@@ -13,8 +13,8 @@ export interface StructuredSkvError {
  * and the MCP tools (extensions/general/mcp-server/server.ts) so connection
  * failures surface one consistent reconnect remediation everywhere.
  *
- * Every auth code is recoverable in the commit sense — the op is fine, the
- * connection/scope/quota isn't — so callers reconnect (or wait) and retry the
+ * Every auth code is recoverable in the commit sense (the op is fine, the
+ * connection/scope/quota isn't), so callers reconnect (or wait) and retry the
  * same operation. The three buckets collapse the nine raw SKV codes onto the
  * remediation that actually differs: reconnect with BankID, fix authorisation
  * at SKV, or back off.
@@ -34,8 +34,14 @@ export function skvAuthCodeToStructured(
       return { code: 'SKATTEVERKET_NOT_CONNECTED', httpStatus: 401 }
     case 'BEHORIGHET_SAKNAS':
     case 'ACCESS_DENIED':
+    // Missing ombud grant is fixed at SKV's Ombud och behorigheter, same
+    // remediation family as BEHORIGHET_SAKNAS.
+    case 'OMBUD_GRANT_MISSING':
       return { code: 'SKATTEVERKET_ACCESS_DENIED', httpStatus: 403 }
     case 'RATE_LIMITED':
       return { code: 'SKATTEVERKET_RATE_LIMITED', httpStatus: 429 }
+    case 'SYSTEM_AUTH_FAILED':
+      // Configuration-side failure: nothing the end user can remediate.
+      return { code: 'SKATTEVERKET_INTERNAL_ERROR', httpStatus: 502 }
   }
 }

@@ -36,7 +36,7 @@ interface Proposal {
 
 interface DepreciationPanelProps {
   periodId: string
-  /** Called after a successful post — parent refetches dispositions because
+  /** Called after a successful post: parent refetches dispositions because
    *  posted avskrivningar change the result which affects bolagsskatt etc. */
   onPosted: () => void
 }

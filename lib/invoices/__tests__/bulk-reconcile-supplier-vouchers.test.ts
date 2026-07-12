@@ -144,7 +144,7 @@ describe('reconcileSupplierInvoiceVouchers', () => {
 
   it('demotes BOTH invoices when one voucher is the top pick for two of them', async () => {
     queue([inv({ id: 'i1', remaining: 1000 }), inv({ id: 'i2', remaining: 1000 })])
-    // Each invoice has exactly one strong candidate — but it is the SAME voucher.
+    // Each invoice has exactly one strong candidate, but it is the SAME voucher.
     mFind
       .mockResolvedValueOnce([cand({ je: 'v1', confidence: 0.95, amount: 1000 })] as never)
       .mockResolvedValueOnce([cand({ je: 'v1', confidence: 0.95, amount: 1000 })] as never)

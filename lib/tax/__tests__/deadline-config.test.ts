@@ -18,7 +18,7 @@ function makeSettings(overrides: Partial<CompanySettingsForDeadlines> = {}): Com
   }
 }
 
-describe('inkomstdeklaration_ab — digital filing deadlines', () => {
+describe('inkomstdeklaration_ab: digital filing deadlines', () => {
   const config = getConfig('inkomstdeklaration_ab')
 
   it('FY end Dec (calendar year) → Aug 1 next year', () => {
@@ -102,7 +102,7 @@ describe('inkomstdeklaration_ab — digital filing deadlines', () => {
   })
 })
 
-describe('arsredovisning — 7 months after FY end (ÅRL 8:3)', () => {
+describe('arsredovisning: 7 months after FY end (ÅRL 8:3)', () => {
   const config = getConfig('arsredovisning')
 
   it('FY end Dec (calendar year) → Jul 31 next year', () => {

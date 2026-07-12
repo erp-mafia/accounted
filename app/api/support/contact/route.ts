@@ -1,5 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { getEmailService } from '@/lib/email/service'
 import { getSupportRecipientEmail } from '@/lib/support'
 import { requireCompanyId } from '@/lib/company/context'
@@ -13,9 +13,8 @@ function escapeHtml(s: string): string {
 }
 
 export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { user, supabase, error } = await requireAuth()
+  if (error) return error
 
   await requireCompanyId(supabase, user.id)
 

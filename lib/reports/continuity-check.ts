@@ -15,7 +15,7 @@ import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
  * Tolerance: ORE_TOLERANCE (0.005 SEK) per account. All monetary values
  * funnel through roundOre() first, so a half-öre threshold is sufficient
  * to absorb float drift and any larger difference is a real discrepancy.
- * (Swedish öresavrundning was abolished 2010 — this is purely IEEE 754
+ * (Swedish öresavrundning was abolished 2010: this is purely IEEE 754
  * hygiene, not a regulatory rounding.)
  */
 export async function validateBalanceContinuity(
@@ -35,7 +35,7 @@ export async function validateBalanceContinuity(
     throw new Error('Fiscal period not found')
   }
 
-  // First period — nothing to compare against
+  // First period: nothing to compare against
   if (!period.previous_period_id) {
     return {
       valid: true,

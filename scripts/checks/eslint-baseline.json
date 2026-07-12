@@ -1,8 +1,8 @@
 {
-  "totalErrors": 60,
+  "totalErrors": 59,
   "perRule": {
     "@next/next/no-assign-module-variable": 1,
-    "@typescript-eslint/no-explicit-any": 15,
+    "@typescript-eslint/no-explicit-any": 14,
     "prefer-const": 3,
     "react-hooks/preserve-manual-memoization": 6,
     "react-hooks/purity": 1,

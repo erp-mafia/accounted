@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 
@@ -29,32 +28,28 @@ const UpdateBookingTemplateSchema = z.object({
  * PUT /api/settings/booking-templates/[id]
  * Update a non-system template.
  */
-export async function PUT(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const { id } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'booking_template.update',
+  async (request, ctx, { params }) => {
+    const { id } = await params
+    const { supabase } = ctx
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
+    const result = await validateBody(request, UpdateBookingTemplateSchema)
+    if (!result.success) return result.response
 
-  const result = await validateBody(request, UpdateBookingTemplateSchema)
-  if (!result.success) return result.response
+    // RLS prevents updating system templates
+    const { data, error } = await supabase
+      .from('booking_template_library')
+      .update(result.data)
+      .eq('id', id)
+      .eq('is_system', false)
+      .select()
+      .single()
 
-  // RLS prevents updating system templates
-  const { data, error } = await supabase
-    .from('booking_template_library')
-    .update(result.data)
-    .eq('id', id)
-    .eq('is_system', false)
-    .select()
-    .single()
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (!data) return NextResponse.json({ error: 'Template not found' }, { status: 404 })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  if (!data) return NextResponse.json({ error: 'Template not found' }, { status: 404 })
-
-  return NextResponse.json({ data })
-}
+    return NextResponse.json({ data })
+  },
+  { requireWrite: true },
+)

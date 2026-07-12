@@ -1,13 +1,13 @@
 /**
- * /api/v1/companies/{companyId}/customers/{id} — customer detail + writes.
+ * /api/v1/companies/{companyId}/customers/{id}: customer detail + writes.
  *
- * GET    — full record. ?expand=invoices embeds open invoices.
- * PATCH  — partial update. Idempotent (mandatory Idempotency-Key).
+ * GET   : full record. ?expand=invoices embeds open invoices.
+ * PATCH : partial update. Idempotent (mandatory Idempotency-Key).
  *          Dry-runnable. VIES re-validation on commit if vat_number changes.
  *          Setting archived_at: null un-archives the customer.
- * DELETE — soft-delete (sets archived_at). Idempotent. Dry-runnable. 204
+ * DELETE: soft-delete (sets archived_at). Idempotent. Dry-runnable. 204
  *          on success. REFUSES to archive when the customer has any open
- *          (sent / partially_paid / overdue) invoice — preserves the
+ *          (sent / partially_paid / overdue) invoice: preserves the
  *          canonical buyer name/address that ML 17 kap 24§ requires the
  *          invoice to carry. Issue a kreditfaktura first if needed.
  */
@@ -33,6 +33,7 @@ const CustomerDetail = z.object({
   id: z.string().uuid(),
   name: z.string(),
   customer_type: z.string(),
+  customer_number: z.string().nullable(),
   email: z.string().nullable(),
   phone: z.string().nullable(),
   address_line1: z.string().nullable(),
@@ -56,7 +57,7 @@ const OPEN_INVOICE_STATUSES = ['sent', 'partially_paid', 'overdue']
 // Explicit projection. Excludes user_id, company_id (internal scoping),
 // and vat_number_validated_at (internal timestamp not in the public schema).
 const CUSTOMER_DETAIL_COLUMNS =
-  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 const OPEN_INVOICE_COLUMNS =
   'id, invoice_number, invoice_date, due_date, status, currency, total, remaining_amount'
@@ -69,7 +70,7 @@ registerEndpoint({
   description:
     'Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response.',
   useWhen:
-    'You need the full customer record — address, payment terms, VAT validation status, contact details — before invoicing or syncing to another system.',
+    'You need the full customer record: address, payment terms, VAT validation status, contact details: before invoicing or syncing to another system.',
   doNotUseFor:
     'Listing customers (use the list endpoint). Looking up arbitrary supplier or employee records (different resources).',
   pitfalls: [
@@ -145,7 +146,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
     if (!customer) {
-      // Generic NOT_FOUND — do not echo the queried id back to the caller
+      // Generic NOT_FOUND: do not echo the queried id back to the caller
       // (enumeration hardening).
       ctx.log.warn('customers.get: not found', { customerId, companyId: ctx.companyId })
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
@@ -154,7 +155,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       })
     }
 
-    // Open invoices expansion — separate query to avoid bloating the
+    // Open invoices expansion: separate query to avoid bloating the
     // customer base shape with a join that's only sometimes needed.
     let invoices: unknown[] | undefined
     const partialExpansions: string[] = []
@@ -176,7 +177,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         const errCode = (invErr as { code?: string }).code ?? 'unknown'
         // Postgres error class 42 = "Syntax Error or Access Rule Violation"
         // (includes 42501 insufficient_privilege). These indicate a real
-        // misconfiguration — a revoked grant or an incorrect RLS policy —
+        // misconfiguration: a revoked grant or an incorrect RLS policy:
         // and should reach Sentry/error monitoring rather than blending
         // into informational warn logs. Other classes are typically
         // transient (network, timeout) and stay at warn.
@@ -207,7 +208,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 )
 
 // ──────────────────────────────────────────────────────────────────
-// PATCH — partial update
+// PATCH: partial update
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -220,10 +221,10 @@ registerEndpoint({
   useWhen:
     'You need to change a customer\'s contact details, payment terms, address, or VAT registration. Use dry-run first to confirm the merged record before committing.',
   doNotUseFor:
-    'Archiving a customer (use DELETE — sets archived_at). Replacing the entire record (no PUT verb is exposed; PATCH is partial).',
+    'Archiving a customer (use DELETE: sets archived_at). Replacing the entire record (no PUT verb is exposed; PATCH is partial).',
   pitfalls: [
     'Idempotency-Key is mandatory; calls without it return 400.',
-    'org_number uniqueness is enforced at DB level — 23505 → 409 CUSTOMER_DUPLICATE_ORG_NUMBER.',
+    'org_number uniqueness is enforced at DB level: 23505 → 409 CUSTOMER_DUPLICATE_ORG_NUMBER.',
     'VIES re-validation is best-effort and runs only on commit. A VIES timeout does not fail the update.',
   ],
   example: {
@@ -310,6 +311,11 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     ] as const) {
       if (body[key] !== undefined) updateData[key] = body[key]
     }
+    // Empty string clears the customer number, same as an explicit null
+    // (matches the internal /api/customers route).
+    if (body.customer_number !== undefined) {
+      updateData.customer_number = body.customer_number || null
+    }
 
     if (Object.keys(updateData).length === 0) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -344,7 +350,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 
     // Best-effort VIES re-validation if vat_number is changing on an
     // eu_business customer. Resolve BEFORE the update so the result lands
-    // atomically with the rest of the change — the API response is then
+    // atomically with the rest of the change: the API response is then
     // guaranteed to reflect committed DB state, not a stale value from a
     // separate fire-and-forget update.
     if (body.vat_number !== undefined) {
@@ -388,7 +394,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 
     if (error) {
       if (error.code === '23505') {
-        // GDPR Art.5(1)(c): do NOT echo body.org_number — for
+        // GDPR Art.5(1)(c): do NOT echo body.org_number: for
         // customer_type='individual' it IS the personnummer.
         return v1ErrorResponseFromCode('CUSTOMER_DUPLICATE_ORG_NUMBER', ctx.log, {
           requestId: ctx.requestId,
@@ -411,7 +417,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 )
 
 // ──────────────────────────────────────────────────────────────────
-// DELETE — soft-delete (sets archived_at)
+// DELETE: soft-delete (sets archived_at)
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -420,15 +426,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/customers/:id',
   summary: 'Archive a customer (soft-delete).',
   description:
-    'Sets archived_at on the customer; the record is preserved (invoices and audit history remain intact) but excluded from default list responses. To un-archive, PATCH archived_at back to null. Idempotent — archiving an already-archived customer is a no-op. Dry-runnable.',
+    'Sets archived_at on the customer; the record is preserved (invoices and audit history remain intact) but excluded from default list responses. To un-archive, PATCH archived_at back to null. Idempotent: archiving an already-archived customer is a no-op. Dry-runnable.',
   useWhen:
     'You want to remove a customer from active rosters without losing their history. Idempotent: re-archiving is safe.',
   doNotUseFor:
-    'Permanently deleting a customer with all history — the public API does not expose hard-delete. GDPR erasure requests go through a dedicated workflow.',
+    'Permanently deleting a customer with all history: the public API does not expose hard-delete. GDPR erasure requests go through a dedicated workflow.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'A customer with any open invoice (sent / partially_paid / overdue) cannot be archived — returns 409 CUSTOMER_HAS_INVOICES. Issue a kreditfaktura first if you need to close the relationship cleanly. This protects ML 17 kap 24§: the customer record is the canonical source of buyer name/address for invoice reissuance.',
-    '204 No Content is returned on success — there is no response body to parse.',
+    'A customer with any open invoice (sent / partially_paid / overdue) cannot be archived: returns 409 CUSTOMER_HAS_INVOICES. Issue a kreditfaktura first if you need to close the relationship cleanly. This protects ML 17 kap 24§: the customer record is the canonical source of buyer name/address for invoice reissuance.',
+    '204 No Content is returned on success: there is no response body to parse.',
   ],
   example: {
     response: { data: null, meta: { request_id: 'req_…', api_version: '2026-05-12' } },
@@ -456,7 +462,7 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
     const customerId = idParse.data
 
     // Pre-flight: check for open invoices BEFORE archiving. Preserves the
-    // canonical buyer record per ML 17 kap 24§ — an open invoice points at
+    // canonical buyer record per ML 17 kap 24§: an open invoice points at
     // this customer for its statutory name/address fields.
     const { count: openInvoiceCount, error: openErr } = await ctx.supabase
       .from('invoices')

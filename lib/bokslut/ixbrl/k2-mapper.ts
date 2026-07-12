@@ -8,7 +8,7 @@
  * in lib/reports/ink2/ink2-engine.ts (same ÅRL structure, coarser posts).
  *
  * Sign conventions: every produced amount is oriented to the concept's
- * natural balance — credit-balance concepts are positive when the underlying
+ * natural balance: credit-balance concepts are positive when the underlying
  * accounts carry a net credit; debit concepts positive on net debit. The
  * document layer adds presentational minuses for cost rows and `sign="-"`
  * for genuinely deviating values (TA §2.10.6).
@@ -25,12 +25,12 @@ export interface TrialBalanceRowLike {
 
 /**
  * Per-year trial balance pair. The year-end closing entry (source_type
- * 'year_end') zeroes every class 3–8 account into 2099, so a single TB can
+ * 'year_end') zeroes every class 3-8 account into 2099, so a single TB can
  * never serve both statements:
  *   - `full` (including the closing entry) carries the booked 2099 and the
- *     correct equity — it drives the BR concepts.
+ *     correct equity: it drives the BR concepts.
  *   - `preClosing` (generateTrialBalance with excludeYearEndClosing: true)
- *     still has the RR accounts open — it drives the RR concepts.
+ *     still has the RR accounts open: it drives the RR concepts.
  * Mirrors how lib/reports' generateIncomeStatement/generateBalanceSheet split
  * the same source.
  */
@@ -53,15 +53,15 @@ interface PostMapping {
 
 const r = (start: string, end: string): Range => ({ start, end })
 
-/** RR — kostnadsslagsindelad (risbs), in uppställningsform order. */
+/** RR: kostnadsslagsindelad (risbs), in uppställningsform order. */
 export const K2_RR_MAPPINGS: PostMapping[] = [
   { concept: 'Nettoomsattning', balance: 'credit', ranges: [r('3000', '3799')] },
   {
     concept: 'ForandringLagerProdukterIArbeteFardigaVarorPagaendeArbetenAnnansRakning',
     balance: 'credit',
     // Lagerförändring for own production + pågående arbeten. Changes in
-    // råvarulager (4910–4929) belong to RavarorFornodenheterKostnader and
-    // handelsvaror (4960–4969) to HandelsvarorKostnader per K2 RR.
+    // råvarulager (4910-4929) belong to RavarorFornodenheterKostnader and
+    // handelsvaror (4960-4969) to HandelsvarorKostnader per K2 RR.
     ranges: [r('4930', '4959'), r('4970', '4999')],
   },
   { concept: 'AktiveratArbeteEgenRakning', balance: 'credit', ranges: [r('3800', '3899')] },
@@ -133,7 +133,7 @@ export const K2_RR_MAPPINGS: PostMapping[] = [
   { concept: 'OvrigaSkatter', balance: 'debit', ranges: [r('8950', '8989')] },
 ]
 
-/** BR — full balansräkning (risbs), in uppställningsform order. */
+/** BR: full balansräkning (risbs), in uppställningsform order. */
 export const K2_BR_MAPPINGS: PostMapping[] = [
   { concept: 'TecknatEjInbetaltKapital', balance: 'debit', ranges: [r('1690', '1699')] },
   // Immateriella anläggningstillgångar
@@ -277,7 +277,7 @@ export const K2_BR_MAPPINGS: PostMapping[] = [
   { concept: 'OverkursfondBunden', balance: 'credit', ranges: [r('2087', '2087')] },
   { concept: 'Uppskrivningsfond', balance: 'credit', ranges: [r('2085', '2085')] },
   // 2083/2084 (medlems-/förlagsinsatser) and 2088/2089 (övriga bundna fonder)
-  // lack own risbs posts for AB — closest bundet-EK post is Reservfond; the
+  // lack own risbs posts for AB: closest bundet-EK post is Reservfond; the
   // mapper flags them for review when present.
   {
     concept: 'Reservfond',
@@ -331,7 +331,7 @@ export const K2_BR_MAPPINGS: PostMapping[] = [
     ranges: [r('2373', '2379')],
   },
   { concept: 'OvrigaLangfristigaSkulder', balance: 'credit', ranges: [r('2380', '2399')] },
-  // Kortfristiga skulder — ranges per BAS 2025/2026 as shipped in
+  // Kortfristiga skulder: ranges per BAS 2025/2026 as shipped in
   // lib/bookkeeping/bas-data/class-2-equity-liabilities.ts (2410 = andra
   // kortfristiga låneskulder, 2420 = förskott från kunder, 2430 = pågående
   // arbeten, 2450 = fakturerad ej upparbetad, 2460 = koncern, 2470 =
@@ -377,10 +377,10 @@ export const K2_BR_MAPPINGS: PostMapping[] = [
 
 /** Accounts that map to a "nearest" post and deserve a manual-review nudge. */
 const RECLASSIFIED_ACCOUNTS: Record<string, string> = {
-  '2083': 'Medlemsinsatser (2083) redovisas under Reservfond — granska klassificeringen.',
-  '2084': 'Förlagsinsatser (2084) redovisas under Reservfond — granska klassificeringen.',
-  '2088': 'Fond för yttre underhåll (2088) redovisas under Reservfond — granska klassificeringen.',
-  '2089': 'Fond för utvecklingsutgifter (2089) redovisas under Reservfond — granska klassificeringen (K2 tillåter inte aktivering av egenupparbetade utgifter).',
+  '2083': 'Medlemsinsatser (2083) redovisas under Reservfond: granska klassificeringen.',
+  '2084': 'Förlagsinsatser (2084) redovisas under Reservfond: granska klassificeringen.',
+  '2088': 'Fond för yttre underhåll (2088) redovisas under Reservfond: granska klassificeringen.',
+  '2089': 'Fond för utvecklingsutgifter (2089) redovisas under Reservfond: granska klassificeringen (K2 tillåter inte aktivering av egenupparbetade utgifter).',
 }
 
 export interface K2MappingResult {
@@ -473,8 +473,8 @@ function sumConcepts(amounts: ConceptAmounts, concepts: string[], signs?: number
 /**
  * Map current + previous trial balance pairs onto the K2 risbs posts.
  *
- * RR concepts come from the pre-closing TB (year-end closing excluded — the
- * closing entry zeroes class 3–8); BR concepts come from the full TB (the
+ * RR concepts come from the pre-closing TB (year-end closing excluded: the
+ * closing entry zeroes class 3-8); BR concepts come from the full TB (the
  * closing entry books 2099). See TrialBalancePair.
  *
  * `previous = null` → first fiscal year (jämförelsesiffror omitted,
@@ -523,7 +523,7 @@ export function mapTrialBalancesToK2(
   }
   for (const u of unmappedAccounts) {
     warnings.push(
-      `Konto ${u.account} (${u.name}) med saldo ${u.balance} kr täcks inte av K2-mappningen — beloppet saknas i årsredovisningen.`,
+      `Konto ${u.account} (${u.name}) med saldo ${u.balance} kr täcks inte av K2-mappningen: beloppet saknas i årsredovisningen.`,
     )
   }
 
@@ -556,7 +556,7 @@ export function mapTrialBalancesToK2(
   if (smoothedAny) totals = computeTotals(rr, br)
 
   // Internal consistency: the RR result must equal BR 2099 (årets resultat)
-  // EXACTLY — if the year-end closing hasn't booked the result yet, warn
+  // EXACTLY: if the year-end closing hasn't booked the result yet, warn
   // (the BR will not balance against RR otherwise). Rounding residuals were
   // smoothed above, so any remaining difference is a data problem.
   const brResult = br['AretsResultatEgetKapital'] ?? ZERO
@@ -622,7 +622,7 @@ function smoothRrResidual(
   if (!concept) return false
   const balance = K2_RR_MAPPINGS.find((mapping) => mapping.concept === concept)?.balance
   // Debit (cost) posts enter the result with weight −1, credit (income)
-  // posts with +1 — adjust so the recomputed result lands on the 2099 value.
+  // posts with +1: adjust so the recomputed result lands on the 2099 value.
   adjustConcept(rr, concept, field, balance === 'debit' ? diff : -diff)
   return true
 }

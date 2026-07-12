@@ -57,37 +57,6 @@ export function daysUntilDeadline(dueDate: string): number {
 }
 
 /**
- * Determine the automatic status based on deadline date
- */
-export function getAutomaticStatus(
-  dueDate: string,
-  currentStatus: DeadlineStatus
-): DeadlineStatus | null {
-  const daysUntil = daysUntilDeadline(dueDate)
-
-  // Already in terminal or user-controlled state
-  if (['submitted', 'confirmed', 'in_progress'].includes(currentStatus)) {
-    // Check for overdue on submitted (shouldn't happen often)
-    if (currentStatus === 'submitted' && daysUntil < 0) {
-      return null // Keep as submitted, don't change to overdue
-    }
-    return null
-  }
-
-  // Past deadline without submission
-  if (daysUntil < 0 && currentStatus !== 'overdue') {
-    return 'overdue'
-  }
-
-  // Within action needed threshold
-  if (daysUntil <= ACTION_NEEDED_THRESHOLD_DAYS && currentStatus === 'upcoming') {
-    return 'action_needed'
-  }
-
-  return null
-}
-
-/**
  * Update deadline statuses automatically (called by daily cron)
  */
 export async function updateDeadlineStatuses(

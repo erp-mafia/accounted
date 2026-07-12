@@ -1,19 +1,30 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Cloud, ExternalLink, Loader2, RefreshCw, Unplug } from 'lucide-react'
-import type { CloudBackupStatus, GoogleDriveSchedule } from '../types'
+import {
+  DestructiveConfirmDialog,
+  useDestructiveConfirm,
+} from '@/components/ui/destructive-confirm-dialog'
+import { AlertTriangle, Cloud, ExternalLink, Loader2, RefreshCw, Unplug } from 'lucide-react'
+import type {
+  CloudBackupStatus,
+  GoogleDriveLastSync,
+  GoogleDriveSchedule,
+} from '../types'
 
 const API_BASE = '/api/extensions/ext/cloud-backup'
 
 export default function CloudBackupCard() {
   const { toast } = useToast()
+  const t = useTranslations('extensions')
   const searchParams = useSearchParams()
+  const { dialogProps, confirm } = useDestructiveConfirm()
 
   const [status, setStatus] = useState<CloudBackupStatus | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -24,28 +35,53 @@ export default function CloudBackupCard() {
   const loadStatus = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/status`)
-      if (!res.ok) throw new Error('Kunde inte hämta status')
+      if (!res.ok) throw new Error(t('ext_cloud_backup_status_failed'))
       const { data } = (await res.json()) as { data: CloudBackupStatus }
       setStatus(data)
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     loadStatus()
   }, [loadStatus])
 
+  // After a connect redirect the first backup builds in the background: poll
+  // the status a few times so the finished sync shows up without a reload.
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [])
+
   // Handle OAuth callback redirect params.
   useEffect(() => {
     const result = searchParams.get('cloud_backup')
     if (!result) return
-    if (result === 'connected') {
-      toast({ title: 'Google Drive kopplat', description: 'Du kan nu synka till din Drive.' })
-    } else if (result === 'error') {
-      const reason = searchParams.get('reason') || 'Okänt fel'
+    if (result === 'connected' || result === 'connected_first') {
       toast({
-        title: 'Kunde inte koppla Google Drive',
+        title: t('ext_cloud_backup_connected_title'),
+        description: t(
+          result === 'connected_first'
+            ? 'ext_cloud_backup_connected_first_description'
+            : 'ext_cloud_backup_connected_description'
+        ),
+      })
+      let attempts = 0
+      pollRef.current = setInterval(() => {
+        attempts += 1
+        loadStatus()
+        if (attempts >= 6 && pollRef.current) {
+          clearInterval(pollRef.current)
+          pollRef.current = null
+        }
+      }, 10_000)
+    } else if (result === 'error') {
+      const reason = searchParams.get('reason') || t('ext_cloud_backup_unknown_error')
+      toast({
+        title: t('ext_cloud_backup_connect_failed'),
         description: reason,
         variant: 'destructive',
       })
@@ -55,7 +91,7 @@ export default function CloudBackupCard() {
     url.searchParams.delete('cloud_backup')
     url.searchParams.delete('reason')
     window.history.replaceState({}, '', url.toString())
-  }, [searchParams, toast])
+  }, [loadStatus, searchParams, t, toast])
 
   const handleConnect = useCallback(async () => {
     setIsConnecting(true)
@@ -63,19 +99,19 @@ export default function CloudBackupCard() {
       const res = await fetch(`${API_BASE}/connect`, { method: 'POST' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || 'Kunde inte starta anslutning')
+        throw new Error(body.error || t('ext_cloud_backup_connect_start_failed'))
       }
       const { url } = (await res.json()) as { url: string }
       window.location.href = url
     } catch (err) {
       toast({
-        title: 'Kunde inte koppla Google Drive',
-        description: err instanceof Error ? err.message : 'Försök igen.',
+        title: t('ext_cloud_backup_connect_failed'),
+        description: err instanceof Error ? err.message : t('ext_cloud_backup_try_again'),
         variant: 'destructive',
       })
       setIsConnecting(false)
     }
-  }, [toast])
+  }, [t, toast])
 
   const handleDisconnect = useCallback(async () => {
     setIsDisconnecting(true)
@@ -83,64 +119,118 @@ export default function CloudBackupCard() {
       const res = await fetch(`${API_BASE}/disconnect`, { method: 'POST' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || 'Kunde inte koppla bort')
+        throw new Error(body.error || t('ext_cloud_backup_disconnect_failed'))
       }
-      toast({ title: 'Google Drive bortkopplat' })
+      toast({ title: t('ext_cloud_backup_disconnected') })
       await loadStatus()
     } catch (err) {
       toast({
-        title: 'Kunde inte koppla bort',
-        description: err instanceof Error ? err.message : 'Försök igen.',
+        title: t('ext_cloud_backup_disconnect_failed'),
+        description: err instanceof Error ? err.message : t('ext_cloud_backup_try_again'),
         variant: 'destructive',
       })
     } finally {
       setIsDisconnecting(false)
     }
-  }, [loadStatus, toast])
+  }, [loadStatus, t, toast])
+
+  type SyncOutcome =
+    | { result: 'ok' | 'error' }
+    | { result: 'too_large'; sizeMb: number | null; limitMb: number | null }
+
+  const syncOnce = useCallback(
+    async (allowDocumentFallback: boolean): Promise<SyncOutcome> => {
+      setIsSyncing(true)
+      try {
+        const res = await fetch(`${API_BASE}/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            include_documents: true,
+            allow_document_fallback: allowDocumentFallback,
+          }),
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          if (res.status === 413 && !allowDocumentFallback) {
+            // Handled by the caller: a dialog offers syncing the oversized
+            // archives without their document blobs.
+            return {
+              result: 'too_large',
+              sizeMb: body.size_bytes
+                ? Math.round(body.size_bytes / (1024 * 1024))
+                : null,
+              limitMb: body.size_limit_bytes
+                ? Math.round(body.size_limit_bytes / (1024 * 1024))
+                : null,
+            }
+          }
+          if (body.error === 'needs_reauth') {
+            // Refresh status so the card switches to the reconnect state.
+            await loadStatus()
+            throw new Error(t('ext_cloud_backup_reauth_description'))
+          }
+          throw new Error(body.error || t('ext_cloud_backup_sync_failed'))
+        }
+        const { data } = (await res.json()) as {
+          data: GoogleDriveLastSync & {
+            web_view_link: string
+            uploaded_count?: number
+            skipped_count?: number
+          }
+        }
+        if (data.uploaded_count === 0) {
+          toast({
+            title: t('ext_cloud_backup_up_to_date'),
+            description: t('ext_cloud_backup_no_changes'),
+          })
+        } else {
+          const anyNoDocs = (data.files ?? []).some(
+            (f) => f.kind !== 'readme' && f.included_documents === false
+          )
+          toast({
+            title: t('ext_cloud_backup_uploaded'),
+            description: `${t('ext_cloud_backup_files_updated', {
+              count: data.uploaded_count ?? 0,
+            })} (${formatMb(data.total_size_bytes ?? data.file_size_bytes ?? 0)})${
+              anyNoDocs ? ` · ${t('ext_cloud_backup_no_documents_note')}` : ''
+            }`,
+          })
+        }
+        await loadStatus()
+        return { result: 'ok' }
+      } catch (err) {
+        toast({
+          title: t('ext_cloud_backup_sync_failed'),
+          description: err instanceof Error ? err.message : t('ext_cloud_backup_try_again'),
+          variant: 'destructive',
+        })
+        return { result: 'error' }
+      } finally {
+        setIsSyncing(false)
+      }
+    },
+    [loadStatus, t, toast]
+  )
 
   const handleSync = useCallback(async () => {
-    setIsSyncing(true)
-    try {
-      const res = await fetch(`${API_BASE}/sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ include_documents: true }),
-      })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        if (res.status === 413) {
-          const mb = body.size_bytes
-            ? Math.round(body.size_bytes / (1024 * 1024))
-            : null
-          throw new Error(
-            mb
-              ? `Arkivet är ${mb} MB — större än nuvarande gräns. Minska omfattning eller avvakta bakgrundssynk.`
-              : 'Arkivet är för stort för direktsynk.'
-          )
-        }
-        throw new Error(body.error || 'Synkningen misslyckades')
-      }
-      const { data } = (await res.json()) as {
-        data: { file_name: string; file_size_bytes: number; web_view_link: string }
-      }
-      toast({
-        title: 'Uppladdad till Google Drive',
-        description: `${data.file_name} (${formatMb(data.file_size_bytes)})`,
-      })
-      await loadStatus()
-    } catch (err) {
-      toast({
-        title: 'Synkningen misslyckades',
-        description: err instanceof Error ? err.message : 'Försök igen.',
-        variant: 'destructive',
-      })
-    } finally {
-      setIsSyncing(false)
-    }
-  }, [loadStatus, toast])
+    const first = await syncOnce(false)
+    if (first.result !== 'too_large') return
+    const ok = await confirm({
+      title: t('ext_cloud_backup_too_large_title'),
+      description: t('ext_cloud_backup_too_large_description', {
+        size: first.sizeMb != null ? String(first.sizeMb) : '?',
+        limit: first.limitMb != null ? String(first.limitMb) : '?',
+      }),
+      confirmLabel: t('ext_cloud_backup_too_large_confirm'),
+      variant: 'warning',
+    })
+    if (ok) await syncOnce(true)
+  }, [confirm, syncOnce, t])
 
   return (
     <div className="rounded-lg border border-border bg-card p-6">
+      <DestructiveConfirmDialog {...dialogProps} />
       <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
         {/* Identity */}
         <div className="flex items-start gap-3">
@@ -150,7 +240,7 @@ export default function CloudBackupCard() {
           <div className="flex-1 min-w-0">
             <h3 className="text-[15px] font-semibold leading-tight">Google Drive</h3>
             <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
-              Säkerhetskopia till din egen Drive.
+              {t('ext_cloud_backup_card_tagline')}
             </p>
           </div>
         </div>
@@ -158,34 +248,57 @@ export default function CloudBackupCard() {
         {/* Controls */}
         <div>
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">Laddar…</p>
+            <p className="text-sm text-muted-foreground">{t('ext_cloud_backup_loading')}</p>
           ) : status?.connected ? (
             <>
+              {status.needs_reauth && (
+                <div className="mb-6 flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
+                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium">
+                      {t('ext_cloud_backup_reauth_title')}
+                    </p>
+                    <p className="mt-1 text-sm text-muted-foreground leading-relaxed">
+                      {t('ext_cloud_backup_reauth_description')}
+                    </p>
+                    <Button
+                      onClick={handleConnect}
+                      disabled={isConnecting}
+                      className="mt-3 w-full sm:w-auto"
+                    >
+                      {isConnecting ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          {t('ext_cloud_backup_redirecting')}
+                        </>
+                      ) : (
+                        <>
+                          <Cloud className="mr-2 h-4 w-4" />
+                          {t('ext_cloud_backup_reauth_action')}
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              )}
               <dl className="space-y-3 text-sm">
                 <div className="flex items-baseline justify-between gap-3">
-                  <dt className="shrink-0 text-muted-foreground">Konto</dt>
+                  <dt className="shrink-0 text-muted-foreground">
+                    {t('ext_cloud_backup_account_label')}
+                  </dt>
                   <dd className="min-w-0 truncate font-medium">{status.account_email}</dd>
                 </div>
                 <div className="flex items-baseline justify-between gap-3">
-                  <dt className="shrink-0 text-muted-foreground">Senaste synk</dt>
+                  <dt className="shrink-0 text-muted-foreground">
+                    {t('ext_cloud_backup_last_sync_label')}
+                  </dt>
                   <dd className="min-w-0 text-right">
                     {status.last_sync ? (
-                      <>
-                        <a
-                          href={`https://drive.google.com/file/d/${status.last_sync.file_id}/view`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 font-medium underline-offset-4 hover:underline tabular-nums"
-                        >
-                          {formatDate(status.last_sync.at)}
-                          <ExternalLink className="h-3 w-3 text-muted-foreground" />
-                        </a>
-                        <p className="text-xs text-muted-foreground tabular-nums">
-                          {formatMb(status.last_sync.file_size_bytes)}
-                        </p>
-                      </>
+                      <LastSyncSummary lastSync={status.last_sync} />
                     ) : (
-                      <span className="text-muted-foreground">Aldrig</span>
+                      <span className="text-muted-foreground">
+                        {t('ext_cloud_backup_never')}
+                      </span>
                     )}
                   </dd>
                 </div>
@@ -194,6 +307,7 @@ export default function CloudBackupCard() {
               <div className="mt-6 pt-6 border-t border-border">
                 <ScheduleSection
                   schedule={status.schedule}
+                  needsReauth={status.needs_reauth}
                   onUpdated={loadStatus}
                 />
               </div>
@@ -203,12 +317,12 @@ export default function CloudBackupCard() {
                   {isSyncing ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Synkar…
+                      {t('ext_cloud_backup_syncing')}
                     </>
                   ) : (
                     <>
                       <RefreshCw className="mr-2 h-4 w-4" />
-                      Synka nu
+                      {t('ext_cloud_backup_sync_now')}
                     </>
                   )}
                 </Button>
@@ -221,12 +335,12 @@ export default function CloudBackupCard() {
                   {isDisconnecting ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Kopplar bort…
+                      {t('ext_cloud_backup_disconnecting')}
                     </>
                   ) : (
                     <>
                       <Unplug className="mr-2 h-4 w-4" />
-                      Koppla bort
+                      {t('ext_cloud_backup_disconnect')}
                     </>
                   )}
                 </Button>
@@ -235,21 +349,19 @@ export default function CloudBackupCard() {
           ) : (
             <>
               <p className="text-sm text-muted-foreground leading-relaxed">
-                Koppla ditt Google-konto för att ladda upp säkerhetsbackupen till din egen Drive.
-                Accounted får bara tillgång till filer som appen själv skapar (scope{' '}
-                <span className="font-mono text-xs">drive.file</span>).
+                {t('ext_cloud_backup_connect_description')}
               </p>
               <div className="mt-4">
                 <Button onClick={handleConnect} disabled={isConnecting} className="w-full sm:w-auto">
                   {isConnecting ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Omdirigerar…
+                      {t('ext_cloud_backup_redirecting')}
                     </>
                   ) : (
                     <>
                       <Cloud className="mr-2 h-4 w-4" />
-                      Koppla Google Drive
+                      {t('ext_cloud_backup_connect')}
                     </>
                   )}
                 </Button>
@@ -262,12 +374,57 @@ export default function CloudBackupCard() {
   )
 }
 
+/**
+ * Last-sync cell. New records list the per-fiscal-year files and link to the
+ * Drive folder; legacy single-ZIP records link to the file.
+ */
+function LastSyncSummary({ lastSync }: { lastSync: GoogleDriveLastSync }) {
+  const t = useTranslations('extensions')
+  const files = lastSync.files
+  const href = files
+    ? `https://drive.google.com/drive/folders/${lastSync.folder_id}`
+    : `https://drive.google.com/file/d/${lastSync.file_id}/view`
+  const sizeBytes = files
+    ? lastSync.total_size_bytes ?? 0
+    : lastSync.file_size_bytes ?? 0
+  const anyNoDocs = files
+    ? files.some((f) => f.kind !== 'readme' && f.included_documents === false)
+    : lastSync.included_documents === false
+  const archiveCount = files ? files.filter((f) => f.kind !== 'readme').length : null
+  const verified = files ? files.every((f) => f.sha256) : Boolean(lastSync.sha256)
+
+  return (
+    <>
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1 font-medium underline-offset-4 hover:underline tabular-nums"
+      >
+        {formatDateTime(lastSync.at)}
+        <ExternalLink className="h-3 w-3 text-muted-foreground" />
+      </a>
+      <p className="text-xs text-muted-foreground tabular-nums">
+        {formatMb(sizeBytes)}
+        {archiveCount !== null &&
+          ` · ${t('ext_cloud_backup_files_count', { count: archiveCount })}`}
+        {verified && ` · ${t('ext_cloud_backup_verified')}`}
+      </p>
+      {anyNoDocs && (
+        <p className="text-xs text-muted-foreground">
+          {t('ext_cloud_backup_last_sync_no_documents')}
+        </p>
+      )}
+    </>
+  )
+}
+
 function formatMb(bytes: number): string {
   const mb = bytes / (1024 * 1024)
   return `${mb.toFixed(1)} MB`
 }
 
-function formatDate(iso: string): string {
+function formatDateTime(iso: string): string {
   const d = new Date(iso)
   return d.toLocaleString('sv-SE', {
     year: 'numeric',
@@ -280,29 +437,30 @@ function formatDate(iso: string): string {
 
 interface ScheduleSectionProps {
   schedule: GoogleDriveSchedule | null
+  needsReauth: boolean
   onUpdated: () => Promise<void> | void
 }
 
-function ScheduleSection({ schedule, onUpdated }: ScheduleSectionProps) {
+function ScheduleSection({ schedule, needsReauth, onUpdated }: ScheduleSectionProps) {
   const { toast } = useToast()
+  const t = useTranslations('extensions')
 
-  // Convert stored UTC hour to the user's local hour for display.
-  const initialLocalHour =
-    schedule && typeof schedule.hour_utc === 'number'
-      ? utcHourToLocalHour(schedule.hour_utc)
-      : utcHourToLocalHour(3)
+  // Prefer the DST-stable Stockholm hour; fall back to converting the legacy
+  // UTC hour through the browser's clock (Swedish users: same thing).
+  const scheduleHour = (s: GoogleDriveSchedule | null): number =>
+    typeof s?.hour_local === 'number'
+      ? s.hour_local
+      : utcHourToLocalHour(typeof s?.hour_utc === 'number' ? s.hour_utc : 3)
+
   const [enabled, setEnabled] = useState(schedule?.enabled ?? false)
-  const [localHour, setLocalHour] = useState(initialLocalHour)
+  const [localHour, setLocalHour] = useState(scheduleHour(schedule))
   const [isSaving, setIsSaving] = useState(false)
 
   useEffect(() => {
     setEnabled(schedule?.enabled ?? false)
-    setLocalHour(
-      schedule && typeof schedule.hour_utc === 'number'
-        ? utcHourToLocalHour(schedule.hour_utc)
-        : utcHourToLocalHour(3)
-    )
-  }, [schedule?.enabled, schedule?.hour_utc])
+    setLocalHour(scheduleHour(schedule))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schedule?.enabled, schedule?.hour_utc, schedule?.hour_local])
 
   const save = useCallback(
     async (nextEnabled: boolean, nextLocalHour: number) => {
@@ -313,25 +471,25 @@ function ScheduleSection({ schedule, onUpdated }: ScheduleSectionProps) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             enabled: nextEnabled,
-            hour_utc: localHourToUtcHour(nextLocalHour),
+            hour_local: nextLocalHour,
           }),
         })
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
-          throw new Error(body.error || 'Kunde inte spara schema')
+          throw new Error(body.error || t('ext_cloud_backup_schedule_save_failed'))
         }
         await onUpdated()
       } catch (err) {
         toast({
-          title: 'Kunde inte spara schema',
-          description: err instanceof Error ? err.message : 'Försök igen.',
+          title: t('ext_cloud_backup_schedule_save_failed'),
+          description: err instanceof Error ? err.message : t('ext_cloud_backup_try_again'),
           variant: 'destructive',
         })
       } finally {
         setIsSaving(false)
       }
     },
-    [onUpdated, toast]
+    [onUpdated, t, toast]
   )
 
   const handleToggle = useCallback(
@@ -356,10 +514,10 @@ function ScheduleSection({ schedule, onUpdated }: ScheduleSectionProps) {
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <Label htmlFor="auto-sync-toggle" className="text-sm font-medium">
-            Automatisk synkronisering
+            {t('ext_cloud_backup_auto_sync_title')}
           </Label>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Daglig säkerhetsbackup till din Drive.
+            {t('ext_cloud_backup_auto_sync_description')}
           </p>
         </div>
         <Switch
@@ -373,7 +531,7 @@ function ScheduleSection({ schedule, onUpdated }: ScheduleSectionProps) {
       {enabled && (
         <div className="flex items-center gap-2">
           <Label htmlFor="auto-sync-hour" className="text-xs text-muted-foreground">
-            Tid (lokal)
+            {t('ext_cloud_backup_time_label')}
           </Label>
           <select
             id="auto-sync-hour"
@@ -394,13 +552,17 @@ function ScheduleSection({ schedule, onUpdated }: ScheduleSectionProps) {
 
       {schedule?.last_auto_sync_at && (
         <p className="text-xs text-muted-foreground">
-          Senaste automatiska synk: {formatDate(schedule.last_auto_sync_at)}{' '}
+          {t('ext_cloud_backup_last_auto_sync')} {formatDateTime(schedule.last_auto_sync_at)}{' '}
           {schedule.last_auto_sync_status === 'success' ? (
-            <span className="text-success">· lyckades</span>
+            <span className="text-success">· {t('ext_cloud_backup_auto_sync_success')}</span>
           ) : schedule.last_auto_sync_status === 'error' ? (
             <span className="text-destructive">
-              · misslyckades
-              {schedule.last_auto_sync_error ? ` (${schedule.last_auto_sync_error})` : ''}
+              · {t('ext_cloud_backup_auto_sync_error')}
+              {needsReauth
+                ? ` (${t('ext_cloud_backup_reauth_needed_short')})`
+                : schedule.last_auto_sync_error
+                  ? ` (${schedule.last_auto_sync_error})`
+                  : ''}
             </span>
           ) : null}
         </p>
@@ -414,11 +576,4 @@ function utcHourToLocalHour(hourUtc: number): number {
   const d = new Date()
   d.setUTCHours(hourUtc, 0, 0, 0)
   return d.getHours()
-}
-
-/** Convert a local hour (0-23) to UTC. */
-function localHourToUtcHour(localHour: number): number {
-  const d = new Date()
-  d.setHours(localHour, 0, 0, 0)
-  return d.getUTCHours()
 }

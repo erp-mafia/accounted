@@ -40,7 +40,7 @@ export default function ResetPasswordPage() {
     if (password !== confirmPassword) {
       toast({
         title: t('mismatch_title'),
-        description: t('weak_description'),
+        description: t('mismatch_description'),
         variant: 'destructive',
       })
       setIsLoading(false)
@@ -50,7 +50,7 @@ export default function ResetPasswordPage() {
     try {
       // Routed through the API so the has_password flag flips in lock-step
       // with the password update. This is the unlock path for BankID-only
-      // users who enrolled MFA and got locked out — the recovery session
+      // users who enrolled MFA and got locked out: the recovery session
       // bypasses AAL2, the API flips has_password, and the lockout banner
       // disappears the next time they log in.
       const res = await fetch('/api/account/password', {
@@ -102,7 +102,7 @@ export default function ResetPasswordPage() {
           </p>
         </div>
 
-        <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+        <div className="rounded-lg border bg-card p-6">
           <form onSubmit={handleResetPassword} className="space-y-5">
             <div className="space-y-2">
               <Label htmlFor="password">{t('new_password_label')}</Label>

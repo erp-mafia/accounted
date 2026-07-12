@@ -4,20 +4,20 @@ import { useState, useCallback, useEffect } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { PageHeader } from '@/components/ui/page-header'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowLeftRight, ArrowRightLeft, FileText, ArrowLeft, Landmark, Loader2, Info, ChevronRight, FileSpreadsheet, Download, AlertTriangle } from 'lucide-react'
-import { motion } from 'framer-motion'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
-import { useCompany } from '@/contexts/CompanyContext'
-import { BankSelector, type Bank } from '@/extensions/general/enable-banking/components/BankSelector'
-import { BankConnectionStatus } from '@/extensions/general/enable-banking/components/BankConnectionStatus'
+import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import type { BankConnection } from '@/types'
+import { getSettingsPanel } from '@/lib/extensions/settings-panel-registry'
 
 // Bank file import components
 import BankFileUploadStep from '@/components/import/BankFileUploadStep'
@@ -124,7 +124,7 @@ function BankFileImportWizard() {
   // Import result
   const [ingestResult, setIngestResult] = useState<IngestResult | null>(null)
 
-  // Active PSD2 connections — drives an overlap warning so users don't
+  // Active PSD2 connections: drives an overlap warning so users don't
   // accidentally upload a CSV covering periods we already sync nightly.
   const [activePsd2Banks, setActivePsd2Banks] = useState<string[]>([])
   useEffect(() => {
@@ -205,7 +205,7 @@ function BankFileImportWizard() {
 
       const txCount = data.data.parse_result.transactions.length
       if (data.data.parse_result.format === 'generic_csv') {
-        // Auto-detect failed or user picked "Annan CSV" — always route to manual column mapping.
+        // Auto-detect failed or user picked "Annan CSV": always route to manual column mapping.
         // Default mapping rarely matches, so advance regardless of tx count.
         setBankStep('column_mapping')
       } else if (txCount > 0) {
@@ -215,7 +215,7 @@ function BankFileImportWizard() {
           description: `${txCount} transaktioner hittades`,
         })
       } else {
-        // Format detected but no transactions parsed — parser couldn't extract rows
+        // Format detected but no transactions parsed: parser couldn't extract rows
         setBankError('Filen kunde läsas men inga transaktioner hittades. Kontrollera att filen innehåller transaktionsdata och inte bara rubriker.')
       }
     } catch (err) {
@@ -291,10 +291,10 @@ function BankFileImportWizard() {
       {/* Status chip for at-a-glance "auto-sync is healthy / stale / needs attention" */}
       <BankSyncStatusChip />
 
-      {/* Overlap warning — active PSD2 means file import will likely create
+      {/* Overlap warning: active PSD2 means file import will likely create
           duplicates of transactions the nightly sync already covers. */}
       {activePsd2Banks.length > 0 && (
-        <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 p-4">
+        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-4">
           <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" />
           <div className="flex-1 text-sm">
             <p className="font-medium">
@@ -498,6 +498,8 @@ function SIEImportWizard() {
         closingBalances: [],
         resultBalances: [],
         vouchers: [],
+        dimensions: [],
+        dimensionValues: [],
         issues: data.parsed.issues,
         stats: data.parsed.stats,
       })
@@ -813,10 +815,13 @@ const OB_STEP_LABELS: Record<OpeningBalanceStep, string> = {
 
 function OpeningBalanceFlow() {
   const { toast } = useToast()
+  const { dialogProps, confirm } = useDestructiveConfirm()
+  const router = useRouter()
 
   const [obStep, setObStep] = useState<OpeningBalanceStep>('upload')
   const [obIsLoading, setObIsLoading] = useState(false)
   const [obError, setObError] = useState<string | null>(null)
+  const [obBankFormatHint, setObBankFormatHint] = useState<string | null>(null)
   const [obFile, setObFile] = useState<File | null>(null)
   const [parseResult, setParseResult] = useState<OpeningBalanceParseResult | null>(null)
   const [editedRows, setEditedRows] = useState<{
@@ -825,7 +830,7 @@ function OpeningBalanceFlow() {
   }[]>([])
   const [executeResult, setExecuteResult] = useState<OpeningBalanceExecuteResult | null>(null)
 
-  // Determine steps — skip column mapping if confidence >= 0.8
+  // Determine steps: skip column mapping if confidence >= 0.8
   const needsMapping = parseResult && parseResult.detected_columns.confidence < 0.8
   const steps: OpeningBalanceStep[] = needsMapping
     ? ['upload', 'column_mapping', 'edit', 'period', 'result']
@@ -835,6 +840,7 @@ function OpeningBalanceFlow() {
 
   const handleFileSelect = useCallback(async (file: File) => {
     setObError(null)
+    setObBankFormatHint(null)
     setObIsLoading(true)
     setObFile(file)
 
@@ -858,7 +864,13 @@ function OpeningBalanceFlow() {
       setParseResult(result)
 
       if (result.rows.length === 0) {
-        setObError('Inga konton med belopp hittades i filen. Kontrollera att filen innehåller kontonummer och belopp.')
+        if (result.detected_bank_format) {
+          // The file is a bank statement uploaded to the wrong importer (#918)
+          setObBankFormatHint(result.detected_bank_format)
+          setObError(`Filen ser ut som ett kontoutdrag från ${result.detected_bank_format}, inte ingående balanser. Kontoutdrag importeras under "Banktransaktioner".`)
+        } else {
+          setObError('Inga konton med belopp hittades i filen. Kontrollera att filen innehåller kontonummer och belopp.')
+        }
         return
       }
 
@@ -917,12 +929,27 @@ function OpeningBalanceFlow() {
     setObStep('period')
   }, [])
 
-  const handleExecute = useCallback(async (fiscalPeriodId: string) => {
+  const handleExecute = useCallback(async (fiscalPeriodId: string, replace: boolean) => {
+    if (replace) {
+      const ok = await confirm({
+        title: 'Ersätt ingående balanser?',
+        description:
+          'Den befintliga IB-verifikationen makuleras (stornas) och en ny bokförs med beloppen du angett. Detta går inte att ångra automatiskt.',
+        confirmLabel: 'Ersätt',
+        variant: 'warning',
+      })
+      if (!ok) return
+    }
+
     setObIsLoading(true)
     setObError(null)
 
+    const endpoint = replace
+      ? '/api/import/opening-balance/correct'
+      : '/api/import/opening-balance/execute'
+
     try {
-      const res = await fetch('/api/import/opening-balance/execute', {
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -938,11 +965,7 @@ function OpeningBalanceFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        if (res.status === 409) {
-          setObError(data.error || 'Perioden har redan ingående balanser')
-        } else {
-          setObError(data.error || 'Importen misslyckades')
-        }
+        setObError(getErrorMessage(data))
         return
       }
 
@@ -951,7 +974,7 @@ function OpeningBalanceFlow() {
 
       if (data.data.success) {
         toast({
-          title: 'Ingående balanser bokförda',
+          title: replace ? 'Ingående balanser korrigerade' : 'Ingående balanser bokförda',
           description: `${data.data.lines_created} kontorader skapades`,
         })
       }
@@ -960,7 +983,7 @@ function OpeningBalanceFlow() {
     } finally {
       setObIsLoading(false)
     }
-  }, [editedRows, toast])
+  }, [editedRows, toast, confirm])
 
   const handleNewImport = () => {
     setObStep('upload')
@@ -969,6 +992,7 @@ function OpeningBalanceFlow() {
     setEditedRows([])
     setExecuteResult(null)
     setObError(null)
+    setObBankFormatHint(null)
   }
 
   return (
@@ -1004,6 +1028,11 @@ function OpeningBalanceFlow() {
           onFileSelect={handleFileSelect}
           isLoading={obIsLoading}
           error={obError}
+          errorAction={
+            obBankFormatHint
+              ? { label: 'Importera banktransaktioner', onClick: () => router.push('/import?mode=bank') }
+              : undefined
+          }
         />
       )}
 
@@ -1047,6 +1076,8 @@ function OpeningBalanceFlow() {
           onNewImport={handleNewImport}
         />
       )}
+
+      <DestructiveConfirmDialog {...dialogProps} />
     </div>
   )
 }
@@ -1818,7 +1849,7 @@ function ArticlesFlow() {
 }
 
 // ============================================================
-// CSV/Excel Data Import Wizard — entity selector + sub-flow
+// CSV/Excel Data Import Wizard, entity selector + sub-flow
 // ============================================================
 
 type CSVDataEntity = 'opening_balance' | 'customers' | 'suppliers' | 'articles'
@@ -1845,7 +1876,7 @@ function CSVDataImportWizard() {
                   aria-hidden
                   className="pointer-events-none absolute -inset-[3px] h-[calc(100%+6px)] w-[calc(100%+6px)] overflow-visible"
                 >
-                  <motion.rect
+                  <rect
                     x="1"
                     y="1"
                     width="calc(100% - 2px)"
@@ -1856,9 +1887,7 @@ function CSVDataImportWizard() {
                     stroke="currentColor"
                     strokeWidth="1.25"
                     strokeDasharray="3 4"
-                    className="text-foreground/45"
-                    animate={{ strokeDashoffset: [0, -14] }}
-                    transition={{ duration: 1.2, repeat: Infinity, ease: 'linear' }}
+                    className="animate-marching-ants text-foreground/45"
                   />
                 </svg>
               )}
@@ -1889,192 +1918,14 @@ function CSVDataImportWizard() {
 }
 
 // ============================================================
-// PSD2 Bank Connection (inline, from Enable Banking extension)
+// Banking (PSD2) connect UI
 // ============================================================
-
-function PSD2ConnectWizard() {
-  const { toast } = useToast()
-  const supabase = createClient()
-  const { dialogProps, confirm } = useDestructiveConfirm()
-  const { company } = useCompany()
-
-  const [bankConnections, setBankConnections] = useState<BankConnection[]>([])
-  const [syncingConnectionId, setSyncingConnectionId] = useState<string | null>(null)
-  const [isConnecting, setIsConnecting] = useState(false)
-  const [connectingBankName, setConnectingBankName] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-
-  useEffect(() => {
-    fetchConnections()
-  }, [])
-
-  async function fetchConnections() {
-    setIsLoading(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
-    if (!company) return
-
-    const { data: connections } = await supabase
-      .from('bank_connections')
-      .select('*')
-      .eq('company_id', company.id)
-      .order('created_at', { ascending: false })
-
-    setBankConnections(connections || [])
-    setIsLoading(false)
-  }
-
-  async function handleConnectBank(bank: Bank) {
-    setIsConnecting(true)
-    setConnectingBankName(bank.name)
-
-    try {
-      const response = await fetch('/api/extensions/ext/enable-banking/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aspsp_name: bank.name, aspsp_country: bank.country }),
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.error)
-      }
-
-      window.location.href = data.authorization_url
-    } catch (error) {
-      toast({
-        title: 'Kunde inte ansluta bank',
-        description: error instanceof Error ? error.message : 'Försök igen.',
-        variant: 'destructive',
-      })
-      setIsConnecting(false)
-      setConnectingBankName(null)
-    }
-  }
-
-  async function handleSyncTransactions(connectionId: string) {
-    setSyncingConnectionId(connectionId)
-
-    try {
-      const response = await fetch('/api/extensions/ext/enable-banking/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connection_id: connectionId }),
-      })
-
-      const data = await response.json()
-
-      if (!response.ok) {
-        throw new Error(data.error)
-      }
-
-      toast({
-        title: 'Synkronisering klar',
-        description: `${data.imported} nya transaktioner importerade`,
-      })
-
-      fetchConnections()
-    } catch (error) {
-      toast({
-        title: 'Synkronisering misslyckades',
-        description: error instanceof Error ? error.message : 'Försök igen.',
-        variant: 'destructive',
-      })
-    }
-
-    setSyncingConnectionId(null)
-  }
-
-  async function handleDisconnectBank(connectionId: string) {
-    const ok = await confirm({
-      title: 'Koppla bort bank?',
-      description: 'PSD2-samtycket kommer återkallas. Befintliga transaktioner påverkas inte.',
-      confirmLabel: 'Koppla bort',
-      variant: 'warning',
-    })
-    if (!ok) return
-
-    try {
-      const response = await fetch('/api/extensions/ext/enable-banking/disconnect', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connection_id: connectionId }),
-      })
-
-      if (!response.ok) {
-        const data = await response.json()
-        throw new Error(data.error || 'Disconnect failed')
-      }
-
-      toast({
-        title: 'Bank bortkopplad',
-        description: 'Bankanslutningen och PSD2-samtycket har återkallats',
-      })
-      fetchConnections()
-    } catch (error) {
-      toast({
-        title: 'Kunde inte koppla bort bank',
-        description: error instanceof Error ? error.message : 'Försök igen.',
-        variant: 'destructive',
-      })
-    }
-  }
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    )
-  }
-
-  const activeConnections = bankConnections.filter((c) => c.status === 'active')
-
-  return (
-    <div className="space-y-6">
-      <DestructiveConfirmDialog {...dialogProps} />
-
-      {/* Connected banks */}
-      {activeConnections.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Anslutna banker</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {activeConnections.map((connection) => (
-              <BankConnectionStatus
-                key={connection.id}
-                connection={connection}
-                onSync={handleSyncTransactions}
-                onDisconnect={handleDisconnectBank}
-                isSyncing={syncingConnectionId === connection.id}
-              />
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Connect new bank */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Anslut din bank</CardTitle>
-          <CardDescription>
-            Välj din bank nedan för att koppla ditt konto via PSD2. Transaktioner synkas automatiskt varje dag.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <BankSelector
-            onConnect={handleConnectBank}
-            isConnecting={isConnecting}
-            connectingBankName={connectingBankName}
-          />
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
+// Provided by the enable-banking extension and loaded through the settings
+// panel registry (dynamic import), so this core page never imports from
+// @/extensions directly. The shared panel renders every connection state
+// (pending account selection, active, expiring, and expired/error with the
+// reconnect entry point), which the old inline wizard here did not.
+const BankingPanel = getSettingsPanel('enable-banking')
 
 // ============================================================
 // Import Page with Selection Cards
@@ -2093,6 +1944,7 @@ export default function ImportPage() {
   const t = useTranslations('import')
   const router = useRouter()
   const hasCloudBackup = ENABLED_EXTENSION_IDS.has('cloud-backup')
+  const hasBankSync = useCapability(CAPABILITY.bank_sync)
 
   // Fetch authenticated user ID and sandbox status
   useEffect(() => {
@@ -2156,21 +2008,16 @@ export default function ImportPage() {
     const qs = params.toString()
     router.replace(qs ? `/import?${qs}` : '/import', { scroll: false })
   }
-  // Extensions are active if compiled in — no runtime toggle check needed
+  // Extensions are active if compiled in: no runtime toggle check needed
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMigrationExtension = ENABLED_EXTENSION_IDS.has('arcim-migration')
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">
-          {view === 'export' ? t('export_title') : t('title')}
-        </h1>
-        <p className="text-muted-foreground">
-          {view === 'export' ? t('export_subtitle') : t('subtitle')}
-        </p>
-      </div>
+    <div className="space-y-8">
+      <PageHeader
+        title={view === 'export' ? t('export_title') : t('title')}
+        description={view === 'export' ? t('export_subtitle') : undefined}
+      />
 
       {mode === null && (
         <>
@@ -2198,10 +2045,10 @@ export default function ImportPage() {
                 tabIndex={isSandbox ? -1 : 0}
                 aria-disabled={isSandbox}
                 className={cn(
-                  'group flex items-start gap-4 rounded-lg border bg-card p-5 transition-all',
+                  'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
                   isSandbox
                     ? 'opacity-50 cursor-not-allowed'
-                    : 'cursor-pointer hover:border-foreground/15 hover:shadow-[var(--shadow-sm)] active:scale-[0.998]'
+                    : 'cursor-pointer hover:border-foreground/15'
                 )}
                 onClick={() => { if (!isSandbox) setMode('psd2') }}
                 onKeyDown={(e) => { if (!isSandbox && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setMode('psd2') } }}
@@ -2210,17 +2057,21 @@ export default function ImportPage() {
                   <Landmark className="h-[18px] w-[18px] text-foreground/60" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2.5">
+                  <div className="flex items-center gap-2">
                     <h3 className="text-[15px] font-semibold leading-tight">{t('psd2_title')}</h3>
-                    <span className="text-[11px] font-medium text-success bg-success/10 px-2 py-0.5 rounded-full leading-none">
-                      {t('psd2_recommended')}
-                    </span>
+                    {hasBankSync ? (
+                      <Badge variant="success">{t('psd2_recommended')}</Badge>
+                    ) : (
+                      <span className="text-[11px] font-medium text-muted-foreground bg-secondary px-2 py-0.5 rounded-full leading-none">
+                        {t('psd2_requires_subscription')}
+                      </span>
+                    )}
                   </div>
-                  <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
+                  <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
                     {t('psd2_description')}
                   </p>
                 </div>
-                <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+                <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
               </div>
             )}
 
@@ -2231,10 +2082,10 @@ export default function ImportPage() {
                 tabIndex={isSandbox ? -1 : 0}
                 aria-disabled={isSandbox}
                 className={cn(
-                  'group rounded-lg border bg-card p-5 transition-all',
+                  'group rounded-lg border bg-card p-6 transition-colors',
                   isSandbox
                     ? 'opacity-50 cursor-not-allowed'
-                    : 'cursor-pointer hover:border-foreground/15 hover:shadow-[var(--shadow-sm)] active:scale-[0.998]'
+                    : 'cursor-pointer hover:border-foreground/15'
                 )}
                 onClick={() => { if (!isSandbox) setMode('migration') }}
                 onKeyDown={(e) => { if (!isSandbox && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setMode('migration') } }}
@@ -2245,13 +2096,13 @@ export default function ImportPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <h3 className="text-[15px] font-semibold leading-tight">{t('migration_title')}</h3>
-                    <p className="text-sm mt-1.5 leading-relaxed max-w-lg underline decoration-foreground/20 underline-offset-2 text-muted-foreground">
+                    <p className="text-sm mt-1 leading-relaxed max-w-lg underline decoration-foreground/20 underline-offset-2 text-muted-foreground">
                       {t('migration_description')}
                     </p>
                   </div>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+                  <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
                 </div>
-                <div className="flex flex-wrap gap-2 mt-3.5 ml-[52px]">
+                <div className="flex flex-wrap gap-2 mt-4 ml-[52px]">
                   {([
                     { name: 'Fortnox', logo: '/logos/fortnox.svg' },
                     { name: 'Visma', logo: '/logos/visma.jpeg' },
@@ -2259,7 +2110,7 @@ export default function ImportPage() {
                     { name: 'Björn Lundén', logo: '/logos/bjornlunden.png' },
                     { name: 'Briox', logo: '/logos/Briox_logo.png' },
                   ] as const).map(provider => (
-                    <div key={provider.name} className="flex items-center gap-1.5 rounded border border-border/60 bg-muted/30 px-2 py-1">
+                    <div key={provider.name} className="flex items-center gap-2 rounded border border-border bg-muted/30 px-2 py-1">
                       <img src={provider.logo} alt={provider.name} className="h-4 w-4 shrink-0 rounded-sm object-contain" />
                       <span className="text-[11px] font-medium text-muted-foreground">{provider.name}</span>
                     </div>
@@ -2268,7 +2119,7 @@ export default function ImportPage() {
               </div>
             )}
 
-            {/* 3. Banktransaktioner — manual file imports (bank file, CSV/Excel,
+            {/* 3. Banktransaktioner: manual file imports (bank file, CSV/Excel,
                 SIE) run entirely on uploaded data with no external service, so
                 they stay available in the sandbox, unlike the API-backed options
                 above (bank connection, provider migration) which need live
@@ -2277,8 +2128,8 @@ export default function ImportPage() {
               role="button"
               tabIndex={0}
               className={cn(
-                'group flex items-start gap-4 rounded-lg border bg-card p-5 transition-all',
-                'cursor-pointer hover:border-foreground/15 hover:shadow-[var(--shadow-sm)] active:scale-[0.998]'
+                'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
+                'cursor-pointer hover:border-foreground/15'
               )}
               onClick={() => setMode('bank')}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMode('bank') } }}
@@ -2288,10 +2139,10 @@ export default function ImportPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <h3 className="text-[15px] font-semibold leading-tight">{t('bankfile_title')}</h3>
-                <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
+                <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
                   {t('bankfile_description')}
                 </p>
-                <div className="flex flex-wrap gap-1.5 mt-2.5">
+                <div className="flex flex-wrap gap-2 mt-2">
                   {['CSV', 'OFX', 'SEB', 'Swedbank', 'Nordea'].map(fmt => (
                     <span key={fmt} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
                       {fmt}
@@ -2299,7 +2150,7 @@ export default function ImportPage() {
                   ))}
                 </div>
               </div>
-              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
             </div>
 
             {/* 4. CSV/Excel-data (ingående balanser, kunder, leverantörer) */}
@@ -2307,8 +2158,8 @@ export default function ImportPage() {
               role="button"
               tabIndex={0}
               className={cn(
-                'group flex items-start gap-4 rounded-lg border bg-card p-5 transition-all',
-                'cursor-pointer hover:border-foreground/15 hover:shadow-[var(--shadow-sm)] active:scale-[0.998]'
+                'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
+                'cursor-pointer hover:border-foreground/15'
               )}
               onClick={() => setMode('csv_data')}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMode('csv_data') } }}
@@ -2318,10 +2169,10 @@ export default function ImportPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <h3 className="text-[15px] font-semibold leading-tight">{t('csv_data_title')}</h3>
-                <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
+                <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
                   {t('csv_data_description')}
                 </p>
-                <div className="flex flex-wrap gap-1.5 mt-2.5">
+                <div className="flex flex-wrap gap-2 mt-2">
                   {[
                     { key: 'XLSX', label: 'XLSX' },
                     { key: 'CSV', label: 'CSV' },
@@ -2336,7 +2187,7 @@ export default function ImportPage() {
                   ))}
                 </div>
               </div>
-              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
             </div>
 
             {/* 5. Bokföringsdata (SIE) */}
@@ -2344,8 +2195,8 @@ export default function ImportPage() {
               role="button"
               tabIndex={0}
               className={cn(
-                'group flex items-start gap-4 rounded-lg border bg-card p-5 transition-all',
-                'cursor-pointer hover:border-foreground/15 hover:shadow-[var(--shadow-sm)] active:scale-[0.998]'
+                'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
+                'cursor-pointer hover:border-foreground/15'
               )}
               onClick={() => setMode('sie')}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMode('sie') } }}
@@ -2355,10 +2206,10 @@ export default function ImportPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <h3 className="text-[15px] font-semibold leading-tight">{t('sie_title')}</h3>
-                <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed max-w-lg">
+                <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
                   {t('sie_description')}
                 </p>
-                <div className="flex flex-wrap gap-1.5 mt-2.5">
+                <div className="flex flex-wrap gap-2 mt-2">
                   {['SIE4', '.se'].map(fmt => (
                     <span key={fmt} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
                       {fmt}
@@ -2366,7 +2217,7 @@ export default function ImportPage() {
                   ))}
                 </div>
               </div>
-              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
             </div>
               </div>
             </TabsContent>
@@ -2444,7 +2295,25 @@ export default function ImportPage() {
         </Button>
       )}
 
-      {mode === 'psd2' && <PSD2ConnectWizard />}
+      {mode === 'psd2' && (
+        hasBankingExtension && BankingPanel ? (
+          <BankingPanel />
+        ) : (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <Landmark className="mb-4 h-10 w-10 text-muted-foreground/40" />
+              <p className="mb-1 font-medium">Bankintegration (PSD2) är inte aktiverad</p>
+              <p className="mb-4 max-w-md text-sm text-muted-foreground">
+                Aktivera tillägget Enable Banking för att koppla ditt bankkonto, eller importera
+                transaktioner manuellt via bankfil.
+              </p>
+              <Button variant="outline" onClick={() => setMode('bank')}>
+                Importera bankfil istället
+              </Button>
+            </CardContent>
+          </Card>
+        )
+      )}
       {mode === 'bank' && <BankFileImportWizard />}
       {mode === 'sie' && <SIEImportWizard />}
       {mode === 'csv_data' && <CSVDataImportWizard />}

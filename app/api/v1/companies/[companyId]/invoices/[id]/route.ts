@@ -1,10 +1,10 @@
 /**
- * /api/v1/companies/{companyId}/invoices/{id} — invoice detail + draft update.
+ * /api/v1/companies/{companyId}/invoices/{id}: invoice detail + draft update.
  *
- * GET   — full invoice record. ?expand=items,payments controls embedding.
- * PATCH — partial update on DRAFT invoices only. Allowed fields are the
+ * GET: full invoice record. ?expand=items,payments controls embedding.
+ * PATCH: partial update on DRAFT invoices only. Allowed fields are the
  *         "metadata" subset (dates, references, notes); customer_id,
- *         currency, document_type, and items are immutable — changing any
+ *         currency, document_type, and items are immutable: changing any
  *         of those means delete-and-recreate (drafts are cheap). Returns
  *         409 INVOICE_UPDATE_NOT_DRAFT (reusing existing code) if the
  *         invoice is not in draft status.
@@ -19,11 +19,13 @@ import { parseExpand } from '@/lib/api/v1/expand'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
+import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 
 // Allowed PATCH fields for a draft invoice. Excludes items (separate
-// workflow), customer_id / currency / document_type (structural — change
+// workflow), customer_id / currency / document_type (structural: change
 // via delete + recreate), invoice_number (allocated server-side), all
-// computed totals, and status (state machine — use action verbs in PR-B-2b).
+// computed totals, and status (state machine: use action verbs in PR-B-2b).
 const V1PatchDraftInvoiceSchema = z.object({
   invoice_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD').optional(),
   due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD').optional(),
@@ -31,9 +33,13 @@ const V1PatchDraftInvoiceSchema = z.object({
   your_reference: z.union([z.string(), z.null()]).optional(),
   our_reference: z.union([z.string(), z.null()]).optional(),
   notes: z.union([z.string(), z.null()]).optional(),
+  // Project/cost-centre tagging ({"6":"P001"}): replaces the whole bag.
+  // Send {} to clear all tags. Codes are validated against the dimension
+  // registry when the invoice posts at :send, not here.
+  default_dimensions: DimensionsBagSchema.optional(),
 })
 
-// Loose schema — detail responses carry many fields, and pinning the exact
+// Loose schema: detail responses carry many fields, and pinning the exact
 // types in the registry is overkill until Phase 2 PR-B introduces writes
 // that reuse the schema for validation.
 const InvoiceDetail = z.object({
@@ -53,19 +59,16 @@ const InvoiceDetail = z.object({
 
 const ALLOWED_EXPAND = ['items', 'payments'] as const
 
-// Explicit projections. Detail endpoint is more verbose than list — includes
-// VAT treatment, conversion, FX, and notes — but still drops user_id and
-// company_id (internal scoping).
-const INVOICE_DETAIL_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, created_at, updated_at'
+// Explicit projections, shared with the create route so create/detail/patch
+// responses never drift.
+const INVOICE_DETAIL_COLUMNS = INVOICE_FULL_COLUMNS
 
 const CUSTOMER_DETAIL_COLUMNS =
   'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
-const INVOICE_ITEM_COLUMNS =
-  'id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, created_at'
+const INVOICE_ITEM_COLUMNS = INVOICE_ITEM_FULL_COLUMNS
 
-// Payment projection — drops invoice_id (redundant on the parent), user_id,
+// Payment projection: drops invoice_id (redundant on the parent), user_id,
 // company_id (internal scoping).
 const INVOICE_PAYMENT_COLUMNS =
   'id, payment_date, amount, currency, exchange_rate, exchange_rate_difference, journal_entry_id, transaction_id, notes, created_at'
@@ -82,7 +85,7 @@ registerEndpoint({
   doNotUseFor:
     'Listing invoices (use GET /api/v1/companies/{companyId}/invoices). Bookkeeping verifikationer tied to the invoice (use the journal-entries endpoints in a later phase).',
   pitfalls: [
-    'Returns 404 if the invoice does not belong to the company in the URL — does not leak existence across companies.',
+    'Returns 404 if the invoice does not belong to the company in the URL: does not leak existence across companies.',
     'paid_at and remaining_amount can lag behind the latest payment by a few seconds during high-volume reconciliation.',
   ],
   example: {
@@ -160,7 +163,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     }
 
     if (!data) {
-      // Generic NOT_FOUND — do not echo the queried id back to the caller.
+      // Generic NOT_FOUND: do not echo the queried id back to the caller.
       ctx.log.warn('invoices.get: not found', { invoiceId, companyId: ctx.companyId })
       return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
         requestId: ctx.requestId,
@@ -173,7 +176,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 )
 
 // ──────────────────────────────────────────────────────────────────
-// PATCH — update a DRAFT invoice (metadata fields only)
+// PATCH: update a DRAFT invoice (metadata fields only)
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -182,15 +185,16 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id',
   summary: 'Update a draft invoice (metadata fields only).',
   description:
-    'Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes. customer_id, currency, document_type, items, and computed totals are immutable — replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.',
+    'Partial update for invoices in draft status. Allowed fields: invoice_date, due_date, delivery_date, your_reference, our_reference, notes, default_dimensions (project/cost-centre tags, e.g. {"6":"P001"}; replaces the whole bag). customer_id, currency, document_type, items, and computed totals are immutable: replace those by deleting the draft and recreating it. Returns 409 INVOICE_UPDATE_NOT_DRAFT if the invoice is no longer in draft status. Idempotent and dry-runnable.',
   useWhen:
     'You need to correct a typo, push the due date, or update a customer reference on a draft you have not sent yet. The invoice number stays null until the first :send action.',
   doNotUseFor:
-    'Updating a sent / paid / credited invoice (those are immutable per ML 17 kap; issue a credit note via POST /:id:credit in PR-B-2b). Changing items, currency, or customer — drafts are cheap to delete and recreate.',
+    'Updating a sent / paid / credited invoice (those are immutable per ML 17 kap; issue a credit note via POST /:id:credit in PR-B-2b). Changing items, currency, or customer: drafts are cheap to delete and recreate.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'A 409 INVOICE_UPDATE_NOT_DRAFT means the invoice has been sent / paid / credited / cancelled. The error code name is shared with the DELETE handler.',
-    'Items are immutable here — to change line items, delete the draft and POST a fresh one.',
+    'Items are immutable here: to change line items, delete the draft and POST a fresh one.',
+    'default_dimensions replaces the entire bag (no per-key merge): read the current value first if you want to add a tag. Send {} to clear all tags. Codes are validated against the dimension registry at :send, not at PATCH time.',
   ],
   example: {
     request: { due_date: '2026-07-15', notes: 'Förlängd förfallotid' },
@@ -213,8 +217,7 @@ registerEndpoint({
   response: { success: dataEnvelope(InvoiceDetail) },
 })
 
-const INVOICE_PATCH_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, created_at, updated_at'
+const INVOICE_PATCH_RESPONSE_COLUMNS = INVOICE_FULL_COLUMNS
 
 export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'invoices.update',
@@ -262,6 +265,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       'your_reference',
       'our_reference',
       'notes',
+      'default_dimensions',
     ] as const) {
       if (body[key] !== undefined) updateData[key] = body[key]
     }
@@ -275,7 +279,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 
     // Pre-flight: verify the invoice exists in this company AND is still in
     // draft status. We do this for both dry-run and commit so the response
-    // is consistent — dry-run that "succeeds" on a non-draft would mislead.
+    // is consistent: dry-run that "succeeds" on a non-draft would mislead.
     const { data: current, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(INVOICE_PATCH_RESPONSE_COLUMNS)

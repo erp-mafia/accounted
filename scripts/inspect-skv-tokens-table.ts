@@ -27,7 +27,7 @@ async function main() {
     .from('skatteverket_tokens')
     .select('id, user_id, expires_at, refresh_count, scope')
     .limit(1)
-  console.log('Sample select error:', openapiErr?.message ?? 'none', '— rows:', openapiResp?.length ?? 0)
+  console.log('Sample select error:', openapiErr?.message ?? 'none', ', rows:', openapiResp?.length ?? 0)
 
   // Fetch from pg_constraint via a dedicated RPC if available, else via raw query
   // Supabase JS doesn't expose raw SQL, so we use a workaround: try to provoke

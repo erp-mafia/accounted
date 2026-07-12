@@ -14,6 +14,6 @@
     "dataPattern": "core",
     "readsCoreTables": [],
     "description": "Copy-paste starter for a whitelabel fork. Disabled by default.",
-    "longDescription": "Template extension for forks that want to rebrand the app. Copy this folder, rename it, edit index.ts with your brand values, drop your logo into assets/, and enable it in extensions.config.json. See WHITELABEL.md for the full fork checklist."
+    "longDescription": "Template extension for forks that want to rebrand the app. Copy this folder, rename it, edit index.ts with your brand values, drop your logo into assets/, and enable it in extensions.config.json. See docs/WHITELABEL.md for the full fork checklist."
   }
 }

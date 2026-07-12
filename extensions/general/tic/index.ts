@@ -53,7 +53,7 @@ const log = createLogger('tic/bankid')
  * is built, encrypt the relevant fields the same way `encryptPersonalNumber`
  * does for pnr.
  *
- * Non-blocking: any failure is logged and swallowed — BankID auth must still
+ * Non-blocking: any failure is logged and swallowed: BankID auth must still
  * succeed even if enrichment is down.
  */
 async function fetchAndStoreEnrichment(
@@ -68,7 +68,7 @@ async function fetchAndStoreEnrichment(
     //
     // If a requested type is disabled on the tenant, TIC rejects the WHOLE
     // enrichment with body field `error: 'Session not completed'` (HTTP 200,
-    // not a real HTTP error). The message is misleading — it does NOT mean
+    // not a real HTTP error). The message is misleading: it does NOT mean
     // the BankID session is incomplete. The hint mapping below catches it.
     const enrichment = await requestEnrichment(sessionId, ['SPAR', 'CompanyRoles'])
     log.info('enrichment request returned', {
@@ -85,27 +85,27 @@ async function fetchAndStoreEnrichment(
     const isCompleted = statusLower === 'completed' || statusLower === 'partiallycompleted'
     const usable = isCompleted && enrichment.secureUrl
     if (!usable) {
-      // Log the full response shape (sans secureUrl — time-limited token)
+      // Log the full response shape (sans secureUrl, time-limited token)
       // so we can diagnose why a real-user enrichment comes back non-usable.
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { secureUrl: _omit, ...responseDiagnostic } = enrichment
 
       // Interpret common failure shapes into actionable hints so developers
       // don't have to re-trace this every time. TIC returns these as body
-      // fields with HTTP 200, not as errors — see TIC_AUTH.md §enrichment.
+      // fields with HTTP 200, not as errors: see TIC_AUTH.md §enrichment.
       const errField = (enrichment as { error?: string }).error ?? ''
       let hint: string | undefined
       if (errField === 'Session not completed') {
         // Two distinct causes produce this identical error:
-        //   1. We requested a type not enabled on the tenant (most common —
+        //   1. We requested a type not enabled on the tenant (most common,
         //      verify via GET /api/v1/enrichment/types)
         //   2. The BankID session genuinely never went through the
         //      consent-to-enrich dialog
         hint = 'Likely cause: a requested enrichment type is not enabled on the TIC tenant. Run `curl -H "X-Api-Key: $KEY" https://id.tic.io/api/v1/enrichment/types` to verify which types have `enabled: true` and adjust the requestEnrichment call to match.'
       } else if (errField.toLowerCase().includes('not enabled')) {
-        hint = 'Enrichment explicitly disabled on TIC tenant — contact support@tic.io.'
+        hint = 'Enrichment explicitly disabled on TIC tenant: contact support@tic.io.'
       } else if (errField.toLowerCase().includes('too old')) {
-        hint = '>30 min between auth completion and enrichment call — check for slow server-side work between /bankid/complete and fetchAndStoreEnrichment.'
+        hint = '>30 min between auth completion and enrichment call: check for slow server-side work between /bankid/complete and fetchAndStoreEnrichment.'
       }
 
       log.warn('enrichment not usable', { ...responseDiagnostic, hint })
@@ -115,7 +115,7 @@ async function fetchAndStoreEnrichment(
     const enrichmentData = await fetchEnrichmentData(enrichment.secureUrl)
 
     // Log a PII-free snapshot so we can debug the role filter in production.
-    // Raw personnummer / names / address values are deliberately omitted —
+    // Raw personnummer / names / address values are deliberately omitted:
     // only flat booleans and counts.
     const firstRole = enrichmentData.companyRoles?.[0]
     const spar = enrichmentData.spar
@@ -170,7 +170,7 @@ const BANKID_START_COOLDOWN_MS = 5_000
  * `TICFinancialReportSummary` shape consumed by TicWorkspace. v2 nests
  * the metadata under `financialReportMetadata` and replaces v1's
  * `isAudited` boolean / `auditOpinion` string with auditor identity
- * fields — we derive `isAudited` from the presence of an auditor.
+ * fields: we derive `isAudited` from the presence of an auditor.
  */
 function toFinancialReportSummary(
   doc: import('./lib/tic-types').TICDocument
@@ -197,7 +197,7 @@ function toFinancialReportSummary(
  *   - NOT_CONFIGURED       → 503 (proxy URL missing)
  *   - RATE_LIMIT_EXCEEDED  → 429 (TIC quota hit)
  *   - TIMEOUT              → 504 (TIC took longer than 15s)
- *   - upstream 4xx         → 400 (TIC rejected the input — typically a malformed org number)
+ *   - upstream 4xx         → 400 (TIC rejected the input: typically a malformed org number)
  *   - upstream 5xx         → 502 (TIC outage)
  *   - other / unknown      → 500
  *
@@ -207,7 +207,7 @@ function toFinancialReportSummary(
 // Derive `{ startMonthDay, endMonthDay }` (e.g. "01-01" / "12-31") from the
 // search doc's mostRecentFinancialSummary. periodStart/periodEnd are Unix
 // timestamps in seconds. Returns null when the company has no closed period
-// yet — the client's deriveFirstYearDefaults handles newly-registered
+// yet: the client's deriveFirstYearDefaults handles newly-registered
 // companies from registrationDate instead.
 function deriveFiscalYearMonthDay(
   fin: { periodStart?: number; periodEnd?: number } | undefined,
@@ -305,7 +305,7 @@ export const ticExtension: Extension = {
       method: 'GET',
       path: '/lookup',
       // Used during onboarding (Step2CompanyDetails debounced lookup + the
-      // BankID picker) — user is authenticated but does not yet have a
+      // BankID picker): user is authenticated but does not yet have a
       // company. Must not require a company context.
       skipCompanyContext: true,
       handler: async (request: Request, ctx?) => {
@@ -325,7 +325,7 @@ export const ticExtension: Extension = {
         try {
           // Single Lens call: the search-public document already includes
           // sniCodes, bankAccounts, emailAddresses, phoneNumbers, and the
-          // registration flags at the top level — we used to fan out to
+          // registration flags at the top level: we used to fan out to
           // five dedicated endpoints for the same data (6 calls total) and
           // the 3 000/mo TIC budget couldn't sustain it. This endpoint now
           // costs ~1 call. Fiscal-year MM-DD is derived from
@@ -410,7 +410,7 @@ export const ticExtension: Extension = {
     {
       method: 'GET',
       path: '/profile',
-      // Used during onboarding to render richer company profile details —
+      // Used during onboarding to render richer company profile details:
       // user is authenticated but may not yet have a company. See /lookup.
       skipCompanyContext: true,
       handler: async (request: Request, ctx?) => {
@@ -444,7 +444,7 @@ export const ticExtension: Extension = {
 
           // Phase 2: ONLY data not already present at the top level of the
           // search doc. We dropped bank-accounts, industries, email-addresses,
-          // phone-numbers, purposes, and signatory — those duplicate the
+          // phone-numbers, purposes, and signatory: those duplicate the
           // search-doc fields and were burning 6 Lens calls per /profile
           // for nothing. Per-/profile cost: 13 → 7 calls.
           const [
@@ -503,7 +503,7 @@ export const ticExtension: Extension = {
 
           // Purpose: take `doc.mostRecentPurpose` directly. Dropped the
           // /purposes call (which sorted history descending and picked
-          // the latest non-empty entry) — the search doc's
+          // the latest non-empty entry): the search doc's
           // mostRecentPurpose is the same most-recently-registered string.
           const purpose = doc.mostRecentPurpose ?? null
 
@@ -544,7 +544,7 @@ export const ticExtension: Extension = {
 
           // Signatory: free-form firmateckning descriptions. v2 search doc
           // exposes `mostRecentSignatory` directly (single entry). Drops the
-          // dedicated /signatory call — historical signatory entries are rare
+          // dedicated /signatory call: historical signatory entries are rare
           // to use in onboarding and the current entry is what the review
           // card surfaces.
           const signatory = (() => {
@@ -657,7 +657,7 @@ export const ticExtension: Extension = {
           // notification's owners are the current ones. v2 returns the
           // notifications as a top-level array (v1's wrapper with
           // `.notifications` / `.exempts` is gone). Personnummer is
-          // intentionally excluded — PII we don't need cached and we
+          // intentionally excluded: PII we don't need cached and we
           // don't want it persisted on `companies.tic_snapshot`.
           let beneficialOwners: TICCompanyProfile['beneficialOwners'] = []
           if (beneficialOwnersResult.status === 'fulfilled' && beneficialOwnersResult.value) {
@@ -805,14 +805,14 @@ export const ticExtension: Extension = {
               return NextResponse.json({ error: 'rate_limit', message: 'Rate limit exceeded' }, { status: 429 })
             }
             if (error.code === 'TIMEOUT') {
-              log.error('start timed out — TIC Identity API unreachable', { statusCode: error.statusCode })
+              log.error('start timed out: TIC Identity API unreachable', { statusCode: error.statusCode })
               return NextResponse.json({ error: 'service_unavailable', message: 'BankID service is not responding' }, { status: 503 })
             }
             // TIC API returned an error (e.g. 5xx)
-            log.error('start failed — TIC API error', { statusCode: error.statusCode, code: error.code, message: error.message })
+            log.error('start failed: TIC API error', { statusCode: error.statusCode, code: error.code, message: error.message })
             return NextResponse.json({ error: 'service_unavailable', message: 'BankID service is temporarily unavailable' }, { status: 502 })
           }
-          log.error('start failed — unexpected error', error)
+          log.error('start failed: unexpected error', error)
           return NextResponse.json({ error: 'internal_error', message: 'Failed to start BankID session' }, { status: 500 })
         }
       },
@@ -841,13 +841,13 @@ export const ticExtension: Extension = {
               return NextResponse.json({ error: 'rate_limit', message: 'Rate limit exceeded' }, { status: 429 })
             }
             if (error.code === 'TIMEOUT') {
-              log.error('poll timed out — TIC Identity API unreachable')
+              log.error('poll timed out: TIC Identity API unreachable')
               return NextResponse.json({ error: 'service_unavailable', message: 'BankID service is not responding' }, { status: 503 })
             }
-            log.error('poll failed — TIC API error', { statusCode: error.statusCode, code: error.code, message: error.message })
+            log.error('poll failed: TIC API error', { statusCode: error.statusCode, code: error.code, message: error.message })
             return NextResponse.json({ error: 'service_unavailable', message: 'BankID service is temporarily unavailable' }, { status: 502 })
           }
-          log.error('poll failed — unexpected error', error)
+          log.error('poll failed: unexpected error', error)
           return NextResponse.json({ error: 'internal_error', message: 'Failed to poll BankID session' }, { status: 500 })
         }
       },
@@ -878,11 +878,12 @@ export const ticExtension: Extension = {
             )
           }
 
-          // Verify BankID session is complete
+          // Verify BankID session is complete. The message surfaces directly
+          // in the register-page toast, so it must be Swedish.
           const session = await collectBankIdResult(sessionId)
           if (session.status !== 'complete' || !session.user) {
             return NextResponse.json(
-              { error: 'session_invalid', message: 'BankID session is not complete' },
+              { error: 'session_invalid', message: 'BankID-sessionen är inte längre giltig. Försök igen.' },
               { status: 400 }
             )
           }
@@ -907,7 +908,7 @@ export const ticExtension: Extension = {
               }, { status: 404 })
             }
 
-            // Returning user — generate magic link
+            // Returning user: generate magic link
             const { data: userData } = await supabase.auth.admin.getUserById(existing.user_id)
             if (!userData?.user?.email) {
               return NextResponse.json(
@@ -959,7 +960,7 @@ export const ticExtension: Extension = {
             .single()
 
           if (existingByEmail) {
-            log.warn('bankid signup rejected — email already registered', {
+            log.warn('bankid signup rejected: email already registered', {
               sessionId,
               pnrHashPrefix: pnrHash.slice(0, 8),
             })
@@ -984,20 +985,45 @@ export const ticExtension: Extension = {
           if (createError || !newUser?.user) {
             log.error('createUser failed', { email: trimmedEmail, status: createError?.status, code: createError?.code, message: createError?.message })
             return NextResponse.json(
-              { error: 'Failed to create account', message: createError?.message },
+              { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
               { status: 500 }
             )
           }
 
           const userId = newUser.user.id
 
+          // All-or-nothing signup: if any step after createUser fails, delete
+          // the just-created user so the same email/BankID can retry cleanly.
+          // Leaving the half-created account behind strands the user — a retry
+          // hits account_exists/already_linked, but the account only has a
+          // random password they never saw, so "log in instead" requires a
+          // password reset. bankid_identities cascades on user delete.
+          const rollbackSignup = async (step: string) => {
+            const { error: deleteError } = await supabase.auth.admin.deleteUser(userId)
+            if (deleteError) {
+              log.error(`signup rollback after failed ${step} could not delete user — orphaned account`, {
+                userId,
+                message: deleteError.message,
+              })
+            }
+          }
+
           // Mark user as BankID-linked (skips TOTP MFA) and record that they
-          // do not have a password yet — the BankID signup gave them a random
+          // do not have a password yet: the BankID signup gave them a random
           // server-side password they will never see. This flag gates MFA
           // enrollment (see lib/auth/has-password.ts).
-          await supabase.auth.admin.updateUserById(userId, {
+          const { error: metaError } = await supabase.auth.admin.updateUserById(userId, {
             app_metadata: { bankid_linked: true, has_password: false },
           })
+
+          if (metaError) {
+            log.error('signup app_metadata update failed', { message: metaError.message, code: metaError.code })
+            await rollbackSignup('app_metadata update')
+            return NextResponse.json(
+              { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
+              { status: 500 }
+            )
+          }
 
           // Store BankID identity
           const { error: insertError } = await supabase
@@ -1012,8 +1038,9 @@ export const ticExtension: Extension = {
 
           if (insertError) {
             log.error('insert bankid_identities failed', { message: insertError.message, code: insertError.code })
+            await rollbackSignup('bankid_identities insert')
             return NextResponse.json(
-              { error: 'Failed to link BankID identity' },
+              { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
               { status: 500 }
             )
           }
@@ -1026,13 +1053,14 @@ export const ticExtension: Extension = {
 
           if (linkError || !link?.properties?.hashed_token) {
             log.error('generateLink failed for signup', { message: linkError?.message, code: linkError?.code })
+            await rollbackSignup('generateLink')
             return NextResponse.json(
-              { error: 'Account created but failed to create session' },
+              { error: 'internal_error', message: 'Kunde inte skapa kontot. Försök igen.' },
               { status: 500 }
             )
           }
 
-          // Enrichment (CompanyRoles) — pre-fills /select-company picker.
+          // Enrichment (CompanyRoles): pre-fills /select-company picker.
           await fetchAndStoreEnrichment(sessionId, userId, supabase)
 
           return NextResponse.json({
@@ -1044,7 +1072,7 @@ export const ticExtension: Extension = {
           })
         } catch (error) {
           if (error instanceof TICAPIError) {
-            log.error('complete failed — TIC API error', { statusCode: error.statusCode, code: error.code, message: error.message })
+            log.error('complete failed: TIC API error', { statusCode: error.statusCode, code: error.code, message: error.message })
             if (error.code === 'TIMEOUT') {
               return NextResponse.json(
                 { error: 'service_unavailable', message: 'BankID service is not responding' },
@@ -1056,7 +1084,7 @@ export const ticExtension: Extension = {
               { status: 502 }
             )
           }
-          log.error('complete failed — unexpected error', error)
+          log.error('complete failed: unexpected error', error)
           return NextResponse.json(
             { error: 'internal_error', message: 'Failed to complete BankID authentication' },
             { status: 500 }
@@ -1089,7 +1117,7 @@ export const ticExtension: Extension = {
     {
       method: 'POST',
       path: '/bankid/link',
-      // skipAuth: false — requires existing Supabase session
+      // skipAuth: false, requires existing Supabase session
       handler: async (request: Request, ctx?) => {
         try {
           const body = await request.json()
@@ -1152,7 +1180,7 @@ export const ticExtension: Extension = {
           // Read-merge-write: updateUserById REPLACES app_metadata wholesale
           // (see app/api/account/password/route.ts). Passing just
           // { bankid_linked: true } would wipe has_password for users who
-          // already set one — they'd then be incorrectly shown the
+          // already set one, they'd then be incorrectly shown the
           // set-password banner on their next session.
           const { data: priorUser } = await supabase.auth.admin.getUserById(ctx.userId)
           const priorMeta = priorUser?.user?.app_metadata ?? {}
@@ -1163,13 +1191,13 @@ export const ticExtension: Extension = {
           return NextResponse.json({ data: { linked: true } })
         } catch (error) {
           if (error instanceof TICAPIError) {
-            log.error('link failed — TIC API error', { statusCode: error.statusCode, code: error.code, message: error.message })
+            log.error('link failed: TIC API error', { statusCode: error.statusCode, code: error.code, message: error.message })
             return NextResponse.json(
               { error: 'service_unavailable', message: 'BankID service is temporarily unavailable' },
               { status: 502 }
             )
           }
-          log.error('link failed — unexpected error', error)
+          log.error('link failed: unexpected error', error)
           return NextResponse.json(
             { error: 'internal_error', message: 'Failed to link BankID' },
             { status: 500 }
@@ -1181,7 +1209,7 @@ export const ticExtension: Extension = {
     {
       method: 'POST',
       path: '/bankid/unlink',
-      // skipAuth: false — requires existing Supabase session
+      // skipAuth: false, requires existing Supabase session
       handler: async (_request: Request, ctx?) => {
         try {
           if (!ctx?.userId) {
@@ -1201,9 +1229,17 @@ export const ticExtension: Extension = {
             return NextResponse.json({ error: 'Failed to unlink BankID' }, { status: 500 })
           }
 
-          // Clear app_metadata.bankid_linked so MFA enforcement resumes
+          // Clear app_metadata.bankid_linked so MFA enforcement resumes.
+          // Read-merge-write: updateUserById REPLACES app_metadata wholesale
+          // (same rationale as /bankid/link above). Writing only
+          // { bankid_linked: false } would wipe has_password — a BankID-only
+          // user (has_password: false) would then be inferred as HAVING a
+          // password (lib/auth/has-password.ts) and could strand themselves
+          // with no working login method.
+          const { data: priorUser } = await supabase.auth.admin.getUserById(ctx.userId)
+          const priorMeta = priorUser?.user?.app_metadata ?? {}
           await supabase.auth.admin.updateUserById(ctx.userId, {
-            app_metadata: { bankid_linked: false },
+            app_metadata: { ...priorMeta, bankid_linked: false },
           })
 
           return NextResponse.json({ data: { unlinked: true } })

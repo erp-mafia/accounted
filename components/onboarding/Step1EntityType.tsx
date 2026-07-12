@@ -19,7 +19,7 @@ export default function Step1EntityType({ initialData, onNext, isSaving }: Step1
   const t = useTranslations('onboarding')
   const [selected, setSelected] = useState<EntityType | undefined>(initialData.entity_type)
 
-  // "Enskild firma" and "Aktiebolag" are statutory legal entity types — kept
+  // "Enskild firma" and "Aktiebolag" are statutory legal entity types: kept
   // in Swedish in both locales.
   const entityOptions: {
     value: EntityType | string
@@ -68,7 +68,7 @@ export default function Step1EntityType({ initialData, onNext, isSaving }: Step1
             >
               <Card
                 className={cn(
-                  'relative p-4 transition-all',
+                  'relative p-4 transition-colors',
                   option.disabled
                     ? 'opacity-50 cursor-not-allowed'
                     : 'cursor-pointer hover:border-primary/50',
@@ -77,7 +77,7 @@ export default function Step1EntityType({ initialData, onNext, isSaving }: Step1
               >
                 <div className="flex items-start gap-4">
                   <div className={cn(
-                    'p-2.5 rounded-lg',
+                    'p-2 rounded-lg',
                     isSelected ? 'bg-primary/10' : 'bg-muted/50'
                   )}>
                     <Icon className={cn(

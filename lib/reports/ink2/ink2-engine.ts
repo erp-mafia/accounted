@@ -562,7 +562,7 @@ export const INK2R_ACCOUNT_MAPPINGS: INK2AccountMapping[] = [
     normalBalance: 'debit',
     accountRanges: [{ start: '8500', end: '8599' }],
   },
-  // Bokslutsdispositioner — account numbers per BAS 2020 (verified against
+  // Bokslutsdispositioner: account numbers per BAS 2020 (verified against
   // lib/bookkeeping/bas-data/class-8-financial.ts).
   {
     sruCode: '7525',
@@ -727,17 +727,20 @@ export async function generateINK2Declaration(
     throw new Error('INK2 declaration is only for aktiebolag (limited company)')
   }
 
-  // Fetch all posted journal entries with lines for this period
-  const { data: entries, error: entriesError } = await supabase
-    .from('journal_entries')
-    .select('*, lines:journal_entry_lines(*)')
-    .eq('company_id', companyId)
-    .eq('fiscal_period_id', fiscalPeriodId)
-    .in('status', ['posted', 'reversed'])
-
-  if (entriesError) {
-    throw new Error(`Failed to fetch journal entries: ${entriesError.message}`)
-  }
+  // Fetch all posted journal entries with lines for this period.
+  // Paginated: a period can exceed PostgREST's 1000-row cap, and a silent
+  // truncation here would under-report the INK2 tax declaration. PostgREST
+  // ranges count parent rows, so the embedded lines come with each entry.
+  const entries = await fetchAllRows<JournalEntry>(({ from, to }) =>
+    supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .in('status', ['posted', 'reversed'])
+      .order('id', { ascending: true })
+      .range(from, to)
+  , { dedupeBy: (e) => e.id })
 
   // Fetch chart of accounts for account names
   const accounts = await fetchAllRows<{ account_number: string; account_name: string }>(({ from, to }) =>
@@ -780,7 +783,7 @@ export async function generateINK2Declaration(
   for (const [accountNumber, balance] of accountBalances) {
     if (Math.abs(balance) < 0.01) continue
 
-    // Skip account 8999 — årets resultat is calculated
+    // Skip account 8999: årets resultat is calculated
     if (accountNumber === '8999') continue
 
     let mapped = false
@@ -878,7 +881,7 @@ export async function generateINK2Declaration(
   }
 
   // Add calculated result to fritt eget kapital for balance
-  // During open fiscal year, 2099 may have no balance — the result only exists
+  // During open fiscal year, 2099 may have no balance; the result only exists
   // as net of income statement accounts. Adding it here handles both cases.
   const adjustedEquityLiabilities = totalEquityLiabilities + resultAfterFinancial
 
@@ -899,7 +902,7 @@ export async function generateINK2Declaration(
     '7114': taxableResult < 0 ? Math.abs(taxableResult) : 0,
   }
 
-  // Build INK2S (skattemässiga justeringar — auto-derived basics only)
+  // Build INK2S (skattemässiga justeringar, auto-derived basics only)
   const ink2s: INK2SRutor = {
     '7011': fyStart,
     '7012': fyEnd,
@@ -912,7 +915,7 @@ export async function generateINK2Declaration(
 
   // Add warnings
   if (!(period as FiscalPeriod).is_closed) {
-    warnings.push('Räkenskapsåret är inte stängt — deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')
+    warnings.push('Räkenskapsåret är inte stängt; deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')
   }
 
   if (totalAssets === 0 && totalEquityLiabilities === 0 && ink2r['7410'] === 0) {

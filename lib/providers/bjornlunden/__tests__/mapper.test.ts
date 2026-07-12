@@ -83,7 +83,7 @@ describe('deriveBLInvoiceStatus via mapBLToSalesInvoice', () => {
     expect(mapBLToSalesInvoice(salesInvoiceRaw({ status: [4] })).status).toBe('paid') // overpaid
   })
 
-  it('deleted [5] and customer loss [6] are terminal — win over paid', () => {
+  it('deleted [5] and customer loss [6] are terminal: win over paid', () => {
     expect(mapBLToSalesInvoice(salesInvoiceRaw({ status: [5], paid: true })).status).toBe('cancelled')
     expect(mapBLToSalesInvoice(salesInvoiceRaw({ status: [6] })).status).toBe('cancelled')
   })
@@ -140,7 +140,7 @@ describe('mapBLToSupplierInvoice', () => {
   })
 })
 
-describe('mapBLToCustomer — customer-side field names', () => {
+describe('mapBLToCustomer: customer-side field names', () => {
   // Trimmed /customer item: organisationNumber + zip (NOT organisationId/zipCode)
   const raw: Record<string, unknown> = {
     entityId: 1,
@@ -178,7 +178,7 @@ describe('mapBLToCustomer — customer-side field names', () => {
   })
 })
 
-describe('mapBLToSupplier — supplier-side field names', () => {
+describe('mapBLToSupplier: supplier-side field names', () => {
   // Trimmed /supplier item: organisationId + zipCode + vatNr (NOT organisationNumber/zip/vatNumber)
   const raw: Record<string, unknown> = {
     entityId: 1,
@@ -213,7 +213,7 @@ describe('mapBLToSupplier — supplier-side field names', () => {
   })
 })
 
-describe('mapBLToJournal — amount sign convention', () => {
+describe('mapBLToJournal: amount sign convention', () => {
   it('positive amount → debit, negative → credit', () => {
     const dto = mapBLToJournal({
       entityId: 40748,
@@ -285,7 +285,7 @@ describe('mapBLToAccountingAccount', () => {
   })
 })
 
-describe('mapBLToCompanyInformation — /details shape', () => {
+describe('mapBLToCompanyInformation: /details shape', () => {
   it('maps name, orgnr and preferredSettings.currency', () => {
     const dto = mapBLToCompanyInformation({
       entityId: 1,

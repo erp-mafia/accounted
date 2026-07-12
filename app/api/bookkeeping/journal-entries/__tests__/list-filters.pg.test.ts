@@ -7,11 +7,11 @@ import { seedCompany, insertBalancedLines } from '@/tests/pg/fixtures'
 // list_fiscal_period_entries_with_related (migrations 20260621130500 +
 // 20260629160000).
 //   - exclude_draft: drafts kept off the committed list (own "Utkast" surface).
-//   - collapse_corrections: a correction group renders as ONE row — the live
+//   - collapse_corrections: a correction group renders as ONE row: the live
 //     correction; the storno and the reversed original it replaced are hidden.
 //   - series: voucher-series filter; pushed into the RPC so total_count reflects
 //     the filtered set (the route used to post-filter and recompute count from
-//     one page, breaking pagination — #798).
+//     one page, breaking pagination, #798).
 // total_count must stay in lockstep with the filtered set so pagination holds.
 describe('list_fiscal_period_entries_with_related: draft + correction filters', () => {
   // Insert a journal_entry directly so we can set the storno/correction link
@@ -143,7 +143,7 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
     expect(Number(seriesB[0]!.total_count)).toBe(3)
 
     // The #798 regression: with a page smaller than the filtered set, the page
-    // truncates but total_count still reports the full filtered count (3) — the
+    // truncates but total_count still reports the full filtered count (3): the
     // paginator can reach every B entry instead of stopping after one page.
     const firstPage = await callRpc(companyId, fiscalPeriodId, { series: 'B', limit: 2 })
     expect(firstPage).toHaveLength(2)

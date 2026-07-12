@@ -1,23 +1,25 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Skeleton } from "@/components/ui/skeleton"
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { DataList, DataListEmpty } from '@/components/ui/data-list'
+import { Card, CardContent } from '@/components/ui/card'
+import { DataListEmpty } from '@/components/ui/data-list'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Plus, FileInput, Lock } from 'lucide-react'
 import Link from 'next/link'
 import { PageHeader } from '@/components/ui/page-header'
+import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatDate } from '@/lib/utils'
+import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { formatCurrency, formatDate } from '@/lib/utils'
+import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { SupplierInvoice } from '@/types'
-
-function formatAmount(amount: number): string {
-  return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
 
 const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
   registered: 'secondary',
@@ -44,9 +46,23 @@ const STATUS_LABEL_KEYS: Record<string, string> = {
 export default function SupplierInvoicesPage() {
   const t = useTranslations('supplier_invoices')
   const { canWrite } = useCanWrite()
+  const { toast } = useToast()
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const [invoices, setInvoices] = useState<(SupplierInvoice & { supplier?: { id: string; name: string } })[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('all')
+  const [approvingId, setApprovingId] = useState<string | null>(null)
+
+  // The "Registrera leverantörsfaktura" modal is driven by the URL (?new=1,
+  // optionally with inbox_item_id for the invoice-inbox conversion flow) so
+  // every entry point (the header button, the empty state, the command
+  // palette, and the legacy /supplier-invoices/new redirect) opens the same
+  // dialog, and the browser back button closes it.
+  const showNewInvoice = searchParams.has('new')
+  const inboxItemId = searchParams.get('inbox_item_id')
+  const closeNewInvoice = () => router.replace('/supplier-invoices', { scroll: false })
+  const openNewInvoice = () => router.push('/supplier-invoices?new=1', { scroll: false })
 
   async function fetchInvoices() {
     setIsLoading(true)
@@ -60,15 +76,57 @@ export default function SupplierInvoicesPage() {
     fetchInvoices()
   }, [])
 
+  // Mirrors the old standalone page's post-create navigation: inbox
+  // conversions land back in the inbox, a created invoice opens its detail
+  // page, and flows that end here (e.g. private expense) close the modal and
+  // refresh the list in place.
+  const handleCreated = (invoiceId?: string) => {
+    if (inboxItemId) {
+      router.push('/e/general/invoice-inbox')
+      return
+    }
+    if (invoiceId) {
+      router.push(`/supplier-invoices/${invoiceId}`)
+      return
+    }
+    closeNewInvoice()
+    fetchInvoices()
+  }
+
+  // "Att betala" is the full payment queue: registered invoices are already
+  // booked as debt (2440), so they belong here too. Approval stays the gate
+  // for paying, not for visibility; unapproved rows get an inline approve.
   const filteredInvoices = invoices.filter((inv) => {
     switch (activeTab) {
       case 'registered': return inv.status === 'registered'
       case 'approved': return inv.status === 'approved'
-      case 'to_pay': return inv.status === 'approved' || inv.status === 'overdue'
+      case 'to_pay': return inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue'
       case 'paid': return inv.status === 'paid'
       default: return true
     }
   })
+
+  async function handleApprove(id: string) {
+    setApprovingId(id)
+    try {
+      const res = await fetch(`/api/supplier-invoices/${id}/approve`, { method: 'POST' })
+      const result = await res.json()
+      if (!res.ok) {
+        toast({ title: t('approve_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+        // Re-sync from the server: an operator about to pay must see the
+        // invoice's true approval state, not an optimistic guess.
+        fetchInvoices()
+      } else {
+        toast({ title: t('approved_title'), description: t('approved_description') })
+        setInvoices((prev) => prev.map((inv) => (inv.id === id ? { ...inv, status: 'approved' as const } : inv)))
+      }
+    } catch {
+      toast({ title: t('approve_failed_title'), description: getErrorMessage(null, { context: 'supplier_invoice' }), variant: 'destructive' })
+      fetchInvoices()
+    } finally {
+      setApprovingId(null)
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -76,12 +134,10 @@ export default function SupplierInvoicesPage() {
         title={t('title')}
         action={
           canWrite ? (
-            <Link href="/supplier-invoices/new">
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                {t('register_invoice')}
-              </Button>
-            </Link>
+            <Button onClick={openNewInvoice}>
+              <Plus className="mr-2 h-4 w-4" />
+              {t('register_invoice')}
+            </Button>
           ) : (
             <Button
               disabled
@@ -105,7 +161,8 @@ export default function SupplierInvoicesPage() {
         </TabsList>
 
         <TabsContent value={activeTab}>
-          <DataList>
+          <Card>
+            <CardContent className="p-0">
             {isLoading ? (
               <div>
                 <div className="p-3 border-b border-border">
@@ -134,9 +191,7 @@ export default function SupplierInvoicesPage() {
                 }
                 action={
                   activeTab === 'all' && canWrite ? (
-                    <Button asChild>
-                      <Link href="/supplier-invoices/new">{t('register_invoice')}</Link>
-                    </Button>
+                    <Button onClick={openNewInvoice}>{t('register_invoice')}</Button>
                   ) : undefined
                 }
               />
@@ -157,7 +212,7 @@ export default function SupplierInvoicesPage() {
                 <TableBody>
                   {filteredInvoices.map((inv) => (
                     <TableRow key={inv.id}>
-                      <TableCell className="font-mono tabular-nums">{inv.arrival_number}</TableCell>
+                      <TableCell className="tabular-nums">{inv.arrival_number}</TableCell>
                       <TableCell>
                         <Link href={`/suppliers/${inv.supplier_id}`} className="hover:underline">
                           {inv.supplier?.name || '-'}
@@ -170,21 +225,56 @@ export default function SupplierInvoicesPage() {
                       </TableCell>
                       <TableCell className="tabular-nums">{formatDate(inv.invoice_date)}</TableCell>
                       <TableCell className="tabular-nums">{formatDate(inv.due_date)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatAmount(inv.total)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatAmount(inv.remaining_amount)}</TableCell>
+                      {/* Belopp rounds like the detail page when the invoice's
+                          öresavrundning flag is on; "kvar att betala" stays
+                          öre-exact (it is the actual outstanding debt). */}
+                      <TableCell className="text-right tabular-nums">
+                        {formatCurrency(getDisplayTotal(
+                          { total: inv.total, currency: inv.currency, ore_rounding: inv.ore_rounding },
+                          { ore_rounding: false },
+                        ).displayed, inv.currency)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{formatCurrency(inv.remaining_amount, inv.currency)}</TableCell>
                       <TableCell>
-                        <Badge variant={STATUS_VARIANTS[inv.status] || 'secondary'}>
-                          {STATUS_LABEL_KEYS[inv.status] ? t(STATUS_LABEL_KEYS[inv.status]) : inv.status}
-                        </Badge>
+                        {activeTab === 'to_pay' && inv.status === 'registered' ? (
+                          <div className="flex items-center gap-2">
+                            <Badge variant="warning" className="whitespace-nowrap">{t('not_approved')}</Badge>
+                            {!inv.is_credit_note && canWrite && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => handleApprove(inv.id)}
+                                disabled={approvingId !== null}
+                              >
+                                {t('approve')}
+                              </Button>
+                            )}
+                          </div>
+                        ) : (
+                          <Badge variant={STATUS_VARIANTS[inv.status] || 'secondary'}>
+                            {STATUS_LABEL_KEYS[inv.status] ? t(STATUS_LABEL_KEYS[inv.status]) : inv.status}
+                          </Badge>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             )}
-          </DataList>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
+
+      <NewSupplierInvoiceDialog
+        open={showNewInvoice}
+        onOpenChange={(open) => {
+          if (!open) closeNewInvoice()
+        }}
+        inboxItemId={inboxItemId}
+        onCreated={handleCreated}
+      />
     </div>
   )
 }

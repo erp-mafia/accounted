@@ -4,8 +4,9 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { formatRedovisare } from '@/lib/skatteverket/format'
+import { settleAgiTaxPayments } from './agi-tax-settlement'
 import { getSaldo, getTransaktioner } from './skattekonto-client'
-import { SkatteverketAuthError } from './api-client'
+import { SkatteverketAuthError, type SkvAuth } from './api-client'
 import type {
   SkatteverketBookedTransaction,
   SkatteverketUpcomingTransaction,
@@ -36,7 +37,7 @@ export interface SkattekontoSyncResult {
  *
  * - When `transaktionsidentitet` is present (always on tidigare, sometimes
  *   on kommande), use it directly. It's stable across syncs.
- * - Otherwise compute a sha256 hex over (date|amount|text) — stable enough
+ * - Otherwise compute a sha256 hex over (date|amount|text): stable enough
  *   for kommande, which graduate to tidigare with the same content.
  *
  * The point of this function is reproducibility: the same logical
@@ -57,7 +58,7 @@ export function computeDedupKey(tx: {
 
 /**
  * Resolve the org/personnummer to send to Skatteverket as `omfragad`.
- * Reads from company_settings — same source the existing momsdeklaration
+ * Reads from company_settings: same source the existing momsdeklaration
  * flow uses.
  */
 async function resolveOmfragad(
@@ -123,13 +124,19 @@ function upcomingToRow(
  * 1. Resolve omfragad from company_settings.
  * 2. Fetch saldo + transaktioner in parallel (rate-limited).
  * 3. Upsert rows by (company_id, dedup_key). When a kommande row graduates
- *    to tidigare it's updated in place — same dedup_key, status flips,
+ *    to tidigare it's updated in place: same dedup_key, status flips,
  *    transaktionsidentitet populated.
- * 4. Cache the saldo response in extension_data with a fetched-at timestamp.
- * 5. Emit skattekonto.synced and (when applicable) other events.
+ * 4. Auto-settle AGI tax payments from booked AGI debit rows (see
+ *    agi-tax-settlement.ts).
+ * 5. Cache the saldo response in extension_data with a fetched-at timestamp.
+ * 6. Emit skattekonto.synced and (when applicable) other events.
  */
 export async function syncSkattekonto(
   ctx: ExtensionContext,
+  // Defaults to the ctx user's personal token: the interactive manual-sync
+  // route keeps its exact pre-hybrid behavior. The cron passes system auth
+  // for companies with a verified lasombud grant.
+  auth: SkvAuth = { mode: 'user', supabase: ctx.supabase, userId: ctx.userId },
 ): Promise<SkattekontoSyncResult> {
   const omfragad = await resolveOmfragad(ctx.supabase, ctx.companyId)
 
@@ -137,8 +144,8 @@ export async function syncSkattekonto(
   let transaktioner: Awaited<ReturnType<typeof getTransaktioner>>
   try {
     ;[saldo, transaktioner] = await Promise.all([
-      getSaldo(ctx.supabase, ctx.userId, omfragad),
-      getTransaktioner(ctx.supabase, ctx.userId, omfragad),
+      getSaldo(auth, omfragad),
+      getTransaktioner(auth, omfragad),
     ])
   } catch (err) {
     if (err instanceof SkatteverketAuthError) {
@@ -200,7 +207,7 @@ export async function syncSkattekonto(
       .from('skattekonto_transactions')
       .upsert(allRows, {
         onConflict: 'company_id,dedup_key',
-        // Don't return rows — we already know what we wrote.
+        // Don't return rows: we already know what we wrote.
         ignoreDuplicates: false,
       })
     if (error) {
@@ -208,6 +215,16 @@ export async function syncSkattekonto(
       throw new Error(`Kunde inte spara skattekonto-transaktioner: ${error.message}`)
     }
   }
+
+  // Auto-settle AGI tax payments: when the "Arbetsgivardeklaration YYYYMM"
+  // debit is booked and the account is not in deficit, the period is paid.
+  // Best-effort inside (never throws).
+  await settleAgiTaxPayments(
+    ctx.supabase,
+    ctx.companyId,
+    bookedRows,
+    saldo.saldoSkatteverket,
+  )
 
   // Cache balance snapshot.
   const snapshot: SkattekontoBalanceSnapshot = {

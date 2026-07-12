@@ -40,13 +40,13 @@ registerEndpoint({
   description:
     'Sets created_journal_entry_id on an invoice_inbox_items row so the item drops out of the active inbox todo list. Use when the document was linked to a JE via a separate call and you need to close the inbox item independently.',
   useWhen:
-    'An inbox document has already been attached to a verifikation (via documents link) but the inbox item itself was not stamped at link time — e.g. when using the v1 link endpoint without inbox_item_id.',
+    'An inbox document has already been attached to a verifikation (via documents link) but the inbox item itself was not stamped at link time: e.g. when using the v1 link endpoint without inbox_item_id.',
   doNotUseFor:
-    'Creating a new journal entry from an inbox item — use the invoice-inbox extension book-direct route for that.',
+    'Creating a new journal entry from an inbox item: use the invoice-inbox extension book-direct route for that.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'The inbox item and journal_entry_id must both belong to the caller\'s company.',
-    'Stamping with a different journal_entry_id than the one already set returns CONFLICT — the item is already resolved.',
+    'Stamping with a different journal_entry_id than the one already set returns CONFLICT: the item is already resolved.',
   ],
   example: {
     request: { journal_entry_id: 'dcccb3c5-b44a-4536-82fa-f0b9bb77f900' },
@@ -145,7 +145,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const item = itemRes.data as { id: string; created_journal_entry_id: string | null }
 
-    // Idempotent: already stamped to the same JE — return success.
+    // Idempotent: already stamped to the same JE: return success.
     if (item.created_journal_entry_id === body.journal_entry_id) {
       return ok(
         { id: item.id, created_journal_entry_id: item.created_journal_entry_id! },

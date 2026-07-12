@@ -1,26 +1,17 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
-import { getActiveCompanyId } from '@/lib/company/context'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import type { Currency } from '@/types'
 
 const VALID_CURRENCIES: Currency[] = ['EUR', 'USD', 'GBP', 'NOK', 'DKK']
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+// Riksbanken's open API is IP rate-limited — the sandbox guard keeps demo
+// traffic from eating that budget (withRouteContext already refuses
+// sessions without an active company).
+export const GET = withRouteContext('currency.rate', async (request, ctx) => {
+  const { supabase, companyId } = ctx
 
-  const companyId = await getActiveCompanyId(supabase, user.id)
-  // Refuse the request when no active company resolves rather than letting
-  // a session without one slip past the sandbox guard. Riksbanken's open
-  // API is IP rate-limited; we don't want demo traffic eating that budget.
-  if (!companyId) {
-    return NextResponse.json({ error: 'No active company' }, { status: 400 })
-  }
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return blocked
 
@@ -32,6 +23,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Invalid currency' }, { status: 400 })
   }
 
+  // Reject malformed dates up front — an Invalid Date would otherwise reach
+  // the Riksbanken request as "NaN-NaN-NaN".
+  if (dateStr && !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return NextResponse.json({ error: 'Invalid date (expected YYYY-MM-DD)' }, { status: 400 })
+  }
+
   const date = dateStr ? new Date(dateStr) : undefined
   const rate = await fetchExchangeRate(currency, date)
 
@@ -40,4 +37,4 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({ data: rate })
-}
+})

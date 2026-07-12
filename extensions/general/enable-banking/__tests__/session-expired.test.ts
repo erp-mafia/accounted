@@ -14,10 +14,16 @@ vi.mock('../lib/sync', () => ({
   syncAccountTransactions: vi.fn(),
 }))
 
+vi.mock('@/lib/entitlements/has-capability', () => ({
+  requireCapability: vi.fn().mockResolvedValue(null),
+}))
+
 import {
   isSessionExpiredResponse,
   SessionExpiredError,
   getAllTransactionsWithRaw,
+  getPreferredAuthMethod,
+  startAuthorization,
 } from '../lib/api-client'
 import { enableBankingExtension } from '../index'
 import { syncAccountTransactions } from '../lib/sync'
@@ -60,7 +66,7 @@ describe('isSessionExpiredResponse', () => {
   })
 })
 
-describe('getAllTransactionsWithRaw — dead session', () => {
+describe('getAllTransactionsWithRaw: dead session', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
@@ -142,7 +148,7 @@ function makeRequest(): Request {
   })
 }
 
-describe('POST /sync (enable-banking) — dead session reconnect', () => {
+describe('POST /sync (enable-banking): dead session reconnect', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -188,7 +194,7 @@ if (!connectRoute) {
   throw new Error('POST /connect route not registered on enable-banking extension')
 }
 
-describe('POST /connect (enable-banking) — reconnect in place', () => {
+describe('POST /connect (enable-banking): reconnect in place', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -198,7 +204,7 @@ describe('POST /connect (enable-banking) — reconnect in place', () => {
   })
 
   it('reuses the existing row (UPDATE, no INSERT) and keeps it out of the stale-pending sweep', async () => {
-    // startAuthorization() POSTs to /auth — stub it (jwt is already mocked).
+    // startAuthorization() POSTs to /auth: stub it (jwt is already mocked).
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => ({
@@ -241,8 +247,8 @@ describe('POST /connect (enable-banking) — reconnect in place', () => {
     // In-place: a fresh authorization on the SAME row, never a new INSERT.
     expect(insertSpy).not.toHaveBeenCalled()
 
-    // The CSRF state is staged on the row FIRST — before startAuthorization, so
-    // before authorization_id even exists — guaranteeing the callback can always
+    // The CSRF state is staged on the row FIRST: before startAuthorization, so
+    // before authorization_id even exists: guaranteeing the callback can always
     // find the row by oauth_state and the bank session can never be orphaned.
     // It stays 'expired' (not 'pending') so the cron's stale-pending cleanup
     // can't delete an established connection mid-reconnect.
@@ -261,7 +267,7 @@ describe('POST /connect (enable-banking) — reconnect in place', () => {
   })
 })
 
-describe('POST /connect (enable-banking) — psu_type persistence', () => {
+describe('POST /connect (enable-banking): psu_type persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
@@ -284,7 +290,7 @@ describe('POST /connect (enable-banking) — psu_type persistence', () => {
   }
 
   it('reuses the stored psu_type on reconnect when the client sends no override', async () => {
-    // A 'personal' connection must NOT silently flip to 'business' on renewal —
+    // A 'personal' connection must NOT silently flip to 'business' on renewal:
     // that was the Handelsbanken signing-failure trap.
     stubAuth()
     const updateSpy = vi.fn()
@@ -367,5 +373,88 @@ describe('POST /connect (enable-banking) — psu_type persistence', () => {
     expect(res.status).toBe(200)
     expect(insertSpy).toHaveBeenCalledTimes(1)
     expect(insertSpy.mock.calls[0][0]).toMatchObject({ psu_type: 'personal' })
+  })
+})
+
+describe('auth_method selection (Handelsbanken Mobile BankID)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubAspsps(aspsps: unknown[]) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ aspsps }),
+        text: async () => '',
+      }))
+    )
+  }
+
+  it('picks the DECOUPLED (Mobile BankID) method when the bank exposes one', async () => {
+    // Handelsbanken's real shape: BankID is decoupled + hidden, Redirect is the
+    // visible default. We must pin BankID or corporate PSUs fail after BankID.
+    stubAspsps([
+      {
+        name: 'Handelsbanken',
+        country: 'SE',
+        bic: 'HANDSESS',
+        auth_methods: [
+          { name: 'BANKID', approach: 'DECOUPLED', hidden_method: true, title: 'Bank ID' },
+          { name: 'REDIRECT', approach: 'REDIRECT', hidden_method: false, title: 'Redirect' },
+        ],
+      },
+    ])
+
+    expect(await getPreferredAuthMethod('Handelsbanken', 'SE', 'business')).toBe('BANKID')
+  })
+
+  it('returns undefined (ASPSP default) when the bank has no decoupled method', async () => {
+    stubAspsps([
+      { name: 'Nordea', country: 'SE', auth_methods: [{ name: 'REDIRECT', approach: 'REDIRECT' }] },
+    ])
+
+    expect(await getPreferredAuthMethod('Nordea', 'SE', 'personal')).toBeUndefined()
+  })
+
+  it('returns undefined when the bank is not found in the ASPSP list', async () => {
+    stubAspsps([])
+    expect(await getPreferredAuthMethod('Handelsbanken', 'SE', 'business')).toBeUndefined()
+  })
+
+  it('startAuthorization sends auth_method in the request body when provided', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ url: 'https://bank.example/auth', authorization_id: 'auth-1' }),
+      text: async () => '',
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await startAuthorization('Handelsbanken', 'SE', 'https://app/cb', 'state-1', 'business', 'BANKID')
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body)
+    expect(body.auth_method).toBe('BANKID')
+    expect(body.psu_type).toBe('business')
+  })
+
+  it('startAuthorization omits auth_method when none is provided', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ url: 'https://bank.example/auth', authorization_id: 'auth-1' }),
+      text: async () => '',
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await startAuthorization('Nordea', 'SE', 'https://app/cb', 'state-1', 'personal')
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body)
+    expect('auth_method' in body).toBe(false)
   })
 })

@@ -112,7 +112,7 @@ async function handleSupplierInvoiceConfirmed(
  * recent unmatched expense transactions for the bank payment that settles it.
  *
  * The forward direction (a freshly imported tx scanning existing invoices) lives
- * in lib/transactions/ingest.ts. This is the mirror — needed because a Bankgiro
+ * in lib/transactions/ingest.ts. This is the mirror: needed because a Bankgiro
  * payment is often imported BEFORE the invoice is registered, and nothing
  * re-matched it afterwards (the reported RosholmDell case). Reuses the same
  * `findSupplierInvoiceMatch` scorer (one invoice, many txs) so the two
@@ -121,7 +121,7 @@ async function handleSupplierInvoiceConfirmed(
  * Writes a SUGGESTION (potential_supplier_invoice_id), never an auto-link
  * (supplier_invoice_id): the match card / confirm dialog only surfaces for the
  * suggestion column (transactions page + lib/worklist), and the product choice
- * is "pre-fill, confirm to book" — the user reviews and posts the verifikat.
+ * is "pre-fill, confirm to book": the user reviews and posts the verifikat.
  * Setting supplier_invoice_id directly would skip that confirmation and strand
  * the payment unbooked. This handler therefore never creates a journal entry.
  */
@@ -135,7 +135,7 @@ async function handleSupplierInvoiceRetroMatch(
     const supabase = await createClient()
 
     // Re-fetch with the supplier relation (the scorer reads bankgiro/plusgiro/
-    // name) — the emitted payload can be stale or lack the join.
+    // name): the emitted payload can be stale or lack the join.
     const { data: invoice } = await supabase
       .from('supplier_invoices')
       .select('*, supplier:suppliers(*)')
@@ -210,7 +210,7 @@ async function handleSupplierInvoiceRetroMatch(
       matchMethod: best.matchMethod,
     })
   } catch (err) {
-    // Never break invoice registration — this is a best-effort convenience.
+    // Never break invoice registration: this is a best-effort convenience.
     log.error('Retroactive supplier-invoice match failed:', err)
   }
 }

@@ -55,7 +55,7 @@ function map(over: Parameters<typeof makeDto>[0]) {
   return mapSupplierInvoice(makeDto(over), 'user-1', 'company-1', 'supplier-1').invoice
 }
 
-describe('mapSupplierInvoice — status/paid consistency', () => {
+describe('mapSupplierInvoice: status/paid consistency', () => {
   it('unpaid booked invoice → registered with full remaining', () => {
     const inv = map({ status: 'booked', paid: false, balance: 1000, total: 1000 })
     expect(inv.status).toBe('registered')
@@ -88,7 +88,7 @@ describe('mapSupplierInvoice — status/paid consistency', () => {
     expect(inv.paid_at).not.toBeNull()
   })
 
-  it('credit note with zero balance stays credited — never flipped to paid', () => {
+  it('credit note with zero balance stays credited: never flipped to paid', () => {
     const inv = map({ status: 'credited', paid: true, balance: 0, total: 1000, invoiceTypeCode: '381' })
     expect(inv.status).toBe('credited')
     expect(inv.is_credit_note).toBe(true)

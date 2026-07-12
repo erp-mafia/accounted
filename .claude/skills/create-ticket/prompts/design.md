@@ -2,7 +2,7 @@
 
 ## Perspective
 
-You are scanning for design and UX issues in the Accounted interface. The app follows an editorial-monochrome aesthetic — paper-white surfaces, hairline borders, serif headlines; considered and quiet. Evaluate against the Accounted design system: achromatic palette (semantic sage/ochre/terracotta are data-only — charts and financial deltas, never chrome), Hedvig Letters Serif display headings, Geist body, generous whitespace, functional (non-decorative) motion.
+You are scanning for design and UX issues in the Accounted interface. The app follows an editorial-monochrome aesthetic: paper-white surfaces, hairline borders, serif headlines; considered and quiet. Evaluate against the Accounted design system: achromatic palette (semantic sage/ochre/terracotta are data-only: charts and financial deltas, never chrome), Hedvig Letters Serif display headings, Geist body, generous whitespace, functional (non-decorative) motion.
 
 ## Checklist
 
@@ -28,7 +28,7 @@ You are scanning for design and UX issues in the Accounted interface. The app fo
 ### Animation & Motion
 - [ ] List items stagger-animate on entry
 - [ ] Interactive elements have hover/active transitions
-- [ ] Transitions use the project default (`transition-colors duration-150`) — no spring/overshoot
+- [ ] Transitions use the project default (`transition-colors duration-150`): no spring/overshoot
 - [ ] `prefers-reduced-motion` respected
 - [ ] No abrupt state changes that need transitions
 

@@ -7,8 +7,10 @@ import {
 } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 vi.mock('@/lib/company/context', () => ({
@@ -34,7 +36,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   reset()
   eventBus.clear()
-  mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+  requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
   // Reset write-permission mock to default ok
   vi.mocked(requireWritePermission).mockResolvedValue({ ok: true })
 })
@@ -45,7 +47,11 @@ function makeReq() {
 
 describe('DELETE /api/documents/[id]', () => {
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
     const res = await DELETE(makeReq(), createMockRouteParams({ id: 'doc-1' }))
     const { status, body } = await parseJsonResponse(res)
     expect(status).toBe(401)

@@ -89,7 +89,7 @@ export default function BankFileColumnMappingStep({
   // contain known column-name keywords (bokföringsdag, beskrivning, belopp, …).
   // A row needs ≥ 2 keyword hits to qualify, which excludes metadata rows where
   // only the label cell happens to match (e.g. "Saldo,251495,41,SEK").
-  // Falls back to row 0 if nothing qualifies — preserves prior behavior for
+  // Falls back to row 0 if nothing qualifies: preserves prior behavior for
   // simple files where the header truly is the first row.
   const DATE_PATTERNS = [/^\d{4}-\d{2}-\d{2}$/, /^\d{2}[./]\d{2}[./]\d{4}$/, /^\d{8}$/]
   const detectedHeaderRow = useMemo(() => {
@@ -126,7 +126,7 @@ export default function BankFileColumnMappingStep({
 
   // skip_rows = number of rows to skip before transaction data starts.
   // When hasHeader: skip past the header row (detectedHeaderRow + 1).
-  // When no header: skip nothing — data starts at row 0.
+  // When no header: skip nothing: data starts at row 0.
   const skipRows = hasHeader ? detectedHeaderRow + 1 : 0
 
   const columnHeaders = useMemo(() => {
@@ -139,7 +139,7 @@ export default function BankFileColumnMappingStep({
 
   // Auto-guess date/description/amount/balance columns. Matches header labels
   // first (so the trailing Saldo column is never picked as the amount), then
-  // falls back to value heuristics. Initial defaults only — user can override.
+  // falls back to value heuristics. Initial defaults only: user can override.
   useEffect(() => {
     if (dateCol !== -1 || descCol !== -1 || amountCol !== -1) return
     if (dataRows.length === 0) return
@@ -401,8 +401,8 @@ export default function BankFileColumnMappingStep({
 
                     return (
                       <TableRow key={i}>
-                        <TableCell className="font-mono text-sm">{row[dateCol] || '–'}</TableCell>
-                        <TableCell className="text-sm">{row[descCol] || '–'}</TableCell>
+                        <TableCell className="font-mono text-sm">{row[dateCol] || '-'}</TableCell>
+                        <TableCell className="text-sm">{row[descCol] || '-'}</TableCell>
                         <TableCell
                           className={`text-right font-mono text-sm ${
                             !isNaN(amount) && amount >= 0 ? 'text-success' : 'text-destructive'

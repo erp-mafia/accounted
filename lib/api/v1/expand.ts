@@ -7,7 +7,7 @@
  * between 200 and 4000 tokens.
  *
  * Each endpoint declares its own allowlist of expandable keys. Unknown
- * values produce a 400 VALIDATION_ERROR rather than being silently ignored —
+ * values produce a 400 VALIDATION_ERROR rather than being silently ignored:
  * agents that typo expansions deserve a clear error.
  *
  * Usage:
@@ -15,7 +15,7 @@
  *   const ALLOWED = ['customer', 'items', 'payments'] as const
  *   type ExpandKey = (typeof ALLOWED)[number]
  *   const expand = parseExpand(url, ALLOWED)
- *   // returns: Set<ExpandKey> — empty if no ?expand param
+ *   // returns: Set<ExpandKey>, empty if no ?expand param
  *
  *   if (expand.has('customer')) { ... }
  */

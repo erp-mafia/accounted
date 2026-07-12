@@ -1,4 +1,13 @@
 version: 2
+# Deliberately throttled to avoid a PR flood. Two knobs do the work:
+#   - open-pull-requests-limit: 1  -> at most ONE open PR per ecosystem at a
+#     time. Dependabot will not open next week's PR until the current one is
+#     merged or closed, so PRs can never pile up.
+#   - groups (patterns: "*")       -> every available bump (major/minor/patch)
+#     is batched into that single PR instead of one PR per package.
+# Combined with the weekly schedule this means: normally one npm PR a week (or
+# none), and only in a rare week where Docker/Actions also move do you see more
+# than one PR at all.
 updates:
   # Base images in the root Dockerfile (node:22-alpine).
   - package-ecosystem: docker
@@ -6,7 +15,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
+    groups:
+      docker:
+        patterns:
+          - "*"
     labels:
       - dependencies
       - docker
@@ -17,7 +30,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
+    groups:
+      docker-cron:
+        patterns:
+          - "*"
     labels:
       - dependencies
       - docker
@@ -28,7 +45,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
+    groups:
+      github-actions:
+        patterns:
+          - "*"
     labels:
       - dependencies
       - ci
@@ -39,13 +60,21 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 1
     labels:
       - dependencies
       - npm
     groups:
-      # Batch low-risk minor/patch bumps so the reviewer queue stays small.
-      minor-and-patch:
-        update-types:
-          - minor
-          - patch
+      # Batch ALL bumps (major/minor/patch) into a single weekly PR.
+      npm:
+        patterns:
+          - "*"
+    ignore:
+      # @anthropic-ai/bedrock-sdk is PINNED to an exact version in package.json.
+      # 0.32.0 arrived inside a grouped minor-and-patch bump (#884) and broke
+      # Bedrock streaming in prod: the SDK returned an empty stream ("request
+      # ended without sending any chunks"), taking down the in-app AI assistant
+      # and invoice OCR. Do NOT let dependabot bump it until 0.32.x streaming is
+      # verified against Bedrock. Enforced by scripts/checks/no-new-antipatterns.mjs
+      # (pinned-dep). See DECISIONS.md (2026-07-08).
+      - dependency-name: "@anthropic-ai/bedrock-sdk"

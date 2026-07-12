@@ -33,7 +33,7 @@ interface ExistingCustomer {
  * POST /api/import/customers/execute
  *
  * Imports validated customer rows. Duplicates (matched by org_number or email)
- * are either updated (merge — only non-empty file fields overwrite) or skipped
+ * are either updated (merge: only non-empty file fields overwrite) or skipped
  * based on `update_duplicates`.
  */
 export const POST = withRouteContext(
@@ -133,7 +133,7 @@ export const POST = withRouteContext(
           continue
         }
 
-        // No match — create.
+        // No match, create.
         const { data, error } = await supabase
           .from('customers')
           .insert({

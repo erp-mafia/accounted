@@ -8,8 +8,12 @@ import { Badge } from '@/components/ui/badge'
 import { cn, formatCurrency } from '@/lib/utils'
 import { UpcomingDeadlinesWidget } from '@/components/deadlines/UpcomingDeadlinesWidget'
 import { TaxTodoWidget } from '@/components/deadlines/TaxTodoWidget'
+import { useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
+import BackupHealthBanner from '@/components/dashboard/BackupHealthBanner'
+import { SkatteverketPromoCard } from '@/components/dashboard/SkatteverketPromoCard'
 import {
   ChevronRight,
   CheckCircle2,
@@ -18,6 +22,7 @@ import {
 } from 'lucide-react'
 import type { Deadline, OnboardingProgress } from '@/types'
 import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
+import { visibleWorklistTotalFrom } from '@/lib/worklist/visible-total'
 
 const setupFreshStartKey = (companyId: string) => `erp_setup_fresh_start:${companyId}`
 
@@ -35,7 +40,7 @@ interface DashboardContentProps {
     deadlines: Deadline[]
     staleUncategorizedCount: number
   }
-  /** Unified pending-work counts from lib/worklist — same source as the sidebar badges. */
+  /** Unified pending-work counts from lib/worklist: same source as the sidebar badges. */
   worklist: WorklistCounts
   /** High-confidence transaction↔invoice matches for inline one-click confirm. */
   suggestedMatches: SuggestedMatch[]
@@ -51,10 +56,11 @@ interface DashboardContentProps {
 
 export default function DashboardContent({ companyId, summary, worklist, suggestedMatches, onboardingProgress, agentBuilt = true }: DashboardContentProps) {
   const t = useTranslations('dashboard')
+  const hasAi = useCapability(CAPABILITY.ai)
 
   // The setup gate exists to nudge brand-new users into a data-import step
   // before they hit the dashboard. Once the assistant is built we treat the
-  // user as past that phase — they've already committed to using the tool —
+  // user as past that phase (they've already committed to using the tool)
   // and let the dashboard render normally. This also keeps the sandbox
   // (which ships with a pre-built assistant + seeded data but no bank
   // connection / SIE import) from showing a checklist that re-links to
@@ -106,14 +112,19 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
     }).format(amount)
   }
 
-  // One number, one source: the worklist total plus expiring bank connections
-  // (dashboard-only, not a lib/worklist category). Must match AttGoraSection's
-  // header so the tile and the section never disagree.
-  const todoCount = worklist.total + (summary.expiringBankConnections?.length ?? 0)
+  // One number, one source (visibleWorklistTotal): the worklist total plus
+  // expiring bank connections (dashboard-only), minus the hidden paid inbox row
+  // for non-payers. Must match AttGoraSection's header off the same helper.
+  const todoCount = visibleWorklistTotalFrom(
+    worklist,
+    hasAi,
+    summary.expiringBankConnections?.length ?? 0,
+  )
 
   return (
     <div className="stagger-enter space-y-8">
-      {/* Build-assistant hero — shown only until the company has a verified
+      <BackupHealthBanner />
+      {/* Build-assistant hero: shown only until the company has a verified
           agent_profile, so existing/migrated users get a clear prompt instead
           of a full-screen onboarding takeover. Once the assistant is built the
           dashboard leads with the metrics + the unified "Att göra" worklist
@@ -121,9 +132,11 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
           has a single CTA surface instead of two that point at the same work. */}
       {!agentBuilt && (
         <section>
-          <Link href="/onboarding/agent" className="block group">
+          {/* Non-payers keep seeing the hero (conversion surface) but it
+              routes to billing instead of a build flow that would 403. */}
+          <Link href={hasAi ? '/onboarding/agent' : '/settings/billing'} className="block group">
             <Card className="transition-colors hover:border-primary/50">
-              <CardContent className="p-6 flex items-center gap-5">
+              <CardContent className="p-6 flex items-center gap-4">
                 <div className="flex-shrink-0 h-10 w-10 rounded-lg flex items-center justify-center bg-foreground text-background">
                   <MessageCircle className="h-5 w-5" />
                 </div>
@@ -133,11 +146,13 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
                     <Badge variant="secondary" className="uppercase tracking-wider">Beta</Badge>
                   </div>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Några frågor om din verksamhet kalibrerar en assistent som föreslår bokföring åt dig.
+                    {hasAi
+                      ? 'Några frågor om din verksamhet kalibrerar en assistent som föreslår bokföring åt dig.'
+                      : 'Ingår i abonnemanget: en assistent som föreslår bokföring åt dig.'}
                   </p>
                 </div>
                 <div className="hidden sm:flex items-center gap-1.5 text-sm font-medium text-foreground group-hover:translate-x-0.5 transition-transform">
-                  <span>Kom igång</span>
+                  <span>{hasAi ? 'Kom igång' : 'Uppgradera'}</span>
                   <ArrowRight className="h-4 w-4" />
                 </div>
               </CardContent>
@@ -146,7 +161,7 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
         </section>
       )}
 
-      {/* Key metrics — 4 compact cards */}
+      {/* Key metrics: 4 compact cards */}
       <section>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Card>
@@ -228,7 +243,17 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
         </div>
       </section>
 
-      {/* Att göra — the unified worklist. One section, every actionable item,
+      {/* Connect-Skatteverket nudge for existing companies. Gated on
+          agentBuilt so it never stacks under the build-assistant hero:
+          one CTA surface at a time. */}
+      {agentBuilt && (
+        <SkatteverketPromoCard
+          companyId={companyId}
+          connected={!!onboardingProgress?.hasSkatteverketConnected}
+        />
+      )}
+
+      {/* Att göra: the unified worklist. One section, every actionable item,
           same counts as the sidebar badges (lib/worklist). */}
       <AttGoraSection
         worklist={worklist}
@@ -237,7 +262,7 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
         staleUncategorizedCount={summary.staleUncategorizedCount}
       />
 
-      {/* Result — revenue / expenses (always visible) */}
+      {/* Result: revenue / expenses (always visible) */}
       <section>
         <div className="grid md:grid-cols-2 gap-4">
           <Card>

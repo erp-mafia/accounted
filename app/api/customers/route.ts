@@ -49,6 +49,7 @@ export const POST = withRouteContext(
         company_id: companyId,
         name: body.name,
         customer_type: body.customer_type,
+        customer_number: body.customer_number || null,
         email: body.email,
         phone: body.phone,
         address_line1: body.address_line1,

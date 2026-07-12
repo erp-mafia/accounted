@@ -4,8 +4,9 @@ import {
   hasCapability,
   requireCapability,
   capabilityBlockedResponse,
+  getCompanyEntitlements,
 } from '../has-capability'
-import { CAPABILITY } from '../keys'
+import { CAPABILITY, PAID_CAPABILITIES } from '../keys'
 
 /**
  * Per-table mock: each table resolves to its own configured result, so a
@@ -45,6 +46,30 @@ describe('hasCapability', () => {
   it('returns true on self-hosted without touching the DB', async () => {
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
     const supabase = makeSupabase({}) // would resolve to null/false if queried
+    expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(true)
+  })
+
+  it('development bypasses the gate (all-on) so gated features are testable without a subscription', async () => {
+    // This is WHY a lapsed company still sees paid surfaces under `npm run dev`.
+    vi.stubEnv('NODE_ENV', 'development')
+    const supabase = makeSupabase({}) // no grant: would be false if the gate ran
+    expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(true)
+  })
+
+  it('FORCE_PAYWALL=true activates the real gate in development (fail-closed on an expired grant)', async () => {
+    vi.stubEnv('NODE_ENV', 'development') // would otherwise bypass
+    vi.stubEnv('FORCE_PAYWALL', 'true')
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: { data: [{ expires_at: iso(-60_000) }] }, // expired
+    })
+    expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(false)
+  })
+
+  it('FORCE_PAYWALL never overrides self-hosted (stays all-on)', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    vi.stubEnv('FORCE_PAYWALL', 'true')
+    const supabase = makeSupabase({}) // would resolve null/false if queried
     expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(true)
   })
 
@@ -130,6 +155,64 @@ describe('requireCapability', () => {
     const body = await res!.json()
     expect(body.capability_blocked).toBe(true)
     expect(body.capability).toBe(CAPABILITY.ai)
+  })
+})
+
+describe('getCompanyEntitlements', () => {
+  const companyId = '11111111-1111-4111-8111-111111111111'
+
+  it('reports the trial expiry while the trial is the only source of access', async () => {
+    const expiry = iso(10 * 24 * 3600 * 1000)
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: expiry, source: 'trial' },
+          { capability_key: CAPABILITY.bank_sync, expires_at: expiry, source: 'trial' },
+        ],
+      },
+      company_capability_config: { data: [] },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.trialEndsAt).toBe(expiry)
+    expect(result.capabilities).toContain(CAPABILITY.ai)
+    expect(result.capabilities).toContain(CAPABILITY.bank_sync)
+  })
+
+  it('hides the trial once a non-trial grant is active (converted customer)', async () => {
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: iso(10 * 24 * 3600 * 1000), source: 'trial' },
+          { capability_key: CAPABILITY.ai, expires_at: null, source: 'stripe' },
+        ],
+      },
+      company_capability_config: { data: [] },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.trialEndsAt).toBeNull()
+    expect(result.capabilities).toContain(CAPABILITY.ai)
+  })
+
+  it('returns no trial and no capabilities after the trial lapsed', async () => {
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [{ capability_key: CAPABILITY.ai, expires_at: iso(-60_000), source: 'trial' }],
+      },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.trialEndsAt).toBeNull()
+    expect(result.capabilities).toEqual([])
+  })
+
+  it('bypass (self-hosted) holds everything with no trial countdown', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const supabase = makeSupabase({})
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.trialEndsAt).toBeNull()
+    expect(result.capabilities).toEqual([...PAID_CAPABILITIES])
   })
 })
 

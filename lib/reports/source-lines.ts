@@ -20,6 +20,8 @@ export type ReportSourceLine = {
   description: string
   debit: number
   credit: number
+  /** SIE dim → code tags on the line; omitted when untagged. */
+  dimensions?: Record<string, string>
 }
 
 /**

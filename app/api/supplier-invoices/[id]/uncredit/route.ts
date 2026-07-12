@@ -1,7 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import {
   bookkeepingErrorResponse,
@@ -9,29 +9,14 @@ import {
   EntryAlreadyReversedError,
 } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import type { SupplierInvoice, SupplierInvoicePayment } from '@/types'
 
 ensureInitialized()
 
-export async function POST(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'supplier_invoice.uncredit',
+  async (_request, { supabase, user, companyId }, { params }) => {
   const { id } = await params
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
 
   const { data: original, error: fetchError } = await supabase
     .from('supplier_invoices')
@@ -45,12 +30,12 @@ export async function POST(
   }
 
   // Idempotent no-op: an already-uncredited or never-credited invoice just returns the row.
-  // Friendlier than a 409 — the client retry path can blindly call this without checking first.
+  // Friendlier than a 409: the client retry path can blindly call this without checking first.
   if (original.status !== 'credited') {
     return NextResponse.json({ data: original })
   }
 
-  // Filter out already-reversed credits — re-crediting the same original after a prior
+  // Filter out already-reversed credits: re-crediting the same original after a prior
   // uncredit creates a second credit row, so we may find multiple historical matches.
   const { data: creditNote } = await supabase
     .from('supplier_invoices')
@@ -73,13 +58,13 @@ export async function POST(
       )
       reversalEntryId = reversal.id
     } catch (err) {
-      // Already reversed (manually or by another concurrent uncredit) — fine, continue.
+      // Already reversed (manually or by another concurrent uncredit): fine, continue.
       if (err instanceof CannotReverseNonPostedError || err instanceof EntryAlreadyReversedError) {
         // proceed to row cleanup
       } else {
         const typed = bookkeepingErrorResponse(err)
         if (typed) return typed
-        // Period lock and similar trigger errors — surface a clear Swedish message
+        // Period lock and similar trigger errors: surface a clear Swedish message
         // so the user knows WHY the action failed (per project's error-UX guidelines).
         return NextResponse.json(
           { error: getErrorMessage(err, { context: 'supplier_invoice' }) },
@@ -111,7 +96,7 @@ export async function POST(
   }
 
   // Recompute original status from payments. The credit had reduced remaining_amount
-  // to 0 and bumped status to 'credited' — undo both based on what's actually paid.
+  // to 0 and bumped status to 'credited': undo both based on what's actually paid.
   const payments = (original.payments as SupplierInvoicePayment[]) || []
   const paidSum = payments.reduce((sum, p) => sum + (p.amount || 0), 0)
   const total = original.total || 0
@@ -172,4 +157,6 @@ export async function POST(
     data: restored,
     reversal_entry_id: reversalEntryId,
   })
-}
+  },
+  { requireWrite: true },
+)

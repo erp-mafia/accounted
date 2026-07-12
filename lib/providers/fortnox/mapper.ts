@@ -19,7 +19,7 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
  * deriveInvoiceStatus and the paymentStatus.paid flag so they can never diverge.
  * Numeric, not strict === 0, so a residual öre / float drift still reads as paid.
  * Number(undefined ?? NaN) = NaN and NaN <= 0 is false, so an ABSENT Balance is
- * treated as NOT paid (the supplier-invoice list payload omits Balance) — only an
+ * treated as NOT paid (the supplier-invoice list payload omits Balance); only an
  * explicit FullyPaid flag or a present non-positive Balance counts as paid.
  */
 function isFullyPaid(raw: Record<string, unknown>): boolean {
@@ -128,7 +128,7 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
   const total = raw['Total'] as number ?? 0;
   // Default an ABSENT Balance to the full total (= fully unpaid), never 0.
   // The supplier-invoice list is fetched with ?filter=unpaid, so a missing
-  // Balance must not be mistaken for "settled" — that would flip a genuinely
+  // Balance must not be mistaken for "settled": that would flip a genuinely
   // open payable to paid downstream. A present Balance (incl. 0) is used as-is.
   // When paid, force balance to 0 so the DTO is internally consistent
   // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field

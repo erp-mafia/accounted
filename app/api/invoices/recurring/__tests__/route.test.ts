@@ -106,6 +106,30 @@ describe('POST /api/invoices/recurring', () => {
     expect(body.type).toBe('not_found')
   })
 
+  it('rejects auto_send when the customer has no email', async () => {
+    // customer lookup: exists but without email
+    enqueue({ data: { id: '550e8400-e29b-41d4-a716-446655440000', email: null }, error: null })
+
+    const request = createMockRequest('/api/invoices/recurring', {
+      method: 'POST',
+      body: {
+        customer_id: '550e8400-e29b-41d4-a716-446655440000',
+        name: 'Test',
+        day_of_month: 15,
+        payment_terms_days: 30,
+        currency: 'SEK',
+        auto_send: true,
+        items: [
+          { description: 'Service', quantity: 1, unit: 'st', unit_price: 1000 },
+        ],
+      },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ type: string }>(response)
+    expect(status).toBe(400)
+    expect(body.type).toBe('validation_error')
+  })
+
   it('creates a schedule on the happy path', async () => {
     const createdSchedule = {
       id: 's-1',

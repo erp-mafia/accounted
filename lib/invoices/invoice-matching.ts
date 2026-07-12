@@ -141,7 +141,7 @@ export async function findMatchingInvoices(
     .order('due_date', { ascending: true })
 
   if (error || !invoices) {
-    // Failed to fetch invoices — return empty matches
+    // Failed to fetch invoices: return empty matches
     return []
   }
 
@@ -171,7 +171,7 @@ export async function findMatchingInvoices(
 
   const matches: InvoiceMatch[] = []
 
-  // OCR/Bankgiro reference matching — highest confidence
+  // OCR/Bankgiro reference matching: highest confidence
   // Swedish standard: match transaction reference to invoice OCR number
   const txReference = (transaction as Transaction & { reference?: string | null }).reference
   if (txReference) {

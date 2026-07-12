@@ -1,21 +1,10 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ sector: string; slug: string }> }
-) {
+export const GET = withRouteContext<{ params: Promise<{ sector: string; slug: string }> }>(
+  'extension.settings.get',
+  async (_request, { supabase, companyId }, { params }) => {
   const { sector, slug } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
 
   const extensionId = `${sector}/${slug}`
 
@@ -28,24 +17,13 @@ export async function GET(
     .single()
 
   return NextResponse.json({ data: data?.value ?? {} })
-}
+  },
+)
 
-export async function PATCH(
-  request: Request,
-  { params }: { params: Promise<{ sector: string; slug: string }> }
-) {
+export const PATCH = withRouteContext<{ params: Promise<{ sector: string; slug: string }> }>(
+  'extension.settings.update',
+  async (request, { supabase, user, companyId }, { params }) => {
   const { sector, slug } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
 
   const body = await request.json()
   const extensionId = `${sector}/${slug}`
@@ -81,4 +59,6 @@ export async function PATCH(
   }
 
   return NextResponse.json({ data: data.value })
-}
+  },
+  { requireWrite: true },
+)

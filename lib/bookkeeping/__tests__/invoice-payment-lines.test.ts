@@ -71,9 +71,9 @@ describe('buildInvoicePaymentClearingLines', () => {
       expect(Math.round((debit - credit) * 100)).toBe(0)
     })
 
-    it('ambiguous loss scenario (bank < SEK booked) is treated as partial — defers FX', () => {
+    it('ambiguous loss scenario (bank < SEK booked) is treated as partial: defers FX', () => {
       // Invoice 100 USD booked at 10.50 (1050 SEK on 1510)
-      // Bank receives 1000 SEK — could be (a) partial payment that didn't
+      // Bank receives 1000 SEK: could be (a) partial payment that didn't
       // cover the full USD amount, or (b) full payment at a worse FX rate.
       // From a SEK-only bank tx we can't distinguish; defaulting to "partial"
       // is the safer choice (no premature 1510 zeroing). If the user knows
@@ -122,7 +122,7 @@ describe('buildInvoicePaymentClearingLines', () => {
     })
 
     it('cross-currency WITH paidInInvoiceCurrency, bank < booked: loss to 7960', () => {
-      // Mirror of the gain case above with the opposite sign — guards the
+      // Mirror of the gain case above with the opposite sign: guards the
       // kursförlust branch the route's gain-only assertion never reaches
       // (Swedish compliance review, PR #615). Invoice 100 USD booked at 9.30
       // (930 SEK on 1510); the 100 USD settlement only fetched 900 SEK at the
@@ -153,9 +153,9 @@ describe('buildInvoicePaymentClearingLines', () => {
 
     it('partial cross-currency payment defers FX: bank-leg = AR-leg = bankSek, no 3960/7960 line', () => {
       // Invoice 140 USD @ 15.30 (2142 SEK booked on 1510)
-      // Bank receives 230 SEK — way below the 2142 remaining. If we credited
+      // Bank receives 230 SEK: way below the 2142 remaining. If we credited
       // the full 2142 to 1510 we'd zero the GL balance while the invoice row
-      // stayed partially_paid (BFL 5 kap 4–5§ violation). Defer FX to the
+      // stayed partially_paid (BFL 5 kap 4-5§ violation). Defer FX to the
       // final settlement that closes the invoice.
       const result = buildInvoicePaymentClearingLines(
         { amount: 230, amount_sek: null, currency: 'SEK', exchange_rate: null },
@@ -247,7 +247,7 @@ describe('buildInvoicePaymentClearingLines', () => {
 
   describe('cross currency (USD invoice + USD tx)', () => {
     it('uses tx amount_sek for the bank-leg when populated', () => {
-      // USD-denominated bank account paying a USD invoice — ingest converts
+      // USD-denominated bank account paying a USD invoice: ingest converts
       // tx → SEK using the bank-date rate.
       const result = buildInvoicePaymentClearingLines(
         { amount: 100, amount_sek: 1100, currency: 'USD', exchange_rate: 11 },

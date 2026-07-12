@@ -28,17 +28,17 @@ import type { InvoiceExtractionResult } from '@/types'
 //
 // Opens from the InvoiceInboxWorkspace FieldsRail when the user clicks
 // "Matcha mot transaktion" on an inbox item whose matched_transaction_id is
-// null. Lists *uncategorised* transactions only — matching points an underlag
+// null. Lists *uncategorised* transactions only: matching points an underlag
 // at the bank payment you're about to book, so already-booked rows are out of
 // scope (and surfacing them would invite a double-booking via "Bokför
 // manuellt"). Two modes:
 //   • Suggested (no search): every uncategorised company transaction, scored
 //     via lib/documents/core-receipt-matcher and sorted best-first. No date
-//     window — over-fetching is cheap for a manual picker and a hard window
+//     window: over-fetching is cheap for a manual picker and a hard window
 //     silently dropped late payments out of the candidate set.
 //   • Search (≥2 chars): the same uncategorised set across ALL dates, narrowed
 //     server-side by description/merchant. This is the fix for "not all
-//     transactions come up to search for" — the old client-only filter could
+//     transactions come up to search for": the old client-only filter could
 //     only see the windowed rows already fetched.
 // Amounts are compared currency-aware (see scoring memo): same-currency raw,
 // otherwise normalised to SEK via the underlag's FX rate. User picks one →
@@ -81,7 +81,7 @@ interface Props {
 // compared against SEK bank charges.
 const SUPPORTED_FX = ['EUR', 'USD', 'GBP', 'NOK', 'DKK']
 
-// Date tolerance used only for *ranking* candidates (not for filtering — there
+// Date tolerance used only for *ranking* candidates (not for filtering, there
 // is no longer a date window). Far wider than the receipt matcher's tight ±3d
 // default so a payment landing weeks or months after the invoice still earns
 // partial date credit and the true match floats to the top, instead of every
@@ -112,7 +112,7 @@ export default function TransactionMatchPicker({
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [matchingId, setMatchingId] = useState<string | null>(null)
   // SEK per unit of the underlag currency (e.g. ~11.5 for EUR). null = SEK
-  // underlag, fetch pending, or unsupported/failed — amount matching then
+  // underlag, fetch pending, or unsupported/failed: amount matching then
   // falls back to same-currency-only.
   const [fxRate, setFxRate] = useState<number | null>(null)
 
@@ -141,7 +141,7 @@ export default function TransactionMatchPicker({
     return null
   }, [total, receiptCurrency, fxRate])
 
-  // True when the underlag is in a foreign currency we can't price right now —
+  // True when the underlag is in a foreign currency we can't price right now:
   // amount matching is unavailable, so we say so instead of mis-ranking.
   const amountMatchUnavailable =
     total != null && receiptCurrency !== 'SEK' && receiptSek == null
@@ -176,7 +176,7 @@ export default function TransactionMatchPicker({
         if (typeof rate === 'number' && rate > 0) setFxRate(rate)
       })
       .catch(() => {
-        /* leave null — cross-currency amount signal simply drops out */
+        /* leave null: cross-currency amount signal simply drops out */
       })
     return () => {
       cancelled = true
@@ -194,14 +194,14 @@ export default function TransactionMatchPicker({
       // `.or()`. Commas separate OR-conditions and parentheses group nested
       // filters, so leaving them in would let a search term inject a synthetic
       // clause (e.g. "Acme,company_id.neq.…"). `%` and `\` are LIKE wildcards/
-      // escapes we also drop. `.` is safe — it stays inside the ilike value.
+      // escapes we also drop. `.` is safe: it stays inside the ilike value.
       const safe = debouncedSearch.trim().replace(/[%,()\\]/g, ' ').trim()
       const searchMode = safe.length >= SEARCH_MIN_CHARS
 
       // Defense-in-depth: RLS only narrows to "any company the user belongs
       // to". Multi-tenant users (consultants) would otherwise see other
       // companies' transactions. Filter to the active company explicitly.
-      // Uncategorised only (journal_entry_id IS NULL) in both modes — see the
+      // Uncategorised only (journal_entry_id IS NULL) in both modes: see the
       // component header. The search just adds a server-side name filter so
       // matches outside the suggested set still surface.
       let query = supabase
@@ -251,7 +251,7 @@ export default function TransactionMatchPicker({
           ? tx.amount
           : resolveSekAmount(tx.amount, tx.amount_sek, tx.currency, tx.exchange_rate)
 
-      // Currency-aware variance — null when uncomparable, which makes the
+      // Currency-aware variance: null when uncomparable, which makes the
       // matcher drop the amount signal instead of matching 750 EUR to 750 SEK.
       const amountVariance = amountVarianceForMatch(
         total,
@@ -341,7 +341,7 @@ export default function TransactionMatchPicker({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Underlag reference — what we're matching against, so a currency or
+        {/* Underlag reference: what we're matching against, so a currency or
             amount mismatch with a candidate is obvious at a glance. */}
         {(total != null || supplier) && (
           <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs flex items-center gap-x-3 gap-y-1 flex-wrap">
@@ -368,7 +368,7 @@ export default function TransactionMatchPicker({
 
         {amountMatchUnavailable && (
           <p className="text-[11px] text-muted-foreground -mt-1">
-            Växelkurs saknas för {receiptCurrency} — kandidaterna rankas på datum
+            Växelkurs saknas för {receiptCurrency}: kandidaterna rankas på datum
             och leverantör, inte belopp.
           </p>
         )}

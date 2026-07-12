@@ -8,7 +8,7 @@
  *     exist per delrapport, their namespace, balance (debit/credit) and period
  *     type. Hand-copying ~1 300 rows guarantees drift; the registry must be
  *     reproducible from the committed spec files.
- *   - The September 2026 taxonomy generation replaces tuples with dimensions —
+ *   - The September 2026 taxonomy generation replaces tuples with dimensions:
  *     taxonomy versions are data, not code. New versions become new generated
  *     JSON files + a new entry in lib/bokslut/ixbrl/taxonomy/entry-points.ts,
  *     leaving emitters for older versions untouched.
@@ -89,7 +89,7 @@ const SHEET_SECTIONS: Record<string, string> = {
 interface ConceptOut {
   /** Namespace prefix, e.g. "se-gen-base". Resolved to a URI in entry-points.ts. */
   ns: string
-  /** Standardrubrik — the official presentation label. */
+  /** Standardrubrik: the official presentation label. */
   label: string
   abstract: boolean
   /** XBRL datatype, e.g. "xbrli:monetaryItemType". Null for tuples. */
@@ -139,7 +139,7 @@ function parseElementList(): Record<string, ConceptOut> {
     const section = SHEET_SECTIONS[sheetName]
     if (!section) {
       throw new Error(
-        `Unknown sheet "${sheetName}" in element list — add it to SHEET_SECTIONS`,
+        `Unknown sheet "${sheetName}" in element list: add it to SHEET_SECTIONS`,
       )
     }
     const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], {
@@ -186,7 +186,7 @@ function parseElementList(): Record<string, ConceptOut> {
       const existing = concepts[name]
       if (existing) {
         // Same element listed on several sheets (shared concepts). Attribute
-        // mismatches would mean the spec disagrees with itself — fail loudly.
+        // mismatches would mean the spec disagrees with itself: fail loudly.
         for (const key of ['ns', 'dataType', 'balance', 'periodType', 'kind'] as const) {
           if (existing[key] !== parsed[key]) {
             throw new Error(
@@ -220,7 +220,7 @@ function parseTupleModel(
   const iAb = header.indexOf('AB')
   const iRequired = 12
   if (iNs === -1 || iEl === -1 || iKind === -1 || iAb === -1) {
-    throw new Error('Tuple model columns moved — update parseTupleModel')
+    throw new Error('Tuple model columns moved: update parseTupleModel')
   }
 
   const tuples: Record<string, { ns: string; members: TupleMemberOut[] }> = {}
@@ -281,7 +281,7 @@ function parseTupleModel(
 
 /**
  * The fastställelseintyg concepts (se-bol-base) come from Bolagsverket's
- * comp-base schema inside the taxonomy package — they are not in any element
+ * comp-base schema inside the taxonomy package: they are not in any element
  * list. Parse the XSD element declarations directly.
  */
 async function parseCompBase(concepts: Record<string, ConceptOut>): Promise<void> {

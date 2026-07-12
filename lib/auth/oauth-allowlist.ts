@@ -23,11 +23,11 @@ export function isBuiltInRedirectUri(uri: string): boolean {
  *
  * The supabase client should be supplied explicitly by the caller so the
  * trust boundary is visible at the callsite (SOC 2 CC6.1). When omitted, the
- * function falls back to a service-role client — required for the /register
+ * function falls back to a service-role client: required for the /register
  * endpoint which has no user session yet. The lookup is by exact URI; the
  * unique partial index on the table ensures at most one active row.
  *
- * Fails closed on any error (client construction, DB query) — for an
+ * Fails closed on any error (client construction, DB query): for an
  * allowlist, "unknown → deny" is the safe default.
  */
 export async function isAllowedRedirectUri(
@@ -38,8 +38,8 @@ export async function isAllowedRedirectUri(
   if (isBuiltInRedirectUri(uri)) return true
 
   // Service-role client construction can throw when Supabase env vars are
-  // absent (unit tests, misconfigured deploys). Treat that as "not allowed"
-  // — failing closed is the safe default for an allowlist.
+  // absent (unit tests, misconfigured deploys). Treat that as "not allowed":
+  // failing closed is the safe default for an allowlist.
   let client: SupabaseClient
   try {
     client = supabase ?? createServiceClientNoCookies()

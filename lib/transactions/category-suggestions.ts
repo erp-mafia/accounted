@@ -34,13 +34,51 @@ const CATEGORY_LABELS: Record<string, string> = {
 }
 
 /**
- * Get suggested categories for a transaction
- * Combines mapping rules, pattern matching, and user history
+ * Counterparty-keyed history: normalized merchant name -> category counts.
+ * Built once per request from the caller's recent categorized transactions.
+ */
+export type MerchantHistoryMap = Map<string, Record<string, number>>
+
+function normalizeMerchantKey(name: string | null | undefined): string {
+  return (name ?? '').toLowerCase().trim()
+}
+
+export function buildMerchantHistory(
+  rows: Array<{ merchant_name: string | null; category: string | null }>,
+): MerchantHistoryMap {
+  const map: MerchantHistoryMap = new Map()
+  for (const row of rows) {
+    const key = normalizeMerchantKey(row.merchant_name)
+    if (!key || !row.category) continue
+    const bucket = map.get(key) ?? {}
+    bucket[row.category] = (bucket[row.category] || 0) + 1
+    map.set(key, bucket)
+  }
+  return map
+}
+
+export function merchantHistoryFor(
+  map: MerchantHistoryMap,
+  merchantName: string | null | undefined,
+): Record<string, number> {
+  const key = normalizeMerchantKey(merchantName)
+  return key ? (map.get(key) ?? {}) : {}
+}
+
+/**
+ * Get suggested categories for a transaction.
+ * Combines mapping rules, pattern matching, and counterparty history.
+ *
+ * merchantHistory is the category history FOR THIS TRANSACTION'S counterparty
+ * (see buildMerchantHistory/merchantHistoryFor): never a company-wide
+ * frequency map. Global padding produced identical ~0.5 four-way spreads on
+ * every transaction, which agents correctly read as no signal
+ * (mcp_optimization_plan P2-1); an empty result is the honest answer.
  */
 export function getSuggestedCategories(
   transaction: Transaction,
   mappingRules: MappingRule[],
-  categoryHistory: Record<string, number>
+  merchantHistory: Record<string, number>
 ): SuggestedCategory[] {
   const suggestions: SuggestedCategory[] = []
   const seen = new Set<string>()
@@ -104,8 +142,9 @@ export function getSuggestedCategories(
     })
   }
 
-  // 3. User history (most commonly used categories)
-  const historyEntries = Object.entries(categoryHistory)
+  // 3. Counterparty history: categories this merchant was booked as before.
+  // Confidence scales with occurrences and the reason carries provenance.
+  const historyEntries = Object.entries(merchantHistory)
     .sort(([, a], [, b]) => b - a)
     .filter(([cat]) => !seen.has(cat))
 
@@ -120,8 +159,11 @@ export function getSuggestedCategories(
       category: cat as TransactionCategory,
       label: CATEGORY_LABELS[cat] || cat,
       account: getExpenseAccountForCategory(cat as TransactionCategory),
-      confidence: Math.min(0.5, count / 20),
+      // 1 previous booking -> 0.56, capped at 0.85 (history informs, a human
+      // or counterparty template confirms).
+      confidence: Math.min(0.85, 0.5 + count * 0.06),
       source: 'history',
+      match_reason: `Bokförd ${count} gång${count === 1 ? '' : 'er'} tidigare för denna motpart`,
     })
   }
 

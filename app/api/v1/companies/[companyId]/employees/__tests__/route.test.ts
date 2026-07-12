@@ -40,6 +40,7 @@ import {
   PATCH as updateEmployee,
   DELETE as deleteEmployee,
 } from '../[id]/route'
+import { encryptPersonnummer, decryptPersonnummer } from '@/lib/salary/personnummer'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -108,7 +109,7 @@ beforeEach(() => {
   })
 })
 
-// 12-digit synthetic personnummer — passes the schema's `^\d{12}$` regex
+// 12-digit synthetic personnummer: passes the schema's `^\d{12}$` regex
 // while being obviously not a real birthdate (year 1900, day 1, zero
 // suffix). ISO A.5.34 / GDPR Art.5(1)(c): test fixtures must not look like
 // production-format PII. Last-4 is '0000' so the mask assertion is still
@@ -168,7 +169,7 @@ describe('GET /api/v1/companies/:companyId/employees', () => {
     const body = await res.json()
     expect(body.data).toHaveLength(1)
     expect(body.data[0].first_name).toBe('Anna')
-    // GDPR Art.5(1)(c) — birthdate visible, last-4 hidden.
+    // GDPR Art.5(1)(c): birthdate visible, last-4 hidden.
     expect(body.data[0].personnummer_masked).toBe('19000101XXXX')
     // The full personnummer must NEVER appear in the response, even in
     // unrelated fields.
@@ -210,6 +211,30 @@ describe('GET /api/v1/companies/:companyId/employees', () => {
     const body = await res.json()
     expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
   })
+
+  it('decrypts an encrypted-at-rest row and masks it birthdate-visible', async () => {
+    // Rows are stored encrypted; the list must decrypt before masking so the
+    // mask is YYYYMMDDXXXX (not fully redacted). Neither the ciphertext nor
+    // the plaintext may leak in the response.
+    const encRow = { ...SAMPLE_EMPLOYEE, personnummer: encryptPersonnummer(SAMPLE_PERSONNUMMER) }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: [encRow], error: null },
+      }),
+    )
+
+    const res = await listEmployees(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data[0].personnummer_masked).toBe('19000101XXXX')
+    expect(JSON.stringify(body)).not.toContain(encRow.personnummer)
+    expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
+  })
 })
 
 describe('GET /api/v1/companies/:companyId/employees/:id', () => {
@@ -229,7 +254,7 @@ describe('GET /api/v1/companies/:companyId/employees/:id', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.id).toBe(EMPLOYEE_ID)
-    // Detail endpoint deliberately returns the full personnummer — the
+    // Detail endpoint deliberately returns the full personnummer: the
     // caller already has read scope and the id.
     expect(body.data.personnummer).toBe(SAMPLE_PERSONNUMMER)
   })
@@ -261,6 +286,29 @@ describe('GET /api/v1/companies/:companyId/employees/:id', () => {
       detailParams(COMPANY_ID, 'not-a-uuid'),
     )
     expect(res.status).toBe(400)
+  })
+
+  it('decrypts the stored ciphertext and returns the full personnummer', async () => {
+    // The detail drill-in returns the full value; it is stored encrypted, so
+    // the endpoint must decrypt it rather than hand back the ciphertext.
+    const encRow = { ...SAMPLE_EMPLOYEE, personnummer: encryptPersonnummer(SAMPLE_PERSONNUMMER) }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: encRow, error: null },
+      }),
+    )
+
+    const res = await getEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.personnummer).toBe(SAMPLE_PERSONNUMMER)
+    // The raw ciphertext must not surface.
+    expect(JSON.stringify(body)).not.toContain(encRow.personnummer)
   })
 })
 
@@ -398,7 +446,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     expect(fromSpy).not.toHaveBeenCalledWith('employees')
     // The dry-run preview must mask personnummer the same way the live
-    // response shape does — never echo back the supplied identifier.
+    // response shape does: never echo back the supplied identifier.
     const body = await res.json()
     expect(body.data.preview.personnummer_masked).toBe('19000101XXXX')
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
@@ -431,7 +479,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     const res = await createEmployee(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
         method: 'POST',
-        // 10-digit form — the schema requires the 12-digit YYYYMMDDNNNN form.
+        // 10-digit form: the schema requires the 12-digit YYYYMMDDNNNN form.
         body: JSON.stringify({ ...validBody, personnummer: '8504121234' }),
       }),
       companyParams(COMPANY_ID),
@@ -459,7 +507,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
           employment_start: '2024-02-01',
           salary_type: 'monthly',
           monthly_salary: 30000,
-          // Deliberately missing tax_table_number — superRefine should fail.
+          // Deliberately missing tax_table_number: superRefine should fail.
         }),
       }),
       companyParams(COMPANY_ID),
@@ -468,6 +516,52 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('stores the personnummer encrypted at rest (round-trips, never plaintext)', async () => {
+    // Regression: this path used to insert body.personnummer verbatim, leaving
+    // plaintext personnummer in the DB and 500-ing every decrypt-on-read path.
+    let inserted: Record<string, unknown> | undefined
+    mockServiceClient.mockReturnValue({
+      from: (table: string) =>
+        new Proxy(
+          {},
+          {
+            get(_t, prop) {
+              if (prop === 'then') {
+                const data =
+                  table === 'company_members'
+                    ? { company_id: COMPANY_ID, role: 'owner' }
+                    : table === 'employees'
+                      ? SAMPLE_EMPLOYEE
+                      : null
+                return (resolve: (v: unknown) => void) => resolve({ data, error: null })
+              }
+              return (...args: unknown[]) => {
+                if (prop === 'insert' && table === 'employees') {
+                  inserted = args[0] as Record<string, unknown>
+                }
+                return new Proxy({}, this!)
+              }
+            },
+          },
+        ),
+    })
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify(validBody),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(inserted).toBeDefined()
+    const storedPnr = inserted!.personnummer as string
+    // Not stored as plaintext, and round-trips back to the supplied value.
+    expect(storedPnr).not.toBe(SAMPLE_PERSONNUMMER)
+    expect(decryptPersonnummer(storedPnr)).toBe(SAMPLE_PERSONNUMMER)
   })
 })
 
@@ -498,7 +592,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     const body = await res.json()
     expect(body.data.monthly_salary).toBe(38000)
     // GDPR Art.5(1)(c): PATCH success response masks personnummer (write
-    // shape) — the full value is only echoed by the GET drill-in.
+    // shape): the full value is only echoed by the GET drill-in.
     expect(body.data.personnummer_masked).toBe('19000101XXXX')
     expect(body.data.personnummer).toBeUndefined()
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
@@ -555,7 +649,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
   })
 
   it('returns a dry-run preview with masked personnummer', async () => {
-    // GDPR Art.5(1)(c) — the dry-run preview is a write-shape so it follows
+    // GDPR Art.5(1)(c): the dry-run preview is a write-shape so it follows
     // the same masking rule as POST and PATCH success. The full value is
     // only echoed by the GET drill-in.
     mockServiceClient.mockReturnValue(
@@ -603,7 +697,7 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id', () => {
     expect(res.status).toBe(204)
   })
 
-  it('is idempotent — deleting an already-inactive employee returns 204', async () => {
+  it('is idempotent: deleting an already-inactive employee returns 204', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },

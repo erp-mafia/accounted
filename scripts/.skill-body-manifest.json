@@ -1,7 +1,7 @@
 {
   "horizontal/swedish-accounting-compliance": {
-    "hash": "d2e40320fdfebb396da20eb50a6b4a0250a4a73bfa19a5ef71cdb2f723c10a43",
-    "version": 2
+    "hash": "8f0ea563286a0fcbf0c7a30307111f06453dc0d5f201869d794772bf0a1538c8",
+    "version": 3
   },
   "horizontal/swedish-accounting-compliance/bas-kontoplan": {
     "hash": "0d1b05466568344be0afd4b360d582db23331ae4f1b4b05681cc92c50d099bdb",
@@ -24,14 +24,14 @@
     "version": 3
   },
   "horizontal/swedish-asset-accounting": {
-    "hash": "f7c79332c0fbc24f391aac3aeb1a01327bb803d11864dd68e52e37a6df2e8588",
-    "version": 2
+    "hash": "790a9d8e712167409b9d626e24f01250df81de26e41e19f4b272db37410dea65",
+    "version": 4
   },
   "horizontal/swedish-asset-accounting/accounts-and-registry": {
     "hash": "b33d044b36d290aebb3677ae82020e0890aff3664070f2d1ec510f38b63793f4",
     "version": 1
   },
-  "horizontal/swedish-asset-accounting/depreciaton": {
+  "horizontal/swedish-asset-accounting/depreciation": {
     "hash": "f764c19f11c8613ba5014ca2767ddb1ae2926928e04c3abb43444ba27c286aec",
     "version": 1
   },
@@ -40,44 +40,44 @@
     "version": 1
   },
   "horizontal/swedish-e-invoicing": {
-    "hash": "bbcb94de81be7663384085104811a801ed6a12aa37cb2a34eefc6d0ba41267e6",
-    "version": 4
+    "hash": "287a9a7d4239de8db25b941345bb9b418e5fcf5b4dd65963c06b68215f54b2ce",
+    "version": 6
   },
   "horizontal/swedish-e-invoicing/consumer-and-b2c": {
-    "hash": "886cf35d3663b88d3b5bc8ca1766e14f073eb3de1f9e75aa55479582e638f32c",
-    "version": 1
+    "hash": "ebcb2c7e888497b61a5b25616314ae620f40d220c93c07a48aa4a49d00ac2068",
+    "version": 2
   },
   "horizontal/swedish-e-invoicing/european-mandates": {
-    "hash": "6a309d7f2c2d4bf5a8f6ee76b09757569804f7812d154b4b422e59885da8874d",
-    "version": 1
+    "hash": "62e68fed6dff28d411b1fbe3ed60aeb25034bd7ff74e97c0ec16ac8c456076f7",
+    "version": 2
   },
   "horizontal/swedish-e-invoicing/implementation-guide": {
-    "hash": "0f6fa7db0a91815c92bc2939fd619a6dc6b4d914bca05ca5bcad9657651f1e91",
-    "version": 1
+    "hash": "dd13aa80a8df4f5f44343133d5f885f1f7f1e914d73ffb5924f0296ead151439",
+    "version": 2
   },
   "horizontal/swedish-e-invoicing/legal-and-regulatory": {
-    "hash": "3b059844f55972292071a7ecf23050df209d1a8cee64d7345a75315c52a376a4",
-    "version": 1
+    "hash": "c1a2f945d60264d2b3e088c2d206be1048aa86688957f67c8047f653c8e48755",
+    "version": 2
   },
   "horizontal/swedish-e-invoicing/market-provider-pricing": {
-    "hash": "046ed818abb136c920ab4651220fb0ecd65ec2fee4e71faf2ba120cef0d425d2",
-    "version": 1
+    "hash": "e9527da2e738cefc32990758f6cbfb5f90e12e911938836dea5a1f6a69e3609b",
+    "version": 2
   },
   "horizontal/swedish-e-invoicing/peppol-bis-billing": {
     "hash": "71605dec0d6fe35175a2c40492fccdf04bf6dff9e1aa773e24fad449bdabd460",
     "version": 1
   },
   "horizontal/swedish-e-invoicing/peppol-network": {
-    "hash": "117c87eae7b594f15d2491d157668a5f59bb160caa915750136ebd29cd233ad8",
-    "version": 1
+    "hash": "f751c3eac89dddac792e6f7993c2084300c0d70a3e6133cc309e49e9d818b829",
+    "version": 2
   },
   "horizontal/swedish-e-invoicing/swedish-cius-and-specifics": {
-    "hash": "80c683c22da2449b0183a0db62377890686b8763bb80c049bac62b8dd8ac3809",
-    "version": 1
+    "hash": "538084e9f20585466adde5aafff03accaa3d7a24c11120014034706c2a01c60d",
+    "version": 2
   },
   "horizontal/swedish-financial-reporting": {
-    "hash": "c3b40427af4e279e92b65b4e048286589218cd5d0d0ae814f54e7297e87f8855",
-    "version": 2
+    "hash": "4fc9d925de42b6a1c4658b960f269f97cf7035cd2041658d17e1883480d9be4b",
+    "version": 3
   },
   "horizontal/swedish-financial-reporting/arsredovisning-structure": {
     "hash": "ae4789f2e72d8b372aafdf0ff0a0211a871b1dd62be76be836fe3cb66d6fe276",
@@ -92,16 +92,16 @@
     "version": 1
   },
   "horizontal/swedish-invoice-compliance": {
-    "hash": "adf8765c94dfd26b73e5053a7e9c310a4fd66238c1f57a8836368384d26e9510",
-    "version": 4
+    "hash": "e59a5cad1da2e4d21cdc495939c92f457280020da82e3c3b84ee830c08d72398",
+    "version": 5
   },
   "horizontal/swedish-invoice-compliance/invoice-rules": {
-    "hash": "6d6b51ce14d1d28a780909b2e1513062c4433dbb282e3c21d764732d7346e716",
-    "version": 1
+    "hash": "00f8b5a1e2883595f470216f1200d88481de9dc6aab3520bac7ab4589922a386",
+    "version": 2
   },
   "horizontal/swedish-payroll": {
-    "hash": "28532c63032c129eb17d6e0409625c6d6b8146c90ba6b1b7cfb111c9d58df9f2",
-    "version": 2
+    "hash": "a01f7a3ded13ec38fe224f1770d1b628efdda8d225ccd1e75eb0354f51ffec60",
+    "version": 3
   },
   "horizontal/swedish-payroll/agi-filing": {
     "hash": "91aa490472fafff434088301dd193ed474589b36ae22bdaab640b42bc3b3c255",
@@ -132,8 +132,8 @@
     "version": 1
   },
   "horizontal/swedish-payroll/social-charges": {
-    "hash": "390fac79462f93ea8e95f00821e7659d1e2f6663907fc281ed0b5b3e87220451",
-    "version": 1
+    "hash": "f5ea138688fc769581d73575c7ec05b15c97a3c3f30ac698631441ba5ed07e77",
+    "version": 2
   },
   "horizontal/swedish-payroll/tax-tables": {
     "hash": "7fbd2be587104f26caf18d28e058d6e9ac5ea3fb167a0990650442b1ffccd9b5",
@@ -148,8 +148,8 @@
     "version": 1
   },
   "horizontal/swedish-project-accounting": {
-    "hash": "4d5c7ea60260de2534e3f65a0b9ca130461319548a186f45fa319b0033e9ae51",
-    "version": 2
+    "hash": "273e3dcce1d4582264694231668fb4c555379cf5f40e19ebc65b34d8bd284c51",
+    "version": 3
   },
   "horizontal/swedish-project-accounting/accounts-and-entries": {
     "hash": "16dba1ef3553d06dcd34bbb7d95c34f4af1738222fb08145f2ed511d176b1b89",
@@ -172,12 +172,12 @@
     "version": 1
   },
   "horizontal/swedish-sie-import-export": {
-    "hash": "92840a5bb969cea4d0200ed7027389d003d064061c5cb01d21e59efa83849f23",
-    "version": 2
+    "hash": "6d003ee8c3439058f60c63ff5f2ca153cf6c1b6657bda56754352a6d409bd831",
+    "version": 3
   },
   "horizontal/swedish-sie-import-export/bas-sru": {
-    "hash": "8c778098571f76425cd5754581a10697bd3fc81ec887e9287790e5620ccd08cc",
-    "version": 1
+    "hash": "7fb1f664b69f5cce897938115d730d00e736d81b6216b6aa13990fc3db95259a",
+    "version": 2
   },
   "horizontal/swedish-sie-import-export/encoding": {
     "hash": "eaa520fe47638fd521d27d0f9d6315d5c15f47eed2b4df408c9e9addba10c7d8",
@@ -192,16 +192,16 @@
     "version": 1
   },
   "horizontal/swedish-sru-filing": {
-    "hash": "a8c3b59da83adcd55806a5b7fb164bb97c08274922b956af48694e4066dd2d38",
-    "version": 4
+    "hash": "5a8f288a668b8c67f6f77986d45ceb1921fe483c8d1c00a28039a8fb89f584c4",
+    "version": 5
   },
   "horizontal/swedish-sru-filing/sru-codes": {
-    "hash": "e295059a8d92b9a5530bbdc15fc33e96b3fb61618d0e99f397cf61cc4c48cd0f",
-    "version": 1
+    "hash": "90b588d78894bc7c546c5bff42c1c43a339c21db4efd51f8b4a0930e2609db83",
+    "version": 2
   },
   "horizontal/swedish-tax-planning": {
-    "hash": "1b6b6f1bc104b4e76f0d2ddc6973565d435e9e81471a2cb2246851f0d1cf1277",
-    "version": 2
+    "hash": "99b87fac9eacf0ad168434c2bce99f21cdb8a53cb26ccabb64ba291b9059aa24",
+    "version": 3
   },
   "horizontal/swedish-tax-planning/312-regler": {
     "hash": "f6fd1e6edb45cc31ec990586b08f9e68aa09be15b6e072874c0770bde941a649",
@@ -232,203 +232,203 @@
     "version": 1
   },
   "horizontal/swedish-vat": {
-    "hash": "cfdb000938ba89ea58a60769b013beda69f669dedebd85c0d6fe509f428f4d45",
-    "version": 2
+    "hash": "e0b55b8c5fafa4dd6bb28f71616637470c72f31df2cb7f8894bfbc40f49bf578",
+    "version": 3
   },
   "horizontal/swedish-vat/vat-compliance-reference": {
     "hash": "12cf0d3b485b506dc52ad44a251e1c4507948ad3378cd70210ef972b9f482c87",
     "version": 1
   },
   "horizontal/swedish-year-end-closing": {
-    "hash": "6099bc7b5b8bd94425b16fef3e897c75598b2d52eed1e624cfce2473f36b8664",
-    "version": 2
+    "hash": "ec90a8ecb3b36379350c7d7ae4e93bb50197d41a38a4c2091538320e59fc83b9",
+    "version": 3
   },
   "horizontal/swedish-year-end-closing/closing-process": {
-    "hash": "bc02a629f554369053b9d8d61f306430783d2c14137582a67bfc39b32527241e",
-    "version": 1
+    "hash": "bce8e129860dd26c04e5e406dc9312e2d42dea6aa8c0139f168de43529abf939",
+    "version": 2
   },
   "horizontal/swedish-year-end-closing/journal-entries": {
-    "hash": "afa2ebaa5d1c6619448179110c5b009e57c0aad67ea700083664bb87d632d91e",
-    "version": 1
+    "hash": "acd171ade0305bcbb4142e0f9817482f845dc6e1b3620a62eb36b6e8eef6110a",
+    "version": 2
   },
   "horizontal/swedish-year-end-closing/k2-vs-k3": {
-    "hash": "78d68d301e15cb37f46b656ae2a77199914b2ac054b50ce43bac05aaea77d46c",
-    "version": 1
+    "hash": "e3fa066d0e1fe4284661df669736241daf05e08599f893b40f5a6f94722d0bce",
+    "version": 2
   },
   "horizontal/swedish-year-end-closing/legal-framework": {
-    "hash": "b58c1e5137e325e1e5cb0a10da6b053985d9603b1feecf56d4440da0f3b0ffe3",
-    "version": 1
+    "hash": "7624ca77cc9c5fe1830ea6dad2bba52b563238b44414c3cddbece651293ef144",
+    "version": 2
   },
   "horizontal/swedish-year-end-closing/pitfalls-and-rates": {
-    "hash": "55afdde0c657b3f0f9c7c16b3c0c1f904dfe78ea4800ee899feee72059400848",
-    "version": 1
+    "hash": "2f68d58b2ccf25853452327d7c4e62793e2463f9e0213499e138bdec6bcbc23e",
+    "version": 2
   },
   "horizontal/swedish-year-end-closing/reporting-and-filing": {
-    "hash": "b914ff7e07f65f552ac040aa982689157edd34dd8a8290dab683a250a12a253b",
-    "version": 1
+    "hash": "80673a4262cab034451d4daf69ce629cc8a5a1544240cea66afe858fef7526e8",
+    "version": 2
   },
   "horizontal/swedish-year-end-closing/tax-calculations": {
-    "hash": "f7859df2a3974933e315d05ff80ec84970e7f1deddbf1f4c5330a816a1bff884",
-    "version": 1
+    "hash": "522dcbc3dcb223482c7fc0cff307e921efcbbc19fa849b99d5e540fbb366e8f6",
+    "version": 2
   },
   "modifier/holding-ab": {
-    "hash": "ad2ce0cba4f120ef1c66dd71cdfad7c15559a3997bb1749992b16d61273bde92",
-    "version": 2
+    "hash": "b8426f432969cf23d10dbe169227d7f8c0b2bbc19f8e8d1a2f3b511fcb25ecbd",
+    "version": 3
   },
   "modifier/holding-ab/312-holding": {
-    "hash": "0f5d92aaa8c172f79971b880cd5a0c4ad29fdeede95dc26bb2504cab25c278df",
-    "version": 1
+    "hash": "0df3e7cda2c612c4b9a91e4f5751b16c1567ea9d8628701757eb3756abe83228",
+    "version": 2
   },
   "modifier/holding-ab/aktieagartillskott": {
-    "hash": "6c9ad013b732e3c028e0ad0374ee0ffb8675eb30b5504cb23e879fd5a0cd6540",
-    "version": 1
+    "hash": "96979e5d66f91aca5eee84f19a9370e656c0817796c7d33704423af96f5b3f3a",
+    "version": 2
   },
   "modifier/holding-ab/koncernbidrag": {
-    "hash": "c9b34d1000b2b7970602c5efc6708e98afe5afb0d0fea9170374daca8325fbec",
-    "version": 1
+    "hash": "f692b7a0aabe18ca25330acace7b889fcc1a303d928189b2ecdd5110e8e87097",
+    "version": 2
   },
   "modifier/holding-ab/kupongskatt-cfc": {
-    "hash": "9784d44f7732a6bc12f8f640fe4b7990b3a78af70d8d751204692a570f5fb319",
-    "version": 1
+    "hash": "e61b29e6be5e77bf0cf48937d3e5a03c9702c0945b69e6065ef83c27e61104ea",
+    "version": 2
   },
   "modifier/holding-ab/moms-holdingbolag": {
-    "hash": "000bec98d76fc0f5f8f0f2745db4a29044b24b0977314b232b291d3873b68e31",
-    "version": 1
+    "hash": "9da07121d466834835b3ed8d5d8ad89c21df38dc89d07832e2337cfacd93b4cd",
+    "version": 2
   },
   "modifier/holding-ab/naringsbetingade-andelar": {
-    "hash": "341473d967b35c0618953213f7ea654a1aa6198105746ff4eb40196369868a4e",
-    "version": 1
+    "hash": "8d1bb3b9ea02f3a04ca27c8ee7f3c40051255eb4b7fa72918df08a65b16ff97c",
+    "version": 2
   },
   "modifier/holding-ab/omstrukturering": {
-    "hash": "585d7f3292468c5895ffea8184f78bd7056f0592c65833b7b87425fbe002bc59",
-    "version": 1
+    "hash": "f9f52e8343809f1382e6aaf9882d1ca478cdaa38472c9d53b1b1410c76e26285",
+    "version": 2
   },
   "modifier/holding-ab/ranteavdrag": {
-    "hash": "2621981aa238f641772b7f6e236acfba8d1aa7ffd7ea918120ecd833689c4a02",
-    "version": 1
+    "hash": "b240d994a88daa13db9e0a8961ee6ddac57d5fb171b84fda6857c9b6ff85858b",
+    "version": 2
   },
   "modifier/mixed-verksamhet": {
-    "hash": "7513494b7e1e518c621bc20e0d59d8929a1f96318e8c152640565556ae94bf1a",
-    "version": 2
+    "hash": "da6405e557094a7462139a586e3f6a40ccdcaed380990b19230a64a658788cc0",
+    "version": 3
   },
   "modifier/mixed-verksamhet/fordelningsnyckel-metoder": {
-    "hash": "8beb7be4148b9f6881531100b95ae3ddac6e3cda4d284249797708dc1d3b79c7",
-    "version": 1
+    "hash": "5ca417bc9cbdc1fd3286061f94c3b485b417660beb2910e3fbc23280aa582cb9",
+    "version": 2
   },
   "modifier/mixed-verksamhet/frivillig-skattskyldighet-fastighet": {
-    "hash": "9fe81b60f940287c8584357022bb1ba1affdc0b49beac813b5857b539b43efbf",
-    "version": 1
+    "hash": "a5db6de348099214497f3c8c782dca57f5cdbc0ecf7c83e5b2cf467be3ca9c3d",
+    "version": 2
   },
   "modifier/mixed-verksamhet/holdingbolag-avdragsratt": {
-    "hash": "14d2fae686b5cf4d8448cec178052d6333a6ccc1f14509c3a34a1486a80adea4",
-    "version": 1
+    "hash": "21151fb4bcb173e01183e74ca49b62d8774afdb424cae9481c75b1f8275cac39",
+    "version": 2
   },
   "modifier/mixed-verksamhet/jamkning-mechanics": {
-    "hash": "6adaa3dbafba65127569f1a773ca08040376b1fbe43c3f1f3048ecf90c3fdf1d",
-    "version": 1
+    "hash": "f2d39dd682adcc00f07ec0ee3336a17329883fa973ab096d148e7f2d30c3b723",
+    "version": 2
   },
   "modifier/single-shareholder-ab-fmb": {
-    "hash": "d79be2b50e33774453b8d6baaec59b79fd4bb7771550cec00f7edd7afedfb30a",
-    "version": 2
+    "hash": "ccf0cb583c7f4ae58801f1e1bc58f2ed78c1d78febd979d882c565534b3e167d",
+    "version": 4
   },
   "vertical/bygg-hantverk": {
-    "hash": "9670e3515b607176efbdab05be8fc0d76f531ddb1fee8b2d70cbf78802ef571a",
-    "version": 2
+    "hash": "fe046e23d98a4ff6ae35df0e0023ccf9168aa8dc63376b569402a026bb6d9f4a",
+    "version": 3
   },
   "vertical/bygg-hantverk/kollektivavtal": {
-    "hash": "63c6f62b621c47509fda41746ec38b713ee7fbe3fe057e2311bd8287813f4eb2",
-    "version": 1
+    "hash": "8df2ea51abfc0323bb5cb15fc80f8319d53dface71823e680be3ad818d8e8e4f",
+    "version": 2
   },
   "vertical/bygg-hantverk/momsregler": {
-    "hash": "ec1da7e6aca0da11b611c6d05a034576a950dd42127e367ca03f3e67f0e851bb",
-    "version": 1
+    "hash": "06d8415d93d25b011d0ebc142652b89c78a71fb204c0b79e5c3a9b32caa02b02",
+    "version": 2
   },
   "vertical/bygg-hantverk/pagaende-arbeten": {
-    "hash": "0d7d089f053880bfba251ef07473a4511054f5cc64fa6176180acf482128441e",
-    "version": 1
+    "hash": "34fb23d739320cf5751b9a6d62f4346eb5bce2ca8006c5273af003144600d48f",
+    "version": 2
   },
   "vertical/bygg-hantverk/praxis": {
-    "hash": "333b7c49cbae60940fc53e865df3834c1ae09e9dec106cc2087d886ababce800",
-    "version": 1
+    "hash": "0205bba6b1ba205c6df8ff557b1d4962e672dac7f07cc8eb7bceb379a2c48b7f",
+    "version": 2
   },
   "vertical/bygg-hantverk/rot-faktura-exempel": {
-    "hash": "793c954cb822ca625524262c5856843d448d249360054117f559924a91a2c270",
-    "version": 1
+    "hash": "9007433f888d8924370a5064eb7f2cef77c2c5c4fdc994cc9c78622a1f31b9d0",
+    "version": 2
   },
   "vertical/e-handel": {
-    "hash": "c0817de10778d297abb6e7206a6a861f0e41c1bc4f936f477c9afeeb8800baff",
-    "version": 2
+    "hash": "d1f7fc4c6e9870c2b8112800b85e10057b396a8972c153f3a84a3762343d4adc",
+    "version": 3
   },
   "vertical/e-handel/dac7-rapportering": {
-    "hash": "68c9ca5cf9532f2e4b8b3087ff743fe5e304acee5bdde697f1fbdf1ff9180b11",
-    "version": 1
-  },
-  "vertical/e-handel/dropshipping-kedjetransaktioner": {
-    "hash": "87caae9d6e4842a7c12f850c00ee16c8e415929999db0870dc54f51e87338857",
-    "version": 1
-  },
-  "vertical/e-handel/kollektivavtal-lager-e-handel": {
-    "hash": "499445a62ce28353857ba803f459bedb98ce8c0bdb6e791b241f509258cb6b16",
-    "version": 1
-  },
-  "vertical/e-handel/konsumentratt": {
-    "hash": "2be4d363c517b1e21b0d2f1739e714a4a240f299f2f654bf2fd141388ffee84d",
-    "version": 1
-  },
-  "vertical/e-handel/marketplace-deemed-supplier": {
-    "hash": "75bae0bd3260acbcf9b56f34e00151bb75829bbc0439a32e793952a9fecb0aff",
-    "version": 1
-  },
-  "vertical/e-handel/oss-ioss-mekanik": {
-    "hash": "801d1fd42a0d4127b61275c70d03168e760b7e9e81efd18adcf103f6bf2d2986",
-    "version": 1
-  },
-  "vertical/e-handel/payment-providers": {
-    "hash": "c93f268997bdf6c2753b40785bd5f908a3811709f37a1334af766d213603c29b",
-    "version": 1
-  },
-  "vertical/e-handel/skv-stallningstaganden-katalog": {
-    "hash": "425ac3bc34873f680d457c7909575870a18e469d705f627b7ef2b4cc978fa658",
-    "version": 1
-  },
-  "vertical/e-handel/vouchers-presentkort": {
-    "hash": "f634e054cb9b4013ba9d0551a5cf43ad58e7cd98de701a3759bd1acda8f89fd0",
-    "version": 1
-  },
-  "vertical/konsult-it": {
-    "hash": "2efeeb03361323e2389d7128395bd91226364d84009c63b1b39025b066121b14",
+    "hash": "3ef510c39c1a1f1218e926ca141f0756557f32d7657c5e80846ed7ea5393e0dc",
     "version": 2
   },
+  "vertical/e-handel/dropshipping-kedjetransaktioner": {
+    "hash": "8a449c781bc908dd06524b8f4d337bec2d1cd1693a026bd8dbe8fbde711d2f9e",
+    "version": 2
+  },
+  "vertical/e-handel/kollektivavtal-lager-e-handel": {
+    "hash": "3130e2f3d04f89b2f55bb9b6af9d6e006d7b97ca8d47a661574911b7ccadca52",
+    "version": 2
+  },
+  "vertical/e-handel/konsumentratt": {
+    "hash": "66c91b4d36af7ed04f3adc6e9c1ea58cde561a2c223e50120cab8d0716ae3ff8",
+    "version": 2
+  },
+  "vertical/e-handel/marketplace-deemed-supplier": {
+    "hash": "41f683310ba98d4914f318d3e8b6c99a6f2cc393c9296ab9c4658bd5199c0132",
+    "version": 2
+  },
+  "vertical/e-handel/oss-ioss-mekanik": {
+    "hash": "94521265f9058f657e9f2f8c02ba129238e2067c1a3691465f75df814a71a655",
+    "version": 2
+  },
+  "vertical/e-handel/payment-providers": {
+    "hash": "52854656bcde98ce7c5e5896de23fe64cddc4b17cc29b0d01d4f9551dc652232",
+    "version": 2
+  },
+  "vertical/e-handel/skv-stallningstaganden-katalog": {
+    "hash": "f630352b6a514041bfb12d3780e6a983f0556bca13a5712bba77e1a1abe0e4c5",
+    "version": 2
+  },
+  "vertical/e-handel/vouchers-presentkort": {
+    "hash": "d7bf91f0eb5aa60f116861f218ee3cd8a2eac6a613126883e0be981d350e577b",
+    "version": 2
+  },
+  "vertical/konsult-it": {
+    "hash": "af181b70fa0c9ccc993d17b1cf6ed3d66eda16d28026d679ef472286a09162cd",
+    "version": 3
+  },
   "vertical/konsult-it/3-12-rules": {
-    "hash": "4b61a79c690e5e079590fadfb85a899488486c1108c402847c31c3523d53599c",
-    "version": 1
+    "hash": "412c18f873236a941e4c72910ccae174805bbb68ddb220352caf67a451f62433",
+    "version": 2
   },
   "vertical/konsult-it/consultant-vs-employee": {
-    "hash": "72617d75adea253db2e12647fc6ec7a6eecfa21e57fcb553cf699a97c40a4253",
-    "version": 1
+    "hash": "e07710aad7ef5b3bce3a83a4b760b4a853f7066ba825bf322b6af3c8a9de7eb9",
+    "version": 2
   },
   "vertical/konsult-it/cross-border-payroll": {
-    "hash": "587e018c1936e73cc220d48b358e09a5508f5912141686042af08b26b02003e2",
-    "version": 1
+    "hash": "9d904488b7966ff9af72043483035bc6d18013e00a1fcccc5a17e294432a9eb0",
+    "version": 2
   },
   "vertical/konsult-it/electronic-services-classification": {
-    "hash": "dcd82bc64dce24c5feab9c1a70ad63d43193be5ad5fab530677b665259b2abc0",
-    "version": 1
+    "hash": "6dbf5448e9985ebfd42e005c4abee834a4adb6b4a3500326af0bfd9332c37241",
+    "version": 2
   },
   "vertical/konsult-it/invoice-templates": {
-    "hash": "14666336b3572372131063cf6a33ded049b20b1d501a1fdd4b2b3654b52cfdf8",
-    "version": 1
+    "hash": "924fb88d62abe4a6c211952b40850b39579c6b5a04afd2d23acf9b183dbafddf",
+    "version": 2
   },
   "vertical/konsult-it/software-capitalization": {
-    "hash": "a659446e3022e6ebc9124bec11dfa98753bd1dcfcd5edde786515b84f830d633",
-    "version": 1
+    "hash": "6e87a0e45e58b9d45796c3257a3162f98bd0c9a211c5d2d53e7f1114bf8d5a47",
+    "version": 2
   },
   "vertical/reklambyra-marknadsforing": {
-    "hash": "6d67fd8ab8c1032168d072025241a0157d68f13f87b92be5e3a84e554265afee",
-    "version": 1
+    "hash": "ef0343360b9c3f2a110bf318505c0001a282d6073dcc15959cd6a22cf341993b",
+    "version": 3
   },
   "vertical/software-saas-ai": {
-    "hash": "63fd0c3f1ddfde9978cd072ee5c76f89900acc5807d5085fa626e611b28a81cd",
-    "version": 1
+    "hash": "a5a8a9a73230e5d0e18c30fe3a3a8a428e21df409deecd782c6683cb9c42f334",
+    "version": 2
   }
 }

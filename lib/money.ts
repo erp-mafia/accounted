@@ -8,7 +8,7 @@
  * journal_entry_lines.
  *
  * Per CLAUDE.md accounting guard rail #9: never use `.toFixed()` for money, and
- * never hand-roll `Math.round(x * 100) / 100` — that naive form is subtly wrong
+ * never hand-roll `Math.round(x * 100) / 100`: that naive form is subtly wrong
  * (see `roundOre` below). Import these helpers instead.
  *
  * This module is the single source of truth. `lib/bokslut/rounding.ts`
@@ -24,7 +24,7 @@
  * 100.49999… and Math.round drops it to 100 instead of 101.
  *
  * The Number.EPSILON nudge bridges the IEEE gap for double-precision values
- * near unit magnitude — large enough to push 100.49999… across the half-integer
+ * near unit magnitude: large enough to push 100.49999… across the half-integer
  * boundary, small enough to leave well-formed decimals (1.234, 1.235, etc.)
  * untouched. Zero is special-cased so negative-zero inputs preserve their sign
  * through the round trip.
@@ -46,22 +46,22 @@ export const ORE_TOLERANCE = 0.005
 
 /**
  * Maximum |bank payment − invoice remaining| (in SEK) that is treated as
- * öresavrundning — booked to BAS 3740 (Öres- och kronutjämning) so the invoice
- * settles fully — rather than left as a genuine partial payment.
+ * öresavrundning: booked to BAS 3740 (Öres- och kronutjämning) so the invoice
+ * settles fully: rather than left as a genuine partial payment.
  *
  * Swedish whole-krona settlements (Bankgiro, Swish, kort) pay an öre-bearing
  * invoice total rounded to the nearest krona, so the residual is always strictly
  * under 1 krona. A real shortfall is ≥ 1 krona, so this band can never hide one.
  *
  * NOTE: deliberately looser than `ORE_TOLERANCE` (0,005). That constant is
- * float-equalisation; this is an accounting policy band. Keep them distinct —
+ * float-equalisation; this is an accounting policy band. Keep them distinct:
  * never reuse `ORE_TOLERANCE` for settlement rounding.
  */
 export const ORE_ROUNDING_SETTLEMENT_MAX = 1.0
 
 /**
  * True when two amounts are equal to the öre (within `ORE_TOLERANCE`). Prefer
- * this over `a === b` for money — direct equality on floats fails on drift.
+ * this over `a === b` for money: direct equality on floats fails on drift.
  */
 export function equalOre(a: number, b: number): boolean {
   return Math.abs(a - b) <= ORE_TOLERANCE

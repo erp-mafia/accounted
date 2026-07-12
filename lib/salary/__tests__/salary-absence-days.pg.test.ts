@@ -42,7 +42,7 @@ async function insertAbsenceDay(params: {
   return id
 }
 
-describe('salary_absence_days.pg — RLS tenant isolation', () => {
+describe('salary_absence_days.pg: RLS tenant isolation', () => {
   it('a user only sees absence days for their own company', async () => {
     const a = await seedCompany()
     const b = await seedCompany()

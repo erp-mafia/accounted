@@ -22,12 +22,18 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
+import CorrectOpeningBalanceDialog from '@/components/bookkeeping/CorrectOpeningBalanceDialog'
 import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
 import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
+import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import CorrectionChain from '@/components/bookkeeping/CorrectionChain'
+import RetagLineDialog, { type RetagLine } from '@/components/dimensions/RetagLineDialog'
+import { useCompanySettings } from '@/components/settings/useSettings'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
+import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { fetchDimensions, type DimensionDto } from '@/components/dimensions/types'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
 
@@ -43,6 +49,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showCorrection, setShowCorrection] = useState(false)
+  const [showCorrectIB, setShowCorrectIB] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [showRecordate, setShowRecordate] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -56,15 +63,48 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesValue, setNotesValue] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
+  // Dimension registry, fetched once when any line carries a dimensions map:
+  // used to resolve display names for the line badges ('KS: Butik'); badges
+  // fall back to raw codes when the fetch fails or a code is unregistered.
+  const [registryDims, setRegistryDims] = useState<DimensionDto[] | null>(null)
+  // Tier-2 retro-tagging (dimensions plan PR6): pencil on posted lines opens
+  // the audited retag dialog; the log renders as a history disclosure below.
+  // Both render only when dimensions are enabled for the company.
+  const { settings } = useCompanySettings()
+  const dimensionsEnabled = settings?.dimensions_enabled === true
+  const [retagLine, setRetagLine] = useState<RetagLine | null>(null)
+  const [retagLog, setRetagLog] = useState<
+    { id: string; line_id: string; old_dimensions: Record<string, string>; new_dimensions: Record<string, string>; reason: string; created_at: string }[]
+  >([])
+
+  useEffect(() => {
+    if (registryDims !== null) return
+    const entryLines = (entry?.lines || []) as JournalEntryLine[]
+    if (!entryLines.some((l) => l.dimensions && Object.keys(l.dimensions).length > 0)) return
+    let cancelled = false
+    fetchDimensions()
+      .then((dims) => {
+        if (!cancelled) setRegistryDims(dims)
+      })
+      .catch(() => {/* display-only, raw codes are fine */})
+    return () => {
+      cancelled = true
+    }
+  }, [entry, registryDims])
 
   const fetchData = useCallback(async () => {
     setIsLoading(true)
     setError(null)
     try {
-      const [chainRes, refsRes] = await Promise.all([
+      const [chainRes, refsRes, retagRes] = await Promise.all([
         fetch(`/api/bookkeeping/journal-entries/${id}/chain`),
         fetch(`/api/bookkeeping/journal-entries/${id}/references`),
+        fetch(`/api/bookkeeping/journal-entries/${id}/retag-log`),
       ])
+      if (retagRes.ok) {
+        const retagPayload = await retagRes.json()
+        setRetagLog(Array.isArray(retagPayload.data) ? retagPayload.data : [])
+      }
       if (!chainRes.ok) {
         const { error: msg } = await chainRes.json()
         setError(msg || t('error_load_failed'))
@@ -74,7 +114,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       setEntry(data.entry)
       setChain(data.chain)
       setIsLastInSeries(data.is_last_in_series ?? false)
-      // Underlag references (linked invoices) — best-effort; the verifikat still
+      // Underlag references (linked invoices), best-effort; the verifikat still
       // renders if this fails, it just falls back to documents-only.
       if (refsRes.ok) {
         const { data: refData } = await refsRes.json()
@@ -158,7 +198,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     }
   }, [id, router, toast, t])
 
-  // Pure reversal (storno) — cancels the verifikat with a stornoverifikation and
+  // Pure reversal (storno): cancels the verifikat with a stornoverifikation and
   // no replacement, per BFL 5 kap 5§. Distinct from "Rätta", which always books
   // a replacement entry. Routes through the engine's reverseEntry (storno +
   // reverses_id link; original → 'reversed', never deleted).
@@ -232,13 +272,57 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const foreignExchangeRate = hasForeignCurrency ? (Number(foreignLines[0].exchange_rate) || null) : null
 
   // A correction is itself a regular posted verifikation and can be corrected
-  // again (BFL 5 kap. 5 § — the chain just grows). Storno entries are pure
+  // again (BFL 5 kap. 5 §, the chain just grows). Storno entries are pure
   // reversals and cannot be corrected directly; the user walks to the latest
   // correction (or the original) and corrects that one.
   const canCorrect = entry.status === 'posted' && entry.source_type !== 'storno'
 
+  // An opening-balance verifikat must be corrected through the IB-aware flow
+  // (storno + rebook + relink the period's opening_balance_entry_id), never the
+  // generic "Rätta rader": that books a `correction` entry but leaves the
+  // period pointing at the stornoed IB, so the Balansrapport "Ingående balans"
+  // column goes stale. Only surface it on the *active* IB (posted; stornoed
+  // predecessors are `reversed`, so exactly one posted IB exists per period).
+  const isOpeningBalance = entry.source_type === 'opening_balance' && entry.status === 'posted'
+
   // Include current entry in the chain for the visualization
   const fullChain = [entry, ...chain]
+
+  // SIE dimension badge prefixes. 'KS' is the market-standard abbreviation
+  // for kostnadsställe; projekt has no standard abbreviation (Fortnox/Visma
+  // show the dimension name, and 'PR' collides with prisnivå in some BAS
+  // setups, flagged in the #859 compliance review), so dim 6 falls through
+  // to the registry name below. Stays Swedish per .claude/rules/i18n.md.
+  const DIM_BADGE_PREFIX: Record<string, string> = { '1': 'KS' }
+
+  // Display-only dimension badges for a line (e.g. 'KS: Butik', 'PR: P001').
+  // Names resolve through the registry when loaded; raw codes otherwise.
+  const renderDimensionBadges = (line: JournalEntryLine) => {
+    const entries = Object.entries(line.dimensions ?? {})
+      .filter(([, code]) => code)
+      .sort(([a], [b]) => Number(a) - Number(b))
+    if (entries.length === 0) return null
+    return (
+      <div className="mt-1 flex flex-wrap gap-1">
+        {entries.map(([dimNo, code]) => {
+          const dim = registryDims?.find((d) => String(d.sie_dim_no) === dimNo)
+          const value = dim?.values.find((v) => v.code === code)
+          const prefix = DIM_BADGE_PREFIX[dimNo] ?? dim?.name ?? `Dim ${dimNo}`
+          const hasName = !!value && value.name !== '' && value.name !== value.code
+          return (
+            <Badge
+              key={dimNo}
+              variant="outline"
+              className="font-mono text-[11px] font-normal"
+              title={`${dim?.name ?? prefix} ${code}${hasName ? `: ${value.name}` : ''}`}
+            >
+              {prefix}: {hasName ? value.name : code}
+            </Badge>
+          )
+        })}
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-8">
@@ -255,7 +339,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight font-mono">
+            <h1 className="text-2xl md:text-3xl tracking-tight font-mono">
               {formatVoucher(entry)}
             </h1>
             <JournalEntryStatusBadge entry={entry} />
@@ -265,6 +349,14 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
         {(entry.status === 'posted' || entry.status === 'draft') && (
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+            {entry.status === 'draft' && (
+              <AgentSparkleButton
+                intentId="verifikation.draft"
+                intentArgs={{ journal_entry_id: id }}
+                contextRef={`verifikation:${id}`}
+                className="w-full sm:w-auto"
+              />
+            )}
             {entry.status === 'draft' && (
               <Button
                 variant="outline"
@@ -303,7 +395,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 {entry.status === 'draft' ? t('delete_draft') : t('delete_entry')}
               </Button>
             )}
-            {canCorrect && (
+            {canCorrect && !isOpeningBalance && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -334,6 +426,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+            )}
+            {canCorrect && isOpeningBalance && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full sm:w-auto"
+                onClick={() => setShowCorrectIB(true)}
+                disabled={!canWrite}
+                title={!canWrite ? t('read_only_tooltip') : undefined}
+              >
+                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
+                {t('correct_opening_balances')}
+              </Button>
             )}
             {entry.status === 'posted' && (
               <Button
@@ -366,7 +471,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             {entry.committed_at && (
               <div className="flex justify-between">
                 <span className="text-muted-foreground">{t('field_posted_at')}</span>
-                <span>{new Date(entry.committed_at).toLocaleDateString('sv-SE')}</span>
+                <span>{formatDate(entry.committed_at)}</span>
               </div>
             )}
             <div className="flex justify-between">
@@ -381,7 +486,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 </span>
               </div>
             )}
-            {/* Notes — always editable (internal metadata, not BFL verifikation content) */}
+            {/* Notes: always editable (internal metadata, not BFL verifikation content) */}
             <div className="border-t pt-2 mt-2">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-muted-foreground flex items-center gap-1">
@@ -506,7 +611,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 <span className="tabular-nums sm:block">
                   {foreignExchangeRate
                     ? `1 ${foreignCurrency} = ${foreignExchangeRate.toLocaleString('sv-SE', { minimumFractionDigits: 4, maximumFractionDigits: 4 })} SEK`
-                    : '—'}
+                    : '-'}
                 </span>
               </div>
               <div className="flex justify-between sm:block">
@@ -543,7 +648,23 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                   return (
                     <tr key={line.id} className="border-b last:border-0">
                       <td className="py-2"><AccountNumber number={line.account_number} showName /></td>
-                      <td className="py-2 text-muted-foreground">{line.line_description || ''}</td>
+                      <td className="py-2 text-muted-foreground">
+                        <span className="inline-flex items-center gap-1">
+                          {line.line_description || ''}
+                          {dimensionsEnabled && canWrite && entry.status === 'posted' && (
+                            <button
+                              type="button"
+                              onClick={() => setRetagLine(line as unknown as RetagLine)}
+                              className="p-1 rounded text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
+                              aria-label="Ändra dimensioner"
+                              title="Ändra dimensioner (påverkar endast internredovisningen)"
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </span>
+                        {renderDimensionBadges(line)}
+                      </td>
                       <td className="py-2 text-right tabular-nums">
                         {Number(line.debit_amount) > 0 && (
                           <>
@@ -593,10 +714,23 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               return (
                 <div key={line.id} className="flex items-center justify-between py-2 border-b last:border-0 gap-2">
                   <div className="min-w-0 flex-1">
-                    <div className="text-sm"><AccountNumber number={line.account_number} showName /></div>
+                    <div className="text-sm flex items-center gap-1">
+                      <AccountNumber number={line.account_number} showName />
+                      {dimensionsEnabled && canWrite && entry.status === 'posted' && (
+                        <button
+                          type="button"
+                          onClick={() => setRetagLine(line as unknown as RetagLine)}
+                          className="p-1 rounded text-muted-foreground/50 hover:text-foreground transition-colors"
+                          aria-label="Ändra dimensioner"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
                     {line.line_description && (
                       <p className="text-xs text-muted-foreground truncate">{line.line_description}</p>
                     )}
+                    {renderDimensionBadges(line)}
                   </div>
                   <div className="text-right shrink-0 text-sm tabular-nums">
                     {Number(line.debit_amount) > 0 && (
@@ -684,6 +818,49 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         </Card>
       )}
 
+      {/* Dimension retag history (dimensions plan PR6): the immutable
+          before/after trail. Stays Swedish (voucher detail surface). */}
+      {dimensionsEnabled && retagLog.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">Ändringshistorik för dimensioner</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {retagLog.map((row) => {
+              const lineForRow = lines.find((l) => l.id === row.line_id)
+              const fmt = (dims: Record<string, string>) => {
+                const entries = Object.entries(dims ?? {}).sort(([a], [b]) => Number(a) - Number(b))
+                return entries.length > 0 ? entries.map(([no, code]) => `${no}: ${code}`).join(', ') : '-'
+              }
+              return (
+                <div key={row.id} className="text-sm border-b last:border-0 pb-3 last:pb-0">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground tabular-nums">{formatDate(row.created_at)}</span>
+                    {lineForRow && <AccountNumber number={lineForRow.account_number} />}
+                  </div>
+                  <p className="tabular-nums">
+                    <span className="text-muted-foreground line-through">{fmt(row.old_dimensions)}</span>
+                    {' → '}
+                    <span>{fmt(row.new_dimensions)}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">{row.reason}</p>
+                </div>
+              )
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Retag dialog (Tier-2 retro-tagging) */}
+      <RetagLineDialog
+        open={retagLine !== null}
+        onOpenChange={(open) => {
+          if (!open) setRetagLine(null)
+        }}
+        line={retagLine}
+        onRetagged={fetchData}
+      />
+
       {/* Correction dialog */}
       {showCorrection && entry && (
         <CorrectionEntryDialog
@@ -692,6 +869,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           onOpenChange={setShowCorrection}
           onCorrected={() => {
             setShowCorrection(false)
+            fetchData()
+          }}
+        />
+      )}
+
+      {/* Opening-balance correction dialog: IB-aware (storno + rebook + relink) */}
+      {showCorrectIB && entry && (
+        <CorrectOpeningBalanceDialog
+          entry={entry}
+          open={showCorrectIB}
+          onOpenChange={setShowCorrectIB}
+          onCorrected={() => {
+            setShowCorrectIB(false)
             fetchData()
           }}
         />
@@ -710,7 +900,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         />
       )}
 
-      {/* Edit draft dialog — drafts only; PATCHes the entry in place */}
+      {/* Edit draft dialog: drafts only; PATCHes the entry in place */}
       {showEdit && entry && entry.status === 'draft' && (
         <EditDraftEntryDialog
           entry={entry}

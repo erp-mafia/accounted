@@ -55,10 +55,12 @@ export default function SupplierDetailPage() {
   }
 
   async function fetchInvoices() {
-    const res = await fetch(`/api/supplier-invoices?status=all`)
+    const res = await fetch(
+      `/api/supplier-invoices?status=all&supplier_id=${encodeURIComponent(String(params.id))}`,
+    )
     const { data } = await res.json()
     if (data) {
-      setInvoices(data.filter((inv: SupplierInvoice) => inv.supplier_id === params.id))
+      setInvoices(data as SupplierInvoice[])
     }
   }
 
@@ -152,7 +154,7 @@ export default function SupplierDetailPage() {
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>
-            <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{supplier.name}</h1>
+            <h1 className="font-display text-2xl md:text-3xl tracking-tight">{supplier.name}</h1>
             <p className="text-muted-foreground">
               {supplierTypeLabels[supplier.supplier_type]}
               {supplier.org_number && t('org_number_inline', { number: supplier.org_number })}
@@ -189,7 +191,7 @@ export default function SupplierDetailPage() {
             <CardTitle className="text-sm text-muted-foreground">{t('outstanding')}</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="font-display text-2xl font-medium tabular-nums">{formatAmount(supplier.stats?.total_outstanding || 0)} kr</p>
+            <p className="font-display text-2xl tabular-nums">{formatAmount(supplier.stats?.total_outstanding || 0)} kr</p>
           </CardContent>
         </Card>
         <Card>
@@ -197,7 +199,7 @@ export default function SupplierDetailPage() {
             <CardTitle className="text-sm text-muted-foreground">{t('total_paid')}</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="font-display text-2xl font-medium tabular-nums">{formatAmount(supplier.stats?.total_paid || 0)} kr</p>
+            <p className="font-display text-2xl tabular-nums">{formatAmount(supplier.stats?.total_paid || 0)} kr</p>
           </CardContent>
         </Card>
         <Card>
@@ -205,7 +207,7 @@ export default function SupplierDetailPage() {
             <CardTitle className="text-sm text-muted-foreground">{t('invoice_count')}</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="font-display text-2xl font-medium tabular-nums">{supplier.stats?.invoice_count || 0}</p>
+            <p className="font-display text-2xl tabular-nums">{supplier.stats?.invoice_count || 0}</p>
           </CardContent>
         </Card>
       </div>
@@ -244,7 +246,7 @@ export default function SupplierDetailPage() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-lg">{t('invoices_section_title')}</CardTitle>
-          <Link href="/supplier-invoices/new">
+          <Link href="/supplier-invoices?new=1">
             <Button size="sm">
               <FileText className="mr-2 h-4 w-4" />
               {t('new_invoice')}

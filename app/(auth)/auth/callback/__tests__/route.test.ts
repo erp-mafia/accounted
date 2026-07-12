@@ -26,7 +26,7 @@ vi.mock('@/lib/auth/invite-tokens', () => ({
 
 import { GET } from '../route'
 
-describe('GET /auth/callback — recovery flow', () => {
+describe('GET /auth/callback: recovery flow', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })

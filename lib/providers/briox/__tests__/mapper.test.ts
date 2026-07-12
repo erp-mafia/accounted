@@ -11,8 +11,8 @@ import {
  * Mirrors lib/providers/fortnox/__tests__/mapper-payment-status.test.ts:
  * deriveInvoiceStatus and paymentStatus.paid share one isFullyPaid() source
  * of truth, so status === 'paid' iff paymentStatus.paid. An ABSENT balance
- * must never be read as paid. Field names follow the Briox docs (snake_case)
- * — re-verify against sandbox payloads (plan Phase 3).
+ * must never be read as paid. Field names follow the Briox docs (snake_case);
+ * re-verify against sandbox payloads (plan Phase 3).
  */
 
 function salesRaw(over: Record<string, unknown> = {}): Record<string, unknown> {
@@ -41,7 +41,7 @@ function supplierRaw(over: Record<string, unknown> = {}): Record<string, unknown
   };
 }
 
-describe('Briox mapper — paid-status consistency', () => {
+describe('Briox mapper: paid-status consistency', () => {
   it('sales: absent balance is NOT paid (defaults to full total, not 0)', () => {
     const dto = mapBrioxToSalesInvoice(salesRaw({})); // no balance key
     expect(dto.status).toBe('booked');
@@ -119,7 +119,7 @@ describe('Briox mapper — paid-status consistency', () => {
   });
 });
 
-describe('Briox mapper — line mapping', () => {
+describe('Briox mapper: line mapping', () => {
   it('maps invoice rows to lines with stringified account numbers', () => {
     const dto = mapBrioxToSalesInvoice(salesRaw({
       rows: [
@@ -187,7 +187,7 @@ describe('Briox mapper — line mapping', () => {
   });
 });
 
-describe('Briox mapper — customers', () => {
+describe('Briox mapper: customers', () => {
   it('maps org number, payment terms and address', () => {
     const dto = mapBrioxToCustomer({
       id: 12,
@@ -210,7 +210,7 @@ describe('Briox mapper — customers', () => {
   });
 });
 
-describe('Briox mapper — accounts', () => {
+describe('Briox mapper: accounts', () => {
   it('uses id as account number, description as name, incoming_balance as opening balance', () => {
     const dto = mapBrioxToAccountingAccount({
       id: 1930,
@@ -240,7 +240,7 @@ describe('Briox mapper — accounts', () => {
   });
 });
 
-describe('Briox mapper — company information', () => {
+describe('Briox mapper: company information', () => {
   it('unwraps the /user/info envelope and reads accounts[0]', () => {
     const dto = mapBrioxToCompanyInformation({
       info: {

@@ -34,7 +34,7 @@ beforeEach(() => {
 /**
  * Load a real SIE file from dev_docs/example_sie and parse it with the real
  * parser (encoding detection included). These are anonymised real-world Bokio
- * exports — regression data for the multi-year-import + year-end-close bug
+ * exports: regression data for the multi-year-import + year-end-close bug
  * reported by an onboarding user in April 2026.
  */
 function loadSIE(filename: string): ParsedSIEFile {
@@ -64,7 +64,7 @@ function buildTrialBalanceFromSIE(parsed: ParsedSIEFile): TrialBalanceRow[] {
   const opening = new Map<string, { debit: number; credit: number }>()
   const period = new Map<string, { debit: number; credit: number }>()
 
-  // Opening balances — only class 1-2 (Swedish SIE #IB convention)
+  // Opening balances: only class 1-2 (Swedish SIE #IB convention)
   for (const ib of parsed.openingBalances.filter((b) => b.yearIndex === 0)) {
     const bucket = opening.get(ib.account) || { debit: 0, credit: 0 }
     if (ib.amount > 0) bucket.debit += ib.amount
@@ -72,7 +72,7 @@ function buildTrialBalanceFromSIE(parsed: ParsedSIEFile): TrialBalanceRow[] {
     opening.set(ib.account, bucket)
   }
 
-  // Period activity — every #VER line
+  // Period activity: every #VER line
   for (const voucher of parsed.vouchers) {
     for (const line of voucher.lines) {
       const bucket = period.get(line.account) || { debit: 0, credit: 0 }
@@ -109,7 +109,7 @@ function buildTrialBalanceFromSIE(parsed: ParsedSIEFile): TrialBalanceRow[] {
   return rows.sort((a, b) => a.account_number.localeCompare(b.account_number))
 }
 
-describe.skipIf(!fixturesAvailable)('income statement — Bokio SIE regression (dev_docs/example_sie)', () => {
+describe.skipIf(!fixturesAvailable)('income statement: Bokio SIE regression (dev_docs/example_sie)', () => {
   it('2025: net_result matches Bokio 221 316 kr despite Yearly result closing voucher', async () => {
     // Bokio's 2025 export contains V194 "Yearly result": debit 8999 / credit 2099
     // with 221 316.27. Before the fix, treating 8999 as a regular class-8
@@ -147,7 +147,7 @@ describe.skipIf(!fixturesAvailable)('income statement — Bokio SIE regression (
     expect(flat.find((r) => r.account_number === '8999')).toBeUndefined()
   })
 
-  it('2024: no year-end close in SIE — net_result equals the sum of #RES accounts (~541k)', async () => {
+  it('2024: no year-end close in SIE: net_result equals the sum of #RES accounts (~541k)', async () => {
     // 2024 SIE has no "Yearly result" voucher, so 8999 stays at 0 and the
     // computation is a plain revenue-minus-expenses. This proves the fix
     // doesn't regress the non-closed case.

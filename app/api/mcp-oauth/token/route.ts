@@ -15,7 +15,7 @@ const ACCESS_TOKEN_TTL_SECONDS = 3600
 
 // Grace window (seconds) during which a just-superseded access token and refresh
 // token stay valid after a rotation. Lets a client that cannot reliably persist
-// the rotated refresh token — or that fires concurrent refreshes — recover via
+// the rotated refresh token, or that fires concurrent refreshes: recover via
 // idempotent replay instead of being forced into a re-auth loop (issue #710).
 // Reuse of a previous refresh token AFTER this window revokes the grant.
 const REFRESH_GRACE_SECONDS = 120
@@ -131,8 +131,8 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
   const refresh = generateRefreshToken()
 
   // Use the scopes the user consented to during /authorize. Re-validate
-  // every value against API_KEY_SCOPES even though /authorize already did
-  // — the auth code is AEAD-encrypted but we treat the boundary as
+  // every value against API_KEY_SCOPES even though /authorize already did:
+  // the auth code is AEAD-encrypted but we treat the boundary as
   // hostile by default (V9.2.1, defense-in-depth).
   let grantedScopes: ApiKeyScope[]
   if (payload.scopes && Array.isArray(payload.scopes) && payload.scopes.length > 0) {
@@ -146,7 +146,7 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     grantedScopes = revalidated
   } else {
     // Code minted with no scope (Claude's existing flow). Fall back to the
-    // read-only OAuth defaults — destructive scopes must be requested
+    // read-only OAuth defaults: destructive scopes must be requested
     // explicitly (GDPR Art. 25(2)).
     grantedScopes = DEFAULT_OAUTH_SCOPES
   }
@@ -196,7 +196,7 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   // Doing lookup + rotate + demote in ONE SECURITY DEFINER RPC closes the
   // TOCTOU gap the old SELECT-then-CAS had, and lets a just-superseded refresh
   // token stay valid for a grace window so a client that cannot persist the
-  // rotated token — or fires concurrent refreshes — recovers instead of being
+  // rotated token, or fires concurrent refreshes: recovers instead of being
   // forced into a re-auth loop (issue #710). Reuse AFTER the grace window
   // revokes the grant (RFC 9700 §4.14.2 reuse detection).
   const rotated = generateRefreshToken()

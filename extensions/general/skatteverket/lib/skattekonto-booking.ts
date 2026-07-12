@@ -88,7 +88,7 @@ async function resolvePrimarySekAccount(
 /**
  * Find the counter-account for a Skatteverket transaktionstext by consulting
  * `skattekonto_rules` (system seeds + per-company overrides). Returns null when
- * no rule matches — the booking flow surfaces NO_COUNTER_ACCOUNT to the user.
+ * no rule matches: the booking flow surfaces NO_COUNTER_ACCOUNT to the user.
  *
  * Rules are matched in priority order (lower numeric priority first), and for each
  * rule the `pattern` is split on commas to produce a list of lowercase substrings;
@@ -97,11 +97,11 @@ async function resolvePrimarySekAccount(
 // Defence-in-depth check for any interpolation site. PostgREST .or() takes a
 // raw filter string, so we refuse company ids that aren't plain ASCII safe
 // characters (letters, digits, dash, underscore). The id should already be a
-// UUID at this call site — but rejecting anything else keeps the .or()
+// UUID at this call site, but rejecting anything else keeps the .or()
 // expression literal regardless of upstream bugs (ASVS V4.5).
 const SAFE_ID_PATTERN = /^[a-zA-Z0-9_-]+$/
 
-// Explicit column projection — narrower than select('*'); ensures we don't
+// Explicit column projection: narrower than select('*'); ensures we don't
 // ship override metadata we don't need to the application layer (SOC 2
 // CC6.1, ISO 27001 A.8.5 least-privilege data access).
 const SKATTEKONTO_RULE_COLUMNS =
@@ -117,7 +117,7 @@ export async function guessCounterAccount(
   if (!SAFE_ID_PATTERN.test(companyId)) {
     // The caller is supposed to pass a validated company id (from
     // requireCompanyId). Refuse rather than interpolate an unknown string
-    // into the PostgREST filter — the .or() string parser is forgiving and
+    // into the PostgREST filter: the .or() string parser is forgiving and
     // we don't want to depend on it for safety.
     return null
   }
@@ -290,7 +290,7 @@ export async function bokforSkattekontoTransaction(
     description: `Skattekonto: ${tx.transaktionstext}`,
     source_type: 'system',
     source_id: tx.id,
-    notes: `Genererad från skattekonto-synk. Skatteverket-id: ${tx.transaktionsidentitet ?? '–'}`,
+    notes: `Genererad från skattekonto-synk. Skatteverket-id: ${tx.transaktionsidentitet ?? '-'}`,
     lines,
   }
 

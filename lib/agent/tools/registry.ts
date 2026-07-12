@@ -5,7 +5,7 @@ import type { AgentTool } from './types'
 // of mcp-server/index.ts calling registerAgentTools).
 //
 // Why a singleton: same lifetime story as the event bus and extension
-// registry — there's exactly one chat loop per process, it must see the same
+// registry: there's exactly one chat loop per process, it must see the same
 // tool set on every invocation, and tests can reset via clear().
 class AgentToolRegistry {
   private tools = new Map<string, AgentTool>()

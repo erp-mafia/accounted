@@ -33,7 +33,7 @@ interface UseSourceLinesResult {
  * of `createSourceLoader` from `lib/reports/source-lines` so the loading
  * semantics can be unit-tested in node without DOM.
  *
- * The cache lives per-instance — reopening the same row never refetches.
+ * The cache lives per-instance: reopening the same row never refetches.
  */
 export function useSourceLines(fetcher: ReportSourceFetcher): UseSourceLinesResult {
   const [lines, setLines] = useState<ReportSourceLine[] | null>(null)
@@ -167,7 +167,7 @@ export function useReportRowExpansion(fetcher: ReportSourceFetcher, rowId: strin
 }
 
 /**
- * Body of the expansion when the wrapping `<td>` colSpan is provided —
+ * Body of the expansion when the wrapping `<td>` colSpan is provided:
  * renders inline (used by ReportRowExpansion).
  */
 function ExpansionPanel({
@@ -266,7 +266,7 @@ function ExpansionContent({
         </thead>
         <tbody>
           {lines.map((line) => (
-            <tr key={`${line.voucher_series}-${line.voucher_number}-${line.journal_entry_id}`} className="border-t border-border/40">
+            <tr key={`${line.voucher_series}-${line.voucher_number}-${line.journal_entry_id}`} className="border-t border-border">
               <td className="py-1.5">
                 {line.journal_entry_id ? (
                   <Link
@@ -276,7 +276,7 @@ function ExpansionContent({
                     {formatVoucher(line)}
                   </Link>
                 ) : (
-                  <span className="font-mono text-muted-foreground">—</span>
+                  <span className="font-mono text-muted-foreground">-</span>
                 )}
               </td>
               <td className="py-1.5 tabular-nums text-muted-foreground">

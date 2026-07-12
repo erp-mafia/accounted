@@ -1,4 +1,4 @@
-name: compliance — review (advisory)
+name: "compliance: review (advisory)"
 
 # Lightweight LLM-only review on every PR. ~90s, no Docker scanners.
 # Posts a sticky comment with reasoned findings across all 5 frameworks.

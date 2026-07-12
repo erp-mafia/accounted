@@ -1,8 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 
 /**
  * POST /api/bookkeeping/accounts/activate
@@ -12,100 +11,101 @@ import { requireWritePermission } from '@/lib/auth/require-write'
  * - Reactivates (is_active=true) accounts that already exist but are inactive.
  * - Skips anything already active.
  * - Returns { activated, reactivated, skipped, unknown } so callers can react.
+ *
+ * Strings that aren't known BAS numbers are reported in `unknown` (not
+ * rejected) so activate-and-retry flows can surface them; the schema only
+ * bounds type and size.
  */
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+const ActivateSchema = z.object({
+  account_numbers: z.array(z.string().min(1).max(10)).min(1).max(2000),
+})
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+export const POST = withRouteContext(
+  'bookkeeping.accounts.activate',
+  async (request, ctx) => {
+    const { supabase, companyId, user } = ctx
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const body = await request.json()
-  const accountNumbers: string[] = body.account_numbers
-
-  if (!Array.isArray(accountNumbers) || accountNumbers.length === 0) {
-    return NextResponse.json({ error: 'account_numbers array required' }, { status: 400 })
-  }
-
-  const uniqueNumbers = [...new Set(accountNumbers)]
-
-  // Fetch existing rows with current is_active state
-  const { data: existing, error: fetchError } = await supabase
-    .from('chart_of_accounts')
-    .select('account_number, is_active')
-    .eq('company_id', companyId)
-    .in('account_number', uniqueNumbers)
-
-  if (fetchError) {
-    return NextResponse.json({ error: fetchError.message }, { status: 500 })
-  }
-
-  const existingByNumber = new Map<string, boolean>(
-    (existing || []).map((a) => [a.account_number, a.is_active])
-  )
-
-  const toReactivate: string[] = []
-  const toInsert: Array<ReturnType<typeof buildInsertRow>> = []
-  const unknown: string[] = []
-  let skipped = 0
-
-  for (const num of uniqueNumbers) {
-    if (existingByNumber.has(num)) {
-      if (existingByNumber.get(num) === true) {
-        skipped += 1
-      } else {
-        toReactivate.push(num)
-      }
-      continue
+    const raw = await request.json().catch(() => null)
+    const parsed = ActivateSchema.safeParse(raw)
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'account_numbers array required' }, { status: 400 })
     }
-    const row = buildInsertRow(num, user.id, companyId)
-    if (row) {
-      toInsert.push(row)
-    } else {
-      unknown.push(num)
-    }
-  }
 
-  let reactivatedRows: { account_number: string }[] = []
-  if (toReactivate.length > 0) {
-    const { data, error } = await supabase
+    const uniqueNumbers = [...new Set(parsed.data.account_numbers)]
+
+    // Fetch existing rows with current is_active state
+    const { data: existing, error: fetchError } = await supabase
       .from('chart_of_accounts')
-      .update({ is_active: true })
+      .select('account_number, is_active')
       .eq('company_id', companyId)
-      .in('account_number', toReactivate)
-      .select('account_number')
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
-    reactivatedRows = data || []
-  }
+      .in('account_number', uniqueNumbers)
 
-  let insertedRows: { account_number: string }[] = []
-  if (toInsert.length > 0) {
-    const { data, error } = await supabase
-      .from('chart_of_accounts')
-      .insert(toInsert)
-      .select('account_number')
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    if (fetchError) {
+      return NextResponse.json({ error: fetchError.message }, { status: 500 })
     }
-    insertedRows = data || []
-  }
 
-  return NextResponse.json({
-    data: [...insertedRows, ...reactivatedRows],
-    activated: insertedRows.length,
-    reactivated: reactivatedRows.length,
-    skipped,
-    unknown,
-  })
-}
+    const existingByNumber = new Map<string, boolean>(
+      (existing || []).map((a) => [a.account_number, a.is_active])
+    )
+
+    const toReactivate: string[] = []
+    const toInsert: Array<NonNullable<ReturnType<typeof buildInsertRow>>> = []
+    const unknown: string[] = []
+    let skipped = 0
+
+    for (const num of uniqueNumbers) {
+      if (existingByNumber.has(num)) {
+        if (existingByNumber.get(num) === true) {
+          skipped += 1
+        } else {
+          toReactivate.push(num)
+        }
+        continue
+      }
+      const row = buildInsertRow(num, user.id, companyId)
+      if (row) {
+        toInsert.push(row)
+      } else {
+        unknown.push(num)
+      }
+    }
+
+    let reactivatedRows: { account_number: string }[] = []
+    if (toReactivate.length > 0) {
+      const { data, error } = await supabase
+        .from('chart_of_accounts')
+        .update({ is_active: true })
+        .eq('company_id', companyId)
+        .in('account_number', toReactivate)
+        .select('account_number')
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 })
+      }
+      reactivatedRows = data || []
+    }
+
+    let insertedRows: { account_number: string }[] = []
+    if (toInsert.length > 0) {
+      const { data, error } = await supabase
+        .from('chart_of_accounts')
+        .insert(toInsert)
+        .select('account_number')
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 })
+      }
+      insertedRows = data || []
+    }
+
+    return NextResponse.json({
+      data: [...insertedRows, ...reactivatedRows],
+      activated: insertedRows.length,
+      reactivated: reactivatedRows.length,
+      skipped,
+      unknown,
+    })
+  },
+  { requireWrite: true },
+)
 
 function buildInsertRow(accountNumber: string, userId: string, companyId: string) {
   const ref = getBASReference(accountNumber)

@@ -2,8 +2,8 @@
 
 ## Primary laws
 
-- **Bokföringslagen (BFL, SFS 1999:1078)** — who must keep accounts and how they close
-- **Årsredovisningslagen (ÅRL, SFS 1995:1554)** — content and format of årsredovisning
+- **Bokföringslagen (BFL, SFS 1999:1078)**: who must keep accounts and how they close
+- **Årsredovisningslagen (ÅRL, SFS 1995:1554)**: content and format of årsredovisning
 
 ## Who does what (BFL Chapter 6)
 

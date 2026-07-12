@@ -1,4 +1,4 @@
-# Violation Patterns — Code, Configuration, Dependency
+# Violation Patterns: Code, Configuration, Dependency
 
 This file catalogs concrete violation patterns the scanner must detect. Patterns are organized by where they live in the repository: source code, infrastructure-as-code, or dependency manifests.
 
@@ -33,7 +33,7 @@ subprocess.call(f"git clone {repo_url}", shell=True)
 AWS_SECRET_KEY = "AKIAIOSFODNN7EXAMPLE"
 db_password = "p@ssw0rd123"
 ```
-**Detection**: Entropy analysis + regex (Trivy secret scanner, gitleaks, truffleHog). Scan full Git history, not just current HEAD — secrets in old commits are still exposed.
+**Detection**: Entropy analysis + regex (Trivy secret scanner, gitleaks, truffleHog). Scan full Git history, not just current HEAD: secrets in old commits are still exposed.
 
 ### Weak cryptography
 **Controls violated**: A.8.24.
@@ -51,7 +51,7 @@ crypto.createHash('md5')  // Broken
 ### Missing input validation on PII handlers
 **Controls violated**: A.8.11 (Data masking), A.5.34 (Privacy and protection of PII).
 **Pattern**: Functions that accept PII parameters and write them to logs, return them in error messages, or store them unencrypted.
-**Detection**: Tag-based SAST — annotate PII-handling functions and verify masking/redaction is applied before output sinks (logs, errors, storage).
+**Detection**: Tag-based SAST: annotate PII-handling functions and verify masking/redaction is applied before output sinks (logs, errors, storage).
 
 ### Insecure deserialization
 **Controls violated**: A.8.28.

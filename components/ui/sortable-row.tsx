@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 interface SortableRowProps<T> {
   /** Identity used by Reorder to track this item across reorders. */
   value: T
-  /** The row's existing markup — rendered untouched beside the drag handle. */
+  /** The row's existing markup: rendered untouched beside the drag handle. */
   children: ReactNode
   /** Localized aria-label for the drag handle. */
   handleLabel: string

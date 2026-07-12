@@ -12,7 +12,7 @@ import {
   type ValidateInvoiceItem,
 } from '../rot-rut-rules'
 
-describe('rot-rut-rules — constants', () => {
+describe('rot-rut-rules: constants', () => {
   it('uses the 2026 statutory rates', () => {
     expect(ROT_PERCENT).toBe(0.30)
     expect(RUT_PERCENT).toBe(0.50)
@@ -82,7 +82,7 @@ describe('computeDeduction', () => {
 
   it('caps at line total even if percent goes off (defensive)', () => {
     // The percent is < 1.0 so this is hypothetical, but the cap is part
-    // of the contract — assert it via a synthetic case where unit_price ×
+    // of the contract: assert it via a synthetic case where unit_price ×
     // quantity happens to be tiny but the rounding step could overshoot.
     const item: ItemForDeduction = {
       unit_price: 0.01,
@@ -95,7 +95,7 @@ describe('computeDeduction', () => {
 })
 
 describe('computeInvoiceDeductionTotal', () => {
-  it('mixed: ROT line + non-eligible line — only ROT generates deduction', () => {
+  it('mixed: ROT line + non-eligible line: only ROT generates deduction', () => {
     const items: ItemForDeduction[] = [
       { unit_price: 10000, quantity: 1, deduction_type: 'rot' },
       { unit_price: 2000, quantity: 1 }, // not flagged
@@ -186,7 +186,7 @@ describe('validateInvoice', () => {
 
   it('no warning when total under cap', () => {
     const items: ValidateInvoiceItem[] = [
-      { unit_price: 10000, quantity: 1, deduction_type: 'rot' }, // 3 000 — well under cap
+      { unit_price: 10000, quantity: 1, deduction_type: 'rot' }, // 3 000: well under cap
     ]
     const result = validateInvoice(items, true, true)
     expect(result.warnings).toHaveLength(0)

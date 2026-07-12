@@ -12,7 +12,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useCompany } from '@/contexts/CompanyContext'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
-import { DATE_RANGE_SLUGS, getReport } from '@/lib/reports/catalog'
+import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
+import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
 import { NEDeclarationView } from '@/components/reports/NEDeclarationView'
 import { PeriodiskSammanstallningView } from '@/components/reports/PeriodiskSammanstallningView'
 import { INK2DeclarationView } from '@/components/reports/INK2DeclarationView'
@@ -28,6 +29,7 @@ import {
   GeneralLedgerView,
   JournalRegisterView,
   ARLedgerView,
+  DimensionPnlView,
 } from '@/components/reports/views'
 
 /**
@@ -35,7 +37,7 @@ import {
  * a back link to the library, the shared fiscal-year selector (restored from
  * localStorage so it matches the year picked on the landing), the report's
  * optional date-range control, and the report body. Drilling into an account
- * navigates to /reports/huvudbok?account=… — drill state lives in the URL.
+ * navigates to /reports/huvudbok?account=…: drill state lives in the URL.
  */
 function FocusedReportInner({ slug }: { slug: string }) {
   const router = useRouter()
@@ -46,11 +48,15 @@ function FocusedReportInner({ slug }: { slug: string }) {
   const [selectedPeriod, setSelectedPeriod] = useState('')
   const [selectedPeriodBounds, setSelectedPeriodBounds] = useState<{ start: string; end: string } | null>(null)
   const [dateRange, setDateRange] = useState<DateRangeValue>({})
+  const [dimensionFilter, setDimensionFilter] = useState<DimensionFilterValue | null>(null)
   const [isReady, setIsReady] = useState(false)
 
   const report = getReport(slug)
   // Calendar (VAT family) and param-less reports don't need a fiscal period.
   const isPeriodless = report?.params === 'calendar' || report?.params === 'none'
+  // Nav-promoted pages (Momsdeklaration) drop the library chrome: no back
+  // link, no shell fiscal-year selector — the view owns its period controls.
+  const isStandalone = !!report?.standalone
   const reportName = report ? t(report.labelKey) : slug
   const accountFilter = searchParams.get('account')
 
@@ -65,30 +71,34 @@ function FocusedReportInner({ slug }: { slug: string }) {
 
   return (
     <div className="space-y-8">
-      <Link
-        href="/reports"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ChevronLeft className="h-4 w-4" />
-        {t('back_to_library')}
-      </Link>
+      {!isStandalone && (
+        <Link
+          href="/reports"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ChevronLeft className="h-4 w-4" />
+          {t('back_to_library')}
+        </Link>
+      )}
 
       <PageHeader
         title={reportName}
         action={
-          <FiscalYearSelector
-            value={selectedPeriod || null}
-            onChange={(id, period) => {
-              setSelectedPeriod(id || '')
-              setSelectedPeriodBounds(
-                period ? { start: period.period_start, end: period.period_end } : null,
-              )
-              setDateRange({})
-            }}
-            includeAllOption={false}
-            hideFuturePeriods
-            onReady={() => setIsReady(true)}
-          />
+          isStandalone ? undefined : (
+            <FiscalYearSelector
+              value={selectedPeriod || null}
+              onChange={(id, period) => {
+                setSelectedPeriod(id || '')
+                setSelectedPeriodBounds(
+                  period ? { start: period.period_start, end: period.period_end } : null,
+                )
+                setDateRange({})
+              }}
+              includeAllOption={false}
+              hideFuturePeriods
+              onReady={() => setIsReady(true)}
+            />
+          )
         }
       />
 
@@ -99,6 +109,10 @@ function FocusedReportInner({ slug }: { slug: string }) {
           value={dateRange}
           onChange={setDateRange}
         />
+      )}
+
+      {DIMENSION_FILTER_SLUGS.has(slug) && selectedPeriod && (
+        <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />
       )}
 
       {!isReady && !isPeriodless ? (
@@ -114,6 +128,7 @@ function FocusedReportInner({ slug }: { slug: string }) {
           periodId={selectedPeriod}
           periodBounds={selectedPeriodBounds}
           dateRange={dateRange}
+          dimensionFilter={dimensionFilter}
           accountFilter={accountFilter}
           isEnskildFirma={isEnskildFirma}
           isAktiebolag={isAktiebolag}
@@ -136,6 +151,7 @@ function FocusedView({
   periodId,
   periodBounds,
   dateRange,
+  dimensionFilter,
   accountFilter,
   isEnskildFirma,
   isAktiebolag,
@@ -145,6 +161,7 @@ function FocusedView({
   periodId: string
   periodBounds: { start: string; end: string } | null
   dateRange: DateRangeValue
+  dimensionFilter: DimensionFilterValue | null
   accountFilter: string | null
   isEnskildFirma: boolean
   isAktiebolag: boolean
@@ -152,17 +169,19 @@ function FocusedView({
 }) {
   switch (slug) {
     case 'resultatrapport':
-      return <ResultatrapportView periodId={periodId} dateRange={dateRange} onNavigateToAccount={onNavigateToAccount} />
+      return <ResultatrapportView periodId={periodId} dateRange={dateRange} dimensionFilter={dimensionFilter} onNavigateToAccount={onNavigateToAccount} />
+    case 'dimension-pnl':
+      return <DimensionPnlView periodId={periodId} dateRange={dateRange} />
     case 'balansrapport':
       return <BalansrapportView periodId={periodId} dateRange={dateRange} onNavigateToAccount={onNavigateToAccount} />
     case 'trial-balance':
       return <TrialBalanceView periodId={periodId} onNavigateToAccount={onNavigateToAccount} />
     case 'income-statement':
-      return <IncomeStatementView periodId={periodId} dateRange={dateRange} onNavigateToAccount={onNavigateToAccount} />
+      return <IncomeStatementView periodId={periodId} dateRange={dateRange} dimensionFilter={dimensionFilter} onNavigateToAccount={onNavigateToAccount} />
     case 'balance-sheet':
       return <BalanceSheetView periodId={periodId} dateRange={dateRange} onNavigateToAccount={onNavigateToAccount} />
     case 'vat-declaration':
-      return <VatDeclarationView fiscalPeriodId={periodId} fiscalPeriodBounds={periodBounds} />
+      return <VatDeclarationView />
     case 'periodisk-sammanstallning':
       return <PeriodiskSammanstallningView />
     case 'ne-declaration':
@@ -170,7 +189,7 @@ function FocusedView({
     case 'ink2-declaration':
       return isAktiebolag ? <INK2DeclarationView periodId={periodId} /> : null
     case 'huvudbok':
-      return <GeneralLedgerView periodId={periodId} initialAccountFilter={accountFilter} />
+      return <GeneralLedgerView periodId={periodId} initialAccountFilter={accountFilter} dimensionFilter={dimensionFilter} dateRange={dateRange} />
     case 'grundbok':
       return <JournalRegisterView periodId={periodId} />
     case 'kundreskontra':

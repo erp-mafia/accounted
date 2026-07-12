@@ -28,7 +28,7 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
     .eq('company_id', companyId)
     .maybeSingle()
 
-  // Sandbox sessions get a pre-built assistant — backfill if a pre-seed
+  // Sandbox sessions get a pre-built assistant: backfill if a pre-seed
   // session is missing it so /chat doesn't bounce back to / in a loop.
   if (!agent?.verified_at) {
     const { data: settings } = await supabase

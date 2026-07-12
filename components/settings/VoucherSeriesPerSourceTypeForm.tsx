@@ -34,11 +34,12 @@ const VISIBLE_SOURCE_TYPES: Array<{ key: JournalEntrySourceType; labelKey: strin
   { key: 'salary_payment', labelKey: 'salary_payment' },
   { key: 'bank_transaction', labelKey: 'bank_transaction' },
   { key: 'reminder_fee', labelKey: 'reminder_fee' },
+  { key: 'vat_settlement', labelKey: 'vat_settlement' },
   { key: 'opening_balance', labelKey: 'opening_balance' },
   { key: 'year_end', labelKey: 'year_end' },
 ]
 
-// Swedish labels. Kept inline so this component is self-contained — these
+// Swedish labels. Kept inline so this component is self-contained: these
 // labels are bookkeeping-domain terms that intentionally stay Swedish across
 // locales (see CLAUDE.md i18n table).
 const SV_LABELS: Record<string, string> = {
@@ -53,6 +54,7 @@ const SV_LABELS: Record<string, string> = {
   salary_payment: 'Lön',
   bank_transaction: 'Banktransaktioner',
   reminder_fee: 'Påminnelseavgifter',
+  vat_settlement: 'Momsredovisning',
   opening_balance: 'Ingående balanser',
   year_end: 'Bokslut',
 }

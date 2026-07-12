@@ -1,12 +1,13 @@
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse, type NextRequest } from 'next/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
 
 /**
  * GET /api/team/accept?token=xxx
  * Validates an invite token and returns invite info (for the invite page).
- * Only company invitations are supported — team invitations are disabled.
- * No auth required — this is a public endpoint.
+ * Only company invitations are supported: team invitations are disabled.
+ * No auth required: this is a public endpoint.
  */
 export async function GET(request: NextRequest) {
   const token = request.nextUrl.searchParams.get('token')
@@ -51,14 +52,11 @@ export async function GET(request: NextRequest) {
 /**
  * POST /api/team/accept
  * Accepts a company invite after the user has signed up.
- * Team invitations are disabled — teams are single-user.
+ * Team invitations are disabled: teams are single-user.
  */
 export async function POST(request: NextRequest) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const { user, error } = await requireAuth()
+  if (error) return error
 
   const body = await request.json()
   const token = body.token as string
@@ -112,8 +110,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Kunde inte lägga till medlem.' }, { status: 500 })
   }
 
-  // Set active company. Non-fatal on failure — the membership insert already
-  // succeeded and middleware falls back to it — but log so silent
+  // Set active company. Non-fatal on failure: the membership insert already
+  // succeeded and middleware falls back to it, but log so silent
   // persistence failures (#701) are observable.
   const { error: prefError } = await serviceClient
     .from('user_preferences')

@@ -106,7 +106,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
             return (
               <div
                 key={def.id}
-                className="rounded-lg border border-border/60 p-3"
+                className="rounded-lg border border-border p-3"
               >
                 <div className="flex items-center justify-between">
                   <button
@@ -139,7 +139,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
                 </div>
 
                 {isExpanded && (
-                  <div className="mt-3 ml-5.5 space-y-2.5 text-xs text-muted-foreground">
+                  <div className="mt-3 ml-5.5 space-y-2 text-xs text-muted-foreground">
                     <p>{t(`def_${def.id}_description`)}</p>
                     <div>
                       <p className="font-medium text-foreground/80 mb-0.5">

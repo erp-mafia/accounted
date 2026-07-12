@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Search, ChevronDown, ChevronUp, AlertTriangle, Info, Building2 } from 'lucide-react'
+import { Search, ChevronDown, ChevronUp, AlertTriangle, Info, Building2, PenLine } from 'lucide-react'
 import {
   getCommonTemplates,
   getAdvancedTemplates,
@@ -58,6 +58,12 @@ function getVatLabelKey(template: BookingTemplate): string | null {
     case 'exempt': return 'vat_exempt'
     default: return null
   }
+}
+
+// Reverse charge (omvänd moms) carries the ochre emphasis via the sanctioned
+// `warning` variant; every other VAT treatment uses the neutral `secondary`.
+function getVatBadgeVariant(vatTreatment: string | null | undefined): 'secondary' | 'warning' {
+  return vatTreatment === 'reverse_charge' ? 'warning' : 'secondary'
 }
 
 function groupTemplates(templates: BookingTemplate[]): Map<TemplateGroup, BookingTemplate[]> {
@@ -117,20 +123,17 @@ function LibraryTemplateCard({ raw, converted, selected, onClick }: LibraryTempl
             )}
             {vatLabelKey && (
               <Badge
-                variant="secondary"
-                className={`text-[10px] px-1.5 py-0 ${
-                  converted?.vat_treatment === 'reverse_charge'
-                    ? 'bg-warning/10 text-warning-foreground'
-                    : ''
-                }`}
+                variant={getVatBadgeVariant(converted?.vat_treatment)}
+                className="text-[10px] px-1.5 py-0"
               >
                 {t(vatLabelKey)}
               </Badge>
             )}
             {!converted && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                <PenLine className="h-3 w-3" />
                 {t('opens_editor_badge')}
-              </Badge>
+              </span>
             )}
           </div>
         </div>
@@ -169,18 +172,14 @@ function TemplateCard({ template, selected, onClick, compact }: TemplateCardProp
             </span>
             {vatLabelKey && (
               <Badge
-                variant="secondary"
-                className={`text-[10px] px-1.5 py-0 ${
-                  template.vat_treatment === 'reverse_charge'
-                    ? 'bg-warning/10 text-warning-foreground'
-                    : ''
-                }`}
+                variant={getVatBadgeVariant(template.vat_treatment)}
+                className="text-[10px] px-1.5 py-0"
               >
                 {t(vatLabelKey)}
               </Badge>
             )}
             {template.requires_vat_registration_data && (
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-warning/30 text-warning-foreground gap-0.5">
+              <Badge variant="warning" className="text-[10px] px-1.5 py-0 gap-0.5">
                 <AlertTriangle className="h-2.5 w-2.5" />
                 {t('requires_vat_reg')}
               </Badge>
@@ -226,14 +225,13 @@ export default function TemplatePicker({
   const [libraryRaw, setLibraryRaw] = useState<BookingTemplateLibrary[]>([])
 
   // Map direction to template direction filter (transfers show in both).
-  // Direction filtering applies only to the static "Vanliga mallar" list —
-  // user-created library templates ignore it (inferred direction is unreliable
+  // Direction filtering applies only to the static "Vanliga mallar" list:   // user-created library templates ignore it (inferred direction is unreliable
   // and users know what they made).
   const templateDirection = direction === 'income' ? 'income' : 'expense'
 
   // Fetch the user's library templates (company + team scope). We keep them
   // in their raw shape so we can render every template, even ones that don't
-  // fit convertLibraryToBookingTemplate's simple 2-account contract — those
+  // fit convertLibraryToBookingTemplate's simple 2-account contract: those
   // get routed through the manual booking dialog instead of the QuickReview
   // single-account path.
   useEffect(() => {
@@ -254,7 +252,7 @@ export default function TemplatePicker({
 
   // Lazy convertibility map. A template is "convertible" if it fits the
   // simple debit/credit pair shape the QuickReview booking path expects.
-  // Non-convertible templates are still shown — they just route to the
+  // Non-convertible templates are still shown: they just route to the
   // full journal-entry editor on click.
   const convertedById = useMemo(() => {
     const m = new Map<string, BookingTemplate | null>()
@@ -292,7 +290,7 @@ export default function TemplatePicker({
   )
 
   // Library templates filtered by entity_type only. Direction is NOT applied
-  // here — see the comment on convertedById above.
+  // here: see the comment on convertedById above.
   const relevantLibraryRaw = useMemo(() => {
     return libraryRaw.filter((tt) => {
       if (entityType && tt.entity_type && tt.entity_type !== 'all' && tt.entity_type !== entityType) {
@@ -353,12 +351,12 @@ export default function TemplatePicker({
   // QuickReview fast path, which books a single category + one account_override
   // and silently discards the template's chosen debit/credit. A kundinbetalning
   // mall (D 1930 / K 1510) came out as a generic cost (D 6991 / K 1930), or with
-  // a VAT line as D 1930 / K 1930 / K 2611 — and the result flipped with the
+  // a VAT line as D 1930 / K 1930 / K 2611, and the result flipped with the
   // direction the converter happened to infer from the business/settlement tags.
   // Routing every library template through the editor books exactly the accounts
   // the user defined, independent of those tags. See template-library.test.ts.
   //
-  // MRU is only bumped once we know the click will do something — otherwise a
+  // MRU is only bumped once we know the click will do something: otherwise a
   // consumer that omits onPickLibraryTemplate would reorder MRU for a template
   // the user never actually applied.
   const handleSelectLibraryRaw = (raw: BookingTemplateLibrary) => {
@@ -439,7 +437,7 @@ export default function TemplatePicker({
         ) : (
           <>
             {/* User-created library templates (company + team scope).
-                Direction is intentionally NOT applied here — all the user's
+                Direction is intentionally NOT applied here: all the user's
                 own templates are shown regardless of expense/income context. */}
             {sortedLibraryRaw.length > 0 && (
               <div>
@@ -461,7 +459,7 @@ export default function TemplatePicker({
               </div>
             )}
 
-            {/* Counterparty templates — learned from history */}
+            {/* Counterparty templates: learned from history */}
             {hasCounterparty && (
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-2">{t('previous_counterparties')}</p>

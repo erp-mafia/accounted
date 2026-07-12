@@ -10,7 +10,7 @@
  *   - non-recoverable / SKV business error → rejected
  *
  * A FAKE extension is registered in the registry so no real SKV/extension
- * code runs — this isolates the core wiring (registry resolution + lifecycle).
+ * code runs: this isolates the core wiring (registry resolution + lifecycle).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
@@ -20,6 +20,15 @@ import type { Extension } from '@/lib/extensions/types'
 import type { SkvSubmitResult } from '@/lib/pending-operations/skatteverket-commit'
 import type { PendingOperation } from '@/types'
 import { commitPendingOperation } from '../commit'
+
+// The commit-time capability gate (PR: gate paid MCP tools) runs hasCapability
+// before the atomic claim for submit_vat_declaration/submit_agi. These tests
+// isolate the registry/lifecycle wiring, so make the gate transparent here;
+// its enforcement is covered by commit-capability-gate.test.ts.
+vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
+  return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
+})
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
   return {

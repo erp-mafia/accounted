@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import {
   createMockRequest,
   parseJsonResponse,
@@ -8,8 +9,10 @@ import {
 import { eventBus } from '@/lib/events'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 vi.mock('@/lib/init', () => ({
@@ -21,8 +24,9 @@ vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
+const requireWriteMock = vi.fn()
 vi.mock('@/lib/auth/require-write', () => ({
-  requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+  requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
 const mockReverseEntry = vi.fn()
@@ -39,11 +43,16 @@ describe('POST /api/transactions/[id]/uncategorize', () => {
     vi.clearAllMocks()
     reset()
     eventBus.clear()
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
 
     const request = createMockRequest('/api/transactions/tx-1/uncategorize', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
@@ -51,6 +60,21 @@ describe('POST /api/transactions/[id]/uncategorize', () => {
 
     expect(status).toBe(401)
     expect(body).toEqual({ error: 'Unauthorized' })
+  })
+
+  it('returns 403 when the caller is a viewer', async () => {
+    requireWriteMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    })
+
+    const request = createMockRequest('/api/transactions/tx-1/uncategorize', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse(response)
+
+    expect(status).toBe(403)
+    expect(body).toEqual({ error: 'Forbidden' })
+    expect(mockReverseEntry).not.toHaveBeenCalled()
   })
 
   it('returns 404 when transaction not found', async () => {

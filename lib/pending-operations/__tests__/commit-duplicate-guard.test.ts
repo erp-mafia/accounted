@@ -1,6 +1,6 @@
 /**
  * The agent/MCP commit path (lib/pending-operations/commit.ts) must run the same
- * duplicate guards as the web routes — it previously bypassed them entirely,
+ * duplicate guards as the web routes: it previously bypassed them entirely,
  * which let an approved staged op double-book an affärshändelse already in the
  * ledger (the production case: a bank line booked on top of an invoice
  * "markera som betald" voucher or a salary payout).
@@ -132,7 +132,7 @@ describe('commit duplicate guard: categorize_transaction (reverse / book the ban
 
     // Guard not enforced: the op is not auto-rejected at the duplicate guard.
     expect(result.status).not.toBe('rejected')
-    // Detection still runs once — to capture the dismissed candidate for audit.
+    // Detection still runs once: to capture the dismissed candidate for audit.
     expect(mockDetectBookingDuplicate).toHaveBeenCalledTimes(1)
     expect(mockAppendProcessingHistory).toHaveBeenCalledTimes(1)
     const event = mockAppendProcessingHistory.mock.calls[0][0]

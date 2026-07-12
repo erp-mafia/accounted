@@ -1,9 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-// Mock Supabase
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(),
+// Exercised through the real withRouteContext wrapper: mock its auth/company
+// dependencies and inject the Supabase client via requireAuth.
+const { supabase } = createQueuedMockSupabase()
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 vi.mock('@/lib/company/context', () => ({
@@ -17,30 +22,32 @@ vi.mock('@/lib/vat/vies-client', () => ({
   validateVatNumber: (...args: unknown[]) => mockValidateVatNumber(...args),
 }))
 
-import { createClient } from '@/lib/supabase/server'
-import { POST } from '../route'
+// Company is not a sandbox, so VIES calls proceed.
+vi.mock('@/lib/sandbox/guard', () => ({
+  guardSandbox: vi.fn().mockResolvedValue(null),
+}))
 
-const mockCreateClient = vi.mocked(createClient)
+import { POST } from '../route'
 
 describe('POST /api/vat/validate', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
   })
 
   it('returns 401 when not authenticated', async () => {
-    const { supabase } = createQueuedMockSupabase()
-    supabase.auth.getUser.mockResolvedValue({
-      data: { user: null },
-      error: { message: 'Not authenticated' },
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
-    mockCreateClient.mockResolvedValue(supabase as never)
 
     const req = createMockRequest('/api/vat/validate', {
       method: 'POST',
       body: { vat_number: 'DE123456789' },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, { params: Promise.resolve({}) })
     const { status, body } = await parseJsonResponse(res)
 
     expect(status).toBe(401)
@@ -48,50 +55,30 @@ describe('POST /api/vat/validate', () => {
   })
 
   it('returns 400 when vat_number is missing', async () => {
-    const { supabase } = createQueuedMockSupabase()
-    supabase.auth.getUser.mockResolvedValue({
-      data: { user: { id: 'user-1' } },
-      error: null,
-    })
-    mockCreateClient.mockResolvedValue(supabase as never)
-
     const req = createMockRequest('/api/vat/validate', {
       method: 'POST',
       body: {},
     })
 
-    const res = await POST(req)
+    const res = await POST(req, { params: Promise.resolve({}) })
     const { status } = await parseJsonResponse(res)
 
     expect(status).toBe(400)
   })
 
   it('returns 400 when vat_number is too short', async () => {
-    const { supabase } = createQueuedMockSupabase()
-    supabase.auth.getUser.mockResolvedValue({
-      data: { user: { id: 'user-1' } },
-      error: null,
-    })
-    mockCreateClient.mockResolvedValue(supabase as never)
-
     const req = createMockRequest('/api/vat/validate', {
       method: 'POST',
       body: { vat_number: 'DE' },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, { params: Promise.resolve({}) })
     const { status } = await parseJsonResponse(res)
 
     expect(status).toBe(400)
   })
 
   it('returns valid result from VIES', async () => {
-    const { supabase } = createQueuedMockSupabase()
-    supabase.auth.getUser.mockResolvedValue({
-      data: { user: { id: 'user-1' } },
-      error: null,
-    })
-    mockCreateClient.mockResolvedValue(supabase as never)
     mockValidateVatNumber.mockResolvedValueOnce({
       valid: true,
       name: 'Test GmbH',
@@ -105,7 +92,7 @@ describe('POST /api/vat/validate', () => {
       body: { vat_number: 'DE123456789' },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, { params: Promise.resolve({}) })
     const { status, body } = await parseJsonResponse(res)
 
     expect(status).toBe(200)
@@ -119,12 +106,6 @@ describe('POST /api/vat/validate', () => {
   })
 
   it('returns invalid result from VIES', async () => {
-    const { supabase } = createQueuedMockSupabase()
-    supabase.auth.getUser.mockResolvedValue({
-      data: { user: { id: 'user-1' } },
-      error: null,
-    })
-    mockCreateClient.mockResolvedValue(supabase as never)
     mockValidateVatNumber.mockResolvedValueOnce({
       valid: false,
       country_code: 'DE',
@@ -136,7 +117,7 @@ describe('POST /api/vat/validate', () => {
       body: { vat_number: 'DE000000000' },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, { params: Promise.resolve({}) })
     const { status, body } = await parseJsonResponse(res)
 
     expect(status).toBe(200)
@@ -144,12 +125,6 @@ describe('POST /api/vat/validate', () => {
   })
 
   it('updates customer when customer_id provided and valid', async () => {
-    const { supabase } = createQueuedMockSupabase()
-    supabase.auth.getUser.mockResolvedValue({
-      data: { user: { id: 'user-1' } },
-      error: null,
-    })
-    mockCreateClient.mockResolvedValue(supabase as never)
     mockValidateVatNumber.mockResolvedValueOnce({
       valid: true,
       name: 'Test GmbH',
@@ -165,7 +140,7 @@ describe('POST /api/vat/validate', () => {
       },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, { params: Promise.resolve({}) })
     const { status, body } = await parseJsonResponse(res)
 
     expect(status).toBe(200)
@@ -173,12 +148,6 @@ describe('POST /api/vat/validate', () => {
   })
 
   it('does not update customer when validation fails', async () => {
-    const { supabase } = createQueuedMockSupabase()
-    supabase.auth.getUser.mockResolvedValue({
-      data: { user: { id: 'user-1' } },
-      error: null,
-    })
-    mockCreateClient.mockResolvedValue(supabase as never)
     mockValidateVatNumber.mockResolvedValueOnce({
       valid: false,
       error: 'Invalid VAT number format',
@@ -192,7 +161,7 @@ describe('POST /api/vat/validate', () => {
       },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, { params: Promise.resolve({}) })
     const { status, body } = await parseJsonResponse(res)
 
     expect(status).toBe(200)
@@ -200,12 +169,6 @@ describe('POST /api/vat/validate', () => {
   })
 
   it('handles VIES service error gracefully', async () => {
-    const { supabase } = createQueuedMockSupabase()
-    supabase.auth.getUser.mockResolvedValue({
-      data: { user: { id: 'user-1' } },
-      error: null,
-    })
-    mockCreateClient.mockResolvedValue(supabase as never)
     mockValidateVatNumber.mockResolvedValueOnce({
       valid: false,
       error: 'Could not verify VAT number. Service temporarily unavailable.',
@@ -216,7 +179,7 @@ describe('POST /api/vat/validate', () => {
       body: { vat_number: 'DE123456789' },
     })
 
-    const res = await POST(req)
+    const res = await POST(req, { params: Promise.resolve({}) })
     const { status, body } = await parseJsonResponse(res)
 
     expect(status).toBe(200)

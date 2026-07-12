@@ -8,7 +8,7 @@ describe('isImportedTransaction', () => {
     })
 
     it('treats a row with a bank connection as imported even if import_source looks in-app', () => {
-      // The bank link wins — a PSD2 row is imported regardless of the source tag.
+      // The bank link wins: a PSD2 row is imported regardless of the source tag.
       expect(isImportedTransaction({ bank_connection_id: 'bc-1', import_source: 'manual' })).toBe(true)
     })
 

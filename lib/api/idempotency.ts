@@ -3,7 +3,7 @@
  *
  * Use case: an agent (MCP, automation webhook, scripted client) retries an
  * operation after a network blip. Without idempotency, the retry creates a
- * duplicate side-effect — two invoices, two journal entries, two emails.
+ * duplicate side-effect: two invoices, two journal entries, two emails.
  *
  * Contract:
  *   1. The caller supplies an `idempotency_key` per logical operation.
@@ -18,7 +18,7 @@
  * the wrong company can never receive the other company's cached response.
  *
  * 24-hour TTL is enforced by an `expires_at` column + a cleanup cron. After
- * 24h, the same key may be reused safely — agents that retry that long after
+ * 24h, the same key may be reused safely: agents that retry that long after
  * the original request are not retrying, they're starting over.
  */
 import crypto from 'crypto'
@@ -64,7 +64,7 @@ function canonicalJson(value: unknown): string {
  *     without side-effects)
  *
  * Throws IdempotencyKeyReuseError when the key exists with a *different*
- * request hash — the caller is misusing the key.
+ * request hash: the caller is misusing the key.
  */
 export async function checkIdempotencyKey(
   supabase: SupabaseClient,
@@ -125,7 +125,7 @@ export async function storeIdempotencyResponse(
       response_body: body,
     })
 
-  // Postgres 23505 is unique_violation — a concurrent retry already inserted.
+  // Postgres 23505 is unique_violation: a concurrent retry already inserted.
   // Silently OK; the cached response from the winner will be returned to
   // both callers on subsequent reads.
   if (error && error.code !== '23505') {

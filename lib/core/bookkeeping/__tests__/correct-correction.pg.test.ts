@@ -5,7 +5,7 @@ import { seedCompany } from '@/tests/pg/fixtures'
 
 /**
  * Chained-correction invariant: a posted entry of source_type='correction'
- * can itself be reversed and corrected — the chain just grows. The UI used
+ * can itself be reversed and corrected: the chain just grows. The UI used
  * to block this; the storno-service never did. This test asserts the DB
  * layer accepts the full two-level chain (CHECK constraint, FK, immutability
  * trigger), so any future migration that accidentally tightens one of those

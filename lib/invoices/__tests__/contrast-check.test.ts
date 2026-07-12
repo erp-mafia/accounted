@@ -52,7 +52,7 @@ describe('isWcagAACompliant', () => {
   })
 
   it('passes for the PDF default accent color (#666666) on white', () => {
-    // 5.74:1 — comfortably above AA threshold.
+    // 5.74:1: comfortably above AA threshold.
     expect(isWcagAACompliant('#666666', '#ffffff')).toBe(true)
   })
 
@@ -62,20 +62,20 @@ describe('isWcagAACompliant', () => {
 
   // Accounted brand semantic colors. All three are used as DATA-ONLY indicators
   // (charts, positive/negative deltas), never as chrome text on white. These
-  // tests document where they sit relative to AA — terracotta/destructive is
+  // tests document where they sit relative to AA: terracotta/destructive is
   // the only one that comfortably passes AA on white.
   it('Accounted terracotta (#c2410c equivalent dark red) passes AA on white', () => {
-    // 5.91:1 — passes AA for normal text.
+    // 5.91:1: passes AA for normal text.
     expect(isWcagAACompliant('#c2410c', '#ffffff')).toBe(true)
   })
 
   it('Accounted sage (#84a98c lighter green) fails AA on white', () => {
-    // ~2.4:1 — fails AA, as expected for a soft pastel sage.
+    // ~2.4:1: fails AA, as expected for a soft pastel sage.
     expect(isWcagAACompliant('#84a98c', '#ffffff')).toBe(false)
   })
 
   it('Accounted ochre (#d4a373 warm yellow) fails AA on white', () => {
-    // ~2.3:1 — fails AA, as expected for a warm soft ochre.
+    // ~2.3:1: fails AA, as expected for a warm soft ochre.
     expect(isWcagAACompliant('#d4a373', '#ffffff')).toBe(false)
   })
 

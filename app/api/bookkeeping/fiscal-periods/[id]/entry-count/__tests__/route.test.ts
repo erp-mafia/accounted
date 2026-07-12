@@ -5,6 +5,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
 import { createClient } from '@/lib/supabase/server'

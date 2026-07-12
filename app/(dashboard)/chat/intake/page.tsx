@@ -5,7 +5,7 @@ import ChatIntakeStarter from '@/components/agent/ChatIntakeStarter'
 
 export const dynamic = 'force-dynamic'
 
-// /chat/intake — Phase C bootstrap surface. ReviewCard navigates here after
+// /chat/intake: Phase C bootstrap surface. ReviewCard navigates here after
 // Phase B "kör" succeeds. The client component mounts AgentChat with
 // intent='onboarding.intake' in fresh-start mode; AgentChat auto-fires the
 // first invoke which creates the conversation row, and we swap the URL to

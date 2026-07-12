@@ -1,9 +1,9 @@
 /**
- * /api/v1/companies/{companyId}/customers — list + create customer endpoints.
+ * /api/v1/companies/{companyId}/customers: list + create customer endpoints.
  *
- * GET   — list with filters (customer_type, search, include_archived).
+ * GET  : list with filters (customer_type, search, include_archived).
  *         Cursor pagination on (created_at ASC, id ASC).
- * POST  — create. Idempotent (mandatory Idempotency-Key). Dry-runnable
+ * POST : create. Idempotent (mandatory Idempotency-Key). Dry-runnable
  *         (?dry_run=true returns validated would-be record without
  *         committing). VIES validation runs only on commit.
  */
@@ -48,7 +48,7 @@ const CustomerSummary = z.object({
 
 const CustomersListResponse = listEnvelope(CustomerSummary)
 
-// Explicit projection — never SELECT *. Schema migrations adding columns
+// Explicit projection: never SELECT *. Schema migrations adding columns
 // must update this list before the field becomes visible on the public API.
 const CUSTOMER_SUMMARY_COLUMNS =
   'id, name, customer_type, email, org_number, vat_number, default_payment_terms, archived_at, created_at'
@@ -61,9 +61,9 @@ registerEndpoint({
   description:
     'Returns active customers in created-first order. Pass ?include_archived=true to include archived rows. Use ?search to match against name or org_number.',
   useWhen:
-    'You need a customer roster — for building a UI picker, syncing a CRM, or resolving a customer_id before creating an invoice.',
+    'You need a customer roster: for building a UI picker, syncing a CRM, or resolving a customer_id before creating an invoice.',
   doNotUseFor:
-    'Fetching a single customer you already know the id of — use GET /api/v1/companies/{companyId}/customers/{id}. Suppliers are a separate resource.',
+    'Fetching a single customer you already know the id of: use GET /api/v1/companies/{companyId}/customers/{id}. Suppliers are a separate resource.',
   pitfalls: [
     'Archived customers are hidden by default; the dashboard makes the same choice.',
     'org_number is included so callers can match against external CRM identifiers; for sole traders (enskild firma) it equals the personnummer.',
@@ -181,7 +181,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const hasMore = rows.length > limit
 
     // GDPR Art.5(1)(c) data minimisation: for sole traders (enskild firma,
-    // customer_type='individual'), org_number IS the personnummer — a
+    // customer_type='individual'), org_number IS the personnummer: a
     // directly identifying special-category identifier. Mask both
     // org_number and vat_number in the LIST response so bulk fetches don't
     // expose personal IDs. The DETAIL endpoint (deliberate drill-in to one
@@ -225,13 +225,14 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 )
 
 // ──────────────────────────────────────────────────────────────────
-// POST — create customer
+// POST: create customer
 // ──────────────────────────────────────────────────────────────────
 
 const CustomerCreated = z.object({
   id: z.string().uuid().nullable(),
   name: z.string(),
   customer_type: CustomerType,
+  customer_number: z.string().nullable(),
   email: z.string().nullable(),
   phone: z.string().nullable(),
   address_line1: z.string().nullable(),
@@ -249,10 +250,10 @@ const CustomerCreated = z.object({
   updated_at: z.string().nullable(),
 })
 
-// Drop vat_number_validated_at — declared in neither CustomerCreated nor
+// Drop vat_number_validated_at: declared in neither CustomerCreated nor
 // CustomerDetail; an internal timestamp with no documented consumer.
 const CUSTOMER_RESPONSE_COLUMNS =
-  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 registerEndpoint({
   operation: 'customers.create',
@@ -260,13 +261,13 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/customers',
   summary: 'Create a customer.',
   description:
-    'Creates a new customer for the company. Requires Idempotency-Key (UUID). Supports ?dry_run=true for input validation without committing — the dry-run response shows the would-be record minus id and timestamps. EU-business customers with a VAT number are auto-validated against VIES on commit.',
+    'Creates a new customer for the company. Requires Idempotency-Key (UUID). Supports ?dry_run=true for input validation without committing: the dry-run response shows the would-be record minus id and timestamps. EU-business customers with a VAT number are auto-validated against VIES on commit.',
   useWhen:
     'You need to register a new customer before invoicing them. Use dry-run first to catch validation errors before committing.',
   doNotUseFor:
     'Updating an existing customer (PATCH instead). Creating suppliers (different resource).',
   pitfalls: [
-    'Idempotency-Key is mandatory — calls without it return 400 VALIDATION_ERROR.',
+    'Idempotency-Key is mandatory: calls without it return 400 VALIDATION_ERROR.',
     'org_number uniqueness is enforced at the database level; duplicate inserts return 409 CUSTOMER_DUPLICATE_ORG_NUMBER.',
     'For Swedish sole traders (customer_type=individual), org_number IS the personnummer. List responses mask it; the create endpoint accepts it as input.',
     'VIES validation runs only on commit. Dry-run skips the external call and leaves vat_number_validated=false in the preview.',
@@ -339,6 +340,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           id: null,
           name: body.name,
           customer_type: body.customer_type,
+          customer_number: body.customer_number || null,
           email: body.email ?? null,
           phone: body.phone ?? null,
           address_line1: body.address_line1 ?? null,
@@ -383,6 +385,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         company_id: ctx.companyId!,
         name: body.name,
         customer_type: body.customer_type,
+        // Empty string clears the customer number, same as an explicit null
+        // (matches the internal /api/customers route).
+        customer_number: body.customer_number || null,
         email: body.email ?? null,
         phone: body.phone ?? null,
         address_line1: body.address_line1 ?? null,
@@ -403,7 +408,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     if (error) {
       if (error.code === '23505') {
-        // GDPR Art.5(1)(c): do NOT echo body.org_number in the response —
+        // GDPR Art.5(1)(c): do NOT echo body.org_number in the response:
         // for customer_type='individual' it IS the personnummer.
         // The error code alone tells the caller which field conflicted;
         // they already know the value they submitted.
@@ -416,7 +421,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     // Emit customer.created so webhooks (Phase 2 PR-C) and downstream
-    // handlers can react. Best-effort — emit failure does not roll back.
+    // handlers can react. Best-effort: emit failure does not roll back.
     // Cast through `unknown` because the response projection deliberately
     // omits internal scoping fields (user_id, company_id) the Customer type
     // requires; we re-inject them on the payload from ctx.

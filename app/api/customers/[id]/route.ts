@@ -58,6 +58,8 @@ export const PATCH = withRouteContext(
     const updateData: Record<string, unknown> = {}
     if (body.name !== undefined) updateData.name = body.name
     if (body.customer_type !== undefined) updateData.customer_type = body.customer_type
+    // Empty string clears the customer number, same as an explicit null.
+    if (body.customer_number !== undefined) updateData.customer_number = body.customer_number || null
     if (body.email !== undefined) updateData.email = body.email
     if (body.phone !== undefined) updateData.phone = body.phone
     if (body.address_line1 !== undefined) updateData.address_line1 = body.address_line1

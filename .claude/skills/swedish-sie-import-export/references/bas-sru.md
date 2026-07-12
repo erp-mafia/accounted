@@ -14,7 +14,7 @@ BAS uses a 4-digit decimal system: first digit = class, first two = group, all f
 | 6xxx | K | Övriga externa kostnader (kontorsmaterial, telefon, reklam) | Other external costs | Income statement | No (#RES) |
 | 7xxx | K | Personalkostnader, avskrivningar | Personnel, depreciation | Income statement | No (#RES) |
 | 8xxx | I/K | Finansiella poster, bokslutsdispositioner, skatt | Financial items, appropriations, tax | Income statement | No (#RES) |
-| 9xxx | — | Internredovisning | Internal/management | Off-report | N/A |
+| 9xxx | - | Internredovisning | Internal/management | Off-report | N/A |
 
 ## Account type (#KTYP) behavior in SIE4
 

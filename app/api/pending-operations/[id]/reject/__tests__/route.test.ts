@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import {
   createMockRequest,
   createMockRouteParams,
@@ -7,39 +8,59 @@ import {
 } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, enqueueMany, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
+  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
+const requireWriteMock = vi.fn()
 vi.mock('@/lib/auth/require-write', () => ({
-  requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+  requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
 import { POST } from '../../reject/route'
 
 describe('POST /api/pending-operations/:id/reject', () => {
-  const mockUser = { id: 'user-1', email: 'test@test.se' }
   const routeParams = createMockRouteParams({ id: 'op-1' })
 
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mockSupabase, error: null })
+    requireWriteMock.mockResolvedValue({ ok: true })
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
 
     const request = createMockRequest('/api/pending-operations/op-1/reject', { method: 'POST' })
     const response = await POST(request, routeParams)
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
+  })
+
+  it('returns 403 for a viewer without write permission', async () => {
+    requireWriteMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    })
+
+    const request = createMockRequest('/api/pending-operations/op-1/reject', { method: 'POST' })
+    const response = await POST(request, routeParams)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(403)
   })
 
   it('returns 404 when not found', async () => {

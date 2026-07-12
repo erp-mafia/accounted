@@ -1,9 +1,9 @@
 /**
  * Minimal Google OAuth 2.0 client for the cloud-backup extension.
  *
- * Scope: `drive.file` — app-created files only, not the user's full Drive.
- * Access type: `offline` — returns a refresh token on first consent.
- * Prompt: `consent` — forces the consent screen so the refresh token is
+ * Scope: `drive.file`: app-created files only, not the user's full Drive.
+ * Access type: `offline`: returns a refresh token on first consent.
+ * Prompt: `consent`: forces the consent screen so the refresh token is
  *   re-issued even if the user has previously authorised the app.
  */
 
@@ -87,7 +87,7 @@ export async function exchangeCodeForTokens(
   const json = (await res.json()) as TokenExchangeResult
   if (!json.refresh_token) {
     throw new Error(
-      'No refresh token returned — Google only issues one on first consent. ' +
+      'No refresh token returned: Google only issues one on first consent. ' +
         'Revoke the app at myaccount.google.com/permissions and try again.'
     )
   }
@@ -97,6 +97,32 @@ export async function exchangeCodeForTokens(
 export interface AccessTokenResult {
   access_token: string
   expires_in: number
+}
+
+/**
+ * Thrown when Google's token endpoint rejects a refresh attempt. Carries the
+ * HTTP status and raw response body so callers can distinguish a permanently
+ * dead refresh token (400 invalid_grant) from transient failures.
+ */
+export class GoogleTokenRefreshError extends Error {
+  readonly status: number
+  readonly body: string
+
+  constructor(status: number, body: string) {
+    super(`Google token refresh failed: ${status} ${body}`)
+    this.name = 'GoogleTokenRefreshError'
+    this.status = status
+    this.body = body
+  }
+
+  /**
+   * True when Google reports the refresh token itself is dead (revoked,
+   * expired, or the grant was invalidated). Retrying will never succeed;
+   * the user must re-consent.
+   */
+  get isInvalidGrant(): boolean {
+    return this.status === 400 && this.body.includes('invalid_grant')
+  }
 }
 
 export async function refreshAccessToken(
@@ -120,7 +146,7 @@ export async function refreshAccessToken(
   )
   if (!res.ok) {
     const errText = await res.text()
-    throw new Error(`Google token refresh failed: ${res.status} ${errText}`)
+    throw new GoogleTokenRefreshError(res.status, errText)
   }
   return (await res.json()) as AccessTokenResult
 }

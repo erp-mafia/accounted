@@ -1,86 +1,78 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateSalaryLineItemSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import { getLineItemAccount } from '@/lib/salary/account-mapping'
 
 ensureInitialized()
 
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { id } = await params
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'salary.run.line.create',
+  async (request, ctx, { params }) => {
+    const { id } = await params
+    const { supabase, companyId } = ctx
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
+    const validation = await validateBody(request, CreateSalaryLineItemSchema)
+    if (!validation.success) return validation.response
+    const body = validation.data
 
-  const companyId = await requireCompanyId(supabase, user.id)
+    // Verify run is draft
+    const { data: run } = await supabase
+      .from('salary_runs')
+      .select('id, status')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .single()
 
-  const validation = await validateBody(request, CreateSalaryLineItemSchema)
-  if (!validation.success) return validation.response
-  const body = validation.data
+    if (!run) {
+      return NextResponse.json({ error: 'Lönekörning hittades inte' }, { status: 404 })
+    }
+    if (run.status !== 'draft') {
+      return NextResponse.json({ error: 'Kan bara redigera utkast' }, { status: 400 })
+    }
 
-  // Verify run is draft
-  const { data: run } = await supabase
-    .from('salary_runs')
-    .select('id, status')
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .single()
+    // Verify salary_run_employee belongs to this run
+    const { data: sre } = await supabase
+      .from('salary_run_employees')
+      .select('id, employee_id')
+      .eq('id', body.salary_run_employee_id)
+      .eq('salary_run_id', id)
+      .single()
 
-  if (!run) {
-    return NextResponse.json({ error: 'Lönekörning hittades inte' }, { status: 404 })
-  }
-  if (run.status !== 'draft') {
-    return NextResponse.json({ error: 'Kan bara redigera utkast' }, { status: 400 })
-  }
+    if (!sre) {
+      return NextResponse.json({ error: 'Anställd finns inte i denna lönekörning' }, { status: 404 })
+    }
 
-  // Verify salary_run_employee belongs to this run
-  const { data: sre } = await supabase
-    .from('salary_run_employees')
-    .select('id, employee_id')
-    .eq('id', body.salary_run_employee_id)
-    .eq('salary_run_id', id)
-    .single()
+    // Auto-resolve account if not provided
+    const accountNumber = body.account_number || getLineItemAccount(body.item_type as never)
 
-  if (!sre) {
-    return NextResponse.json({ error: 'Anställd finns inte i denna lönekörning' }, { status: 404 })
-  }
+    const { data: lineItem, error } = await supabase
+      .from('salary_line_items')
+      .insert({
+        salary_run_employee_id: body.salary_run_employee_id,
+        company_id: companyId,
+        item_type: body.item_type,
+        description: body.description,
+        quantity: body.quantity || null,
+        unit_price: body.unit_price || null,
+        amount: Math.round(body.amount * 100) / 100,
+        is_taxable: body.is_taxable,
+        is_avgift_basis: body.is_avgift_basis,
+        is_vacation_basis: body.is_vacation_basis,
+        is_gross_deduction: body.is_gross_deduction,
+        is_net_deduction: body.is_net_deduction,
+        account_number: accountNumber,
+        sort_order: body.sort_order,
+      })
+      .select()
+      .single()
 
-  // Auto-resolve account if not provided
-  const accountNumber = body.account_number || getLineItemAccount(body.item_type as never)
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
 
-  const { data: lineItem, error } = await supabase
-    .from('salary_line_items')
-    .insert({
-      salary_run_employee_id: body.salary_run_employee_id,
-      company_id: companyId,
-      item_type: body.item_type,
-      description: body.description,
-      quantity: body.quantity || null,
-      unit_price: body.unit_price || null,
-      amount: Math.round(body.amount * 100) / 100,
-      is_taxable: body.is_taxable,
-      is_avgift_basis: body.is_avgift_basis,
-      is_vacation_basis: body.is_vacation_basis,
-      is_gross_deduction: body.is_gross_deduction,
-      is_net_deduction: body.is_net_deduction,
-      account_number: accountNumber,
-      sort_order: body.sort_order,
-    })
-    .select()
-    .single()
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  return NextResponse.json({ data: lineItem }, { status: 201 })
-}
+    return NextResponse.json({ data: lineItem }, { status: 201 })
+  },
+  { requireWrite: true },
+)

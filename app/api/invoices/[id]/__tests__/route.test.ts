@@ -127,7 +127,7 @@ describe('DELETE /api/invoices/[id]', () => {
       data: { id: 'inv-1', status: 'draft', invoice_number: null, user_id: 'user-1' },
       error: null,
     })
-    // delete matched 0 rows — the draft was finalized (numbered) in the meantime.
+    // delete matched 0 rows: the draft was finalized (numbered) in the meantime.
     enqueue({ data: [], error: null })
 
     const response = await DELETE(

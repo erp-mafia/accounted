@@ -16,7 +16,11 @@ import {
   insertOrUpdateTemplate,
   populateTemplatesFromSieVouchers,
 } from '../counterparty-templates'
+import { buildTransactionEntryLines } from '../transaction-entries'
+import { roundOre } from '@/lib/money'
 import type { TemplateUpsertParams } from '../counterparty-templates'
+import type { LinePatternEntry } from '@/types'
+import type { SIETransactionLine } from '@/lib/import/types'
 
 describe('counterparty-templates', () => {
   // ── Normalization ──────────────────────────────────────────
@@ -81,9 +85,9 @@ describe('counterparty-templates', () => {
     })
 
     it('does not strip multi-letter trailing words or 3+ letter brands', () => {
-      // Conservative guard: only 1–2 char all-caps initials and month tokens go.
+      // Conservative guard: only 1-2 char all-caps initials and month tokens go.
       expect(normalizeCounterpartyName('SWISH ANDERS JOHANSSON')).toBe('anders johansson')
-      expect(normalizeCounterpartyName('NORDEA SEB')).toBe('nordea seb') // SEB is 3 chars — kept
+      expect(normalizeCounterpartyName('NORDEA SEB')).toBe('nordea seb') // SEB is 3 chars: kept
       expect(normalizeCounterpartyName('KLARNA')).toBe('klarna')         // single token kept
     })
   })
@@ -459,7 +463,7 @@ describe('counterparty-templates', () => {
 
       await insertOrUpdateTemplate(supabase as never, 'user-1', baseParams, existing)
 
-      // Should NOT have queried for existing — only the update call
+      // Should NOT have queried for existing: only the update call
       // The from() call count indicates no select was made before update
       expect(supabase.from).toHaveBeenCalledTimes(1)
     })
@@ -481,7 +485,7 @@ describe('counterparty-templates', () => {
       expect(supabase.from).toHaveBeenCalledWith('categorization_templates')
     })
 
-    it('respects source priority — sie_import does not overwrite user_approved', async () => {
+    it('respects source priority: sie_import does not overwrite user_approved', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       const existing = makeCategorizationTemplate({
         debit_account: '5410', // Different accounts = correction
@@ -744,6 +748,690 @@ describe('counterparty-templates', () => {
 
       const result = await populateTemplatesFromSieVouchers(supabase as never, 'user-1', vouchers)
       expect(result).toBe(2)
+    })
+  })
+})
+
+// ── dimensions propagation (PR7) ─────────────────────────────
+
+describe('dimensions propagation (PR7)', () => {
+  describe('buildMappingResultFromCounterpartyTemplate: multi-line pattern', () => {
+    it('materialized business lines carry the pattern bag; VAT and tax lines stay untagged', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '5410',
+        credit_account: '1930',
+        line_pattern: [
+          { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
+          { account: '5410', type: 'business', side: 'debit', ratio: 0.8, dimensions: { '1': 'KS01' } },
+          // Even a (bogus) bag on a tax entry must not materialize: only
+          // business lines are tagged.
+          { account: '2710', type: 'tax', side: 'debit', ratio: 0.2, dimensions: { '1': 'KS01' } },
+        ],
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      const tx = makeTransaction({ amount: -1250 })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      expect(result.all_lines_complete).toBe(true)
+      const business = result.vat_lines.find((l) => l.account_number === '5410')
+      expect(business?.dimensions).toEqual({ '1': 'KS01' })
+      expect(result.vat_lines.find((l) => l.account_number === '2641')?.dimensions).toBeUndefined()
+      expect(result.vat_lines.find((l) => l.account_number === '2710')?.dimensions).toBeUndefined()
+    })
+
+    it('a pattern business line without a bag materializes untagged', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '5410',
+        credit_account: '1930',
+        line_pattern: [
+          { account: '5410', type: 'business', side: 'debit', ratio: 1 },
+        ],
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      const tx = makeTransaction({ amount: -1000 })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      expect(result.vat_lines.find((l) => l.account_number === '5410')?.dimensions).toBeUndefined()
+    })
+  })
+
+  describe('populateTemplatesFromSieVouchers: line-pattern dimension learning', () => {
+    /**
+     * Queue-based supabase mock that also records `.insert()` payloads per
+     * table, so assertions can inspect the stored line_pattern. Follows the
+     * capture pattern in lib/pending-operations/__tests__/create-invoice-executor.test.ts.
+     */
+    function createCapturingSupabase(results: Array<{ data?: unknown; error?: unknown }>) {
+      const queue = [...results]
+      const inserts: Record<string, unknown[]> = {}
+
+      const from = vi.fn((_table: string) => {
+        const raw = queue.shift() ?? { data: null, error: null }
+        const result = { data: raw.data ?? null, error: raw.error ?? null }
+        const chain: object = new Proxy(
+          {},
+          {
+            get(_target, prop) {
+              if (prop === 'then') {
+                return (resolve: (v: unknown) => void) => resolve(result)
+              }
+              if (prop === 'insert') {
+                return (payload: unknown) => {
+                  ;(inserts[_table] ??= []).push(payload)
+                  return chain
+                }
+              }
+              return () => chain
+            },
+          },
+        )
+        return chain
+      })
+
+      return { supabase: { from }, inserts }
+    }
+
+    function capturedLinePattern(inserts: Record<string, unknown[]>): LinePatternEntry[] {
+      const rows = inserts['categorization_templates']
+      expect(rows).toHaveLength(1)
+      const row = rows[0] as { line_pattern: LinePatternEntry[] | null }
+      expect(row.line_pattern).not.toBeNull()
+      return row.line_pattern!
+    }
+
+    it('preserves a business line bag only when EVERY voucher occurrence has the identical bag', async () => {
+      // Two business accounts → not "simple", so the pattern is stored as
+      // line_pattern JSONB. All three vouchers tag both accounts identically.
+      const vouchers = Array.from({ length: 3 }, (_, i) =>
+        makeSIEVoucher({
+          description: 'Projektbygget AB',
+          number: i + 1,
+          lines: [
+            { account: '1930', amount: -1100 },
+            { account: '6212', amount: 600, dimensions: { '1': 'KS01' } },
+            { account: '5410', amount: 500, dimensions: { '6': 'P001' } },
+          ],
+        })
+      )
+
+      const { supabase, inserts } = createCapturingSupabase([
+        { data: [] }, // pre-fetch existing templates
+        { data: null }, // insert
+      ])
+
+      const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)
+      expect(count).toBe(1)
+
+      const pattern = capturedLinePattern(inserts)
+      expect(pattern.find((e) => e.account === '6212')?.dimensions).toEqual({ '1': 'KS01' })
+      expect(pattern.find((e) => e.account === '5410')?.dimensions).toEqual({ '6': 'P001' })
+    })
+
+    it('drops the bag when a voucher disagrees, or leaves the line untagged', async () => {
+      // 6212 conflicts across vouchers (KS01 vs KS02); 5410 is untagged in one
+      // voucher. Both must lose the bag: a template must never invent a tag
+      // history does not consistently support.
+      const linesFor = (v: number): SIETransactionLine[] => [
+        { account: '1930', amount: -1100 },
+        { account: '6212', amount: 600, dimensions: v === 2 ? { '1': 'KS02' } : { '1': 'KS01' } },
+        v === 2
+          ? { account: '5410', amount: 500 }
+          : { account: '5410', amount: 500, dimensions: { '6': 'P001' } },
+      ]
+      const vouchers = [1, 2, 3].map((v) =>
+        makeSIEVoucher({ description: 'Projektbygget AB', number: v, lines: linesFor(v) })
+      )
+
+      const { supabase, inserts } = createCapturingSupabase([
+        { data: [] }, // pre-fetch existing templates
+        { data: null }, // insert
+      ])
+
+      const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)
+      expect(count).toBe(1)
+
+      const pattern = capturedLinePattern(inserts)
+      expect(pattern.find((e) => e.account === '6212')?.dimensions).toBeUndefined()
+      expect(pattern.find((e) => e.account === '5410')?.dimensions).toBeUndefined()
+    })
+  })
+})
+
+// ── learning-loop repair (issue #865) ────────────────────────
+
+describe('learning-loop repair (issue #865)', () => {
+  /** Queue-based mock that records insert payloads per table (see PR7 block). */
+  function createCapturingSupabase(results: Array<{ data?: unknown; error?: unknown }>) {
+    const queue = [...results]
+    const inserts: Record<string, unknown[]> = {}
+
+    const from = vi.fn((_table: string) => {
+      const raw = queue.shift() ?? { data: null, error: null }
+      const result = { data: raw.data ?? null, error: raw.error ?? null }
+      const chain: object = new Proxy(
+        {},
+        {
+          get(_target, prop) {
+            if (prop === 'then') {
+              return (resolve: (v: unknown) => void) => resolve(result)
+            }
+            if (prop === 'insert') {
+              return (payload: unknown) => {
+                ;(inserts[_table] ??= []).push(payload)
+                return chain
+              }
+            }
+            return () => chain
+          },
+        },
+      )
+      return chain
+    })
+
+    return { supabase: { from }, inserts }
+  }
+
+  function capturedTemplateRow(inserts: Record<string, unknown[]>) {
+    const rows = inserts['categorization_templates']
+    expect(rows).toHaveLength(1)
+    return rows[0] as {
+      vat_treatment: string | null
+      vat_account: string | null
+      line_pattern: LinePatternEntry[] | null
+      debit_account: string
+      credit_account: string
+    }
+  }
+
+  describe('direction mismatch (refunds/repayments)', () => {
+    it('mirrors an expense-learned template for an incoming refund, with reversed input VAT', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '6200',
+        credit_account: '1930',
+        vat_treatment: 'standard_25',
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const tx = makeTransaction({ amount: 1250 }) // money IN from an expense counterparty
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      // Mirrored: settle on debit (bank), reduce the expense on credit
+      expect(result.debit_account).toBe('1930')
+      expect(result.credit_account).toBe('6200')
+      expect(result.requires_review).toBe(true)
+      expect(result.direction_mismatch).toBe(true)
+      // Input VAT mirrored: credit 2641 for the VAT share of 1250 = 250
+      expect(result.vat_lines).toHaveLength(1)
+      expect(result.vat_lines[0].account_number).toBe('2641')
+      expect(result.vat_lines[0].credit_amount).toBe(250)
+      expect(result.vat_lines[0].debit_amount).toBe(0)
+    })
+
+    it('mirrors both fiktiv-moms legs for a reverse-charge credit note, and the entry balances', () => {
+      const template = makeCategorizationTemplate({
+        counterparty_name: 'google cloud emea',
+        debit_account: '4535',
+        credit_account: '1930',
+        vat_treatment: 'reverse_charge',
+        vat_account: '2645',
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const tx = makeTransaction({ amount: 5000 }) // credit note from an RC supplier
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'aktiebolag')
+
+      expect(result.direction_mismatch).toBe(true)
+      // Original purchase books debit 2645 / credit 2614; the mirror flips both
+      const in2645 = result.vat_lines.find((l) => l.account_number === '2645')
+      const out2614 = result.vat_lines.find((l) => l.account_number === '2614')
+      expect(in2645?.credit_amount).toBe(1250)
+      expect(out2614?.debit_amount).toBe(1250)
+
+      // End-to-end: the RC pair nets to zero, business keeps the gross amount,
+      // and the whole entry balances
+      const lines = buildTransactionEntryLines(tx, result)
+      const debits = roundOre(lines.reduce((s, l) => s + l.debit_amount, 0))
+      const credits = roundOre(lines.reduce((s, l) => s + l.credit_amount, 0))
+      expect(debits).toBe(credits)
+      expect(lines.find((l) => l.account_number === '4535')?.credit_amount).toBe(5000)
+    })
+
+    it('mirrors an income-learned template for an outgoing repayment, without VAT lines', () => {
+      const template = makeCategorizationTemplate({
+        counterparty_name: 'kund ab',
+        debit_account: '1930',
+        credit_account: '3001',
+        vat_treatment: null,
+        vat_account: null,
+      })
+      const match = { template, matchMethod: 'exact_normalized' as const, confidence: 0.8 }
+      const tx = makeTransaction({ amount: -5000 }) // money OUT to an income counterparty
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'aktiebolag')
+
+      expect(result.debit_account).toBe('3001')
+      expect(result.credit_account).toBe('1930')
+      expect(result.requires_review).toBe(true)
+      expect(result.direction_mismatch).toBe(true)
+      expect(result.vat_lines).toHaveLength(0)
+    })
+
+    it('mirrors every side of a multi-line pattern on sign mismatch', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '5410',
+        credit_account: '1930',
+        line_pattern: [
+          { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
+          { account: '5410', type: 'business', side: 'debit', ratio: 1 },
+        ],
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      const tx = makeTransaction({ amount: 1250 }) // refund of a multi-line expense
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      expect(result.all_lines_complete).toBe(true)
+      expect(result.requires_review).toBe(true)
+      expect(result.direction_mismatch).toBe(true)
+      expect(result.debit_account).toBe('1930')
+      expect(result.credit_account).toBe('5410')
+      const vat = result.vat_lines.find((l) => l.account_number === '2641')
+      expect(vat?.credit_amount).toBe(250)
+      expect(vat?.debit_amount).toBe(0)
+      const business = result.vat_lines.find((l) => l.account_number === '5410')
+      expect(business?.credit_amount).toBe(1000)
+      expect(business?.debit_amount).toBe(0)
+    })
+
+    it('does not learn from a direction-mismatched booking', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      const tx = makeTransaction({ merchant_name: 'Telia Sverige AB', amount: 1250 })
+
+      await upsertCounterpartyTemplate(
+        supabase as never,
+        'company-1',
+        tx,
+        {
+          rule: null,
+          debit_account: '1930',
+          credit_account: '6200',
+          risk_level: 'NONE',
+          confidence: 0.85,
+          requires_review: true,
+          direction_mismatch: true,
+          default_private: false,
+          vat_lines: [],
+          description: 'Motpart: telia (retur/återbetalning)',
+        },
+        'user_approved',
+      )
+
+      expect(supabase.from).not.toHaveBeenCalled()
+    })
+
+    it('refuses an opposite-direction "correction" of an existing template', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      const existing = makeCategorizationTemplate({
+        debit_account: '6200',
+        credit_account: '1930',
+      })
+
+      const params: TemplateUpsertParams = {
+        counterpartyName: 'telia',
+        aliases: ['telia refund'],
+        debitAccount: '1930', // refund shape: settlement moved to debit
+        creditAccount: '3990',
+        vatTreatment: null,
+        vatAccount: null,
+        category: null,
+        occurrenceCount: 1,
+        confidence: 0.45,
+        lastSeenDate: '2024-07-01',
+        source: 'user_approved',
+      }
+
+      const written = await insertOrUpdateTemplate(supabase as never, 'company-1', params, existing)
+
+      expect(written).toBe(false)
+      expect(supabase.from).not.toHaveBeenCalled()
+    })
+
+    it('falls back to the pattern direction when the legacy fields cannot classify a multi-line template', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      // Both legacy fields settlement-ish → legacy direction 'unknown';
+      // the pattern's business sides say expense.
+      const existing = makeCategorizationTemplate({
+        debit_account: '2440',
+        credit_account: '1930',
+        line_pattern: [
+          { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
+          { account: '5410', type: 'business', side: 'debit', ratio: 1 },
+        ],
+      })
+
+      const params: TemplateUpsertParams = {
+        counterpartyName: 'telia',
+        aliases: [],
+        debitAccount: '1930', // income-shaped: opposite of the learned pattern
+        creditAccount: '3001',
+        vatTreatment: null,
+        vatAccount: null,
+        category: null,
+        occurrenceCount: 1,
+        confidence: 0.45,
+        lastSeenDate: '2024-07-01',
+        source: 'user_approved',
+      }
+
+      const written = await insertOrUpdateTemplate(supabase as never, 'company-1', params, existing)
+
+      expect(written).toBe(false)
+      expect(supabase.from).not.toHaveBeenCalled()
+    })
+
+    it('still applies a same-direction account correction', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      const existing = makeCategorizationTemplate({
+        debit_account: '6200',
+        credit_account: '1930',
+      })
+      enqueue({ data: null }) // update
+
+      const params: TemplateUpsertParams = {
+        counterpartyName: 'telia',
+        aliases: [],
+        debitAccount: '6230', // still expense-shaped
+        creditAccount: '1930',
+        vatTreatment: 'standard_25',
+        vatAccount: '2641',
+        category: null,
+        occurrenceCount: 1,
+        confidence: 0.45,
+        lastSeenDate: '2024-07-01',
+        source: 'user_approved',
+      }
+
+      const written = await insertOrUpdateTemplate(supabase as never, 'company-1', params, existing)
+
+      expect(written).toBe(true)
+      expect(supabase.from).toHaveBeenCalledWith('categorization_templates')
+    })
+  })
+
+  describe('reduced_12 templates across the livsmedel transition (2026-04-01)', () => {
+    const staleTemplate = () => makeCategorizationTemplate({
+      debit_account: '4010',
+      credit_account: '1930',
+      vat_treatment: 'reduced_12',
+      last_seen_date: '2026-03-10', // learned before the 12→6 livsmedel change
+    })
+
+    it('review-gates a stale 12% template applied after the transition', () => {
+      const match = { template: staleTemplate(), matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const tx = makeTransaction({ amount: -560, date: '2026-05-02' })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      expect(result.requires_review).toBe(true)
+      expect(result.direction_mismatch).toBeUndefined()
+    })
+
+    it('does not gate a 12% template re-confirmed after the transition', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '5831', // e.g. restaurant/hotel: legitimately still 12%
+        credit_account: '1930',
+        vat_treatment: 'reduced_12',
+        last_seen_date: '2026-04-20',
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const tx = makeTransaction({ amount: -560, date: '2026-05-02' })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      expect(result.requires_review).toBe(false)
+    })
+
+    it('does not gate pre-transition transaction dates or other rates', () => {
+      const match = { template: staleTemplate(), matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const backdated = makeTransaction({ amount: -560, date: '2026-03-20' })
+      expect(
+        buildMappingResultFromCounterpartyTemplate(match, backdated, 'enskild_firma').requires_review
+      ).toBe(false)
+
+      const t25 = makeCategorizationTemplate({
+        vat_treatment: 'standard_25',
+        last_seen_date: '2026-03-10',
+      })
+      const match25 = { template: t25, matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const tx = makeTransaction({ amount: -560, date: '2026-05-02' })
+      expect(
+        buildMappingResultFromCounterpartyTemplate(match25, tx, 'enskild_firma').requires_review
+      ).toBe(false)
+    })
+
+    it('review-gates a stale multi-line pattern carrying a 12% VAT entry', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '4010',
+        credit_account: '1930',
+        vat_treatment: null,
+        last_seen_date: '2026-02-01',
+        line_pattern: [
+          { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.12 },
+          { account: '4010', type: 'business', side: 'debit', ratio: 1 },
+        ],
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      const tx = makeTransaction({ amount: -1120, date: '2026-05-02' })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      expect(result.requires_review).toBe(true)
+    })
+  })
+
+  describe('SEK resolution for foreign-currency transactions', () => {
+    it('computes legacy VAT lines from the SEK amount, not the foreign amount', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '6200',
+        credit_account: '1930',
+        vat_treatment: 'standard_25',
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const tx = makeTransaction({
+        amount: -100,
+        currency: 'EUR',
+        amount_sek: -1100,
+        exchange_rate: 11,
+      })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      // VAT share of 1100 SEK at 25% = 220, not 20 (which the EUR amount gives)
+      expect(result.vat_lines[0].debit_amount).toBe(220)
+    })
+
+    it('computes multi-line pattern amounts from the SEK amount so the entry balances', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '5410',
+        credit_account: '1930',
+        line_pattern: [
+          { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
+          { account: '5410', type: 'business', side: 'debit', ratio: 1 },
+        ],
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      const tx = makeTransaction({
+        amount: -100,
+        currency: 'EUR',
+        amount_sek: -1100,
+        exchange_rate: 11,
+      })
+
+      const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+      const vat = result.vat_lines.find((l) => l.account_number === '2641')
+      const business = result.vat_lines.find((l) => l.account_number === '5410')
+      expect(vat?.debit_amount).toBe(220)
+      expect(business?.debit_amount).toBe(880)
+      // Non-settlement lines sum to the SEK settlement amount: entry balances
+      const totalDebits = result.vat_lines.reduce((s, l) => s + l.debit_amount, 0)
+      expect(totalDebits).toBe(1100)
+    })
+  })
+
+  describe('SIE VAT-rate inference (2641 is rate-agnostic)', () => {
+    it('learns reduced_12 from voucher amounts instead of hardcoding 25%', async () => {
+      const vouchers = Array.from({ length: 3 }, (_, i) =>
+        makeSIEVoucher({
+          description: 'Restaurang AB',
+          number: i + 1,
+          lines: [
+            { account: '1930', amount: -1120 },
+            { account: '6072', amount: 1000 },
+            { account: '2641', amount: 120 }, // 12% of the 1000 net
+          ],
+        })
+      )
+
+      const { supabase, inserts } = createCapturingSupabase([
+        { data: [] }, // pre-fetch existing templates
+        { data: null }, // insert
+      ])
+
+      const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)
+      expect(count).toBe(1)
+
+      const row = capturedTemplateRow(inserts)
+      expect(row.vat_treatment).toBe('reduced_12')
+      expect(row.vat_account).toBe('2641')
+    })
+
+    it('drops the VAT leg when the observed rate snaps to no legal rate', async () => {
+      const vouchers = Array.from({ length: 3 }, (_, i) =>
+        makeSIEVoucher({
+          description: 'Utlandet Ltd',
+          number: i + 1,
+          lines: [
+            { account: '1930', amount: -1190 },
+            { account: '6100', amount: 1000 },
+            { account: '2641', amount: 190 }, // 19%: not a Swedish rate
+          ],
+        })
+      )
+
+      const { supabase, inserts } = createCapturingSupabase([
+        { data: [] },
+        { data: null },
+      ])
+
+      const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)
+      expect(count).toBe(1)
+
+      const row = capturedTemplateRow(inserts)
+      expect(row.vat_treatment).toBeNull()
+      expect(row.vat_account).toBeNull()
+    })
+
+    it('excludes import output-VAT accounts (2615) from the ratio base like other fiktiv moms', async () => {
+      const vouchers = Array.from({ length: 3 }, (_, i) =>
+        makeSIEVoucher({
+          description: 'Import Goods Ltd',
+          number: i + 1,
+          lines: [
+            { account: '1930', amount: -1000 },
+            { account: '4545', amount: 1000 },
+            { account: '2645', amount: 250 },
+            { account: '2615', amount: -250 }, // output VAT on imports
+          ],
+        })
+      )
+
+      const { supabase, inserts } = createCapturingSupabase([
+        { data: [] },
+        { data: null },
+      ])
+
+      const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)
+      expect(count).toBe(1)
+
+      const row = capturedTemplateRow(inserts)
+      expect(row.vat_treatment).toBe('reverse_charge')
+      expect(row.debit_account).toBe('4545')
+      // Simple pattern: neither fiktiv leg shrank the business ratio base
+      expect(row.line_pattern).toBeNull()
+    })
+
+    it('learns reverse_charge for counterparties booked with fiktiv moms', async () => {
+      const vouchers = Array.from({ length: 3 }, (_, i) =>
+        makeSIEVoucher({
+          description: 'Google Cloud EMEA',
+          number: i + 1,
+          lines: [
+            { account: '1930', amount: -1000 },
+            { account: '4535', amount: 1000 },
+            { account: '2645', amount: 250 },
+            { account: '2614', amount: -250 },
+          ],
+        })
+      )
+
+      const { supabase, inserts } = createCapturingSupabase([
+        { data: [] },
+        { data: null },
+      ])
+
+      const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)
+      expect(count).toBe(1)
+
+      const row = capturedTemplateRow(inserts)
+      expect(row.vat_treatment).toBe('reverse_charge')
+      expect(row.vat_account).toBe('2645')
+      expect(row.debit_account).toBe('4535')
+      expect(row.credit_account).toBe('1930')
+      // Simple pattern: RC legs are regenerated from the treatment at booking
+      expect(row.line_pattern).toBeNull()
+    })
+  })
+
+  describe('write-failure visibility', () => {
+    it('populateTemplatesFromSieVouchers counts only rows actually written', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      const vouchers = Array.from({ length: 3 }, (_, i) =>
+        makeSIEVoucher({
+          description: 'Telia',
+          number: i + 1,
+          lines: [{ account: '1930', amount: -1000 }, { account: '6212', amount: 1000 }],
+        })
+      )
+
+      enqueue({ data: [] }) // pre-fetch existing templates
+      enqueue({ error: { message: 'null value in column "user_id"' } }) // insert fails
+
+      const count = await populateTemplatesFromSieVouchers(supabase as never, 'company-1', vouchers)
+      expect(count).toBe(0)
+    })
+
+    it('insertOrUpdateTemplate returns false on insert error instead of swallowing it', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ error: { message: 'violates row-level security policy' } })
+
+      const written = await insertOrUpdateTemplate(supabase as never, 'company-1', {
+        counterpartyName: 'telia',
+        aliases: [],
+        debitAccount: '6200',
+        creditAccount: '1930',
+        vatTreatment: null,
+        vatAccount: null,
+        category: null,
+        occurrenceCount: 1,
+        confidence: 0.45,
+        lastSeenDate: '2024-06-15',
+        source: 'user_approved',
+      }, null)
+
+      expect(written).toBe(false)
     })
   })
 })

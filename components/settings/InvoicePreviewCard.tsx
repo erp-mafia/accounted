@@ -64,7 +64,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
         if (cancelled) return
 
         // Non-momsregistrerade säljare ska inte få en exempel-rad med 25 %
-        // VAT — förhandsvisningen är hårdkodad sample-data, inte ett val
+        // VAT: förhandsvisningen är hårdkodad sample-data, inte ett val
         // användaren gjort, så vi följer settings.vat_registered direkt här
         // (till skillnad från /invoices/new som låter användaren välja och
         // bara varnar vid submit).

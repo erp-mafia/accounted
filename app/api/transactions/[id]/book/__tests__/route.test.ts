@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import {
   createMockRequest,
   parseJsonResponse,
@@ -10,8 +11,10 @@ import {
 import { eventBus } from '@/lib/events'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 vi.mock('@/lib/init', () => ({
@@ -23,8 +26,9 @@ vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
+const requireWriteMock = vi.fn()
 vi.mock('@/lib/auth/require-write', () => ({
-  requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+  requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
 const mockCreateJournalEntry = vi.fn()
@@ -32,7 +36,7 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
 }))
 
-// Booking-time duplicate guard — mocked so route tests exercise the WIRING
+// Booking-time duplicate guard: mocked so route tests exercise the WIRING
 // (warn / force / mismatch); the detection query itself is unit-tested in
 // lib/transactions/__tests__/booking-duplicate-detection.test.ts.
 const mockDetectDup = vi.fn()
@@ -40,7 +44,7 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
   detectBookingDuplicate: (...args: unknown[]) => mockDetectDup(...args),
 }))
 
-// Behandlingshistorik append — mocked so we can assert the dismissal is
+// Behandlingshistorik append: mocked so we can assert the dismissal is
 // persisted without reaching the service-role client.
 const mockAppendProcessingHistory = vi.fn()
 vi.mock('@/lib/processing-history/append', () => ({
@@ -70,14 +74,19 @@ describe('POST /api/transactions/[id]/book', () => {
     vi.clearAllMocks()
     reset()
     eventBus.clear()
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
     // No booking-duplicate by default; guard tests override per-case.
     mockDetectDup.mockResolvedValue(null)
     mockAppendProcessingHistory.mockResolvedValue('evt-1')
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
 
     const request = createMockRequest('/api/transactions/tx-1/book', {
       method: 'POST',
@@ -88,6 +97,24 @@ describe('POST /api/transactions/[id]/book', () => {
 
     expect(status).toBe(401)
     expect(body).toEqual({ error: 'Unauthorized' })
+  })
+
+  it('returns 403 when the caller is a viewer', async () => {
+    requireWriteMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: validBody,
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse(response)
+
+    expect(status).toBe(403)
+    expect(body).toEqual({ error: 'Forbidden' })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
   it('returns 400 when missing required fields', async () => {
@@ -245,7 +272,7 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(body.error.details.candidate.voucher_label).toBe('A142')
     // Critically: no verifikat is created when a duplicate is flagged.
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
-    // Blocking a duplicate is not a dismissal — nothing is logged.
+    // Blocking a duplicate is not a dismissal: nothing is logged.
     expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
   })
 
@@ -293,7 +320,7 @@ describe('POST /api/transactions/[id]/book', () => {
   it('returns 409 when a ledger-only voucher (no sibling transaction) already books this movement', async () => {
     const tx = makeTransaction({ id: 'tx-1', amount: 98565, journal_entry_id: null })
     enqueue({ data: tx, error: null }) // fetch
-    // A voucher-keyed candidate has no transaction_id — it's bound by je id.
+    // A voucher-keyed candidate has no transaction_id: it's bound by je id.
     mockDetectDup.mockResolvedValue({
       transaction_id: null,
       journal_entry_id: VOUCHER_JE_UUID,

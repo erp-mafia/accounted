@@ -14,6 +14,6 @@
     "dataPattern": "core",
     "readsCoreTables": ["journal_entries", "invoices", "receipts"],
     "description": "Händelsenotiser för bokföringsaktiviteter",
-    "longDescription": "Få push-notiser direkt i webbläsaren när viktiga händelser sker — nya fakturor, förfallna betalningar, slutförda bokföringar med mera."
+    "longDescription": "Få push-notiser direkt i webbläsaren när viktiga händelser sker: nya fakturor, förfallna betalningar, slutförda bokföringar med mera."
   }
 }

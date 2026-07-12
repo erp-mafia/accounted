@@ -23,7 +23,7 @@ export interface AgentTool {
   description: string
   inputSchema: Record<string, unknown>
   outputSchema?: Record<string, unknown>
-  // Anthropic SDK tool blocks don't carry annotation hints — these stay in
+  // Anthropic SDK tool blocks don't carry annotation hints: these stay in
   // the registry for our own scoping/policy logic.
   annotations?: {
     readOnlyHint?: boolean

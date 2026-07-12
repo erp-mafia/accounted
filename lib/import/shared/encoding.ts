@@ -92,7 +92,7 @@ export function prepareContent(content: string): string {
  * --- U+FFFD heuristic recovery ---
  *
  * When Windows-1252 / Latin-1 bytes are decoded as UTF-8 with `fatal: false`,
- * invalid sequences silently become U+FFFD. The original byte is lost — but
+ * invalid sequences silently become U+FFFD. The original byte is lost, but
  * for Swedish text we can guess from context: the missing letter is almost
  * always one of Å/Ä/Ö (uppercase context) or å/ä/ö (lowercase context).
  *
@@ -133,10 +133,10 @@ const SWEDISH_STEMS = new Set<string>([
   'återbetalning', 'utlägg', 'utgift', 'avdrag',
   // omvänd moms etc.
   'omvänd', 'omvänt', 'omvända',
-  // 3+ letter prepositions/adverbs (skip 2-letter ones — too ambiguous)
+  // 3+ letter prepositions/adverbs (skip 2-letter ones: too ambiguous)
   'från', 'över', 'när', 'där', 'även', 'någon', 'något', 'många',
   'själv', 'små', 'väg', 'gång', 'räkning', 'räntor', 'är',
-  // 'på' — short but extremely common; include explicitly
+  // 'på': short but extremely common; include explicitly
   'på',
   // cities
   'göteborg', 'malmö', 'örebro', 'östersund', 'jönköping', 'linköping',
@@ -190,7 +190,7 @@ function chooseCase(word: string): 'upper' | 'lower' {
 /**
  * Try every Swedish-vowel substitution for the U+FFFDs in `word`, then return
  * the highest-scoring candidate. Returns null if no candidate matches a
- * dictionary stem (i.e. ambiguous — operator must review).
+ * dictionary stem (i.e. ambiguous: operator must review).
  */
 export function recoverWordWithFFFD(word: string): string | null {
   if (!word.includes(REPLACEMENT)) return word
@@ -201,8 +201,7 @@ export function recoverWordWithFFFD(word: string): string | null {
     if (word[i] === REPLACEMENT) positions.push(i)
   }
 
-  // Words with more than ~6 lost bytes blow up the combinatorial space —
-  // bail out rather than spend cycles on something that's likely garbage anyway.
+  // Words with more than ~6 lost bytes blow up the combinatorial space:   // bail out rather than spend cycles on something that's likely garbage anyway.
   const totalCombos = Math.pow(vowels.length, positions.length)
   if (totalCombos > 729) return null
 

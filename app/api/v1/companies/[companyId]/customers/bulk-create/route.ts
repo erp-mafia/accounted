@@ -2,7 +2,7 @@
  * POST /api/v1/companies/{companyId}/customers/bulk-create
  *
  * Bulk-create up to 50 customers in one call. Each item is validated and
- * inserted independently — per-item failures don't roll back successes.
+ * inserted independently: per-item failures don't roll back successes.
  * Mirrors the shape of /invoices/bulk-create exactly so agents only need
  * to learn one bulk pattern.
  *
@@ -10,7 +10,7 @@
  * Idempotent over the whole batch. Dry-runnable.
  *
  * VIES validation for eu_business customers is best-effort PER ITEM. A VIES
- * timeout does NOT fail the item — it just leaves vat_number_validated=false.
+ * timeout does NOT fail the item: it just leaves vat_number_validated=false.
  */
 
 import { z } from 'zod'
@@ -53,7 +53,7 @@ const BulkCreateResponse = z.object({
   }),
 })
 
-// Same projection as the single-create endpoint — keeps response shapes
+// Same projection as the single-create endpoint: keeps response shapes
 // identical so callers can union the two surfaces transparently.
 const CUSTOMER_RESPONSE_COLUMNS =
   'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
@@ -64,15 +64,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/customers/bulk-create',
   summary: 'Create up to 50 customers in one call (partial-success).',
   description:
-    'Bulk-create endpoint mirroring /invoices/bulk-create. Each customer is validated and inserted independently — per-item failures do not roll back items that succeeded. Returns a results array plus a summary. Idempotent over the whole batch. Dry-runnable.',
+    'Bulk-create endpoint mirroring /invoices/bulk-create. Each customer is validated and inserted independently: per-item failures do not roll back items that succeeded. Returns a results array plus a summary. Idempotent over the whole batch. Dry-runnable.',
   useWhen:
     'You\'re importing a roster of customers from another CRM, or seeding a fresh company with its existing client list. Use dry-run first to validate the batch.',
   doNotUseFor:
-    'Updating existing customers — PATCH /customers/{id} once per customer. Bulk uploads of > 50 customers — split into pages of 50. Transactional all-or-nothing imports — passing all_or_nothing: true returns 501 NOT_IMPLEMENTED.',
+    'Updating existing customers: PATCH /customers/{id} once per customer. Bulk uploads of > 50 customers: split into pages of 50. Transactional all-or-nothing imports: passing all_or_nothing: true returns 501 NOT_IMPLEMENTED.',
   pitfalls: [
-    'Idempotency-Key is mandatory and covers the WHOLE batch. A retried bulk-create returns the cached full response — it does not retry only the failed items.',
+    'Idempotency-Key is mandatory and covers the WHOLE batch. A retried bulk-create returns the cached full response: it does not retry only the failed items.',
     'Passing all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist; omit the flag or pass false.',
-    'org_number uniqueness is enforced at the DB level — items with duplicates fail individually with CUSTOMER_DUPLICATE_ORG_NUMBER.',
+    'org_number uniqueness is enforced at the DB level: items with duplicates fail individually with CUSTOMER_DUPLICATE_ORG_NUMBER.',
     'VIES validation for eu_business customers is best-effort per item; a VIES timeout leaves vat_number_validated=false but does NOT fail the item.',
   ],
   example: {
@@ -192,7 +192,7 @@ async function createOneCustomer(
   if (error) {
     if (error.code === '23505') {
       // GDPR Art.5(1)(c): do NOT echo input.org_number; for sole traders
-      // it IS the personnummer. The error code + field is enough — the
+      // it IS the personnummer. The error code + field is enough: the
       // caller knows the value they submitted.
       return {
         ok: false,
@@ -221,7 +221,7 @@ async function createOneCustomer(
   }
 
   // Emit customer.created per success. Same cast pattern as the single
-  // POST — projection omits internal scoping fields we re-inject here.
+  // POST: projection omits internal scoping fields we re-inject here.
   try {
     await eventBus.emit({
       type: 'customer.created',
@@ -290,7 +290,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Sequential processing — matches /invoices/bulk-create. VIES has its own
+    // Sequential processing: matches /invoices/bulk-create. VIES has its own
     // upstream throughput limits; running a batch of 50 in parallel can trip
     // them. The 50-item cap keeps the worst-case latency bounded.
     const results: ResultItem[] = []

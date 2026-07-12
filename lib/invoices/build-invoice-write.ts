@@ -29,10 +29,10 @@ import {
  *  - mixed-rate detection, currency → SEK conversion
  *  - the invoice_items row mapping
  *
- * It intentionally does NOT allocate an invoice number or emit events — those
+ * It intentionally does NOT allocate an invoice number or emit events: those
  * differ between create and update and stay in the route handlers. The returned
  * `invoiceFields` exclude `user_id`, `company_id`, `invoice_number` and `status`;
- * the caller merges those. Returned `items` carry no `invoice_id` — the caller
+ * the caller merges those. Returned `items` carry no `invoice_id`: the caller
  * adds it once the invoice row id is known.
  */
 
@@ -51,9 +51,12 @@ export interface InvoiceWriteItemInput {
   work_type?: string | null
   housing_designation?: string | null
   apartment_number?: string | null
+  brf_org_number?: string | null
   accrual_period_start?: string | null
   accrual_period_end?: string | null
   accrual_balance_account?: string | null
+  /** Dimensions PR7: per-item bag merged over the invoice default at booking. */
+  dimensions?: Record<string, string>
 }
 
 export interface InvoiceWriteInput {
@@ -65,10 +68,19 @@ export interface InvoiceWriteInput {
   your_reference?: string
   our_reference?: string
   notes?: string
+  /** Optional https payment link (schema-validated). Omitted/empty → null. */
+  payment_link_url?: string
+  /** Per-invoice opt-out for the automatic Stripe payment link. Omitted → true. */
+  payment_link_auto?: boolean
   /** Per-invoice öresavrundning override (display-only). Omitted → null (inherit company setting). */
   ore_rounding?: boolean
   deduction_personnummer?: string
   deduction_housing_designation?: string
+  /** ROT i bostadsrätt: lägenhetsnummer + föreningens orgnr instead of fastighetsbeteckning. */
+  deduction_apartment_number?: string
+  deduction_brf_org_number?: string
+  /** Dimensions PR7: invoice-level bag applied to every generated journal line. */
+  default_dimensions?: Record<string, string>
   items: InvoiceWriteItemInput[]
 }
 
@@ -97,11 +109,14 @@ export type InvoiceWriteFields = {
   your_reference: string | null | undefined
   our_reference: string | null | undefined
   notes: string | null | undefined
+  payment_link_url: string | null
+  payment_link_auto: boolean
   ore_rounding: boolean | null
   document_type: InvoiceDocumentType
   deduction_total: number
   deduction_personnummer_encrypted: string | null
   deduction_personnummer_last4: string | null
+  default_dimensions: Record<string, string>
 }
 
 export type InvoiceWriteItemRow = {
@@ -122,16 +137,18 @@ export type InvoiceWriteItemRow = {
   work_type: string | null
   housing_designation: string | null
   apartment_number: string | null
+  brf_org_number: string | null
   accrual_period_start: string | null
   accrual_period_end: string | null
   accrual_balance_account: string | null
+  dimensions: Record<string, string>
 }
 
 export type BuildInvoiceWriteResult =
   | { ok: true; invoiceFields: InvoiceWriteFields; items: InvoiceWriteItemRow[] }
-  // Domain validation failure — map via errorResponseFromCode(code, { details }).
+  // Domain validation failure: map via errorResponseFromCode(code, { details }).
   | { ok: false; code: string; details?: Record<string, unknown> }
-  // Unexpected DB error from an internal lookup — map via errorResponse(dbError).
+  // Unexpected DB error from an internal lookup: map via errorResponse(dbError).
   | { ok: false; dbError: unknown }
 
 export async function buildInvoiceWriteData(params: {
@@ -148,7 +165,7 @@ export async function buildInvoiceWriteData(params: {
   const availableRates = getAvailableVatRates(customer.customer_type, customer.vat_number_validated)
   const allowedRates = new Set(availableRates.map((r) => r.rate))
 
-  // VAT registration gate (defense in depth — the invoice form already hides
+  // VAT registration gate (defense in depth: the invoice form already hides
   // the Moms column when vat_registered is false). A non-momsregistrerad
   // company books no output VAT: zero every line rate so the sale lands as
   // momsfri (treatment 'exempt' → revenue 3004/3100, no 2611). 0% is a valid
@@ -248,13 +265,29 @@ export async function buildInvoiceWriteData(params: {
   // ROT/RUT-avdrag: validate prerequisites and compute the per-item +
   // invoice-level deduction. Computed server-side (never trusted from the
   // client) so a tampered request can't expand the 1513 receivable. Skipped
-  // entirely for proformas, delivery notes, and quotes — those documents don't
+  // entirely for proformas, delivery notes, and quotes: those documents don't
   // post journal entries and have no deduction model.
   let deductionTotal = 0
   let deductionPersonnummerEncrypted: string | null = null
   let deductionPersonnummerLast4: string | null = null
   if (documentType === 'invoice') {
-    const housingProvided = !!input.deduction_housing_designation?.trim()
+    // Housing info satisfies the ROT requirement in either of two shapes
+    // (Begaran.xsd V6): fastighetsbeteckning (småhus/ägarlägenhet) OR
+    // lägenhetsnummer + bostadsrättsföreningens orgnr (bostadsrätt).
+    const fastighetProvided = !!input.deduction_housing_designation?.trim()
+    const apartmentProvided = !!input.deduction_apartment_number?.trim()
+    const brfProvided = !!input.deduction_brf_org_number?.trim()
+    if ((apartmentProvided || brfProvided) && !(apartmentProvided && brfProvided)) {
+      return {
+        ok: false,
+        code: 'INVOICE_CREATE_ROT_RUT_VALIDATION',
+        details: {
+          errors: ['För bostadsrätt krävs både lägenhetsnummer och föreningens organisationsnummer.'],
+          warnings: [],
+        },
+      }
+    }
+    const housingProvided = fastighetProvided || (apartmentProvided && brfProvided)
     const personnummerRaw = input.deduction_personnummer?.trim() || ''
     const personnummerProvided = personnummerRaw.length > 0
 
@@ -275,7 +308,7 @@ export async function buildInvoiceWriteData(params: {
     }
 
     // Compute and (when present) encrypt the personnummer. The plaintext value
-    // never touches the DB — only the AES-256-GCM ciphertext + the last four
+    // never touches the DB: only the AES-256-GCM ciphertext + the last four
     // digits go into invoices columns.
     deductionTotal = computeInvoiceDeductionTotal(validateInput)
     if (personnummerProvided) {
@@ -327,7 +360,7 @@ export async function buildInvoiceWriteData(params: {
     total,
     total_sek: documentType === 'delivery_note' ? null : totalSek,
     // remaining_amount = total - deduction for real invoices so open-invoice
-    // queries treat them as fully unpaid for the CUSTOMER's share — the
+    // queries treat them as fully unpaid for the CUSTOMER's share: the
     // Skatteverket portion is on 1513 and clears when the agency pays out.
     // Proformas / delivery notes have no payment obligation → keep 0.
     remaining_amount: documentType === 'invoice' ? total - deductionTotal : 0,
@@ -338,16 +371,24 @@ export async function buildInvoiceWriteData(params: {
     your_reference: input.your_reference,
     our_reference: input.our_reference,
     notes: input.notes,
+    // Always a concrete value (never undefined) so a draft edit that cleared
+    // the field actually NULLs the column: supabase-js drops undefined keys.
+    payment_link_url: input.payment_link_url?.trim() || null,
+    // Automation opt-out for the Stripe payment link; default on. The form
+    // always sends the field, so a draft edit that unticked it persists false.
+    payment_link_auto: input.payment_link_auto ?? true,
     // Display-only öresavrundning override; null inherits company_settings.ore_rounding.
     ore_rounding: input.ore_rounding ?? null,
     document_type: documentType,
     deduction_total: deductionTotal,
     deduction_personnummer_encrypted: deductionPersonnummerEncrypted,
     deduction_personnummer_last4: deductionPersonnummerLast4,
+    // Dimensions PR7: stored as-is; the generators coerce + merge at booking.
+    default_dimensions: input.default_dimensions ?? {},
   }
 
   const itemRows: InvoiceWriteItemRow[] = items.map((item, index) => {
-    // Free-text / blank rows carry no amounts and never book — store the
+    // Free-text / blank rows carry no amounts and never book: store the
     // description only and zero everything else. Keys must match the product
     // branch exactly so a bulk insert isn't rejected for differing key sets.
     if (item.line_type === 'text') {
@@ -369,9 +410,11 @@ export async function buildInvoiceWriteData(params: {
         work_type: null,
         housing_designation: null,
         apartment_number: null,
+        brf_org_number: null,
         accrual_period_start: null,
         accrual_period_end: null,
         accrual_balance_account: null,
+        dimensions: {},
       }
     }
     const itemRate = item.vat_rate !== undefined ? item.vat_rate : vatRules.rate
@@ -407,8 +450,22 @@ export async function buildInvoiceWriteData(params: {
       deduction_amount: deductionAmount,
       labor_hours: documentType === 'invoice' ? (item.labor_hours ?? null) : null,
       work_type: documentType === 'invoice' ? (item.work_type ?? null) : null,
-      housing_designation: documentType === 'invoice' ? (item.housing_designation ?? null) : null,
-      apartment_number: documentType === 'invoice' ? (item.apartment_number ?? null) : null,
+      // Property info: per-line value wins, else the invoice-level claim-card
+      // value is stamped onto every deduction line so the Skatteverket file
+      // generator can read it off the line later. Non-deduction lines carry
+      // no property data (privacy by default).
+      housing_designation:
+        documentType === 'invoice' && deductionType
+          ? (item.housing_designation ?? input.deduction_housing_designation?.trim() ?? null) || null
+          : null,
+      apartment_number:
+        documentType === 'invoice' && deductionType
+          ? (item.apartment_number ?? input.deduction_apartment_number?.trim() ?? null) || null
+          : null,
+      brf_org_number:
+        documentType === 'invoice' && deductionType
+          ? (item.brf_org_number ?? input.deduction_brf_org_number?.trim() ?? null) || null
+          : null,
       // Periodisering (förutbetald intäkt): frozen onto the line. The schedule
       // itself is created when the invoice is sent/booked. ROT/RUT lines never
       // defer (schema-enforced); the guard above restricted this to real
@@ -425,6 +482,7 @@ export async function buildInvoiceWriteData(params: {
         documentType === 'invoice' && !deductionType && item.accrual_period_start && item.accrual_period_end
           ? (item.accrual_balance_account ?? DEFAULT_DEFERRED_REVENUE_ACCOUNT)
           : null,
+      dimensions: item.dimensions ?? {},
     }
   })
 

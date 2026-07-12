@@ -25,10 +25,13 @@ import { Loader2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
-  getCurrentFiscalYearStart,
   getPreviousFiscalYearStart,
   daysBetween,
 } from '@/lib/company/fiscal-year'
+import {
+  resolveBookedCoverage,
+  resolveFiscalYearStart,
+} from '../lib/date-suggestions'
 import type { CompanySettings } from '@/types'
 import type { StoredAccount } from '../types'
 import {
@@ -42,7 +45,7 @@ interface AccountPickerDialogProps {
   connectionId: string
   bankName: string
   accounts: StoredAccount[]
-  // True when the connection is still in pending_selection — closing without
+  // True when the connection is still in pending_selection: closing without
   // saving is allowed but the user is reminded that no sync runs until they
   // confirm.
   isInitialSelection: boolean
@@ -79,17 +82,24 @@ export function AccountPickerDialog({
 }: AccountPickerDialogProps) {
   const { toast } = useToast()
   // Memoise so the client has a stable reference across re-renders. Without this,
-  // listing `supabase` in the SIE-fetch effect's deps would re-fire that query on
-  // every checkbox tick or parent re-render.
+  // listing `supabase` in the data-fetch effects' deps would re-fire those queries
+  // on every checkbox tick or parent re-render.
   const supabase = useMemo(() => createClient(), [])
   const { company } = useCompany()
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [isSaving, setIsSaving] = useState(false)
-  const [sieLastDate, setSieLastDate] = useState<string | null>(null)
+  // Server-side save rejection (validation / ledger conflict). Shown inline in
+  // the dialog: a rejected save persisted nothing and started no sync, so the
+  // user must see why and be able to correct the picks.
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [lastBookedDate, setLastBookedDate] = useState<string | null>(null)
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([])
+  const [chartError, setChartError] = useState(false)
   const [ledgerByUid, setLedgerByUid] = useState<Record<string, string>>({})
   const [companySettings, setCompanySettings] = useState<Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'> | null>(null)
+  const [currentPeriodStart, setCurrentPeriodStart] = useState<string | null>(null)
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
 
   const [lookbackMode, setLookbackMode] = useState<LookbackMode>('fiscal-year')
   const [customSubMode, setCustomSubMode] = useState<CustomSubMode>('date')
@@ -97,66 +107,108 @@ export function AccountPickerDialog({
 
   const [progressOpen, setProgressOpen] = useState(false)
   const [progressState, setProgressState] = useState<SyncProgressState>({ kind: 'syncing' })
+  // Bumped on each new backfill so the progress dialog is keyed per attempt and
+  // remounts fresh: the dialog stays mounted across attempts, so without this a
+  // second sync would inherit the previous run's elapsed timer for a frame and
+  // briefly compute overGrace/blockClose from stale state.
+  const [syncAttempt, setSyncAttempt] = useState(0)
 
   useEffect(() => {
     if (open) {
+      // Re-arm the "settings loaded" gate each open so the fiscal-year label
+      // doesn't flash last-open's resolved date before this open's fetch lands.
+      setSettingsLoaded(false)
       const initial = new Set<string>(
         accounts.filter(a => a.enabled !== false).map(a => a.uid)
       )
       setSelected(initial)
+      setSaveError(null)
       setLookbackMode('fiscal-year')
       setCustomSubMode('date')
       setCustomDate('')
 
       // Pre-populate ledger picks from existing StoredAccount values, falling
-      // back to currency-based suggestions for accounts the user hasn't mapped yet.
+      // back to currency-based suggestions for accounts the user hasn't mapped
+      // yet. The currency default is suggested at most once — two SEK accounts
+      // both pre-filled with 1930 would collide on the UNIQUE
+      // (company_id, ledger_account) constraint at save; the second account is
+      // left blank so the user picks a distinct slot.
       const initialLedger: Record<string, string> = {}
+      const suggested = new Set<string>()
       for (const a of accounts) {
         const fromStored = a.ledger_account
         const fromDefault = CURRENCY_DEFAULTS[a.currency] ?? ''
-        initialLedger[a.uid] = fromStored ?? fromDefault
+        const pick = fromStored ?? (suggested.has(fromDefault) ? '' : fromDefault)
+        if (pick) suggested.add(pick)
+        initialLedger[a.uid] = pick
       }
       setLedgerByUid(initialLedger)
     }
   }, [open, accounts])
 
   // Load fiscal_year_start_month + entity_type so "Sedan räkenskapsårets början"
-  // resolves to the right date for non-calendar fiscal years.
+  // resolves to the right date for non-calendar fiscal years, plus the actual
+  // fiscal_periods row containing today: the recurring setting cannot represent
+  // an extended or shortened first year, so the period row wins when it exists.
   useEffect(() => {
     if (!open || !company?.id) return
     let cancelled = false
     ;(async () => {
-      const { data } = await supabase
-        .from('company_settings')
-        .select('fiscal_year_start_month, entity_type')
-        .eq('company_id', company.id)
-        .maybeSingle()
+      const today = new Date().toISOString().split('T')[0]
+      const [settingsRes, periodRes] = await Promise.all([
+        supabase
+          .from('company_settings')
+          .select('fiscal_year_start_month, entity_type')
+          .eq('company_id', company.id)
+          .maybeSingle(),
+        supabase
+          .from('fiscal_periods')
+          .select('period_start')
+          .eq('company_id', company.id)
+          .lte('period_start', today)
+          .gte('period_end', today)
+          .order('period_start', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ])
       if (cancelled) return
-      setCompanySettings((data as { fiscal_year_start_month?: number; entity_type?: CompanySettings['entity_type'] } | null) as Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'> | null)
+      if (settingsRes.error || periodRes.error) {
+        // A failed fetch must not present the calendar-year fallback as the
+        // authoritative fiscal-year start (issue #917). Leave settingsLoaded
+        // false so the date stays masked; if the user proceeds anyway the
+        // request falls back to the recurring-setting derivation.
+        return
+      }
+      setCompanySettings((settingsRes.data as { fiscal_year_start_month?: number; entity_type?: CompanySettings['entity_type'] } | null) as Pick<CompanySettings, 'fiscal_year_start_month' | 'entity_type'> | null)
+      setCurrentPeriodStart((periodRes.data as { period_start?: string } | null)?.period_start || null)
+      setSettingsLoaded(true)
     })()
     return () => { cancelled = true }
   }, [open, company?.id, supabase])
 
-  // Fetch the latest SIE import end date so we can offer "day after last SIE entry"
-  // as a one-click escape from the default fiscal-year start. Only matters on the
-  // initial activation flow — selection edits don't re-run sync.
+  // Fetch the latest posted verifikat date so we can offer "day after the last
+  // booked entry" as a one-click escape from the default fiscal-year start.
+  // Deliberately NOT sie_imports.fiscal_year_end (issue #917): that is the
+  // fiscal period's end, which can lie months past the last actually booked
+  // transaction and would make the user skip everything unbooked in between.
+  // Only matters on the initial activation flow: selection edits don't re-run sync.
   useEffect(() => {
     if (!open || !isInitialSelection || !company?.id) {
-      setSieLastDate(null)
+      setLastBookedDate(null)
       return
     }
     let cancelled = false
     ;(async () => {
       const { data } = await supabase
-        .from('sie_imports')
-        .select('fiscal_year_end')
+        .from('journal_entries')
+        .select('entry_date')
         .eq('company_id', company.id)
-        .eq('status', 'completed')
-        .order('fiscal_year_end', { ascending: false })
+        .eq('status', 'posted')
+        .order('entry_date', { ascending: false })
         .limit(1)
         .maybeSingle()
       if (cancelled) return
-      setSieLastDate((data as { fiscal_year_end?: string } | null)?.fiscal_year_end || null)
+      setLastBookedDate((data as { entry_date?: string } | null)?.entry_date || null)
     })()
     return () => { cancelled = true }
   }, [open, isInitialSelection, company?.id, supabase])
@@ -167,13 +219,20 @@ export function AccountPickerDialog({
     if (!open || !company?.id) return
     let cancelled = false
     ;(async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('chart_of_accounts')
         .select('account_number, account_name')
         .eq('company_id', company.id)
         .like('account_number', '19%')
         .order('account_number', { ascending: true })
       if (cancelled) return
+      if (error) {
+        // Surface the failure: without the 19xx chart the ledger picker is
+        // silently empty, which reads as "no bank accounts exist".
+        setChartError(true)
+        return
+      }
+      setChartError(false)
       setChartAccounts((data as ChartAccount[] | null) || [])
     })()
     return () => { cancelled = true }
@@ -188,7 +247,7 @@ export function AccountPickerDialog({
   )
 
   // Detect cases where the user routed two enabled accounts with different
-  // currencies to the same BAS account — usually a mistake, but allowed.
+  // currencies to the same BAS account, usually a mistake, but allowed.
   const currencyConflicts = useMemo(() => {
     const byLedger = new Map<string, Set<string>>()
     for (const a of accounts) {
@@ -244,7 +303,7 @@ export function AccountPickerDialog({
 
     // Block save when the user picked "Anpassat datum" but left the date blank.
     // Without this guard, lookback.body is null and the PATCH would silently
-    // fall back to the backend's 120-day default — not what the user asked for.
+    // fall back to the backend's 120-day default, not what the user asked for.
     if (
       isInitialSelection &&
       lookbackMode === 'custom' &&
@@ -260,19 +319,31 @@ export function AccountPickerDialog({
     }
 
     setIsSaving(true)
+    setSaveError(null)
+
+    // Cap the client wait at the route's 300s budget so a hung backfill can't
+    // leave the progress modal in 'syncing' forever. The save+backfill is one
+    // request; on abort we don't know if it finished, so the message stays
+    // neutral and the parent refetch reflects the true state.
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 300_000)
 
     // For the initial-selection path, open the progress modal up-front so the
-    // user has visible feedback during the 30–60s backfill. Selection edits
-    // (no backfill) keep the existing toast-only feedback.
+    // user has visible feedback during the 30-60s backfill. Selection edits
+    // (no backfill) keep the existing toast-only feedback. Do NOT signal the
+    // parent to close here (issue #916): the parent unmounts this component on
+    // close, which would tear down the progress modal too and swallow every
+    // outcome, including a rejected save. The picker Dialog hides itself while
+    // progressOpen is true and comes back if the save is rejected.
     if (isInitialSelection) {
+      setSyncAttempt((n) => n + 1)
       setProgressState({ kind: 'syncing' })
       setProgressOpen(true)
-      onOpenChange(false)
     }
 
     try {
       // Send a mapping entry per selected account. Account_mappings doesn't
-      // include disabled accounts — their existing ledger_account stays untouched.
+      // include disabled accounts: their existing ledger_account stays untouched.
       const account_mappings = Array.from(selected).map(uid => ({
         uid,
         ledger_account: ledgerByUid[uid] || null,
@@ -287,12 +358,23 @@ export function AccountPickerDialog({
           account_mappings,
           ...(isInitialSelection && lookback.body ? lookback.body : {}),
         }),
+        signal: controller.signal,
       })
 
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || 'Kunde inte spara kontoval')
+        // Rejected save (400 conflicting_accounts / duplicate_accounts / other
+        // validation): nothing was persisted and no sync started. Surface the
+        // server's message inside the still-open picker; the progress modal's
+        // failed state would wrongly claim "we retry in the background".
+        setSaveError(
+          typeof data?.error === 'string' && data.error
+            ? data.error
+            : 'Kunde inte spara kontoval'
+        )
+        if (isInitialSelection) setProgressOpen(false)
+        return
       }
 
       if (isInitialSelection && data.initial_sync) {
@@ -312,31 +394,33 @@ export function AccountPickerDialog({
 
       onSaved()
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Kunde inte spara kontoval'
+      const aborted = controller.signal.aborted
+      const message = aborted
+        ? 'Det tar längre tid än vanligt. Vi slutför i bakgrunden: uppdatera sidan om en stund.'
+        : (error instanceof Error ? error.message : 'Kunde inte spara kontoval')
       if (isInitialSelection) {
         setProgressState({ kind: 'failed', error: { message } })
       } else {
         toast({
-          title: 'Fel',
+          title: aborted ? 'Tar längre tid än vanligt' : 'Fel',
           description: message,
-          variant: 'destructive',
+          variant: aborted ? undefined : 'destructive',
         })
       }
     } finally {
+      clearTimeout(timeout)
       setIsSaving(false)
     }
   }
 
-  const dayAfterSie = useMemo(() => {
-    if (!sieLastDate) return null
-    const d = new Date(sieLastDate)
-    d.setDate(d.getDate() + 1)
-    return d.toISOString().split('T')[0]
-  }, [sieLastDate])
+  const bookedCoverage = useMemo(
+    () => resolveBookedCoverage(lastBookedDate),
+    [lastBookedDate],
+  )
 
   const fiscalYearStart = useMemo(
-    () => getCurrentFiscalYearStart(companySettings),
-    [companySettings],
+    () => resolveFiscalYearStart(currentPeriodStart, companySettings),
+    [currentPeriodStart, companySettings],
   )
 
   const previousFiscalYearStart = useMemo(
@@ -365,22 +449,34 @@ export function AccountPickerDialog({
   return (
     <>
     <BankSyncProgressDialog
+      key={syncAttempt}
       open={progressOpen}
       onOpenChange={(next) => {
         setProgressOpen(next)
-        // When the user closes the summary, propagate the saved/refresh
-        // signal to the parent (it would have been emitted on success earlier;
-        // this just guards the failure case where we still want a refresh).
-        if (!next) onSaved()
+        // When the user dismisses the progress modal the initial-selection
+        // flow is over: propagate the saved/refresh signal and close the
+        // picker. The parent unmounts this whole component on close, which is
+        // exactly why the picker must stay open until this point: closing it
+        // earlier would unmount the progress modal mid-flight and swallow the
+        // sync summary or error. (onSaved was already emitted on success;
+        // repeating it just guards the failure case where we still refresh.)
+        if (!next) {
+          onSaved()
+          onOpenChange(false)
+        }
       }}
       bankName={bankName}
       accounts={accounts.filter((a) => selected.has(a.uid))}
       state={progressState}
     />
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    {/* Visually yield to the progress modal while it is up, but WITHOUT
+        signaling the parent (open stays true): the parent unmounts the
+        component on close, and a rejected save must return to a live picker
+        with the user's picks intact. */}
+    <Dialog open={open && !progressOpen} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Välj konton att synka — {bankName}</DialogTitle>
+          <DialogTitle>Välj konton att synka: {bankName}</DialogTitle>
           <DialogDescription>
             {isInitialSelection
               ? 'Banken har gett åtkomst till följande konton. Avmarkera de konton du inte vill synka transaktioner från, och välj vilket bokföringskonto varje konto ska bokföras mot. Inga transaktioner hämtas innan du sparar.'
@@ -399,13 +495,13 @@ export function AccountPickerDialog({
               </p>
             </div>
 
-            {sieLastDate && dayAfterSie && (
+            {bookedCoverage && (
               <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-background/60 p-3">
                 <p className="text-xs text-muted-foreground">
-                  Senaste SIE-importen täcker till{' '}
-                  <span className="font-medium tabular-nums text-foreground">{sieLastDate}</span>.
+                  Ditt senaste bokförda verifikat är daterat{' '}
+                  <span className="font-medium tabular-nums text-foreground">{bookedCoverage.lastBookedDate}</span>.
                   Vi föreslår{' '}
-                  <span className="font-medium tabular-nums text-foreground">{dayAfterSie}</span>{' '}
+                  <span className="font-medium tabular-nums text-foreground">{bookedCoverage.suggestedStartDate}</span>{' '}
                   som startdatum så inget överlappar din bokföring.
                 </p>
                 <button
@@ -414,7 +510,7 @@ export function AccountPickerDialog({
                   onClick={() => {
                     setLookbackMode('custom')
                     setCustomSubMode('date')
-                    setCustomDate(dayAfterSie)
+                    setCustomDate(bookedCoverage.suggestedStartDate)
                   }}
                   disabled={isSaving}
                 >
@@ -452,7 +548,7 @@ export function AccountPickerDialog({
                 <span>
                   <span className="block">Sedan räkenskapsårets början</span>
                   <span className="text-xs text-muted-foreground tabular-nums">
-                    från {fiscalYearStart}
+                    från {settingsLoaded ? fiscalYearStart : '…'}
                   </span>
                 </span>
               </label>
@@ -482,7 +578,7 @@ export function AccountPickerDialog({
                         <SelectContent>
                           <SelectItem value="date">Specifikt datum</SelectItem>
                           <SelectItem value="previous-fiscal-year">
-                            Föregående räkenskapsårets start ({previousFiscalYearStart})
+                            Föregående räkenskapsårets start ({settingsLoaded ? previousFiscalYearStart : '…'})
                           </SelectItem>
                         </SelectContent>
                       </Select>
@@ -545,9 +641,24 @@ export function AccountPickerDialog({
 
         {currencyConflicts.length > 0 && (
           <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-            Varning: samma bokföringskonto används för flera valutor —
+            Varning: samma bokföringskonto används för flera valutor:
             {currencyConflicts.map(c => ` ${c.ledger} (${c.currencies.join(', ')})`).join(';')}.
             Det fungerar tekniskt men gör årsskifte med valutaomvärdering svårare.
+          </div>
+        )}
+
+        {chartError && (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
+            Kunde inte ladda bokföringskonton (19xx). Ladda om sidan och försök igen innan du sparar kontoval.
+          </div>
+        )}
+
+        {saveError && (
+          <div
+            role="alert"
+            className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+          >
+            Kontovalet sparades inte: {saveError}
           </div>
         )}
 
@@ -563,7 +674,7 @@ export function AccountPickerDialog({
               >
                 {/* Toggle area: label + Checkbox (a Radix Checkbox renders as
                     its own <button role="checkbox">, so wrapping it in another
-                    <button> would be nested interactive elements — invalid HTML
+                    <button> would be nested interactive elements: invalid HTML
                     that browsers silently flatten and breaks event routing). */}
                 <label className="flex flex-1 min-w-0 cursor-pointer items-center gap-3">
                   <Checkbox
@@ -593,7 +704,7 @@ export function AccountPickerDialog({
                     </p>
                   )}
                 </label>
-                {/* Ledger picker is a sibling of the label, not inside it —
+                {/* Ledger picker is a sibling of the label, not inside it:
                     otherwise clicking the Select would also toggle the checkbox. */}
                 <div className="w-44 shrink-0">
                   {isChecked && (
@@ -609,7 +720,7 @@ export function AccountPickerDialog({
                         {/* Surface a non-existent default so the user can see/correct it. */}
                         {ledger && !ledgerExistsInChart && (
                           <SelectItem value={ledger} disabled>
-                            {ledger} — finns ej i kontoplan
+                            {ledger}: finns ej i kontoplan
                           </SelectItem>
                         )}
                         {chartAccounts.map(acc => (

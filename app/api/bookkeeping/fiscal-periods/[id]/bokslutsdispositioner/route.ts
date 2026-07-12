@@ -51,13 +51,13 @@ const DISPOSITION_ORDER: Record<string, number> = {
   periodiseringsfond_avsattning: 2,
   sarskild_loneskatt: 3,
   bolagsskatt: 4,
-  // K3 only — posts last because it depends on the closing 21xx balance,
+  // K3 only: posts last because it depends on the closing 21xx balance,
   // which only stabilises once avsättning / återföring have been applied.
   uppskjuten_skatt: 5,
 }
 
 // ============================================================
-// GET — return proposal snapshot with defaults
+// GET: return proposal snapshot with defaults
 // ============================================================
 export const GET = withRouteContext(
   'period.bokslutsdispositioner_preview',
@@ -81,7 +81,7 @@ export const GET = withRouteContext(
 )
 
 // ============================================================
-// POST — commit a list of dispositions chosen by the user
+// POST: commit a list of dispositions chosen by the user
 // ============================================================
 const ItemSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -103,25 +103,27 @@ const ItemSchema = z.discriminatedUnion('kind', [
     kind: z.literal('periodiseringsfond_avsattning'),
     /** Optional override for the SLR-based schablonintäkt rate; defaults to
      *  the server-side constant. Used both to compute the cap base and to
-     *  feed back into bolagsskatt's adjustment if present in the same batch. */
-    schablonintaktRate: z.number().optional(),
-    desiredAmount: z.number().optional(),
+     *  feed back into bolagsskatt's adjustment if present in the same batch.
+     *  Bounded to a sane range — an inflated rate would inflate the cap base
+     *  and let the caller exceed the legal 25 % avsättning limit (IL 30 kap). */
+    schablonintaktRate: z.number().min(0).max(0.2).optional(),
+    desiredAmount: z.number().positive().optional(),
   }),
   z.object({
     kind: z.literal('periodiseringsfond_ateforing'),
-    returns: z.record(z.string(), z.number()).default({}),
-    schablonintaktRate: z.number().default(DEFAULT_SCHABLONINTAKT_RATE),
+    returns: z.record(z.string(), z.number().nonnegative()).default({}),
+    schablonintaktRate: z.number().min(0).max(0.2).default(DEFAULT_SCHABLONINTAKT_RATE),
   }),
   z.object({
     kind: z.literal('overavskrivningar'),
     additionalAmount: z.number(),
-    /** Asset category for BAS account selection — defaults to maskiner &
+    /** Asset category for BAS account selection: defaults to maskiner &
      *  inventarier (8853/2153), the dominant K2 case. */
     category: z
       .enum(['machinery_equipment', 'building', 'immaterial', 'group'])
       .optional(),
   }),
-  // K3 only — uppskjuten skatt provision. Server recomputes the amount from
+  // K3 only: uppskjuten skatt provision. Server recomputes the amount from
   // current 2240 + 21xx state so the client cannot override it.
   z.object({
     kind: z.literal('uppskjuten_skatt'),
@@ -160,7 +162,7 @@ export const POST = withRouteContext(
       const created: { kind: string; entry: JournalEntry }[] = []
 
       // Process items in canonical bokslut order regardless of client array
-      // ordering — each computation pulls the current income statement, so
+      // ordering: each computation pulls the current income statement, so
       // återföring must post before avsättning sees its cap base; över-
       // avskrivningar must post before bolagsskatt; SLP and bolagsskatt last.
       const sortedItems = [...validation.data.items].sort(
@@ -168,7 +170,7 @@ export const POST = withRouteContext(
       )
 
       // KNOWN LIMITATION (SOC 2 PI1.3): the loop is not wrapped in a database
-      // transaction — each item posts its own journal entry via the engine.
+      // transaction: each item posts its own journal entry via the engine.
       // A failure midway leaves earlier items committed and later ones not.
       // Recovery: the UI can re-POST omitting already-committed kinds; each
       // calculator re-derives from the current trial balance so the next run
@@ -210,11 +212,11 @@ async function computeProposal(
   switch (item.kind) {
     case 'bolagsskatt': {
       // Dispositioner are booked as source_type='year_end', which the income
-      // statement excludes — so net_result alone overstates resultat före skatt.
+      // statement excludes, so net_result alone overstates resultat före skatt.
       // Add the already-posted dispositions back (avsättning −, återföring +,
       // SLP −, överavskrivningar −); bolagsskatt is sorted LAST so they are
       // committed by now. Without this the booked tax ignores the avsättning
-      // (the original customer bug — too-high tax, ÅR/INK2 mismatch).
+      // (the original customer bug, too-high tax, ÅR/INK2 mismatch).
       const incomeStatement = await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
       const dispositionsEffect = await sumPostedYearEndDispositions(
         supabase,
@@ -278,7 +280,7 @@ async function computeProposal(
         schablonintaktRate: item.schablonintaktRate,
       })
       // Combine multiple cohort reversals into a single voucher with multiple
-      // lines so we don't blow up voucher numbering — but each fond is its own
+      // lines so we don't blow up voucher numbering, but each fond is its own
       // line pair already. Build a merged ProposedDisposition.
       if (result.proposals.length === 0) return null
       return mergeAteforingProposals(result.proposals)
@@ -291,7 +293,7 @@ async function computeProposal(
     case 'uppskjuten_skatt':
       // Server-only: recompute from current TB (which already reflects any
       // 21xx postings that committed earlier in this batch). The client
-      // sends no amount — the calculator owns the K3 split.
+      // sends no amount: the calculator owns the K3 split.
       return buildLatentTaxProposal({
         supabase,
         companyId,

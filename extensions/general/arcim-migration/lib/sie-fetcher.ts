@@ -4,7 +4,7 @@
  * Providers that expose their general ledger as a SIE export over the API get
  * the "Fortnox-grade" migration experience: the wizard pulls the GL itself
  * instead of requiring a manual SIE upload. Everything downstream (parsing,
- * validation, account mapping, replace-mode import) is provider-agnostic —
+ * validation, account mapping, replace-mode import) is provider-agnostic:
  * this module's only job is to produce raw SIE file contents per fiscal year.
  *
  * Shared by /preview (latest year, for stats) and /sie-data (all years).
@@ -20,7 +20,7 @@ import { createLogger } from '@/lib/logger'
 const log = createLogger('extensions/arcim-migration/sie-fetcher')
 
 /**
- * Fiscal years we support importing — the current year and the two before it.
+ * Fiscal years we support importing: the current year and the two before it.
  * Derived at call time (not a module constant) so the window rolls forward
  * automatically at new year without a code change.
  */
@@ -37,7 +37,7 @@ export interface ProviderSieFile {
 export interface ProviderSieFetchResult {
   files: ProviderSieFile[]
   /**
-   * Every fiscal year available at the provider within the allowed window —
+   * Every fiscal year available at the provider within the allowed window:
    * also populated when latestOnly fetched just one file, so /preview can show
    * the full year list without a second round-trip.
    */
@@ -63,7 +63,7 @@ export function providerSupportsSie(provider: ProviderName): boolean {
 interface FiscalYearRef {
   id: string | number
   year: number
-  /** Period bounds — required by BL, whose export URL is date-ranged. */
+  /** Period bounds: required by BL, whose export URL is date-ranged. */
   fromDate?: string
   toDate?: string
 }
@@ -140,7 +140,7 @@ function getSieFetcher(
       },
       async fetchSie(accessToken, fy) {
         // Fortnox normally serves the SIE body as UTF-8, but endpoint variants
-        // have been seen answering CP437 (the SIE spec encoding) — a blind
+        // have been seen answering CP437 (the SIE spec encoding): a blind
         // response.text() would turn å/ä/ö into U+FFFD irrecoverably. Fetch
         // raw bytes and detect-decode like the Briox/BL paths.
         const buffer = await fortnoxClient.getBytes(accessToken, `/sie/4?financialyear=${fy.id}`)
@@ -160,7 +160,7 @@ function getSieFetcher(
       },
       async fetchSie(accessToken, fy) {
         // Briox serves SIE as an octet-stream whose encoding varies
-        // (CP437/Windows-1252/UTF-8) — fetch bytes and detect-decode.
+        // (CP437/Windows-1252/UTF-8): fetch bytes and detect-decode.
         const buffer = await brioxClient.getBytes(accessToken, `/sie/${fy.id}/4`)
         return decodeBuffer(buffer, detectEncoding(buffer))
       },
@@ -171,7 +171,7 @@ function getSieFetcher(
     // providerCompanyId carries the per-company User-Key header value.
     const userKey = providerCompanyId
     if (!userKey) {
-      throw new Error('Björn Lundén requires a company User-Key — reconnect the provider')
+      throw new Error('Björn Lundén requires a company User-Key: reconnect the provider')
     }
     return {
       async listYears(accessToken) {
@@ -187,7 +187,7 @@ function getSieFetcher(
         // BL's export is date-ranged rather than year-id based. Sandbox-
         // verified: the body is RAW SIE bytes (CP437, Content-Type
         // text/vnd.sie-gruppen.si) even though the swagger declares a base64
-        // string — decodeSieBytes handles both shapes.
+        // string: decodeSieBytes handles both shapes.
         const buffer = await bjornLundenClient.getBytes(
           accessToken,
           userKey,
@@ -204,7 +204,7 @@ function getSieFetcher(
 /**
  * Decode a SIE payload that may arrive either as raw SIE bytes or as a
  * base64 string (optionally JSON-quoted). BL's swagger declares base64 but
- * the live API sends raw CP437 — handle both so a future API change doesn't
+ * the live API sends raw CP437: handle both so a future API change doesn't
  * silently break the import.
  */
 function decodeSieBytes(buffer: ArrayBuffer): string {
@@ -223,7 +223,7 @@ function decodeSieBytes(buffer: ArrayBuffer): string {
     }
   }
 
-  // Neither shape matched — return the direct decode and let the SIE parser
+  // Neither shape matched: return the direct decode and let the SIE parser
   // produce its own diagnostics instead of failing silently here.
   return direct
 }

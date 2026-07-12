@@ -10,10 +10,10 @@ import { withPublicSecurityHeaders } from '@/lib/api/v1/security-headers'
 const SLUG_ALLOW = new Set<string>(COOKBOOK_SLUGS)
 
 // Next.js 16 does not extract the dynamic segment name from a directory
-// like `[slug].md/` — the literal `.md` suffix breaks the inference and
+// like `[slug].md/`: the literal `.md` suffix breaks the inference and
 // the framework types `params` as `{}`. Workaround: parse the slug from
 // request.url.pathname directly. Routing still works (Next.js still
-// matches /docs/api/cookbook/foo.md to this handler) — only the
+// matches /docs/api/cookbook/foo.md to this handler): only the
 // `params` typing is unusable.
 export async function GET(request: Request) {
   const url = new URL(request.url)
@@ -22,7 +22,7 @@ export async function GET(request: Request) {
   // URL-decode before the allow-list check so a percent-encoded slug
   // can't slip through the literal Set lookup. The allow-list is pure
   // ASCII so any decoded value matching means the caller could have
-  // requested the canonical slug directly — no behaviour change for
+  // requested the canonical slug directly: no behaviour change for
   // legitimate clients, defense-in-depth for adversarial ones.
   let slug: string | undefined
   try {

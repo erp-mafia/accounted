@@ -19,7 +19,7 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('pending_operations MCP tools — registration', () => {
+describe('pending_operations MCP tools: registration', () => {
   it('all three tools are registered', () => {
     expect(listTool).toBeDefined()
     expect(approveTool).toBeDefined()
@@ -107,7 +107,7 @@ describe('gnubok_approve_pending_operation', () => {
     // commit options always include commitMethod; userEmail is added when
     // the supabase mock supports auth.admin.getUserById (it doesn't here, so
     // the resolution silently fails and we fall back to just commitMethod).
-    // An api_key actor records 'api_key' in the immutable layer — MCP-relayed
+    // An api_key actor records 'api_key' in the immutable layer: MCP-relayed
     // acknowledgment, not a first-party human session (vision §8 P0-1).
     // The actor option drives the runWithActor() scope inside
     // commitPendingOperation so EVERY journal commit in the op is attributed
@@ -230,7 +230,7 @@ describe('gnubok_reject_pending_operation', () => {
   it('flips status to rejected and never invokes the executor', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1', status: 'pending' }, error: null }) // fetch
-    enqueue({ data: [{ id: 'op-1' }], error: null }) // update CAS — returns rows
+    enqueue({ data: [{ id: 'op-1' }], error: null }) // update CAS: returns rows
 
     const result = (await rejectTool.execute(
       { operation_id: 'op-1' },
@@ -247,7 +247,7 @@ describe('gnubok_reject_pending_operation', () => {
   it('throws when the CAS update affects 0 rows (concurrent claim)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1', status: 'pending' }, error: null }) // fetch
-    enqueue({ data: [], error: null }) // update CAS — 0 rows (lost race)
+    enqueue({ data: [], error: null }) // update CAS: 0 rows (lost race)
 
     await expect(
       rejectTool.execute({ operation_id: 'op-1' }, 'company-1', 'user-1', supabase as never)

@@ -3,7 +3,7 @@ import { z } from 'zod'
 /**
  * Zod schemas for Skatteverket AGI pre-flight kontrollera endpoints.
  * Matches the v1.7 §7 (HU) and §8 (IU) JSON spec exactly, with strict()
- * to reject unknown properties — without this guard, a caller could inject
+ * to reject unknown properties: without this guard, a caller could inject
  * fields like agRegistreradId or personnummer overrides into the payload
  * we forward verbatim to SKV.
  *
@@ -11,13 +11,13 @@ import { z } from 'zod'
  *   - IDENTITET: 12 digits (orgnr prefixed "16" + 10 digits, or personnummer YYYYMMDDXXXX)
  *   - redovisningsPeriod: YYYYMM
  *   - amount fields: integer SEK (no decimals)
- *   - boolean kryss fields: true/false (JSON) — SKV converts to <FK>1</FK> in XML
+ *   - boolean kryss fields: true/false (JSON): SKV converts to <FK>1</FK> in XML
  */
 
 // 12-digit IDENTITET pattern. Slightly looser than the XSD regex used in
 // xml-generator.ts (we don't re-validate samordningsnummer arithmetic here)
 // because SKV will reject malformed values on its end with a clearer
-// felmeddelande than we can surface — what matters here is that we don't
+// felmeddelande than we can surface: what matters here is that we don't
 // forward an obviously bogus or oversized string.
 const IDENTITET = z
   .string()
@@ -57,7 +57,7 @@ export const AGIKontrolleraIUSchema = z
     betalningsmottagarId: IDENTITET,
     specifikationsnummer: SPEC_NUMBER,
 
-    // Cash + tax — FK011 / FK001
+    // Cash + tax: FK011 / FK001
     kontantErsattningUlagAG: AMOUNT.optional(),
     avdrPrelSkatt: AMOUNT.optional(),
 

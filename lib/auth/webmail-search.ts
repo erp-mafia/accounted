@@ -5,7 +5,7 @@
  * a `from:<sender>` search pre-populated where supported (Gmail).
  *
  * Custom domains (Google Workspace, Microsoft 365, Fastmail, etc.) can't
- * be detected from the address alone — callers should fall back to the
+ * be detected from the address alone: callers should fall back to the
  * plain "check your inbox" copy when this returns null.
  */
 
@@ -13,7 +13,7 @@ export type WebmailProviderId = 'gmail' | 'outlook' | 'yahoo' | 'icloud' | 'prot
 
 export interface WebmailHint {
   id: WebmailProviderId
-  /** Display name, e.g. "Gmail". Not translated — provider names are global brands. */
+  /** Display name, e.g. "Gmail". Not translated: provider names are global brands. */
   name: string
   /** URL that opens the user's inbox, ideally pre-populated with a from: search. */
   url: string
@@ -81,7 +81,7 @@ export function detectWebmailHint(email: string, fromAddress: string): WebmailHi
 
   switch (id) {
     case 'gmail': {
-      // Hash-based search that survives client-side routing — the URL Stripe uses.
+      // Hash-based search that survives client-side routing: the URL Stripe uses.
       const query = encodeURIComponent(`from:${fromAddress}`)
       return {
         id,

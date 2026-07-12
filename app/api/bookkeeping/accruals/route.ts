@@ -1,11 +1,17 @@
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateQuery } from '@/lib/api/validate'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { firstOfMonth } from '@/lib/bookkeeping/accruals/compute'
 import type { AccrualSchedule, AccrualScheduleInstallment } from '@/types'
 
 ensureInitialized()
+
+const ListQuerySchema = z.object({
+  status: z.enum(['active', 'completed', 'cancelled', 'all']).default('active'),
+})
 
 /**
  * GET /api/bookkeeping/accruals?status=active|completed|cancelled|all
@@ -19,8 +25,12 @@ export const GET = withRouteContext(
   async (request, ctx) => {
     const { supabase, companyId, log, requestId } = ctx
 
-    const { searchParams } = new URL(request.url)
-    const status = searchParams.get('status') || 'active'
+    const validated = validateQuery(request, ListQuerySchema, {
+      log,
+      operation: 'accruals.list',
+    })
+    if (!validated.success) return validated.response
+    const { status } = validated.data
 
     let query = supabase
       .from('accrual_schedules')

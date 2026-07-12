@@ -100,6 +100,20 @@ describe('GET /api/supplier-invoices', () => {
     expect(status).toBe(200)
   })
 
+  it('applies supplier_id filter', async () => {
+    const invoices = [makeSupplierInvoice({ supplier_id: 'supplier-1' })]
+    enqueue({ data: invoices, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      searchParams: { status: 'all', supplier_id: 'supplier-1' },
+    })
+    const response = await GET(request)
+    const { status, body } = await parseJsonResponse<{ data: unknown[] }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual(invoices)
+  })
+
   it('returns 500 on database error', async () => {
     enqueue({ data: null, error: { message: 'DB error' } })
 
@@ -340,7 +354,7 @@ describe('POST /api/supplier-invoices', () => {
     expect(status).toBe(400)
     expect(body.error.code).toBe('SI_CREATE_NO_FISCAL_PERIOD')
     expect(mockCreateSupplierInvoiceRegistrationEntry).toHaveBeenCalled()
-    // The orphan must be rolled back — the delete is the 6th queued call.
+    // The orphan must be rolled back: the delete is the 6th queued call.
     expect(mockSupabase.from).toHaveBeenCalledWith('supplier_invoices')
   })
 
@@ -453,7 +467,7 @@ describe('POST /api/supplier-invoices', () => {
           'duplicate key value violates unique constraint "idx_supplier_invoices_company_supplier_number"',
       },
     })
-    // Lookup returns null — the row was deleted between the failing insert and our fetch
+    // Lookup returns null: the row was deleted between the failing insert and our fetch
     enqueue({ data: null, error: null })
 
     const request = createMockRequest('/api/supplier-invoices', {

@@ -1,4 +1,29 @@
 import { NextResponse } from 'next/server'
+import { DimensionValidationError, MandatoryDimensionMissingError } from './dimension-errors'
+
+// ============================================================================
+// Dimension validation error: class lives in ./dimension-errors.ts (pure
+// module, no next/server) because dimension-resolver.ts is reachable from
+// client bundles via lib/api/schemas.ts. Re-exported here so this file stays
+// the single import surface for all typed bookkeeping errors.
+// ============================================================================
+
+export {
+  DIMENSION_VALIDATION_FAILED,
+  DimensionValidationError,
+  formatDimensionValidationIssue,
+  formatDimensionValidationIssues,
+  isDimensionValidationError,
+  MANDATORY_DIMENSION_MISSING,
+  MandatoryDimensionMissingError,
+  formatMandatoryDimensionViolation,
+  isMandatoryDimensionMissingError,
+} from './dimension-errors'
+export type {
+  DimensionValidationIssue,
+  DimensionValidationReason,
+  MandatoryDimensionViolation,
+} from './dimension-errors'
 
 // ============================================================================
 // Error codes
@@ -23,7 +48,7 @@ export const TARGET_PERIOD_CLOSED = 'TARGET_PERIOD_CLOSED' as const
 export const TARGET_PERIOD_LOCKED = 'TARGET_PERIOD_LOCKED' as const
 
 // ============================================================================
-// AccountsNotInChartError — kept for back-compat (many existing call sites)
+// AccountsNotInChartError: kept for back-compat (many existing call sites)
 // ============================================================================
 
 export class AccountsNotInChartError extends Error {
@@ -32,7 +57,7 @@ export class AccountsNotInChartError extends Error {
 
   constructor(accountNumbers: string[]) {
     // Numeric-first sort so mixed-length BAS codes (rare but possible) order
-    // by value rather than by UTF-16 code units — otherwise ['245', '1930']
+    // by value rather than by UTF-16 code units: otherwise ['245', '1930']
     // would sort to ['1930', '245'] under the default string comparator,
     // confusing a user about which accounts to activate in Kontoplan.
     // Non-numeric tokens fall back to a stable string compare so the order
@@ -51,7 +76,7 @@ function compareAccountNumbers(a: string, b: string): number {
   const bIsNum = Number.isFinite(nb)
   if (aIsNum && bIsNum) {
     if (na !== nb) return na - nb
-    // Same numeric value but different string (e.g. "0245" vs "245") —
+    // Same numeric value but different string (e.g. "0245" vs "245"):
     // break the tie deterministically by string.
     return a < b ? -1 : a > b ? 1 : 0
   }
@@ -65,7 +90,7 @@ export function isAccountsNotInChartError(err: unknown): err is AccountsNotInCha
 }
 
 // ============================================================================
-// Semantic errors — carry structured data so getErrorMessage can format rich
+// Semantic errors: carry structured data so getErrorMessage can format rich
 // Swedish translations with amounts / period names / status.
 // ============================================================================
 
@@ -148,7 +173,7 @@ export class CannotCorrectNonPostedError extends Error {
  * Raised when an edit is attempted on a committed entry. Only drafts are
  * editable in place; posted/reversed/cancelled entries are immutable per BFL
  * 5 kap. (corrections go through storno). The DB immutability trigger is the
- * backstop — this gives a clean, translatable 409 before we reach it.
+ * backstop: this gives a clean, translatable 409 before we reach it.
  */
 export class CannotEditNonDraftError extends Error {
   readonly code = CANNOT_EDIT_NON_DRAFT
@@ -184,10 +209,10 @@ export class MeaninglessCorrectionError extends Error {
   constructor(public readonly reason: MeaninglessCorrectionReason) {
     super(
       reason === 'net_zero_per_account'
-        ? 'Correction lines net to zero on every account — no economic event represented (BFL 5 kap. 5 §).'
+        ? 'Correction lines net to zero on every account: no economic event represented (BFL 5 kap. 5 §).'
         : reason === 'no_date_change'
-          ? 'New date equals the current date — nothing to move.'
-          : 'Correction lines are identical to the original entry — nothing to correct.'
+          ? 'New date equals the current date: nothing to move.'
+          : 'Correction lines are identical to the original entry: nothing to correct.'
     )
     this.name = 'MeaninglessCorrectionError'
   }
@@ -207,7 +232,7 @@ export class NoOpenPeriodForDateError extends Error {
 
 /**
  * Raised when the target date of a recordate falls in a closed fiscal year
- * (bokslut). A closed year cannot be reopened — the correction must be booked
+ * (bokslut). A closed year cannot be reopened: the correction must be booked
  * in the current open period instead.
  */
 export class TargetPeriodClosedError extends Error {
@@ -250,7 +275,7 @@ export class InvalidMappingResultError extends Error {
 }
 
 // ============================================================================
-// BookkeepingDatabaseError — single wrapper for all "Failed to <op>: <cause>"
+// BookkeepingDatabaseError: single wrapper for all "Failed to <op>: <cause>"
 // engine throws. The `operation` tag is preserved for logs; the cause string
 // stays in `message` so period-lock / trigger messages can still be matched
 // by regex patterns in get-error-message.ts.
@@ -271,6 +296,7 @@ export type BookkeepingOperation =
   | 'fetch_currency_receivables'
   | 'fetch_currency_payables'
   | 'check_existing_revaluation'
+  | 'resolve_settlement_account'
 
 export class BookkeepingDatabaseError extends Error {
   readonly code = BOOKKEEPING_DATABASE_ERROR
@@ -310,7 +336,9 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof MeaninglessCorrectionError ||
     err instanceof NoOpenPeriodForDateError ||
     err instanceof TargetPeriodClosedError ||
-    err instanceof TargetPeriodLockedError
+    err instanceof TargetPeriodLockedError ||
+    err instanceof DimensionValidationError ||
+    err instanceof MandatoryDimensionMissingError
   )
 }
 
@@ -535,6 +563,37 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
         },
       },
       { status: 409 }
+    )
+  }
+
+  if (err instanceof DimensionValidationError) {
+    // err.message is already the user-facing Swedish sentence(s) naming the
+    // offending code(s); details.issues carries the machine-readable list.
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { issues: err.issues },
+        },
+      },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof MandatoryDimensionMissingError) {
+    // Policy rejection at commit (dimensions PR10): the message names every
+    // account + required dimension so a user or agent self-corrects in one
+    // pass; details.violations is the machine-readable list.
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { violations: err.violations },
+        },
+      },
+      { status: 400 }
     )
   }
 

@@ -145,7 +145,7 @@ export function detectColumns(
   } else if (balanceCol !== null) {
     layout = 'net'
   } else if (debitCol !== null || creditCol !== null) {
-    // Only one of debit/credit found — treat as net balance
+    // Only one of debit/credit found: treat as net balance
     balanceCol = debitCol ?? creditCol
     debitCol = null
     creditCol = null

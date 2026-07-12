@@ -17,7 +17,7 @@ export default function DashboardError({
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4">
-      <h2 className="text-xl font-semibold">Nagot gick fel</h2>
+      <h2 className="text-xl font-semibold">Något gick fel</h2>
       <p className="text-muted-foreground text-sm max-w-md text-center">
         Ett oväntat fel uppstod. Försök igen eller{' '}
         <SupportLink variant="inline" subject="Oväntat fel">kontakta support</SupportLink>{' '}

@@ -116,8 +116,8 @@ describe('calculateBolagsskatt', () => {
       { account_number: '8819', debit_amount: 0, credit_amount: 20_000 },  // återföring       +20k
       { account_number: '8853', debit_amount: 39_000, credit_amount: 0 },  // överavskrivning  −39k
       { account_number: '7533', debit_amount: 5_000, credit_amount: 0 },   // SLP               −5k
-      { account_number: '8910', debit_amount: 123_600, credit_amount: 0 }, // skatt    — ignored
-      { account_number: '2124', debit_amount: 0, credit_amount: 150_000 }, // skuld    — ignored
+      { account_number: '8910', debit_amount: 123_600, credit_amount: 0 }, // skatt   : ignored
+      { account_number: '2124', debit_amount: 0, credit_amount: 150_000 }, // skuld   : ignored
     ]
     const result = { data: rows, error: null }
     const handler: ProxyHandler<object> = {

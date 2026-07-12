@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
+import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -170,7 +171,7 @@ function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel: strin
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      // clipboard unavailable (insecure context) — silently ignore
+      // clipboard unavailable (insecure context): silently ignore
     }
   }
 
@@ -187,7 +188,7 @@ function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel: strin
         aria-label={copyAriaLabel}
       >
         {copied ? (
-          <Check className="h-3.5 w-3.5 text-green-600" />
+          <Check className="h-3.5 w-3.5 text-success" />
         ) : (
           <Copy className="h-3.5 w-3.5" />
         )}
@@ -207,16 +208,16 @@ function ScopeCard({
 }) {
   const t = useTranslations('settings_api_keys')
   const label = t(entry.labelKey)
-  const dashIdx = label.indexOf(' — ')
-  const verb = dashIdx > 0 ? label.slice(0, dashIdx) : label
-  const description = dashIdx > 0 ? label.slice(dashIdx + 3) : ''
+  const sepIdx = label.indexOf(': ')
+  const verb = sepIdx > 0 ? label.slice(0, sepIdx) : label
+  const description = sepIdx > 0 ? label.slice(sepIdx + 2) : ''
 
   return (
     <label
       className={cn(
         'flex min-h-[68px] cursor-pointer flex-col gap-1 rounded-md border p-2 transition-colors',
         checked
-          ? 'border-foreground/30 bg-secondary'
+          ? 'border-border bg-secondary'
           : 'border-border hover:bg-secondary/60'
       )}
     >
@@ -254,7 +255,7 @@ export function ApiKeysPanel() {
   const [showApiKeyMethods, setShowApiKeyMethods] = useState(false)
   const [newKeyName, setNewKeyName] = useState('')
   // 'live' by default: this is the general MCP-key surface and the dominant case
-  // is a key for the user's real company. 'test' is an explicit opt-in — a
+  // is a key for the user's real company. 'test' is an explicit opt-in: a
   // simulation-only key that forces dry-run on every write (nothing is saved).
   const [newKeyMode, setNewKeyMode] = useState<'live' | 'test'>('live')
   const [newKeyScopes, setNewKeyScopes] = useState<Set<Scope>>(new Set(ALL_SCOPES))
@@ -265,7 +266,7 @@ export function ApiKeysPanel() {
   // STAGING_SCOPES member) AND can approve it (pending_operations:approve)
   // lets an automated agent commit financial postings with no human in the
   // loop. We warn inline and require an explicit confirm before submitting
-  // with acknowledge_sod — the route returns 409 API_KEY_SOD_CONFLICT
+  // with acknowledge_sod: the route returns 409 API_KEY_SOD_CONFLICT
   // otherwise (default create ticks all scopes, so this path is the norm).
   const sodConflictScope = STAGING_SCOPES.find((s) => newKeyScopes.has(s)) ?? null
   const hasSodConflict =
@@ -318,7 +319,7 @@ export function ApiKeysPanel() {
 
       if (!res.ok) {
         // The route returns the canonical { error: { code, message, message_en } }
-        // envelope — render the message string, never the object (a React child
+        // envelope: render the message string, never the object (a React child
         // must be a string, not { code, message, ... }).
         const message =
           typeof json.error === 'string'
@@ -366,7 +367,7 @@ export function ApiKeysPanel() {
   }
 
   function formatDate(iso: string | null) {
-    if (!iso) return '—'
+    if (!iso) return '-'
     return new Date(iso).toLocaleDateString('sv-SE', {
       year: 'numeric',
       month: 'short',
@@ -387,7 +388,7 @@ export function ApiKeysPanel() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle>{t('title')}</CardTitle>
+              <CardTitle className="text-base">{t('title')}</CardTitle>
               <CardDescription>
                 {t('description')}
               </CardDescription>
@@ -408,13 +409,11 @@ export function ApiKeysPanel() {
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : keys.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <Key className="h-8 w-8 text-muted-foreground/50 mb-3" />
-              <p className="text-sm text-muted-foreground">{t('empty_title')}</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {t('empty_help')}
-              </p>
-            </div>
+            <EmptyState
+              icon={Key}
+              title={t('empty_title')}
+              description={t('empty_help')}
+            />
           ) : (
             <div className="space-y-3">
               {keys.map((key) => {
@@ -479,7 +478,7 @@ export function ApiKeysPanel() {
           <div>
             <div className="flex items-center gap-2 mb-2">
               <p className="text-sm font-medium">Claude.ai</p>
-              <Badge variant="secondary" className="text-[10px] font-normal px-1.5 py-0">{t('recommended_badge')}</Badge>
+              <span className="text-xs text-muted-foreground">{t('recommended_badge')}</span>
             </div>
             <p className="text-xs text-muted-foreground mb-2">
               {t.rich('claude_ai_instructions', {
@@ -495,7 +494,7 @@ export function ApiKeysPanel() {
             <p className="text-xs text-muted-foreground mb-2">
               {t('terminal_runs_browser_login')}
             </p>
-            {/* URL is quoted — unquoted `?` in the query string trips zsh globbing. */}
+            {/* URL is quoted: unquoted `?` in the query string trips zsh globbing. */}
             <CopyBlock text={`claude mcp add ${connectorName} --transport http "${mcpUrl('claude-code')}"`} copyAriaLabel={t('copy_aria')} />
           </div>
 
@@ -700,7 +699,7 @@ export function ApiKeysPanel() {
               onClick={handleCopy}
             >
               {copied ? (
-                <Check className="h-4 w-4 text-green-600" />
+                <Check className="h-4 w-4 text-success" />
               ) : (
                 <Copy className="h-4 w-4" />
               )}

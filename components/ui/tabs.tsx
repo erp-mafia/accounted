@@ -45,7 +45,7 @@ const TabsContent = React.forwardRef<
     className={cn(
       "mt-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
       // When a consumer passes `forceMount`, Radix keeps inactive panels in the
-      // DOM (present is always true) but does NOT hide them itself — hide them
+      // DOM (present is always true) but does NOT hide them itself: hide them
       // here. No-op for non-forceMount tabs, which unmount inactive content.
       "data-[state=inactive]:hidden",
       className

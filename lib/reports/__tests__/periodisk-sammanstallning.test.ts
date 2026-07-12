@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — sequential result queue (mirrors vat-declaration.test.ts)
+// Mock: sequential result queue (mirrors vat-declaration.test.ts)
 // ============================================================
 
 let resultIdx: number
@@ -102,18 +102,42 @@ interface InvoiceFx {
 // Recent validation so VIES_UNVALIDATED warnings don't fire by default.
 const RECENT = new Date().toISOString()
 
+// The generator fetches lines via the two-step entry-lines helper
+// (lib/bookkeeping/entry-lines.ts): journal_entries first, then
+// journal_entry_lines by entry id with the parent reattached under
+// `journal_entries`. Each fixture invoice gets one entry (je-<sourceId>).
+function je(sourceId: string) {
+  return `je-${sourceId}`
+}
+
+function entryEU(sourceId: string) {
+  return {
+    id: je(sourceId),
+    company_id: 'c1',
+    entry_date: '2025-05-15',
+    status: 'posted',
+    source_type: 'invoice_created',
+    source_id: sourceId,
+  }
+}
+
+function entryCredit(sourceId: string) {
+  return {
+    id: je(sourceId),
+    company_id: 'c1',
+    entry_date: '2025-05-20',
+    status: 'posted',
+    source_type: 'credit_note',
+    source_id: sourceId,
+  }
+}
+
 function lineEU(account: string, credit: number, sourceId: string) {
   return {
     account_number: account,
     debit_amount: 0,
     credit_amount: credit,
-    journal_entries: {
-      company_id: 'c1',
-      entry_date: '2025-05-15',
-      status: 'posted',
-      source_type: 'invoice_created',
-      source_id: sourceId,
-    },
+    journal_entry_id: je(sourceId),
   }
 }
 
@@ -122,13 +146,7 @@ function lineCredit(account: string, debit: number, sourceId: string) {
     account_number: account,
     debit_amount: debit,
     credit_amount: 0,
-    journal_entries: {
-      company_id: 'c1',
-      entry_date: '2025-05-20',
-      status: 'posted',
-      source_type: 'credit_note',
-      source_id: sourceId,
-    },
+    journal_entry_id: je(sourceId),
   }
 }
 
@@ -148,6 +166,7 @@ function invDE(id = 'inv-de', customer = 'cust-de', name = 'DE Customer', vat = 
 
 describe('generatePeriodiskSammanstallning', () => {
   it('empty period returns zero rows and zero warnings', async () => {
+    // journal_entries: none match → the line fetch is skipped entirely.
     results = [{ data: [], error: null }]
 
     const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
@@ -161,6 +180,8 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('single EU service sale → 1 row, type 3 only', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [entryEU('inv-de')], error: null },
       { data: [lineEU('3308', 10000, 'inv-de')], error: null },
       { data: [invDE()], error: null },
     ]
@@ -181,6 +202,8 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('aggregates multiple invoices to same customer', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [entryEU('inv1'), entryEU('inv2'), entryEU('inv3')], error: null },
       {
         data: [
           lineEU('3308', 4000, 'inv1'),
@@ -207,6 +230,8 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('one customer with both services and goods → 1 row with both filled', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [entryEU('inv1'), entryEU('inv2')], error: null },
       {
         data: [
           lineEU('3308', 7000, 'inv1'),
@@ -228,6 +253,8 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('credit invoice nets against original in same period', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [entryEU('inv1'), entryCredit('cn1')], error: null },
       {
         data: [
           lineEU('3308', 10000, 'inv1'),
@@ -249,6 +276,8 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('credit fully cancels → row excluded with ZERO_NET_EXCLUDED warning', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [entryEU('inv1'), entryCredit('cn1')], error: null },
       {
         data: [
           lineEU('3308', 10000, 'inv1'),
@@ -267,6 +296,8 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('customer missing country → MISSING_COUNTRY error and row blocked', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [entryEU('inv1')], error: null },
       { data: [lineEU('3308', 5000, 'inv1')], error: null },
       {
         data: [{
@@ -285,6 +316,8 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('customer missing vat_number → MISSING_VAT_NUMBER error', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [entryEU('inv1')], error: null },
       { data: [lineEU('3308', 5000, 'inv1')], error: null },
       {
         data: [{
@@ -303,6 +336,8 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('VAT prefix mismatch surfaces COUNTRY_PREFIX_MISMATCH warning', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [entryEU('inv1')], error: null },
       { data: [lineEU('3308', 5000, 'inv1')], error: null },
       {
         data: [{
@@ -321,6 +356,8 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('non-EU country on EU account → NON_EU_COUNTRY_ON_EU_ACCOUNT and excluded from CSV', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [entryEU('inv1')], error: null },
       { data: [lineEU('3308', 5000, 'inv1')], error: null },
       {
         data: [{
@@ -339,6 +376,8 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('Greek customer → country code emitted as EL', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [entryEU('inv1')], error: null },
       { data: [lineEU('3308', 4200, 'inv1')], error: null },
       {
         data: [{
@@ -356,6 +395,8 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('goods sold in quarterly period → GOODS_SOLD_WITH_QUARTERLY_PERIOD warning', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [entryEU('inv1')], error: null },
       { data: [lineEU('3108', 9000, 'inv1')], error: null },
       { data: [{ ...invDE('inv1') }], error: null },
     ]
@@ -367,6 +408,8 @@ describe('generatePeriodiskSammanstallning', () => {
 
   it('sorts rows by country then vat_number', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [entryEU('inv-fr'), entryEU('inv-de'), entryEU('inv-at')], error: null },
       {
         data: [
           lineEU('3308', 1000, 'inv-fr'),
@@ -404,7 +447,7 @@ describe('generatePeriodiskSammanstallning', () => {
 describe('reconcilePsAgainstVatDeclaration', () => {
   it('returns null matches when periods do not coincide', async () => {
     const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'quarterly', 2025, 2)
-    // No data calls expected — function bails before invoking calculateVatDeclaration.
+    // No data calls expected: function bails before invoking calculateVatDeclaration.
     results = []
     const reconciled = await reconcilePsAgainstVatDeclaration(supabase, 'c1', report, 'monthly')
     expect(reconciled.reconciliation.matches).toBeNull()

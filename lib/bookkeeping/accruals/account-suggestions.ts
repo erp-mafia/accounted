@@ -3,7 +3,7 @@
  *
  * Förutbetalda kostnader sit on 17xx interimsfordringar; the specific account
  * follows BAS convention by cost type. Förutbetalda intäkter sit on 2970
- * (29xx interimsskulder). The user can always override in the form — these
+ * (29xx interimsskulder). The user can always override in the form: these
  * are suggestions, and the DB CHECK only enforces the 17xx/29xx range.
  */
 

@@ -15,6 +15,7 @@ export default function OpeningBalanceResultStep({
   result,
   onNewImport,
 }: OpeningBalanceResultStepProps) {
+  const isCorrection = !!result.reversed_entry_id
   return (
     <Card>
       <CardHeader>
@@ -26,7 +27,9 @@ export default function OpeningBalanceResultStep({
           )}
           <CardTitle>
             {result.success
-              ? 'Ingående balanser bokförda'
+              ? isCorrection
+                ? 'Ingående balanser korrigerade'
+                : 'Ingående balanser bokförda'
               : 'Importen misslyckades'}
           </CardTitle>
         </div>

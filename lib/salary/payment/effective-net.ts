@@ -4,8 +4,8 @@
  * written into the pain.001 / Bankgirot LB payment files.
  *
  * Bank details (clearing + account number) are only required when this is > 0:
- * a zero payout — e.g. a nollkörning, or an employee whose net is fully
- * consumed by a nettolöneavdrag — produces no payment-file line, so there is
+ * a zero payout: e.g. a nollkörning, or an employee whose net is fully
+ * consumed by a nettolöneavdrag: produces no payment-file line, so there is
  * no destination account to fill in. Gating the bank-details requirement on
  * this keeps the approve guard and the payment-file generators in agreement.
  */

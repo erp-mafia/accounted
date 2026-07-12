@@ -3,7 +3,7 @@
 // Sends the uploaded document directly to Claude Sonnet 4.6 via AWS
 // Bedrock and asks for a structured InvoiceExtractionResult JSON. Sonnet
 // reads PDFs, images, and scans natively, which the previous regex
-// extractor couldn't — that's why English receipts (Anthropic, AWS,
+// extractor couldn't: that's why English receipts (Anthropic, AWS,
 // Stripe, …) and image-only PDFs came back empty.
 //
 // The AI output is validated against a Zod schema; anything that doesn't
@@ -20,19 +20,19 @@ const log = createLogger('invoice-inbox-extract')
 
 // Both overridable via env vars so ops can swap models / raise token caps
 // without a code deploy. Defaults match what's expected to be set in
-// production (eu.anthropic.claude-sonnet-4-6 in eu-north-1, 8192 tokens —
+// production (eu.anthropic.claude-sonnet-4-6 in eu-north-1, 8192 tokens:
 // enough headroom for invoices with 20+ line items).
 const MODEL = process.env.BEDROCK_MODEL_ID || 'eu.anthropic.claude-sonnet-4-6'
 const MAX_TOKENS = (() => {
   const parsed = Number(process.env.BEDROCK_MAX_TOKENS)
-  // Use the env value only if it's a positive number — `||` would also
+  // Use the env value only if it's a positive number: `||` would also
   // fall back on a deliberate `0`, masking what is really an invalid
   // configuration rather than the intent to disable.
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 8192
 })()
 
 // Bedrock supports these document/image media types directly. HEIC/HEIF
-// are not on the list, so we skip AI for those — the inbox row still
+// are not on the list, so we skip AI for those: the inbox row still
 // lands and the user can edit fields manually or replace the file.
 const SUPPORTED_MEDIA_TYPES = new Set([
   'application/pdf',
@@ -87,7 +87,7 @@ export const ExtractionSchema = z.object({
       // for reference; the strict Swedish allowlist applies later when the
       // user converts to a supplier invoice.
       vatRate: z.number().min(0).max(100).nullable(),
-      // accountSuggestion is forcibly null at parse time — we never
+      // accountSuggestion is forcibly null at parse time: we never
       // delegate BAS account assignment to an unvalidated AI output.
       // .transform coerces a hallucinated string to null without
       // failing the whole document parse, and eliminates the
@@ -112,7 +112,7 @@ export const ExtractionSchema = z.object({
 
 // Agent-supplied extraction: accountSuggestion is preserved instead of forced
 // to null. Agents (unlike AI extractors) can reliably assign a BAS expense
-// account; the regex enforces the class-4–7 range required for cost accounts.
+// account; the regex enforces the class-4-7 range required for cost accounts.
 export const AgentExtractionSchema = ExtractionSchema.omit({ lineItems: true }).extend({
   lineItems: z.array(
     z.object({
@@ -145,8 +145,8 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
     "dueDate": string | null,          // ISO date YYYY-MM-DD
     "paymentReference": string | null, // OCR / payment reference
     "currency": string,                // ISO 4217 (SEK, USD, EUR, ...). Default "SEK" only if truly indeterminate.
-    "servicePeriodStart": string | null, // ISO date — start of the service/coverage window the invoice charges for
-    "servicePeriodEnd": string | null    // ISO date — end of that window
+    "servicePeriodStart": string | null, // ISO date: start of the service/coverage window the invoice charges for
+    "servicePeriodEnd": string | null    // ISO date: end of that window
   },
   "lineItems": [
     {
@@ -155,13 +155,13 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
       "unitPrice": number | null,
       "lineTotal": number,
       "vatRate": number | null,         // percent integer: 25, 12, 6, or 0. Same convention as vatBreakdown.rate.
-      "accountSuggestion": null         // always null — leave Swedish BAS suggestion to the user
+      "accountSuggestion": null         // always null: leave Swedish BAS suggestion to the user
     }
   ],
   "totals": {
     "subtotal": number | null,    // amount excluding VAT
     "vatAmount": number | null,   // total VAT
-    "total": number | null        // amount including VAT — what the buyer pays
+    "total": number | null        // amount including VAT: what the buyer pays
   },
   "vatBreakdown": [
     { "rate": number, "base": number, "amount": number }   // rate as percent integer, e.g. 25 for 25%
@@ -236,7 +236,7 @@ function buildContent(input: ExtractionInput) {
 
 /**
  * Extract invoice fields by sending the document directly to Claude
- * Sonnet 4.6 via AWS Bedrock. Never throws on extraction failure —
+ * Sonnet 4.6 via AWS Bedrock. Never throws on extraction failure:
  * always returns an InvoiceExtractionResult. Empty fields are null.
  */
 export async function extractInvoiceFields(
@@ -247,7 +247,7 @@ export async function extractInvoiceFields(
   }
 
   if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-    log.warn('AWS Bedrock credentials missing — returning empty extraction', {
+    log.warn('AWS Bedrock credentials missing: returning empty extraction', {
       file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
     })
     return { data: emptyResult(), rawText: null }
@@ -261,7 +261,7 @@ export async function extractInvoiceFields(
 
   let rawText: string | null = null
   try {
-    // SYSTEM_PROMPT is byte-stable per deploy and ~3.5 KB — marking it as
+    // SYSTEM_PROMPT is byte-stable per deploy and ~3.5 KB: marking it as
     // ephemeral lets Bedrock reuse the prompt-cache on rapid sequential
     // extractions (e.g. a user uploading a stack of receipts within minutes).
     // Bedrock supports `{ type: 'ephemeral' }` with the default short TTL;
@@ -291,8 +291,8 @@ export async function extractInvoiceFields(
         }
       | undefined
     if (usage) {
-      // Raw fileName can constitute personal data (e.g. "faktura_Sven_Andersson.pdf")
-      // — log a short hash so the operator can correlate without exposing PII
+      // Raw fileName can constitute personal data (e.g. "faktura_Sven_Andersson.pdf").
+      // Log a short hash so the operator can correlate without exposing PII
       // to the log destination (GDPR Art. 5(1)(f)).
       const fileNameHash = createHash('sha256').update(input.fileName).digest('hex').slice(0, 12)
       log.info('ai_extraction_usage', {
@@ -309,8 +309,8 @@ export async function extractInvoiceFields(
     const validated = ExtractionSchema.parse(parsed)
 
     return {
-      // accountSuggestion is null at this point — enforced by the schema's
-      // .transform — so no post-validation coercion is needed.
+      // accountSuggestion is null at this point, enforced by the schema's
+      // .transform, so no post-validation coercion is needed.
       data: { ...validated, confidence: 1 },
       rawText,
     }

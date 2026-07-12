@@ -12,7 +12,7 @@ const ParamsSchema = z.object({ id: z.string().uuid() })
  * GET /api/documents/:id/integrity
  *
  * Probes the actual stored bytes against the declared MIME type. Used by the
- * Bilagor modal to surface a clear "this file is corrupt — please re-upload"
+ * Bilagor modal to surface a clear "this file is corrupt: please re-upload"
  * warning instead of relying on the browser's PDF viewer error UI, which
  * only fires after the user has already tried to view the file.
  *
@@ -21,7 +21,7 @@ const ParamsSchema = z.object({ id: z.string().uuid() })
  * after those rows were written. This endpoint lets the UI detect and steer
  * the user toward replacing them.
  *
- * Response shape is intentionally minimal — { valid: boolean } only. The
+ * Response shape is intentionally minimal: { valid: boolean } only. The
  * reason for an invalid result is logged server-side rather than returned
  * to the client to avoid information disclosure (V1.2.5 / GDPR Art 25(2))
  * and to keep this from being a probe surface for storage internals.
@@ -91,8 +91,8 @@ export async function GET(
   }
 
   // Only the first 16 bytes are needed for magic-byte detection (PDF/PNG
-  // use ≤8, WebP needs 12). Trimming here doesn't change bandwidth — the
-  // full blob is already downloaded — but it makes the intent explicit and
+  // use ≤8, WebP needs 12). Trimming here doesn't change bandwidth (the
+  // full blob is already downloaded) but it makes the intent explicit and
   // keeps memory churn off the hot path for large PDFs.
   const headerBuffer = await blob.slice(0, 16).arrayBuffer()
   const magicError = validateDocumentMagicBytes(headerBuffer, doc.mime_type)

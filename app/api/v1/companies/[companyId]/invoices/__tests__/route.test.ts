@@ -39,7 +39,7 @@ vi.mock('@/lib/invoices/ensure-invoice-number', () => ({
   ensureInvoiceNumber: vi.fn().mockResolvedValue(undefined),
 }))
 
-// Riksbanken exchange-rate fetcher — return null by default (treats as
+// Riksbanken exchange-rate fetcher: return null by default (treats as
 // SEK-only). Individual tests can override.
 vi.mock('@/lib/currency/riksbanken', async () => {
   const actual = await vi.importActual<typeof import('@/lib/currency/riksbanken')>('@/lib/currency/riksbanken')
@@ -441,7 +441,7 @@ function makePatchInvoice(url: string, body: unknown, extraHeaders: Record<strin
   })
 }
 
-// A swedish_business customer with VAT validated — picks up 25% as the
+// A swedish_business customer with VAT validated: picks up 25% as the
 // only allowed rate (vat_treatment: standard_25). Reduced rates (12 / 6)
 // would need a wider VAT-rule fixture; SEK + standard 25% is enough for
 // the route-level tests here.
@@ -637,6 +637,391 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
   })
+
+  it('persists default_dimensions + items[].dimensions on the draft', async () => {
+    withInvoiceWriteScope()
+    const createdInvoice = {
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      invoice_number: null,
+      customer_id: CUSTOMER_ID,
+      status: 'draft',
+      document_type: 'invoice',
+    }
+    let insertedInvoice: Record<string, unknown> | null = null
+    let insertedItems: Array<Record<string, unknown>> | null = null
+    mockServiceClient.mockReturnValue({
+      from: (table: string) => {
+        if (table === 'invoices') {
+          return new Proxy({}, {
+            get(_t, prop) {
+              if (prop === 'insert') {
+                return (row: Record<string, unknown>) => {
+                  insertedInvoice = row
+                  return new Proxy({}, {
+                    get(_t2, prop2) {
+                      if (prop2 === 'then') {
+                        return (r: (v: unknown) => void) => r({ data: createdInvoice, error: null })
+                      }
+                      return () => new Proxy({}, this!)
+                    },
+                  })
+                }
+              }
+              if (prop === 'then') {
+                return (r: (v: unknown) => void) => r({ data: createdInvoice, error: null })
+              }
+              return () => new Proxy({}, this!)
+            },
+          })
+        }
+        if (table === 'invoice_items') {
+          return new Proxy({}, {
+            get(_t, prop) {
+              if (prop === 'insert') {
+                return (rows: Array<Record<string, unknown>>) => {
+                  insertedItems = rows
+                  return new Proxy({}, {
+                    get(_t2, prop2) {
+                      if (prop2 === 'then') {
+                        return (r: (v: unknown) => void) => r({ data: null, error: null })
+                      }
+                      return () => new Proxy({}, this!)
+                    },
+                  })
+                }
+              }
+              if (prop === 'then') {
+                return (r: (v: unknown) => void) => r({ data: null, error: null })
+              }
+              return () => new Proxy({}, this!)
+            },
+          })
+        }
+        return new Proxy({}, {
+          get(_t, prop) {
+            if (prop === 'then') {
+              const data = table === 'company_members'
+                ? { company_id: COMPANY_ID, role: 'owner' }
+                : table === 'customers'
+                  ? SWEDISH_BUSINESS_CUSTOMER
+                  : null
+              return (r: (v: unknown) => void) => r({ data, error: null })
+            }
+            return () => new Proxy({}, this!)
+          },
+        })
+      },
+    })
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        default_dimensions: { '6': 'P001' },
+        items: [
+          {
+            description: 'Konsultation',
+            quantity: 8,
+            unit: 'tim',
+            unit_price: 1250,
+            dimensions: { '1': 'KS01' },
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(insertedInvoice).not.toBeNull()
+    expect(insertedInvoice!.default_dimensions).toEqual({ '6': 'P001' })
+    expect(insertedItems).not.toBeNull()
+    expect(insertedItems![0].dimensions).toEqual({ '1': 'KS01' })
+  })
+
+  it('dry-run preview carries default_dimensions and per-item dimensions', async () => {
+    withInvoiceWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: SWEDISH_BUSINESS_CUSTOMER, error: null },
+      }),
+    )
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices?dry_run=true`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        default_dimensions: { '6': 'P001' },
+        items: [
+          {
+            description: 'Konsultation',
+            quantity: 8,
+            unit: 'tim',
+            unit_price: 1250,
+            dimensions: { '1': 'KS01' },
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('X-Dry-Run')).toBe('true')
+    const body = await res.json()
+    expect(body.data.preview.default_dimensions).toEqual({ '6': 'P001' })
+    expect(body.data.preview.items[0].dimensions).toEqual({ '1': 'KS01' })
+  })
+
+  // ── ROT/RUT + article linkage (#895) ────────────────────────────
+
+  // Valid 12-digit personnummer (Luhn-checked); same fixture family as
+  // lib/invoices/__tests__/rot-rut-file.test.ts.
+  const VALID_PNR = '198406012388'
+
+  it('computes ROT deduction server-side and persists deduction fields', async () => {
+    withInvoiceWriteScope()
+    const createdInvoice = { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', status: 'draft' }
+    let insertedInvoice: Record<string, unknown> | null = null
+    let insertedItems: Array<Record<string, unknown>> | null = null
+    mockServiceClient.mockReturnValue({
+      from: (table: string) => {
+        const handler: ProxyHandler<object> = {
+          get(_t, prop) {
+            if (prop === 'insert') {
+              return (rows: Record<string, unknown> | Array<Record<string, unknown>>) => {
+                if (table === 'invoices') insertedInvoice = rows as Record<string, unknown>
+                if (table === 'invoice_items') insertedItems = rows as Array<Record<string, unknown>>
+                return new Proxy({}, handler)
+              }
+            }
+            if (prop === 'then') {
+              const data =
+                table === 'company_members'
+                  ? { company_id: COMPANY_ID, role: 'owner' }
+                  : table === 'customers'
+                    ? SWEDISH_BUSINESS_CUSTOMER
+                    : table === 'invoices'
+                      ? createdInvoice
+                      : null
+              return (r: (v: unknown) => void) => r({ data, error: null })
+            }
+            return () => new Proxy({}, handler)
+          },
+        }
+        return new Proxy({}, handler)
+      },
+    })
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        deduction_personnummer: VALID_PNR,
+        deduction_housing_designation: 'Almgren 1:23',
+        items: [
+          {
+            description: 'Takarbete',
+            quantity: 10,
+            unit: 'tim',
+            unit_price: 1000,
+            deduction_type: 'rot',
+            labor_hours: 10,
+            work_type: 'BYGG',
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(insertedInvoice).not.toBeNull()
+    // ROT = 30% of 10000 labor.
+    expect(insertedInvoice!.deduction_total).toBe(3000)
+    // Personnummer never stored in plaintext: ciphertext + last4 only.
+    expect(insertedInvoice!.deduction_personnummer_encrypted).toBeTruthy()
+    expect(insertedInvoice!.deduction_personnummer_encrypted).not.toContain(VALID_PNR)
+    expect(insertedInvoice!.deduction_personnummer_last4).toBe('2388')
+    // Customer share: total 12500 minus the 3000 Skatteverket pays via 1513.
+    expect(insertedInvoice!.remaining_amount).toBe(9500)
+    expect(insertedItems).not.toBeNull()
+    expect(insertedItems![0].deduction_type).toBe('rot')
+    expect(insertedItems![0].deduction_amount).toBe(3000)
+    expect(insertedItems![0].work_type).toBe('BYGG')
+    expect(insertedItems![0].labor_hours).toBe(10)
+    // Invoice-level fastighetsbeteckning stamped onto the deduction line.
+    expect(insertedItems![0].housing_designation).toBe('Almgren 1:23')
+  })
+
+  it('rejects a ROT line without personnummer/housing info (400 INVOICE_CREATE_ROT_RUT_VALIDATION)', async () => {
+    withInvoiceWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: SWEDISH_BUSINESS_CUSTOMER, error: null },
+      }),
+    )
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        items: [
+          {
+            description: 'Takarbete',
+            quantity: 10,
+            unit: 'tim',
+            unit_price: 1000,
+            deduction_type: 'rot',
+            labor_hours: 10,
+            work_type: 'BYGG',
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_CREATE_ROT_RUT_VALIDATION')
+  })
+
+  it('dry-run preview computes deduction_total and never echoes the encrypted personnummer', async () => {
+    withInvoiceWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: SWEDISH_BUSINESS_CUSTOMER, error: null },
+      }),
+    )
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices?dry_run=true`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        deduction_personnummer: VALID_PNR,
+        deduction_housing_designation: 'Almgren 1:23',
+        items: [
+          {
+            description: 'Städning',
+            quantity: 4,
+            unit: 'tim',
+            unit_price: 500,
+            deduction_type: 'rut',
+            labor_hours: 4,
+            work_type: 'STAD',
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // RUT = 50% of 2000 labor.
+    expect(body.data.preview.deduction_total).toBe(1000)
+    expect(body.data.preview.deduction_personnummer_last4).toBe('2388')
+    expect(body.data.preview.deduction_personnummer_encrypted).toBeUndefined()
+    expect(body.data.preview.items[0].deduction_amount).toBe(1000)
+  })
+
+  it('persists article_id + revenue_account on line items (validated against the chart)', async () => {
+    withInvoiceWriteScope()
+    const ARTICLE_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+    const createdInvoice = { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', status: 'draft' }
+    let insertedItems: Array<Record<string, unknown>> | null = null
+    mockServiceClient.mockReturnValue({
+      from: (table: string) => {
+        const handler: ProxyHandler<object> = {
+          get(_t, prop) {
+            if (prop === 'insert') {
+              return (rows: Record<string, unknown> | Array<Record<string, unknown>>) => {
+                if (table === 'invoice_items') insertedItems = rows as Array<Record<string, unknown>>
+                return new Proxy({}, handler)
+              }
+            }
+            if (prop === 'then') {
+              const data =
+                table === 'company_members'
+                  ? { company_id: COMPANY_ID, role: 'owner' }
+                  : table === 'customers'
+                    ? SWEDISH_BUSINESS_CUSTOMER
+                    : table === 'chart_of_accounts'
+                      ? [{ account_number: '3041' }]
+                      : table === 'invoices'
+                        ? createdInvoice
+                        : null
+              return (r: (v: unknown) => void) => r({ data, error: null })
+            }
+            return () => new Proxy({}, handler)
+          },
+        }
+        return new Proxy({}, handler)
+      },
+    })
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        items: [
+          {
+            description: 'Takarbete',
+            quantity: 1,
+            unit: 'st',
+            unit_price: 5000,
+            article_id: ARTICLE_ID,
+            revenue_account: '3041',
+          },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(insertedItems).not.toBeNull()
+    expect(insertedItems![0].article_id).toBe(ARTICLE_ID)
+    expect(insertedItems![0].revenue_account).toBe('3041')
+  })
+
+  it('rejects a revenue_account not in the chart of accounts', async () => {
+    withInvoiceWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: SWEDISH_BUSINESS_CUSTOMER, error: null },
+        chart_of_accounts: { data: [], error: null },
+      }),
+    )
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        items: [
+          { description: 'x', quantity: 1, unit: 'st', unit_price: 100, revenue_account: '3999' },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_CREATE_REVENUE_ACCOUNT_INVALID')
+  })
 })
 
 // ──────────────────────────────────────────────────────────────────
@@ -764,6 +1149,54 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
     const body = await res.json()
     expect(body.data.preview.notes).toBe('preview')
     expect(body.data.preview.due_date).toBe('2026-06-11') // unchanged from current
+  })
+
+  it('updates default_dimensions (project tag) on a draft invoice (#895)', async () => {
+    withInvoiceWriteScope()
+    const draftInvoice = {
+      id: INVOICE_ID,
+      status: 'draft',
+      invoice_date: '2026-05-12',
+      due_date: '2026-06-11',
+      default_dimensions: {},
+    }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...draftInvoice, default_dimensions: { '6': 'P001' } }, error: null },
+      }),
+    )
+
+    const res = await updateInvoice(
+      makePatchInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}`, {
+        default_dimensions: { '6': 'P001' },
+      }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.default_dimensions).toEqual({ '6': 'P001' })
+  })
+
+  it('rejects a malformed default_dimensions bag', async () => {
+    withInvoiceWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+
+    const res = await updateInvoice(
+      makePatchInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}`, {
+        default_dimensions: { 'not-a-number': 'P001' },
+      }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 
   it('rejects forbidden fields (items / currency / customer_id)', async () => {

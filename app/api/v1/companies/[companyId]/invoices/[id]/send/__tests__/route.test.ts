@@ -49,7 +49,7 @@ vi.mock('@react-pdf/renderer', () => ({
   renderToBuffer: vi.fn().mockResolvedValue(Buffer.from('pdf-content')),
 }))
 
-// Email service mock — configurable per test
+// Email service mock: configurable per test
 const mockSendEmail = vi.fn()
 const mockIsConfigured = vi.fn().mockReturnValue(true)
 vi.mock('@/lib/email/service', async (importOriginal) => {
@@ -101,6 +101,9 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
   for (const [t, val] of Object.entries(byTable)) {
     queues.set(t, Array.isArray(val) ? [...val] : [val])
   }
+  // Records every .select() projection string per table so tests can assert
+  // which columns the route actually fetches.
+  const selects: Record<string, string[]> = {}
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -111,12 +114,17 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
             resolve(next)
           }
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (...args: unknown[]) => {
+          if (prop === 'select' && typeof args[0] === 'string') {
+            ;(selects[table] ??= []).push(args[0])
+          }
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
   }
-  return { from: vi.fn((table: string) => buildChain(table)) }
+  return { from: vi.fn((table: string) => buildChain(table)), selects }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -406,14 +414,38 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
     // DRAFT_INVOICE has invoice_number: null, so isFreshAllocation is true and
     // a preflight render runs first with the F-PREVIEW placeholder. The final
-    // render is the second call — its invoice must carry status: 'sent' and
+    // render is the second call: its invoice must carry status: 'sent' and
     // the freshly-assigned invoice_number, otherwise the customer's PDF is
-    // stamped "UTKAST – inte en giltig faktura".
+    // stamped "UTKAST: inte en giltig faktura".
     const calls = vi.mocked(InvoicePDF).mock.calls
     expect(calls.length).toBeGreaterThanOrEqual(2)
     const finalRenderArgs = calls[calls.length - 1][0]
     expect(finalRenderArgs.invoice.status).toBe('sent')
     expect(finalRenderArgs.invoice.invoice_number).toBe('2026-0043')
+  })
+
+  it('fetches customer_number in the customer join so the emailed PDF matches the downloaded one', async () => {
+    // The pdf route selects customers(*); this route uses an explicit
+    // projection. If customer_number is dropped here, the emailed PDF
+    // silently omits the kundnummer that the downloaded PDF shows.
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: DRAFT_INVOICE, error: null },
+        { data: { invoice_number: '2026-0042' }, error: null },
+      ],
+      company_settings: { data: COMPANY_SETTINGS, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+    expect(res.status).toBe(200)
+
+    const invoiceFetchProjection = supabaseMock.selects['invoices']?.[0] ?? ''
+    expect(invoiceFetchProjection).toMatch(/customer:customers\([^)]*\bcustomer_number\b[^)]*\)/)
   })
 
   it('test-mode key forces dry-run: returns a preview, no email, no number burned', async () => {

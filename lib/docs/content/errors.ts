@@ -1,12 +1,12 @@
 /**
- * /docs/api/errors content — generated from the STRUCTURED_ERRORS registry.
+ * /docs/api/errors content: generated from the STRUCTURED_ERRORS registry.
  *
  * The registry lives in lib/errors/structured-errors.ts; we re-import it here
  * and build a Stripe-style catalogue page where every code is anchorable
  * (the docs_url field on every error envelope already points at this page).
  *
  * Adding a new error code in the registry automatically surfaces here on the
- * next build — no manual edits to keep in sync.
+ * next build: no manual edits to keep in sync.
  */
 
 import { listErrorCodes, getErrorEntry } from '@/lib/errors/structured-errors'
@@ -14,7 +14,7 @@ import { listErrorCodes, getErrorEntry } from '@/lib/errors/structured-errors'
 interface DomainGroup {
   label: string
   description: string
-  /** Code prefix matchers — first match wins; codes without a match fall to 'Other'. */
+  /** Code prefix matchers: first match wins; codes without a match fall to 'Other'. */
   prefixes: string[]
 }
 
@@ -73,7 +73,7 @@ export function buildErrorReferenceMd(): string {
   const lines: string[] = []
   lines.push('# Errors')
   lines.push('')
-  lines.push(`> Every error returned by the Accounted REST API uses a stable code from this catalogue. Codes never change once shipped — agents can pattern-match on them safely. The \`docs_url\` field on every error envelope points at the anchor for that specific code.`)
+  lines.push(`> Every error returned by the Accounted REST API uses a stable code from this catalogue. Codes never change once shipped: agents can pattern-match on them safely. The \`docs_url\` field on every error envelope points at the catalogue entry for that specific code.`)
   lines.push('')
   lines.push('## Envelope shape')
   lines.push('')
@@ -83,18 +83,15 @@ export function buildErrorReferenceMd(): string {
   lines.push('    "code": "PERIOD_LOCKED",')
   lines.push('    "message": "Den valda perioden är låst.",')
   lines.push('    "message_en": "The selected period is locked.",')
-  lines.push('    "remediation": {')
-  lines.push('      "description": "Unlock via /fiscal-periods/{id}/unlock or pick an open period.",')
-  lines.push('      "tool": "fiscal_periods.unlock"')
-  lines.push('    },')
   lines.push('    "details": { "fiscal_period_id": "..." },')
-  lines.push('    "docs_url": "https://app.gnubok.se/docs/api/errors#period_locked"')
-  lines.push('  },')
-  lines.push('  "meta": { "request_id": "req_...", "api_version": "..." }')
+  lines.push('    "recovery_hint": "Unlock via /fiscal-periods/{id}/unlock or pick an open period.",')
+  lines.push('    "docs_url": "https://app.gnubok.se/docs/api/errors/PERIOD_LOCKED",')
+  lines.push('    "request_id": "req_..."')
+  lines.push('  }')
   lines.push('}')
   lines.push('```')
   lines.push('')
-  lines.push(`The \`message\` field is Swedish (matches the dashboard); \`message_en\` is English (for agent and developer logs); \`remediation\` (when present) hints at the canonical fix and may include a \`tool\` reference into the MCP surface.`)
+  lines.push(`The \`message\` field is Swedish (matches the dashboard); \`message_en\` is English (for agent and developer logs). \`recovery_hint\` (when present) is a one-line description of the canonical fix. \`request_id\` echoes the request for support and log correlation — note it lives inside \`error\` on failures (there is no top-level \`meta\` block on an error response, unlike the success envelope). \`docs_url\` is built from the code (\`…/docs/api/errors/<CODE>\`).`)
   lines.push('')
 
   for (const label of orderedLabels) {
@@ -116,7 +113,7 @@ export function buildErrorReferenceMd(): string {
       const statusName = statusLabel(status)
       lines.push(`### ${code}`)
       lines.push('')
-      lines.push(`**HTTP \`${status}\`**${statusName ? ` — ${statusName}` : ''}`)
+      lines.push(`**HTTP \`${status}\`**${statusName ? `: ${statusName}` : ''}`)
       lines.push('')
       lines.push(`${entry.message_en}`)
       lines.push('')

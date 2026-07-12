@@ -156,7 +156,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
       <div className="max-w-lg mx-auto">
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">
+          <h1 className="text-2xl font-bold text-foreground mb-2">
             Betalningspåminnelse
           </h1>
           <p className="text-muted-foreground">
@@ -268,7 +268,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
               onClick={() => handleAction('disputed')}
               disabled={isSubmitting}
             >
-              <MessageSquare className="h-5 w-5 mr-3 text-orange-600" />
+              <MessageSquare className="h-5 w-5 mr-3 text-muted-foreground" />
               <div className="text-left">
                 <p className="font-medium">Kontakta avsändaren</p>
                 <p className="text-sm text-muted-foreground font-normal">

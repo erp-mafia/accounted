@@ -26,10 +26,10 @@ async function ping(model: string): Promise<void> {
       .filter((b) => b.type === 'text')
       .map((b) => (b as { type: 'text'; text: string }).text)
       .join('')
-    console.log(`  ✓ ${model} — ${Date.now() - start}ms — "${text.trim()}"`)
+    console.log(`  ✓ ${model}: ${Date.now() - start}ms: "${text.trim()}"`)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    console.error(`  ✗ ${model} — ${message}`)
+    console.error(`  ✗ ${model}: ${message}`)
     process.exitCode = 1
   }
 }

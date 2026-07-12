@@ -2,7 +2,7 @@
  * GET /api/v1/companies/{companyId}/fiscal-periods
  *
  * List fiscal periods (räkenskapsår) for the company. Ordered newest first.
- * Read-only in v1 — period creation, locking and closing land in Phase 4.
+ * Read-only in v1: period creation, locking and closing land in Phase 4.
  */
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
@@ -41,10 +41,10 @@ registerEndpoint({
   useWhen:
     'You need to find the active period before booking, build a year-selector UI, or audit the period-lock history.',
   doNotUseFor:
-    'Creating, locking, or closing periods — those land in Phase 4 (`POST /fiscal-periods/{id}/lock`, `:close`, `:year-end`). Use the dashboard or wait for Phase 4.',
+    'Creating, locking, or closing periods: those land in Phase 4 (`POST /fiscal-periods/{id}/lock`, `:close`, `:year-end`). Use the dashboard or wait for Phase 4.',
   pitfalls: [
     'previous_period_id chains the bokslut continuity (BFNAR 2013:2). A null value on a non-first period is a data-quality red flag.',
-    'A period can be locked but not closed (löpande bokföring of the new year while bokslut work continues on the prior year — see BFL 5 kap 2 § for the löpande bokföring deadline).',
+    'A period can be locked but not closed (löpande bokföring of the new year while bokslut work continues on the prior year: see BFL 5 kap 2 § for the löpande bokföring deadline).',
     'BFL 3 kap caps a single fiscal period at 18 months. First-year exceptions are allowed.',
   ],
   example: {
@@ -74,14 +74,14 @@ registerEndpoint({
 
 /**
  * BFL 3 kap 1 § caps a räkenskapsår at 18 calendar months. "Calendar months"
- * matters here: 18 months can span 540–549 days depending on which 31-day
+ * matters here: 18 months can span 540-549 days depending on which 31-day
  * months and leap days fall in the window, so a fixed day count is either
  * too generous (false negatives) or too strict (false positives near month
- * boundaries). Use proper calendar arithmetic — the period end's anchor day
+ * boundaries). Use proper calendar arithmetic: the period end's anchor day
  * 18 months after the period start.
  */
 function exceedsEighteenMonths(periodStart: string, periodEnd: string): boolean {
-  // ISO date strings — UTC parse to avoid host-tz shifts.
+  // ISO date strings: UTC parse to avoid host-tz shifts.
   const start = new Date(periodStart + 'T00:00:00Z')
   const end = new Date(periodEnd + 'T00:00:00Z')
   const startY = start.getUTCFullYear()

@@ -6,7 +6,7 @@ vi.mock('next/headers', () => ({
   cookies: vi.fn(async () => ({ set: mockCookieSet })),
 }))
 
-import { setActiveCompany, CompanyContextError } from '../context'
+import { setActiveCompany, CompanyContextError, getCompanyDisplayName } from '../context'
 
 type CapturedCall = { table: string; method: string; args: unknown[] }
 
@@ -107,5 +107,50 @@ describe('setActiveCompany', () => {
       'company-2',
       expect.objectContaining({ httpOnly: true, path: '/' }),
     )
+  })
+})
+
+describe('getCompanyDisplayName', () => {
+  it('returns company_settings.company_name and never reads companies when set', async () => {
+    const { supabase, calls } = buildSupabase({
+      company_settings: { maybeSingle: { data: { company_name: 'Ny Firma AB' } } },
+      companies: { maybeSingle: { data: { name: 'Aktiebolaget Grundstenen 000000' } } },
+    })
+
+    const name = await getCompanyDisplayName(supabase as never, 'company-1')
+
+    expect(name).toBe('Ny Firma AB')
+    // companies.name is the frozen onboarding value: it must not be consulted
+    // when the user has set a current name in settings.
+    expect(calls.find((c) => c.table === 'companies')).toBeUndefined()
+  })
+
+  it('falls back to companies.name when company_settings has no row', async () => {
+    const { supabase } = buildSupabase({
+      company_settings: { maybeSingle: { data: null } },
+      companies: { maybeSingle: { data: { name: 'Aktiebolaget Grundstenen 000000' } } },
+    })
+
+    expect(await getCompanyDisplayName(supabase as never, 'company-1')).toBe(
+      'Aktiebolaget Grundstenen 000000',
+    )
+  })
+
+  it('falls back to companies.name when company_settings.company_name is empty', async () => {
+    const { supabase } = buildSupabase({
+      company_settings: { maybeSingle: { data: { company_name: '' } } },
+      companies: { maybeSingle: { data: { name: 'Bolaget AB' } } },
+    })
+
+    expect(await getCompanyDisplayName(supabase as never, 'company-1')).toBe('Bolaget AB')
+  })
+
+  it('returns null when neither table resolves a name', async () => {
+    const { supabase } = buildSupabase({
+      company_settings: { maybeSingle: { data: null } },
+      companies: { maybeSingle: { data: null } },
+    })
+
+    expect(await getCompanyDisplayName(supabase as never, 'company-1')).toBeNull()
   })
 })

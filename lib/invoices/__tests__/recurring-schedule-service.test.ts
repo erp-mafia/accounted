@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   computeNextRunDate,
   computeInitialRunDate,
+  getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
 
 describe('computeNextRunDate', () => {
@@ -61,5 +62,39 @@ describe('computeInitialRunDate', () => {
   it('clamps day 31 in February when picking this-month', () => {
     const today = new Date(Date.UTC(2027, 1, 10)) // 2027-02-10, Feb has 28 days
     expect(computeInitialRunDate(today, 31)).toBe('2027-02-28')
+  })
+})
+
+describe('getStockholmDateHour', () => {
+  it('applies summer offset (CEST, UTC+2)', () => {
+    // 2026-07-06 06:00 UTC -> 08:00 Stockholm
+    expect(getStockholmDateHour(new Date('2026-07-06T06:00:00Z'))).toEqual({
+      date: '2026-07-06',
+      hour: 8,
+    })
+  })
+
+  it('applies winter offset (CET, UTC+1)', () => {
+    // 2026-01-15 06:00 UTC -> 07:00 Stockholm
+    expect(getStockholmDateHour(new Date('2026-01-15T06:00:00Z'))).toEqual({
+      date: '2026-01-15',
+      hour: 7,
+    })
+  })
+
+  it('rolls the date forward across the local midnight boundary', () => {
+    // 2026-07-06 22:30 UTC -> 00:30 Stockholm on 2026-07-07 (summer +2)
+    expect(getStockholmDateHour(new Date('2026-07-06T22:30:00Z'))).toEqual({
+      date: '2026-07-07',
+      hour: 0,
+    })
+  })
+
+  it('reports hour 23 (h23 cycle, never 24) late in the local day', () => {
+    // 2026-07-06 21:00 UTC -> 23:00 Stockholm (summer +2)
+    expect(getStockholmDateHour(new Date('2026-07-06T21:00:00Z'))).toEqual({
+      date: '2026-07-06',
+      hour: 23,
+    })
   })
 })

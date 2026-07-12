@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { createMockRequest, createMockRouteParams, parseJsonResponse } from '@/tests/helpers'
 
 const mockCreateClient = vi.fn()
@@ -36,6 +36,14 @@ vi.mock('@/lib/bokslut/accruals/auto-detect', () => ({
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
+// The route module pulls in the bookkeeping engine and accrual detector; that
+// parse can take seconds under full-suite parallel load. Warm it once here so
+// no individual test's default 5s timeout has to absorb the import cost.
+let GET: typeof import('../route').GET
+beforeAll(async () => {
+  ;({ GET } = await import('../route'))
+}, 30_000)
+
 beforeEach(() => {
   vi.clearAllMocks()
   mockCreateClient.mockResolvedValue({
@@ -48,7 +56,6 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
     mockCreateClient.mockResolvedValue({
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null } }) },
     })
-    const { GET } = await import('../route')
     const res = await GET(
       createMockRequest('/api/bookkeeping/fiscal-periods/period-1/accruals'),
       createMockRouteParams({ id: 'period-1' }),
@@ -76,7 +83,6 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
         suggested_deferred_account: null,
       },
     ])
-    const { GET } = await import('../route')
     const res = await GET(
       createMockRequest('/api/bookkeeping/fiscal-periods/period-1/accruals'),
       createMockRouteParams({ id: 'period-1' }),
@@ -92,7 +98,6 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
       proposals: [],
     })
     mockDetectPeriodisering.mockRejectedValue(new Error('boom'))
-    const { GET } = await import('../route')
     const res = await GET(
       createMockRequest('/api/bookkeeping/fiscal-periods/period-1/accruals'),
       createMockRouteParams({ id: 'period-1' }),

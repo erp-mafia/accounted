@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
 import { insertAuthUser } from '@/tests/pg/fixtures'
 
-describe('audit-log.pg — append-only immutability', () => {
+describe('audit-log.pg: append-only immutability', () => {
   it('rejects UPDATE on audit_log rows', async () => {
     const userId = await insertAuthUser()
     const auditId = randomUUID()

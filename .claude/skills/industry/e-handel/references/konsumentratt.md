@@ -1,4 +1,4 @@
-# Konsumenträtt — distansavtalslagen, KKL, MFL, prisinformation, GPSR
+# Konsumenträtt: distansavtalslagen, KKL, MFL, prisinformation, GPSR
 
 ## Distansavtalslagen (2005:59)
 
@@ -40,7 +40,7 @@ Full namn: Lag om distansavtal och avtal utanför affärslokaler. Genomför dire
 - Näringsidkare får dra av belopp motsvarande värdeminskning **endast** om värdeminskningen beror på att konsumenten hanterat varan mer än nödvändigt för att fastställa egenskaper och funktion.
 - Praxis: kläder som provats fritt är OK; kläder med tagg avlägsnad eller använt med synliga spår kan motivera avdrag.
 
-### SFS 2026:246 — Ångerknappen
+### SFS 2026:246: Ångerknappen
 - Ikraft **2026-06-19**.
 - Krav på "ångerknapp" tydligt synlig i onlinegränssnitt under hela ångerfristen.
 - Knappen ska initiera elektroniskt ångermeddelande och näringsidkaren ska bekräfta mottagandet utan dröjsmål.
@@ -51,7 +51,7 @@ Ikraft **2022-05-01**, ersätter KKL 1990:932. Genomför direktiv (EU) 2019/771 
 
 ### Felansvar
 - **Reklamationstid 3 år** från avlämnandet (4 kap. 14 §).
-- Konsumenten ska reklamera **inom skälig tid** efter upptäckt — minst 2 månader anses alltid skäligt (4 kap. 13 §).
+- Konsumenten ska reklamera **inom skälig tid** efter upptäckt: minst 2 månader anses alltid skäligt (4 kap. 13 §).
 
 ### Omvänd bevisbörda
 - **2 år** (4 kap. 17 §). Fel som visar sig inom 2 år presumeras ha funnits vid avlämnandet om inte näringsidkaren bevisar motsatsen.
@@ -78,17 +78,17 @@ Ikraft **2022-05-01**, ersätter KKL 1990:932. Genomför direktiv (EU) 2019/771 
 ## Marknadsföringslagen (2008:486)
 
 ### Generella krav
-- **5 §** — God marknadsföringssed.
-- **8 §** — Marknadsföring som påverkar konsumentens förmåga att fatta välgrundat affärsbeslut.
-- **10 §** — Vilseledande marknadsföring (inkl. om pris, jämförelser).
+- **5 §**: God marknadsföringssed.
+- **8 §**: Marknadsföring som påverkar konsumentens förmåga att fatta välgrundat affärsbeslut.
+- **10 §**: Vilseledande marknadsföring (inkl. om pris, jämförelser).
 
 ### Omnibus-ändringar (ikraft 2022-09-01)
 
-- **12 c §** — Vid presentation av konsumentrecensioner ska näringsidkaren ange om och hur det säkerställs att recensionerna kommer från konsumenter som faktiskt köpt eller använt varan.
-- **Svarta listan p. 23a–23c** (förbjudna marknadsföringsåtgärder):
-  - p 23a — Påstå att recensioner kommer från konsumenter utan rimliga åtgärder för att verifiera.
-  - p 23b — Lämna eller anlita någon för att lämna falska konsumentrecensioner.
-  - p 23c — Manipulera konsumentrecensioner (t.ex. radera negativa).
+- **12 c §**: Vid presentation av konsumentrecensioner ska näringsidkaren ange om och hur det säkerställs att recensionerna kommer från konsumenter som faktiskt köpt eller använt varan.
+- **Svarta listan p. 23a-23c** (förbjudna marknadsföringsåtgärder):
+  - p 23a: Påstå att recensioner kommer från konsumenter utan rimliga åtgärder för att verifiera.
+  - p 23b: Lämna eller anlita någon för att lämna falska konsumentrecensioner.
+  - p 23c: Manipulera konsumentrecensioner (t.ex. radera negativa).
 
 ### Sanktion
 - Marknadsstörningsavgift upp till **4 % av årsomsättningen** för flagranta överträdelser (Omnibus-höjning).
@@ -108,12 +108,12 @@ Ikraft **2022-05-01**, ersätter KKL 1990:932. Genomför direktiv (EU) 2019/771 
 
 ## E-handelslagen (2002:562)
 
-### Informationsskyldigheter (8–9 §§)
+### Informationsskyldigheter (8-9 §§)
 - Namn, organisationsnummer/registrering, gatuadress där näringsidkare är etablerad, e-postadress.
 - Momsregistreringsnummer.
 - Yrkesregistrering om relevant.
 
-### Beställningsprocess (10–11 §§)
+### Beställningsprocess (10-11 §§)
 - Tekniska steg innan slutförd beställning.
 - Möjlighet att upptäcka och rätta inmatningsfel.
 - Språk för beställning.
@@ -122,20 +122,20 @@ Ikraft **2022-05-01**, ersätter KKL 1990:932. Genomför direktiv (EU) 2019/771 
 ### Bekräftelse (12 §)
 - Mottagningsbekräftelse utan dröjsmål, på elektronisk väg.
 
-## GPSR — förordning (EU) 2023/988
+## GPSR: förordning (EU) 2023/988
 
 Ikraft **2024-12-13**, direkt tillämplig. Ersätter direktiv 2001/95/EG och svensk lag (2004:451) för varor utsläppta på marknaden från 2024-12-13.
 
 ### Krav för e-handel
-- **Artikel 9** — Spårbarhet: produkter ska kunna identifieras via typ/parti/serienummer.
-- **Artikel 19** — Informationskrav vid distansförsäljning: tillverkarens uppgifter, importör om från tredje land, kontaktuppgifter, produktbild, eventuella varningar.
-- **Artikel 22** — Onlinemarknadsplatser har särskilda förpliktelser: utse kontaktpunkt för myndigheter, registrera säljare med rimlig due diligence, samarbeta vid återkallelser.
-- **Återkallelseprocedur** — direktkontakt till alla identifierade köpare, fortsatt notis på e-handelssida tills åtgärd vidtagits.
+- **Artikel 9**: Spårbarhet: produkter ska kunna identifieras via typ/parti/serienummer.
+- **Artikel 19**: Informationskrav vid distansförsäljning: tillverkarens uppgifter, importör om från tredje land, kontaktuppgifter, produktbild, eventuella varningar.
+- **Artikel 22**: Onlinemarknadsplatser har särskilda förpliktelser: utse kontaktpunkt för myndigheter, registrera säljare med rimlig due diligence, samarbeta vid återkallelser.
+- **Återkallelseprocedur**: direktkontakt till alla identifierade köpare, fortsatt notis på e-handelssida tills åtgärd vidtagits.
 
 ### Sanktioner
-- Sanktioner enligt nationell lag — i Sverige genom kompletterande lag (förslag, ev. nya regler under 2026).
+- Sanktioner enligt nationell lag: i Sverige genom kompletterande lag (förslag, ev. nya regler under 2026).
 
-## Penningtvättslagen (2017:630) — e-handelsrelevans
+## Penningtvättslagen (2017:630): e-handelsrelevans
 
 Ren varuförsäljning omfattas **normalt inte**. Tröskeln 15 000 EUR för kontant betalning av varor togs bort genom SFS 2019:608/774.
 
@@ -147,15 +147,15 @@ Ren varuförsäljning omfattas **normalt inte**. Tröskeln 15 000 EUR för konta
 ## GDPR (EU) 2016/679 + kompletterande lag (2018:218)
 
 ### Rättslig grund för e-handel
-- **Art. 6.1 b** — Avtalsuppfyllelse: kunduppgifter för köpet.
-- **Art. 6.1 f** — Berättigat intresse: marknadsföring till befintliga kunder (med opt-out), bedrägeribekämpning.
-- **Art. 6.1 a** — Samtycke: nyhetsbrev till nya kontakter, icke-funktionella cookies, profilering.
-- **Art. 6.1 c** — Rättslig förpliktelse: bokföringsdata (BFL 7 kap. 2 §).
+- **Art. 6.1 b**: Avtalsuppfyllelse: kunduppgifter för köpet.
+- **Art. 6.1 f**: Berättigat intresse: marknadsföring till befintliga kunder (med opt-out), bedrägeribekämpning.
+- **Art. 6.1 a**: Samtycke: nyhetsbrev till nya kontakter, icke-funktionella cookies, profilering.
+- **Art. 6.1 c**: Rättslig förpliktelse: bokföringsdata (BFL 7 kap. 2 §).
 
 ### Lagringstid
 - Kunddata: så länge nödvändigt för relationen, sedan radering eller anonymisering.
-- **Bokföringsdata: 7 år** efter räkenskapsårets slut (BFL 7 kap. 2 §) — specialregel.
-- Marknadsföringsdata utan samtycke efter avslutad kundrelation: vanligtvis 2–3 år.
+- **Bokföringsdata: 7 år** efter räkenskapsårets slut (BFL 7 kap. 2 §), specialregel.
+- Marknadsföringsdata utan samtycke efter avslutad kundrelation: vanligtvis 2-3 år.
 
 ### Personuppgiftsbiträden
 - Shopify, Klaviyo, Stripe, fraktbolag, ESP, customer service-verktyg → biträdesavtal (art. 28) krävs.

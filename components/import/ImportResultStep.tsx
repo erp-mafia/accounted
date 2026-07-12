@@ -18,6 +18,7 @@ import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
+import { formatCurrency } from '@/lib/utils'
 import type { ImportResult } from '@/lib/import/types'
 
 interface ImportResultStepProps {
@@ -41,16 +42,20 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
   }
   const hasErrors = result.errors.length > 0
   const skipped = result.details?.skippedVouchers
+  const untransferred = result.details?.untransferredResults
 
-  // Filter out raw "hoppades över" warnings when we have structured data
-  const otherWarnings = skipped && skipped.total > 0
+  // Filter out raw warnings when we have structured data for them
+  let otherWarnings = skipped && skipped.total > 0
     ? result.warnings.filter((w) => !w.includes('hoppades över'))
     : result.warnings
+  if (untransferred && untransferred.length > 0) {
+    otherWarnings = otherWarnings.filter((w) => !w.includes('förts om till eget kapital'))
+  }
 
   return (
     <div className="space-y-6">
       {/* Success/Failure header */}
-      <Card className={result.success ? 'border-success/50' : 'border-destructive/50'}>
+      <Card className={result.success ? 'border-border' : 'border-destructive/50'}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             {result.success ? (
@@ -68,7 +73,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
           <CardDescription>
             {result.success
               ? skipped && skipped.total > 0
-                ? `Din bokföring har importerats. ${result.journalEntriesCreated} verifikationer skapades, ${skipped.total} hoppades över — se detaljer nedan.`
+                ? `Din bokföring har importerats. ${result.journalEntriesCreated} verifikationer skapades, ${skipped.total} hoppades över: se detaljer nedan.`
                 : 'Din bokföring har importerats framgångsrikt.'
               : 'Det uppstod fel under importen. Läs felmeddelanden nedan för att förstå vad som gick snett och hur du kan åtgärda det.'}
           </CardDescription>
@@ -107,6 +112,33 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
         </Card>
       )}
 
+      {/* Dimensions detected (lossless SIE round-trip, dimensions plan PR5) */}
+      {result.success && result.dimensionsImported && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Info className="h-5 w-5 text-muted-foreground" />
+              Dimensioner följde med importen
+            </CardTitle>
+            <CardDescription>
+              Filen innehöll kostnadsställen/projekt: {result.dimensionsImported.taggedLines}{' '}
+              taggade rader importerades
+              {result.dimensionsImported.values > 0 && (
+                <> och {result.dimensionsImported.values} nya värden lades till i registret</>
+              )}
+              .{' '}
+              {result.dimensionsImported.toggleEnabled && (
+                <>Dimensioner aktiverades automatiskt för företaget: du hittar registret under{' '}
+                <Link href="/dimensions" className="underline underline-offset-4">
+                  Kostnadsställen &amp; projekt
+                </Link>
+                .</>
+              )}
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+
       {/* Statistics */}
       {result.success && (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
@@ -116,7 +148,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
                 <FileText className="h-4 w-4" />
                 <span className="text-sm">Verifikationer skapade</span>
               </div>
-              <p className="text-2xl font-display font-medium tabular-nums">{result.journalEntriesCreated}</p>
+              <p className="text-2xl font-display tabular-nums">{result.journalEntriesCreated}</p>
             </CardContent>
           </Card>
 
@@ -125,9 +157,9 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
                 <span className="text-sm">Räkenskapsår</span>
               </div>
-              <div className="text-2xl font-display font-medium">
+              <div className="text-2xl font-display">
                 {result.fiscalPeriodId ? (
-                  <Badge variant="default" className="bg-success">Skapat</Badge>
+                  <Badge variant="success">Skapat</Badge>
                 ) : (
                   <Badge variant="secondary">Befintligt</Badge>
                 )}
@@ -140,9 +172,9 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
                 <span className="text-sm">Ingående balanser</span>
               </div>
-              <div className="text-2xl font-display font-medium">
+              <div className="text-2xl font-display">
                 {result.openingBalanceEntryId ? (
-                  <Badge variant="default" className="bg-success">Importerade</Badge>
+                  <Badge variant="success">Importerade</Badge>
                 ) : (
                   <Badge variant="secondary">Inga</Badge>
                 )}
@@ -184,7 +216,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
         </Card>
       )}
 
-      {/* Skipped vouchers — structured breakdown */}
+      {/* Skipped vouchers: structured breakdown */}
       {skipped && skipped.total > 0 && (
         <Card className="border-muted-foreground/20">
           <CardHeader>
@@ -199,7 +231,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
                 <div className="text-sm">
                   <p className="font-medium">{skipped.empty} tomma verifikationer</p>
                   <p className="text-muted-foreground">
-                    Platshållare utan bokföringsrader — vanligt i Fortnox och Visma. Påverkar inte din bokföring.
+                    Platshållare utan bokföringsrader: vanligt i Fortnox och Visma. Påverkar inte din bokföring.
                   </p>
                 </div>
               )}
@@ -227,6 +259,35 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
                   </p>
                 </div>
               )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Untransferred prior-year results — the year-end omföring is missing */}
+      {untransferred && untransferred.length > 0 && (
+        <Card className="border-warning/50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-warning">
+              <AlertCircle className="h-5 w-5" />
+              Årets resultat är inte omfört
+            </CardTitle>
+            <CardDescription>
+              Följande räkenskapsår saknar omföring av årets resultat till eget kapital.
+              Senare års balansräkning visar en differens på beloppet tills omföringen
+              bokförs (konto 8999 mot eget kapital, t.ex. 2099) i respektive år.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {untransferred.map((u) => (
+                <div key={u.fiscal_period_id} className="text-sm flex justify-between gap-4">
+                  <span className="font-medium">{u.period_name}</span>
+                  <span className="tabular-nums">
+                    {formatCurrency(u.pl_net, 'SEK', { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              ))}
             </div>
           </CardContent>
         </Card>

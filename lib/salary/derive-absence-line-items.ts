@@ -10,17 +10,17 @@ import {
  *
  * Why this lives outside the existing absence-calculator: those formulas
  * still take `sickDays: number`. They cannot determine sjuklöneperiod
- * boundaries, återinsjuknande, or högriskskydd — those depend on actual
+ * boundaries, återinsjuknande, or högriskskydd: those depend on actual
  * dates, which now live in `salary_absence_days`. This module is the
  * bridge: it walks the per-day records and emits correctly-classified
  * line items.
  *
  * Swedish payroll rules implemented:
  *   - **Sjuklöneperiod** (Sjuklönelagen) = first sick day → calendar-day 14.
- *     Day 1 is karensavdrag (one per period). Days 2–14 are sjuklön at 80%.
+ *     Day 1 is karensavdrag (one per period). Days 2-14 are sjuklön at 80%.
  *     Day 15+ is Försäkringskassan; employer pays nothing but must report.
  *   - **Återinsjuknande**: if the next sick day is within 5 calendar days of
- *     the previous sjuklöneperiod's last day, both merge — no new karens.
+ *     the previous sjuklöneperiod's last day, both merge: no new karens.
  *   - **Allmänt högriskskydd**: max 10 karensavdrag per rolling 12-month
  *     window (inclusive of the new one). The 11th is suppressed.
  *
@@ -77,7 +77,7 @@ interface SjukloneperiodSegment {
   /** Number of *sick days* in this merged segment (not calendar days). */
   sickDayCount: number
   /** True if this segment is the continuation of a prior segment via
-   *  återinsjuknande (gap 1–5 calendar days). No new karensavdrag. */
+   *  återinsjuknande (gap 1-5 calendar days). No new karensavdrag. */
   isAterinsjuknande: boolean
 }
 
@@ -98,7 +98,7 @@ function addDays(d: string, n: number): string {
 
 /**
  * Walk the (sorted ascending) sick dates and merge them into sjuklöneperioder
- * using the SjLL återinsjuknande rule: gap of 1–5 calendar days = same
+ * using the SjLL återinsjuknande rule: gap of 1-5 calendar days = same
  * period continues; gap ≥ 6 = new period.
  */
 export function buildSjukloneperioder(sickDates: string[]): SjukloneperiodSegment[] {
@@ -127,12 +127,12 @@ export function buildSjukloneperioder(sickDates: string[]): SjukloneperiodSegmen
     const gap = daysBetween(endDate, date)
     if (gap === 0) continue
     if (gap >= 1 && gap <= 5) {
-      // Within 5 calendar days — same period (contiguous OR återinsjuknande)
+      // Within 5 calendar days: same period (contiguous OR återinsjuknande)
       endDate = date
       count += 1
       continue
     }
-    // gap > 5 — close current segment, start new one
+    // gap > 5: close current segment, start new one
     flush(gap)
     startDate = date
     endDate = date
@@ -141,8 +141,8 @@ export function buildSjukloneperioder(sickDates: string[]): SjukloneperiodSegmen
   flush(null)
 
   // Annotate isAterinsjuknande based on inter-segment gap (only meaningful if
-  // the gap from prior segment's end to this segment's start is 1–5 days,
-  // which the merge logic above already excludes — so this stays false. The
+  // the gap from prior segment's end to this segment's start is 1-5 days,
+  // which the merge logic above already excludes: so this stays false. The
   // återinsjuknande logic is fully captured by the merge above; we keep the
   // flag for caller introspection if they pass in pre-segmented data.)
   return segments
@@ -193,14 +193,14 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     // within a rolling 12-month window, no karensavdrag is made.
     //
     // Interpretation: we count *sjuklöneperioder* in the lookback window. The
-    // law's phrasing — "från och med den 11:e sjukperioden under en
-    // tolvmånadersperiod görs inget karensavdrag" — keys the cap to the
+    // law's phrasing: "från och med den 11:e sjukperioden under en
+    // tolvmånadersperiod görs inget karensavdrag": keys the cap to the
     // period count. An alternative reading is that cap-suppressed periods
     // shouldn't count toward future windows (only periods that actually
     // had karens deducted). That requires persisting per-period karens-
     // deduction state, which Accounted doesn't yet do. The period-count
     // reading can over-suppress karens for an employee who hits the cap
-    // repeatedly — softer error than the opposite.
+    // repeatedly: softer error than the opposite.
     //
     // TODO: persist per-period karens deduction state if the period-count
     // reading produces complaints in the field.
@@ -246,7 +246,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         } else {
           // Suppressed by allmänt högriskskydd. The employee keeps day-1 pay
           // (no karens deduction). Day 1 still consumed from the 14-day
-          // window but treated as paid normal — emit nothing for it.
+          // window but treated as paid normal: emit nothing for it.
         }
       }
 
@@ -274,7 +274,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
       const sjuklon = r(dailyRate * payrollConfig.sjuklonRate * day2_14CountTotal)
       lineItems.push({
         item_type: 'sick_day2_14',
-        description: `Sjuklön dag 2–14 (${day2_14CountTotal} dagar)`,
+        description: `Sjuklön dag 2-14 (${day2_14CountTotal} dagar)`,
         quantity: day2_14CountTotal,
         // Net deduction vs full pay = lostPay - sjuklon (employer pays 80%).
         amount: -(lostPay - sjuklon),
@@ -291,7 +291,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
         item_type: 'sick_day15_plus',
         description: `Sjukfrånvaro dag 15+ (FK) (${day15PlusCountTotal} dagar)`,
         quantity: day15PlusCountTotal,
-        // Employer pays nothing — full daily rate deducted.
+        // Employer pays nothing: full daily rate deducted.
         amount: -lostPay,
         is_taxable: true,
         is_avgift_basis: false,
@@ -338,7 +338,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
   }
 
   // ── Unpaid leave (tjänstledighet utan lön) ─────────────────────────────
-  // Each day reduces gross pay by one daily rate (monthlySalary / 21 — same
+  // Each day reduces gross pay by one daily rate (monthlySalary / 21: same
   // convention used elsewhere in the engine). Not semestergrundande per SemL
   // 17 § (only paid leave types accrue vacation).
   //

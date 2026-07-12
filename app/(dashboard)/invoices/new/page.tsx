@@ -1,8 +1,9 @@
-import InvoiceEditor from '@/components/invoices/InvoiceEditor'
+import { redirect } from 'next/navigation'
 
-// The invoice creator lives in the shared <InvoiceEditor> component so the same
-// form powers both creating a new invoice and editing an existing draft
-// (app/(dashboard)/invoices/[id]/edit).
+// Invoice creation now happens in a modal on the invoice list (issue: match
+// the verifikat pattern). This route survives as a redirect so old links,
+// bookmarks, and agent intents keep working. Editing drafts still has a full
+// page at /invoices/[id]/edit.
 export default function NewInvoicePage() {
-  return <InvoiceEditor mode="create" />
+  redirect('/invoices?new=1')
 }

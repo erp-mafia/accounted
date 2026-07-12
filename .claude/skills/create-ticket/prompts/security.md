@@ -54,6 +54,6 @@ You are scanning for security vulnerabilities and hardening opportunities in a N
 
 ## Classification
 
-- **Bug**: Active vulnerability — missing auth check, SQL injection vector, data leak, RLS gap, exposed secret.
-- **Feature**: New security capability needed — audit logging, rate limiting on a new endpoint, CSP policy addition.
-- **Improvement**: Hardening — adding input validation to an endpoint that works but accepts too broadly, tightening a SELECT to specific columns, adding rate limiting.
+- **Bug**: Active vulnerability: missing auth check, SQL injection vector, data leak, RLS gap, exposed secret.
+- **Feature**: New security capability needed: audit logging, rate limiting on a new endpoint, CSP policy addition.
+- **Improvement**: Hardening: adding input validation to an endpoint that works but accepts too broadly, tightening a SELECT to specific columns, adding rate limiting.

@@ -17,6 +17,8 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { getBranding } from '@/lib/branding/service'
+import { useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 
 const branding = getBranding()
 
@@ -46,11 +48,12 @@ export default function NewUserChecklist({
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket')
+  const hasAi = useCapability(CAPABILITY.ai)
 
   return (
     <div className={cn('min-h-[75vh] flex flex-col items-center justify-center px-4 sm:px-0 stagger-enter', className)}>
       <div className="w-full max-w-2xl">
-        {/* Header — centered welcome. Data-import steps lead; building the
+        {/* Header: centered welcome. Data-import steps lead; building the
             assistant is the last step so a user coming from another system
             brings their books in first. */}
         <div className="text-center mb-8 md:mb-12">
@@ -197,7 +200,7 @@ export default function NewUserChecklist({
           </div>
         </div>
 
-        {/* Step 3: Connect Skatteverket — only when the extension is enabled.
+        {/* Step 3: Connect Skatteverket, only when the extension is enabled.
             Optional: connecting here lets Accounted submit moms + AGI and read
             skattekonto saldo, but the user can skip and do it later from
             /settings/skatteverket. The OAuth flow returns to the dashboard
@@ -242,7 +245,7 @@ export default function NewUserChecklist({
               ) : (
                 // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api route, not a Next page
                 <a
-                  // Plain anchor — the authorize endpoint 302-redirects to
+                  // Plain anchor: the authorize endpoint 302-redirects to
                   // skatteverket.se; <Link> would route via Next's client
                   // router which doesn't follow cross-origin redirects.
                   href="/api/extensions/ext/skatteverket/authorize?return_to=/"
@@ -268,7 +271,7 @@ export default function NewUserChecklist({
           </div>
         )}
 
-        {/* Build the assistant — always the last step, so a user migrating
+        {/* Build the assistant: always the last step, so a user migrating
             from another system brings their books in first. */}
         <div className="mb-8 md:mb-12">
           <div className="flex items-center gap-3 mb-4">
@@ -304,7 +307,7 @@ export default function NewUserChecklist({
               </div>
             ) : (
               <Link
-                href="/onboarding/agent"
+                href={hasAi ? '/onboarding/agent' : '/settings/billing'}
                 className="group block p-4 sm:p-6 rounded-lg border border-border hover:border-primary/40 hover:bg-primary/[0.02] transition-colors duration-150"
               >
                 <div className="flex items-start gap-3 sm:gap-4">
@@ -316,10 +319,14 @@ export default function NewUserChecklist({
                       <p className="font-medium group-hover:text-primary transition-colors text-sm sm:text-base">
                         Bygg din bokföringsassistent
                       </p>
-                      <Badge variant="secondary" className="uppercase tracking-wider">Beta</Badge>
+                      <Badge variant="secondary" className="uppercase tracking-wider">
+                        {hasAi ? 'Beta' : 'Abonnemang'}
+                      </Badge>
                     </div>
                     <p className="text-xs sm:text-sm text-muted-foreground mt-1 sm:mt-2 leading-relaxed">
-                      Några frågor om din verksamhet kalibrerar tonalitet, signatur och vad assistenten kan. Ju mer du delar, desto bättre förstår den dig.
+                      {hasAi
+                        ? 'Några frågor om din verksamhet kalibrerar tonalitet, signatur och vad assistenten kan. Ju mer du delar, desto bättre förstår den dig.'
+                        : 'Ingår i abonnemanget: en assistent som föreslår bokföring åt dig. Uppgradera för att komma igång.'}
                     </p>
                   </div>
                   <ArrowRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary/60 mt-1 flex-shrink-0 transition-colors" />
@@ -329,7 +336,7 @@ export default function NewUserChecklist({
           </div>
         </div>
 
-        {/* Escape hatch — a visible secondary action, not a muted ghost link,
+        {/* Escape hatch: a visible secondary action, not a muted ghost link,
             so users with nothing to import can clearly choose to start fresh. */}
         <div className="space-y-6">
           <div className="flex items-center gap-4">

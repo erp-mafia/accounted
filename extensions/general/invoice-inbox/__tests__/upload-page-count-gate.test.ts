@@ -5,7 +5,7 @@ import { parseJsonResponse } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 // Mocks. extract-invoice-fields is the AI call we want to assert is NOT
-// invoked when the gate trips. uploadDocument is the storage write — we
+// invoked when the gate trips. uploadDocument is the storage write: we
 // short-circuit it to a synthetic doc row.
 vi.mock('@/extensions/general/invoice-inbox/lib/extract-invoice-fields', async () => {
   const actual = await vi.importActual<
@@ -28,6 +28,14 @@ vi.mock('@/lib/rate-limits/inbox', () => ({
 vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
 }))
+
+// Paid AI OCR gate: hasCapability('ai') decides whether Bedrock runs. Default
+// to entitled (true) so these page-count tests exercise the page-count reason,
+// not the no-AI one; the no-AI path is covered in sandbox-skip-extraction.test.ts.
+vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
+  return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
+})
 
 import { extractInvoiceFields, emptyResult } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 
@@ -91,7 +99,7 @@ async function makePdfBuffer(pageCount: number): Promise<Uint8Array> {
   return pdf.save()
 }
 
-// createMockRequest hard-codes application/json — build the multipart Request
+// createMockRequest hard-codes application/json: build the multipart Request
 // directly so the formData() parse on the server side succeeds.
 function makeMultipartRequest(form: FormData): Request {
   return new Request('http://localhost:3000/upload', {
@@ -112,7 +120,7 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('POST /upload — page-count gate (issue #553)', () => {
+describe('POST /upload: page-count gate (issue #553)', () => {
   it('skips extraction and marks the row as skipped when PDF has more than 3 pages', async () => {
     const captured: { row?: Record<string, unknown> } = {}
     const supabase = makeSupabase(captured)

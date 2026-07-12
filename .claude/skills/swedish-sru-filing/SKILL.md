@@ -24,7 +24,7 @@ Every SRU submission consists of exactly two files:
 
 | File | Content | Max size |
 |---|---|---|
-| `INFO.SRU` | Submitter metadata (who is filing) | — |
+| `INFO.SRU` | Submitter metadata (who is filing) | N/A |
 | `BLANKETTER.SRU` | All blankett blocks with tax data | 5 MB |
 
 File names are case-insensitive but must not be renamed (browsers appending `(1)` cause rejection).
@@ -57,7 +57,7 @@ Posts must appear in this exact order. Omit optional posts entirely if not used.
 
 Mandatory posts: `#PRODUKT`, `#FILNAMN`, `#ORGNR`, `#NAMN`, `#POSTNR`, `#POSTORT`.
 
-The `#PRODUKT` value is always `SRU` (post-2013). There is no `#PERIOD` post — period is encoded in each blankett type string.
+The `#PRODUKT` value is always `SRU` (post-2013). There is no `#PERIOD` post: period is encoded in each blankett type string.
 
 ## BLANKETTER.SRU structure
 
@@ -80,9 +80,9 @@ An aktiebolag filing INK2 must include three separate blocks in this file:
 
 | Block | BlankettTyp example | Content |
 |---|---|---|
-| INK2 | `INK2-2024P4` | Huvudblankett (page 1) — summary fields |
-| INK2R | `INK2R-2024P4` | Räkenskapsschema (pages 2-3) — balance sheet + income statement |
-| INK2S | `INK2S-2024P4` | Skattemässiga justeringar (page 4) — tax adjustments |
+| INK2 | `INK2-2024P4` | Huvudblankett (page 1): summary fields |
+| INK2R | `INK2R-2024P4` | Räkenskapsschema (pages 2-3): balance sheet + income statement |
+| INK2S | `INK2S-2024P4` | Skattemässiga justeringar (page 4): tax adjustments |
 
 ### Period suffix rules
 
@@ -90,16 +90,16 @@ The suffix after the hyphen encodes when the fiscal year ENDS:
 
 | Suffix | Fiscal year ends in months |
 |---|---|
-| P1 | January–April |
-| P2 | May–August |
+| P1 | January-April |
+| P2 | May-August |
 | P3 | Special cases |
-| P4 | September–December (calendar-year companies) |
+| P4 | September-December (calendar-year companies) |
 
 The year in the type string is the INCOME YEAR (inkomstår), not the filing year. A company with fiscal year 2024-01-01 to 2024-12-31 uses period `2024P4`.
 
 ### Each block is independent
 
-Every blankett block carries its own `#IDENTITET` line. The `DatFramst` timestamp determines version precedence — later timestamps replace earlier submissions for the same org number and blankett type.
+Every blankett block carries its own `#IDENTITET` line. The `DatFramst` timestamp determines version precedence: later timestamps replace earlier submissions for the same org number and blankett type.
 
 ## Encoding and formatting rules
 
@@ -133,7 +133,7 @@ Always 12 digits, format `SSÅÅMMDDNNNK`, no hyphens.
 
 ### Checkbox fields
 
-Value: uppercase `X`. If unchecked, **omit the entire #UPPGIFT line** — never send empty values.
+Value: uppercase `X`. If unchecked, **omit the entire #UPPGIFT line**: never send empty values.
 
 ### The `#` character
 
@@ -218,14 +218,14 @@ Skatteverket validates on upload and returns a mottagningskvittens.
 - Invalid blankett type string
 
 ### Most frequent real-world failures
-1. **Renamed files** — browsers adding `(1)` suffix
-2. **Wrong period** — using `2025P4` when income year is 2024
-3. **Amounts with decimals or spaces** — `7135.50` or `7 135`
+1. **Renamed files**: browsers adding `(1)` suffix
+2. **Wrong period**: using `2025P4` when income year is 2024
+3. **Amounts with decimals or spaces**: `7135.50` or `7 135`
 4. **UTF-8 encoding** instead of ISO 8859-1
 5. **Including #UPPGIFT for zero/empty values**
 6. **Duplicate field codes** in same blankett block
 7. **10-digit or hyphenated org number** instead of 12-digit
-8. **Non-existent SRU codes** — mapping BAS accounts to wrong field codes
+8. **Non-existent SRU codes**: mapping BAS accounts to wrong field codes
 
 ## BAS-to-SRU mapping: critical rules
 

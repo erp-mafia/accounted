@@ -1,7 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
-import { requireCompanyId } from '@/lib/company/context'
 import {
   reportToWorkbook,
   textColumn,
@@ -19,16 +18,7 @@ interface AgingRow {
   total_outstanding: number
 }
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext('report.supplier_ledger.xlsx', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
   const asOfDate = searchParams.get('as_of_date') || undefined
 
@@ -93,4 +83,4 @@ export async function GET(request: Request) {
       { status: 500 }
     )
   }
-}
+})

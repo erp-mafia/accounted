@@ -10,7 +10,7 @@
 // pathname and picks the intent + intentArgs that the equivalent on-page
 // button would have used.
 //
-// Pure function, no React deps — easy to test, easy to extend with new
+// Pure function, no React deps: easy to test, easy to extend with new
 // routes as more intents land.
 
 export interface RouteIntent {
@@ -35,7 +35,7 @@ export function routeToIntent(pathname: string | null | undefined): RouteIntent 
   const segments = pathname.split('/').filter(Boolean)
   const [first, second] = segments
 
-  // /invoices/new — drafting a brand-new invoice (no entity id yet).
+  // /invoices/new: drafting a brand-new invoice (no entity id yet).
   if (first === 'invoices' && second === 'new') {
     return {
       intentId: 'invoice.draft',
@@ -44,7 +44,7 @@ export function routeToIntent(pathname: string | null | undefined): RouteIntent 
     }
   }
 
-  // /invoices/[id] and /invoices/[id]/credit — entity in focus.
+  // /invoices/[id] and /invoices/[id]/credit: entity in focus.
   if (first === 'invoices' && second && second !== 'new') {
     return {
       intentId: 'invoice.draft',
@@ -54,8 +54,8 @@ export function routeToIntent(pathname: string | null | undefined): RouteIntent 
     }
   }
 
-  // /supplier-invoices/[id] — review/attest flow.
-  // /supplier-invoices/new has no entity to review yet — fall through to
+  // /supplier-invoices/[id]: review/attest flow.
+  // /supplier-invoices/new has no entity to review yet: fall through to
   // general.help so the agent doesn't load a heavy Opus intent on an empty
   // capture.
   if (first === 'supplier-invoices' && second && second !== 'new') {
@@ -67,7 +67,7 @@ export function routeToIntent(pathname: string | null | undefined): RouteIntent 
     }
   }
 
-  // /bookkeeping/year-end — the bokslut wizard. Match the page's "Fråga om
+  // /bookkeeping/year-end: the bokslut wizard. Match the page's "Fråga om
   // bokslutet" button (bokslut.step) instead of general.help, so the FAB and the
   // page button open the SAME assistant here rather than two different ones.
   if (first === 'bookkeeping' && second === 'year-end') {
@@ -80,11 +80,11 @@ export function routeToIntent(pathname: string | null | undefined): RouteIntent 
   }
 
   // /bookkeeping/[id] (single verifikation) is intentionally NOT mapped
-  // here — AgentTrigger suppresses the FAB on that route entirely. The
+  // here: AgentTrigger suppresses the FAB on that route entirely. The
   // verifikation editor is a dense regulatory surface and the floating
   // pill earned its way off the page.
 
-  // /kpi — nyckeltal dashboard. Match the page's "Fråga om nyckeltalen" button
+  // /kpi: nyckeltal dashboard. Match the page's "Fråga om nyckeltalen" button
   // (kpi.explain) so the FAB and the page button agree on this page.
   if (first === 'kpi') {
     return {
@@ -97,10 +97,10 @@ export function routeToIntent(pathname: string | null | undefined): RouteIntent 
 
   // Note: /transactions and /reports intentionally fall through to general.help.
   // Their on-page triggers are entity/view-specific (a transaction row needs a
-  // transaction_id; the VAT report button needs the selected period/view) — the
+  // transaction_id; the VAT report button needs the selected period/view): the
   // FAB only knows the pathname, so page-level help is the honest default there.
 
-  // /settings/<panel>[/...] — settings.help captures which panel is active.
+  // /settings/<panel>[/...]: settings.help captures which panel is active.
   // Uses the second segment as panel slug so /settings/invoicing/templates
   // still surfaces panel=invoicing.
   if (first === 'settings' && second) {

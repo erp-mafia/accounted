@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import {
   createQueuedMockSupabase,
   createMockRequest,
@@ -7,24 +8,19 @@ import {
 } from '@/tests/helpers'
 
 // ── Mocks ────────────────────────────────────────────────────
+// The route is wrapped in withRouteContext (auth via requireAuth, company via
+// getActiveCompanyId, write-gate via requireWritePermission). We inject a queued
+// Supabase mock through requireAuth and mock fetch to the extension endpoint.
 
-const mockCreateClient = vi.fn()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => mockCreateClient(),
+vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
+vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
+vi.mock('@/lib/company/context', () => ({
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
+  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
-
-vi.mock('@/lib/init', () => ({
-  ensureInitialized: vi.fn(),
-}))
-
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
-
-vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
-}))
-
 vi.mock('@/lib/events', () => ({
   eventBus: { emit: vi.fn().mockResolvedValue(undefined) },
 }))
@@ -34,6 +30,8 @@ const mockFetch = vi.fn()
 vi.stubGlobal('fetch', mockFetch)
 
 import { POST } from '../route'
+import { requireAuth } from '@/lib/auth/require-auth'
+import { requireWritePermission } from '@/lib/auth/require-write'
 import { eventBus } from '@/lib/events'
 
 // ── Test data ────────────────────────────────────────────────
@@ -64,16 +62,29 @@ const makeAgiDeclaration = (overrides = {}) => ({
   ...overrides,
 })
 
+function authed() {
+  const { supabase, enqueueMany } = createQueuedMockSupabase()
+  vi.mocked(requireAuth).mockResolvedValue({
+    user: mockUser as never,
+    supabase: supabase as never,
+    error: null,
+  })
+  return { supabase, enqueueMany }
+}
+
 // ── Tests ────────────────────────────────────────────────────
 
 describe('POST /api/salary/runs/[id]/agi/submit', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: true } as never)
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockCreateClient.mockResolvedValue({
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: null } }) },
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null,
+      supabase: null as never,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
     const request = createMockRequest('/api/salary/runs/run-1/agi/submit', { method: 'POST' })
@@ -84,11 +95,22 @@ describe('POST /api/salary/runs/[id]/agi/submit', () => {
     expect(body).toEqual({ error: 'Unauthorized' })
   })
 
-  it('returns 404 when salary run not found', async () => {
-    const { supabase, enqueueMany } = createQueuedMockSupabase()
-    supabase.auth = { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) }
-    mockCreateClient.mockResolvedValue(supabase)
+  it('returns 403 for a viewer (no write permission)', async () => {
+    authed()
+    vi.mocked(requireWritePermission).mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    } as never)
 
+    const request = createMockRequest('/api/salary/runs/run-1/agi/submit', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(403)
+  })
+
+  it('returns 404 when salary run not found', async () => {
+    const { enqueueMany } = authed()
     enqueueMany([
       { data: null, error: { message: 'Not found' } }, // salary_runs query
     ])
@@ -102,10 +124,7 @@ describe('POST /api/salary/runs/[id]/agi/submit', () => {
   })
 
   it('returns 400 when salary run is in draft status', async () => {
-    const { supabase, enqueueMany } = createQueuedMockSupabase()
-    supabase.auth = { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) }
-    mockCreateClient.mockResolvedValue(supabase)
-
+    const { enqueueMany } = authed()
     enqueueMany([
       { data: makeSalaryRun({ status: 'draft' }) }, // salary_runs query
     ])
@@ -119,10 +138,7 @@ describe('POST /api/salary/runs/[id]/agi/submit', () => {
   })
 
   it('returns 400 when AGI has not been generated', async () => {
-    const { supabase, enqueueMany } = createQueuedMockSupabase()
-    supabase.auth = { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) }
-    mockCreateClient.mockResolvedValue(supabase)
-
+    const { enqueueMany } = authed()
     enqueueMany([
       { data: makeSalaryRun() },        // salary_runs query
       { data: null },                    // agi_declarations query (not found)
@@ -137,10 +153,7 @@ describe('POST /api/salary/runs/[id]/agi/submit', () => {
   })
 
   it('returns 409 when AGI has already been submitted', async () => {
-    const { supabase, enqueueMany } = createQueuedMockSupabase()
-    supabase.auth = { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) }
-    mockCreateClient.mockResolvedValue(supabase)
-
+    const { enqueueMany } = authed()
     enqueueMany([
       { data: makeSalaryRun() },
       { data: makeAgiDeclaration({ status: 'submitted' }) },
@@ -155,10 +168,7 @@ describe('POST /api/salary/runs/[id]/agi/submit', () => {
   })
 
   it('submits AGI draft and returns success', async () => {
-    const { supabase, enqueueMany } = createQueuedMockSupabase()
-    supabase.auth = { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) }
-    mockCreateClient.mockResolvedValue(supabase)
-
+    const { enqueueMany } = authed()
     enqueueMany([
       { data: makeSalaryRun() },                          // salary_runs query
       { data: makeAgiDeclaration() },                     // agi_declarations query
@@ -214,10 +224,7 @@ describe('POST /api/salary/runs/[id]/agi/submit', () => {
   })
 
   it('returns error when extension draft endpoint fails', async () => {
-    const { supabase, enqueueMany } = createQueuedMockSupabase()
-    supabase.auth = { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) }
-    mockCreateClient.mockResolvedValue(supabase)
-
+    const { enqueueMany } = authed()
     enqueueMany([
       { data: makeSalaryRun() },
       { data: makeAgiDeclaration() },
@@ -241,10 +248,7 @@ describe('POST /api/salary/runs/[id]/agi/submit', () => {
   })
 
   it('accepts booked salary runs for submission', async () => {
-    const { supabase, enqueueMany } = createQueuedMockSupabase()
-    supabase.auth = { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }) }
-    mockCreateClient.mockResolvedValue(supabase)
-
+    const { enqueueMany } = authed()
     enqueueMany([
       { data: makeSalaryRun({ status: 'booked' }) },
       { data: makeAgiDeclaration() },

@@ -152,7 +152,7 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
               <div
                 role="group"
                 aria-label={t('placement_aria_label')}
-                className="inline-flex rounded-md border border-border/60 p-0.5"
+                className="inline-flex rounded-md border border-border p-1"
               >
                 {(['header', 'footer'] as const).map((pos) => {
                   const active = (settings.invoice_company_name_position ?? 'header') === pos

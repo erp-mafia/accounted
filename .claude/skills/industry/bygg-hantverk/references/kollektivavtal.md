@@ -1,6 +1,6 @@
-# Kollektivavtal per sub-vertikal inom SNI 41–43
+# Kollektivavtal per sub-vertikal inom SNI 41-43
 
-Samtliga avtal har period **2025-05-01 – 2027-04-30** med märket 6,4 % över 24 månader (3,4 % år 1 + 3,0 % år 2). Försäkringspaket via **Fora** för kollektivanställda: AGS, AGB, TFA, TGL och Avtalspension SAF-LO. Tjänstemän har ITP via Collectum.
+Samtliga avtal har period **2025-05-01 till 2027-04-30** med märket 6,4 % över 24 månader (3,4 % år 1 + 3,0 % år 2). Försäkringspaket via **Fora** för kollektivanställda: AGS, AGB, TFA, TGL och Avtalspension SAF-LO. Tjänstemän har ITP via Collectum.
 
 ## Byggavtalet
 
@@ -45,7 +45,7 @@ Samtliga avtal har period **2025-05-01 – 2027-04-30** med märket 6,4 % över 
 
 - **Parter:** Byggnads (Målareförbundet uppgick i Byggnads maj 2024) + Måleriföretagen i Sverige.
 - **SNI:** 43.34 måleri.
-- **Lön:** Ackord eller tidlön – endast dessa två former tillåtna. Ackord enligt riksprislista, mätning via **Målerifakta** (huvudsakligen distansmätning på ritning).
+- **Lön:** Ackord eller tidlön: endast dessa två former tillåtna. Ackord enligt riksprislista, mätning via **Målerifakta** (huvudsakligen distansmätning på ritning).
 - **Helglön:** Reglerad i § 2.
 - **Pension:** +0,1 % år 1, +0,2 % år 2; måleribranschen integreras i Svenskt Byggkontroll från 2026-01-01.
 - **Berör:** ca 14 000 yrkesarbetare.
@@ -62,8 +62,8 @@ Samtliga avtal har period **2025-05-01 – 2027-04-30** med märket 6,4 % över 
 
 ## Anmärkningar
 
-- **Golvavtalet finns inte som separat CBA** – golvläggare (SNI 43.33) omfattas av Byggavtalet med egen yrkeskategori och egna mätnings-/prislistor.
-- SNI-mappning är approximativ – CBA-tillämpningsområdet bestäms av faktisk arbetsuppgift, inte formell SNI-kod.
+- **Golvavtalet finns inte som separat CBA**: golvläggare (SNI 43.33) omfattas av Byggavtalet med egen yrkeskategori och egna mätnings-/prislistor.
+- SNI-mappning är approximativ: CBA-tillämpningsområdet bestäms av faktisk arbetsuppgift, inte formell SNI-kod.
 - Tjänstemän (arbetsledare, projektingenjörer, kalkylatorer) följer vanligen **Tjänstemannaavtalet Byggnadsämnesindustrin** eller motsvarande Unionen/Sveriges Ingenjörer-avtal med ITP via Collectum.
 
 ## Bokföringsmässiga noter

@@ -1,5 +1,5 @@
 /**
- * Provider document (underlag) import — best-effort, re-runnable.
+ * Provider document (underlag) import: best-effort, re-runnable.
  *
  * The migration imports the GL via SIE and the entity registers via the
  * provider API, but the receipts/underlag attached to each verifikat are not
@@ -56,7 +56,7 @@ export interface ImportDocumentsResult {
   scanned: number
   /** Receipts newly archived and linked to their verifikat. */
   linked: number
-  /** Receipts already archived for this company (sha256 match) — re-run skip. */
+  /** Receipts already archived for this company (sha256 match): re-run skip. */
   skipped: number
   /** Uploads whose Bokio voucher number resolved to no gnubok verifikat. */
   unmatched: number
@@ -95,13 +95,13 @@ function periodIdForDate(periods: FiscalPeriodRow[], date: string): string | nul
 
 /**
  * In-memory key for a verifikat: fiscal period + series + number. Scoping by
- * period is essential — Bokio reuses voucher numbers across fiscal years.
+ * period is essential: Bokio reuses voucher numbers across fiscal years.
  */
 function voucherKey(periodId: string, series: string, number: number): string {
   return `${periodId}|${series}|${number}`
 }
 
-/** Synthesise a readable filename — the Bokio uploads list carries none. */
+/** Synthesise a readable filename: the Bokio uploads list carries none. */
 function fileNameFor(upload: BokioUpload, ref: BokioVoucherRef, contentType: string | null): string {
   const ext = (contentType && EXTENSION_BY_TYPE[contentType]) || 'bin'
   const label = upload.description?.trim() || `${ref.series}${ref.number}`
@@ -130,13 +130,13 @@ export async function importProviderDocuments(
   // v1 supports Bokio only. Other providers are a no-op rather than an error
   // so a mixed-provider caller can invoke this unconditionally.
   if (provider !== 'bokio') {
-    log.info('document import skipped — provider not supported in v1', { provider })
+    log.info('document import skipped: provider not supported in v1', { provider })
     return result
   }
 
   const { accessToken, providerCompanyId } = resolved
   if (!providerCompanyId) {
-    throw new Error('Consent has no provider_company_id — cannot fetch Bokio uploads')
+    throw new Error('Consent has no provider_company_id: cannot fetch Bokio uploads')
   }
 
   const client = new BokioClient()
@@ -209,7 +209,7 @@ export async function importProviderDocuments(
 
     if (!ref) {
       // journalEntryId not in the Bokio voucher index (unparseable number, or
-      // an entry the API didn't return) — can't resolve a target verifikat.
+      // an entry the API didn't return): can't resolve a target verifikat.
       recordUnmatched(upload.id, '(unresolved)', '')
       continue
     }
@@ -225,7 +225,7 @@ export async function importProviderDocuments(
     }
 
     if (dryRun) {
-      // We can resolve the target without spending a download — count it as a
+      // We can resolve the target without spending a download: count it as a
       // would-link so the preview reflects the real plan.
       result.linked++
       continue

@@ -54,7 +54,7 @@ async function normalize(input: unknown): Promise<NormalizedError> {
     try {
       body = await input.json()
     } catch {
-      // ignore — body might be empty
+      // ignore: body might be empty
     }
     const fromBody = readEnvelope(body)
     return {

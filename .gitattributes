@@ -11,3 +11,10 @@ docker/crontab.* text eol=lf
 # taxonomy:check` (CI); keep LF on Windows checkouts so the local check
 # matches what the generator writes.
 lib/bokslut/ixbrl/taxonomy/generated/*.json text eol=lf linguist-generated=true
+
+# The extension registry is rewritten with LF by `setup:extensions` on every
+# dev/build, and Vitest rewrites snapshots with LF. With core.autocrlf=true
+# git would expect CRLF and flag these as phantom modifications; pin LF so
+# the working tree matches what the generators write.
+lib/extensions/_generated/** text eol=lf linguist-generated=true
+*.snap text eol=lf linguist-generated=true

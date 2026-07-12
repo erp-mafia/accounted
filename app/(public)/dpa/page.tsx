@@ -5,7 +5,7 @@ import { getBranding } from '@/lib/branding/service'
 
 export function generateMetadata(): Metadata {
   return {
-    title: `Personuppgiftsbitradesavtal - ${getBranding().appName}`,
+    title: `Personuppgiftsbiträdesavtal - ${getBranding().appName}`,
   }
 }
 
@@ -16,7 +16,7 @@ export default function DPAPage() {
       <div className="max-w-3xl mx-auto space-y-8">
         <div className="text-center space-y-2">
           <h1 className="font-display text-3xl md:text-4xl tracking-tight text-foreground">
-            Personuppgiftsbitradesavtal (DPA)
+            Personuppgiftsbiträdesavtal (DPA)
           </h1>
           <p className="text-sm text-muted-foreground">
             Enligt GDPR Art. 28 &middot; Senast uppdaterad: 2026-06-03
@@ -112,14 +112,14 @@ export default function DPAPage() {
                 åtkomst</li>
               <li><strong>Integritetskontroll:</strong> SHA-256 checksummor för alla dokument, med
                 regelbunden verifiering</li>
-              <li><strong>Revisionslogg:</strong> Alla ändringshandelser loggas automatiskt av databasen
+              <li><strong>Revisionslogg:</strong> Alla ändringshändelser loggas automatiskt av databasen
                 (ej redigerbara)</li>
               <li><strong>Oföränderlig bokföring:</strong> Bokförda verifikationer kan inte ändras eller
                 raderas (databasutlösare)</li>
               <li><strong>Säkerhetskopior:</strong> Kontinuerliga databaskopior med point-in-time-recovery</li>
               <li><strong>EU-lagring och EU-inferens:</strong> All primär datalagring sker i EU
                 (Supabase, eu-north-1, Stockholm). AI-inferens sker, när AI-funktioner är aktiverade, inom
-                EU via Amazon Bedrock (eu-north-1, Stockholm) — ingen överföring till tredje land</li>
+                EU via Amazon Bedrock (eu-north-1, Stockholm): ingen överföring till tredje land</li>
             </ul>
           </CardContent>
         </Card>
@@ -158,7 +158,7 @@ export default function DPAPage() {
               Biträdet bistår den Ansvarige, genom lämpliga tekniska och organisatoriska åtgärder
               och i den mån det är möjligt, med att fullgöra den Ansvariges skyldighet att besvara
               begäran från registrerade om utövande av sina rättigheter enligt GDPR kapitel III
-              (art. 12–23), däribland rätt till tillgång, rättelse, radering, begränsning,
+              (art. 12-23), däribland rätt till tillgång, rättelse, radering, begränsning,
               dataportabilitet och invändning.
             </p>
             <p>
@@ -170,7 +170,7 @@ export default function DPAPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">8. Dataintrångsnotifiering och bistånd enligt art. 32–36</CardTitle>
+            <CardTitle className="text-base">8. Dataintrångsnotifiering och bistånd enligt art. 32-36</CardTitle>
           </CardHeader>
           <CardContent className="prose prose-sm max-w-none">
             <p>
@@ -186,9 +186,9 @@ export default function DPAPage() {
             </ul>
             <p>
               Biträdet bistår den Ansvarige med att säkerställa att skyldigheterna enligt
-              art. 32–36 i GDPR fullgörs, med beaktande av behandlingens art och den information
+              art. 32-36 i GDPR fullgörs, med beaktande av behandlingens art och den information
               som Biträdet har tillgång till. Detta omfattar säkerhet i behandlingen (art. 32),
-              anmälan av personuppgiftsincidenter (art. 33–34), konsekvensbedömningar avseende
+              anmälan av personuppgiftsincidenter (art. 33-34), konsekvensbedömningar avseende
               dataskydd (art. 35, DPIA) samt förhandssamråd med Integritetsskyddsmyndigheten
               (IMY) (art. 36).
             </p>
@@ -243,7 +243,7 @@ export default function DPAPage() {
         <Card>
           <CardContent className="pt-6">
             <p className="text-sm text-muted-foreground text-center">
-              Detta personuppgiftsbitradesavtal träder i kraft när du skapar ett konto på
+              Detta personuppgiftsbiträdesavtal träder i kraft när du skapar ett konto på
               {' '}{appName} och gäller så länge du använder tjänsten. För frågor, kontakta oss
               på {privacyEmail}.
             </p>

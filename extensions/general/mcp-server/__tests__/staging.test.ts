@@ -7,7 +7,7 @@
  *
  * The schema-shape guard walks tools whose outputSchema is the staged
  * envelope and asserts the `next` property matches NEXT_ACTION_HINT_SCHEMA.
- * It doesn't try to test the runtime stagePendingOperation function — that
+ * It doesn't try to test the runtime stagePendingOperation function: that
  * has a transactional supabase dependency exercised by the per-tool tests.
  */
 import { describe, it, expect } from 'vitest'
@@ -94,7 +94,7 @@ describe('staged operation titles: must carry contextual data', () => {
       // Plain single/double quoted strings without ${} are static labels
       // and must clear a length bar that signals they include detail.
       if (t.startsWith('`') && t.includes('${')) return false
-      // Static title — require enough characters that the author must have
+      // Static title: require enough characters that the author must have
       // included at least one piece of context (name, number, period etc.)
       const inner = t.slice(1, -1)
       return inner.length < 25
@@ -134,14 +134,20 @@ describe('toToolError: retryable propagation', () => {
     expect(result.error.retryable).toBe(true)
   })
 
-  it('omits retryable on permanent validation/period errors', () => {
+  it('marks permanent validation/period errors retryable:false, explicitly, never absent', () => {
     const periodLocked = toToolError(new Error('locked/closed fiscal period'))
     expect(periodLocked.error.code).toBe('PERIOD_LOCKED')
-    expect(periodLocked.error.retryable).toBeUndefined()
+    expect(periodLocked.error.retryable).toBe(false)
 
     const tagged = Object.assign(new Error('validation'), { code: 'VALIDATION_ERROR' })
     const validation = toToolError(tagged)
-    expect(validation.error.retryable).toBeUndefined()
+    expect(validation.error.retryable).toBe(false)
+  })
+
+  it('categorize_transaction accepts idempotency_key so blind retries are replay-safe', () => {
+    const tool = tools.find((t) => t.name === 'gnubok_categorize_transaction')!
+    const schema = tool.inputSchema as { properties: Record<string, unknown> }
+    expect(schema.properties.idempotency_key).toBeDefined()
   })
 
   it('PERIOD_LOCKED carries a remediation pointing at gnubok_unlock_period', () => {

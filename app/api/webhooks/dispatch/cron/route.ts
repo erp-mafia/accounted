@@ -1,5 +1,5 @@
 /**
- * GET /api/webhooks/dispatch/cron — per-minute webhook delivery dispatcher.
+ * GET /api/webhooks/dispatch/cron: per-minute webhook delivery dispatcher.
  *
  * Picks up due deliveries (pending or retry-due failed) and POSTs them to
  * their configured receivers. Each cycle handles up to 50 deliveries; with

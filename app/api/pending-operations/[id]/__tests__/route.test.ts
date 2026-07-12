@@ -7,13 +7,19 @@ import {
 } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+
+// The route runs through the real withRouteContext wrapper: mock its auth,
+// company-resolution and write-permission dependencies (getActiveCompanyId,
+// not requireCompanyId, is what the wrapper calls) and inject the queued
+// Supabase mock via requireAuth so the route's own queries stay in sequence.
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
-const requireCompanyIdMock = vi.fn()
 vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: (...args: unknown[]) => requireCompanyIdMock(...args),
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
+  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
 const requireWritePermissionMock = vi.fn()
@@ -30,6 +36,11 @@ vi.mock('@/lib/bookkeeping/category-mapping', () => ({
   getCategoryAccountMapping: (...args: unknown[]) => accountMappingMock(...args),
 }))
 
+const buildLinesMock = vi.fn()
+vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
+  buildTransactionEntryLines: (...args: unknown[]) => buildLinesMock(...args),
+}))
+
 import { PATCH } from '../route'
 
 const mockUser = { id: 'user-1' }
@@ -37,9 +48,8 @@ const mockUser = { id: 'user-1' }
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+  requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
   requireWritePermissionMock.mockResolvedValue({ ok: true })
-  requireCompanyIdMock.mockResolvedValue('company-1')
   mappingMock.mockReturnValue({
     debit_account: '5410',
     credit_account: '1930',
@@ -52,11 +62,17 @@ beforeEach(() => {
     vatDebitAccount: '2641',
     vatCreditAccount: null,
   })
+  buildLinesMock.mockReturnValue([])
 })
 
 describe('PATCH /api/pending-operations/[id]', () => {
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    const { NextResponse } = await import('next/server')
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
     const res = await PATCH(
       createMockRequest('/api/pending-operations/op-1', {
         method: 'PATCH',
@@ -211,6 +227,58 @@ describe('PATCH /api/pending-operations/[id]', () => {
     expect(mappingMock).toHaveBeenCalledTimes(1)
   })
 
+  it('re-derives the full journal lines from the new mapping (stale-preview guard)', async () => {
+    enqueue({
+      data: {
+        id: 'op-1',
+        company_id: 'company-1',
+        operation_type: 'categorize_transaction',
+        status: 'pending',
+        params: { transaction_id: 'tx-1', category: 'expense_other', vat_treatment: null },
+        preview_data: {
+          debit_account: '6990',
+          credit_account: '1930',
+          amount: 500,
+          // Stale lines from staging — must be replaced, not spread through.
+          lines: [{ account_number: '6990', debit_amount: 400, credit_amount: 0 }],
+        },
+        title: 'Kategorisera: X',
+      },
+    })
+    enqueue({ data: { id: 'tx-1', company_id: 'company-1', amount: -500, currency: 'SEK' } })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: { id: 'op-1', params: {}, preview_data: {}, title: '', status: 'pending' } })
+
+    const mapping = {
+      debit_account: '5420',
+      credit_account: '1930',
+      vat_lines: [
+        { account_number: '2641', debit_amount: 100, credit_amount: 0, description: 'Ingående moms 25%' },
+      ],
+    }
+    mappingMock.mockReturnValue(mapping)
+    buildLinesMock.mockReturnValue([
+      { account_number: '2641', debit_amount: 100, credit_amount: 0, line_description: 'Ingående moms 25%' },
+      { account_number: '5420', debit_amount: 400, credit_amount: 0, line_description: 'Kostnad' },
+      { account_number: '1930', debit_amount: 0, credit_amount: 500, line_description: 'X' },
+    ])
+
+    const res = await PATCH(
+      createMockRequest('/api/pending-operations/op-1', {
+        method: 'PATCH',
+        body: { category: 'expense_software' },
+      }),
+      createMockRouteParams({ id: 'op-1' }),
+    )
+
+    expect(res.status).toBe(200)
+    expect(buildLinesMock).toHaveBeenCalledTimes(1)
+    expect(buildLinesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'tx-1' }),
+      mapping,
+    )
+  })
+
   it('preserves a staged vat_amount override when the new treatment still carries VAT', async () => {
     enqueue({
       data: {
@@ -241,7 +309,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     )
     expect(res.status).toBe(200)
     // 6th arg = vat_amount override, carried over from the staged params
-    // (vat_treatment persists too — only the category changed)
+    // (vat_treatment persists too, only the category changed)
     expect(mappingMock).toHaveBeenCalledWith(
       'expense_office', expect.anything(), true, 'enskild_firma', 'reduced_12', 42.43,
     )

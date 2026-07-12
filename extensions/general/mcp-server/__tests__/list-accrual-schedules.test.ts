@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest'
 import { tools } from '../server'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
-describe('gnubok_list_accrual_schedules — registration', () => {
+describe('gnubok_list_accrual_schedules: registration', () => {
   it('is registered and read-only', () => {
     const tool = tools.find((t) => t.name === 'gnubok_list_accrual_schedules')
     expect(tool).toBeDefined()

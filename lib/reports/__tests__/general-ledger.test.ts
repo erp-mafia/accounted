@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — table-keyed result queues
+// Mock: table-keyed result queues
+//
+// The report fetches lines via the two-step entry-lines helper
+// (lib/bookkeeping/entry-lines.ts): journal_entries first, then
+// journal_entry_lines by entry id, reattaching the parent entry on each line
+// under `journal_entries`. Tests queue entry rows (with the entry fields the
+// report reads) and line rows that reference them via journal_entry_id.
 // ============================================================
 
 type MockResult = { data?: unknown; error?: unknown }
@@ -61,10 +67,8 @@ describe('generateGeneralLedger', () => {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       ],
-      journal_entry_lines: [
-        // period lines — empty (prior lines come from RPC, defaults to empty)
-        { data: [], error: null },
-      ],
+      // No matching entries → the line query is skipped entirely.
+      journal_entries: [{ data: [], error: null }],
     }
 
     const report = await generateGeneralLedger(supabase, 'company-1', 'period-1')
@@ -77,15 +81,24 @@ describe('generateGeneralLedger', () => {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       ],
-      journal_entry_lines: [
-        // period lines (joined with entry data)
+      journal_entries: [
         {
           data: [
-            { account_number: '1510', debit_amount: 1250, credit_amount: 0, journal_entries: { entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Sale', source_type: 'invoice' } },
-            { account_number: '3001', debit_amount: 0, credit_amount: 1000, journal_entries: { entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Sale', source_type: 'invoice' } },
-            { account_number: '2611', debit_amount: 0, credit_amount: 250, journal_entries: { entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Sale', source_type: 'invoice' } },
-            { account_number: '1930', debit_amount: 1250, credit_amount: 0, journal_entries: { entry_date: '2024-02-10', voucher_number: 2, voucher_series: 'A', description: 'Payment', source_type: 'transaction' } },
-            { account_number: '1510', debit_amount: 0, credit_amount: 1250, journal_entries: { entry_date: '2024-02-10', voucher_number: 2, voucher_series: 'A', description: 'Payment', source_type: 'transaction' } },
+            { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Sale', source_type: 'invoice' },
+            { id: 'e2', entry_date: '2024-02-10', voucher_number: 2, voucher_series: 'A', description: 'Payment', source_type: 'transaction' },
+          ],
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        // period lines (parent entry reattached from the entries fetch)
+        {
+          data: [
+            { account_number: '1510', debit_amount: 1250, credit_amount: 0, journal_entry_id: 'e1' },
+            { account_number: '3001', debit_amount: 0, credit_amount: 1000, journal_entry_id: 'e1' },
+            { account_number: '2611', debit_amount: 0, credit_amount: 250, journal_entry_id: 'e1' },
+            { account_number: '1930', debit_amount: 1250, credit_amount: 0, journal_entry_id: 'e2' },
+            { account_number: '1510', debit_amount: 0, credit_amount: 1250, journal_entry_id: 'e2' },
           ],
           error: null,
         },
@@ -125,34 +138,43 @@ describe('generateGeneralLedger', () => {
   })
 
   it('does not double a balance when an unstable page boundary re-serves a line (#790/#791)', async () => {
-    // Reproduces the doubling bug's mechanism: a paginated query whose order
-    // was not stable can return the same journal_entry_line on two pages.
-    // Page 1 must be a FULL page (PAGE_SIZE rows) so fetchAllRows fetches a
-    // second page; page 2 re-serves the 5010 line. dedupeBy(line id) must
-    // collapse it so the single 4000 posting totals 4000, not 8000.
+    // Reproduces the doubling bug's mechanism: a paginated LINE query whose
+    // order was not stable can return the same journal_entry_line on two
+    // pages. Page 1 must be a FULL page (PAGE_SIZE rows) so fetchAllRows
+    // fetches a second page; page 2 re-serves the 5010 line. dedupeBy(line id)
+    // must collapse it so the single 4000 posting totals 4000, not 8000.
     const PAGE_SIZE = 1000
     const filler = Array.from({ length: PAGE_SIZE - 1 }, (_, i) => ({
       id: `f${i}`,
       account_number: '1930',
       debit_amount: 0,
       credit_amount: 0,
-      journal_entries: { entry_date: '2024-01-02', voucher_number: 1, voucher_series: 'A', description: 'filler', source_type: 'manual' },
+      journal_entry_id: 'e1',
     }))
     const rentLine = {
       id: 'rent-line-1',
       account_number: '5010',
       debit_amount: 4000,
       credit_amount: 0,
-      journal_entries: { entry_date: '2024-01-15', voucher_number: 2, voucher_series: 'A', description: 'Lokalhyra', source_type: 'manual' },
+      journal_entry_id: 'e2',
     }
 
     mockResults = {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2024-01-02', voucher_number: 1, voucher_series: 'A', description: 'filler', source_type: 'manual' },
+            { id: 'e2', entry_date: '2024-01-15', voucher_number: 2, voucher_series: 'A', description: 'Lokalhyra', source_type: 'manual' },
+          ],
+          error: null,
+        },
+      ],
       journal_entry_lines: [
-        { data: [...filler, rentLine], error: null }, // page 1 — full → triggers page 2
-        { data: [rentLine], error: null },            // page 2 — duplicate of the 5010 line
+        { data: [...filler, rentLine], error: null }, // page 1: full → triggers page 2
+        { data: [rentLine], error: null },            // page 2: duplicate of the 5010 line
       ],
       chart_of_accounts: [
         {
@@ -183,12 +205,20 @@ describe('generateGeneralLedger', () => {
           error: null,
         },
       ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2025-03-01', voucher_number: 1, voucher_series: 'A', description: 'Purchase', source_type: 'manual' },
+          ],
+          error: null,
+        },
+      ],
       journal_entry_lines: [
         // period lines
         {
           data: [
-            { account_number: '1930', debit_amount: 0, credit_amount: 500, journal_entries: { entry_date: '2025-03-01', voucher_number: 1, voucher_series: 'A', description: 'Purchase', source_type: 'manual' } },
-            { account_number: '5410', debit_amount: 500, credit_amount: 0, journal_entries: { entry_date: '2025-03-01', voucher_number: 1, voucher_series: 'A', description: 'Purchase', source_type: 'manual' } },
+            { account_number: '1930', debit_amount: 0, credit_amount: 500, journal_entry_id: 'e1' },
+            { account_number: '5410', debit_amount: 500, credit_amount: 0, journal_entry_id: 'e1' },
           ],
           error: null,
         },
@@ -217,13 +247,21 @@ describe('generateGeneralLedger', () => {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Test', source_type: 'manual' },
+          ],
+          error: null,
+        },
+      ],
       journal_entry_lines: [
         // period lines across multiple accounts
         {
           data: [
-            { account_number: '1510', debit_amount: 1000, credit_amount: 0, journal_entries: { entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Test', source_type: 'manual' } },
-            { account_number: '1930', debit_amount: 0, credit_amount: 500, journal_entries: { entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Test', source_type: 'manual' } },
-            { account_number: '3001', debit_amount: 0, credit_amount: 500, journal_entries: { entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Test', source_type: 'manual' } },
+            { account_number: '1510', debit_amount: 1000, credit_amount: 0, journal_entry_id: 'e1' },
+            { account_number: '1930', debit_amount: 0, credit_amount: 500, journal_entry_id: 'e1' },
+            { account_number: '3001', debit_amount: 0, credit_amount: 500, journal_entry_id: 'e1' },
           ],
           error: null,
         },
@@ -235,7 +273,7 @@ describe('generateGeneralLedger', () => {
 
     const report = await generateGeneralLedger(supabase, 'company-1', 'period-1', '1500', '1999')
 
-    // Only accounts in 1500–1999 range
+    // Only accounts in 1500-1999 range
     expect(report.accounts.map((a) => a.account_number)).toEqual(['1510', '1930'])
   })
 
@@ -244,13 +282,23 @@ describe('generateGeneralLedger', () => {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       ],
-      journal_entry_lines: [
-        // period lines — out of order
+      journal_entries: [
         {
           data: [
-            { account_number: '1930', debit_amount: 100, credit_amount: 0, journal_entries: { entry_date: '2024-01-10', voucher_number: 2, voucher_series: 'A', description: 'Second', source_type: 'manual' } },
-            { account_number: '1930', debit_amount: 200, credit_amount: 0, journal_entries: { entry_date: '2024-01-10', voucher_number: 1, voucher_series: 'A', description: 'First', source_type: 'manual' } },
-            { account_number: '1930', debit_amount: 300, credit_amount: 0, journal_entries: { entry_date: '2024-01-05', voucher_number: 3, voucher_series: 'A', description: 'Earlier date', source_type: 'manual' } },
+            { id: 'e1', entry_date: '2024-01-10', voucher_number: 2, voucher_series: 'A', description: 'Second', source_type: 'manual' },
+            { id: 'e2', entry_date: '2024-01-10', voucher_number: 1, voucher_series: 'A', description: 'First', source_type: 'manual' },
+            { id: 'e3', entry_date: '2024-01-05', voucher_number: 3, voucher_series: 'A', description: 'Earlier date', source_type: 'manual' },
+          ],
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        // period lines: out of order
+        {
+          data: [
+            { account_number: '1930', debit_amount: 100, credit_amount: 0, journal_entry_id: 'e1' },
+            { account_number: '1930', debit_amount: 200, credit_amount: 0, journal_entry_id: 'e2' },
+            { account_number: '1930', debit_amount: 300, credit_amount: 0, journal_entry_id: 'e3' },
           ],
           error: null,
         },
@@ -263,10 +311,102 @@ describe('generateGeneralLedger', () => {
     const report = await generateGeneralLedger(supabase, 'company-1', 'period-1')
     const acc = report.accounts[0]
 
-    // e3 (Jan 5) first, then e1 (Jan 10, #1), then e2 (Jan 10, #2)
+    // e3 (Jan 5) first, then e2 (Jan 10, #1), then e1 (Jan 10, #2)
     expect(acc.lines[0].description).toBe('Earlier date')
     expect(acc.lines[1].description).toBe('First')
     expect(acc.lines[2].description).toBe('Second')
+  })
+
+  it('rolls lines before fromDate into the opening balance and drops lines after toDate', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      'rpc:compute_prior_opening_balances': [
+        {
+          data: [{ account_number: '1930', debit: 10000, credit: 0 }],
+          error: null,
+        },
+      ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2026-03-15', voucher_number: 1, voucher_series: 'A', description: 'Pre-range', source_type: 'manual' },
+            { id: 'e2', entry_date: '2026-06-10', voucher_number: 2, voucher_series: 'A', description: 'In range', source_type: 'manual' },
+            { id: 'e3', entry_date: '2026-09-01', voucher_number: 3, voucher_series: 'A', description: 'Post-range', source_type: 'manual' },
+          ],
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        {
+          data: [
+            // Before the range: rolls into opening
+            { account_number: '1930', debit_amount: 0, credit_amount: 2000, journal_entry_id: 'e1' },
+            // Inside the range: shown
+            { account_number: '1930', debit_amount: 500, credit_amount: 0, journal_entry_id: 'e2' },
+            // After the range: dropped entirely
+            { account_number: '1930', debit_amount: 0, credit_amount: 300, journal_entry_id: 'e3' },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [
+        { data: [{ account_number: '1930', account_name: 'Företagskonto' }], error: null },
+      ],
+    }
+
+    const report = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      fromDate: '2026-06-01',
+      toDate: '2026-06-30',
+    })
+
+    const acc = report.accounts.find((a) => a.account_number === '1930')!
+    // Opening at range start = period IB 10000 - pre-range 2000
+    expect(acc.opening_balance).toBe(8000)
+    expect(acc.lines).toHaveLength(1)
+    expect(acc.lines[0].description).toBe('In range')
+    expect(acc.lines[0].balance).toBe(8500)
+    // Closing = opening + in-range movement only; post-range line excluded
+    expect(acc.closing_balance).toBe(8500)
+    expect(report.period).toEqual({ start: '2026-06-01', end: '2026-06-30' })
+  })
+
+  it('keeps an account visible when all its lines fall before the range', async () => {
+    mockResults = {
+      fiscal_periods: [
+        { data: { period_start: '2026-01-01', period_end: '2026-12-31', opening_balance_entry_id: null }, error: null },
+      ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2026-02-01', voucher_number: 1, voucher_series: 'A', description: 'Hyra feb', source_type: 'manual' },
+          ],
+          error: null,
+        },
+      ],
+      journal_entry_lines: [
+        {
+          data: [
+            { account_number: '5010', debit_amount: 4000, credit_amount: 0, journal_entry_id: 'e1' },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [
+        { data: [{ account_number: '5010', account_name: 'Lokalhyra' }], error: null },
+      ],
+    }
+
+    const report = await generateGeneralLedger(supabase, 'company-1', 'period-1', undefined, undefined, {
+      fromDate: '2026-06-01',
+      toDate: '2026-06-30',
+    })
+
+    const acc = report.accounts.find((a) => a.account_number === '5010')!
+    expect(acc.opening_balance).toBe(4000)
+    expect(acc.lines).toHaveLength(0)
+    expect(acc.closing_balance).toBe(4000)
   })
 
   it('uses Math.round for monetary precision', async () => {
@@ -274,10 +414,18 @@ describe('generateGeneralLedger', () => {
       fiscal_periods: [
         { data: { period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null },
       ],
+      journal_entries: [
+        {
+          data: [
+            { id: 'e1', entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Precision', source_type: 'manual' },
+          ],
+          error: null,
+        },
+      ],
       journal_entry_lines: [
         {
           data: [
-            { account_number: '1930', debit_amount: 33.33, credit_amount: 0, journal_entries: { entry_date: '2024-01-15', voucher_number: 1, voucher_series: 'A', description: 'Precision', source_type: 'manual' } },
+            { account_number: '1930', debit_amount: 33.33, credit_amount: 0, journal_entry_id: 'e1' },
           ],
           error: null,
         },

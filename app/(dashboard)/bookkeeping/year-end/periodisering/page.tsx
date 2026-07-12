@@ -364,7 +364,7 @@ export default function PeriodiseringWizardPage() {
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <h1 className="font-display text-3xl md:text-4xl tracking-tight">
-          {closingYear ? `Periodisering — Bokslut ${closingYear}` : 'Periodisering'}
+          {closingYear ? `Periodisering: Bokslut ${closingYear}` : 'Periodisering'}
         </h1>
         <Button variant="outline" asChild>
           <Link href="/bookkeeping/year-end">
@@ -542,7 +542,7 @@ function VacationStep({
             </div>
           ) : (
             <p className="text-sm text-muted-foreground italic">
-              Ingen justering behövs — semesterlöneskulden ligger redan rätt.
+              Ingen justering behövs: semesterlöneskulden ligger redan rätt.
             </p>
           )}
         </CardContent>
@@ -610,8 +610,8 @@ function AuditStep({
                     onChange({ ...state, liabilityAccount: e.target.value as '2991' | '2992' })
                   }
                 >
-                  <option value="2992">2992 — Revision</option>
-                  <option value="2991">2991 — Bokslut</option>
+                  <option value="2992">2992: Revision</option>
+                  <option value="2991">2991: Bokslut</option>
                 </select>
               </div>
             </div>
@@ -651,7 +651,7 @@ function AutoStep({
           <p className="text-sm text-muted-foreground">
             Fakturor (kund och leverantör) i den stängda perioden vars beskrivning
             innehåller en datumintervall som sträcker sig in i nästa räkenskapsår.
-            Granska och bekräfta — högst säkra förslag är förvalda.
+            Granska och bekräfta: högst säkra förslag är förvalda.
           </p>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -808,7 +808,7 @@ function ManualEntryEditor({
     <div className="rounded-md border border-border p-3 space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">{template.name}</p>
-        <Button variant="ghost" size="sm" onClick={onRemove} className="h-7 px-2">
+        <Button variant="ghost" size="sm" onClick={onRemove} className="h-7 px-2" aria-label="Ta bort">
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>

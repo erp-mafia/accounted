@@ -1,14 +1,19 @@
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 
 /**
  * GET /api/team/members
- * Returns team members (single-user teams — no invitations).
+ * Returns team members (single-user teams, no invitations).
+ *
+ * Team-scoped (not company-scoped): a brand-new user with no company must
+ * still get a valid empty response (ownsCompany: false), so this uses
+ * requireAuth() directly rather than withRouteContext, which would require an
+ * active company context. requireAuth still enforces MFA (AAL2) on hosted.
  */
 export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const { user, error } = await requireAuth()
+  if (error) return error
 
   const serviceClient = await createServiceClient()
 
@@ -21,7 +26,7 @@ export async function GET() {
     .single()
 
   if (!myMembership) {
-    // User is not in any team — check if they own a company (could start a team)
+    // User is not in any team: check if they own a company (could start a team)
     const { data: ownedCompany } = await serviceClient
       .from('company_members')
       .select('id')

@@ -15,16 +15,16 @@ import { formatCurrency } from '@/lib/utils'
 // Inline approval card for an agent-staged pending_operation.
 //
 // Risk tiers (plan §9, §12):
-//   low    — single-click "Godkänn". Trust UI for auto-approve lives
+//   low:    single-click "Godkänn". Trust UI for auto-approve lives
 //            post-V0 (data model supports it via agent_profiles.trust_per_tool).
-//   medium — single-click "Godkänn".
-//   high   — requires the user to type "godkänn" verbatim. Never auto-
+//   medium: single-click "Godkänn".
+//   high:   requires the user to type "godkänn" verbatim. Never auto-
 //            approvable, by design (legal compliance).
 //
 // Reject is always one-click.
 //
 // The card posts to the existing /api/pending-operations/<id>/{commit,reject}
-// endpoints — same surface the Accounted "Förslag" page uses, so there is
+// endpoints: same surface the Accounted "Förslag" page uses, so there is
 // exactly one approval source of record.
 //
 // Structured preview: when the staged envelope carries a preview object, we
@@ -45,7 +45,7 @@ interface Props {
   toolName?: string
   preview?: unknown
   periodStatus?: PeriodStatus
-  // Fired after a reject that carries a reason — the chat feeds this synthetic
+  // Fired after a reject that carries a reason: the chat feeds this synthetic
   // correction back as a hidden user turn so the agent re-proposes inline.
   onRequestCorrection?: (correctionMessage: string) => void
 }
@@ -65,13 +65,19 @@ const REJECTION_CATEGORY_LABELS: Record<PendingOperationRejectionCategory, strin
 
 // Subset of fields the commit response may return that the success state
 // uses to deep-link to the freshly-created artifact. Different
-// operation_types return different shapes — only the ones we actually
+// operation_types return different shapes: only the ones we actually
 // surface as links are declared.
 interface CommitResultData {
   journal_entry_id?: string | null
   invoice_id?: string | null
   customer_id?: string | null
   supplier_invoice_id?: string | null
+  // bulk_book_inbox_items creates N verifikationer, not one artifact: the
+  // executor returns per-item counts instead of a single id. Surfaced as a
+  // "N bokförda" summary + a link to the ledger (or the sole verifikat).
+  booked_count?: number
+  skipped_count?: number
+  booked?: Array<{ journal_entry_id?: string | null }>
 }
 
 export default function ApprovalCard({
@@ -86,7 +92,7 @@ export default function ApprovalCard({
   // Gating the AI re-propose path only: approving/rejecting the staged
   // operation is manual ledger work and stays enabled without the AI add-on.
   // What's paid is feeding a rejection back so the agent generates a *new*
-  // proposal (an LLM call) — that's suppressed when the company lacks `ai`.
+  // proposal (an LLM call): that's suppressed when the company lacks `ai`.
   const hasAi = useCapability(CAPABILITY.ai)
   const [state, setState] = useState<State>('pending')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -124,7 +130,7 @@ export default function ApprovalCard({
       }
       if (!res.ok) {
         // Recoverable: the booking posts to BAS accounts not active in the
-        // chart. Offer to activate them and retry — the op stays pending.
+        // chart. Offer to activate them and retry: the op stays pending.
         const structured = typeof body.error === 'object' && body.error !== null ? body.error : null
         if (structured?.code === 'ACCOUNTS_NOT_IN_CHART' && structured.account_numbers?.length) {
           setAccountsToActivate(structured.account_numbers)
@@ -172,7 +178,7 @@ export default function ApprovalCard({
     setErrorMessage(null)
     const categoryLabel = rejectCategory ? REJECTION_CATEGORY_LABELS[rejectCategory] : null
     const reason = rejectReason.trim()
-    // Both fields optional — a bare "Avvisa" still rejects (parity with the
+    // Both fields optional: a bare "Avvisa" still rejects (parity with the
     // granskning dialog and older bodyless clients).
     const body =
       rejectCategory || reason
@@ -194,12 +200,12 @@ export default function ApprovalCard({
       }
       setShowRejectForm(false)
       setState('rejected')
-      // Feed the correction back so the agent re-proposes — only when the user
+      // Feed the correction back so the agent re-proposes: only when the user
       // actually said what was wrong. A bare reject just stops here.
       const parts = [categoryLabel, reason].filter(Boolean) as string[]
       if (hasAi && parts.length > 0) {
         onRequestCorrection?.(
-          `Jag avvisade förslaget. Det som var fel: ${parts.join(' — ')}. Föreslå en korrigerad bokning.`,
+          `Jag avvisade förslaget. Det som var fel: ${parts.join(', ')}. Föreslå en korrigerad bokning.`,
         )
       }
     } catch (err) {
@@ -234,10 +240,26 @@ export default function ApprovalCard({
         label: 'Öppna kund',
       }
     }
+    // Bulk operations (bulk_book_inbox_items) book N underlag at once and return
+    // counts instead of a single id. Show the outcome ("N bokförda · M
+    // överhoppade") (a bulk commit silently skips non-bookable items, so
+    // without this the user can't tell whether anything was booked) and link to
+    // the ledger list, or straight to the sole verifikat when exactly one landed.
+    const bulkSummary =
+      typeof commitResult?.booked_count === 'number'
+        ? { booked: commitResult.booked_count, skipped: commitResult.skipped_count ?? 0 }
+        : null
+    if (bulkSummary && !deepLink) {
+      const soleEntryId =
+        bulkSummary.booked === 1 ? commitResult?.booked?.[0]?.journal_entry_id : null
+      deepLink = soleEntryId
+        ? { href: `/bookkeeping/${soleEntryId}`, label: 'Öppna verifikation' }
+        : { href: '/bookkeeping', label: 'Öppna bokföringen' }
+    }
     // The server's `message` field (e.g. "Operation staged for review …
     // Open the Accounted web app to approve or reject it.") was written for
     // MCP clients without an inline approval surface. Inside the in-app
-    // chat it's redundant noise — the agent already narrated the why
+    // chat it's redundant noise: the agent already narrated the why
     // above the card. We keep it accessible via aria-description for
     // screen readers but don't render it.
     return (
@@ -248,6 +270,12 @@ export default function ApprovalCard({
         <p className="flex items-center gap-2 font-medium">
           <Check className="h-4 w-4" /> Godkänt
         </p>
+        {bulkSummary && (
+          <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+            {bulkSummary.booked} {bulkSummary.booked === 1 ? 'underlag bokfört' : 'underlag bokförda'}
+            {bulkSummary.skipped > 0 ? ` · ${bulkSummary.skipped} överhoppade` : ''}
+          </p>
+        )}
         {deepLink && (
           <Link
             href={deepLink.href}
@@ -307,7 +335,7 @@ export default function ApprovalCard({
         <div className="space-y-1">
           <p className="flex items-center gap-2 text-xs text-destructive">
             <AlertTriangle className="h-3.5 w-3.5" />
-            Hög risk — skriv <strong className="font-semibold">godkänn</strong> för att bekräfta.
+            Hög risk: skriv <strong className="font-semibold">godkänn</strong> för att bekräfta.
           </p>
           <input
             type="text"
@@ -441,7 +469,7 @@ export default function ApprovalCard({
           {/* Keep in sync with EXPIRY_DAYS in
               app/api/pending-operations/expire/cron/route.ts. */}
           <p className="text-[11px] text-muted-foreground">
-            Om du inte gör något utgår förslaget automatiskt efter 30 dagar — inget bokförs.
+            Om du inte gör något utgår förslaget automatiskt efter 30 dagar, inget bokförs.
           </p>
         </>
       )}
@@ -479,24 +507,24 @@ function PreviewBlock({ toolName, preview }: PreviewBlockProps) {
 // 20 categories from types/index.ts TransactionCategory. Kept inline so the
 // component has no cross-module enum import; sync if the type changes.
 const CATEGORY_OPTIONS: { value: string; label: string }[] = [
-  { value: 'income_services', label: 'Intäkt — tjänster' },
-  { value: 'income_products', label: 'Intäkt — produkter' },
-  { value: 'income_other', label: 'Intäkt — övrigt' },
-  { value: 'expense_software', label: 'Kostnad — mjukvara' },
-  { value: 'expense_equipment', label: 'Kostnad — utrustning' },
-  { value: 'expense_office', label: 'Kostnad — kontor' },
-  { value: 'expense_travel', label: 'Kostnad — resor' },
-  { value: 'expense_marketing', label: 'Kostnad — marknadsföring' },
-  { value: 'expense_professional_services', label: 'Kostnad — konsult/tjänster' },
-  { value: 'expense_education', label: 'Kostnad — utbildning' },
-  { value: 'expense_representation', label: 'Kostnad — representation' },
-  { value: 'expense_consumables', label: 'Kostnad — förbrukning' },
-  { value: 'expense_vehicle', label: 'Kostnad — fordon' },
-  { value: 'expense_telecom', label: 'Kostnad — telefon/internet' },
-  { value: 'expense_bank_fees', label: 'Kostnad — bankavgifter' },
-  { value: 'expense_card_fees', label: 'Kostnad — kortavgifter' },
-  { value: 'expense_currency_exchange', label: 'Kostnad — valutaväxling' },
-  { value: 'expense_other', label: 'Kostnad — övrigt' },
+  { value: 'income_services', label: 'Intäkt: tjänster' },
+  { value: 'income_products', label: 'Intäkt: produkter' },
+  { value: 'income_other', label: 'Intäkt: övrigt' },
+  { value: 'expense_software', label: 'Kostnad: mjukvara' },
+  { value: 'expense_equipment', label: 'Kostnad: utrustning' },
+  { value: 'expense_office', label: 'Kostnad: kontor' },
+  { value: 'expense_travel', label: 'Kostnad: resor' },
+  { value: 'expense_marketing', label: 'Kostnad: marknadsföring' },
+  { value: 'expense_professional_services', label: 'Kostnad: konsult/tjänster' },
+  { value: 'expense_education', label: 'Kostnad: utbildning' },
+  { value: 'expense_representation', label: 'Kostnad: representation' },
+  { value: 'expense_consumables', label: 'Kostnad: förbrukning' },
+  { value: 'expense_vehicle', label: 'Kostnad: fordon' },
+  { value: 'expense_telecom', label: 'Kostnad: telefon/internet' },
+  { value: 'expense_bank_fees', label: 'Kostnad: bankavgifter' },
+  { value: 'expense_card_fees', label: 'Kostnad: kortavgifter' },
+  { value: 'expense_currency_exchange', label: 'Kostnad: valutaväxling' },
+  { value: 'expense_other', label: 'Kostnad: övrigt' },
   { value: 'private', label: 'Privat uttag' },
 ]
 
@@ -510,9 +538,19 @@ function CategorizeTransactionPreview({
   const amount = preview.amount as number | undefined
   const currency = (preview.currency as string | undefined) ?? 'SEK'
   const category = preview.category as string | undefined
-  // Server emits { account_number, debit_amount, credit_amount, description }
-  // per VAT line (extensions/general/mcp-server/server.ts:390-395). One side
-  // is non-zero, the other 0 — render the active side with D/K prefix.
+  // The exact journal lines the approval will post (net cost line, VAT line,
+  // gross bank line, SEK), staged by the server since the preview-lines fix.
+  const lines = (preview.lines as
+    | {
+        account_number?: string
+        debit_amount?: number
+        credit_amount?: number
+        description?: string
+      }[]
+    | undefined) ?? []
+  // Legacy summary fields, rendered only for operations staged before the
+  // preview carried full lines. Pairing the gross amount with the cost
+  // account reads as an unbalanced entry: never show it when lines exist.
   const vatLines = (preview.vat_lines as
     | {
         account_number?: string
@@ -532,42 +570,69 @@ function CategorizeTransactionPreview({
           {prettyCategory(category)}
         </span>
       </div>
-      {debit && credit && amount != null && (
-        <Row
-          label="Bokning"
-          value={
-            <span className="tabular-nums">
-              <span className="text-muted-foreground">D </span>
-              <strong className="font-medium">{debit}</strong>
-              <span className="text-muted-foreground"> / K </span>
-              <strong className="font-medium">{credit}</strong>
-              <span className="ml-2">{formatCurrency(amount, currency)}</span>
-            </span>
-          }
-        />
-      )}
-      {vatLines.length > 0 && (
-        <div className="pt-1 mt-1 border-t border-border">
-          {vatLines.map((v, i) => {
-            const debit = typeof v.debit_amount === 'number' ? v.debit_amount : 0
-            const credit = typeof v.credit_amount === 'number' ? v.credit_amount : 0
-            const side: 'D' | 'K' | null = debit > 0 ? 'D' : credit > 0 ? 'K' : null
-            const amount = side === 'D' ? debit : side === 'K' ? credit : 0
+      {lines.length > 0 ? (
+        <div className="pt-1 mt-1 border-t border-border space-y-0.5">
+          {lines.map((l, i) => {
+            const debitAmt = typeof l.debit_amount === 'number' ? l.debit_amount : 0
+            const creditAmt = typeof l.credit_amount === 'number' ? l.credit_amount : 0
+            const side: 'D' | 'K' = debitAmt > 0 ? 'D' : 'K'
             return (
               <Row
                 key={i}
-                label={i === 0 ? 'Moms' : ''}
+                label={i === 0 ? 'Verifikat' : ''}
                 value={
                   <span className="tabular-nums">
-                    {side && <span className="text-muted-foreground">{side} </span>}
-                    <span className="text-muted-foreground">{v.account_number ?? ''} </span>
-                    {formatCurrency(amount, currency)}
+                    <span className="text-muted-foreground">{side} </span>
+                    <strong className="font-medium">{l.account_number ?? '?'}</strong>
+                    <span className="ml-2">
+                      {formatCurrency(side === 'D' ? debitAmt : creditAmt)}
+                    </span>
                   </span>
                 }
               />
             )
           })}
         </div>
+      ) : (
+        <>
+          {debit && credit && amount != null && (
+            <Row
+              label="Bokning"
+              value={
+                <span className="tabular-nums">
+                  <span className="text-muted-foreground">D </span>
+                  <strong className="font-medium">{debit}</strong>
+                  <span className="text-muted-foreground"> / K </span>
+                  <strong className="font-medium">{credit}</strong>
+                  <span className="ml-2">{formatCurrency(amount, currency)}</span>
+                </span>
+              }
+            />
+          )}
+          {vatLines.length > 0 && (
+            <div className="pt-1 mt-1 border-t border-border">
+              {vatLines.map((v, i) => {
+                const debit = typeof v.debit_amount === 'number' ? v.debit_amount : 0
+                const credit = typeof v.credit_amount === 'number' ? v.credit_amount : 0
+                const side: 'D' | 'K' | null = debit > 0 ? 'D' : credit > 0 ? 'K' : null
+                const amount = side === 'D' ? debit : side === 'K' ? credit : 0
+                return (
+                  <Row
+                    key={i}
+                    label={i === 0 ? 'Moms' : ''}
+                    value={
+                      <span className="tabular-nums">
+                        {side && <span className="text-muted-foreground">{side} </span>}
+                        <span className="text-muted-foreground">{v.account_number ?? ''} </span>
+                        {formatCurrency(amount, currency)}
+                      </span>
+                    }
+                  />
+                )
+              })}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

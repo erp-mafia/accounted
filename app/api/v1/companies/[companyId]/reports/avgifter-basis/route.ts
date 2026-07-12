@@ -1,7 +1,7 @@
 /**
  * GET /api/v1/companies/{companyId}/reports/avgifter-basis
  *
- * Annual arbetsgivaravgifter basis per employee — feeds the AGI HU
+ * Annual arbetsgivaravgifter basis per employee: feeds the AGI HU
  * verification.
  */
 
@@ -19,7 +19,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/reports/avgifter-basis',
   summary: 'Annual arbetsgivaravgifter basis per employee.',
   description:
-    'Returns the annual avgifter basis per employee for `year`, summed across booked salary runs. Each row shows the basis, applied rate, and computed avgifter amount — useful for reconciling against monthly AGI filings (HU sum across the year).',
+    'Returns the annual avgifter basis per employee for `year`, summed across booked salary runs. Each row shows the basis, applied rate, and computed avgifter amount: useful for reconciling against monthly AGI filings (HU sum across the year).',
   useWhen:
     'Annual reconciliation between the AGI declarations and the bookkeeping (BAS 7510). Year-end audit prep.',
   doNotUseFor:

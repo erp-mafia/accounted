@@ -1,7 +1,7 @@
 import type { UiWidget } from './types'
 
 /**
- * Receipt Matcher Widget — MCP Apps inline HTML.
+ * Receipt Matcher Widget: MCP Apps inline HTML.
  * Drag-and-drop receipt attachment for uncategorized bank transactions.
  * Triggered by the gnubok_receipt_matcher tool.
  */
@@ -11,7 +11,7 @@ export const RECEIPT_MATCHER_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Kvittomatchning — Accounted</title>
+<title>Kvittomatchning - Accounted</title>
 <style>
   :root {
     --bg: #fafafa;
@@ -306,7 +306,7 @@ export const RECEIPT_MATCHER_HTML = `<!DOCTYPE html>
           bookTransaction(idx);
         });
       } else {
-        // PDF — send as-is (no resize)
+        // PDF: send as-is (no resize)
         transactions[idx]._file = file.name;
         transactions[idx]._dataUri = reader.result;
         transactions[idx]._mimeType = file.type;

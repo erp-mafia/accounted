@@ -11,7 +11,7 @@ interface Props {
   alt?: string
 }
 
-// Renders the agent's avatar — either the chosen dicebear SVG from the
+// Renders the agent's avatar: either the chosen dicebear SVG from the
 // AVATAR_OPTIONS registry, or a fallback MessageCircle glyph on a dark circle
 // when no avatar is set yet (free tier / older profiles).
 //

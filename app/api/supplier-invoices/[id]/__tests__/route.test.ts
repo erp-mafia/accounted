@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import {
   createMockRequest,
   parseJsonResponse,
@@ -7,8 +8,10 @@ import {
 } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 vi.mock('@/lib/company/context', () => ({
@@ -28,7 +31,7 @@ describe('DELETE /api/supplier-invoices/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
   })
 
   function deleteRequest() {
@@ -39,7 +42,11 @@ describe('DELETE /api/supplier-invoices/[id]', () => {
   }
 
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
 
     const response = await deleteRequest()
     expect(response.status).toBe(401)
@@ -103,7 +110,7 @@ describe('DELETE /api/supplier-invoices/[id]', () => {
     expect(body.error.code).toBe('SI_DELETE_HAS_BOOKING')
     expect(body.error.details.reason).toBe('accrual_schedule')
     expect(body.error.details.scheduleId).toBe('sched-1')
-    // Only the existence fetch + schedule lookup ran — no item deletion.
+    // Only the existence fetch + schedule lookup ran: no item deletion.
     expect(mockSupabase.from).toHaveBeenCalledTimes(2)
   })
 

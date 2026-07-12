@@ -8,7 +8,7 @@ import type { AtomSelection } from './schemas'
 // enough that the user can proceed; they can refine atom selection in Phase B
 // or rebuild later.
 //
-// We pick deliberately conservatively — better to load a few extra horizontals
+// We pick deliberately conservatively: better to load a few extra horizontals
 // than to miss one. The agent loop pays for cache, not for content; an extra
 // 8k tokens of swedish-financial-reporting on a sole-trader profile is cheap
 // noise, while missing swedish-vat on any Swedish company is a correctness bug.
@@ -48,8 +48,8 @@ export function fallbackAtomSelection(inputs: ComposerInputs): AtomSelection {
     pushIfKnown(horizontal, 'horizontal/swedish-payroll', has)
   }
 
-  // Vertical fallback: best-effort SNI-prefix match. Empty list is acceptable
-  // — vertical atoms are not yet authored (Phase 3).
+  // Vertical fallback: best-effort SNI-prefix match. Empty list is acceptable:
+  // vertical atoms are not yet authored (Phase 3).
   const verticals: string[] = []
   const sniCodes = tic?.sniCodes ?? []
   if (sniCodes.length > 0) {
@@ -80,7 +80,7 @@ export function fallbackAtomSelection(inputs: ComposerInputs): AtomSelection {
     modifier_atoms: modifiers,
     is_multi_vertical: verticals.length > 1,
     verification_questions: buildFallbackQuestions(inputs),
-    uncertainty_notes: ['Selection produced by deterministic fallback — Opus call failed or was skipped.'],
+    uncertainty_notes: ['Selection produced by deterministic fallback: Opus call failed or was skipped.'],
   }
 }
 
@@ -97,7 +97,7 @@ function buildFallbackQuestions(inputs: ComposerInputs): string[] {
     qs.push('Är du ensamägare till bolaget?')
     qs.push('Har bolaget anställda förutom dig?')
   }
-  qs.push('Vilken momsperiod använder ni — månad, kvartal eller år?')
+  qs.push('Vilken momsperiod använder ni: månad, kvartal eller år?')
   return qs
 }
 
@@ -126,7 +126,7 @@ export function fallbackNarrative(inputs: ComposerInputs): string {
     }
   }
   parts.push(
-    'Jag har laddat de svenska reglerna som gäller bredast — moms, fakturering, bokslut och årsavslutning.',
+    'Jag har laddat de svenska reglerna som gäller bredast: moms, fakturering, bokslut och årsavslutning.',
   )
   parts.push(
     inputs.userIsConfirmedDirector

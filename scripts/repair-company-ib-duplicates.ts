@@ -4,7 +4,7 @@
  *
  * Problem: the pre-fix SIE import created one posted journal entry with
  * source_type='opening_balance' for every year imported. Year N+1's IB
- * equals year N's UB, which is already the sum of year N's transactions —
+ * equals year N's UB, which is already the sum of year N's transactions,
  * so summing prior lines to derive a cumulative balance double-counts one
  * year of movements per extra IB. Result: cash and other balance-sheet
  * accounts drift upward each year.

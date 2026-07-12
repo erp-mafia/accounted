@@ -4,11 +4,11 @@ import { useState, useEffect } from 'react'
 import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { ArrowUpRight, ArrowDownRight, ChevronDown, ChevronUp, FileText, Inbox, Paperclip, X } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, FileText, Inbox, X } from 'lucide-react'
 import JournalEntryForm from '@/components/bookkeeping/JournalEntryForm'
+import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
@@ -28,6 +28,9 @@ interface TransactionBookingDialogProps {
     transactionId: string,
     journalEntryId: string,
     attachedDocumentId?: string | null,
+    /** True when the transaction was LINKED to an existing voucher via the
+     *  duplicate guard's match action: no new verifikat was created. */
+    matched?: boolean,
   ) => void
   preselectedTemplate?: BookingTemplateLibrary | null
 }
@@ -115,13 +118,14 @@ export default function TransactionBookingDialog({
   const { toast } = useToast()
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [pickedInboxDocs, setPickedInboxDocs] = useState<AvailableInboxDoc[]>([])
-  const [showUploadZone, setShowUploadZone] = useState(false)
   const [inboxPickerOpen, setInboxPickerOpen] = useState(false)
   const [bankAccount, setBankAccount] = useState<string | null>(null)
+  const [bankAccountName, setBankAccountName] = useState<string | null>(null)
 
   useEffect(() => {
     if (!open || !transaction) return
     setBankAccount(null)
+    setBankAccountName(null)
     let cancelled = false
     fetch('/api/cash-accounts')
       .then((r) => {
@@ -136,7 +140,12 @@ export default function TransactionBookingDialog({
           transaction.cash_account_id ?? null,
           transaction.currency ?? 'SEK',
         )
+        // Use the matched account's own name instead of a generic label.
+        const matched =
+          accounts.find((a) => a.id === transaction.cash_account_id) ??
+          accounts.find((a) => a.ledger_account === account)
         setBankAccount(account)
+        setBankAccountName(matched?.name ?? null)
       })
       .catch(() => {
         if (!cancelled) setBankAccount('1930')
@@ -148,11 +157,11 @@ export default function TransactionBookingDialog({
 
   const isIncome = transaction.amount > 0
 
-  const handleBooked = async (transactionId: string, journalEntryId: string) => {
+  const handleBooked = async (transactionId: string, journalEntryId: string, matched = false) => {
     // Link any attached documents to the new journal entry: freshly uploaded
     // files, and existing inbox documents picked via InboxDocumentPicker. For
     // picked docs, inbox_item_id stamps the inbox item as consumed so it drops
-    // out of the active inbox — see app/api/documents/[id]/link/route.ts.
+    // out of the active inbox: see app/api/documents/[id]/link/route.ts.
     // transaction_id additionally pins the doc to the transaction row so the
     // /transactions list shows the underlag indicator (first linked doc wins).
     const filesToLink = uploadedFiles.filter((f) => f.status === 'uploaded' && f.id)
@@ -200,11 +209,11 @@ export default function TransactionBookingDialog({
     }
 
     // The server pins only when the tx has no document_id yet (first linked
-    // doc wins) — mirror that here so the optimistic state never claims a
+    // doc wins): mirror that here so the optimistic state never claims a
     // pin the server refused to swap.
     const pinnedDocId = transaction.document_id ? null : firstLinkedDocId
     if (pinnedDocId) {
-      // Same event AgentChat dispatches after uploads — flips the inbox card's
+      // Same event AgentChat dispatches after uploads: flips the inbox card's
       // paperclip optimistically without a refetch.
       window.dispatchEvent(
         new CustomEvent('Accounted:transaction-document-linked', {
@@ -215,27 +224,35 @@ export default function TransactionBookingDialog({
 
     setUploadedFiles([])
     setPickedInboxDocs([])
-    setShowUploadZone(false)
-    onBooked(transactionId, journalEntryId, pinnedDocId)
+    onBooked(transactionId, journalEntryId, pinnedDocId, matched)
   }
 
-  const attachedCount =
-    uploadedFiles.filter((f) => f.status === 'uploaded').length + pickedInboxDocs.length
+  // The receipt to show beside the form. A transaction may arrive with a
+  // pre-linked document; otherwise the user attaches one in-dialog (upload or
+  // inbox pick) and it appears here as soon as it's available.
+  const uploadedDoc = uploadedFiles.find((f) => f.status === 'uploaded' && f.id)
+  const pickedDoc = pickedInboxDocs[0]
+  const preexistingDocId = transaction.document_id ?? null
+  const inDialogDocId = uploadedDoc?.id ?? pickedDoc?.document_id ?? null
+  const currentDocId = preexistingDocId ?? inDialogDocId
+  const currentDocMime = preexistingDocId ? null : uploadedDoc?.file.type ?? null
+  const currentDocName = preexistingDocId
+    ? null
+    : uploadedDoc?.fileName ?? pickedDoc?.file_name ?? null
 
   return (
     <Dialog open={open} onOpenChange={(o) => {
       if (!o) {
         setUploadedFiles([])
         setPickedInboxDocs([])
-        setShowUploadZone(false)
         setInboxPickerOpen(false)
       }
       onOpenChange(o)
     }}>
-      <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{t('title')}</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="sr-only">
             {t('description')}
           </DialogDescription>
         </DialogHeader>
@@ -265,99 +282,117 @@ export default function TransactionBookingDialog({
           </p>
         </div>
 
-        {/* Document upload section */}
-        <div className="rounded-lg border">
-          <button
-            type="button"
-            onClick={() => setShowUploadZone(!showUploadZone)}
-            className="flex items-center justify-between w-full px-3 py-2 text-sm hover:bg-muted/50 transition-colors"
-          >
-            <div className="flex items-center gap-2">
-              <Paperclip className="h-4 w-4 text-muted-foreground" />
-              <span className="font-medium">{t('doc_label')}</span>
-              {attachedCount > 0 && (
-                <span className="text-xs text-muted-foreground">
-                  {t('doc_attached_count', { count: attachedCount })}
-                </span>
-              )}
-            </div>
-            {showUploadZone ? (
-              <ChevronUp className="h-4 w-4 text-muted-foreground" />
-            ) : (
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-            )}
-          </button>
-          {showUploadZone && (
-            <div className="px-3 pb-3 space-y-2">
-              <DocumentUploadZone
-                files={uploadedFiles}
-                onFilesChange={setUploadedFiles}
-                compact
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)]">
+          {/* Document column: sticky on desktop so the receipt stays visible
+              while the form scrolls; stacks above the form on smaller screens. */}
+          <div className="flex h-[45vh] flex-col gap-3 lg:sticky lg:top-0 lg:h-[72vh] lg:self-start">
+            {currentDocId ? (
+              <DocumentViewerPane
+                documentId={currentDocId}
+                mime={currentDocMime}
+                fileName={currentDocName}
+                className="min-h-0 flex-1"
               />
-              {pickedInboxDocs.length > 0 && (
-                <div className="space-y-1">
-                  {pickedInboxDocs.map((doc) => (
-                    <div
-                      key={doc.document_id}
-                      className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50"
-                    >
-                      <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <span className="truncate flex-1">
-                        {doc.supplier_name ?? doc.file_name}
-                      </span>
-                      {doc.amount != null && (
-                        <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-                          {formatCurrency(doc.amount, doc.currency ?? 'SEK')}
-                        </span>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0 shrink-0"
-                        aria-label={t('doc_picked_remove')}
-                        onClick={() =>
-                          setPickedInboxDocs((prev) =>
-                            prev.filter((d) => d.document_id !== doc.document_id),
-                          )
-                        }
-                      >
-                        <X className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="w-full"
-                onClick={() => setInboxPickerOpen(true)}
-              >
-                <Inbox className="h-4 w-4 mr-2" />
-                {t('doc_pick_existing')}
-              </Button>
-            </div>
-          )}
-        </div>
+            ) : (
+              <div className="min-h-0 flex-1">
+                <DocumentUploadZone
+                  files={uploadedFiles}
+                  onFilesChange={setUploadedFiles}
+                />
+              </div>
+            )}
 
-        {bankAccount !== null && (
-          <JournalEntryForm
-            key={`${transaction.id}-${preselectedTemplate?.id ?? 'default'}-${bankAccount}`}
-            embedded
-            initialLines={
-              preselectedTemplate
-                ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
-                : buildInitialLines(transaction, t('bank_line_description'), bankAccount)
-            }
-            initialDate={transaction.date}
-            initialDescription={transaction.description}
-            submitUrl={`/api/transactions/${transaction.id}/book`}
-            sourceType="bank_transaction"
-            sourceId={transaction.id}
-            onEntryCreated={(entryId) => handleBooked(transaction.id, entryId)}
-          />
-        )}
+            {/* Attach controls: only when the transaction has no pre-linked
+                document (a pre-linked one is already the verifikat's underlag). */}
+            {!preexistingDocId && (
+              <div className="shrink-0 space-y-2">
+                {pickedInboxDocs.length > 0 && (
+                  <div className="space-y-1">
+                    {pickedInboxDocs.map((doc) => (
+                      <div
+                        key={doc.document_id}
+                        className="flex items-center gap-2 text-sm py-1.5 px-2 rounded bg-muted/50"
+                      >
+                        <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <span className="truncate flex-1">
+                          {doc.supplier_name ?? doc.file_name}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 shrink-0"
+                          aria-label={t('doc_picked_remove')}
+                          onClick={() =>
+                            setPickedInboxDocs((prev) =>
+                              prev.filter((d) => d.document_id !== doc.document_id),
+                            )
+                          }
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setInboxPickerOpen(true)}
+                  >
+                    <Inbox className="h-4 w-4 mr-2" />
+                    {t('doc_pick_existing')}
+                  </Button>
+                  {inDialogDocId && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setUploadedFiles([])
+                        setPickedInboxDocs([])
+                      }}
+                    >
+                      <X className="h-3.5 w-3.5 mr-1.5" />
+                      {t('doc_clear')}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Booking form */}
+          <div className="space-y-4">
+            {bankAccount !== null && (
+              <JournalEntryForm
+                key={`${transaction.id}-${preselectedTemplate?.id ?? 'default'}-${bankAccount}`}
+                embedded
+                initialLines={
+                  preselectedTemplate
+                    ? buildInitialLinesFromTemplate(transaction, preselectedTemplate, bankAccount)
+                    : buildInitialLines(transaction, bankAccountName ?? t('bank_line_description'), bankAccount)
+                }
+                initialDate={transaction.date}
+                initialDescription={transaction.description}
+                submitUrl={`/api/transactions/${transaction.id}/book`}
+                sourceType="bank_transaction"
+                sourceId={transaction.id}
+                onEntryCreated={(entryId) => handleBooked(transaction.id, entryId)}
+                duplicateMatchTransaction={{
+                  id: transaction.id,
+                  cash_account_id: transaction.cash_account_id ?? null,
+                  currency: transaction.currency ?? 'SEK',
+                }}
+                // Duplicate guard match: the bank line was linked to an existing
+                // voucher (no new entry). Reuse the booked flow so attached
+                // documents land on that verifikat and the row leaves the list.
+                onDuplicateMatched={(journalEntryId) => handleBooked(transaction.id, journalEntryId, true)}
+              />
+            )}
+          </div>
+        </div>
 
         <InboxDocumentPicker
           open={inboxPickerOpen}

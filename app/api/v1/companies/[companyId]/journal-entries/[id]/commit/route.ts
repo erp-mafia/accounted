@@ -3,7 +3,7 @@
  *
  * Commits a draft journal entry: assigns the next voucher_number from the
  * series atomically via the `commit_journal_entry` RPC and flips status to
- * 'posted'. The RPC is a single Postgres transaction — if the balance
+ * 'posted'. The RPC is a single Postgres transaction: if the balance
  * trigger or any other constraint rejects, the sequence does NOT advance
  * (no löpnummer gap per BFL 5 kap 7 §).
  *
@@ -42,7 +42,7 @@ registerEndpoint({
   useWhen:
     'You created a draft via POST /journal-entries and now want to post it to the books. After commit the entry is immutable per BFL 5 kap 2 §; corrections require /reverse or /correct.',
   doNotUseFor:
-    'Re-committing an already-posted entry (returns 409). Committing across companies — the URL companyId must match the draft\'s company.',
+    'Re-committing an already-posted entry (returns 409). Committing across companies: the URL companyId must match the draft\'s company.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'Posted entries cannot be edited. Plan the lines carefully or call /correct after commit if you need to change them.',
@@ -101,7 +101,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       // true dry-run we'd want a non-advancing peek. Project convention: the
       // dry-run reports the PROJECTED number, with the caveat that a
       // concurrent commit could advance the sequence between dry-run and
-      // commit — same caveat the dry-run.ts substrate documents.
+      // commit: same caveat the dry-run.ts substrate documents.
       const projectedNumber = await getNextVoucherNumber(
         ctx.supabase,
         ctx.companyId!,

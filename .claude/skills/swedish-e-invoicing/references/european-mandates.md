@@ -8,11 +8,11 @@ This reference compares Sweden's likely trajectory to the mandates already enact
 
 | Date | Obligation |
 |---|---|
-| **14 Apr 2025** | Member states may mandate domestic B2B e-invoicing without Article 395 derogation, provided EN 16931–based; recipient consent abolished |
+| **14 Apr 2025** | Member states may mandate domestic B2B e-invoicing without Article 395 derogation, provided EN 16931-based; recipient consent abolished |
 | **1 Jul 2030** | **Mandatory structured e-invoicing + Digital Reporting Requirements (DRR) for cross-border intra-EU B2B**; recapitulative VIES statements abolished; invoice issuance ≤10 days after chargeable event |
 | **1 Jan 2035** | Pre-existing national clearance regimes (IT/FR/PL/RO/HU/ES) must align to the EU DRR standard |
 
-**Sweden has no pre-existing CTC, so Sweden does NOT get the 2035 grandfather clause.** Any new domestic mandate must be EN 16931–compliant by design.
+**Sweden has no pre-existing CTC, so Sweden does NOT get the 2035 grandfather clause.** Any new domestic mandate must be EN 16931-compliant by design.
 
 ## Country-by-country mandate status (April 2026)
 
@@ -23,7 +23,7 @@ This reference compares Sweden's likely trajectory to the mandates already enact
 - Live for B2B since 1 January 2019. Cross-border via SDI from 1 July 2022. Forfettari fully included in 2024.
 - Pre-clearance: every invoice routed through SDI before reaching the buyer.
 - **EU derogation extended to 31 December 2027.**
-- Penalties: 90–180% of VAT.
+- Penalties: 90-180% of VAT.
 - Archive: 10 years.
 - The "old" model that ViDA's 2035 alignment deadline forces to harmonise.
 
@@ -94,9 +94,9 @@ Sweden has **20+ years of Peppol/SFTI infrastructure**, B2G mandatory since 2019
 
 1. **Now → 30 November 2027**, Dir. 2026:9 inquiry runs. Skatteverket's preferred model (decentralised Peppol + DRR layer) is articulated.
 2. **2028**, Lagrådsremiss and proposition. Likely model: Belgium-style Peppol 4-corner B2B, plus a 5-corner DRR layer where Skatteverket becomes Corner 5.
-3. **2029–2030**, First domestic obligations. Likely: receive obligation first (all VAT-registered), then send obligation phased by entity size mirroring Germany's 2025→2027→2028 rollout.
+3. **2029-2030**, First domestic obligations. Likely: receive obligation first (all VAT-registered), then send obligation phased by entity size mirroring Germany's 2025→2027→2028 rollout.
 4. **1 July 2030**, ViDA cross-border B2B obligation kicks in regardless of domestic timeline. Sweden is bound.
-5. **2031–2032**, Full domestic mandate live including DRR layer.
+5. **2031-2032**, Full domestic mandate live including DRR layer.
 
 The single most important date to monitor is **30 November 2027** (Dir. 2026:9 final report). Architectural decisions made before then should preserve optionality between (a) pure Peppol 4-corner with no central reporting, (b) Peppol + DRR 5-corner, and (c) the unlikely-but-possible centralised clearance fallback.
 

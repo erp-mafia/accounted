@@ -55,11 +55,11 @@ If supplier VAT country is `SE` and category is `S`, the rate must be **6, 12, o
 
 ### SE-R-008 / SE-R-009, Bankgiro
 
-Bankgiro account numbers must be **7–8 numeric digits**.
+Bankgiro account numbers must be **7-8 numeric digits**.
 
 ### SE-R-010, Plusgiro
 
-Plusgiro account numbers must be **2–8 characters**.
+Plusgiro account numbers must be **2-8 characters**.
 
 ### SE-R-011, Swedish payment methods
 
@@ -109,7 +109,7 @@ For non-Swedish EU payments use code `58` (SEPA credit transfer) with country-ch
 
 ## OCR references
 
-Swedish OCR is numeric, **2–25 digits, last digit modulus-10 (Luhn) check**. Optional length digit at position n−1 encodes total length.
+Swedish OCR is numeric, **2-25 digits, last digit modulus-10 (Luhn) check**. Optional length digit at position n−1 encodes total length.
 
 Four control levels at Bankgirot:
 - **OCR1**, soft (mjuk), Luhn only.
@@ -288,7 +288,7 @@ Each Swedish public sector buyer specifies its own BT-10 / BuyerReference format
 |---|---|
 | Skatteverket | 4-letter code |
 | Svenska Kraftnät | 3 digits + 3 letters |
-| Försäkringskassan | 5–10 digits starting with `4` |
+| Försäkringskassan | 5-10 digits starting with `4` |
 | Many universities | cost-centre + name |
 
 **Maintain a per-buyer-Peppol-ID regex map** and validate at invoice compose time. This prevents 30-day public-sector payment delays. Scrape SFTI / docplayer reference and update quarterly.

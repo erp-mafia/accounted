@@ -34,7 +34,7 @@ describe('checkAgentRateLimit', () => {
     expect(result.retryAfterSec).toBe(3600)
   })
 
-  it('fails open (ok=true) when the RPC errors — never 429 a real user on infra blip', async () => {
+  it('fails open (ok=true) when the RPC errors: never 429 a real user on infra blip', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const result = await checkAgentRateLimit(makeSupabase({ data: null, error: { message: 'boom' } }), 'user-1')
     expect(result.ok).toBe(true)

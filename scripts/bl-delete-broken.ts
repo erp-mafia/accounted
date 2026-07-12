@@ -19,7 +19,7 @@ const DELAY_MS = 125 // ~8 req/s, under BL's 10 req/s limit
 const consentId = process.argv[2]
 if (!consentId) {
   console.error('Usage: npx tsx --env-file=.env --env-file=.env.local scripts/bl-delete-broken.ts <consentId>')
-  console.error('Refusing to run without an explicit consentId — this script deletes vouchers from a live BL company.')
+  console.error('Refusing to run without an explicit consentId: this script deletes vouchers from a live BL company.')
   process.exit(1)
 }
 
@@ -101,7 +101,7 @@ async function main() {
     return
   }
 
-  // Probe with the first voucher — abort if BL refuses deletes
+  // Probe with the first voucher: abort if BL refuses deletes
   const probe = broken[0]!
   console.log(`Probe delete: ${probe.series}${probe.number} (${probe.date})...`)
   const probeResult = await deleteVoucher(token.access_token, userKey, probe)
@@ -109,7 +109,7 @@ async function main() {
     console.error(`ABORT: BL refused the probe delete (HTTP ${probeResult.status}): ${probeResult.body}`)
     process.exit(1)
   }
-  console.log('Probe OK — deleting the rest...')
+  console.log('Probe OK: deleting the rest...')
 
   const failures: { voucher: string; status: number; body: string }[] = []
   let done = 1
@@ -126,7 +126,7 @@ async function main() {
   console.log(`\nDone: ${done - failures.length}/${broken.length} deleted, ${failures.length} failed`)
   if (failures.length > 0) {
     console.log('Failures (first 20):')
-    for (const f of failures.slice(0, 20)) console.log(`  ${f.voucher} — HTTP ${f.status} ${f.body}`)
+    for (const f of failures.slice(0, 20)) console.log(`  ${f.voucher}: HTTP ${f.status} ${f.body}`)
   }
 
   console.log('\nRe-fetching SIE export to validate...')

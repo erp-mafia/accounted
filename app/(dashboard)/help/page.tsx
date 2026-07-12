@@ -4,7 +4,6 @@ import { useState, useMemo } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
 import { HelpLink } from '@/components/ui/info-tooltip'
 import { PageHeader } from '@/components/ui/page-header'
 import {
@@ -210,12 +209,12 @@ const glossaryTerms: GlossaryTerm[] = [
 ]
 
 const categoryConfig = {
-  skatt: { labelKey: 'category_skatt', icon: Calculator, color: 'bg-orange-500/10 text-orange-600' },
-  moms: { labelKey: 'category_moms', icon: Receipt, color: 'bg-blue-500/10 text-blue-600' },
-  faktura: { labelKey: 'category_faktura', icon: FileText, color: 'bg-success/10 text-success' },
-  bokföring: { labelKey: 'category_bokforing', icon: BookOpen, color: 'bg-purple-500/10 text-purple-600' },
-  bank: { labelKey: 'category_bank', icon: Building2, color: 'bg-pink-500/10 text-pink-600' },
-  företag: { labelKey: 'category_foretag', icon: Building2, color: 'bg-cyan-500/10 text-cyan-600' },
+  skatt: { labelKey: 'category_skatt', icon: Calculator, color: 'bg-secondary text-muted-foreground' },
+  moms: { labelKey: 'category_moms', icon: Receipt, color: 'bg-secondary text-muted-foreground' },
+  faktura: { labelKey: 'category_faktura', icon: FileText, color: 'bg-secondary text-muted-foreground' },
+  bokföring: { labelKey: 'category_bokforing', icon: BookOpen, color: 'bg-secondary text-muted-foreground' },
+  bank: { labelKey: 'category_bank', icon: Building2, color: 'bg-secondary text-muted-foreground' },
+  företag: { labelKey: 'category_foretag', icon: Building2, color: 'bg-secondary text-muted-foreground' },
 }
 
 function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpanded: boolean; onToggle: () => void }) {
@@ -224,7 +223,7 @@ function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpand
   const CategoryIcon = config.icon
 
   return (
-    <Card className={cn('transition-all', isExpanded && 'ring-2 ring-primary/20')}>
+    <Card className={cn('transition-colors', isExpanded && 'ring-2 ring-primary/20')}>
       <CardContent className="pt-4">
         <button
           onClick={onToggle}
@@ -239,9 +238,9 @@ function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpand
                 <div className="flex items-center gap-2 flex-wrap">
                   <h3 className="font-medium">{term.term}</h3>
                   {term.simpleTerm && (
-                    <Badge variant="secondary" className="font-normal">
+                    <span className="text-sm text-muted-foreground font-normal">
                       {term.simpleTerm}
-                    </Badge>
+                    </span>
                   )}
                 </div>
                 {!isExpanded && (
@@ -268,11 +267,9 @@ function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpand
             {term.relatedTerms && term.relatedTerms.length > 0 && (
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs text-muted-foreground">{t('related_label')}</span>
-                {term.relatedTerms.map((related) => (
-                  <Badge key={related} variant="outline" className="text-xs">
-                    {related}
-                  </Badge>
-                ))}
+                <span className="text-xs text-muted-foreground">
+                  {term.relatedTerms.join(', ')}
+                </span>
               </div>
             )}
 
@@ -418,7 +415,7 @@ export default function HelpPage() {
                 <span className="font-medium">Arkivplan</span>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Mall enligt BFNAR 2013:2 — beskriver var räkenskapsinformation förvaras
+                Mall enligt BFNAR 2013:2: beskriver var räkenskapsinformation förvaras
               </p>
             </a>
             <a
@@ -431,7 +428,7 @@ export default function HelpPage() {
                 <span className="font-medium">Systemdokumentation</span>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Mall enligt BFL 5 kap. 11 § — beskriver bokföringssystemets uppbyggnad
+                Mall enligt BFL 5 kap. 11 §: beskriver bokföringssystemets uppbyggnad
               </p>
             </a>
           </div>

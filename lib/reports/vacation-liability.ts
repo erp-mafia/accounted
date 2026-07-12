@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
- * Semesterlöneskuld — Vacation liability report per BFNAR 2016:10.
+ * Semesterlöneskuld: Vacation liability report per BFNAR 2016:10.
  *
  * Per BFNAR 2016:10 kap 16: Vacation liability must be calculated per employee,
  * not as a lump sum. This report shows earned/taken days, accrued SEK amount
@@ -51,7 +51,7 @@ export async function generateVacationLiability(
   const r = (x: number) => Math.round(x * 100) / 100
 
   // Load active employees who actually accrue vacation. Employees on
-  // 'none' or 'semesterersattning' have no semesterlöneskuld liability —
+  // 'none' or 'semesterersattning' have no semesterlöneskuld liability:
   // including them in the report would just show empty rows.
   const employees = await fetchAllRows(({ from, to }) =>
     supabase
@@ -61,7 +61,7 @@ export async function generateVacationLiability(
       .eq('is_active', true)
       .not('vacation_rule', 'in', '(none,semesterersattning)')
       .order('last_name')
-      // id tiebreaker — last_name is not unique, so it alone is not a stable
+      // id tiebreaker: last_name is not unique, so it alone is not a stable
       // total order for paging (see fetch-all.ts).
       .order('id', { ascending: true })
       .range(from, to)

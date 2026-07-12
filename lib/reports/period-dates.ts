@@ -1,6 +1,6 @@
 /**
  * Period date helpers shared between report generators (momsdeklaration,
- * periodisk sammanställning, etc.). Kept tiny on purpose — anything domain-
+ * periodisk sammanställning, etc.). Kept tiny on purpose: anything domain-
  * specific belongs in the calling module.
  */
 

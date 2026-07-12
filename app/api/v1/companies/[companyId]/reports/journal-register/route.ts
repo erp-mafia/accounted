@@ -1,7 +1,7 @@
 /**
  * GET /api/v1/companies/{companyId}/reports/journal-register
  *
- * The verifikationsregister — every committed journal entry in the period
+ * The verifikationsregister: every committed journal entry in the period
  * with all its lines. Mirrors the dashboard generator.
  */
 
@@ -18,14 +18,14 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/reports/journal-register',
   summary: 'Journal register (verifikationsregister) for a fiscal period.',
   description:
-    'Returns every committed journal entry in the period with its voucher number, date, description, and complete debit/credit line set. The canonical compliance report — what an accountant or Skatteverket audit would pull as proof of every booking.',
+    'Returns every committed journal entry in the period with its voucher number, date, description, and complete debit/credit line set. The canonical compliance report: what an accountant or Skatteverket audit would pull as proof of every booking.',
   useWhen:
-    'You need the BFL-required register of all verifikationer for a period — typically for an audit, year-end review, or feeding an external accountant\'s tooling.',
+    'You need the BFL-required register of all verifikationer for a period: typically for an audit, year-end review, or feeding an external accountant\'s tooling.',
   doNotUseFor:
     'Per-account drilldown (use /reports/general-ledger). Aggregate totals only (use /reports/trial-balance).',
   pitfalls: [
     '`period_id` is required.',
-    'Output includes every line of every entry — large periods produce large responses. Consider paginating client-side or filtering by date range via /journal-entries list if you only need a slice.',
+    'Output includes every line of every entry: large periods produce large responses. Consider paginating client-side or filtering by date range via /journal-entries list if you only need a slice.',
     'Reversed entries appear with status `reversed`; the original they reversed also remains.',
   ],
   example: {

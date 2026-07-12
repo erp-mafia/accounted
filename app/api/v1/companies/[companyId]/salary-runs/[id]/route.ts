@@ -1,11 +1,11 @@
 /**
  * /api/v1/companies/{companyId}/salary-runs/{id}
  *
- * GET    — return the full salary run including denormalised totals + journal
+ * GET    : return the full salary run including denormalised totals + journal
  *          entry references.
- * PATCH  — update payment_date / voucher_series / notes. ONLY allowed when
+ * PATCH  : update payment_date / voucher_series / notes. ONLY allowed when
  *          status === 'draft'. Idempotent. Dry-runnable.
- * DELETE — remove the run. ONLY allowed when status === 'draft' (no
+ * DELETE : remove the run. ONLY allowed when status === 'draft' (no
  *          verifikation has been posted yet, BFL 5 kap is not violated by a
  *          hard delete of an empty draft). Hard delete; the DB has ON DELETE
  *          CASCADE on salary_run_employees / salary_line_items.
@@ -63,9 +63,9 @@ registerEndpoint({
   description:
     'Returns the salary run\'s lifecycle state, denormalised totals (gross/tax/net/avgifter/vacation/employer_cost), and references to the journal entries it produced (once :book has run).',
   useWhen:
-    'You have a salary_run_id and need its current status — typically to decide which lifecycle verb to call next, or to display the run header in a UI.',
+    'You have a salary_run_id and need its current status: typically to decide which lifecycle verb to call next, or to display the run header in a UI.',
   doNotUseFor:
-    'Per-employee breakdown (Phase 5 PR-1 does not expose the per-employee endpoint on v1; use the internal /api/salary/runs/{id} for that today). Salary journal report — use GET /reports/salary-journal in Phase 5 PR-3.',
+    'Per-employee breakdown (Phase 5 PR-1 does not expose the per-employee endpoint on v1; use the internal /api/salary/runs/{id} for that today). Salary journal report: use GET /reports/salary-journal in Phase 5 PR-3.',
   pitfalls: [
     'salary_entry_id / avgifter_entry_id / vacation_entry_id are null until POST /book has run. They reference the journal_entries table.',
     'total_* fields are 0 until POST /calculate has run.',
@@ -126,12 +126,12 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 )
 
 // ──────────────────────────────────────────────────────────────────
-// PATCH — update salary run (draft only)
+// PATCH: update salary run (draft only)
 // ──────────────────────────────────────────────────────────────────
 
 const UpdateSalaryRunSchema = z.object({
   payment_date: isoDate.optional(),
-  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z').optional(),
+  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').optional(),
   notes: z.string().max(2000).nullable().optional(),
 })
 
@@ -141,11 +141,11 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs/:id',
   summary: 'Update a draft salary run.',
   description:
-    'Updates payment_date, voucher_series, or notes on a draft salary run. ONLY allowed when status === "draft" — once :calculate has advanced the run to review, these fields are frozen because they feed into the verifikation that :book will eventually post.',
+    'Updates payment_date, voucher_series, or notes on a draft salary run. ONLY allowed when status === "draft": once :calculate has advanced the run to review, these fields are frozen because they feed into the verifikation that :book will eventually post.',
   useWhen:
     'You created a draft, then noticed payment_date should be different (e.g. moved from the 25th to the 23rd) before running :calculate.',
   doNotUseFor:
-    'Changing period_year / period_month (immutable — DELETE the draft and create a new one). Modifying employees in the run (not in v1 PR-1 scope).',
+    'Changing period_year / period_month (immutable: DELETE the draft and create a new one). Modifying employees in the run (not in v1 PR-1 scope).',
   pitfalls: [
     'Returns 400 SALARY_RUN_PATCH_NOT_DRAFT if status !== "draft".',
     'period_year + period_month are immutable post-create.',
@@ -187,7 +187,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 
     // OWASP V4.5: require a plain JSON object. Zod would catch a non-object
     // body downstream, but the rawKeys filter below uses Object.keys on
-    // rawBody directly — guarding here makes the contract explicit and the
+    // rawBody directly: guarding here makes the contract explicit and the
     // Object.keys call unambiguously safe.
     if (typeof rawBody !== 'object' || rawBody === null || Array.isArray(rawBody)) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -231,7 +231,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 
     // Filter the explicitly-supplied keys so unmentioned columns aren't
     // overwritten to their `default()` values. Same OWASP V4.5 defense-in-
-    // depth as employees PATCH — strip prototype-polluting own-properties
+    // depth as employees PATCH: strip prototype-polluting own-properties
     // before extracting the key list. The intersection with the Zod-parsed
     // `body` already prevents these keys from reaching the DB, but the
     // filter makes the intent unambiguous.
@@ -281,7 +281,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 )
 
 // ──────────────────────────────────────────────────────────────────
-// DELETE — hard-delete (draft only)
+// DELETE: hard-delete (draft only)
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -290,11 +290,11 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs/:id',
   summary: 'Delete a draft salary run.',
   description:
-    'Hard-deletes a salary run. ONLY allowed when status === "draft" — once the run has calculated numbers or posted a verifikation, BFL 5 kap immutability applies and storno is the only correction path. CASCADE deletes salary_run_employees and salary_line_items.',
+    'Hard-deletes a salary run. ONLY allowed when status === "draft": once the run has calculated numbers or posted a verifikation, BFL 5 kap immutability applies and storno is the only correction path. CASCADE deletes salary_run_employees and salary_line_items.',
   useWhen:
     'You created a run by mistake or want to recreate it with different period_month. Only draft runs can be deleted.',
   doNotUseFor:
-    'Reverting a booked run (use the internal /correct flow; v1 promotion deferred). Hiding a run from listings (no soft-delete on this table — drafts are truly removed).',
+    'Reverting a booked run (use the internal /correct flow; v1 promotion deferred). Hiding a run from listings (no soft-delete on this table: drafts are truly removed).',
   pitfalls: [
     'Returns 400 SALARY_RUN_DELETE_NOT_DRAFT for any status other than draft.',
     'Hard delete: the salary_run_employees + salary_line_items rows cascade away.',
@@ -369,7 +369,7 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
     if (count === 0) {
-      // Pre-flight saw status='draft', so a status race is one explanation —
+      // Pre-flight saw status='draft', so a status race is one explanation,
       // but the more concerning interpretation is that the FK-null guards
       // tripped (a journal entry has somehow attached to a draft row,
       // which would be a partial-failure path in PR-2's lifecycle code).

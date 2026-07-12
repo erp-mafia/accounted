@@ -2,12 +2,12 @@
  * Skatteverket data shapes used by core UI (the /transactions page lives
  * in core, but renders skattekonto rows alongside bank tx). The DB table
  * `skattekonto_transactions` lives in core migrations even when the
- * skatteverket extension is disabled — the extension only owns the API
+ * skatteverket extension is disabled: the extension only owns the API
  * that populates it. Keeping these types in core means components can
  * render the table's shape without depending on the extension module.
  *
  * If skatteverket is disabled, the API returns 503 and the UI just sees
- * an empty list — the types remain valid descriptors of the schema.
+ * an empty list: the types remain valid descriptors of the schema.
  */
 
 /** Row shape for the `skattekonto_transactions` table (DB → app). */

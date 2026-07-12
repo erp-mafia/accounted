@@ -37,7 +37,7 @@ fi
 # so the same cp still works.
 #
 # On a non-tmpfs restart the target dirs persist with their write bits removed
-# (see the immutability step below), so restore owner-write first — otherwise the
+# (see the immutability step below), so restore owner-write first: otherwise the
 # unprivileged cp -R below fails under `set -e`. Under tmpfs the dirs are empty
 # each start, so this is a no-op.
 chmod -R u+w /app/.next /app/public 2>/dev/null || true
@@ -52,7 +52,7 @@ mkdir -p /app/.next/cache
 # ─── Replace build-time placeholder sentinels with runtime env vars ───
 # Substitution covers /app/.next (client static + server bundles + manifests;
 # the manifests at .next/ root hold the CSP/headers from next.config.ts) and
-# /app/public (sw.js — the service worker is served raw, so Next's build-time
+# /app/public (sw.js: the service worker is served raw, so Next's build-time
 # inlining doesn't reach it). server.js needs no substitution and lives on the
 # read-only image layer, so it is deliberately excluded.
 #
@@ -75,7 +75,18 @@ if [ -n "$SUBST_PATHS" ]; then
     v=${v//|/\\|}
     printf %s "$v"
   }
+  # Realtime WebSocket origin for the CSP (issue #893): derive from the
+  # Supabase URL unless explicitly overridden. https:// becomes wss://;
+  # http:// becomes ws:// for plain-HTTP local installs. Without this token
+  # in connect-src, Supabase Realtime's WebSocket is CSP-blocked on
+  # self-hosted installs and WebKit crashes the dashboard.
+  if [ -z "${NEXT_PUBLIC_SUPABASE_WS_URL:-}" ]; then
+    NEXT_PUBLIC_SUPABASE_WS_URL=$(printf %s "$NEXT_PUBLIC_SUPABASE_URL" \
+      | sed -e 's|^https://|wss://|' -e 's|^http://|ws://|')
+  fi
+
   E_SUPABASE_URL=$(sed_esc "$NEXT_PUBLIC_SUPABASE_URL")
+  E_SUPABASE_WS_URL=$(sed_esc "$NEXT_PUBLIC_SUPABASE_WS_URL")
   E_SUPABASE_ANON_KEY=$(sed_esc "$NEXT_PUBLIC_SUPABASE_ANON_KEY")
   E_APP_URL=$(sed_esc "$NEXT_PUBLIC_APP_URL")
   E_VAPID_PUBLIC_KEY=$(sed_esc "${NEXT_PUBLIC_VAPID_PUBLIC_KEY:-}")
@@ -84,11 +95,11 @@ if [ -n "$SUBST_PATHS" ]; then
   E_BRANDING_APP_NAME=$(sed_esc "${NEXT_PUBLIC_BRANDING_APP_NAME:-Gnubok}")
 
   # File-type coverage:
-  #   *.js   — client + server bundles
-  #   *.json — routes-manifest.json (CSP/headers), build-manifest.json, etc.
-  #   *.html — prerendered pages (e.g. /login title contains BRANDING_APP_NAME)
-  #   *.rsc  — RSC payloads with the same inlined values
-  #   *.body — metadata-route bodies, e.g. manifest.webmanifest.body (PWA name)
+  #   *.js: client + server bundles
+  #   *.json: routes-manifest.json (CSP/headers), build-manifest.json, etc.
+  #   *.html: prerendered pages (e.g. /login title contains BRANDING_APP_NAME)
+  #   *.rsc: RSC payloads with the same inlined values
+  #   *.body: metadata-route bodies, e.g. manifest.webmanifest.body (PWA name)
   # shellcheck disable=SC2086
   find $SUBST_PATHS -type f \
         \( -name '*.js' -o -name '*.json' -o -name '*.html' -o -name '*.rsc' -o -name '*.body' \) \
@@ -96,6 +107,7 @@ if [ -n "$SUBST_PATHS" ]; then
     | tr '\n' '\0' \
     | xargs -0 -r sed -i \
         -e "s|__NEXT_PUBLIC_SUPABASE_URL__|${E_SUPABASE_URL}|g" \
+        -e "s|__NEXT_PUBLIC_SUPABASE_WS_URL__|${E_SUPABASE_WS_URL}|g" \
         -e "s|__NEXT_PUBLIC_SUPABASE_ANON_KEY__|${E_SUPABASE_ANON_KEY}|g" \
         -e "s|__NEXT_PUBLIC_APP_URL__|${E_APP_URL}|g" \
         -e "s|__NEXT_PUBLIC_VAPID_PUBLIC_KEY__|${E_VAPID_PUBLIC_KEY}|g" \

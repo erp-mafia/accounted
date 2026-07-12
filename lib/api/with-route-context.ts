@@ -32,11 +32,11 @@ import { createLogger, type Logger } from '@/lib/logger'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 export interface RouteContext {
-  /** Stable id for this HTTP request — appears in logs, error envelope, X-Request-Id header. */
+  /** Stable id for this HTTP request: appears in logs, error envelope, X-Request-Id header. */
   requestId: string
   /** Logger pre-bound with { requestId, userId, companyId, operation }. */
   log: Logger
-  /** Authenticated user. Always present — wrapper short-circuits with 401 otherwise. */
+  /** Authenticated user. Always present: wrapper short-circuits with 401 otherwise. */
   user: User
   /** Authenticated Supabase client (request-scoped, RLS active). */
   supabase: SupabaseClient
@@ -68,7 +68,7 @@ interface RouteContextOptions {
 }
 
 // Next.js 16 always passes a `{ params: Promise<...> }` second arg to route
-// handlers — including on non-dynamic routes, where it's `Promise<{}>`. The
+// handlers: including on non-dynamic routes, where it's `Promise<{}>`. The
 // generic defaults to that empty shape so static routes type-check without
 // having to declare any params at the call site.
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
@@ -164,8 +164,15 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       })
       return response
     } catch (err) {
-      errLog.error('op failed', err as Error, { durationMs: Date.now() - start })
-      return errorResponse(err, errLog, { requestId })
+      // Resolve the envelope first so the log level can follow the mapped
+      // status — thrown 4xx domain errors are expected outcomes (warn), only
+      // 5xx are runtime errors. errorResponse logs the error itself at the
+      // same threshold.
+      const response = errorResponse(err, errLog, { requestId })
+      const meta = { durationMs: Date.now() - start, status: response.status }
+      if (response.status < 500) errLog.warn('op failed', err as Error, meta)
+      else errLog.error('op failed', err as Error, meta)
+      return response
     }
   }
 }

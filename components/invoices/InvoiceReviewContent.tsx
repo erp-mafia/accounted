@@ -4,7 +4,7 @@ import { useTranslations } from 'next-intl'
 import { CalendarClock } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { Customer, Currency } from '@/types'
@@ -15,7 +15,7 @@ interface ReviewItem {
   unit: string
   unit_price: number
   vat_rate?: number
-  /** 'text' rows are free-text/blank lines — description only, no amounts. */
+  /** 'text' rows are free-text/blank lines: description only, no amounts. */
   line_type?: 'product' | 'text'
   // Periodisering: when both dates are set, the revenue books to the 29xx
   // interim account and dissolves monthly over the period.
@@ -108,15 +108,15 @@ export function InvoiceReviewContent({
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
         <div>
           <span className="text-muted-foreground">{t('invoice_date')}</span>
-          <p className="font-medium">{invoiceDate}</p>
+          <p className="font-medium">{invoiceDate ? formatDate(invoiceDate) : ''}</p>
         </div>
         <div>
           <span className="text-muted-foreground">{t('due_date')}</span>
-          <p className="font-medium">{dueDate}</p>
+          <p className="font-medium">{dueDate ? formatDate(dueDate) : ''}</p>
         </div>
       </div>
 
-      {/* Line items — table on desktop, cards on mobile */}
+      {/* Line items: table on desktop, cards on mobile */}
       <div className="hidden sm:block">
         <table className="w-full text-sm">
           <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
@@ -236,28 +236,14 @@ export function InvoiceReviewContent({
       {(yourReference || ourReference || notes) && (
         <div className="border-t pt-3 space-y-2 text-sm text-muted-foreground">
           {yourReference && (
-            <div>
-              <span>{t('your_reference')}</span>
-              <div className="flex flex-wrap gap-1 mt-1">
-                {yourReference.split(',').map((ref, i) => (
-                  <Badge key={i} variant="secondary" className="text-xs font-normal">
-                    {ref.trim()}
-                  </Badge>
-                ))}
-              </div>
-            </div>
+            <p>
+              <span>{t('your_reference')}</span> {yourReference}
+            </p>
           )}
           {ourReference && (
-            <div>
-              <span>{t('our_reference')}</span>
-              <div className="flex flex-wrap gap-1 mt-1">
-                {ourReference.split(',').map((ref, i) => (
-                  <Badge key={i} variant="secondary" className="text-xs font-normal">
-                    {ref.trim()}
-                  </Badge>
-                ))}
-              </div>
-            </div>
+            <p>
+              <span>{t('our_reference')}</span> {ourReference}
+            </p>
           )}
           {notes && <p>{t('notes_prefix', { notes })}</p>}
         </div>

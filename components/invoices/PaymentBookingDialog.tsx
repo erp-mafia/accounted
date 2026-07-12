@@ -86,7 +86,7 @@ export default function PaymentBookingDialog({
   // Drives the "Befintlig verifikation" picker copy: cash links against a 19xx
   // debit, accrual against a 1510 credit.
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
-  // source_type the booking will use — drives the voucher-series preview so the
+  // source_type the booking will use: drives the voucher-series preview so the
   // number shown matches what mark-paid will actually create.
   const [sourceType, setSourceType] =
     useState<'invoice_cash_payment' | 'invoice_paid' | null>(null)
@@ -152,6 +152,7 @@ export default function PaymentBookingDialog({
             exchange_rate: invoice.exchange_rate,
             vat_treatment: invoice.vat_treatment,
             items: invoice.items,
+            default_dimensions: invoice.default_dimensions,
           },
           accountingMethod,
           entityType,
@@ -245,6 +246,12 @@ export default function PaymentBookingDialog({
           debit_amount: parseFloat(l.debit_amount) || 0,
           credit_amount: parseFloat(l.credit_amount) || 0,
           line_description: l.line_description || undefined,
+          // Dimensions PR7: the proposal re-propagates the invoice default;
+          // whatever the grid holds is what gets booked.
+          dimensions:
+            l.dimensions && Object.keys(l.dimensions).length > 0
+              ? l.dimensions
+              : undefined,
         }))
 
       const response = await fetch(`/api/invoices/${invoice.id}/mark-paid`, {
@@ -349,7 +356,7 @@ export default function PaymentBookingDialog({
                         </span>
                       </div>
                       <p className="truncate text-xs text-muted-foreground">
-                        {c.merchant_name || c.description || '—'}
+                        {c.merchant_name || c.description || '-'}
                       </p>
                     </div>
                     <Button

@@ -243,7 +243,7 @@ export default function SupplierForm({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="default_currency">{t('default_account_label')}</Label>
+            <Label htmlFor="default_currency">{t('default_currency_label')}</Label>
             <Controller
               name="default_currency"
               control={control}

@@ -42,7 +42,7 @@ export class ResendEmailService implements EmailService {
     }
 
     // Strip CRLF and angle brackets from name parts to prevent header injection.
-    // Resend's API does its own validation, but defense in depth — both fromName
+    // Resend's API does its own validation, but defense in depth: both fromName
     // (user-controlled, from company settings) and appName (admin-controlled,
     // from branding) flow into the From header.
     const safeAppName = sanitizeHeaderPart(getBranding().appName)

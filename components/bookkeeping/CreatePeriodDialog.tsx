@@ -79,7 +79,7 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
 
       if (!res.ok) {
         const err = result?.error
-        // Blocked by an open prior year — surface an inline "lås och försök
+        // Blocked by an open prior year: surface an inline "lås och försök
         // igen" path instead of a dead-end toast.
         if (
           err &&
@@ -123,7 +123,7 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
         })
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
-          // An already-locked period is fine — keep going.
+          // An already-locked period is fine: keep going.
           if (body?.error?.code === 'PERIOD_LOCK_ALREADY_LOCKED') continue
           toast({
             title: `Kunde inte låsa ${p.name}`,
@@ -183,14 +183,14 @@ export default function CreatePeriodDialog({ open, onOpenChange, entryDate, peri
                   <p className="font-medium">Föregående räkenskapsår är öppet</p>
                   <p className="text-muted-foreground">
                     Du måste låsa föregående räkenskapsår innan du kan skapa ett nytt.
-                    Låsningen är vändbar — du kan låsa upp året igen för att bokföra
+                    Låsningen är vändbar: du kan låsa upp året igen för att bokföra
                     bokslutsposter.
                   </p>
                 </div>
                 <ul className="space-y-0.5 text-muted-foreground">
                   {blockingPeriods.map((p) => (
                     <li key={p.id} className="tabular-nums">
-                      {p.name} ({p.period_start} – {p.period_end})
+                      {p.name} ({p.period_start} till {p.period_end})
                     </li>
                   ))}
                 </ul>

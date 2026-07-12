@@ -4,11 +4,26 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from "@/components/ui/skeleton"
+import { PageHeader } from '@/components/ui/page-header'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import dynamic from 'next/dynamic'
 import { KPIHeroCards } from '@/components/kpi/KPIHeroCards'
-import { KPITrendChart } from '@/components/kpi/KPITrendChart'
-import { KPIExpenseMixChart } from '@/components/kpi/KPIExpenseMixChart'
-import { KPITopSuppliersChart } from '@/components/kpi/KPITopSuppliersChart'
+
+// Recharts is ~180KB: defer the chart components so the KPI page shell and
+// hero cards render without waiting for the charting bundle.
+const chartFallback = () => <Skeleton className="h-[300px] w-full" />
+const KPITrendChart = dynamic(
+  () => import('@/components/kpi/KPITrendChart').then((m) => m.KPITrendChart),
+  { ssr: false, loading: chartFallback },
+)
+const KPIExpenseMixChart = dynamic(
+  () => import('@/components/kpi/KPIExpenseMixChart').then((m) => m.KPIExpenseMixChart),
+  { ssr: false, loading: chartFallback },
+)
+const KPITopSuppliersChart = dynamic(
+  () => import('@/components/kpi/KPITopSuppliersChart').then((m) => m.KPITopSuppliersChart),
+  { ssr: false, loading: chartFallback },
+)
 import { KPISettingsDialog } from '@/components/kpi/KPISettingsDialog'
 import { getDefaultPreferences } from '@/lib/reports/kpi-definitions'
 import type { KPIReport, KPIPreferences } from '@/types'
@@ -73,7 +88,7 @@ export default function KpiPage() {
       setPreferences(data)
       if (selectedPeriod) await fetchReport(selectedPeriod)
     } catch {
-      // Silently fail — user can retry
+      // Silently fail: user can retry
     } finally {
       setIsSavingPrefs(false)
     }
@@ -81,16 +96,16 @@ export default function KpiPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('title')}</h1>
-        <div className="flex gap-2">
+      <PageHeader
+        title={t('title')}
+        action={
           <KPISettingsDialog
             preferences={preferences}
             onSave={handleSavePreferences}
             saving={isSavingPrefs}
           />
-        </div>
-      </div>
+        }
+      />
 
       <FiscalYearSelector
         value={selectedPeriod || null}
@@ -129,7 +144,7 @@ function LoadingSkeleton() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[1, 2, 3, 4].map((i) => (
           <Card key={i}>
-            <CardContent className="p-6 space-y-2">
+            <CardContent className="p-4 space-y-2">
               <Skeleton className="h-3 w-20" />
               <Skeleton className="h-7 w-28" />
               <Skeleton className="h-3 w-16" />

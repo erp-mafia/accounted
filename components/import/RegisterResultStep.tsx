@@ -94,7 +94,7 @@ export default function RegisterResultStep({
                 {result.errors.map((e, i) => (
                   <li key={i} className="px-3 py-2 text-sm">
                     <span className="font-medium">Rad {e.row_index}: {e.name}</span>
-                    <span className="text-muted-foreground"> — {e.reason}</span>
+                    <span className="text-muted-foreground">: {e.reason}</span>
                   </li>
                 ))}
               </ul>
@@ -102,7 +102,7 @@ export default function RegisterResultStep({
           </div>
         )}
 
-        {/* Warnings (non-fatal — e.g. dropped revenue-account overrides) */}
+        {/* Warnings (non-fatal: e.g. dropped revenue-account overrides) */}
         {result.warnings && result.warnings.length > 0 && (
           <div className="space-y-2">
             <h4 className="text-sm font-medium">Att notera</h4>

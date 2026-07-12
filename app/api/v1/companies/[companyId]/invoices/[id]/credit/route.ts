@@ -2,7 +2,7 @@
  * POST /api/v1/companies/{companyId}/invoices/{id}/credit
  *
  * Issues a credit note (kreditfaktura) against the invoice identified by `:id`.
- * Per ML 17 kap 22–23§, a kreditfaktura references the original invoice's
+ * Per ML 17 kap 22-23§, a kreditfaktura references the original invoice's
  * löpnummer and carries reversed-sign amounts.
  *
  * Behaviour:
@@ -14,13 +14,13 @@
  *      On items failure, rolls back the credit-note row (scoped DELETE).
  *   4. Flips the original invoice to status='credited'.
  *   5. Posts the reverse journal entry via createCreditNoteJournalEntry
- *      (accrual only — cash basis defers recognition to refund time).
+ *      (accrual only: cash basis defers recognition to refund time).
  *   6. Emits invoice.credited.
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable. The credit-note row
- * gets created via INSERT — under dry-run NO row is created.
+ * gets created via INSERT: under dry-run NO row is created.
  *
- * Optional body: { reason?: string } — populates the credit note's `notes`
+ * Optional body: { reason?: string }: populates the credit note's `notes`
  * field. Defaults to "Krediterar faktura <original>".
  */
 
@@ -39,13 +39,16 @@ const CreditNoteRequest = z.object({
 })
 
 const ORIGINAL_INVOICE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, default_dimensions'
 
+// default_dimensions stays in this projection: the inserted credit-note row is
+// handed to createCreditNoteJournalEntry, which reads the bag off the row so
+// the reversing JE nets against the same dimension cells as the original.
 const CREDIT_NOTE_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, paid_at, paid_amount, remaining_amount, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
 
 const ORIGINAL_ITEMS_COLUMNS =
-  'sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount'
+  'sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, dimensions'
 
 const CreditNoteCreated = z.object({
   id: z.string().uuid(),
@@ -67,14 +70,14 @@ registerEndpoint({
   description:
     'Creates a credit note referencing the original invoice. The credit note carries reversed-sign amounts (matching the original line for line) and gets invoice_number=KR-<original>. The original invoice transitions to status=credited. Under faktureringsmetoden, posts a reversing journal entry (Credit AR 1510 / Debit revenue + Debit output VAT). Under kontantmetoden the credit note still creates the row but defers the reversal entry until refund. Idempotent and dry-runnable. Emits invoice.credited.',
   useWhen:
-    'You need to legally cancel an issued invoice (ML 17 kap 22–23§). The original invoice cannot be edited once issued — credit it and reissue corrected.',
+    'You need to legally cancel an issued invoice (ML 17 kap 22-23§). The original invoice cannot be edited once issued: credit it and reissue corrected.',
   doNotUseFor:
     'Cancelling a draft (DELETE the draft instead). Refunding a partial payment without invalidating the whole invoice (book the refund manually via the journal-entries API in a future PR).',
   pitfalls: [
-    'Idempotency-Key is mandatory. Retried credits with the same key replay the cached response — no duplicate credit note is created.',
+    'Idempotency-Key is mandatory. Retried credits with the same key replay the cached response: no duplicate credit note is created.',
     'The original invoice must be in sent / paid / overdue status. Drafts, cancelled invoices, and already-credited invoices are rejected with specific error codes.',
     'Credit-note items mirror the original\'s lines with negated values. To credit only part of an invoice (line-level), credit the full invoice first then reissue with the corrected lines.',
-    'Under kontantmetoden no journal entry is created here — refund booking is deferred. A `JOURNAL_ENTRY_NOT_POSTED` warning is NOT emitted in this case (the deferral is correct, not a failure).',
+    'Under kontantmetoden no journal entry is created here: refund booking is deferred. A `JOURNAL_ENTRY_NOT_POSTED` warning is NOT emitted in this case (the deferral is correct, not a failure).',
   ],
   example: {
     request: { reason: 'Felaktig kund' },
@@ -181,6 +184,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         line_total: number
         vat_rate?: number | null
         vat_amount?: number | null
+        dimensions?: Record<string, string> | null
       }>
     }
     const original = originalInvoice as unknown as OriginalShape
@@ -193,7 +197,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     if (original.credited_invoice_id) {
-      // Original IS itself a credit note — can't credit a credit.
+      // Original IS itself a credit note: can't credit a credit.
       return v1ErrorResponseFromCode('INVOICE_CREDIT_NOT_INVOICE', ctx.log, {
         requestId: ctx.requestId,
         details: { reason: 'cannot credit a credit note' },
@@ -246,6 +250,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       credited_invoice_id: originalId,
       status: 'sent' as const,
       document_type: 'invoice' as const,
+      // Copy the original's dimension bag so the credit-note verifikat nets
+      // against the same dimension cells in reports (dimensions PR7).
+      default_dimensions: original.default_dimensions ?? {},
     }
 
     const creditNoteItems = (original.items ?? []).map((item) => ({
@@ -257,6 +264,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       line_total: -Math.abs(item.line_total),
       vat_rate: item.vat_rate ?? 0,
       vat_amount: -Math.abs(item.vat_amount ?? 0),
+      // Same reasoning: the reversal must carry the exact per-item bag the
+      // original booked with (dimensions PR7).
+      dimensions: item.dimensions ?? {},
     }))
 
     // Fetch settings for accounting method + entity type.
@@ -319,7 +329,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         .eq('company_id', ctx.companyId!)
       if (rollbackErr) {
         ctx.log.error(
-          'credit-note items insert failed AND rollback delete failed — orphaned header',
+          'credit-note items insert failed AND rollback delete failed: orphaned header',
           rollbackErr,
           {
             creditNoteId,

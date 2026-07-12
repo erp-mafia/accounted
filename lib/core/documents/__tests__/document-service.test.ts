@@ -3,7 +3,7 @@ import { eventBus } from '@/lib/events/bus'
 import { makeDocumentAttachment } from '@/tests/helpers'
 
 // ============================================================
-// Mock — separate client (no .then) from query builder (thenable)
+// Mock: separate client (no .then) from query builder (thenable)
 // ============================================================
 
 let resultIdx: number
@@ -55,7 +55,7 @@ import {
   _resetBucketVerified,
 } from '../document-service'
 
-// A minimal valid PDF byte sequence (header + EOF) — passes magic-byte check.
+// A minimal valid PDF byte sequence (header + EOF): passes magic-byte check.
 function pdfBuffer(payload = 'test'): ArrayBuffer {
   return new TextEncoder().encode(`%PDF-1.4\n${payload}\n%%EOF\n`).buffer as ArrayBuffer
 }
@@ -68,7 +68,7 @@ beforeEach(() => {
   results = []
 })
 
-describe('validateDocumentMagicBytes — application/xhtml+xml', () => {
+describe('validateDocumentMagicBytes: application/xhtml+xml', () => {
   const toBuffer = (text: string, bom = false): ArrayBuffer => {
     const bytes = new TextEncoder().encode(bom ? `﻿${text}` : text)
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
@@ -113,6 +113,108 @@ describe('validateDocumentMagicBytes — application/xhtml+xml', () => {
     )
     // And a real PDF still passes as PDF.
     expect(validateDocumentMagicBytes(pdfBuffer(), 'application/pdf')).toBeNull()
+  })
+})
+
+describe('validateDocumentMagicBytes: application/json', () => {
+  const toBuffer = (text: string, bom = false): ArrayBuffer => {
+    const bytes = new TextEncoder().encode(bom ? `﻿${text}` : text)
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  }
+
+  it('accepts a JSON object (raw PSD2 response archive shape)', () => {
+    const psd2Page = JSON.stringify({ transactions: [{ amount: '100.00' }], continuation_key: null })
+    expect(validateDocumentMagicBytes(toBuffer(psd2Page), 'application/json')).toBeNull()
+  })
+
+  it('accepts a JSON array, leading whitespace, and a UTF-8 BOM', () => {
+    expect(validateDocumentMagicBytes(toBuffer('[1, 2, 3]'), 'application/json')).toBeNull()
+    expect(validateDocumentMagicBytes(toBuffer('\n  {"a": 1}'), 'application/json')).toBeNull()
+    expect(validateDocumentMagicBytes(toBuffer('{"a": 1}', true), 'application/json')).toBeNull()
+  })
+
+  it('rejects prose placeholders and bare JSON scalars', () => {
+    expect(validateDocumentMagicBytes(toBuffer('summary of the response'), 'application/json')).toMatch(
+      /kunde inte verifieras/,
+    )
+    // Scalars parse as JSON but are not a plausible archived API response:
+    // the object/array root requirement keeps the anti-placeholder defense.
+    expect(validateDocumentMagicBytes(toBuffer('"just a string"'), 'application/json')).toMatch(
+      /kunde inte verifieras/,
+    )
+    expect(validateDocumentMagicBytes(toBuffer('42'), 'application/json')).toMatch(
+      /kunde inte verifieras/,
+    )
+    expect(validateDocumentMagicBytes(toBuffer('null'), 'application/json')).toMatch(
+      /kunde inte verifieras/,
+    )
+  })
+
+  it('rejects truncated JSON', () => {
+    expect(validateDocumentMagicBytes(toBuffer('{"transactions": [{"amount":'), 'application/json')).toMatch(
+      /kunde inte verifieras/,
+    )
+  })
+
+  it('does not loosen validation for other declared types', () => {
+    expect(validateDocumentMagicBytes(toBuffer('{"a": 1}'), 'application/pdf')).toMatch(
+      /kunde inte verifieras/,
+    )
+  })
+})
+
+describe('validateDocumentMagicBytes: PDF header offset tolerance', () => {
+  const toArrayBuffer = (bytes: Uint8Array): ArrayBuffer =>
+    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+
+  const withPreamble = (preamble: string): ArrayBuffer => {
+    const pdf = new Uint8Array(pdfBuffer())
+    const lead = new TextEncoder().encode(preamble)
+    const combined = new Uint8Array(lead.length + pdf.length)
+    combined.set(lead, 0)
+    combined.set(pdf, lead.length)
+    return toArrayBuffer(combined)
+  }
+
+  it('accepts a PDF with a leading newline before %PDF- (ISO 32000 preamble)', () => {
+    expect(validateDocumentMagicBytes(withPreamble('\n'), 'application/pdf')).toBeNull()
+  })
+
+  it('accepts a PDF with leading whitespace/junk before %PDF-', () => {
+    expect(validateDocumentMagicBytes(withPreamble('   '), 'application/pdf')).toBeNull()
+    expect(validateDocumentMagicBytes(withPreamble('\r\n\r\n<junk>'), 'application/pdf')).toBeNull()
+  })
+
+  it('accepts a PDF with a UTF-8 BOM before %PDF-', () => {
+    const pdf = new Uint8Array(pdfBuffer())
+    const combined = new Uint8Array(3 + pdf.length)
+    combined.set([0xEF, 0xBB, 0xBF], 0)
+    combined.set(pdf, 3)
+    expect(validateDocumentMagicBytes(toArrayBuffer(combined), 'application/pdf')).toBeNull()
+  })
+
+  it('rejects when %PDF- appears only beyond the first 1024 bytes', () => {
+    expect(validateDocumentMagicBytes(withPreamble('x'.repeat(1025)), 'application/pdf')).toMatch(
+      /kunde inte verifieras/,
+    )
+  })
+
+  it('still rejects HTML and plain text declared as PDF', () => {
+    const toBuffer = (text: string): ArrayBuffer =>
+      toArrayBuffer(new TextEncoder().encode(text))
+    expect(
+      validateDocumentMagicBytes(toBuffer('<html><body>Your invoice</body></html>'), 'application/pdf'),
+    ).toMatch(/kunde inte verifieras/)
+    expect(
+      validateDocumentMagicBytes(toBuffer('JVBERi0xLjQKJcOkw7zDtsO'), 'application/pdf'),
+    ).toMatch(/kunde inte verifieras/)
+  })
+
+  it('images stay strict at offset 0: a leading byte still rejects', () => {
+    const png = new Uint8Array([0x0A, 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    expect(validateDocumentMagicBytes(toArrayBuffer(png), 'image/png')).toMatch(
+      /kunde inte verifieras/,
+    )
   })
 })
 

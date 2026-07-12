@@ -12,7 +12,7 @@ export const GET = withRouteContext(
     const { supabase, companyId, log, requestId } = ctx
     try {
       // Narrative edits come from arsredovisning_narratives now, loaded
-      // inside buildArsredovisningData. The URL stays clean — no narrative
+      // inside buildArsredovisningData. The URL stays clean, no narrative
       // text in query params, access logs, or browser history.
       const data = await buildArsredovisningData(supabase, companyId, id)
       // Dispatch on the framework recorded in the data. K3 documents need
@@ -27,14 +27,14 @@ export const GET = withRouteContext(
       // "-utkast" suffix mirrors the existing PDF routes; the file becomes
       // "fastställd" only after the signature flow records all signatures.
       // Sanitize the dynamic segment so a stray quote / newline in the date
-      // (defensive — unlikely to ever happen) can't break the header.
+      // (defensive, unlikely to ever happen) can't break the header.
       const safePeriodEnd = data.fiscal_period.period_end.replace(/[^\w.-]/g, '_')
       const filename = `arsredovisning-${safePeriodEnd}-utkast.pdf`
       return new Response(new Uint8Array(pdfBuffer), {
         headers: {
           'Content-Type': 'application/pdf',
           'Content-Disposition': `inline; filename="${filename}"`,
-          // ÅR contains company financials + officer names — don't let any
+          // ÅR contains company financials + officer names: don't let any
           // intermediary cache the document.
           'Cache-Control': 'private, no-store, no-cache, must-revalidate',
           'Pragma': 'no-cache',

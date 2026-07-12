@@ -29,7 +29,7 @@ cd Accounted
 docker compose up -d
 ```
 
-You need a Supabase project and must apply the database migrations before first use. See [SELF-HOSTING.md](SELF-HOSTING.md) for the full step-by-step guide, including Supabase setup, auth configuration, optional features (AI, email, push notifications), and troubleshooting.
+You need a Supabase project and must apply the database migrations before first use. See [SELF-HOSTING.md](docs/SELF-HOSTING.md) for the full step-by-step guide, including Supabase setup, auth configuration, optional features (AI, email, push notifications), and troubleshooting.
 
 ## Development Setup
 
@@ -52,7 +52,7 @@ npm run lint      # ESLint
 
 ## Documentation
 
-- [SELF-HOSTING.md](SELF-HOSTING.md) -- Full self-hosting guide (Docker, Supabase setup, migrations, optional features)
+- [SELF-HOSTING.md](docs/SELF-HOSTING.md) -- Full self-hosting guide (Docker, Supabase setup, migrations, optional features)
 - [CLAUDE.md](CLAUDE.md) -- Architecture, bookkeeping engine, database conventions, extension system
 - [CONTRIBUTING.md](CONTRIBUTING.md) -- Development workflow, code style, pull request process
 - [SECURITY.md](SECURITY.md) -- Vulnerability reporting policy

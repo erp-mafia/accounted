@@ -17,7 +17,17 @@
     "SKATTEVERKET_AGD_INLAMNING_API_BASE_URL",
     "SKATTEVERKET_AGD_PERIOD_API_BASE_URL",
     "SKATTEVERKET_SKATTEKONTO_API_BASE_URL",
-    "SKATTEVERKET_DISABLED"
+    "SKATTEVERKET_DISABLED",
+    "SKATTEVERKET_SYSTEM_AUTH_MODE",
+    "SKATTEVERKET_SYSTEM_AUTH_MECHANISM",
+    "SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL",
+    "SKATTEVERKET_SYSTEM_CLIENT_ID",
+    "SKATTEVERKET_SYSTEM_CERT_PEM_B64",
+    "SKATTEVERKET_SYSTEM_KEY_PEM_B64",
+    "SKATTEVERKET_SYSTEM_KEY_PASSPHRASE",
+    "SKATTEVERKET_SYSTEM_CA_PEM_B64",
+    "SKATTEVERKET_SYSTEM_SCOPES",
+    "SKATTEVERKET_OMBUD_ORG_NUMBER"
   ],
   "npmDependencies": [],
   "definition": {
@@ -26,6 +36,6 @@
     "icon": "FileCheck",
     "dataPattern": "core",
     "description": "Skicka momsdeklaration direkt till Skatteverket via BankID.",
-    "longDescription": "Anslut till Skatteverket med BankID och skicka din momsdeklaration direkt från gnubok. Spara utkast, validera, lås och signera — utan att lämna appen."
+    "longDescription": "Anslut till Skatteverket med BankID och skicka din momsdeklaration direkt från gnubok. Spara utkast, validera, lås och signera: utan att lämna appen."
   }
 }

@@ -4,7 +4,7 @@
 # Guidelines 9/2022 §3 (controller-side RoPA): purposes, lawful basis,
 # data subject + data category, recipients, transfer mechanism, retention,
 # security measures. Add an entry whenever a new flow ships that touches
-# personal data — onboarding, integrations, support, or regulator filings.
+# personal data: onboarding, integrations, support, or regulator filings.
 
 processing_activities:
 
@@ -37,7 +37,7 @@ processing_activities:
         not applicable; no third-country transfer.
     retention:
       duration: 7y
-      basis: bfl_7_kap   # BFL 7 kap. — räkenskapsinformation
+      basis: bfl_7_kap   # BFL 7 kap.: räkenskapsinformation
       stored_in:
         - agi_declarations.xml_content
         - agi_declarations.individuppgifter
@@ -105,7 +105,7 @@ processing_activities:
       - business_owner
     data_categories:
       - user.government_id          # orgnummer (juridiska personer) eller pnr
-      - user.financial.tax          # rutor 05–62
+      - user.financial.tax          # rutor 05-62
     recipients:
       - name: Skatteverket
         country: SE
@@ -221,7 +221,7 @@ processing_activities:
       applicable: true
       mechanism: scc_2021_c2p
       note: >-
-        Resend (US) — SCC Module 2 (controller-to-processor). Outbound
+        Resend (US): SCC Module 2 (controller-to-processor). Outbound
         payload limited to ett notifieringsmail utan finansiella belopp;
         TIA dokumenterad i .compliance/tia/resend.md.
     retention:
@@ -241,9 +241,9 @@ processing_activities:
       Föreslå bokföringskategori för banktransaktioner och tolka/extrahera
       uppladdade underlag (kvitton, leverantörsfakturor) med Anthropic
       Claude-modeller körda i Amazon Bedrock. Endast aktiv när tenanten
-      uttryckligen aktiverat AI-funktioner — kärntjänsten (bokföring, fakturor,
+      uttryckligen aktiverat AI-funktioner: kärntjänsten (bokföring, fakturor,
       moms, rapporter) fungerar fullt ut utan AI.
-    lawful_basis: art_6_1_a   # consent — opt-in, AI features off by default
+    lawful_basis: art_6_1_a   # consent: opt-in, AI features off by default
     special_category_basis: null
     controller: gnubok-tenant
     processor: aws-bedrock
@@ -261,7 +261,7 @@ processing_activities:
       applicable: false
       mechanism: null
       note: >-
-        Inferens körs i AWS-regionen eu-north-1 (Stockholm) — ingen överföring
+        Inferens körs i AWS-regionen eu-north-1 (Stockholm): ingen överföring
         till tredje land. AWS DPA + SCC + DPF-certifiering finns som
         skyddsmekanism. Prompter lagras ej hos Bedrock efter anropet och används
         ej till modellträning.
@@ -283,7 +283,7 @@ processing_activities:
     purpose: >-
       Varje MCP-verktygsanrop loggar metadata (verktygsnamn, felkod,
       felmeddelande max 500 tecken, latens, aktör, session, frivillig
-      distributionskanal-markör — t.ex. 'openclaw' via X-Gnubok-Client-header
+      distributionskanal-markör, t.ex. 'openclaw' via X-Gnubok-Client-header
       eller ?client=-parameter, sanerad mot allow-list och aldrig använd för
       auktorisation) och varje skill-laddning loggar slug/tier till event_log.
       Syftet är tillförlitlighetsanalys av agentgränssnittet: felfrekvens per

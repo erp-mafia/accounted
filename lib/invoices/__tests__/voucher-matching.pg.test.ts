@@ -84,7 +84,7 @@ async function seedPostedVoucher(params: {
 /**
  * Seed a posted voucher with one debit line and one credit line (balanced).
  * Lets kontantmetoden tests build a cash-receipt verifikat (debit 1930 /
- * credit 3001 — no 1510) and a non-matching one (debit 1510 / credit 3001).
+ * credit 3001: no 1510) and a non-matching one (debit 1510 / credit 3001).
  */
 async function seedVoucherDebitCredit(params: {
   userId: string
@@ -133,7 +133,7 @@ describe('link_invoice_voucher pg-real guards', () => {
     const invoiceId = await seedInvoice({ userId, companyId, customerId })
     const voucherId = await seedPostedVoucher({ userId, companyId, fiscalPeriodId })
 
-    // First link — should succeed.
+    // First link: should succeed.
     await getPool().query(
       `INSERT INTO public.invoice_payments
          (user_id, company_id, invoice_id, payment_date, amount, currency, journal_entry_id)
@@ -141,7 +141,7 @@ describe('link_invoice_voucher pg-real guards', () => {
       [userId, companyId, invoiceId, voucherId],
     )
 
-    // Second identical link — should be rejected by the partial unique index.
+    // Second identical link: should be rejected by the partial unique index.
     await expect(
       getPool().query(
         `INSERT INTO public.invoice_payments
@@ -196,11 +196,11 @@ describe('link_invoice_voucher pg-real guards', () => {
       [txId1, userId, companyId, randomUUID(), txId2],
     ).catch(async () => {
       // transactions table also requires account_id pointing at bank_connections;
-      // skip seeding txs if FK doesn't allow NULL — and assert against the
+      // skip seeding txs if FK doesn't allow NULL, and assert against the
       // invoice_payments table directly.
     })
 
-    // Insert two rows with no journal_entry_id and no transaction_id — the
+    // Insert two rows with no journal_entry_id and no transaction_id: the
     // partial index excludes them and the (transaction_id, invoice_id) unique
     // index allows NULL transaction_id duplicates.
     await getPool().query(
@@ -252,7 +252,7 @@ describe('link_invoice_voucher pg-real guards', () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
     await insertCompanyMember({ companyId, userId })
-    // Period must be open while we seed the voucher — enforce_period_lock
+    // Period must be open while we seed the voucher: enforce_period_lock
     // fires on INSERT, so close it only after the JE rows exist.
     const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
     const customerId = await seedCustomer({ userId, companyId })
@@ -266,7 +266,7 @@ describe('link_invoice_voucher pg-real guards', () => {
       [fiscalPeriodId],
     )
 
-    // No journal_entries write happens in the link flow — only
+    // No journal_entries write happens in the link flow: only
     // invoice_payments + invoices, neither of which is gated by
     // enforce_period_lock. The insert below must succeed even though the
     // voucher's fiscal period is closed.
@@ -286,7 +286,7 @@ describe('link_invoice_voucher pg-real guards', () => {
 })
 
 // ============================================================
-// link_invoice_to_voucher RPC — atomic customer link (audit C2)
+// link_invoice_to_voucher RPC: atomic customer link (audit C2)
 // Mirrors the supplier-side link_supplier_invoice_to_voucher tests: the RPC
 // must lock the invoice FOR UPDATE, validate, and apply UPDATE + INSERT in a
 // single transaction so concurrent linkers serialize instead of clobbering
@@ -316,7 +316,7 @@ async function callLinkRpc(args: {
   return rows[0].result
 }
 
-describe('link_invoice_to_voucher RPC (atomic link — audit C2)', () => {
+describe('link_invoice_to_voucher RPC (atomic link: audit C2)', () => {
   it('links a full payment: invoice advanced + payment row, one transaction', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
@@ -415,7 +415,7 @@ describe('link_invoice_to_voucher RPC (atomic link — audit C2)', () => {
     expect(Number(pay[0].count)).toBe(1)
   })
 
-  it('REGRESSION (the C2 race): two concurrent full-payment links — exactly one wins', async () => {
+  it('REGRESSION (the C2 race): two concurrent full-payment links: exactly one wins', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
     await insertCompanyMember({ companyId, userId })
@@ -458,12 +458,12 @@ describe('link_invoice_to_voucher RPC (atomic link — audit C2)', () => {
 })
 
 // ============================================================
-// link_invoice_to_voucher RPC — kontantmetoden branch
+// link_invoice_to_voucher RPC: kontantmetoden branch
 // On cash method no 1510 is ever booked (revenue is recognised at payment),
 // so the RPC must key on the bank/cash DEBIT (19xx) instead of the AR credit.
 // Mirrors the accounting-method branch in lib/invoices/voucher-matching.ts.
 // ============================================================
-describe('link_invoice_to_voucher RPC (kontantmetoden — 19xx debit)', () => {
+describe('link_invoice_to_voucher RPC (kontantmetoden: 19xx debit)', () => {
   it('cash method: links against the 1930 debit of a receipt voucher (no 1510)', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
@@ -472,7 +472,7 @@ describe('link_invoice_to_voucher RPC (kontantmetoden — 19xx debit)', () => {
     const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
     const customerId = await seedCustomer({ userId, companyId })
     const invoiceId = await seedInvoice({ userId, companyId, customerId, total: 1000 })
-    // Cash receipt: debit 1930 (bank) / credit 3001 (revenue) — no receivable.
+    // Cash receipt: debit 1930 (bank) / credit 3001 (revenue): no receivable.
     const voucherId = await seedVoucherDebitCredit({
       userId,
       companyId,
@@ -529,7 +529,7 @@ describe('link_invoice_to_voucher RPC (kontantmetoden — 19xx debit)', () => {
 
   it('accrual default (no settings row): still keys on the 1510 credit', async () => {
     // Regression guard: a company with no company_settings row must behave as
-    // accrual — the 1930-debit / 1510-credit voucher links via its AR credit.
+    // accrual: the 1930-debit / 1510-credit voucher links via its AR credit.
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
     await insertCompanyMember({ companyId, userId })

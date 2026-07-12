@@ -4,7 +4,7 @@ import { makeJournalEntry, makeJournalEntryLine } from '@/tests/helpers'
 import { BookkeepingDatabaseError, MeaninglessCorrectionError } from '@/lib/bookkeeping/errors'
 
 // ============================================================
-// Mock — separate client (no .then) from query builder (thenable)
+// Mock: separate client (no .then) from query builder (thenable)
 // ============================================================
 
 let resultIdx: number
@@ -37,7 +37,7 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   getNextVoucherNumber: vi.fn(async () => ++resultIdx), // just increment
 }))
 
-// On-demand BAS backfill — default: nothing seedable. Tests override.
+// On-demand BAS backfill, default: nothing seedable. Tests override.
 const mockBackfill = vi.fn()
 vi.mock('@/lib/bookkeeping/account-backfill', () => ({
   backfillStandardBASAccounts: (...args: unknown[]) => mockBackfill(...args),
@@ -85,7 +85,7 @@ describe('correctEntry', () => {
     results = [
       // 0: fetch original (.single())
       { data: originalEntry, error: null },
-      // 1: fetch accounts for corrected lines — Step 0 pre-validation (thenable)
+      // 1: fetch accounts for corrected lines: Step 0 pre-validation (thenable)
       { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null },
       // 2: insert reversal entry (.single())
       { data: reversalEntry, error: null },
@@ -158,7 +158,7 @@ describe('correctEntry', () => {
       { data: correctedEntry, error: null },         // 5: insert corrected
       { data: null, error: null },                   // 6: insert corrected lines
       { data: null, error: null },                   // 7: post corrected
-      { data: [], error: null },                     // 8: CAS fails — empty array
+      { data: [], error: null },                     // 8: CAS fails: empty array
       { data: null, error: null },                   // 9: cancelEntry reversal update
       { data: null, error: null },                   // 10: cancelEntry reversal lines delete
       { data: null, error: null },                   // 11: cancelEntry corrected update
@@ -233,7 +233,7 @@ describe('correctEntry', () => {
       correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', noOpLines)
     ).rejects.toBeInstanceOf(MeaninglessCorrectionError)
 
-    // Guard runs before any DB call — original must not be fetched.
+    // Guard runs before any DB call: original must not be fetched.
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
@@ -255,7 +255,7 @@ describe('correctEntry', () => {
 
   it('rejects rättelse identical to the original entry', async () => {
     const supabase = makeClient()
-    // Only the fetch-original result is needed — guard runs right after.
+    // Only the fetch-original result is needed: guard runs right after.
     results = [{ data: originalEntry, error: null }]
 
     const identicalLines = [
@@ -274,7 +274,7 @@ describe('correctEntry', () => {
   it('allows rättelse that shifts amounts between different accounts', async () => {
     setupResults()
     const supabase = makeClient()
-    // correctedLines moves expense from 5410 → 5420 — net effect per account
+    // correctedLines moves expense from 5410 → 5420, net effect per account
     // is non-zero (5420 +1200, 5410 0 since absent, 1930 -1200), and the lines
     // differ from the original, so both guards must pass.
     const result = await correctEntry(
@@ -289,7 +289,7 @@ describe('correctEntry', () => {
 
   it('accepts a source_type=correction entry as the original (chained correction, BFL 5 kap. 5 §)', async () => {
     // The user just corrected entry A → got correction C. They now want to
-    // correct C. Service must not care about source_type of the original —
+    // correct C. Service must not care about source_type of the original:
     // status='posted' is the only constraint.
     const correctionAsOriginal = makeJournalEntry({
       id: 'correction-1',
@@ -338,14 +338,14 @@ describe('correctEntry', () => {
     expect(result.corrected.source_type).toBe('correction')
   })
 
-  it('fails fast on unknown accounts — BEFORE the storno exists or a voucher number is consumed', async () => {
+  it('fails fast on unknown accounts: BEFORE the storno exists or a voucher number is consumed', async () => {
     // Regression: the old flow created+posted the storno first, then hit
     // AccountsNotInChartError on the corrected lines and had to cancel the
-    // storno again — leaving a voided 0 kr storno in the chain (the user's
+    // storno again, leaving a voided 0 kr storno in the chain (the user's
     // "A98") and burning voucher numbers (the missing "A99").
     results = [
       { data: originalEntry, error: null }, // 0: fetch original
-      { data: [{ id: 'acc-1930', account_number: '1930' }], error: null }, // 1: accounts — 5420 missing
+      { data: [{ id: 'acc-1930', account_number: '1930' }], error: null }, // 1: accounts: 5420 missing
     ]
     mockBackfill.mockResolvedValue([]) // not seedable (e.g. deactivated / unknown)
 
@@ -365,7 +365,7 @@ describe('correctEntry', () => {
     const correctedEntry = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'orig-1' })
     results = [
       { data: originalEntry, error: null },                                  // 0: fetch original
-      { data: [{ id: 'acc-1930', account_number: '1930' }], error: null },   // 1: accounts — 5420 missing
+      { data: [{ id: 'acc-1930', account_number: '1930' }], error: null },   // 1: accounts: 5420 missing
       // -- backfill seeds 5420 --
       { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null }, // 2: re-resolve
       { data: reversalEntry, error: null },                                  // 3: insert reversal
@@ -406,7 +406,7 @@ describe('correctEntry', () => {
   })
 })
 
-describe('correctEntry — date/period override (recordate engine)', () => {
+describe('correctEntry: date/period override (recordate engine)', () => {
   const originalEntry = makeJournalEntry({
     id: 'orig-1',
     status: 'posted',
@@ -420,7 +420,7 @@ describe('correctEntry — date/period override (recordate engine)', () => {
     ],
   })
 
-  // Same multiset as the original — allowed here because the *date* is the
+  // Same multiset as the original: allowed here because the *date* is the
   // change (a wrong-year fix keeps the lines untouched).
   const identicalLines = [
     { account_number: '5410', debit_amount: 1000, credit_amount: 0 },
@@ -468,7 +468,7 @@ describe('correctEntry — date/period override (recordate engine)', () => {
   it('rejects when the new date falls outside the target period bounds', async () => {
     results = [
       { data: originalEntry, error: null },                                                          // 0 fetch original
-      { data: { name: '2025', period_start: '2025-01-01', period_end: '2025-05-31' }, error: null },  // 1 target period — 06-15 out of bounds
+      { data: { name: '2025', period_start: '2025-01-01', period_end: '2025-05-31' }, error: null },  // 1 target period: 06-15 out of bounds
     ]
     const supabase = makeClient()
     await expect(

@@ -59,7 +59,7 @@ describe('brandingFromCompanySettings', () => {
   })
 
   it('survives a legacy DB row that returns null/undefined for the branding columns', () => {
-    // Simulate a row that was created BEFORE the migration applied — these
+    // Simulate a row that was created BEFORE the migration applied: these
     // columns can come back as null until the default backfills run. The
     // helper must not throw.
     const legacyRow = {

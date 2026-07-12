@@ -53,7 +53,7 @@ describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
   // Regression guard for #755: 7833/7834 were referenced here but absent from
   // the BAS reference, so backfillStandardBASAccounts could not seed them and
   // annual depreciation threw AccountsNotInChartError. Every account in the
-  // triple must resolve in BAS_REFERENCE — otherwise the lazy backfill silently
+  // triple must resolve in BAS_REFERENCE: otherwise the lazy backfill silently
   // can't add it and the depreciation posting fails on minimal charts.
   it('every account in the triple exists in the BAS reference (backfillable)', () => {
     for (const cat of Object.keys(DEFAULT_ACCOUNTS_BY_CATEGORY) as Array<
@@ -67,7 +67,7 @@ describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
   })
 })
 
-describe('disposeAsset — gain/loss account selection', () => {
+describe('disposeAsset: gain/loss account selection', () => {
   function makeAsset(overrides: Partial<Asset> = {}): Asset {
     return {
       id: 'asset-1',
@@ -103,7 +103,7 @@ describe('disposeAsset — gain/loss account selection', () => {
   function makeSupabaseForDispose(asset: Asset, schedules: Array<{ planned_depreciation: number }>) {
     // Three from() calls happen inside disposeAsset:
     //   1. getAsset (.maybeSingle on 'assets')
-    //   2. sumPostedDepreciation (.then on 'depreciation_schedules' — server-derived
+    //   2. sumPostedDepreciation (.then on 'depreciation_schedules': server-derived
     //      accumulated_depreciation; replaces the previously client-supplied value)
     //   3. update (.single on 'assets', returning the disposed row)
     const builders = {
@@ -274,7 +274,7 @@ describe('disposeAsset — gain/loss account selection', () => {
     expect(lines.find((l) => l.account_number === '7973')).toBeUndefined()
   })
 
-  it('server-derives accumulated_depreciation — caller cannot inflate gain', async () => {
+  it('server-derives accumulated_depreciation: caller cannot inflate gain', async () => {
     const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
     vi.mocked(createJournalEntry).mockClear()
     const asset = makeAsset({ category: 'equipment', acquisition_cost: 100_000 })
@@ -305,7 +305,7 @@ describe('disposeAsset — gain/loss account selection', () => {
   })
 })
 
-describe('updateAsset — acquisition-basis correction guard', () => {
+describe('updateAsset: acquisition-basis correction guard', () => {
   function makeAssetRow(overrides: Partial<Asset> = {}): Asset {
     return {
       id: 'asset-1',
@@ -342,11 +342,13 @@ describe('updateAsset — acquisition-basis correction guard', () => {
 
   /**
    * Minimal Supabase mock that captures the final UPDATE payload. updateAsset's
-   * correction guard touches three tables:
+   * correction guard touches four tables:
    *   - 'assets'                 → getAsset (.maybeSingle) and the update (.single)
    *   - 'depreciation_schedules' → hasPostedDepreciation (1st call, head {count})
    *                                then hasManualDepreciationPosted (2nd call,
    *                                .select('journal_entry_id') → {data})
+   *   - 'journal_entries'        → hasManualDepreciationPosted entries step of the
+   *                                two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts)
    *   - 'journal_entry_lines'    → hasManualDepreciationPosted ledger scan → {data}
    */
   function mockForUpdate(
@@ -382,11 +384,32 @@ describe('updateAsset — acquisition-basis correction guard', () => {
             )
           return chain
         }
+        if (table === 'journal_entries') {
+          // Entries step of the two-step fetch: derive the entry ids from the
+          // line fixtures so the chunked line query has ids to ask for.
+          const entryIds = [
+            ...new Set((opts.accumulatedCredits ?? []).map((l) => l.journal_entry_id)),
+          ]
+          const chain: Record<string, unknown> = {}
+          chain.select = vi.fn(() => chain)
+          chain.eq = vi.fn(() => chain)
+          chain.order = vi.fn(() => chain)
+          chain.range = vi.fn(() => chain)
+          chain.then = (resolve: (v: unknown) => void) =>
+            resolve({
+              data: entryIds.length > 0 ? entryIds.map((id) => ({ id })) : [{ id: 'entry-none' }],
+              error: null,
+            })
+          return chain
+        }
         if (table === 'journal_entry_lines') {
           const chain: Record<string, unknown> = {}
           chain.select = vi.fn(() => chain)
           chain.eq = vi.fn(() => chain)
           chain.gt = vi.fn(() => chain)
+          chain.in = vi.fn(() => chain)
+          chain.order = vi.fn(() => chain)
+          chain.range = vi.fn(() => chain)
           chain.then = (resolve: (v: unknown) => void) =>
             resolve({ data: opts.accumulatedCredits ?? [], error: null })
           return chain
@@ -457,7 +480,7 @@ describe('updateAsset — acquisition-basis correction guard', () => {
 
   it('blocks a correction when depreciation was hand-posted (no engine schedule)', async () => {
     // No depreciation_schedules row, but a manual credit to the asset's 1259
-    // accumulated account exists in the ledger — must still block.
+    // accumulated account exists in the ledger: must still block.
     const { supabase } = mockForUpdate(makeAssetRow(), {
       postedCount: 0,
       otherAssetEntryIds: [],

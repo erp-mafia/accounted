@@ -1,10 +1,9 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { getVatRules } from '@/lib/invoices/vat-rules'
-import { requireCompanyId } from '@/lib/company/context'
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 
 /**
@@ -13,26 +12,27 @@ import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentTy
  * Generates a preview PDF from form data without creating an invoice.
  * Returns the PDF as an inline blob for display in a new browser tab.
  */
-export async function POST(request: Request) {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const POST = withRouteContext('invoice.preview_pdf', async (request, { supabase, user, companyId }) => {
   const body = await request.json()
-  const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type, invoice_number } = body
+  const { customer_id, invoice_date, due_date, delivery_date, currency, items, your_reference, our_reference, notes, document_type, invoice_number, payment_link_url } = body
+
+  // Preview-only https gate, mirroring CreateInvoiceSchema: the value is
+  // rendered as a clickable link + QR in the preview PDF.
+  const previewPaymentLink = (() => {
+    if (typeof payment_link_url !== 'string' || !payment_link_url.trim()) return null
+    try {
+      return new URL(payment_link_url).protocol === 'https:' ? payment_link_url.trim() : null
+    } catch {
+      return null
+    }
+  })()
 
   if (!items || items.length === 0) {
     return NextResponse.json({ error: 'Rader krävs' }, { status: 400 })
   }
 
   // When customer_id is omitted, only allow the synthetic preview if the
-  // company has no real customers — this is the settings-preview dead-end
+  // company has no real customers: this is the settings-preview dead-end
   // case. Derived server-side so a client can't bypass the ownership check
   // by passing a flag.
   const isMockCustomer = !customer_id
@@ -55,6 +55,7 @@ export async function POST(request: Request) {
       company_id: 'preview-company',
       name: 'Exempel AB',
       customer_type: 'swedish_business',
+      customer_number: null,
       email: 'kund@exempel.se',
       phone: null,
       address_line1: 'Storgatan 1',
@@ -104,7 +105,7 @@ export async function POST(request: Request) {
   const docType: InvoiceDocumentType = document_type || 'invoice'
   const isDeliveryNote = docType === 'delivery_note'
 
-  // VAT registration gate — mirror the server-side write gate
+  // VAT registration gate: mirror the server-side write gate
   // (lib/invoices/build-invoice-write.ts) so the preview never shows output VAT
   // for a non-momsregistrerad seller. Without this the per-item fallback below
   // (`?? vatRules.rate`) would render 25% for a Swedish customer even though the
@@ -166,6 +167,7 @@ export async function POST(request: Request) {
     your_reference: your_reference || null,
     our_reference: our_reference || null,
     notes: notes || null,
+    payment_link_url: previewPaymentLink,
     reverse_charge_text: vatRules.reverseChargeText || null,
     credited_invoice_id: null,
     document_type: docType,
@@ -181,6 +183,7 @@ export async function POST(request: Request) {
       company as CompanySettings,
     )
     const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, previewInvoice)
+    const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(previewInvoice)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
         invoice: previewInvoice,
@@ -190,6 +193,7 @@ export async function POST(request: Request) {
         isPreview: true,
         branding,
         swishQrDataUrl,
+        paymentLinkQrDataUrl,
       })
     )
 
@@ -206,4 +210,4 @@ export async function POST(request: Request) {
       { status: 500 }
     )
   }
-}
+})

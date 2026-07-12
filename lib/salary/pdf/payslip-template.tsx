@@ -11,7 +11,7 @@ import { getBranding } from '@/lib/branding/service'
  * - Company + employee identification
  * - Line items (salary, absence, benefits, deductions)
  * - Gross → Tax → Net summary with tax table reference
- * - Employer cost breakdown (avgifter, vacation accrual) — transparency feature
+ * - Employer cost breakdown (avgifter, vacation accrual): transparency feature
  * - YTD totals (cumulative year-to-date)
  * - Calculation breakdown (optional detail showing every formula step)
  */
@@ -335,7 +335,7 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
           </View>
         </View>
 
-        {/* Employer cost (transparency feature — our differentiator) */}
+        {/* Employer cost (transparency feature: our differentiator) */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Arbetsgivarkostnad</Text>
           <View style={styles.summaryRow}>

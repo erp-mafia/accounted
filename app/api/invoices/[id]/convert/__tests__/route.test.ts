@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import {
   createMockRequest,
   createMockRouteParams,
@@ -8,8 +9,10 @@ import {
 import { eventBus } from '@/lib/events'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 vi.mock('@/lib/init', () => ({
@@ -17,6 +20,7 @@ vi.mock('@/lib/init', () => ({
 }))
 
 vi.mock('@/lib/company/context', () => ({
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
@@ -67,11 +71,15 @@ describe('POST /api/invoices/[id]/convert', () => {
     vi.clearAllMocks()
     reset()
     eventBus.clear()
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
 
     const response = await POST(
       createMockRequest('/api/invoices/pf-1/convert', { method: 'POST' }),
@@ -109,14 +117,14 @@ describe('POST /api/invoices/[id]/convert', () => {
   it('does NOT advance the F-series counter when items insert fails', async () => {
     // 1. fetch proforma
     enqueue({ data: baseProforma, error: null })
-    // 2. insert real invoice with null number — succeeds
+    // 2. insert real invoice with null number, succeeds
     enqueue({
       data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' },
       error: null,
     })
-    // 3. insert items — FAILS
+    // 3. insert items, FAILS
     enqueue({ data: null, error: { message: 'items insert failed' } })
-    // 4. rollback delete of orphan row — succeeds
+    // 4. rollback delete of orphan row, succeeds
     enqueue({ data: null, error: null })
 
     const response = await POST(
@@ -140,7 +148,7 @@ describe('POST /api/invoices/[id]/convert', () => {
     })
     // 3. insert items
     enqueue({ data: null, error: null })
-    // 4. cancel proforma — FAILS
+    // 4. cancel proforma, FAILS
     enqueue({ data: null, error: { message: 'cancel failed' } })
     // 5. rollback delete of orphan invoice
     enqueue({ data: null, error: null })
@@ -168,7 +176,7 @@ describe('POST /api/invoices/[id]/convert', () => {
     })
     // 3. insert items
     enqueue({ data: null, error: null })
-    // 4. cancel proforma — succeeds
+    // 4. cancel proforma, succeeds
     enqueue({ data: null, error: null })
     // 5. ensureInvoiceNumber → rpc THROWS
     enqueue({ data: null, error: { message: 'number allocation failed' } })

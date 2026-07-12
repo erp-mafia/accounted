@@ -37,7 +37,7 @@ beforeEach(() => {
 describe('GET /api/agent/memory', () => {
   it('returns 401 when not authenticated', async () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
-    const response = await GET(createMockRequest('/api/agent/memory'))
+    const response = await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({}))
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
     expect(status).toBe(401)
     expect(body.error).toBe('Unauthorized')
@@ -45,7 +45,7 @@ describe('GET /api/agent/memory', () => {
 
   it('returns 400 when no active company', async () => {
     getActiveCompanyIdMock.mockResolvedValue(null)
-    const response = await GET(createMockRequest('/api/agent/memory'))
+    const response = await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({}))
     const { status } = await parseJsonResponse(response)
     expect(status).toBe(400)
   })
@@ -55,7 +55,7 @@ describe('GET /api/agent/memory', () => {
       {
         id: 'mem-1',
         kind: 'fact',
-        content: 'Räkenskapsår jan–dec',
+        content: 'Räkenskapsår jan-dec',
         source: 'composer',
         source_ref: null,
         relevance_score: 0.5,
@@ -67,7 +67,7 @@ describe('GET /api/agent/memory', () => {
       },
     ]
     enqueue({ data: rows })
-    const response = await GET(createMockRequest('/api/agent/memory'))
+    const response = await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({}))
     const { status, body } = await parseJsonResponse<{ data: typeof rows }>(response)
     expect(status).toBe(200)
     expect(body.data).toHaveLength(1)
@@ -76,7 +76,7 @@ describe('GET /api/agent/memory', () => {
 
   it('does not require write permission for read', async () => {
     enqueue({ data: [] })
-    await GET(createMockRequest('/api/agent/memory'))
+    await GET(createMockRequest('/api/agent/memory'), createMockRouteParams({}))
     expect(requireWritePermissionMock).not.toHaveBeenCalled()
   })
 })
@@ -89,6 +89,7 @@ describe('POST /api/agent/memory', () => {
         method: 'POST',
         body: { content: 'hello world' },
       }),
+      createMockRouteParams({}),
     )
     expect(response.status).toBe(401)
   })
@@ -104,6 +105,7 @@ describe('POST /api/agent/memory', () => {
         method: 'POST',
         body: { content: 'hello world' },
       }),
+      createMockRouteParams({}),
     )
     expect(response.status).toBe(403)
   })
@@ -114,6 +116,7 @@ describe('POST /api/agent/memory', () => {
         method: 'POST',
         body: { content: 'x' },
       }),
+      createMockRouteParams({}),
     )
     expect(response.status).toBe(400)
   })
@@ -142,6 +145,7 @@ describe('POST /api/agent/memory', () => {
         method: 'POST',
         body: { content: 'En sak att komma ihåg' },
       }),
+      createMockRouteParams({}),
     )
     const { status, body } = await parseJsonResponse<{ data: typeof inserted }>(response)
     expect(status).toBe(200)
@@ -155,6 +159,7 @@ describe('POST /api/agent/memory', () => {
         method: 'POST',
         body: { content: 'En sak att komma ihåg' },
       }),
+      createMockRouteParams({}),
     )
     expect(response.status).toBe(403)
   })

@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import Link from 'next/link'
 import { AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -43,6 +45,7 @@ import TransactionAttachDocumentDialog from '@/components/transactions/Transacti
 import QuickReviewDialog from '@/components/transactions/QuickReviewDialog'
 import EditTransactionTitleDialog from '@/components/transactions/EditTransactionTitleDialog'
 import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
+import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 
 import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from '@/lib/bookkeeping/category-mapping'
@@ -85,6 +88,45 @@ function buildSupplierInvoiceMap(
   }, {})
 }
 
+// Fetch the potential invoice/supplier-invoice matches referenced by a page
+// of transactions in one parallel round trip. A single-query PostgREST embed
+// on potential_supplier_invoice_id is blocked until that FK exists in the
+// prod schema cache (see DECISIONS.md 2026-07-06).
+async function fetchPotentialMatches(
+  supabase: SupabaseClient,
+  rows: { potential_invoice_id: string | null; potential_supplier_invoice_id: string | null }[],
+) {
+  const potentialInvoiceIds = rows
+    .filter((t) => t.potential_invoice_id)
+    .map((t) => t.potential_invoice_id)
+  const potentialSupplierInvoiceIds = rows
+    .filter((t) => t.potential_supplier_invoice_id)
+    .map((t) => t.potential_supplier_invoice_id)
+
+  const [invoiceResult, supplierInvoiceResult] = await Promise.all([
+    potentialInvoiceIds.length > 0
+      ? supabase.from('invoices').select('*, customer:customers(*)').in('id', potentialInvoiceIds)
+      : Promise.resolve({ data: null, error: null }),
+    potentialSupplierInvoiceIds.length > 0
+      ? supabase.from('supplier_invoices').select('*, supplier:suppliers(*)').in('id', potentialSupplierInvoiceIds)
+      : Promise.resolve({ data: null, error: null }),
+  ])
+
+  // Non-fatal: the transaction list still renders without match hints, but
+  // log so a DB failure isn't mistaken for "no potential match".
+  if (invoiceResult.error) {
+    console.error('[fetchPotentialMatches] invoices query failed', invoiceResult.error)
+  }
+  if (supplierInvoiceResult.error) {
+    console.error('[fetchPotentialMatches] supplier_invoices query failed', supplierInvoiceResult.error)
+  }
+
+  return {
+    invoiceMap: buildInvoiceMap(invoiceResult.data),
+    supplierInvoiceMap: buildSupplierInvoiceMap(supplierInvoiceResult.data),
+  }
+}
+
 interface QuickReviewState {
   transaction: TransactionWithInvoice
   category: TransactionCategory
@@ -125,7 +167,7 @@ export default function TransactionsPage() {
 
   // Attach-underlag dialog (tx→doc mirror of the Documents view's matcher)
   const [attachDocTx, setAttachDocTx] = useState<TransactionWithInvoice | null>(null)
-  // Underlag status per booked journal_entry_id — drives the per-row
+  // Underlag status per booked journal_entry_id: drives the per-row
   // "Underlag"/"Underlag saknas" badges in history view.
   const [jeUnderlagStatus, setJeUnderlagStatus] = useState<Record<string, JeUnderlagStatus>>({})
   // JE ids already requested (in-flight or done) so the enrichment effect
@@ -146,7 +188,7 @@ export default function TransactionsPage() {
   const [supplierInvoicePickerTransaction, setSupplierInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
   const [splitMatchOpen, setSplitMatchOpen] = useState(false)
   const [splitMatchTransaction, setSplitMatchTransaction] = useState<TransactionWithInvoice | null>(null)
-  // "Matcha mot befintlig verifikation" — link a bank tx to an already-booked
+  // "Matcha mot befintlig verifikation": link a bank tx to an already-booked
   // voucher (salary, Fortnox import, manual entry) with no new bokföring.
   const [matchVoucherTx, setMatchVoucherTx] = useState<TransactionWithInvoice | null>(null)
   const [bulkBookOpen, setBulkBookOpen] = useState(false)
@@ -192,25 +234,18 @@ export default function TransactionsPage() {
   const [ciMatchProcessing, setCiMatchProcessing] = useState(false)
 
   // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE): the
-  // server found this affärshändelse already booked — either another booked
+  // server found this affärshändelse already booked: either another booked
   // transaction sharing this one's date+amount+bank account, OR an unlinked
   // voucher that already books the amount on the bank account (a paid invoice,
   // a salary payout). Surface the existing verifikat and let the user book
-  // anyway — genuinely repeated same-day payments (e.g. identical Swish
+  // anyway: genuinely repeated same-day payments (e.g. identical Swish
   // transfers) are legitimate. "Bokför ändå" retries with force bound to the
   // reviewed candidate via expected_duplicate_journal_entry_id (present on both
   // candidate kinds), which the server re-detects so a stale id can't wave it.
   const [duplicateWarning, setDuplicateWarning] = useState<{
     transactionId: string
     retry: () => Promise<string | null>
-    candidate: {
-      transaction_id: string | null
-      journal_entry_id: string
-      voucher_label: string
-      entry_date: string
-      description: string | null
-      amount: number
-    }
+    candidate: BookedDuplicateCandidate
   } | null>(null)
   const [duplicateProcessing, setDuplicateProcessing] = useState(false)
 
@@ -265,7 +300,7 @@ export default function TransactionsPage() {
 
   // Merged inbox: bank tx + SKV rows interleaved by date. Source filter
   // narrows to one side. SKV rows always go after bank rows on the same
-  // date — bank tx tend to have invoice-match suggestions and we'd rather
+  // date: bank tx tend to have invoice-match suggestions and we'd rather
   // surface those first.
   type InboxItem =
     | { source: 'bank'; date: string; data: TransactionWithInvoice }
@@ -334,7 +369,7 @@ export default function TransactionsPage() {
       }
       const json = await res.json()
       const booked = (json.data?.booked ?? []) as SkattekontoTransactionWithSuggestion[]
-      // Keep all booked SKV rows in state — inbox view filters to obokförda
+      // Keep all booked SKV rows in state: inbox view filters to obokförda
       // (journal_entry_id null), history view shows all of them (matched
       // and unmatched) interleaved with bank tx by date.
       setSkvRows(booked)
@@ -359,7 +394,7 @@ export default function TransactionsPage() {
           .select('*', { count: 'exact', head: true })
           .eq('company_id', companyId)
           .is('is_business', null)
-          // Same predicate as lib/worklist countUnbookedTransactions — ignored
+          // Same predicate as lib/worklist countUnbookedTransactions: ignored
           // rows are handled, not pending.
           .eq('is_ignored', false),
       ])
@@ -370,24 +405,7 @@ export default function TransactionsPage() {
       }
 
       const rows = txData || []
-      const potentialInvoiceIds = rows
-        .filter((t) => t.potential_invoice_id)
-        .map((t) => t.potential_invoice_id)
-      const potentialSupplierInvoiceIds = rows
-        .filter((t) => t.potential_supplier_invoice_id)
-        .map((t) => t.potential_supplier_invoice_id)
-
-      const [invoiceResult, supplierInvoiceResult] = await Promise.all([
-        potentialInvoiceIds.length > 0
-          ? supabase.from('invoices').select('*, customer:customers(*)').in('id', potentialInvoiceIds)
-          : Promise.resolve({ data: null }),
-        potentialSupplierInvoiceIds.length > 0
-          ? supabase.from('supplier_invoices').select('*, supplier:suppliers(*)').in('id', potentialSupplierInvoiceIds)
-          : Promise.resolve({ data: null }),
-      ])
-
-      const invoiceMap = buildInvoiceMap(invoiceResult.data)
-      const supplierInvoiceMap = buildSupplierInvoiceMap(supplierInvoiceResult.data)
+      const { invoiceMap, supplierInvoiceMap } = await fetchPotentialMatches(supabase, rows)
 
       const transactionsWithInvoices: TransactionWithInvoice[] = rows.map((t) => ({
         ...t,
@@ -402,7 +420,7 @@ export default function TransactionsPage() {
       setHasMore(rows.length >= PAGE_SIZE)
 
       // Fire-and-forget: load SKV rows in parallel with the rest of the
-      // page. We don't block on this — if the extension is disabled or the
+      // page. We don't block on this: if the extension is disabled or the
       // user isn't connected the response is 503/401 and we just leave the
       // SKV section empty.
       if (includeSkvRows) {
@@ -450,24 +468,7 @@ export default function TransactionsPage() {
 
     setHasMore(txData.length >= PAGE_SIZE)
 
-    const potentialInvoiceIds = txData
-      .filter((t) => t.potential_invoice_id)
-      .map((t) => t.potential_invoice_id)
-    const potentialSupplierInvoiceIds = txData
-      .filter((t) => t.potential_supplier_invoice_id)
-      .map((t) => t.potential_supplier_invoice_id)
-
-    const [invoiceResult, supplierInvoiceResult] = await Promise.all([
-      potentialInvoiceIds.length > 0
-        ? supabase.from('invoices').select('*, customer:customers(*)').in('id', potentialInvoiceIds)
-        : Promise.resolve({ data: null }),
-      potentialSupplierInvoiceIds.length > 0
-        ? supabase.from('supplier_invoices').select('*, supplier:suppliers(*)').in('id', potentialSupplierInvoiceIds)
-        : Promise.resolve({ data: null }),
-    ])
-
-    const invoiceMap = buildInvoiceMap(invoiceResult.data)
-    const supplierInvoiceMap = buildSupplierInvoiceMap(supplierInvoiceResult.data)
+    const { invoiceMap, supplierInvoiceMap } = await fetchPotentialMatches(supabase, txData)
 
     const newTransactions: TransactionWithInvoice[] = txData.map((t) => ({
       ...t,
@@ -485,7 +486,7 @@ export default function TransactionsPage() {
   // 150-id chunk (PostgREST .in() URL-length convention, see
   // lib/worklist/categories.ts): the JEs' source types, which JEs have a
   // current-version document, and which are exempted via
-  // journal_entry_no_doc_required. Incremental — only fetches JE ids not yet
+  // journal_entry_no_doc_required. Incremental: only fetches JE ids not yet
   // requested, so loadMoreTransactions pages are covered without refetching.
   // Soft-fails to "no badges" on error.
   useEffect(() => {
@@ -516,7 +517,7 @@ export default function TransactionsPage() {
             .select('id, source_type')
             // Same posted-only scope as countVerifikatMissingDocument:
             // reversed/corrected entries fall out of the result set and the
-            // row renders no badge — a storno'd verifikation must never grow
+            // row renders no badge: a storno'd verifikation must never grow
             // an "Underlag saknas" attach affordance.
             .eq('status', 'posted')
             .in('id', chunk)
@@ -548,7 +549,7 @@ export default function TransactionsPage() {
       }
       // The merge is an idempotent keyed write, so it stays valid across
       // unrelated transactions-state changes (booking a row, deletes,
-      // load-more) — only a company switch invalidates it. No cleanup-based
+      // load-more); only a company switch invalidates it. No cleanup-based
       // cancellation: that would orphan ids already marked as requested.
       if (requestedJeIdsRef.current.companyId === companyId && Object.keys(merged).length > 0) {
         setJeUnderlagStatus((prev) => ({ ...prev, ...merged }))
@@ -632,7 +633,7 @@ export default function TransactionsPage() {
 
   // Scroll the targeted row into view when arriving via
   // /transactions?highlight=<id>. Callers are inbox "Öppna transaktionen",
-  // payment-booking dialog, and supplier-invoice cross-link — all "go look
+  // payment-booking dialog, and supplier-invoice cross-link: all "go look
   // at this row", not "start booking". The legacy auto-open-template-picker
   // behavior was removed in v5: booking happens in the inbox workspace now.
   // Runs once per distinct highlight id so closing/scrolling away doesn't
@@ -746,10 +747,10 @@ export default function TransactionsPage() {
           // The user picked a library template (or typed an account
           // override) whose account isn't in this company's kontoplan.
           // Mirror the ACCOUNTS_NOT_IN_CHART flow with a one-click
-          // "Aktivera och bokför" — pull the BAS name if known so the
+          // "Aktivera och bokför": pull the BAS name if known so the
           // toast carries real context.
           // Validate the BAS account number is a plain 4-digit string before
-          // embedding it in any fetch URL/body — the value comes from the
+          // embedding it in any fetch URL/body: the value comes from the
           // server error envelope but defense-in-depth.
           const rawAccountNumber: unknown = result.error.details?.accountNumber
           const accountNumber: string | undefined =
@@ -763,7 +764,7 @@ export default function TransactionsPage() {
               if (lookupRes.ok) {
                 const lookup = await lookupRes.json() as { data?: Array<{ account_number: string; account_name: string | null; known?: boolean }> }
                 const hit = lookup.data?.find((r) => r.account_number === accountNumber)
-                if (hit?.account_name) displayName = `${accountNumber} — ${hit.account_name}`
+                if (hit?.account_name) displayName = `${accountNumber} - ${hit.account_name}`
               }
             } catch { /* fall through to the plain number */ }
           }
@@ -797,7 +798,7 @@ export default function TransactionsPage() {
                   if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
                     toast({
                       title: 'Kontot finns inte i BAS-planen',
-                      description: `Lägg till ${accountNumber} manuellt under Inställningar → Kontoplan.`,
+                      description: `Lägg till ${accountNumber} manuellt i Kontoplan.`,
                       variant: 'destructive',
                     })
                     return
@@ -818,7 +819,7 @@ export default function TransactionsPage() {
           // The mapped template/category references one or more accounts
           // that aren't active in this company's kontoplan. Without an
           // inline action the user has to navigate to settings, activate
-          // each account, and come back — surface a one-click "Aktivera
+          // each account, and come back: surface a one-click "Aktivera
           // och bokför" instead.
           const accountNumbers: string[] =
             (Array.isArray(result.error.account_numbers) && result.error.account_numbers) ||
@@ -857,7 +858,7 @@ export default function TransactionsPage() {
                   if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
                     toast({
                       title: 'Kunde inte hitta alla konton',
-                      description: `Lägg till ${activateBody.unknown.join(', ')} manuellt under Inställningar → Kontoplan.`,
+                      description: `Lägg till ${activateBody.unknown.join(', ')} manuellt i Kontoplan.`,
                       variant: 'destructive',
                     })
                     return
@@ -879,17 +880,10 @@ export default function TransactionsPage() {
           result.error.details?.candidate
         ) {
           // Booking-time duplicate guard fired. Don't dead-end on a toast that
-          // merely says "book anyway" with no way to do so — open a dialog with
+          // merely says "book anyway" with no way to do so: open a dialog with
           // the already-booked sibling and let the user confirm. "Bokför ändå"
           // re-runs with force bound to this candidate (server re-detects it).
-          const candidate = result.error.details.candidate as {
-            transaction_id: string | null
-            journal_entry_id: string
-            voucher_label: string
-            entry_date: string
-            description: string | null
-            amount: number
-          }
+          const candidate = result.error.details.candidate as BookedDuplicateCandidate
           setDuplicateWarning({
             transactionId: id,
             retry: () =>
@@ -1081,13 +1075,13 @@ export default function TransactionsPage() {
 
   async function handleIgnoreTransaction(tx: TransactionWithInvoice) {
     // Mirrors BankReconciliationView's ignore flow: Ignorera is fully
-    // reversible, but the row vanishes immediately — confirmation before the
+    // reversible, but the row vanishes immediately: confirmation before the
     // write plus an Ångra toast gives two recovery affordances. The
     // "Ignorerade transaktioner" card on Rapporter → Bankavstämning is the
     // standing third.
     const ok = await confirm({
       title: 'Ignorera transaktionen?',
-      description: `${tx.description} — ${formatCurrency(tx.amount, tx.currency)} (${formatDate(tx.date)}) försvinner från listan utan att bokföras. Använd bara för poster som inte är affärshändelser, t.ex. dubbletter eller överföringar mellan egna konton — riktiga köp och betalningar ska bokföras. Du kan återställa den under Bankavstämning när som helst.`,
+      description: `${tx.description}, ${formatCurrency(tx.amount, tx.currency)} (${formatDate(tx.date)}) försvinner från listan utan att bokföras. Använd bara för poster som inte är affärshändelser, t.ex. dubbletter eller överföringar mellan egna konton. Riktiga köp och betalningar ska bokföras. Du kan återställa den under Bankavstämning när som helst.`,
       confirmLabel: 'Ignorera',
       cancelLabel: 'Avbryt',
       variant: 'warning',
@@ -1120,7 +1114,7 @@ export default function TransactionsPage() {
       }, 350)
       toast({
         title: 'Transaktionen ignorerad',
-        description: `${tx.description} — ${formatCurrency(tx.amount, tx.currency)}`,
+        description: `${tx.description}, ${formatCurrency(tx.amount, tx.currency)}`,
         action: (
           <ToastAction altText="Ångra ignorera" onClick={() => void handleUnignoreTransaction(tx.id)}>
             Ångra
@@ -1329,7 +1323,7 @@ export default function TransactionsPage() {
 
   // Called by MatchVoucherDialog after /api/reconciliation/bank/link succeeds.
   // The row is now booked (journal_entry_id set, is_business true) so the inbox
-  // filter drops it — animate it out the same way as the invoice-link path.
+  // filter drops it: animate it out the same way as the invoice-link path.
   function handleVoucherLinked(transactionId: string, journalEntryId: string, voucherLabel: string) {
     toast({
       title: 'Bankhändelsen kopplad',
@@ -1437,7 +1431,7 @@ export default function TransactionsPage() {
 
   // Selected-tx derivation for bulk-book eligibility.
   // The action bar shows "Bokför i klump" only when ≥2 txs are selected,
-  // share the same date, and same direction (all income or all expense) —
+  // share the same date, and same direction (all income or all expense):
   // matches the RPC's same-day + same-direction invariants so the user
   // doesn't submit a guaranteed-fail batch.
   const selectedTransactions = useMemo(
@@ -1495,7 +1489,7 @@ export default function TransactionsPage() {
     setIsCreating(true)
     try {
       // Create through the server route so the payload is validated server-side
-      // (shared CreateTransactionSchema) and the DB CHECK applies — the browser
+      // (shared CreateTransactionSchema) and the DB CHECK applies: the browser
       // client must never be the only guard on a mutation.
       const response = await fetch('/api/transactions', {
         method: 'POST',
@@ -1630,7 +1624,7 @@ export default function TransactionsPage() {
   }
 
   function handleSkvMatched() {
-    // After a successful match, drop the row from the inbox — it's now
+    // After a successful match, drop the row from the inbox: it's now
     // linked to a verifikat. Trigger an exit animation first.
     if (skvMatchTarget) {
       const id = skvMatchTarget.id
@@ -1650,6 +1644,9 @@ export default function TransactionsPage() {
     transactionId: string,
     journalEntryId: string,
     attachedDocumentId?: string | null,
+    // True when the duplicate guard's match action LINKED the transaction to
+    // an existing voucher instead of creating a new one.
+    matched?: boolean,
   ) {
     setExitingIds((prev) => new Set(prev).add(transactionId))
     setTimeout(() => {
@@ -1660,7 +1657,7 @@ export default function TransactionsPage() {
                 ...t,
                 is_business: true,
                 journal_entry_id: journalEntryId,
-                // Existing pin wins — the link route only pins when the tx
+                // Existing pin wins: the link route only pins when the tx
                 // had none (document_id IS NULL guard).
                 document_id: t.document_id ?? attachedDocumentId ?? null,
               }
@@ -1676,7 +1673,11 @@ export default function TransactionsPage() {
     setBookingDialogOpen(false)
     setBookingDialogTransaction(null)
     setBookingDialogTemplate(null)
-    toast({ title: 'Bokförd' })
+    if (matched) {
+      toast({ title: 'Bankhändelsen kopplad', description: 'Ingen ny bokföring skapad.' })
+    } else {
+      toast({ title: 'Bokförd' })
+    }
   }
 
   function openAttachDocumentDialog(transaction: TransactionWithInvoice) {
@@ -1689,7 +1690,7 @@ export default function TransactionsPage() {
     )
     // Booked row: the attach route propagated the doc onto the verifikation,
     // so flip the JE status optimistically too. Read the JE id off the
-    // dialog's own subject (attachDocTx), not the transactions snapshot —
+    // dialog's own subject (attachDocTx), not the transactions snapshot:
     // the list may have changed (load-more, booking) while the dialog was
     // open, and a stale find() would silently skip the badge flip.
     const jeId =
@@ -1836,7 +1837,15 @@ export default function TransactionsPage() {
     }
     setBatchProgress(null)
     if (failures.length === 0) {
-      toast({ title: 'Klart', description: `${successes} transaktioner ignorerade` })
+      toast({
+        title: 'Klart',
+        description: `${successes} transaktioner ignorerade`,
+        action: (
+          <ToastAction altText="Öppna Bankavstämning" asChild>
+            <Link href="/reports/bank-reconciliation">Bankavstämning</Link>
+          </ToastAction>
+        ),
+      })
     } else {
       toast({
         title: 'Delvis klart',
@@ -1944,7 +1953,7 @@ export default function TransactionsPage() {
   }
 
   // Complex (multi-leg or otherwise non-convertible) library template picked
-  // from the transaction modal — route into the manual booking dialog with
+  // from the transaction modal: route into the manual booking dialog with
   // the template pre-applied against the transaction's amount.
   function handlePickLibraryTemplate(raw: BookingTemplateLibrary) {
     if (!templatePickerTransaction) return
@@ -1980,7 +1989,7 @@ export default function TransactionsPage() {
             (Array.isArray(result.error.account_numbers) && result.error.account_numbers) ||
             (Array.isArray(result.error.details?.account_numbers) && result.error.details?.account_numbers) ||
             []
-          // Synchronous in-flight flag per toast closure — see same pattern
+          // Synchronous in-flight flag per toast closure: see same pattern
           // in runCategorize. Double-click on the counterparty-template
           // retry would race the second cpCategorize against the first's
           // verifikation insert.
@@ -2040,7 +2049,7 @@ export default function TransactionsPage() {
         } else {
           toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(result, { context: 'transaction', statusCode: cpStatus }), variant: 'destructive' })
         }
-        // Close the review dialog on hard errors — the toast (with action if
+        // Close the review dialog on hard errors: the toast (with action if
         // ACCOUNTS_NOT_IN_CHART) carries the message and the recovery path.
         setQuickReviewOpen(false)
         setQuickReview(null)
@@ -2051,7 +2060,7 @@ export default function TransactionsPage() {
     } else {
       journalEntryId = await handleCategorize(id, true, category, vatTreatment, accountOverride, templateId)
     }
-    // Always close — whether the server created a verifikation, returned a
+    // Always close: whether the server created a verifikation, returned a
     // structured 4xx (ACCOUNTS_NOT_IN_CHART, INVALID_MAPPING, …), or hit a
     // partial-success path. The toast from runCategorize already communicates
     // the outcome; keeping the dialog open serves no purpose.
@@ -2061,7 +2070,7 @@ export default function TransactionsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Status bar */}
       <TransactionStatusBar
         uncategorizedCount={totalUncategorizedCount ?? uncategorizedTransactions.length}
@@ -2075,6 +2084,12 @@ export default function TransactionsPage() {
       <div className="flex flex-wrap items-center gap-2">
         <BankSyncStatusChip />
         <BankSyncNowButton />
+        {/* The ignore flows tell users to "återställ under Bankavstämning":
+            this is the path there. Bankavstämning has no nav entry of its own,
+            so without a link here the copy points at an unreachable place. */}
+        <Button asChild variant="ghost" size="sm" className="ml-auto h-9 text-sm text-muted-foreground">
+          <Link href="/reports/bank-reconciliation">Bankavstämning →</Link>
+        </Button>
       </div>
       <BankSyncSinceLastVisit />
 
@@ -2091,7 +2106,7 @@ export default function TransactionsPage() {
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-9 gap-1.5 px-3 text-sm">
+            <Button variant="outline" size="sm" className="h-9 gap-2 px-3 text-sm">
               {mode === 'inbox'
                 ? `Att bokföra${(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 ? ` (${totalUncategorizedCount ?? uncategorizedTransactions.length})` : ''}`
                 : 'Alla transaktioner'}
@@ -2138,7 +2153,7 @@ export default function TransactionsPage() {
                 </span>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-xs">
+                    <Button variant="outline" size="sm" className="h-7 gap-2 px-2 text-xs">
                       {sourceFilter === 'all'
                         ? t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })
                         : sourceFilter === 'bank'
@@ -2263,7 +2278,7 @@ export default function TransactionsPage() {
                 <Trash2 className="mr-1 h-3 w-3" />
                 Ta bort
               </Button>
-              {/* Bulk-book (samlingsverifikation) — only when ≥2 selected on
+              {/* Bulk-book (samlingsverifikation): only when ≥2 selected on
                   the same date + same direction. Disabled state explains why
                   via title. */}
               <Button
@@ -2610,7 +2625,7 @@ export default function TransactionsPage() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium">
-                        {c.customer_name || 'Kund'} · {c.invoice_number ?? '—'}
+                        {c.customer_name || 'Kund'} · {c.invoice_number ?? '-'}
                       </span>
                       {c.match_reason === 'ocr_exact' && (
                         <Badge variant="success">{t('badge_exact_ocr')}</Badge>
@@ -2654,6 +2669,21 @@ export default function TransactionsPage() {
         candidate={duplicateWarning?.candidate ?? null}
         processing={duplicateProcessing}
         onCancel={() => setDuplicateWarning(null)}
+        // Ledger-only candidate (transaction_id null, e.g. a verifikat from an
+        // SIE import): the primary action links the bank line to the existing
+        // voucher instead of double-booking it. Success refreshes the same
+        // state a MatchVoucherDialog link does.
+        matchTransaction={
+          duplicateWarning
+            ? transactions.find((tx) => tx.id === duplicateWarning.transactionId) ?? {
+                id: duplicateWarning.transactionId,
+              }
+            : null
+        }
+        onMatched={(transactionId, journalEntryId, voucherLabel) => {
+          setDuplicateWarning(null)
+          handleVoucherLinked(transactionId, journalEntryId, voucherLabel)
+        }}
         onBookAnyway={async () => {
           const retry = duplicateWarning?.retry
           setDuplicateProcessing(true)

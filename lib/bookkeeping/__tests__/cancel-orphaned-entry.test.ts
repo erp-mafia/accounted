@@ -106,7 +106,7 @@ describe('cancelOrphanedPaymentEntry', () => {
       supabase as never, 'company-1', 'user-1', 'je-1', 'x',
     )
 
-    // The voucher is still live — a gap explanation would be a lie.
+    // The voucher is still live: a gap explanation would be a lie.
     expect(inserts['voucher_gap_explanations']).toBeUndefined()
   })
 })

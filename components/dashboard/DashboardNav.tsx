@@ -9,10 +9,11 @@ import { Button } from '@/components/ui/button'
 import {
   LayoutDashboard,
   Home,
-  Receipt,
+  ReceiptText,
   Users,
   ArrowLeftRight,
   BookOpen,
+  ListTree,
   BarChart3,
   Settings,
   LogOut,
@@ -29,8 +30,18 @@ import {
   HandCoins,
   Package,
   Tag,
+  Tags,
+  ChevronRight,
   ChevronsUpDown,
+  Clock,
   Sparkles,
+  Percent,
+  Landmark,
+  CalendarClock,
+  CalendarRange,
+  FileCheck,
+  FileSpreadsheet,
+  ScrollText,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -50,6 +61,7 @@ import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
+import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType } from '@/types'
 
 void _ENABLED_EXTENSION_IDS
@@ -65,13 +77,17 @@ interface DashboardNavProps {
   entityType: EntityType
   // Whether the company has registered as an employer (company_settings.
   // pays_salaries). Drives visibility of the payroll (Personal) section for
-  // non-aktiebolag — notably an enskild firma that hires staff. See #782.
+  // non-aktiebolag, notably an enskild firma that hires staff. See #782.
   paysSalaries?: boolean
+  // Whether the dimensions register (company_settings.dimensions_enabled) is
+  // switched on. Drives visibility of the Kostnadsställen & projekt row:
+  // same mechanism as paysSalaries: fetched by the dashboard layout.
+  dimensionsEnabled?: boolean
   uncategorizedTransactionCount?: number
   pendingOperationsCount?: number
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
-  // Signed-in user's full name + email — drives the bottom-left account
+  // Signed-in user's full name + email: drives the bottom-left account
   // popover trigger so the user can see WHO they're logged in as,
   // distinct from the active COMPANY shown by CompanySwitcher up top.
   userName?: string | null
@@ -92,35 +108,60 @@ type NavLabelKey =
   | 'review'
   | 'transactions'
   | 'bookkeeping'
+  | 'chart_of_accounts'
+  | 'dimensions'
   | 'assets'
   | 'reports'
   | 'import'
   | 'salary'
   | 'employees'
+  | 'vat_declaration'
+  | 'skattekonto'
+  | 'deadlines'
+  | 'periodiseringar'
+  | 'year_end'
+  | 'annual_report'
+  | 'income_declaration'
   | 'help'
   | 'settings'
 
-// New nav layout (May 2026):
-//   top-of-sidebar       — CompanySwitcher (active company / org context).
-//   top section          — flat, no dropdown: Hem (agent), Underlag,
-//                          Transaktioner, Granskning.
-//   four dropdowns       — Försäljning, Inköp, Redovisning, Personal.
-//   bottom-left popover  — signed-in user's name + initial, opens upward
+// Nav layout (July 2026, interaction-mode grouping, dev_docs/nav_ia_redesign.md
+// Phase 0): same routes as before, regrouped by what the user is doing.
+//   top-of-sidebar       : CompanySwitcher (active company / org context).
+//   top section          : flat, no dropdown: Hem, Assistent. Hem doubles as
+//                          the "what needs me" surface until a dedicated
+//                          /inbox exists.
+//   four dropdowns       : Arbeta (produce: the bookkeeping funnel first,
+//                          then invoices, supplier invoices, payroll),
+//                          Analys (KPI + reports), Data (master-data
+//                          registers + import/export), Skatt & bokslut
+//                          (statutory: VAT, tax account, deadlines, year-end).
+//   bottom-left popover  : signed-in user's name + initial, opens upward
 //                          to Inställningar, Hjälp, Support, Logga ut.
-// Help + Settings are NOT in `navItems` anymore; they live in the account
-// popover. KPI moved from main to redovisning. Pending stays visible at all
-// times — the inline badge carries the count.
-type GroupKey = 'top' | 'försäljning' | 'inköp' | 'redovisning' | 'personal'
+// Help + Settings are NOT in `navItems`; they live in the account popover.
+// Pending (Granskning) stays visible at all times: the badge carries the count.
+type GroupKey = 'top' | 'arbeta' | 'analys' | 'data' | 'skatt'
 
 interface NavItem {
   href: string
   labelKey: NavLabelKey
   icon: typeof LayoutDashboard
   group: GroupKey
-  // Payroll surfaces — visible only to employers: every aktiebolag (unchanged
+  // Payroll surfaces: visible only to employers: every aktiebolag (unchanged
   // behaviour) plus any company that has registered as an employer via
   // company_settings.pays_salaries (e.g. an enskild firma with staff). #782
   employerOnly?: boolean
+  // Dimension surfaces: visible only when the company has opted in via
+  // company_settings.dimensions_enabled (UI-visibility gate only; the pages
+  // and APIs work regardless, dimensions plan §2).
+  requiresDimensions?: boolean
+  // Paywall surfaces: hidden unless the active company holds this paid
+  // capability. Cosmetic only, the page and API gates are the real
+  // enforcement; this just keeps the sidebar honest for non-payers.
+  requiredCapability?: CapabilityKey
+  // Statutory surfaces that only exist for one company form (INK2 vs
+  // NE-bilaga, årsredovisning): hidden for the other entity type.
+  entityOnly?: EntityType
   hidden?: boolean
   comingSoon?: boolean
   devBadge?: boolean
@@ -128,31 +169,52 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  // Top section — flat list, always visible, no header
+  // Top section: flat list, always visible, no header
   { href: '/', labelKey: 'home', icon: Home, group: 'top' },
   { href: '/chat', labelKey: 'assistant', icon: Sparkles, group: 'top' },
-  { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'top' },
-  { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'top' },
-  { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'top' },
-  // Försäljning dropdown
-  { href: '/invoices', labelKey: 'invoices', icon: Receipt, group: 'försäljning' },
-  { href: '/customers', labelKey: 'customers', icon: Users, group: 'försäljning' },
-  { href: '/articles', labelKey: 'articles', icon: Tag, group: 'försäljning' },
-  // Inköp dropdown
-  { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'inköp' },
-  { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'inköp' },
-  // Redovisning dropdown
-  { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'redovisning' },
-  { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'redovisning' },
-  { href: '/assets', labelKey: 'assets', icon: Package, group: 'redovisning' },
-  { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'redovisning' },
-  { href: '/import', labelKey: 'import', icon: Upload, group: 'redovisning' },
-  // Personal — "Beta" badge while we validate the end-to-end salary + AGI flow.
+  // Arbeta: everything the user produces. The bookkeeping funnel leads
+  // (Bokföring · Underlag · Transaktioner · Granskning: kept as separate
+  // rows until the unified workspace lands), then the transactional flows.
   // employerOnly: shown to aktiebolag and to any employer (pays_salaries), so an
   // enskild firma that hires staff gets payroll. Owner self-payroll stays
   // blocked at the engine/DB layer (EF owner takes egna uttag, not lön). #782
-  { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'personal', employerOnly: true, betaBadge: true },
-  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'personal', employerOnly: true, betaBadge: true },
+  { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'arbeta' },
+  { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'arbeta', requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'] },
+  { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'arbeta' },
+  { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
+  { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
+  { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
+  { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
+  // Analys: read the numbers. KPI stays a separate row until the fused
+  // Rapporter surface (nav_ia_redesign §F) is built.
+  { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'analys' },
+  { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'analys' },
+  // Data: master-data registers + data plumbing. Anställda is a register
+  // (you edit an employee rarely, you run payroll monthly), so it lives here
+  // while the Löner flow stays in Arbeta.
+  { href: '/customers', labelKey: 'customers', icon: Users, group: 'data' },
+  { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'data' },
+  { href: '/articles', labelKey: 'articles', icon: Tag, group: 'data' },
+  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', employerOnly: true },
+  { href: '/assets', labelKey: 'assets', icon: Package, group: 'data' },
+  { href: '/chart-of-accounts', labelKey: 'chart_of_accounts', icon: ListTree, group: 'data' },
+  { href: '/dimensions', labelKey: 'dimensions', icon: Tags, group: 'data', requiresDimensions: true },
+  { href: '/import', labelKey: 'import', icon: Upload, group: 'data' },
+  // Skatt & bokslut: everything submitted to the state. Rescues the
+  // previously nav-orphaned /skattekonto and /deadlines, and promotes the
+  // VAT declaration out of the report catalog. The year-end chain
+  // (periodiseringar → bokslut → årsredovisning → inkomstdeklaration) is
+  // listed in workflow order; the last two are entity-gated because the
+  // surfaces only exist for one company form (ÅR + INK2 for aktiebolag,
+  // NE-bilaga for enskild firma).
+  { href: '/reports/vat-declaration', labelKey: 'vat_declaration', icon: Percent, group: 'skatt' },
+  { href: '/skattekonto', labelKey: 'skattekonto', icon: Landmark, group: 'skatt' },
+  { href: '/deadlines', labelKey: 'deadlines', icon: CalendarClock, group: 'skatt' },
+  { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar', icon: CalendarRange, group: 'skatt' },
+  { href: '/bookkeeping/year-end', labelKey: 'year_end', icon: FileCheck, group: 'skatt' },
+  { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', entityOnly: 'aktiebolag' },
+  { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'aktiebolag' },
+  { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'enskild_firma' },
 ]
 
 // Map known extension hrefs to nav translation keys so sidebar labels translate.
@@ -164,10 +226,10 @@ function extensionLabelKey(href: string): string | null {
 }
 
 const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
-  försäljning: 'group_sales',
-  inköp: 'group_purchases',
-  redovisning: 'group_accounting',
-  personal: 'group_personnel',
+  arbeta: 'group_work',
+  analys: 'group_analysis',
+  data: 'group_data',
+  skatt: 'group_tax',
 }
 
 // Best single-character initial we can show in the bottom-left account
@@ -182,12 +244,12 @@ function accountInitial(name: string | null, email: string | null): string {
   return '?'
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
-  const { company } = useCompany()
-  // Agent identity drives the "Assistent" nav icon — when the user has
+  const { company, capabilities, trialEndsAt } = useCompany()
+  // Agent identity drives the "Assistent" nav icon: when the user has
   // built their assistant we show its chosen avatar instead of the
   // generic Sparkles glyph.
   const { identity: agentIdentity } = useAgentSheet()
@@ -201,11 +263,28 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   )
   const refreshInFlightRef = useRef(false)
   const refreshQueuedRef = useRef(false)
+  // Trial countdown for the sidebar touchpoint. Computed in an effect (not
+  // during render) so server and client markup agree at hydration; an hourly
+  // tick keeps a long-lived tab from showing yesterday's count.
+  const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null)
+  useEffect(() => {
+    if (!trialEndsAt) {
+      setTrialDaysLeft(null)
+      return
+    }
+    const update = () => {
+      const msLeft = new Date(trialEndsAt).getTime() - Date.now()
+      setTrialDaysLeft(msLeft > 0 ? Math.ceil(msLeft / 86_400_000) : null)
+    }
+    update()
+    const id = setInterval(update, 3_600_000)
+    return () => clearInterval(id)
+  }, [trialEndsAt])
 
   const hasCompany = !!company
   const ALWAYS_ENABLED = new Set(['/settings'])
   const isItemEnabled = (href: string) => hasCompany || ALWAYS_ENABLED.has(href)
-  // Per-group collapse state. Default: ALL groups expanded — the user
+  // Per-group collapse state. Default: ALL groups expanded. The user
   // can see every child link without hunting. Clicking the chevron
   // collapses the group; opening it again restores the children.
   // Active route still forces a group expanded even when the user has
@@ -213,10 +292,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   // Personal hidden).
   type ExpandableGroup = Exclude<GroupKey, 'top'>
   const [manualCollapsed, setManualCollapsed] = useState<Record<ExpandableGroup, boolean>>({
-    försäljning: false,
-    inköp: false,
-    redovisning: false,
-    personal: false,
+    arbeta: false,
+    analys: false,
+    data: false,
+    skatt: false,
   })
   const toggleGroup = (g: ExpandableGroup) =>
     setManualCollapsed((prev) => ({ ...prev, [g]: !prev[g] }))
@@ -242,6 +321,30 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     }
     if (href === '/salary') {
       return pathname === '/salary' || pathname.startsWith('/salary/runs')
+    }
+    // Routes with their own rows under Skatt & bokslut (Bokslut, Moms,
+    // Periodiseringar, Årsredovisning, Inkomstdeklaration) are carved out
+    // of their parent routes so exactly one row lights up.
+    if (href === '/bookkeeping') {
+      return (
+        pathname.startsWith('/bookkeeping') &&
+        !pathname.startsWith('/bookkeeping/year-end') &&
+        !pathname.startsWith('/bookkeeping/periodiseringar')
+      )
+    }
+    if (href === '/bookkeeping/year-end') {
+      return (
+        pathname.startsWith('/bookkeeping/year-end') &&
+        !pathname.startsWith('/bookkeeping/year-end/arsredovisning')
+      )
+    }
+    if (href === '/reports') {
+      return (
+        pathname.startsWith('/reports') &&
+        !pathname.startsWith('/reports/vat-declaration') &&
+        !pathname.startsWith('/reports/ink2-declaration') &&
+        !pathname.startsWith('/reports/ne-declaration')
+      )
     }
     return pathname.startsWith(href)
   }
@@ -345,14 +448,24 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const filteredItems = navItems.filter(item => {
     if (item.hidden) return false
     if (hiddenNavHrefs.has(item.href)) return false
-    // Payroll (employerOnly) is hidden until the company is an employer — an
+    // Payroll (employerOnly) is hidden until the company is an employer, an
     // aktiebolag, or any entity that has flagged pays_salaries. #782
     if (item.employerOnly && !isEmployer) return false
-    // Hide the Assistent (/chat) tab until the agent is built — mirrors the
+    // Dimension surfaces are hidden until the company opts in via the
+    // bookkeeping settings toggle (company_settings.dimensions_enabled).
+    if (item.requiresDimensions && !dimensionsEnabled) return false
+    // Paywalled surfaces (e.g. the AI-only Dokumentinkorg) are hidden unless
+    // the active company holds the capability. The page + API gates enforce
+    // the paywall; this keeps the sidebar from advertising a dead workspace.
+    if (item.requiredCapability && !capabilities.includes(item.requiredCapability)) return false
+    // Entity-gated statutory surfaces: INK2/ÅR for aktiebolag, NE for
+    // enskild firma; the page for the other form doesn't exist.
+    if (item.entityOnly && item.entityOnly !== entityType) return false
+    // Hide the Assistent (/chat) tab until the agent is built: mirrors the
     // floating AgentTrigger and avoids a nav entry that only bounces to the
     // home checklist (chat/layout redirects unverified users to /).
     if (item.href === '/chat' && !agentIdentity.isVerified) return false
-    // Granskning stays in the top nav at all times now — the badge
+    // Granskning stays in the top nav at all times now: the badge
     // surfaces the count when there are pending ops, but the link is
     // always present so users can navigate there manually.
     return true
@@ -368,10 +481,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   )
 
   const sidebarGroups: { key: ExpandableGroup; items: NavItem[] }[] = [
-    { key: 'försäljning', items: filteredItems.filter((i) => i.group === 'försäljning') },
-    { key: 'inköp', items: filteredItems.filter((i) => i.group === 'inköp') },
-    { key: 'redovisning', items: filteredItems.filter((i) => i.group === 'redovisning') },
-    { key: 'personal', items: filteredItems.filter((i) => i.group === 'personal') },
+    { key: 'arbeta', items: filteredItems.filter((i) => i.group === 'arbeta') },
+    { key: 'analys', items: filteredItems.filter((i) => i.group === 'analys') },
+    { key: 'data', items: filteredItems.filter((i) => i.group === 'data') },
+    { key: 'skatt', items: filteredItems.filter((i) => i.group === 'skatt') },
   ]
 
   // A group is expanded when the user hasn't manually collapsed it OR
@@ -407,23 +520,18 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
       <aside className="hidden md:fixed md:inset-y-0 md:flex md:w-64 md:flex-col">
         <div className="flex min-h-0 flex-1 flex-col border-r border-border bg-background">
           <div className="flex flex-1 flex-col overflow-y-auto pt-7 pb-4">
-            {/* Company switcher pinned to the top — the active company is
+            {/* Company switcher pinned to the top: the active company is
                 the strongest piece of context for everything below it. */}
             <div className="px-5 mb-8">
               <CompanySwitcher />
             </div>
             <nav className="px-3" aria-label={tNav('main_navigation')}>
-              {/* Top section: flat, no header. Hem, Underlag, Transaktioner, Granskning. */}
+              {/* Top section: flat, no header. Hem, Assistent. */}
               <div className="mb-4 space-y-px">
                 {topItems.map((item) => {
                   const active = isActive(item.href)
                   const enabled = isItemEnabled(item.href)
-                  const badge =
-                    item.href === '/transactions' && liveUncategorizedTransactionCount > 0
-                      ? liveUncategorizedTransactionCount
-                      : item.href === '/pending' && pendingOperationsCount > 0
-                        ? pendingOperationsCount
-                        : null
+                  const badge: number | null = null
                   const decorBadge = renderBadge(item, 'sidebar')
                   const content = (
                     <>
@@ -470,7 +578,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 })}
               </div>
 
-              {/* Collapsible groups: Försäljning, Inköp, Redovisning, Personal */}
+              {/* Collapsible groups: Arbeta, Analys, Data, Skatt & bokslut */}
               {sidebarGroups
                 .filter(({ items }) => items.length > 0)
                 .map(({ key, items }) => {
@@ -495,6 +603,12 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                             const Icon = item.icon
                             const active = isActive(item.href)
                             const enabled = isItemEnabled(item.href) && !item.comingSoon
+                            const badge =
+                              item.href === '/transactions' && liveUncategorizedTransactionCount > 0
+                                ? liveUncategorizedTransactionCount
+                                : item.href === '/pending' && pendingOperationsCount > 0
+                                  ? pendingOperationsCount
+                                  : null
                             const decorBadge = renderBadge(item, 'sidebar')
                             const content = (
                               <>
@@ -507,7 +621,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                                   )}
                                 />
                                 <span className="flex-1">{tNav(item.labelKey)}</span>
-                                {decorBadge}
+                                {decorBadge ? decorBadge : badge !== null && (
+                                  <span className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
+                                    {badge > 99 ? '99+' : badge}
+                                  </span>
+                                )}
                               </>
                             )
                             const baseClass = cn(
@@ -540,11 +658,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                               </div>
                             )
                           })}
-                          {/* Extension nav items land in Redovisning since the
-                              current extensions (TIC workspace, etc.) are
-                              accounting-adjacent. Future categorised extensions
-                              can opt into a different group via their manifest. */}
-                          {key === 'redovisning' &&
+                          {/* Extension nav items land in Arbeta since extension
+                              workspaces are work surfaces. Future categorised
+                              extensions can opt into a different group via
+                              their manifest. */}
+                          {key === 'arbeta' &&
                             visibleExtensionNavItems.map((item) => {
                               const Icon = resolveIcon(item.icon)
                               const active = isActive(item.href)
@@ -600,10 +718,30 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             </nav>
           </div>
 
+          {/* Trial countdown touchpoint: the paywall is a lifecycle flow, not
+              a settings page, so trial state stays quietly visible in the
+              chrome instead of only inside Inställningar → Abonnemang.
+              Hidden for sandbox/demo (no checkout) and once any non-trial
+              grant is active (trialEndsAt is null then). */}
+          {!isSandbox && trialDaysLeft !== null && (
+            <div className="flex-shrink-0 px-3 pb-2">
+              <Link
+                href="/settings/billing"
+                className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150"
+              >
+                <Clock className="h-3.5 w-3.5 shrink-0" />
+                <span className="flex-1 truncate">
+                  {tNav('trial_days_left', { days: trialDaysLeft })}
+                </span>
+                <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
+              </Link>
+            </div>
+          )}
+
           {/* Account popover (bottom-left). Triggered by the signed-in
               user's name + initial. Holds Inställningar, Hjälp, Support,
               Logga ut. CompanySwitcher lives at the top of the sidebar,
-              not in here — different concept ("which company am I working
+              not in here, different concept ("which company am I working
               with" vs "who am I logged in as"). */}
           <div className="flex-shrink-0 px-3 py-3 border-t border-border">
             <DropdownMenu>
@@ -731,7 +869,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         </div>
       </nav>
 
-      {/* Mobile menu — bottom sheet */}
+      {/* Mobile menu: bottom sheet */}
       {isMobileMenuOpen && (
         <>
           {/* Backdrop */}
@@ -778,17 +916,12 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
             {/* Navigation */}
             <div className="px-2">
-              {/* Top items (Hem, Underlag, Transaktioner, Granskning) */}
+              {/* Top items (Hem, Assistent) */}
               <div className="space-y-0.5">
                 {topItems.map((item) => {
                   const active = isActive(item.href)
                   const enabled = isItemEnabled(item.href)
-                  const badge =
-                    item.href === '/transactions' && liveUncategorizedTransactionCount > 0
-                      ? liveUncategorizedTransactionCount
-                      : item.href === '/pending' && pendingOperationsCount > 0
-                        ? pendingOperationsCount
-                        : null
+                  const badge: number | null = null
                   const decorBadge = renderBadge(item, 'mobile')
                   const content = (
                     <>
@@ -829,7 +962,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 })}
               </div>
 
-              {/* AR / AP / Personal / Accounting groups (mobile) */}
+              {/* Arbeta / Analys / Data / Skatt & bokslut groups (mobile) */}
               {sidebarGroups.filter(({ items }) => items.length > 0).map(({ key, items }) => (
                 <div key={key}>
                   <div className="flex items-center gap-3 my-1.5 px-3">
@@ -888,7 +1021,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 </div>
               ))}
 
-              {/* Tillägg (extensions) — only when there's at least one */}
+              {/* Tillägg (extensions): only when there's at least one */}
               {visibleExtensionNavItems.length > 0 && (
                 <>
                   <div className="flex items-center gap-3 my-1.5 px-3">

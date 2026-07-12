@@ -38,7 +38,7 @@ export async function listSignatureRequests(
 
 /**
  * Create one signature request per styrelseledamot / VD. The BankID call
- * itself isn't wired here — that ships in a follow-up that uses
+ * itself isn't wired here: that ships in a follow-up that uses
  * lib/auth/bankid helpers to sign and write the result back via
  * markSignatureSigned(). For now this just records who is supposed to sign.
  */

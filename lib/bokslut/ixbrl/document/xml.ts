@@ -66,9 +66,9 @@ export function paragraphs(text: string, className?: string): string {
 }
 
 /**
- * Format a whole-SEK amount for ixt:numspacecomma — groups of three digits
+ * Format a whole-SEK amount for ixt:numspacecomma: groups of three digits
  * separated by REGULAR spaces (U+0020; NBSP fails the transform regex).
- * The sign is never part of the transformed text — negative handling lives
+ * The sign is never part of the transformed text: negative handling lives
  * on the ix:nonFraction `sign` attribute / presentational minus outside.
  */
 export function formatSekAbs(value: number): string {

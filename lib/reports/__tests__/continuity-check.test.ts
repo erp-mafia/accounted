@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock Supabase — table-keyed result queues
+// Mock Supabase: table-keyed result queues
 // ============================================================
 
 type MockResult = { data?: unknown; error?: unknown; count?: number }
@@ -14,7 +14,15 @@ function makeBuilder(tableName: string) {
   }
   const consume = (): MockResult => {
     const queue = mockResults[tableName]
-    if (!queue || queue.length === 0) return { data: null, error: null }
+    if (!queue || queue.length === 0) {
+      // The two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts) reads
+      // journal_entries before journal_entry_lines. Tests queue line rows
+      // directly, so default the entries step to one generic entry.
+      if (tableName === 'journal_entries') {
+        return { data: [{ id: 'entry-1' }], error: null }
+      }
+      return { data: null, error: null }
+    }
     return queue.shift()!
   }
   b.single = vi.fn().mockImplementation(async () => consume())
@@ -72,7 +80,7 @@ describe('validateBalanceContinuity', () => {
         { data: { period_start: '2024-01-01', opening_balance_entry_id: null } },
       ],
       journal_entry_lines: [
-        // Previous period lines (trial balance — prior OB comes from RPC, defaults empty)
+        // Previous period lines (trial balance: prior OB comes from RPC, defaults empty)
         {
           data: [
             { account_number: '1930', debit_amount: 50000, credit_amount: 0 },

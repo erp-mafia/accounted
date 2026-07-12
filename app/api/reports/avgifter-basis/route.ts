@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { generateAvgifterBasis } from '@/lib/reports/avgifter-basis'
 
 /**
@@ -8,13 +7,7 @@ import { generateAvgifterBasis } from '@/lib/reports/avgifter-basis'
  * Monthly breakdown by avgifter rate category for AGI reconciliation.
  * Per BFL: Part of räkenskapsinformation, 7-year retention.
  */
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext('report.avgifter_basis', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
   const year = parseInt(searchParams.get('year') || new Date().getFullYear().toString())
 
@@ -25,4 +18,4 @@ export async function GET(request: Request) {
     const message = err instanceof Error ? err.message : 'Kunde inte generera avgiftsunderlag'
     return NextResponse.json({ error: message }, { status: 500 })
   }
-}
+})

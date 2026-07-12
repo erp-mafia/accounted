@@ -21,7 +21,7 @@ ARG EXTENSIONS_PRESET=self-hosted
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Apply extension preset (must happen before build — prebuild hook
+# Apply extension preset (must happen before build: prebuild hook
 # runs setup:extensions which reads extensions.config.json)
 COPY docker/extensions.${EXTENSIONS_PRESET}.json ./extensions.config.json
 
@@ -29,6 +29,10 @@ COPY docker/extensions.${EXTENSIONS_PRESET}.json ./extensions.config.json
 # These get replaced at runtime by docker-entrypoint.sh so the image
 # is generic and reusable across different Supabase projects.
 ENV NEXT_PUBLIC_SUPABASE_URL=__NEXT_PUBLIC_SUPABASE_URL__
+# Realtime WebSocket origin for the CSP. Must be its own sentinel: the CSP is
+# baked into the build output, so the entrypoint cannot derive wss:// from the
+# already-substituted https URL after the fact (issue #893).
+ENV NEXT_PUBLIC_SUPABASE_WS_URL=__NEXT_PUBLIC_SUPABASE_WS_URL__
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=__NEXT_PUBLIC_SUPABASE_ANON_KEY__
 ENV NEXT_PUBLIC_APP_URL=__NEXT_PUBLIC_APP_URL__
 ENV NEXT_PUBLIC_VAPID_PUBLIC_KEY=__NEXT_PUBLIC_VAPID_PUBLIC_KEY__
@@ -52,7 +56,7 @@ WORKDIR /app
 # healthcheck uses BusyBox wget. The runtime runs `node server.js` and never
 # invokes npm, so we delete the base image's bundled npm CLI: its vendored deps
 # (picomatch, tar, brace-expansion, ip-address) are the packages Trivy flags on
-# this image — removing npm clears them at the source and shrinks the attack
+# this image: removing npm clears them at the source and shrinks the attack
 # surface.
 RUN apk upgrade --no-cache && \
     rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
@@ -64,9 +68,9 @@ RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 -G nodejs nextjs
 
 # /app at runtime is split across the read-only image layer and tmpfs mounts:
-#   /app/server.js, /app/node_modules/, /app/package.json   — image (read-only)
-#   /app/.next/                                              — tmpfs (writable)
-#   /app/public/                                             — tmpfs (writable)
+#   /app/server.js, /app/node_modules/, /app/package.json   : image (read-only)
+#   /app/.next/                                              : tmpfs (writable)
+#   /app/public/                                             : tmpfs (writable)
 # The entrypoint runs UNPRIVILEGED as nextjs: it copies the templates from
 # /opt/gnubok-template/ into the nextjs-owned tmpfs mounts, substitutes the
 # NEXT_PUBLIC_* placeholders, then drops the write bits. Because it never needs

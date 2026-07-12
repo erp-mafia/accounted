@@ -1,6 +1,7 @@
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { createLogger } from '@/lib/logger'
 
@@ -29,8 +30,8 @@ const SetPasswordSchema = z.object({
  * Two paths depending on whether the user already has a real password:
  *
  *   - First-time set (`app_metadata.has_password !== true`): write via the
- *     admin API. BankID-only users — and legacy users whose `has_password`
- *     flag was set to false by the backfill — sit at AAL1 with a TOTP factor
+ *     admin API. BankID-only users (and legacy users whose `has_password`
+ *     flag was set to false by the backfill) sit at AAL1 with a TOTP factor
  *     enrolled, and `updateUser` on the user session would be rejected with
  *     "AAL2 session is required to update email or password when MFA is
  *     enabled". Setting an initial password has no existing credential to
@@ -42,21 +43,15 @@ const SetPasswordSchema = z.object({
  *
  * This route is the single write path for setting a password. SecuritySettings,
  * the reset-password page, and the /account/set-password page all funnel
- * through here so the flag stays in sync — see lib/auth/has-password.ts.
+ * through here so the flag stays in sync: see lib/auth/has-password.ts.
  *
  * If the password update succeeds but the flag write fails, we log and still
  * return success: the user has a working password and the banner will show one
  * more time, but a retry will re-flip the flag.
  */
 export async function POST(request: Request) {
-  const supabase = await createClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const { user, supabase, error: authError } = await requireAuth()
+  if (authError) return authError
 
   const result = await validateBody(request, SetPasswordSchema)
   if (!result.success) return result.response

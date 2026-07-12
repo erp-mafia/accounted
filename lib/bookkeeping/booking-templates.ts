@@ -68,7 +68,7 @@ export interface BookingTemplate {
   /**
    * Supplier-type hint for reverse-charge bookings. Determines which 44xx/45xx
    * basbelopp account is emitted alongside the 2645/2614 fiktiv-moms pair so
-   * Skatteverket's momsdeklaration rutor 20–24 line up with rutor 30–32
+   * Skatteverket's momsdeklaration rutor 20-24 line up with rutor 30-32
    * (felkod FK004 if absent). Default 'eu_business' when unset.
    */
   reverse_charge_supplier_type?: 'eu_business' | 'non_eu_business' | 'swedish_business'
@@ -1107,7 +1107,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     special_rules_sv: 'Skattefritt traktamente för tjänsteresa i Sverige inom Skatteverkets schablonbelopp. Kräver reseräkning + övernattning >50 km från tjänstestället. Ingen ingående moms.',
     mcc_codes: [],
     // Note: keywords are intentionally narrow. "utlandstraktamente" must route
-    // to the abroad template, not here — so we avoid the bare "traktament"
+    // to the abroad template, not here: so we avoid the bare "traktament"
     // substring (which would also fire on "utlandstraktamente").
     keywords: ['traktamente', 'dagtraktamente', 'helt dygn', 'halvt dygn'],
     risk_level: 'LOW',
@@ -1827,7 +1827,7 @@ export function findMatchingTemplates(
 
 /**
  * Whether an account number sits in the reverse-charge basbelopp range
- * (44xx/45xx series — ruta 20–24 inputs). Used to skip redundant basis
+ * (44xx/45xx series, ruta 20-24 inputs). Used to skip redundant basis
  * emission when the template already books to such an account.
  */
 function isBasisAccount(account: string): boolean {
@@ -1873,9 +1873,9 @@ export function buildMappingResultFromTemplate(
     if (template.vat_treatment === 'reverse_charge' && isExpense) {
       // EU/non-EU/domestic reverse charge: emit BOTH the fiktiv-moms pair
       // (2645|2647 / 2614) AND the basbelopp pair (44xx|45xx / 4598). The
-      // basbelopp pair populates momsdeklaration rutor 20–24; without it
+      // basbelopp pair populates momsdeklaration rutor 20-24; without it
       // Skatteverket rejects with FK004 ("ruta 30-32 utan motsvarande
-      // basbelopp i 20-24" — ML 13 kap kräver båda sidor).
+      // basbelopp i 20-24", ML 13 kap kräver båda sidor).
       const supplierType = template.reverse_charge_supplier_type ?? 'eu_business'
       const isDomestic = supplierType === 'swedish_business'
       const rcRate = 0.25 // fiktiv moms rate; current templates are 25%
@@ -1891,7 +1891,7 @@ export function buildMappingResultFromTemplate(
       }
 
       // Skip basbelopp emission if the template already books the expense
-      // directly to a basis account (44xx/45xx series) — would double-count.
+      // directly to a basis account (44xx/45xx series): would double-count.
       if (!isBasisAccount(debitAccount)) {
         const basisLines = generateReverseChargeBasisLines(absAmount, rcRate, supplierType)
         for (const bl of basisLines) {

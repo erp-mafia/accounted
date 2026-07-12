@@ -165,7 +165,7 @@ describe('POST /items/:id/convert', () => {
     expect(body.error.code).toBe('SI_CREATE_DUPLICATE_INVOICE_NUMBER')
     expect(body.error.details?.existing?.id).toBe('existing-1')
     // Data minimisation: the raw request body must NOT be echoed back into the
-    // error envelope — only the server-authoritative `existing` row.
+    // error envelope: only the server-authoritative `existing` row.
     expect(body.error.details).not.toHaveProperty('supplierId')
     expect(body.error.details).not.toHaveProperty('supplierInvoiceNumber')
   })

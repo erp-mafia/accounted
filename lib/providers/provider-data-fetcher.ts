@@ -145,7 +145,7 @@ export async function fetchCustomersDirect(
   if (provider === 'bokio') {
     const config = BOKIO_RESOURCE_CONFIGS[ResourceType.Customers];
     if (!config || !providerCompanyId) {
-      console.warn(`[provider-data-fetcher] Bokio customers: skipped — config=${!!config}, providerCompanyId=${providerCompanyId ?? 'undefined'}`);
+      console.warn(`[provider-data-fetcher] Bokio customers: skipped, config=${!!config}, providerCompanyId=${providerCompanyId ?? 'undefined'}`);
       return [];
     }
     const items = await bokioPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
@@ -198,7 +198,7 @@ export async function fetchSuppliersDirect(
       return items.map((item) => config.mapper(item) as SupplierDto);
     } catch (err) {
       if (err instanceof BokioApiError && err.statusCode === 404) {
-        console.log('[provider-data-fetcher] Bokio suppliers endpoint not available (404) — skipping');
+        console.log('[provider-data-fetcher] Bokio suppliers endpoint not available (404), skipping');
         return [];
       }
       throw err;
@@ -243,7 +243,7 @@ export async function fetchSalesInvoicesDirect(
   if (provider === 'bokio') {
     const config = BOKIO_RESOURCE_CONFIGS[ResourceType.SalesInvoices];
     if (!config || !providerCompanyId) {
-      console.warn(`[provider-data-fetcher] Bokio invoices: skipped — config=${!!config}, providerCompanyId=${providerCompanyId ?? 'undefined'}`);
+      console.warn(`[provider-data-fetcher] Bokio invoices: skipped, config=${!!config}, providerCompanyId=${providerCompanyId ?? 'undefined'}`);
       return [];
     }
     const items = await bokioPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
@@ -296,7 +296,7 @@ export async function fetchSupplierInvoicesDirect(
       return items.map((item) => config.mapper(item) as SupplierInvoiceDto);
     } catch (err) {
       if (err instanceof BokioApiError && err.statusCode === 404) {
-        console.log('[provider-data-fetcher] Bokio supplier-invoices endpoint not available (404) — skipping');
+        console.log('[provider-data-fetcher] Bokio supplier-invoices endpoint not available (404), skipping');
         return [];
       }
       throw err;

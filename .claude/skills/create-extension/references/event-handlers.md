@@ -1,6 +1,6 @@
 # Event Handlers Reference
 
-Extensions subscribe via `eventHandlers`. The bus dispatches with `Promise.allSettled()` — failures are isolated.
+Extensions subscribe via `eventHandlers`. The bus dispatches with `Promise.allSettled()`: failures are isolated.
 
 ## Signature & Registration
 
@@ -16,7 +16,7 @@ export const myExtension: Extension = {
 }
 ```
 
-`ctx` can be `undefined` in cron job contexts — always provide fallbacks.
+`ctx` can be `undefined` in cron job contexts: always provide fallbacks.
 
 ## All Event Types
 
@@ -68,8 +68,8 @@ async function handleTransactionSynced(
 
 ## Key Rules
 
-1. **Handle `ctx = undefined`** — fallback for supabase, logging, settings
-2. **Handlers run concurrently** — order undefined, don't depend on other handlers
-3. **Use settings gates** — let users control features
-4. **Wrap in try/catch** — don't throw unhandled errors
-5. **Emit events for cascading pipelines** — e.g., OCR emits `receipt.extracted` → triggers push notifications
+1. **Handle `ctx = undefined`**: fallback for supabase, logging, settings
+2. **Handlers run concurrently**: order undefined, don't depend on other handlers
+3. **Use settings gates**: let users control features
+4. **Wrap in try/catch**: don't throw unhandled errors
+5. **Emit events for cascading pipelines**: e.g., OCR emits `receipt.extracted` → triggers push notifications

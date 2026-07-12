@@ -9,7 +9,7 @@ import {
 } from '@/lib/bokslut/assets/depreciation-engine'
 
 const CommitSchema = z.object({
-  /** Optional whitelist — when supplied, only assets in this list are posted.
+  /** Optional whitelist: when supplied, only assets in this list are posted.
    *  Empty / omitted = post all proposed depreciations. */
   asset_ids: z.array(z.string().uuid()).optional(),
 })

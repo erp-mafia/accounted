@@ -14,7 +14,7 @@ import { useCompany } from '@/contexts/CompanyContext'
  *
  * This is the UI layer of the viewer role enforcement. The API layer
  * (`requireWritePermission()`) and RLS layer (`current_user_can_write()`)
- * remain the security-critical backstops — this hook only controls what
+ * remain the security-critical backstops: this hook only controls what
  * the user sees and can click.
  */
 export function useCanWrite(): { canWrite: boolean } {

@@ -94,6 +94,19 @@ export function extractLocalPartForDomain(recipients: string[], domain: string):
   return null
 }
 
+// Splits every parseable recipient into { localPart, domain }, lowercased and
+// in original order. Used to match recipients against per-company verified
+// custom domains when none of them is on the shared inbound domain.
+export function parseRecipients(recipients: string[]): Array<{ localPart: string; domain: string }> {
+  const parsed: Array<{ localPart: string; domain: string }> = []
+  for (const addr of recipients) {
+    const match = addr.match(/^\s*([^@\s]+)@([^@\s]+?)\s*$/)
+    if (!match) continue
+    parsed.push({ localPart: match[1].toLowerCase(), domain: match[2].toLowerCase() })
+  }
+  return parsed
+}
+
 export function isEmailReceivedEvent(event: WebhookEventPayload): event is EmailReceivedEvent {
   return event.type === 'email.received'
 }

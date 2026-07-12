@@ -1,4 +1,4 @@
-# ISMS Clauses 4-10 — Mandatory Documents and Verification Logic
+# ISMS Clauses 4-10: Mandatory Documents and Verification Logic
 
 ISO/IEC 27001:2022 is structurally bifurcated. Annex A enumerates security controls; Clauses 4-10 define the management system that must wrap them. Certification fails without a complete and operating Management System, regardless of how well Annex A controls are implemented technically.
 
@@ -8,7 +8,7 @@ The clauses are: Context (4), Leadership (5), Planning (6), Support (7), Operati
 
 | Clause | Document | Filename convention | Verification logic |
 |---|---|---|---|
-| 4.3 | Scope of the ISMS | `ISMS_Scope.md` | Must define exact boundaries — included departments, locations, systems, exclusions with justification. |
+| 4.3 | Scope of the ISMS | `ISMS_Scope.md` | Must define exact boundaries: included departments, locations, systems, exclusions with justification. |
 | 5.2 | Information Security Policy | `InfoSec_Policy.md` | Must include framework for objectives, commitment to satisfy applicable requirements, commitment to continual improvement, top management approval. |
 | 6.1.2 | Risk Assessment Process | `Risk_Methodology.md` | Must define scoring matrix (impact × likelihood), risk acceptance thresholds, owner assignment criteria. |
 | 6.1.3 | Statement of Applicability | `SoA.json` / `SoA.csv` | Must contain four core elements per control: identifier, inclusion/exclusion statement, justification, implementation status. |
@@ -23,7 +23,7 @@ The clauses are: Context (4), Leadership (5), Planning (6), Support (7), Operati
 | 10.1 | Continual improvement | (cross-cutting) | Evidence of corrective actions closing previous findings. |
 | 10.2 | Nonconformity and corrective action records | `NC_Log.md` or `NC_Register.xlsx` | Each NC must have root cause analysis, corrective action, effectiveness verification. |
 
-## Clause 9.3 — Mandatory Management Review inputs
+## Clause 9.3: Mandatory Management Review inputs
 
 This is the most commonly under-documented requirement. Management Review minutes must explicitly cover **all** of the following:
 
@@ -41,7 +41,7 @@ This is the most commonly under-documented requirement. Management Review minute
 
 The agentic auditor must verify each of these is textually present. Output a per-input checklist showing pass/fail for each agenda item.
 
-## Clause 7.5 — Documented Information requirements
+## Clause 7.5: Documented Information requirements
 
 Every controlled document must satisfy:
 
@@ -91,4 +91,4 @@ The auditor must run cross-references:
 | Competency Matrix → InfoSec roles | Competency_Matrix | Roles defined in policies | Role exists in policy but no competency requirement defined. |
 | Suppression Risk IDs → Risk Register | Inline scanner suppressions | Risk_Register | Suppression references Risk ID that does not exist. |
 
-These cross-checks are the highest-value agentic operations because they detect compliance theater — where every individual document looks fine but the documents are internally inconsistent.
+These cross-checks are the highest-value agentic operations because they detect compliance theater: where every individual document looks fine but the documents are internally inconsistent.

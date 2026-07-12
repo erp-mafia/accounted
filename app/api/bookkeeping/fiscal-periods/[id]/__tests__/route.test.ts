@@ -6,6 +6,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
@@ -160,7 +161,7 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
     })
   })
 
-  describe('enskild firma — BFL 3 kap.', () => {
+  describe('enskild firma: BFL 3 kap.', () => {
     it('allows förlängt räkenskapsår (15 mån, 4 okt 2020 → 31 dec 2021) on the first period', async () => {
       buildMockSupabase({ earlierPeriodCount: 0 })
       const res = await PATCH(
@@ -195,7 +196,7 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
       expect(body.error).toMatch(/kalenderår/)
     })
 
-    it('accepts EF subsequent period running 1 jan – 31 dec', async () => {
+    it('accepts EF subsequent period running 1 jan to 31 dec', async () => {
       buildMockSupabase({
         period: { id: 'p2', period_start: '2026-01-01', period_end: '2026-12-31', locked_at: null, is_closed: false },
         earlierPeriodCount: 1,
@@ -226,7 +227,7 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
 
     // Defense-in-depth: the EF end-date guard runs before validatePeriodDuration.
     // A 24-month first period (2020-01-01 → 2021-12-31) ends on 31 dec, so the EF
-    // guard passes — duration validation must catch it as BFL 3 kap. caps the
+    // guard passes: duration validation must catch it as BFL 3 kap. caps the
     // first period at 18 months.
     it('rejects a 24-month first period via the duration cap', async () => {
       buildMockSupabase({ earlierPeriodCount: 0 })

@@ -1,5 +1,5 @@
 /**
- * MCP prompt — a server-defined chat template the user picks from a slash menu
+ * MCP prompt: a server-defined chat template the user picks from a slash menu
  * in their MCP client. Selecting a prompt sends the message text to the model,
  * which then calls the relevant Accounted tools to satisfy the request.
  *

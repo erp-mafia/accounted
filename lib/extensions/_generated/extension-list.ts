@@ -1,4 +1,4 @@
-// AUTO-GENERATED — do not edit. Run `npm run setup:extensions` to regenerate.
+// AUTO-GENERATED: do not edit. Run `npm run setup:extensions` to regenerate.
 import type { Extension } from '../types'
 import { enableBankingExtension } from '@/extensions/general/enable-banking'
 import { emailExtension } from '@/extensions/general/email'
@@ -9,6 +9,7 @@ import { cloudBackupExtension } from '@/extensions/general/cloud-backup'
 import { skatteverketExtension } from '@/extensions/general/skatteverket'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
 import { documentExtractionExtension } from '@/extensions/general/document-extraction'
+import { stripeExtension } from '@/extensions/general/stripe'
 
 export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   enableBankingExtension,
@@ -20,4 +21,5 @@ export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   skatteverketExtension,
   invoiceInboxExtension,
   documentExtractionExtension,
+  stripeExtension,
 ]

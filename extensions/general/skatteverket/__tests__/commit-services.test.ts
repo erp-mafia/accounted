@@ -1,5 +1,5 @@
 /**
- * Tests for the extension's registry-exposed commit services — specifically the
+ * Tests for the extension's registry-exposed commit services: specifically the
  * VAT "send for signing" chain (POST /utkast → PUT /las → signeringslänk), the
  * SKATTEVERKET_ENABLED flag gate, and SkatteverketAuthError → recoverable
  * mapping. The op-lifecycle translation is covered separately in

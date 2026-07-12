@@ -329,12 +329,12 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
-    // The document already lives on the registration verifikat — re-linking
+    // The document already lives on the registration verifikat: re-linking
     // here would move it off the primary booking.
     expect(linkToJournalEntry).not.toHaveBeenCalled()
   })
 
-  it('returns 500 when journal entry creation fails (blocking — GL must succeed for payment)', async () => {
+  it('returns 500 when journal entry creation fails (blocking: GL must succeed for payment)', async () => {
     const supplier = makeSupplier()
     const invoice = makeSupplierInvoice({
       id: 'si-1',
@@ -449,7 +449,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
       items: [],
     })
 
-    // Note: no candidates enqueue — guard is skipped for partial payments
+    // Note: no candidates enqueue, guard is skipped for partial payments
     enqueue({ data: invoice, error: null })
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })

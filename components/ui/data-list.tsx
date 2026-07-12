@@ -2,7 +2,7 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 
 /**
- * DataList — unified list surface (one bordered container, hairline rows).
+ * DataList: unified list surface (one bordered container, hairline rows).
  *
  * Replaces the per-row Card pattern across Granskning, Transactions, and
  * similar list pages. Visual contract is flat-with-hairlines per CLAUDE.md:
@@ -31,7 +31,7 @@ const DataListHeader = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "flex flex-wrap items-center gap-3 border-b border-border bg-secondary/40 px-4 py-2.5",
+      "flex flex-wrap items-center gap-3 border-b border-border bg-secondary/40 px-4 py-2",
       className
     )}
     {...props}

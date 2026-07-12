@@ -4,14 +4,14 @@
  * Background: account names were corrupted for ~888 companies in the seeding /
  * import window 2026-03-30 → 2026-06-12, in three signatures (see
  * lib/bookkeeping/charset-repair.ts): stripped diacritics, lost-byte U+FFFD, and
- * double-encoded UTF-8. The root causes are CLOSED — the runtime
+ * double-encoded UTF-8. The root causes are CLOSED: the runtime
  * seed_chart_of_accounts() function on prod now carries correct diacritics (the
  * fix migration 20260516130000 was applied to prod ~2026-06-12; classic
  * prod-migration-drift, so companies created during the drift window were
  * seeded by the old stripped function). This script repairs the legacy rows.
  *
  * Strategy (per row): resolveCorrectName() against CANDIDATE correct names for
- * the same account number — the clean sibling rows already in the table plus the
+ * the same account number: the clean sibling rows already in the table plus the
  * BAS reference name. Double-encoded reverses losslessly (recovers customs too);
  * stripped/lost-byte require an unambiguous clean sibling, else the row is left
  * untouched and reported. Never clobbers user-renamed accounts.
@@ -65,7 +65,7 @@ async function main() {
   const { url, key } = loadEnv()
   const supabase = createClient(url, key, { auth: { persistSession: false } })
 
-  console.log(`=== chart_of_accounts charset repair — ${EXECUTE ? 'EXECUTE' : 'DRY RUN'} ===\n`)
+  console.log(`=== chart_of_accounts charset repair: ${EXECUTE ? 'EXECUTE' : 'DRY RUN'} ===\n`)
 
   // Closure over the inferred client so we don't annotate (and mismatch) the
   // supabase-js generic parameters.
@@ -134,7 +134,7 @@ async function main() {
   console.log(`Total fixes: ${fixes.length} rows across ${new Set(fixes.map((f) => f.company_id)).size} companies.`)
 
   if (unresolved.length) {
-    console.log(`\n[unresolved] ${unresolved.length} rows carry a corruption signature but have no unambiguous clean sibling — left untouched:`)
+    console.log(`\n[unresolved] ${unresolved.length} rows carry a corruption signature but have no unambiguous clean sibling: left untouched:`)
     console.log(
       [...new Map(unresolved.map((u) => [`${u.account_number}|${u.account_name}`, u])).values()]
         .slice(0, 20)
@@ -144,7 +144,7 @@ async function main() {
   }
 
   if (!EXECUTE) {
-    console.log('\nDRY RUN — no rows changed. Re-run with --execute to apply.')
+    console.log('\nDRY RUN: no rows changed. Re-run with --execute to apply.')
     return
   }
 
@@ -180,7 +180,7 @@ async function main() {
       } else if (r.changed) {
         applied++
       } else {
-        skipped++ // row changed under us since the read — left as-is
+        skipped++ // row changed under us since the read: left as-is
       }
     }
     if ((i / CHUNK) % 10 === 0) console.log(`  …${applied}/${fixes.length} applied`)

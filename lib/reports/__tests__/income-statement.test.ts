@@ -198,7 +198,7 @@ describe('generateIncomeStatement', () => {
     mockTrialBalance.mockResolvedValue({
       rows: [
         makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, closing_credit: 10000, closing_debit: 0 }),
-        // Amount 0.004 — below threshold, filtered from rows but included in subtotal
+        // Amount 0.004: below threshold, filtered from rows but included in subtotal
         makeRow({ account_number: '3002', account_name: 'Micro', account_class: 3, closing_credit: 0.004, closing_debit: 0 }),
       ],
       totalDebit: 0,
@@ -237,7 +237,7 @@ describe('generateIncomeStatement', () => {
 
     expect(report.total_revenue).toBe(370000)
     expect(report.total_expenses).toBe(149000)
-    // 8999 must not contribute — financial section should be empty
+    // 8999 must not contribute: financial section should be empty
     expect(report.financial_sections).toEqual([])
     expect(report.total_financial).toBe(0)
     // Computed net result equals what Bokio / NE-bilaga shows
@@ -245,7 +245,7 @@ describe('generateIncomeStatement', () => {
   })
 
   it('still includes legitimate class 8 accounts (8310 interest, 8410 interest expense)', async () => {
-    // Sanity check the 8999 exclusion is narrow — other class 8 accounts
+    // Sanity check the 8999 exclusion is narrow: other class 8 accounts
     // (interest income, interest expense, tax) must still appear.
     mockTrialBalance.mockResolvedValue({
       rows: [
@@ -264,7 +264,7 @@ describe('generateIncomeStatement', () => {
     const titles = report.financial_sections.map(s => s.title)
     expect(titles).toContain('Ränteintäkter')
     expect(titles).toContain('Räntekostnader')
-    // 89xx section would have been populated by 8999 only — excluded
+    // 89xx section would have been populated by 8999 only: excluded
     expect(titles).not.toContain('Skatter och årets resultat')
     expect(report.total_financial).toBe(300) // 500 - 200
     expect(report.net_result).toBe(100300) // 100000 - 0 + 300
@@ -291,11 +291,11 @@ describe('generateIncomeStatement', () => {
     expect(report.total_revenue).toBe(40000)
   })
 
-  it('includes energikostnader (group 53, e.g. 5310) in expenses and net_result — regression', async () => {
+  it('includes energikostnader (group 53, e.g. 5310) in expenses and net_result: regression', async () => {
     // Regression: group '53' was missing from the expense label map, so 53xx
     // accounts (energy costs like 5310 El för drift) were silently dropped from
     // total_expenses and net_result. The Resultatrapport (which sums all class
-    // 3–8 rows directly) stayed correct, which is how the discrepancy surfaced.
+    // 3-8 rows directly) stayed correct, which is how the discrepancy surfaced.
     mockTrialBalance.mockResolvedValue({
       rows: [
         makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, closing_credit: 100000, closing_debit: 0 }),
@@ -336,10 +336,10 @@ describe('generateIncomeStatement', () => {
     expect(expenseAccounts).toEqual(expect.arrayContaining(['4810', '5310', '6710']))
   })
 
-  it('total_expenses equals the signed sum of every class 4–7 row (no silent drops)', async () => {
+  it('total_expenses equals the signed sum of every class 4-7 row (no silent drops)', async () => {
     // Structural invariant guarding the whole class of "missing group label"
     // bug: the sum of expense-section subtotals must equal Σ(debit - credit)
-    // over all class 4–7 rows, mixing mapped (50, 70) and unmapped (48, 53, 67)
+    // over all class 4-7 rows, mixing mapped (50, 70) and unmapped (48, 53, 67)
     // groups.
     const rows = [
       makeRow({ account_number: '5010', account_name: 'Lokalhyra', account_class: 5, closing_debit: 8000, closing_credit: 0 }),

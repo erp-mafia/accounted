@@ -11,7 +11,6 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import CorrectionPreview from '@/components/bookkeeping/CorrectionPreview'
 import { useToast } from '@/components/ui/use-toast'
@@ -67,7 +66,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
       const { data } = await res.json()
       setAccounts(data || [])
     } catch {
-      // Accounts will be empty — user can still type account numbers manually
+      // Accounts will be empty: user can still type account numbers manually
     }
   }
 
@@ -159,16 +158,16 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             <li>En ny verifikation med dina rättade uppgifter</li>
           </ol>
           <p className="mt-2">
-            Rättelsen bokförs i samma räkenskapsperiod som originalet — du hittar den under originalets räkenskapsår.
+            Rättelsen bokförs i samma räkenskapsperiod som originalet: du hittar den under originalets räkenskapsår.
           </p>
         </div>
 
-        {/* Original entry metadata — lines live inside CorrectionPreview below */}
+        {/* Original entry metadata: lines live inside CorrectionPreview below */}
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
+            <span className="text-muted-foreground">Original</span>
             <span className="font-mono">{formatVoucher(entry)}</span>
             <span className="tabular-nums">{formatDate(entry.entry_date)}</span>
-            <Badge variant="outline" className="text-xs">Original</Badge>
           </div>
           <p className="text-sm">{entry.description}</p>
         </div>
@@ -181,7 +180,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           <div className="space-y-1">
             <p className="text-sm font-medium">Rättade rader</p>
             <p className="text-xs text-muted-foreground">
-              Det här är hela den nya verifikationen — alla konton som ska finnas kvar måste stå
+              Det här är hela den nya verifikationen: alla konton som ska finnas kvar måste stå
               kvar. Tar du bort ett konto nollställs det (stornon återför det). Vill du bara återföra
               hela verifikatet utan att ersätta det, använd Återför (storno) istället.
             </p>

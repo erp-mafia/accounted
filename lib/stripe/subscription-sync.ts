@@ -7,7 +7,7 @@ import type { BillingPlan } from './client'
  * Stripe → DB reconciliation for subscriptions. The single source of truth for
  * paid access is capability_grants(source='stripe'); this module writes those
  * grants from subscription state and removes them on cancellation
- * (freeze-and-retain — only the stripe grants are touched, never bank tokens or
+ * (freeze-and-retain: only the stripe grants are touched, never bank tokens or
  * AI data).
  */
 
@@ -42,7 +42,7 @@ function planFromSubscription(sub: Stripe.Subscription): BillingPlan | null {
 }
 
 // current_period_end lives on the Subscription in older API versions and on the
-// subscription item in newer ones — read defensively so SDK/API drift can't
+// subscription item in newer ones: read defensively so SDK/API drift can't
 // break the build or the expiry calc.
 function periodEndIso(sub: Stripe.Subscription): string | null {
   const s = sub as unknown as {
@@ -67,7 +67,7 @@ export function subscriptionToState(sub: Stripe.Subscription, companyId: string)
 /**
  * Reconcile a company's subscription state into the DB: upsert
  * company_subscriptions, then either grant or remove the stripe capability
- * grants. Idempotent — safe to run on duplicate/retried events.
+ * grants. Idempotent: safe to run on duplicate/retried events.
  */
 export async function applySubscriptionState(
   supabase: SupabaseClient,
@@ -157,7 +157,7 @@ export async function handleStripeEvent(
       return
     }
     default:
-      // invoice.payment_failed etc. — Stripe also emits subscription.updated
+      // invoice.payment_failed etc.: Stripe also emits subscription.updated
       // (-> past_due / canceled), which the cases above handle. No-op here.
       return
   }

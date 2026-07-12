@@ -5,13 +5,13 @@
  * `npm run lint` was never wired into CI, so ~60 pre-existing errors
  * accumulated across the repo. Fixing them all in one PR is churn; gating raw
  * `eslint` would break every PR until then. So: ratchet. Error counts are
- * tracked per rule in a committed baseline and can only go DOWN, never up —
+ * tracked per rule in a committed baseline and can only go DOWN, never up:
  * a PR introducing a NEW error of any rule fails CI, while legacy errors are
  * burned down independently.
  *
  * Warnings stay advisory (only `--quiet` errors are counted).
  *
- * Known tradeoff: counts are per-rule repo-wide, not per-location — a PR that
+ * Known tradeoff: counts are per-rule repo-wide, not per-location: a PR that
  * fixes one legacy error of a rule can absorb one NEW error of the same rule
  * without tripping the gate. Acceptable for a burn-down ratchet; tighten to
  * per-file fingerprints if that ever bites.
@@ -36,7 +36,7 @@ function runEslint() {
     ['eslint', '.', '--quiet', '-f', 'json'],
     { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   )
-  // ESLint exits 1 when errors exist — that's expected; only treat a missing/
+  // ESLint exits 1 when errors exist: that's expected; only treat a missing/
   // unparsable report as fatal.
   if (!result.stdout) {
     console.error('no-new-lint-errors: eslint produced no JSON output')
@@ -77,7 +77,7 @@ if (process.argv.includes('--update')) {
     BASELINE_PATH,
     JSON.stringify({ totalErrors: total, perRule: sorted }, null, 2) + '\n',
   )
-  console.log(`no-new-lint-errors: baseline updated — ${total} error(s) across ${Object.keys(perRule).length} rule(s).`)
+  console.log(`no-new-lint-errors: baseline updated: ${total} error(s) across ${Object.keys(perRule).length} rule(s).`)
   process.exit(0)
 }
 
@@ -97,7 +97,7 @@ for (const [rule, count] of Object.entries(perRule)) {
 }
 
 if (regressions.length > 0) {
-  console.error('no-new-lint-errors: FAILED — new ESLint errors beyond the baseline:\n')
+  console.error('no-new-lint-errors: FAILED: new ESLint errors beyond the baseline:\n')
   for (const { rule, count, allowed } of regressions) {
     console.error(`  ${rule}: ${count} (baseline ${allowed})`)
     for (const loc of (locations[rule] ?? []).slice(0, 10)) {
@@ -105,7 +105,7 @@ if (regressions.length > 0) {
     }
   }
   console.error(`
-Fix the new error(s) — run \`npx eslint . --quiet\` locally to see them.
+Fix the new error(s): run \`npx eslint . --quiet\` locally to see them.
 (If you fixed MORE legacy errors than you added and the rule still trips,
 re-baseline with: node scripts/checks/no-new-lint-errors.mjs --update)
 `)
@@ -114,8 +114,8 @@ re-baseline with: node scripts/checks/no-new-lint-errors.mjs --update)
 
 const improved = total < (baseline.totalErrors ?? 0)
 console.log(
-  `no-new-lint-errors: OK — ${total} error(s), baseline ${baseline.totalErrors}.` +
+  `no-new-lint-errors: OK: ${total} error(s), baseline ${baseline.totalErrors}.` +
     (improved
-      ? ' Count went DOWN — ratchet it: node scripts/checks/no-new-lint-errors.mjs --update'
+      ? ' Count went DOWN: ratchet it: node scripts/checks/no-new-lint-errors.mjs --update'
       : ''),
 )

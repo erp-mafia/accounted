@@ -127,7 +127,7 @@ function createServices(): ExtensionServices {
  * Build a fully populated ExtensionContext.
  *
  * The context gives extensions access to Supabase, event emission, settings,
- * storage, logging, and core services — without importing from core modules.
+ * storage, logging, and core services: without importing from core modules.
  *
  * `requestId` (when supplied by the dispatcher) flows through the bound logger
  * and is exposed on the context so handlers can pass it into

@@ -55,7 +55,7 @@ function getKPIValue(report: KPIReport, id: string): number | null {
 }
 
 function formatKPIValue(value: number | null, format: string, id: string, daysSuffix: string): string {
-  if (value === null) return '—'
+  if (value === null) return '-'
   if (format === 'currency') {
     if (id === 'vatLiability') return formatCurrency(Math.abs(value))
     return formatCurrency(value)
@@ -137,7 +137,7 @@ export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
 
         return (
           <Card key={def.id}>
-            <CardContent className="p-6">
+            <CardContent className="p-4">
               <InfoTooltip
                 content={tooltipContent}
                 side="top"
@@ -147,7 +147,7 @@ export function KPIHeroCards({ report, preferences }: KPIHeroCardsProps) {
                 <p className="text-xs text-muted-foreground">{t(`def_${def.id}_label`)}</p>
               </InfoTooltip>
               <p
-                className={`font-display text-2xl font-medium tabular-nums tracking-tight mt-2 ${color}`}
+                className={`font-display text-2xl tabular-nums tracking-tight mt-2 ${color}`}
               >
                 {formatted}
               </p>

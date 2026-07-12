@@ -3,7 +3,21 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { refreshAccessToken } from './oauth'
 import { getTokens, storeTokens, deleteTokens } from './token-store'
+import { getSystemAccessToken, invalidateSystemToken } from './system-auth/token-provider'
 import type { SkatteverketTokens } from '../types'
+
+/**
+ * Credential selector for SKV API calls.
+ *
+ * 'user'   : the personal BankID OAuth token (per-user, 65-minute refresh
+ *            chain). The only mode that existed before the hybrid model.
+ * 'system' : Accounted's own Client Credentials token (org certificate),
+ *            authorized per company via an ombud grant at Skatteverket.
+ *            Used by background reads; carries no user session at all.
+ */
+export type SkvAuth =
+  | { mode: 'user'; supabase: SupabaseClient; userId: string }
+  | { mode: 'system' }
 
 const log = createLogger('skatteverket-api-client')
 
@@ -124,7 +138,7 @@ async function getValidToken(
     return tokens.access_token
   }
 
-  // Need refresh — coalesce concurrent attempts.
+  // Need refresh: coalesce concurrent attempts.
   const inFlight = refreshInFlight.get(userId)
   if (inFlight) return inFlight
 
@@ -140,7 +154,7 @@ async function refreshTokenForUser(
 ): Promise<string> {
   // Re-read after entering the critical section. Another process may have
   // refreshed while we were waiting; if so, the row now has a new
-  // refresh_token and a future expiry — just hand it back.
+  // refresh_token and a future expiry: just hand it back.
   const tokens = await getTokens(supabase, userId)
   if (!tokens) {
     throw new SkatteverketAuthError(
@@ -164,7 +178,24 @@ async function refreshTokenForUser(
     )
   }
 
-  const refreshed = await refreshAccessToken(tokens.refresh_token, tokens.refresh_count)
+  let refreshed
+  try {
+    refreshed = await refreshAccessToken(tokens.refresh_token, tokens.refresh_count)
+  } catch (err) {
+    // SKV's `per`-flow refresh tokens live 65 minutes. Any daily cron (or a
+    // user returning the next day) therefore always finds a dead token and
+    // gets 404 id_not_found back — that's ordinary session expiry, not a
+    // runtime error. Classify it so the crons' quiet buckets and the UI's
+    // reconnect flow catch it instead of a raw Error escaping to the logs.
+    const message = err instanceof Error ? err.message : String(err)
+    if (/\b404\b/.test(message) && /id_not_found|refresh token is not found/i.test(message)) {
+      throw new SkatteverketAuthError(
+        'Sessionen har gått ut. Logga in med BankID igen.',
+        'SESSION_EXPIRED'
+      )
+    }
+    throw err
+  }
   const updatedTokens: SkatteverketTokens = {
     ...refreshed,
     scope: tokens.scope,
@@ -174,16 +205,38 @@ async function refreshTokenForUser(
 }
 
 /**
- * Make an authenticated request to the Skatteverket API.
- *
- * Automatically handles:
- * - Token refresh if expired
- * - Required headers (Client_Id, Client_Secret, correlation ID)
- * - Rate limiting
+ * Make an authenticated request to the Skatteverket API with the user's
+ * personal BankID token. Thin wrapper kept for the ~40 existing call sites;
+ * new auth-aware code calls skvRequestWithAuth directly.
  */
 export async function skvRequest(
   supabase: SupabaseClient,
   userId: string,
+  method: string,
+  path: string,
+  body?: unknown,
+  options?: { baseUrl?: string; contentType?: string }
+): Promise<Response> {
+  return skvRequestWithAuth({ mode: 'user', supabase, userId }, method, path, body, options)
+}
+
+/**
+ * Make an authenticated request to the Skatteverket API.
+ *
+ * Automatically handles:
+ * - Credential resolution per auth mode (user token refresh, or the cached
+ *   system CCG token)
+ * - Required headers (Client_Id, Client_Secret, correlation ID)
+ * - Rate limiting
+ *
+ * Error semantics differ by mode: user-mode 401/403s map to the reconnect
+ * codes (SESSION_EXPIRED, TOKEN_REVOKED, ...); system-mode failures never
+ * touch skatteverket_tokens and map to SYSTEM_AUTH_FAILED (run-level
+ * credential problem) or OMBUD_GRANT_MISSING (this company has not granted,
+ * or has revoked, the behorighet).
+ */
+export async function skvRequestWithAuth(
+  auth: SkvAuth,
   method: string,
   path: string,
   body?: unknown,
@@ -195,7 +248,20 @@ export async function skvRequest(
       'ACCESS_DENIED'
     )
   }
-  const accessToken = await getValidToken(supabase, userId)
+
+  let accessToken: string
+  if (auth.mode === 'user') {
+    accessToken = await getValidToken(auth.supabase, auth.userId)
+  } else {
+    try {
+      accessToken = await getSystemAccessToken()
+    } catch (err) {
+      throw new SkatteverketAuthError(
+        err instanceof Error ? err.message : 'Systemtoken kunde inte hämtas.',
+        'SYSTEM_AUTH_FAILED'
+      )
+    }
+  }
 
   await enforceRateLimit()
 
@@ -208,7 +274,7 @@ export async function skvRequest(
   }
 
   // contentType defaults to application/json, which is right for moms +
-  // skattekonto. AGI's POST /underlag takes application/xml — callers pass
+  // skattekonto. AGI's POST /underlag takes application/xml: callers pass
   // the XML as a string body and override contentType.
   let serializedBody: string | undefined
   if (body !== undefined) {
@@ -229,8 +295,8 @@ export async function skvRequest(
   if (response.status === 401) {
     // SKV returns 401 for two distinct reasons that need different remedies:
     //   1. Genuine token expiry / invalid bearer (user must re-auth)
-    //   2. APIGW client lacks subscription for this API (developer portal fix)
-    //      — the bearer is valid but the gateway rejects the call.
+    //   2. APIGW client lacks subscription for this API (developer portal fix):
+    //      the bearer is valid but the gateway rejects the call.
     // Read the body and gateway-side headers so we can distinguish and
     // surface a useful message.
     const text = await response.text().catch(() => '')
@@ -238,7 +304,7 @@ export async function skvRequest(
     // WWW-Authenticate carries OAuth's machine-readable failure reason
     // (insufficient_scope / invalid_token). The x-skv-* / x-amzn-* / x-api-*
     // families are gateway-side hints SKV's APIGW emits when it rejects the
-    // call before reaching the application — the body is often empty in
+    // call before reaching the application: the body is often empty in
     // that case so the headers are the only signal.
     const wwwAuth = response.headers.get('WWW-Authenticate') ?? ''
     const skvHeaders: Record<string, string> = {}
@@ -253,16 +319,31 @@ export async function skvRequest(
         skvHeaders[k] = v
       }
     })
-    // Diagnostic detail (headers, body) belongs in server-side logs only —
+    // Diagnostic detail (headers, body) belongs in server-side logs only,
     // not in user-facing error messages. The structured logger redacts
     // sensitive keys and we further cap body length and strip Bearer tokens
-    // so the diagnostic is bounded.
-    log.error('401 from Skatteverket API', {
+    // so the diagnostic is bounded. warn, not error: auth rejections are
+    // expected states (expired sessions, stale scopes) and the thrown
+    // SkatteverketAuthError below carries the signal to the caller.
+    log.warn('401 from Skatteverket API', {
       url,
       statusCode: 401,
+      authMode: auth.mode,
       body: safeBodyForLog(text),
       headers: skvHeaders,
     })
+
+    if (auth.mode === 'system') {
+      // A rejected system token is a run-level credential problem (cert,
+      // token endpoint, APIGW subscription): drop the cache so the next
+      // call mints fresh, and never touch the user token table from here.
+      invalidateSystemToken()
+      throw new SkatteverketAuthError(
+        'Skatteverket avvisade systemautentiseringen. Kontrollera certifikatet ' +
+        'och APIGW-prenumerationerna för systemklienten.',
+        'SYSTEM_AUTH_FAILED'
+      )
+    }
 
     const lower = text.toLowerCase()
 
@@ -286,7 +367,7 @@ export async function skvRequest(
     // SKV explicitly declares the token revoked. Body shape observed in
     // production: { "error": "Token has been revoked." } with a generic
     // `Bearer realm="OAuth2 Client Realm"` challenge header. This is a
-    // terminal state — the bearer will never come back to life, regardless
+    // terminal state: the bearer will never come back to life, regardless
     // of refresh attempts (refresh_token from the same family is also dead).
     // Auto-clear the local row so /status stops claiming we're connected
     // and the next interaction forces a clean reconnect. We swallow any
@@ -294,9 +375,9 @@ export async function skvRequest(
     // primary auth error to the user.
     if (lower.includes('revoked') || lower.includes('token has been revoked')) {
       try {
-        await deleteTokens(supabase, userId)
+        await deleteTokens(auth.supabase, auth.userId)
       } catch (cleanupErr) {
-        log.error('failed to clear revoked token row', cleanupErr as Error, { userId })
+        log.error('failed to clear revoked token row', cleanupErr as Error, { userId: auth.userId })
       }
       throw new SkatteverketAuthError(
         'Skatteverket har återkallat anslutningen. Detta händer t.ex. om ' +
@@ -308,7 +389,7 @@ export async function skvRequest(
 
     // APIGW subscription / client-credential problems: the gateway responds
     // before the bearer is ever evaluated. The user reconnecting won't help
-    // here — it's an Utvecklarportalen / APIGW configuration issue.
+    // here: it's an Utvecklarportalen / APIGW configuration issue.
     const looksLikeApigwIssue =
       lower.includes('client_id') ||
       lower.includes('client id') ||
@@ -330,7 +411,7 @@ export async function skvRequest(
     // subscription issue rather than a real session expiry. We refreshed
     // the local bearer immediately above, so an empty body with no
     // WWW-Authenticate means SKV's APIGW rejected the call before it
-    // reached the application — typically because the APIGW client isn't
+    // reached the application: typically because the APIGW client isn't
     // subscribed to the API at the URL we just hit. Telling the user to
     // "log in again" sends them down a dead end; be explicit about the
     // likely fix instead.
@@ -342,7 +423,7 @@ export async function skvRequest(
       try {
         const u = new URL(url)
         const parts = u.pathname.split('/').filter(Boolean)
-        // Take the first 3 segments — e.g. arbetsgivardeklaration/inlamning/v1
+        // Take the first 3 segments, e.g. arbetsgivardeklaration/inlamning/v1
         if (parts.length >= 1) apiHint = parts.slice(0, 3).join('/')
       } catch {
         // keep raw url
@@ -368,12 +449,32 @@ export async function skvRequest(
     const text = await response.text().catch(() => '')
     // Same diagnostic-vs-user-message split as the 401 path: log the body
     // server-side, surface only the actionable Swedish guidance.
-    log.error('403 from Skatteverket API', {
+    log.warn('403 from Skatteverket API', {
       url,
       statusCode: 403,
+      authMode: auth.mode,
       body: safeBodyForLog(text),
     })
-    // Missing scope on the access token — fires when an existing connection
+
+    if (auth.mode === 'system') {
+      if (text.includes('invalid_scope') || text.includes('required scope')) {
+        throw new SkatteverketAuthError(
+          'Systemtokenens scope räcker inte för denna tjänst. Kontrollera ' +
+          'SKATTEVERKET_SYSTEM_SCOPES mot tjänstens krav.',
+          'SYSTEM_AUTH_FAILED'
+        )
+      }
+      // With valid system credentials, a 403 means this company has not
+      // granted (or has revoked) the behorighet for Accounted's org number.
+      // Company-level: the caller downgrades the connection row, other
+      // companies in the same run are unaffected.
+      throw new SkatteverketAuthError(
+        'Företaget har inte gett Accounted behörighet hos Skatteverket, ' +
+        'eller så har behörigheten återkallats i Ombud och behörigheter.',
+        'OMBUD_GRANT_MISSING'
+      )
+    }
+    // Missing scope on the access token: fires when an existing connection
     // pre-dates an extension that needed a new scope (the AGI/`agd` rollout
     // is the canonical example). The user has to disconnect + reconnect to
     // re-issue a token with the broader scope set; we want to say so
@@ -389,7 +490,7 @@ export async function skvRequest(
         'MISSING_SCOPE'
       )
     }
-    // Behörighet saknas — user is authenticated but not authorized for this company
+    // Behörighet saknas: user is authenticated but not authorized for this company
     if (text.includes('Behörighet') || text.includes('behörighet')) {
       throw new SkatteverketAuthError(
         'Du har inte behörighet att agera för detta företag hos Skatteverket. ' +
@@ -405,7 +506,7 @@ export async function skvRequest(
 
   if (response.status === 429) {
     // Skatteverket may include a Retry-After header. We surface a generic
-    // Swedish message — callers can inspect the header on the thrown error
+    // Swedish message: callers can inspect the header on the thrown error
     // if they need to schedule a retry. The 4 req/sec local rate limiter
     // should normally prevent this; a 429 here implies the per-consumer
     // gateway quota was exceeded.
@@ -423,22 +524,28 @@ export async function skvRequest(
  * The `code` field helps the frontend show appropriate UI.
  *
  * Codes:
- *   NOT_CONNECTED      — no tokens stored; user needs to run BankID flow
- *   SESSION_EXPIRED    — 401 from SKV; refresh exhausted or token rejected
- *   REFRESH_EXHAUSTED  — refresh count hit cap (10) before user re-auth
- *   TOKEN_REVOKED      — 401 with "Token has been revoked." body; SKV killed
+ *   NOT_CONNECTED      : no tokens stored; user needs to run BankID flow
+ *   SESSION_EXPIRED    : 401 from SKV; refresh exhausted or token rejected
+ *   REFRESH_EXHAUSTED  : refresh count hit cap (10) before user re-auth
+ *   TOKEN_REVOKED      : 401 with "Token has been revoked." body; SKV killed
  *                        the bearer (BankID session ended, parallel connect
  *                        from another device, or auth-code reuse). Local row
  *                        is auto-cleared; user must reconnect with BankID.
- *   BEHORIGHET_SAKNAS  — 403 with "Behörighet" body; user not authorized
+ *   BEHORIGHET_SAKNAS  : 403 with "Behörighet" body; user not authorized
  *                        for this company at SKV (firmatecknare / ombud)
- *   MISSING_SCOPE      — 403 with "invalid_scope" body; the stored token
+ *   MISSING_SCOPE      : 403 with "invalid_scope" body; the stored token
  *                        was issued before the required scope existed.
  *                        User must disconnect + reconnect.
- *   ACCESS_DENIED      — generic 403
- *   RATE_LIMITED       — 429 from SKV API gateway
- *   TOKEN_CORRUPTED    — stored tokens cannot be decrypted (key rotated
+ *   ACCESS_DENIED      : generic 403
+ *   RATE_LIMITED       : 429 from SKV API gateway
+ *   TOKEN_CORRUPTED    : stored tokens cannot be decrypted (key rotated
  *                        or row tampered with); user must reconnect
+ *   SYSTEM_AUTH_FAILED : system (CCG) credential problem: token could not
+ *                        be minted, was rejected, or lacks scope. Run-level:
+ *                        affects every company, fix is configuration-side.
+ *   OMBUD_GRANT_MISSING: 403 on a system-mode call: this company has not
+ *                        granted (or has revoked) Accounted's behorighet at
+ *                        Skatteverket. Company-level.
  */
 export class SkatteverketAuthError extends Error {
   constructor(
@@ -453,6 +560,8 @@ export class SkatteverketAuthError extends Error {
       | 'ACCESS_DENIED'
       | 'RATE_LIMITED'
       | 'TOKEN_CORRUPTED'
+      | 'SYSTEM_AUTH_FAILED'
+      | 'OMBUD_GRANT_MISSING'
   ) {
     super(message)
     this.name = 'SkatteverketAuthError'

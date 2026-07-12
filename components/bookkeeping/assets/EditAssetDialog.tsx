@@ -36,7 +36,7 @@ interface EditAssetDialogProps {
 }
 
 // Same category labels and depreciation hints as CreateAssetDialog (kept in
-// sync deliberately — this register surface is Swedish-only, like creation).
+// sync deliberately: this register surface is Swedish-only, like creation).
 const CATEGORY_OPTIONS: { value: AssetCategory; label: string }[] = [
   { value: 'computer', label: 'Dator / IT-utrustning' },
   { value: 'equipment', label: 'Inventarier' },
@@ -57,17 +57,17 @@ const DEPRECIATION_METHOD_OPTIONS: { value: DepreciationMethod; label: string; h
   {
     value: 'declining_balance_30',
     label: 'Räkenskapsenlig 30 %',
-    hint: 'Huvudregeln (IL 18 kap 13§) — 30 % degressivt på avskrivningsunderlaget.',
+    hint: 'Huvudregeln (IL 18 kap 13§): 30 % degressivt på avskrivningsunderlaget.',
   },
   {
     value: 'declining_balance_20',
     label: 'Räkenskapsenlig 20 %',
-    hint: 'Kompletteringsregeln (IL 18 kap 17§) — 20 % degressivt. Vanlig för byggnader.',
+    hint: 'Kompletteringsregeln (IL 18 kap 17§): 20 % degressivt. Vanlig för byggnader.',
   },
   {
     value: 'restvardesavskrivning_25',
     label: 'Restvärdeavskrivning 25 %',
-    hint: 'IL 18 kap 13§ st.3 — 25 % degressivt ner till angivet restvärde.',
+    hint: 'IL 18 kap 13§ st.3: 25 % degressivt ner till angivet restvärde.',
   },
 ]
 
@@ -75,7 +75,7 @@ export function EditAssetDialog({ asset, open, onOpenChange, onSaved }: EditAsse
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   // Once depreciation has been booked, acquisition date/cost/category are
-  // locked — a real change has to go through storno. The server enforces the
+  // locked: a real change has to go through storno. The server enforces the
   // same rule (ASSET_CORRECTION_BLOCKED); this just makes it visible up front.
   const basisLocked = asset.has_posted_depreciation === true
 
@@ -299,7 +299,7 @@ export function EditAssetDialog({ asset, open, onOpenChange, onSaved }: EditAsse
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
                 Byte av avskrivningsmetod efter att avskrivning påbörjats. Enligt K2
-                (BFNAR 2016:10 p. 10.26) ska vald metod tillämpas konsekvent — ändra
+                (BFNAR 2016:10 p. 10.26) ska vald metod tillämpas konsekvent: ändra
                 bara vid särskilda skäl och lämna i så fall upplysning i bokslutet.
                 Ändringen gäller framåt; redan bokförda avskrivningar påverkas inte.
               </span>

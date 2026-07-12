@@ -3,7 +3,7 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ─────────────────────────────────────────────────────────────────────────
- * Spacing scale — locked.
+ * Spacing scale: locked.
  * Card padding: p-6. Section gap: space-y-8. Form/control gap: gap-4.
  * Allowed Tailwind values: 1, 2, 3, 4, 6, 8, 10, 12. No 2.5 / 5.
  * Sidebar width is md:w-64 (256px); main offset matches md:pl-64.
@@ -11,7 +11,7 @@
 
 :root {
   color-scheme: light;
-  /* Grayscale Chrome Palette — paper white + warm beige */
+  /* Grayscale Chrome Palette: paper white + warm beige */
 
   --background: 0 0% 100%;
   --foreground: 0 0% 9%;
@@ -44,11 +44,11 @@
   /* Radius */
   --radius: 0.5rem;
 
-  /* Success — Sage green */
+  /* Success: Sage green */
   --success: 155 25% 40%;
   --success-foreground: 0 0% 100%;
 
-  /* Warning — Muted ochre */
+  /* Warning: Muted ochre */
   --warning: 38 55% 50%;
   --warning-foreground: 0 0% 9%;
 
@@ -64,7 +64,7 @@
   --font-display: var(--font-hedvig-serif), Georgia, serif;
   --font-body: var(--font-geist-sans), system-ui, sans-serif;
 
-  /* Shadows — barely-there; chrome relies on hairline borders */
+  /* Shadows: barely-there; chrome relies on hairline borders */
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.03), 0 1px 1px rgba(15, 23, 42, 0.02);
   --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.03);
   --shadow-lg: 0 12px 40px rgba(15, 23, 42, 0.05);
@@ -262,10 +262,22 @@ h1, h2, h3 {
   animation: typingDot 1.1s ease-in-out infinite;
 }
 
+/* Marching-ants dashed border used by the import entity selector. */
+@keyframes marchingAnts {
+  to { stroke-dashoffset: -14; }
+}
+
+.animate-marching-ants {
+  animation: marchingAnts 1.2s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-typing-dot {
     animation: gentlePulse 1.6s ease-in-out infinite;
     transform: none;
+  }
+  .animate-marching-ants {
+    animation: none;
   }
 }
 

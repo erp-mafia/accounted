@@ -43,12 +43,24 @@ vi.mock('@/lib/bookkeeping/invoice-entries', async () => {
   }
 })
 
+vi.mock('@/lib/transactions/categorize-core', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/lib/transactions/categorize-core')>(
+      '@/lib/transactions/categorize-core'
+    )
+  return {
+    ...actual,
+    categorizeMatchedTransaction: vi.fn(),
+  }
+})
+
 import { commitPendingOperation } from '../commit'
 import { unlockPeriod } from '@/lib/core/bookkeeping/period-service'
 import { parseSIEFile } from '@/lib/import/sie-parser'
 import { executeSIEImport } from '@/lib/import/sie-import'
 import { commitAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
   return {
@@ -304,7 +316,7 @@ describe('commitPendingOperation: import_sie', () => {
     })
     expect(parseSIEFile).toHaveBeenCalledWith('#FLAGGA 0\n')
     // Operations staged before update_account_names existed (params without
-    // the key) must default to true — Boolean(undefined) would flip it off.
+    // the key) must default to true: Boolean(undefined) would flip it off.
     expect(executeSIEImport).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
@@ -553,7 +565,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
   it('auto-rejects 404 when transaction is not in the company', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: null, error: null }) // tx fetch — not found
+    enqueue({ data: null, error: null }) // tx fetch: not found
     enqueue({ data: null, error: null }) // dispatcher reject update
 
     const result = await commitPendingOperation(
@@ -570,7 +582,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'tx-1', document_id: 'doc-old', journal_entry_id: null }, error: null })
-    enqueue({ data: { journal_entry_id: 'je-99' }, error: null }) // existing doc fetch — locked
+    enqueue({ data: { journal_entry_id: 'je-99' }, error: null }) // existing doc fetch: locked
     enqueue({ data: null, error: null }) // dispatcher reject update
 
     const result = await commitPendingOperation(
@@ -645,7 +657,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
   })
 
   it('still commits when the inbox-link best-effort update errors', async () => {
-    // Inbox sync is best-effort — a failure to mark the inbox row as matched
+    // Inbox sync is best-effort: a failure to mark the inbox row as matched
     // must not roll back the (compliant) doc→tx attach. Mirrors the REST
     // route's swallow-and-log behaviour. The Supabase client resolves with
     // { error } rather than rejecting, so we both confirm the op commits AND
@@ -655,7 +667,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
     enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // tx UPDATE returning
-    enqueue({ data: null, error: { message: 'inbox row missing or RLS-blocked' } }) // inbox link — errors
+    enqueue({ data: null, error: { message: 'inbox row missing or RLS-blocked' } }) // inbox link: errors
     enqueue({ data: null, error: null }) // dispatcher commit update
 
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -717,13 +729,13 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
   })
 
   it('skips the propagation write on an idempotent re-attach (doc already on the same verifikation)', async () => {
-    // The period-lock trigger raises on ANY journal_entry_id write — even a
-    // same-value rewrite — so an unconditional re-run would fail an otherwise
+    // The period-lock trigger raises on ANY journal_entry_id write: even a
+    // same-value rewrite: so an unconditional re-run would fail an otherwise
     // idempotent re-attach once the period locks.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'tx-1', document_id: 'doc-1', journal_entry_id: 'je-1' }, error: null })
-    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1' }, error: null }) // doc fetch — same JE
+    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1' }, error: null }) // doc fetch: same JE
     enqueue({ data: { journal_entry_id: 'je-1' }, error: null }) // tx UPDATE returning
     enqueue({ data: null, error: null }) // invoice_inbox_items link
     enqueue({ data: null, error: null }) // dispatcher commit update
@@ -735,7 +747,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
       makePendingOp(baseOp),
     )
     expect(result.status).toBe('committed')
-    // document_attachments touched once (the doc fetch) — no propagation write.
+    // document_attachments touched once (the doc fetch): no propagation write.
     const tablesTouched = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0])
     expect(tablesTouched.filter((t) => t === 'document_attachments')).toHaveLength(1)
   })
@@ -748,7 +760,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null }) // doc fetch
-    enqueue({ data: { journal_entry_id: 'je-7' }, error: null }) // tx UPDATE returning — booked meanwhile
+    enqueue({ data: { journal_entry_id: 'je-7' }, error: null }) // tx UPDATE returning: booked meanwhile
     enqueue({ data: null, error: null }) // invoice_inbox_items link
     enqueue({
       data: null,
@@ -778,7 +790,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
   it('auto-rejects 404 when document is not in the company', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: null, error: null })            // doc fetch — not found
+    enqueue({ data: null, error: null })            // doc fetch: not found
     enqueue({ data: null, error: null })            // dispatcher reject update
 
     const result = await commitPendingOperation(
@@ -803,12 +815,12 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
   })
 
   it('allows re-linking when existing linked JE is not yet posted (draft)', async () => {
-    // A doc linked to a draft (uncommitted) JE can be moved — only posted
+    // A doc linked to a draft (uncommitted) JE can be moved: only posted
     // verifikationer trigger the WORM guard.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-DRAFT' }, error: null }) // doc fetch
-    enqueue({ data: { status: 'draft' }, error: null })                         // WORM: existing JE — not posted
+    enqueue({ data: { status: 'draft' }, error: null })                         // WORM: existing JE: not posted
     enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
     enqueue({
       data: { id: 'doc-1', file_name: 'kvitto.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
@@ -851,7 +863,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     enqueue({
       data: null,
       error: { message: 'cannot link document in a locked/closed fiscal period' },
-    })                                                                           // linkToJournalEntry: doc update — period locked
+    })                                                                           // linkToJournalEntry: doc update: period locked
     enqueue({ data: null, error: null })                                         // dispatcher reject update
 
     const result = await commitPendingOperation(
@@ -859,5 +871,85 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     )
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
+  })
+})
+
+// ─── categorize_transaction: dimensions propagation (PR7) ──────────
+
+describe('commitPendingOperation: categorize_transaction: dimensions propagation (PR7)', () => {
+  it('threads the staged dimensions bag into categorizeMatchedTransaction opts', async () => {
+    vi.mocked(categorizeMatchedTransaction).mockResolvedValueOnce({
+      data: { journal_entry_id: 'je-1' },
+    })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: {
+        transaction_id: 'tx-1',
+        category: 'office_supplies',
+        dimensions: { '1': 'KS01', '6': 'P001' },
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(categorizeMatchedTransaction).toHaveBeenCalledTimes(1)
+    const call = vi.mocked(categorizeMatchedTransaction).mock.calls[0]
+    expect(call[1]).toBe('user-1')
+    expect(call[2]).toBe('company-1')
+    expect(call[3]).toBe('tx-1')
+    expect(call[4].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+  })
+
+  it('coerces an INVALID staged bag to undefined (drift/tamper gate)', async () => {
+    vi.mocked(categorizeMatchedTransaction).mockResolvedValueOnce({
+      data: { journal_entry_id: 'je-1' },
+    })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: {
+        transaction_id: 'tx-1',
+        category: 'office_supplies',
+        // '0' is not a valid SIE dimension number: the whole bag is rejected
+        // and booking proceeds without dimensions.
+        dimensions: { '0': 'X' },
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const opts = vi.mocked(categorizeMatchedTransaction).mock.calls[0][4]
+    expect(opts.dimensions).toBeUndefined()
+  })
+
+  it('passes no dimensions when nothing was staged', async () => {
+    vi.mocked(categorizeMatchedTransaction).mockResolvedValueOnce({
+      data: { journal_entry_id: 'je-1' },
+    })
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'categorize_transaction',
+      params: { transaction_id: 'tx-1', category: 'office_supplies' },
+    })
+
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    const opts = vi.mocked(categorizeMatchedTransaction).mock.calls[0][4]
+    expect(opts.dimensions).toBeUndefined()
   })
 })

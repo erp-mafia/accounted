@@ -20,7 +20,7 @@ export const GET = withRouteContext(
     const { id: transactionId } = await params
     const { supabase, companyId, log, requestId } = ctx
 
-    // Membership is enforced by withRouteContext (see its docstring) — the
+    // Membership is enforced by withRouteContext (see its docstring): the
     // resolved companyId is always a company the caller is a member of, so
     // intra-company multi-user visibility of transaction metadata here is
     // the intended tenancy model. The selected column set is intentionally

@@ -1,5 +1,5 @@
 /**
- * Tests for gnubok_get_agent_briefing — session-bootstrap context for the
+ * Tests for gnubok_get_agent_briefing: session-bootstrap context for the
  * specialized accountant agent over MCP.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -50,12 +50,27 @@ function mockSupabase(opts: {
   company?: { name: string | null; org_number: string | null; entity_type: string | null } | null
   // company_settings.accounting_method. undefined → no settings row (null data).
   accountingMethod?: string | null
+  // Dimension registry (dimensions PR3). Default: empty → block omitted.
+  dimensionRows?: Array<{ id: string; sie_dim_no: number; name: string }>
+  dimensionValueRows?: Array<{ dimension_id: string; code: string; name: string }>
+  dimensionRuleRows?: Array<{ account_number: string; rule_type: string; dimension_id: string }>
+  dimensionsEnabled?: boolean
   errors?: { profile?: string; memory?: string; atoms?: string }
 }) {
   const profile = opts.profile === undefined ? null : opts.profile
   const memoryRows = opts.memoryRows ?? []
   const atomRows = opts.atomRows ?? []
   const errors = opts.errors ?? {}
+
+  /** Order-agnostic chainable query resolving to `data` when awaited. */
+  const chainResolving = (data: unknown) => {
+    const chain: Record<string, unknown> = {}
+    for (const m of ['select', 'eq', 'in', 'order', 'limit']) {
+      chain[m] = vi.fn(() => chain)
+    }
+    chain.then = (resolve: (v: unknown) => void) => resolve({ data, error: null })
+    return chain
+  }
 
   return {
     from: vi.fn((table: string) => {
@@ -132,14 +147,27 @@ function mockSupabase(opts: {
             eq: vi.fn(() => ({
               maybeSingle: vi.fn().mockResolvedValue({
                 data:
-                  opts.accountingMethod === undefined
+                  opts.accountingMethod === undefined && opts.dimensionsEnabled === undefined
                     ? null
-                    : { accounting_method: opts.accountingMethod },
+                    : {
+                        accounting_method: opts.accountingMethod ?? null,
+                        dimensions_enabled: opts.dimensionsEnabled ?? false,
+                      },
                 error: null,
               }),
             })),
           })),
         }
+      }
+      if (table === 'dimensions') {
+        return chainResolving(opts.dimensionRows ?? [])
+      }
+      if (table === 'dimension_values') {
+        return chainResolving(opts.dimensionValueRows ?? [])
+      }
+      if (table === 'account_dimension_rules') {
+        // PR10: the briefing surfaces active rules; default none.
+        return chainResolving(opts.dimensionRuleRows ?? [])
       }
       throw new Error(`Unexpected table in test mock: ${table}`)
     }),
@@ -211,6 +239,7 @@ describe('gnubok_get_agent_briefing tool', () => {
     }
     expect(result.company).toEqual({
       id: 'company-1',
+      company_id: 'company-1',
       name: 'Acme AB',
       org_number: '556677-8899',
       entity_type: 'aktiebolag',
@@ -231,11 +260,12 @@ describe('gnubok_get_agent_briefing tool', () => {
       company: { id: string; name: string | null; accounting_method: string | null }
     }
     expect(result.company.id).toBe('company-1')
+    expect((result.company as { company_id?: string }).company_id).toBe('company-1')
     expect(result.company.name).toBeNull()
     expect(result.company.accounting_method).toBeNull()
   })
 
-  it('returns only the first name (tilltalsnamn) — data minimisation, not the full legal name', async () => {
+  it('returns only the first name (tilltalsnamn): data minimisation, not the full legal name', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
     const supabase = mockSupabase({ profile: null, userFullName: 'Peter Bennet' })
     const result = (await tool.execute(
@@ -343,5 +373,82 @@ describe('gnubok_get_agent_briefing tool', () => {
     await expect(
       tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
     ).rejects.toThrow(/Failed to load agent memory.*rls-denied/)
+  })
+
+  it('omits the dimensions block entirely when the registry is empty', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    const supabase = mockSupabase({ profile: null })
+    const result = (await tool.execute(
+      {},
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as Record<string, unknown>
+    expect('dimensions' in result).toBe(false)
+  })
+
+  it('returns the dimensions block with enabled flag, counts, and top values capped at 10', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    const manyValues = Array.from({ length: 12 }, (_, i) => ({
+      dimension_id: 'dim-6',
+      code: `P${String(i + 1).padStart(3, '0')}`,
+      name: `Projekt ${i + 1}`,
+    }))
+    const supabase = mockSupabase({
+      profile: null,
+      dimensionsEnabled: true,
+      dimensionRows: [
+        { id: 'dim-1', sie_dim_no: 1, name: 'Kostnadsställe' },
+        { id: 'dim-6', sie_dim_no: 6, name: 'Projekt' },
+      ],
+      dimensionValueRows: [
+        { dimension_id: 'dim-1', code: 'KS01', name: 'Stockholm' },
+        ...manyValues,
+      ],
+    })
+    const result = (await tool.execute(
+      {},
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as {
+      dimensions?: {
+        enabled: boolean
+        dimensions: Array<{
+          sie_dim_no: number
+          name: string
+          active_value_count: number
+          top_values: Array<{ code: string; name: string }>
+        }>
+      }
+    }
+    expect(result.dimensions).toBeDefined()
+    expect(result.dimensions!.enabled).toBe(true)
+    expect(result.dimensions!.dimensions).toHaveLength(2)
+    const [ks, projekt] = result.dimensions!.dimensions
+    expect(ks).toMatchObject({ sie_dim_no: 1, name: 'Kostnadsställe', active_value_count: 1 })
+    expect(ks.top_values).toEqual([{ code: 'KS01', name: 'Stockholm' }])
+    expect(projekt.active_value_count).toBe(12)
+    expect(projekt.top_values).toHaveLength(10) // capped
+  })
+
+  it('reports enabled=false in the dimensions block when the toggle is off but values exist', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    const supabase = mockSupabase({
+      profile: null,
+      dimensionsEnabled: false,
+      dimensionRows: [{ id: 'dim-6', sie_dim_no: 6, name: 'Projekt' }],
+      dimensionValueRows: [{ dimension_id: 'dim-6', code: 'P001', name: 'Villa Almgren' }],
+    })
+    const result = (await tool.execute(
+      {},
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as { dimensions?: { enabled: boolean } }
+    expect(result.dimensions?.enabled).toBe(false)
   })
 })

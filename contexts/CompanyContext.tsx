@@ -13,6 +13,12 @@ interface CompanyContextValue {
   isSandbox: boolean
   /** PAID capability keys the active company currently holds (entitled + enabled). */
   capabilities: CapabilityKey[]
+  /**
+   * Trial expiry while the trial is the company's only source of paid access;
+   * null when paying/comped or after the trial lapsed. Drives the countdown
+   * touchpoint in the sidebar.
+   */
+  trialEndsAt: string | null
 }
 
 const CompanyContext = createContext<CompanyContextValue | null>(null)
@@ -39,7 +45,7 @@ export function useCompanyOptional() {
 
 /**
  * Whether the active company holds a given paid capability. Controls UI
- * affordances only — the server gate (lib/entitlements) is the real enforcement.
+ * affordances only: the server gate (lib/entitlements) is the real enforcement.
  * Fail-open when rendered outside a CompanyProvider (e.g. standalone dialogs):
  * the server still blocks; this only decides whether to show/disable/upsell.
  */

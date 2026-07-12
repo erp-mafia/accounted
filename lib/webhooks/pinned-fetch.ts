@@ -55,7 +55,7 @@ export interface PinnedFetchInit {
   headers: Record<string, string>
   body: string
   timeoutMs: number
-  /** Max bytes captured from response body — receivers returning long error pages get truncated. */
+  /** Max bytes captured from response body: receivers returning long error pages get truncated. */
   maxResponseBytes: number
 }
 
@@ -104,7 +104,7 @@ export async function pinnedHttpsFetch(
   // Deterministic choice keeps log output stable across retries.
   const pinnedAddress = validation.resolvedAddresses[0]
   if (!pinnedAddress) {
-    // Defensive — validateWebhookUrl returns ok only when there's at least
+    // Defensive: validateWebhookUrl returns ok only when there's at least
     // one address, but a future refactor could regress this and we want
     // the failure to be loud, not a silent DNS-lookup-by-empty-host.
     return {
@@ -125,14 +125,14 @@ export async function pinnedHttpsFetch(
     }
 
     // The HTTP Host header must carry the original hostname (vhost routing
-    // on the receiver). Include the port only when non-default — RFC 7230
+    // on the receiver). Include the port only when non-default: RFC 7230
     // §5.4 says the port is omitted when it matches the scheme default.
     const hostHeader = port === 443 ? parsed.hostname : `${parsed.hostname}:${port}`
 
     const requestOptions: HttpsRequestOptions = {
       protocol: 'https:',
       // Pin the socket to the validated IP. node:https accepts the
-      // address directly — no further DNS lookup happens.
+      // address directly: no further DNS lookup happens.
       host: pinnedAddress,
       port,
       path: parsed.pathname + parsed.search,
@@ -144,19 +144,19 @@ export async function pinnedHttpsFetch(
       // matches the cert's SAN/CN against `servername` (or `host` when
       // servername is unset). Because `servername` is set to the original
       // hostname, the IP substitution above does NOT weaken the hostname-
-      // verification step — a forged endpoint at the pinned IP presenting
+      // verification step: a forged endpoint at the pinned IP presenting
       // a valid cert for a DIFFERENT hostname would fail the handshake.
       // No explicit checkServerIdentity override is needed; relying on
       // the default is the documented contract.
       servername: parsed.hostname,
       headers: {
         ...init.headers,
-        // Lowercase 'host' — Node's https.request would synthesise one
+        // Lowercase 'host': Node's https.request would synthesise one
         // from `host` (the pinned IP) if we didn't set it explicitly,
         // which would break vhost routing on the receiver.
         host: hostHeader,
       },
-      // Fresh socket per call — webhook delivery doesn't benefit from
+      // Fresh socket per call: webhook delivery doesn't benefit from
       // Keep-Alive (the dispatcher serializes and the IP changes per
       // dispatch from re-validation). agent:false also forecloses any
       // accidental pool-level reuse across pinned IPs.
@@ -196,7 +196,7 @@ export async function pinnedHttpsFetch(
           if (remaining > 0) chunks.push(chunk.subarray(0, remaining))
           total = init.maxResponseBytes
           truncated = true
-          // Destroy the stream — no point pulling the rest over the wire.
+          // Destroy the stream: no point pulling the rest over the wire.
           res.destroy()
         } else {
           chunks.push(chunk)

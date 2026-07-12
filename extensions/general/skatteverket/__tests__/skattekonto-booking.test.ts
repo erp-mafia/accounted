@@ -175,7 +175,7 @@ describe('guessCounterAccount', () => {
     ).toBe('8423')
 
     enqueue({ data: SEED_RULES })
-    // Skattekontoräntan är skattefri per IL 8 kap 7 § — 8314, inte 8313.
+    // Skattekontoräntan är skattefri per IL 8 kap 7 §: 8314, inte 8313.
     expect(
       (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Intäktsränta skattekonto', 'aktiebolag'))?.account,
     ).toBe('8314')
@@ -191,13 +191,13 @@ describe('guessCounterAccount', () => {
     enqueue({ data: SEED_RULES })
     // Förseningsavgift contains the substring "förseningsavgift". The "moms" suffix
     // would also match a lower-priority rule (2650), but priority 25 (penalty)
-    // beats priority 20 (moms) — penalty routing wins.
+    // beats priority 20 (moms): penalty routing wins.
     expect(
       (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Förseningsavgift arbetsgivardeklaration', 'aktiebolag'))?.account,
     ).toBe('6992')
   })
 
-  it('does NOT route plain omprövning to 6992 — underlying tax rules win', async () => {
+  it('does NOT route plain omprövning to 6992: underlying tax rules win', async () => {
     const { supabase, enqueue } = makeSupabase()
     enqueue({ data: SEED_RULES })
     // "Omprövning av momsdeklaration" should route to moms (2650), because
@@ -207,7 +207,7 @@ describe('guessCounterAccount', () => {
     ).toBe('2650')
   })
 
-  it('returns null for anstånd — SKV-side deferral, GL does not move', async () => {
+  it('returns null for anstånd: SKV-side deferral, GL does not move', async () => {
     const { supabase, enqueue } = makeSupabase()
     enqueue({ data: SEED_RULES })
     expect(

@@ -10,7 +10,7 @@ async function load(): Promise<DiscoveredAtom[]> {
   return atoms
 }
 
-describe('discoverAtoms — reference children', () => {
+describe('discoverAtoms: reference children', () => {
   it('emits top-level skills with parent_atom_id null', async () => {
     const all = await load()
     const vat = all.find((a) => a.id === 'horizontal/swedish-vat')

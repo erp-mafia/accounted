@@ -252,12 +252,14 @@ interface CommonHeaderProps {
   title: string
   company: CompanySettings
   period: { start: string; end: string }
+  /** Partial-view disclosure (dimension-filtered exports, BFNAR 2013:2). */
+  filterNote?: string
 }
 
-function HeaderBlock({ title, company, period }: CommonHeaderProps) {
+function HeaderBlock({ title, company, period, filterNote }: CommonHeaderProps) {
   const companyDisplayName = company.company_name || ''
   const periodLabel = period.start && period.end
-    ? `${formatDateSv(period.start)} – ${formatDateSv(period.end)}`
+    ? `${formatDateSv(period.start)}: ${formatDateSv(period.end)}`
     : ''
   return (
     <View style={styles.header} fixed>
@@ -268,6 +270,9 @@ function HeaderBlock({ title, company, period }: CommonHeaderProps) {
         )}
         {periodLabel && (
           <Text style={styles.period}>Period: {periodLabel}</Text>
+        )}
+        {filterNote && (
+          <Text style={styles.period}>{filterNote}</Text>
         )}
       </View>
       <View style={styles.companyInfo}>
@@ -307,15 +312,17 @@ interface ResultatrapportPDFProps {
   report: ResultatrapportReport
   company: CompanySettings
   generatedAt: string
+  /** Partial-view disclosure line (dimension-filtered exports). */
+  filterNote?: string
 }
 
-export function ResultatrapportPDF({ report, company, generatedAt }: ResultatrapportPDFProps) {
+export function ResultatrapportPDF({ report, company, generatedAt, filterNote }: ResultatrapportPDFProps) {
   const hasPrior = report.prior_period !== null
 
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        <HeaderBlock title="Resultatrapport" company={company} period={report.period} />
+        <HeaderBlock title="Resultatrapport" company={company} period={report.period} filterNote={filterNote} />
 
         <View style={styles.tableHeader}>
           <Text style={[styles.tableHeaderText, styles.colAccount]}>Konto</Text>
@@ -327,7 +334,7 @@ export function ResultatrapportPDF({ report, company, generatedAt }: Resultatrap
         </View>
 
         {report.groups.map((group) => (
-          // No wrap={false} on the outer View — large account classes (80+
+          // No wrap={false} on the outer View: large account classes (80+
           // active accounts) would otherwise be silently clipped instead of
           // flowing onto the next page.
           <View key={group.class}>
@@ -449,6 +456,11 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
               {report.is_balanced ? 'Balanserar' : 'Balanserar ej'}
             </Text>
           </View>
+          {!report.is_balanced && report.imbalance_diagnosis && (
+            <Text style={{ fontSize: 8, color: '#666', marginTop: 4 }}>
+              {report.imbalance_diagnosis.message}
+            </Text>
+          )}
         </View>
 
         <FooterBlock company={company} generatedAt={generatedAt} />

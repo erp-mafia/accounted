@@ -1,0 +1,22 @@
+-- Remove anonymous read/listing access to the receipts storage bucket.
+-- pg-test: covered-by tests/pg/db-advisor-lockdowns.pg.test.ts
+--
+-- Supabase advisor (public_bucket_allows_listing): the receipts storage
+-- bucket is public and carried an anon SELECT policy on storage.objects
+-- (receipts_public_read, USING bucket_id = 'receipts'), which let anonymous
+-- clients LIST every object in the bucket through the storage API.
+--
+-- Investigation (2026-07-09): the bucket is unused. No code references it
+-- (no storage.from('receipts'), no getPublicUrl or signed URL against it),
+-- the public.receipts table has 0 rows in prod, and the bucket holds 2
+-- orphan objects from 2026-02-26 (early development). Nothing depends on
+-- anonymous reads or listing, so the policy can go. Authenticated own-folder
+-- policies (receipts_select/insert/delete) are untouched, and direct
+-- public-URL object reads are served without RLS while the bucket's public
+-- flag stays on; whether to flip the bucket private or delete it outright is
+-- a separate product decision, documented in the PR.
+--
+-- The bucket and its policies were created outside the migration history
+-- (dashboard), hence IF EXISTS: fresh-from-migrations databases (pg-real CI,
+-- preview branches) do not have the policy.
+DROP POLICY IF EXISTS "receipts_public_read" ON storage.objects;

@@ -43,13 +43,13 @@ registerEndpoint({
   useWhen:
     'You have a salary run in `review` status and want to authorize it for payment. This is the human (or agent) signoff step before money moves; the verifikation is still pending and won\'t exist until `:book` runs.',
   doNotUseFor:
-    'Posting journal entries (use `:book` after `:mark-paid`). Reverting an approval (the lifecycle has no `:unapprove` — call `:correct` once the run is booked if you need to undo).',
+    'Posting journal entries (use `:book` after `:mark-paid`). Reverting an approval (the lifecycle has no `:unapprove`: call `:correct` once the run is booked if you need to undo).',
   pitfalls: [
-    'Run must be in `review` — non-`review` runs return 400 SALARY_RUN_APPROVE_NOT_REVIEW.',
+    'Run must be in `review`: non-`review` runs return 400 SALARY_RUN_APPROVE_NOT_REVIEW.',
     'Every employee on the run needs a `clearing_number` + `bank_account_number`. Missing bank details return 400 SALARY_RUN_APPROVE_VALIDATION_FAILED with the per-employee list.',
     'Every employee on the run needs `calculation_breakdown` populated. If you skipped `:calculate` somehow, approve fails.',
     'Employees without email get a non-blocking warning (lönebesked can\'t be sent automatically).',
-    'No period-lock check here — that lives on `:book` where the verifikation is posted. An agent can approve a run whose payment date falls in a now-locked period; `:book` will later refuse.',
+    'No period-lock check here: that lives on `:book` where the verifikation is posted. An agent can approve a run whose payment date falls in a now-locked period; `:book` will later refuse.',
   ],
   example: {
     response: {
@@ -58,7 +58,7 @@ registerEndpoint({
         status: 'approved',
         approved_at: '2026-05-14T12:00:00Z',
         approved_by: 'user_b73c…',
-        warnings: ['Anna Andersson: E-post saknas — lönebesked kan inte skickas'],
+        warnings: ['Anna Andersson: E-post saknas, lönebesked kan inte skickas'],
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -146,10 +146,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         )
       }
       if (!sre.calculation_breakdown) {
-        validationErrors.push(`${name}: Beräkning saknas — kör beräkning först`)
+        validationErrors.push(`${name}: Beräkning saknas, kör beräkning först`)
       }
       if (!emp.email) {
-        warnings.push(`${name}: E-post saknas — lönebesked kan inte skickas`)
+        warnings.push(`${name}: E-post saknas, lönebesked kan inte skickas`)
       }
     }
     if (validationErrors.length > 0) {

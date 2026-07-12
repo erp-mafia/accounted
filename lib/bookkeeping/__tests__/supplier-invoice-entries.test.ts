@@ -216,7 +216,7 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
 
     const debit2641 = findByAccount(input.lines, '2641')
     expect(debit2641).toHaveLength(1)
-    // Avgörande: 1 250 (manual) — INTE 2 500 (10 000 × 0.25).
+    // Avgörande: 1 250 (manual), INTE 2 500 (10 000 × 0.25).
     expect(debit2641[0].debit_amount).toBe(1250)
 
     const credit2440 = findByAccount(input.lines, '2440')
@@ -250,6 +250,47 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     assertBalanced(input)
   })
 
+  it('posts 2641 from the items even when invoice.vat_amount is stale/zero (regression: MCP inbox-conversion header/line mismatch)', async () => {
+    // Reported bug: gnubok_create_supplier_invoice_from_inbox sourced the
+    // header vat_amount from the OCR-extracted document totals (totalsExt.vat)
+    // instead of summing the line items. Customizing per-line VAT rates (or a
+    // mis-extracted document total) left invoice.vat_amount at 0 while the
+    // items still carried correct non-zero vat_rate/vat_amount. The engine
+    // used to gate the whole VAT branch on `invoice.vat_amount > 0`, so a
+    // stale header silently suppressed a correct per-line VAT posting (e.g.
+    // Glesys 623884: 1 001 kr booked with zero VAT instead of 800.54 + 200.14).
+    // The fix drives the gate off the items themselves (itemsHaveVat), so the
+    // header field can never again suppress a correct posting.
+    const invoice = makeSupplierInvoice({
+      subtotal: 800.54,
+      vat_amount: 0, // stale header: never reconciled against the customized line
+      total: 1001,
+    })
+    const items = [
+      makeItem({ line_total: 800.54, account_number: '6540', vat_rate: 0.25, vat_amount: 200.14 }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const debit6540 = findByAccount(input.lines, '6540')
+    expect(debit6540[0].debit_amount).toBe(800.54)
+
+    const debit2641 = findByAccount(input.lines, '2641')
+    expect(debit2641).toHaveLength(1)
+    expect(debit2641[0].debit_amount).toBe(200.14)
+
+    // 2440 must reflect the TRUE gross total (800.54 + 200.14), not the stale
+    // header total: the engine derives it as totalDebits - totalCredits.
+    const credit2440 = findByAccount(input.lines, '2440')
+    expect(credit2440[0].credit_amount).toBe(1000.68)
+
+    assertBalanced(input)
+  })
+
   it('aggregates manual VAT overrides per rate group on mixed-rate invoice', async () => {
     // Restaurangkvitto med två olika momsöverskridningar pga representation-
     // tak och egen avrundning. 25%-raden får manuell 100 kr, 12%-raden får
@@ -278,7 +319,7 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
   })
 
   it('reverse charge ignores manual vat_amount and uses statutory base × rate', async () => {
-    // RC: fiktiv moms beräknas alltid på basbeloppet med lagstadgad sats —
+    // RC: fiktiv moms beräknas alltid på basbeloppet med lagstadgad sats:
     // ett manuellt vat_amount på posten är meningslöst (köparen redovisar
     // själv) och får inte påverka 2645/2614.
     const invoice = makeSupplierInvoice({
@@ -358,7 +399,7 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     expect(credit2614).toHaveLength(1)
     expect(credit2614[0].credit_amount).toBe(2500)
 
-    // Basbeloppsrader för ruta 21 (EU tjänster huvudregeln) — utan dessa
+    // Basbeloppsrader för ruta 21 (EU tjänster huvudregeln): utan dessa
     // avvisar Skatteverket deklarationen med FK004.
     const debit4535 = findByAccount(input.lines, '4535')
     expect(debit4535).toHaveLength(1)
@@ -378,11 +419,11 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     assertBalanced(input)
   })
 
-  it('books reverse charge VAT for a 0%-rate line item — defaults to 25% huvudregeln (regression)', async () => {
+  it('books reverse charge VAT for a 0%-rate line item: defaults to 25% huvudregeln (regression)', async () => {
     // The exact reported bug: a Finnish (EU) supplier invoice entered with the
     // line at 0% momssats (the supplier charges no VAT) must still self-assess
     // at 25%. Before the fix the `rate > 0` guard skipped ALL VAT lines, so the
-    // verifikat was just expense + 2440 — the user had to add VAT lines by hand.
+    // verifikat was just expense + 2440: the user had to add VAT lines by hand.
     const invoice = makeSupplierInvoice({
       subtotal: 12000,
       vat_amount: 0,
@@ -400,7 +441,7 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     // Fiktiv moms self-assessed at the 25% huvudregel default (ruta 30 / 48).
     expect(findByAccount(input.lines, '2645')[0].debit_amount).toBe(3000)
     expect(findByAccount(input.lines, '2614')[0].credit_amount).toBe(3000)
-    // Basbeloppsrader for ruta 21 (EU services) — required or SKV rejects FK004.
+    // Basbeloppsrader for ruta 21 (EU services): required or SKV rejects FK004.
     expect(findByAccount(input.lines, '4535')[0].debit_amount).toBe(12000)
     expect(findByAccount(input.lines, '4598')[0].credit_amount).toBe(12000)
     // Leverantörsskuld is the net (no VAT rolls into the payable under RC).
@@ -742,7 +783,7 @@ describe('createSupplierInvoiceRegistrationEntry', () => {
     expect(findByAccount(input.lines, '2641')).toHaveLength(0)
 
     // User picked 4425 directly as the expense account, so the engine must
-    // not add parallel basbeloppsrader on 4425/4598 — that would double the
+    // not add parallel basbeloppsrader on 4425/4598: that would double the
     // basis. Exactly one 4425 line (the user's expense) and zero 4598.
     expect(findByAccount(input.lines, '4425')).toHaveLength(1)
     expect(findByAccount(input.lines, '4425')[0].debit_amount).toBe(20000)
@@ -1028,7 +1069,7 @@ describe('createSupplierInvoiceCashEntry', () => {
     expect(mockedCreateEntry).not.toHaveBeenCalled()
   })
 
-  it('domestic with VAT — credits 1930 (not 2440)', async () => {
+  it('domestic with VAT: credits 1930 (not 2440)', async () => {
     const invoice = makeSupplierInvoice({
       subtotal: 8000,
       vat_amount: 2000,
@@ -1090,7 +1131,7 @@ describe('createSupplierInvoiceCashEntry', () => {
     assertBalanced(input)
   })
 
-  it('EU reverse charge — credits 1930', async () => {
+  it('EU reverse charge: credits 1930', async () => {
     const invoice = makeSupplierInvoice({
       subtotal: 10000,
       vat_amount: 0,
@@ -1206,12 +1247,12 @@ describe('createSupplierInvoiceCashEntry', () => {
 })
 
 // ============================================================
-// createSupplierInvoiceCashEntry — foreign-currency settlement
+// createSupplierInvoiceCashEntry: foreign-currency settlement
 // (kontantmetoden books the expense at the PAYMENT-date rate; the
 //  payment-account credit must equal the SEK that left the bank)
 // ============================================================
 
-describe('createSupplierInvoiceCashEntry — foreign-currency settlement', () => {
+describe('createSupplierInvoiceCashEntry: foreign-currency settlement', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockedFindFiscalPeriod.mockResolvedValue('period-1')
@@ -1221,7 +1262,7 @@ describe('createSupplierInvoiceCashEntry — foreign-currency settlement', () =>
     // 19 USD invoice. The invoice was captured at rate 9.20 (→ 174.80 SEK),
     // but the bank actually paid 175.28 SEK at the payment-date rate. Under
     // kontantmetoden the expense belongs at the payment rate, so 1930 must
-    // equal the bank movement exactly — and there is NO kursdifferens.
+    // equal the bank movement exactly, and there is NO kursdifferens.
     const invoice = makeSupplierInvoice({
       currency: 'USD', exchange_rate: 9.20, subtotal: 19, vat_amount: 0, total: 19,
     })
@@ -1554,7 +1595,7 @@ describe('createSupplierCreditNoteEntry', () => {
 })
 
 // ============================================================
-// createSupplierInvoicePrivatelyPaidEntry — eget utlägg
+// createSupplierInvoicePrivatelyPaidEntry: eget utlägg
 // ============================================================
 
 describe('createSupplierInvoicePrivatelyPaidEntry', () => {
@@ -1605,9 +1646,9 @@ describe('createSupplierInvoicePrivatelyPaidEntry', () => {
     expect(credit2893).toHaveLength(1)
     expect(credit2893[0].credit_amount).toBe(500)
 
-    // AP account 2440 must NOT appear — privately-paid bypasses AP entirely.
+    // AP account 2440 must NOT appear: privately-paid bypasses AP entirely.
     expect(findByAccount(input.lines, '2440')).toHaveLength(0)
-    // Bank account 1930 must NOT appear — the owner paid, not the company.
+    // Bank account 1930 must NOT appear: the owner paid, not the company.
     expect(findByAccount(input.lines, '1930')).toHaveLength(0)
     // EF owner account 2018 must NOT appear for AB.
     expect(findByAccount(input.lines, '2018')).toHaveLength(0)
@@ -1711,5 +1752,283 @@ describe('createSupplierInvoicePrivatelyPaidEntry', () => {
     const debit6110 = findByAccount(input.lines, '6110')
     expect(debit6110).toHaveLength(1)
     expect(debit6110[0].debit_amount).toBe(600)
+  })
+})
+
+// ============================================================
+// dimensions propagation (PR7)
+// ============================================================
+
+describe('dimensions propagation (PR7): createSupplierInvoiceRegistrationEntry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  it('expense lines carry merged item-over-default bags; 2641 and 2440 carry the default', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 8000,
+      vat_amount: 2000,
+      total: 10000,
+      default_dimensions: { '1': 'KS01' },
+    })
+    const items = [
+      makeItem({ id: 'si-item-1', line_total: 5000, account_number: '6200', vat_rate: 0.25, dimensions: { '6': 'P001' } }),
+      makeItem({ id: 'si-item-2', line_total: 3000, account_number: '6200', vat_rate: 0.25, dimensions: { '1': 'KS02' } }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    // Same account, DIFFERENT bags → two separate expense lines
+    // (aggregation identity = account + bag).
+    const debit6200 = findByAccount(input.lines, '6200')
+    expect(debit6200).toHaveLength(2)
+    expect(debit6200[0].debit_amount).toBe(5000)
+    expect(debit6200[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(debit6200[1].debit_amount).toBe(3000)
+    // The item bag wins per key over the invoice default.
+    expect(debit6200[1].dimensions).toEqual({ '1': 'KS02' })
+
+    // VAT and AP legs carry the default only.
+    expect(findByAccount(input.lines, '2641')[0].dimensions).toEqual({ '1': 'KS01' })
+    expect(findByAccount(input.lines, '2440')[0].dimensions).toEqual({ '1': 'KS01' })
+
+    assertBalanced(input)
+  })
+
+  it('items with the identical merged bag still aggregate into one expense line', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 8000,
+      vat_amount: 2000,
+      total: 10000,
+      default_dimensions: { '1': 'KS01' },
+    })
+    const items = [
+      makeItem({ id: 'si-item-1', line_total: 5000, account_number: '6200', vat_rate: 0.25, dimensions: { '6': 'P001' } }),
+      makeItem({ id: 'si-item-2', line_total: 3000, account_number: '6200', vat_rate: 0.25, dimensions: { '6': 'P001' } }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const debit6200 = findByAccount(input.lines, '6200')
+    expect(debit6200).toHaveLength(1)
+    expect(debit6200[0].debit_amount).toBe(8000)
+    expect(debit6200[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+  })
+
+  it('reverse charge: fiktiv moms + basbelopp lines carry the default; expense keeps the merged bag', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000,
+      vat_amount: 0,
+      total: 10000,
+      reverse_charge: true,
+      default_dimensions: { '1': 'KS01' },
+    })
+    const items = [
+      makeItem({ line_total: 10000, account_number: '6540', vat_rate: 0.25, dimensions: { '6': 'P001' } }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(findByAccount(input.lines, '6540')[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    // RC fiktiv moms pair + basis pair carry the default only.
+    expect(findByAccount(input.lines, '2645')[0].dimensions).toEqual({ '1': 'KS01' })
+    expect(findByAccount(input.lines, '2614')[0].dimensions).toEqual({ '1': 'KS01' })
+    expect(findByAccount(input.lines, '4535')[0].dimensions).toEqual({ '1': 'KS01' })
+    expect(findByAccount(input.lines, '4598')[0].dimensions).toEqual({ '1': 'KS01' })
+    expect(findByAccount(input.lines, '2440')[0].dimensions).toEqual({ '1': 'KS01' })
+
+    assertBalanced(input)
+  })
+
+  it('no default and no item bags → line.dimensions stays undefined', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: 8000, vat_amount: 2000, total: 10000 })
+    const items = [makeItem({ line_total: 8000, account_number: '6200', vat_rate: 0.25 })]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    const debit6200 = findByAccount(input.lines, '6200')[0]
+    // toEqual ignores undefined-valued keys: the line shape is unchanged.
+    expect(debit6200).toEqual({
+      account_number: '6200',
+      debit_amount: 8000,
+      credit_amount: 0,
+      line_description: 'Leverantörsfaktura LF-001 (ankomstnr 1)',
+    })
+    expect(debit6200.dimensions).toBeUndefined()
+    expect(findByAccount(input.lines, '2641')[0].dimensions).toBeUndefined()
+    expect(findByAccount(input.lines, '2440')[0].dimensions).toBeUndefined()
+  })
+})
+
+describe('dimensions propagation (PR7): createSupplierInvoicePaymentEntry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  it('standard payment: both 2440 and payment-account lines carry the default', async () => {
+    const invoice = makeSupplierInvoice({ default_dimensions: { '1': 'KS01', '6': 'P001' } })
+
+    await createSupplierInvoicePaymentEntry(
+      null as never, 'company-1', 'user-1', invoice, 10000, '2024-07-01'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines).toHaveLength(2)
+    for (const line of input.lines) {
+      expect(line.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    }
+  })
+
+  it('FX payment: the 3960/7960 result lines carry the default too', async () => {
+    const invoice = makeSupplierInvoice({ default_dimensions: { '6': 'P001' } })
+
+    // Gain: paid less SEK than booked → credit 3960.
+    await createSupplierInvoicePaymentEntry(
+      null as never, 'company-1', 'user-1', invoice, 10000, '2024-07-01', 200
+    )
+    let input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '3960')[0].dimensions).toEqual({ '6': 'P001' })
+    expect(findByAccount(input.lines, '2440')[0].dimensions).toEqual({ '6': 'P001' })
+    expect(findByAccount(input.lines, '1930')[0].dimensions).toEqual({ '6': 'P001' })
+
+    // Loss: debit 7960.
+    await createSupplierInvoicePaymentEntry(
+      null as never, 'company-1', 'user-1', invoice, 10000, '2024-07-01', -300
+    )
+    input = mockedCreateEntry.mock.calls[1][3]
+    expect(findByAccount(input.lines, '7960')[0].dimensions).toEqual({ '6': 'P001' })
+  })
+
+  it('no default bag → payment lines carry no dimensions', async () => {
+    const invoice = makeSupplierInvoice()
+
+    await createSupplierInvoicePaymentEntry(
+      null as never, 'company-1', 'user-1', invoice, 10000, '2024-07-01'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    for (const line of input.lines) {
+      expect(line.dimensions).toBeUndefined()
+    }
+  })
+})
+
+describe('dimensions propagation (PR7): createSupplierInvoiceCashEntry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  it('expense lines carry merged bags; 2641 and payment account carry the default', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 8000,
+      vat_amount: 2000,
+      total: 10000,
+      default_dimensions: { '1': 'KS01' },
+    })
+    const items = [
+      makeItem({ line_total: 8000, account_number: '6200', vat_rate: 0.25, dimensions: { '6': 'P001' } }),
+    ]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(findByAccount(input.lines, '6200')[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(findByAccount(input.lines, '2641')[0].dimensions).toEqual({ '1': 'KS01' })
+    expect(findByAccount(input.lines, '1930')[0].dimensions).toEqual({ '1': 'KS01' })
+    expect(findByAccount(input.lines, '2440')).toHaveLength(0)
+
+    assertBalanced(input)
+  })
+})
+
+describe('dimensions propagation (PR7): createSupplierInvoicePrivatelyPaidEntry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  it('expense lines carry merged bags; 2641 and the owner account carry the default', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 400,
+      vat_amount: 100,
+      total: 500,
+      default_dimensions: { '1': 'KS01' },
+    })
+    const items = [
+      makeItem({ line_total: 400, account_number: '6110', vat_rate: 0.25, dimensions: { '6': 'P001' } }),
+    ]
+
+    await createSupplierInvoicePrivatelyPaidEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'aktiebolag'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(findByAccount(input.lines, '6110')[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(findByAccount(input.lines, '2641')[0].dimensions).toEqual({ '1': 'KS01' })
+    expect(findByAccount(input.lines, '2893')[0].dimensions).toEqual({ '1': 'KS01' })
+
+    assertBalanced(input)
+  })
+})
+
+describe('dimensions propagation (PR7): createSupplierCreditNoteEntry', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  it('expense credits keep the item bags; 2440 and 2641 carry the credit note default', async () => {
+    const creditNote = makeSupplierInvoice({
+      is_credit_note: true,
+      subtotal: -8000,
+      vat_amount: -2000,
+      total: -10000,
+      default_dimensions: { '1': 'KS01' },
+    })
+    const items = [
+      makeItem({ id: 'si-item-1', line_total: -5000, account_number: '6200', vat_rate: 0.25, dimensions: { '6': 'P001' } }),
+      makeItem({ id: 'si-item-2', line_total: -3000, account_number: '6200', vat_rate: 0.25, dimensions: { '6': 'P002' } }),
+    ]
+
+    await createSupplierCreditNoteEntry(
+      null as never, 'company-1', 'user-1', creditNote, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    // Two credit lines on the same account, split by the item bags.
+    const credit6200 = findByAccount(input.lines, '6200')
+    expect(credit6200).toHaveLength(2)
+    expect(credit6200[0].credit_amount).toBe(5000)
+    expect(credit6200[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(credit6200[1].credit_amount).toBe(3000)
+    expect(credit6200[1].dimensions).toEqual({ '1': 'KS01', '6': 'P002' })
+
+    expect(findByAccount(input.lines, '2641')[0].dimensions).toEqual({ '1': 'KS01' })
+    expect(findByAccount(input.lines, '2440')[0].dimensions).toEqual({ '1': 'KS01' })
+
+    assertBalanced(input)
   })
 })

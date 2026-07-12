@@ -1,5 +1,5 @@
 /**
- * Regression tests for issue #772 — "Logotyp kommer inte med på fakturor".
+ * Regression tests for issue #772: "Logotyp kommer inte med på fakturor".
  *
  * Root cause: @react-pdf/renderer's <Image> only decodes JPG/PNG, but the logo
  * upload route and the `logos` bucket accept SVG and WebP. When a logo was an
@@ -13,8 +13,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import sharp from 'sharp'
-import { prepareInvoicePdfRender } from '@/lib/invoices/pdf-render-helpers'
-import { makeCompanySettings } from '@/tests/helpers'
+import { prepareInvoicePdfRender, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { makeCompanySettings, makeInvoice } from '@/tests/helpers'
 
 const PNG_DATA_URL_PREFIX = 'data:image/png;base64,'
 
@@ -44,7 +44,7 @@ async function expectValidEmbeddedPng(logoUrl: string | null | undefined) {
   expect(meta.format).toBe('png')
 }
 
-describe('prepareInvoicePdfRender — logo resolution (issue #772)', () => {
+describe('prepareInvoicePdfRender: logo resolution (issue #772)', () => {
   beforeEach(() => {
     vi.unstubAllGlobals()
   })
@@ -105,7 +105,7 @@ describe('prepareInvoicePdfRender — logo resolution (issue #772)', () => {
 
     const { company: resolved } = await prepareInvoicePdfRender(company)
 
-    // Unchanged — never worse than before (@react-pdf still fetches PNG/JPEG).
+    // Unchanged: never worse than before (@react-pdf still fetches PNG/JPEG).
     expect(resolved.logo_url).toBe(url)
   })
 
@@ -175,5 +175,31 @@ describe('prepareInvoicePdfRender — logo resolution (issue #772)', () => {
     const { branding } = await prepareInvoicePdfRender(company)
 
     expect(branding.primaryColor).toBe('#c2410c')
+  })
+})
+
+describe('buildPaymentLinkQrDataUrl', () => {
+  it('encodes the payment link as a PNG QR data URL for a real invoice', async () => {
+    const invoice = makeInvoice({ payment_link_url: 'https://buy.stripe.com/test_abc123' })
+    const qr = await buildPaymentLinkQrDataUrl(invoice)
+    expect(qr).toMatch(new RegExp(`^${PNG_DATA_URL_PREFIX}`))
+  })
+
+  it('returns null when the invoice has no payment link', async () => {
+    expect(await buildPaymentLinkQrDataUrl(makeInvoice())).toBeNull()
+    expect(await buildPaymentLinkQrDataUrl(makeInvoice({ payment_link_url: '   ' }))).toBeNull()
+  })
+
+  it('returns null for non-payable documents (proforma, delivery note, credit note)', async () => {
+    const url = 'https://buy.stripe.com/test_abc123'
+    expect(
+      await buildPaymentLinkQrDataUrl(makeInvoice({ payment_link_url: url, document_type: 'proforma' })),
+    ).toBeNull()
+    expect(
+      await buildPaymentLinkQrDataUrl(makeInvoice({ payment_link_url: url, document_type: 'delivery_note' })),
+    ).toBeNull()
+    expect(
+      await buildPaymentLinkQrDataUrl(makeInvoice({ payment_link_url: url, credited_invoice_id: 'inv-orig' })),
+    ).toBeNull()
   })
 })

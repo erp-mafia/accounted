@@ -1,6 +1,12 @@
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import {
+  coerceDimensionsBag,
+  dimensionsBagKey,
+  type LineDimensions,
+} from '@/lib/bookkeeping/dimension-resolver'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import { SALARY_ACCOUNTS, getLineItemAccount } from './account-mapping'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
@@ -21,8 +27,14 @@ interface SalaryRunEmployee {
   avgifter_rate: number
   vacation_accrual: number
   vacation_accrual_avgifter: number
-  cost_center?: string
-  project?: string
+  // Dimensions PR8: the employee's default bag ({sie_dim_no: code}), read
+  // from employees.default_dimensions by the book routes. P&L cost lines
+  // (löner, avgifter, semester, pension, SLP) split per bag; the
+  // balance-sheet/settlement legs (2710, 1930, 2731, 29xx, 2740, 2514)
+  // stay aggregated: a liability toward Skatteverket or the bank has no
+  // per-employee dimension. Replaces the never-wired cost_center/project
+  // pair that predated the JSONB substrate.
+  default_dimensions?: Record<string, string>
   line_items: Array<{
     item_type: string
     amount: number
@@ -133,14 +145,32 @@ async function createSalaryEntry(
 ): Promise<JournalEntry> {
   const lines: CreateJournalEntryLineInput[] = []
 
-  // Aggregate salary expenses by account
-  const expenseByAccount = new Map<string, number>()
+  // Aggregate salary expenses by (account, dimensions), dimensions PR8. The
+  // employee's bag is part of the aggregation identity, so two employees on
+  // the same account but different kostnadsställen produce separate lines
+  // instead of collapsing (the dead cost_center/project fields never did
+  // this). Dimension-less runs collapse to one bucket per account and book
+  // byte-identically to before.
+  interface ExpenseBucket {
+    account: string
+    dimensions?: LineDimensions
+    amount: number
+  }
+  const expenseBuckets = new Map<string, ExpenseBucket>()
+  const addExpense = (account: string, dimensions: LineDimensions | undefined, amount: number) => {
+    const key = `${account}\u0000${dimensionsBagKey(dimensions)}`
+    const bucket = expenseBuckets.get(key) ?? { account, dimensions, amount: 0 }
+    bucket.amount += amount
+    expenseBuckets.set(key, bucket)
+  }
+
   for (const emp of run.employees) {
     // Base salary and additions go to the employee-type account
     const salaryAccount = getEmployeeSalaryAccount(emp.employment_type)
+    const dimensions = coerceDimensionsBag(emp.default_dimensions)
 
     // Add salary line items that are cash expenses
-    // Förmånsvärden (benefits) are excluded — they affect the tax base but
+    // Förmånsvärden (benefits) are excluded: they affect the tax base but
     // have no cash flow and should not appear as expense lines in the journal.
     const BENEFIT_TYPES = ['benefit_car', 'benefit_housing', 'benefit_meals', 'benefit_wellness', 'benefit_bike', 'benefit_other']
     let lineItemTotal = 0
@@ -148,8 +178,7 @@ async function createSalaryEntry(
       if (li.is_net_deduction || li.is_gross_deduction) continue
       if (BENEFIT_TYPES.includes(li.item_type)) continue // No cash flow for förmånsvärden
       const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
-      const current = expenseByAccount.get(account) || 0
-      expenseByAccount.set(account, current + li.amount)
+      addExpense(account, dimensions, li.amount)
       lineItemTotal += li.amount
     }
 
@@ -160,28 +189,29 @@ async function createSalaryEntry(
     // base-salary line item would fail the check_journal_entry_balance() trigger.
     const baseRemainder = Math.round((emp.gross_salary - lineItemTotal) * 100) / 100
     if (baseRemainder !== 0) {
-      const current = expenseByAccount.get(salaryAccount) || 0
-      expenseByAccount.set(salaryAccount, current + baseRemainder)
+      addExpense(salaryAccount, dimensions, baseRemainder)
     }
   }
 
-  // Debit: Salary expense accounts
-  for (const [account, amount] of expenseByAccount) {
-    if (amount === 0) continue
-    if (amount > 0) {
+  // Debit: Salary expense accounts (one line per account+dimensions bucket)
+  for (const bucket of expenseBuckets.values()) {
+    if (bucket.amount === 0) continue
+    if (bucket.amount > 0) {
       lines.push({
-        account_number: account,
-        debit_amount: Math.round(amount * 100) / 100,
+        account_number: bucket.account,
+        debit_amount: roundOre(bucket.amount),
         credit_amount: 0,
-        line_description: `${desc} — ${accountLabel(account)}`,
+        line_description: `${desc}: ${accountLabel(bucket.account)}`,
+        dimensions: bucket.dimensions,
       })
     } else {
       // Negative amounts (deductions) become credits
       lines.push({
-        account_number: account,
+        account_number: bucket.account,
         debit_amount: 0,
-        credit_amount: Math.round(Math.abs(amount) * 100) / 100,
-        line_description: `${desc} — ${accountLabel(account)}`,
+        credit_amount: roundOre(Math.abs(bucket.amount)),
+        line_description: `${desc}: ${accountLabel(bucket.account)}`,
+        dimensions: bucket.dimensions,
       })
     }
   }
@@ -193,7 +223,7 @@ async function createSalaryEntry(
       account_number: SALARY_ACCOUNTS.TAX_WITHHELD,
       debit_amount: 0,
       credit_amount: Math.round(totalTax * 100) / 100,
-      line_description: `${desc} — Personalskatt`,
+      line_description: `${desc}: Personalskatt`,
     })
   }
 
@@ -204,7 +234,7 @@ async function createSalaryEntry(
       account_number: SALARY_ACCOUNTS.BANK,
       debit_amount: 0,
       credit_amount: Math.round(totalNet * 100) / 100,
-      line_description: `${desc} — Nettolön`,
+      line_description: `${desc}: Nettolön`,
     })
   }
 
@@ -223,10 +253,37 @@ async function createSalaryEntry(
 }
 
 /**
+ * Bucket a per-employee amount by the employee's dimensions bag, dimensions
+ * PR8. Used for the P&L cost side of the avgifter/vacation/pension entries:
+ * one debit line per distinct bag, while the liability credit stays a single
+ * aggregated line. Zero amounts are skipped; each bucket is rounded and the
+ * caller credits the SUM OF ROUNDED buckets so the entry balances by
+ * construction regardless of how the total partitions.
+ */
+function bucketByEmployeeDimensions(
+  employees: SalaryRunEmployee[],
+  amountOf: (emp: SalaryRunEmployee) => number
+): Array<{ dimensions?: LineDimensions; amount: number }> {
+  const buckets = new Map<string, { dimensions?: LineDimensions; amount: number }>()
+  for (const emp of employees) {
+    const amount = amountOf(emp)
+    if (!amount) continue
+    const dimensions = coerceDimensionsBag(emp.default_dimensions)
+    const key = dimensionsBagKey(dimensions)
+    const bucket = buckets.get(key) ?? { dimensions, amount: 0 }
+    bucket.amount += amount
+    buckets.set(key, bucket)
+  }
+  return [...buckets.values()]
+    .map((b) => ({ ...b, amount: roundOre(b.amount) }))
+    .filter((b) => b.amount !== 0)
+}
+
+/**
  * Entry 2: Arbetsgivaravgifter.
  *
- * Debit:  7510 Lagstadgade sociala avgifter
- * Credit: 2731 Avräkning sociala avgifter
+ * Debit:  7510 Lagstadgade sociala avgifter (per dimensions bucket)
+ * Credit: 2731 Avräkning sociala avgifter (single aggregated liability)
  */
 async function createAvgifterEntry(
   supabase: SupabaseClient,
@@ -236,28 +293,32 @@ async function createAvgifterEntry(
   fiscalPeriodId: string,
   desc: string
 ): Promise<JournalEntry> {
-  const totalAvgifter = run.employees.reduce((sum, e) => sum + e.avgifter_amount, 0)
-  const roundedAvgifter = Math.round(totalAvgifter * 100) / 100
+  const dimBuckets = bucketByEmployeeDimensions(run.employees, (e) => e.avgifter_amount)
+  // Legacy shape parity: a run whose avgifter sum to zero still emits the
+  // single untagged debit line, exactly as before the dimension split.
+  const buckets = dimBuckets.length > 0 ? dimBuckets : [{ dimensions: undefined, amount: 0 }]
+  const roundedAvgifter = roundOre(buckets.reduce((sum, b) => sum + b.amount, 0))
 
   const lines: CreateJournalEntryLineInput[] = [
-    {
+    ...buckets.map((bucket): CreateJournalEntryLineInput => ({
       account_number: SALARY_ACCOUNTS.AVGIFTER_EXPENSE,
-      debit_amount: roundedAvgifter,
+      debit_amount: bucket.amount,
       credit_amount: 0,
-      line_description: `${desc} — Arbetsgivaravgifter`,
-    },
+      line_description: `${desc}: Arbetsgivaravgifter`,
+      dimensions: bucket.dimensions,
+    })),
     {
       account_number: SALARY_ACCOUNTS.AVGIFTER_LIABILITY,
       debit_amount: 0,
       credit_amount: roundedAvgifter,
-      line_description: `${desc} — Arbetsgivaravgifter`,
+      line_description: `${desc}: Arbetsgivaravgifter`,
     },
   ]
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: run.payment_date,
-    description: `${desc} — Arbetsgivaravgifter`,
+    description: `${desc}: Arbetsgivaravgifter`,
     source_type: 'salary_payment',
     source_id: run.id,
     voucher_series: run.voucher_series,
@@ -292,35 +353,44 @@ async function createVacationEntry(
   const lines: CreateJournalEntryLineInput[] = []
 
   if (roundedVacation > 0) {
+    // Dimensions PR8: cost per bag, liability aggregated. The credit equals
+    // the sum of the rounded debit buckets so the entry balances by
+    // construction (may differ from round(total) by an öre when partitioned).
+    const buckets = bucketByEmployeeDimensions(run.employees, (e) => e.vacation_accrual)
+    const creditTotal = roundOre(buckets.reduce((sum, b) => sum + b.amount, 0))
     lines.push(
-      {
+      ...buckets.map((bucket): CreateJournalEntryLineInput => ({
         account_number: SALARY_ACCOUNTS.VACATION_ACCRUAL_EXPENSE,
-        debit_amount: roundedVacation,
+        debit_amount: bucket.amount,
         credit_amount: 0,
-        line_description: `${desc} — Semesteravsättning`,
-      },
+        line_description: `${desc}: Semesteravsättning`,
+        dimensions: bucket.dimensions,
+      })),
       {
         account_number: SALARY_ACCOUNTS.VACATION_ACCRUAL_LIABILITY,
         debit_amount: 0,
-        credit_amount: roundedVacation,
-        line_description: `${desc} — Semesteravsättning`,
+        credit_amount: creditTotal,
+        line_description: `${desc}: Semesteravsättning`,
       }
     )
   }
 
   if (roundedAvgifter > 0) {
+    const buckets = bucketByEmployeeDimensions(run.employees, (e) => e.vacation_accrual_avgifter)
+    const creditTotal = roundOre(buckets.reduce((sum, b) => sum + b.amount, 0))
     lines.push(
-      {
+      ...buckets.map((bucket): CreateJournalEntryLineInput => ({
         account_number: SALARY_ACCOUNTS.VACATION_AVGIFTER_EXPENSE,
-        debit_amount: roundedAvgifter,
+        debit_amount: bucket.amount,
         credit_amount: 0,
-        line_description: `${desc} — Sociala avgifter på semester`,
-      },
+        line_description: `${desc}: Sociala avgifter på semester`,
+        dimensions: bucket.dimensions,
+      })),
       {
         account_number: SALARY_ACCOUNTS.VACATION_AVGIFTER_LIABILITY,
         debit_amount: 0,
-        credit_amount: roundedAvgifter,
-        line_description: `${desc} — Sociala avgifter på semester`,
+        credit_amount: creditTotal,
+        line_description: `${desc}: Sociala avgifter på semester`,
       }
     )
   }
@@ -328,7 +398,7 @@ async function createVacationEntry(
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: run.payment_date,
-    description: `${desc} — Semesteravsättning`,
+    description: `${desc}: Semesteravsättning`,
     source_type: 'salary_payment',
     source_id: run.id,
     voucher_series: run.voucher_series,
@@ -359,37 +429,46 @@ async function createPensionEntry(
   totalPension: number,
   totalSlp: number
 ): Promise<JournalEntry> {
-  const roundedPension = Math.round(totalPension * 100) / 100
   const roundedSlp = Math.round(totalSlp * 100) / 100
 
+  // Dimensions PR8: pension + SLP cost per bag, liabilities aggregated.
+  // Credits equal the sum of the rounded debit buckets (balance by
+  // construction). The caller gates on totalPension > 0.
+  const pensionBuckets = bucketByEmployeeDimensions(run.employees, (e) => e.pension_contribution || 0)
+  const pensionCredit = roundOre(pensionBuckets.reduce((sum, b) => sum + b.amount, 0))
+
   const lines: CreateJournalEntryLineInput[] = [
-    {
+    ...pensionBuckets.map((bucket): CreateJournalEntryLineInput => ({
       account_number: SALARY_ACCOUNTS.PENSION_EXPENSE,
-      debit_amount: roundedPension,
+      debit_amount: bucket.amount,
       credit_amount: 0,
-      line_description: `${desc} — Pensionsförsäkringspremier`,
-    },
+      line_description: `${desc}: Pensionsförsäkringspremier`,
+      dimensions: bucket.dimensions,
+    })),
     {
       account_number: SALARY_ACCOUNTS.PENSION_LIABILITY,
       debit_amount: 0,
-      credit_amount: roundedPension,
-      line_description: `${desc} — Pensionsförsäkringspremier`,
+      credit_amount: pensionCredit,
+      line_description: `${desc}: Pensionsförsäkringspremier`,
     },
   ]
 
   if (roundedSlp > 0) {
+    const slpBuckets = bucketByEmployeeDimensions(run.employees, (e) => e.pension_slp || 0)
+    const slpCredit = roundOre(slpBuckets.reduce((sum, b) => sum + b.amount, 0))
     lines.push(
-      {
+      ...slpBuckets.map((bucket): CreateJournalEntryLineInput => ({
         account_number: SALARY_ACCOUNTS.SLP_EXPENSE,
-        debit_amount: roundedSlp,
+        debit_amount: bucket.amount,
         credit_amount: 0,
-        line_description: `${desc} — Särskild löneskatt 24,26%`,
-      },
+        line_description: `${desc}: Särskild löneskatt 24,26%`,
+        dimensions: bucket.dimensions,
+      })),
       {
         account_number: SALARY_ACCOUNTS.SLP_LIABILITY,
         debit_amount: 0,
-        credit_amount: roundedSlp,
-        line_description: `${desc} — Särskild löneskatt 24,26%`,
+        credit_amount: slpCredit,
+        line_description: `${desc}: Särskild löneskatt 24,26%`,
       }
     )
   }
@@ -397,14 +476,14 @@ async function createPensionEntry(
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: run.payment_date,
-    description: `${desc} — Pensionsavsättning`,
+    description: `${desc}: Pensionsavsättning`,
     source_type: 'salary_payment',
     source_id: run.id,
     voucher_series: run.voucher_series,
     lines,
   }
 
-  log.info(`Creating pension entry for ${desc}: ${roundedPension} SEK pension + ${roundedSlp} SEK SLP`)
+  log.info(`Creating pension entry for ${desc}: ${pensionCredit} SEK pension + ${roundedSlp} SEK SLP`)
   return createJournalEntry(supabase, companyId, userId, input)
 }
 
@@ -423,7 +502,7 @@ function getEmployeeSalaryAccount(employmentType: string): string {
 /**
  * Ensure every BAS account referenced by the salary run exists in
  * chart_of_accounts. Users who seeded the minimal chart via
- * seed_chart_of_accounts will be missing many 7xxx/29xx accounts — we
+ * seed_chart_of_accounts will be missing many 7xxx/29xx accounts: we
  * auto-create them from BAS reference data on first salary booking.
  */
 async function ensureSalaryAccountsExist(
@@ -479,7 +558,7 @@ async function ensureSalaryAccountsExist(
         is_system_account: false,
       }
     }
-    // Fallback — shouldn't happen for salary accounts, but keeps us safe.
+    // Fallback: shouldn't happen for salary accounts, but keeps us safe.
     const classNum = parseInt(accountNumber.charAt(0), 10)
     const group = accountNumber.substring(0, 2)
     return {

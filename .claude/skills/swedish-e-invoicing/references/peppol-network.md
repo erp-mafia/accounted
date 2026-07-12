@@ -16,7 +16,7 @@ ViDA introduces the **five-corner model** for cross-border B2B reporting from 1 
 
 ## SML, Service Metadata Locator
 
-The SML is the centralised DNS service. Operated by **OpenPeppol AISBL** (insourced from EC DG DIGIT during 2024–2025).
+The SML is the centralised DNS service. Operated by **OpenPeppol AISBL** (insourced from EC DG DIGIT during 2024-2025).
 
 Lookup algorithm (migrated from CNAME/MD5 to **NAPTR/SHA-256** during 2025):
 
@@ -73,7 +73,7 @@ Two certificate types per Access Point:
 - **AP cert**, used for AS4 message signing and encryption.
 - **SMP cert**, used to sign `SignedServiceMetadata` responses.
 
-Cert validity is typically 1–2 years. Renewal is automated via DigiCert's portal; trust store updates flow via OpenPeppol member announcements.
+Cert validity is typically 1-2 years. Renewal is automated via DigiCert's portal; trust store updates flow via OpenPeppol member announcements.
 
 Trust store libraries (Helger `peppol-commons`, Oxalis) ship the bundled Peppol root and intermediate certs; update at least quarterly to track CA rotation.
 
@@ -106,7 +106,7 @@ GitHub: https://github.com/OpenPEPPOL/peppol-bis-invoice-3/blob/master/structure
 
 ### OpenPeppol membership fees (effective 1 July 2025 for new members)
 
-For a small Swedish fintech (S1 size, 1–10 employees):
+For a small Swedish fintech (S1 size, 1-10 employees):
 
 | Path | Sign-up | Annual | Certification | Year-1 total |
 |---|---|---|---|---|
@@ -114,9 +114,9 @@ For a small Swedish fintech (S1 size, 1–10 employees):
 | **AP-only S1+S2** | €1,050 | €1,850 | €1,500 | **≈ €4,400** |
 | **End User S1+S2** | €650 | €1,250 | n/a | **≈ €1,900** |
 
-Add infrastructure cost: 24/7 redundant AS4 hosting (€3–10k/yr), monitoring/on-call (€5–20k fully loaded), DigiCert G3 certs (bundled into OpenPeppol annual). DIGG charges no additional Peppol-Authority fee for Swedish service providers but requires signing the **Peppol Service Provider Agreement**.
+Add infrastructure cost: 24/7 redundant AS4 hosting (€3-10k/yr), monitoring/on-call (€5-20k fully loaded), DigiCert G3 certs (bundled into OpenPeppol annual). DIGG charges no additional Peppol-Authority fee for Swedish service providers but requires signing the **Peppol Service Provider Agreement**.
 
-**Realistic minimum to operate an own AP: €20–40k/year direct cost plus 0.5–1 FTE engineering and 3–6 months upfront build.** Twice-yearly spec updates with a 7-day implementation window and mandatory monthly volume reporting are non-trivial recurring costs.
+**Realistic minimum to operate an own AP: €20-40k/year direct cost plus 0.5-1 FTE engineering and 3-6 months upfront build.** Twice-yearly spec updates with a 7-day implementation window and mandatory monthly volume reporting are non-trivial recurring costs.
 
 ### Onboarding steps
 
@@ -131,7 +131,7 @@ Add infrastructure cost: 24/7 redundant AS4 hosting (€3–10k/yr), monitoring/
 9. Register SMP in production SML via DIGG.
 10. Commit to monthly volume reporting.
 
-**Total elapsed time: 3–6 months.**
+**Total elapsed time: 3-6 months.**
 
 ### Open-source AS4 / SMP stacks
 

@@ -20,7 +20,7 @@ import { TICAPIError } from './tic-types'
 const TIC_API_TIMEOUT = 15_000
 
 // In-process TTL cache for proxy responses. Onboarding currently fires the
-// same org-number lookup 2–3 times in <2 s (server prefetch + client
+// same org-number lookup 2-3 times in <2 s (server prefetch + client
 // useEffect + duplicate-check) and the agent build re-fetches /profile data
 // minutes later. The TIC budget (3000/mo Lens calls) can't absorb the
 // duplication. 5 min is long enough to collapse a full onboarding flow into
@@ -65,7 +65,7 @@ export function __resetTicCacheForTest(): void {
  *
  * Routes through the proxy at TIC_API_PROXY_URL (no API key needed in this
  * codebase). The proxy targets `lens-api.tic.io` (v2 "Lens API") and adds
- * `x-api-key` server-side. v1 (`api.tic.io`) is retired — all paths below
+ * `x-api-key` server-side. v1 (`api.tic.io`) is retired: all paths below
  * are Lens paths (no `/datasets/` prefix, `id` instead of `companyId`).
  */
 export async function ticApiFetch<T>(endpoint: string): Promise<T | null> {
@@ -97,7 +97,7 @@ export async function ticApiFetch<T>(endpoint: string): Promise<T | null> {
     }
 
     if (response.status === 429) {
-      // Do NOT cache rate-limit responses — the next call after the window
+      // Do NOT cache rate-limit responses: the next call after the window
       // resets should be allowed through.
       throw new TICAPIError('Rate limit exceeded', 429, 'RATE_LIMIT_EXCEEDED')
     }
@@ -121,20 +121,81 @@ export async function ticApiFetch<T>(endpoint: string): Promise<T | null> {
   }
 }
 
-/** Search for a company by org number. Returns the first matching document or null. */
+/**
+ * Expand a 10-digit personnummer to the 12-digit (century-prefixed) form that
+ * Lens requires to resolve an enskild firma. Lens stores a sole trader under a
+ * 16-digit registration number derived from the 12-digit personnummer; the bare
+ * 10-digit form only ever fuzzy-matches, which is how a personnummer once
+ * resolved to an unrelated foundation.
+ *
+ * Detection is unambiguous: a Swedish organisationsnummer always has a 3rd digit
+ * >= 2, whereas a personnummer's 3rd+4th digits are the birth month (01-12). So
+ * a 10-digit number whose 3rd digit is 0/1 and whose month reads 01-12 is a
+ * personnummer and gets the century prefix; AB / förening / handelsbolag numbers
+ * pass through untouched. Century (19 vs 20) uses the same heuristic as
+ * `formatRedovisare`: a two-digit year greater than the current one is 1900s.
+ */
+function toLensQueryNumber(cleaned: string): string {
+  if (!/^\d{10}$/.test(cleaned)) return cleaned
+  const month = parseInt(cleaned.substring(2, 4), 10)
+  const isPersonnummer = cleaned[2] <= '1' && month >= 1 && month <= 12
+  if (!isPersonnummer) return cleaned
+  const yearDigits = parseInt(cleaned.substring(0, 2), 10)
+  const currentTwoDigitYear = new Date().getFullYear() % 100
+  const prefix = yearDigits > currentTwoDigitYear ? '19' : '20'
+  return `${prefix}${cleaned}`
+}
+
+/**
+ * Search for a company by org number. Returns the matching document or null.
+ *
+ * TIC v2 is a Typesense index and `query_by=registrationNumber` is a
+ * typo-tolerant full-text search: it returns ranked *near-misses*, not only
+ * exact hits. An identifier that isn't in the index therefore comes back as
+ * the closest lookalike number: a completely unrelated entity (this is how
+ * an enskild firma's personnummer once resolved to a random foundation).
+ *
+ * We validate the returned `registrationNumber` against the requested number
+ * before accepting a hit. The check is *containment*, not strict equality,
+ * because Lens stores an enskild firma under a 16-digit registration number
+ * that embeds the 10-digit personnummer (e.g. request `0201173275` →
+ * Lens `2002011732750001`). Requiring exact equality would wrongly reject
+ * every correctly-resolved sole trader. A genuine mismatch (Björn's case)
+ * has neither number containing the other, so it is still discarded and the
+ * caller sees a clean "not found" instead of a stranger's company.
+ *
+ * The upstream request is intentionally unchanged: the fuzzy `q=` call is
+ * what every working lookup already uses; we only tighten which hit we accept.
+ */
 export async function searchCompanyByOrgNumber(
   orgNumber: string
 ): Promise<TICCompanyDocument | null> {
   const cleaned = orgNumber.replace(/[\s-]/g, '')
   const data = await ticApiFetch<TICCompanyResponse>(
-    `/search-public/companies?q=${cleaned}&query_by=registrationNumber`
+    `/search-public/companies?q=${toLensQueryNumber(cleaned)}&query_by=registrationNumber`
   )
 
-  if (!data || data.found === 0 || !data.hits?.[0]) {
+  if (!data || data.found === 0 || !data.hits?.length) {
     return null
   }
 
-  return data.hits[0].document
+  // A real match either equals the requested number or embeds it (16-digit
+  // enskild-firma number containing the 10-digit personnummer). Guard the
+  // containment branch with a length floor so a short/garbage query can't
+  // coincidentally substring-match an unrelated number: all real Swedish
+  // identifiers are >= 10 digits.
+  const numbersRelated = (returned: string): boolean => {
+    if (returned === cleaned) return true
+    if (cleaned.length < 10 || returned.length < 10) return false
+    return returned.includes(cleaned) || cleaned.includes(returned)
+  }
+
+  const match = data.hits.find((hit) => {
+    const returned = hit.document?.registrationNumber?.replace(/[\s-]/g, '') ?? ''
+    return returned.length > 0 && numbersRelated(returned)
+  })
+
+  return match?.document ?? null
 }
 
 /**
@@ -183,7 +244,7 @@ export async function getCompanyDocuments(companyId: number): Promise<TICDocumen
 
 /**
  * Get fiscal-year configurations for a company. v2 endpoint with no v1
- * equivalent — used to auto-fill fiscal-year selection during Accounted
+ * equivalent: used to auto-fill fiscal-year selection during Accounted
  * onboarding so the user doesn't have to enter MM-DD manually.
  */
 export async function getFiscalYears(companyId: number): Promise<TICFiscalYear[] | null> {
@@ -192,7 +253,7 @@ export async function getFiscalYears(companyId: number): Promise<TICFiscalYear[]
 
 /**
  * Get accounting-period change history for a company. v2 endpoint with
- * no v1 equivalent — surfaces "this company has shifted its year-end"
+ * no v1 equivalent: surfaces "this company has shifted its year-end"
  * during onboarding/customer-setup.
  */
 export async function getAccountingPeriods(
@@ -202,7 +263,7 @@ export async function getAccountingPeriods(
 }
 
 /**
- * Get payroll summary for a company. v2 endpoint — restructured from
+ * Get payroll summary for a company. v2 endpoint: restructured from
  * v1's `/se/payroll`, returns `{ payroll2, payrolls }` where `payroll2`
  * is the modern per-period breakdown and `payrolls` is the legacy
  * Skatteverket MOMS/AG totals.
@@ -251,7 +312,7 @@ export async function getCompanyStatus(
  * exempt-from-registration flags. Used to answer ownership questions
  * authoritatively rather than asking the user to confirm.
  *
- * v2 endpoint — split out from what v1 grouped under `/parties`.
+ * v2 endpoint: split out from what v1 grouped under `/parties`.
  * Representatives (board/CEO/auditor) live at `/representatives` instead.
  */
 export async function getBeneficialOwners(

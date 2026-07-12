@@ -14,6 +14,6 @@
     "hasOwnData": true,
     "description": "Synka säkerhetsbackup till din egen molnlagring",
     "longDescription": "Koppla ditt Google Drive-konto och ladda upp en fullständig säkerhetsbackup med ett klick. Accounted skapar en ZIP med SIE-filer, kvitton och behandlingshistorik och laddar upp till en egen mapp i din Drive. Perfekt för att uppfylla egna krav på redundans.",
-    "subscriptionNotice": "Kräver ett Google-konto. Uppladdningar sker direkt till din Drive — ingen data lagras hos tredje part utöver Google."
+    "subscriptionNotice": "Kräver ett Google-konto. Uppladdningar sker direkt till din Drive: ingen data lagras hos tredje part utöver Google."
   }
 }

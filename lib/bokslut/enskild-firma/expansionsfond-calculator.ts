@@ -9,7 +9,7 @@ export interface ExpansionsfondInput {
   /** Kapitalunderlag vid årets slut (samma underlag som för positiv
    *  räntefördelning, IL 34 kap 6 §). */
   kapitalunderlag: number
-  /** Tidigare kvarstående avsättning till expansionsfond — utgör utgångsläget
+  /** Tidigare kvarstående avsättning till expansionsfond: utgör utgångsläget
    *  för årets bedömning. */
   existingBalance?: number
   /** Önskad ändring (positivt = avsättning, negativt = återföring).
@@ -34,7 +34,7 @@ export interface ExpansionsfondComputation {
  *
  * Mechanism: en enskild näringsidkare betalar 20,6 % expansionsfondsskatt på
  * avsatt belopp ENA året. När fonden återförs blir beloppet inkomst av
- * näringsverksamhet samma år som återföringen — men de 20,6 % redan betalat
+ * näringsverksamhet samma år som återföringen: men de 20,6 % redan betalat
  * tillgodoräknas mot årets skatt. Tax-only mechanism, NEVER booked.
  */
 export function calculateExpansionsfondChange(
@@ -85,8 +85,8 @@ export function calculateExpansionsfondChange(
     kind: actualChange > 0 ? 'expansionsfond_avsattning' : 'expansionsfond_ateforing',
     label:
       actualChange > 0
-        ? 'Expansionsfond — avsättning'
-        : 'Expansionsfond — återföring',
+        ? 'Expansionsfond: avsättning'
+        : 'Expansionsfond: återföring',
     description:
       actualChange > 0
         ? `Avsättning ${actualChange} kr. Skatt 20,6 % (${Math.abs(taxOnChange)} kr) betalas i år.`

@@ -1,6 +1,6 @@
 'use client'
 
-import { ReactNode } from 'react'
+import { ReactNode, useRef } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -22,6 +22,9 @@ interface ConfirmationDialogProps {
   confirmLabel?: string
   extraActions?: ReactNode
   children: ReactNode
+  // When true, initial focus lands on the confirm button so Enter fires the
+  // primary action. Opt-in: never arm Enter on unrelated/destructive dialogs.
+  autoFocusConfirm?: boolean
 }
 
 export function ConfirmationDialog({
@@ -34,10 +37,18 @@ export function ConfirmationDialog({
   confirmLabel = 'Bekräfta & skapa',
   extraActions,
   children,
+  autoFocusConfirm,
 }: ConfirmationDialogProps) {
+  const confirmRef = useRef<HTMLButtonElement>(null)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl border-t-2 border-primary p-0 gap-0 max-h-[95dvh] sm:max-h-[90dvh] flex flex-col">
+      <DialogContent
+        className="sm:max-w-2xl border-t-2 border-primary p-0 gap-0 max-h-[95dvh] sm:max-h-[90dvh] flex flex-col"
+        onOpenAutoFocus={autoFocusConfirm ? (e) => {
+          e.preventDefault()
+          confirmRef.current?.focus()
+        } : undefined}
+      >
         <DialogHeader className="px-4 sm:px-6 pt-4 sm:pt-6 pb-3 sm:pb-4 shrink-0">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 shrink-0">
@@ -72,7 +83,7 @@ export function ConfirmationDialog({
               Tillbaka
             </Button>
             {extraActions}
-            <Button onClick={onConfirm} disabled={isSubmitting} className="min-h-11 w-full sm:w-auto">
+            <Button ref={confirmRef} onClick={onConfirm} disabled={isSubmitting} className="min-h-11 w-full sm:w-auto">
               {isSubmitting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

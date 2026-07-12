@@ -13,7 +13,7 @@ export interface BenefitStep {
 }
 
 // ============================================================
-// Car Benefit (Bilförmån) — Generation 3 (≥July 1, 2021)
+// Car Benefit (Bilförmån): Generation 3 (≥July 1, 2021)
 // ============================================================
 
 export interface CarBenefitParams {
@@ -138,7 +138,7 @@ export const BIKE_BENEFIT_TAX_FREE_ALLOWANCE = 3000
  * taxable_annual  = max(0, annual_market_value - 3000)
  * taxable_monthly = taxable_annual / 12
  *
- * `annualMarketValue` is the yearly värde av förmånen — typically the
+ * `annualMarketValue` is the yearly värde av förmånen, typically the
  * marknadsmässiga hyran or the subscription cost the employer pays.
  */
 export function calculateBikeBenefit(annualMarketValue: number): {
@@ -193,8 +193,8 @@ export function calculateWellnessBenefit(
     steps: [{
       label: 'Friskvårdsbidrag',
       formula: taxable
-        ? `YTD ${totalYtd} > ${config.friskvardCap} — hela beloppet skattepliktigt`
-        : `YTD ${totalYtd} ≤ ${config.friskvardCap} — skattefritt`,
+        ? `YTD ${totalYtd} > ${config.friskvardCap}: hela beloppet skattepliktigt`
+        : `YTD ${totalYtd} ≤ ${config.friskvardCap}: skattefritt`,
       input: { amount, ytd: ytdWellness, cap: config.friskvardCap },
       output: taxable ? totalYtd : 0,
     }],

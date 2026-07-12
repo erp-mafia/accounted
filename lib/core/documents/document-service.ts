@@ -60,21 +60,27 @@ export function validateDocumentFile(file: { size: number; type?: string }): str
 /**
  * Inspect the first bytes of a buffer to identify the actual file format.
  * Defends against callers (typically MCP agents) that base64-encode a text
- * placeholder or summary instead of the real binary file — those uploads
+ * placeholder or summary instead of the real binary file: those uploads
  * succeed at the storage layer but the bytes are unreadable as a PDF/image.
  */
 function detectFileMagic(bytes: Uint8Array): string | null {
   if (bytes.length < 4) return null
-  // PDF: %PDF-  (allow a leading UTF-8 BOM as some tools prepend one)
-  const offset = bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF ? 3 : 0
-  if (
-    bytes.length >= offset + 5 &&
-    bytes[offset] === 0x25 &&
-    bytes[offset + 1] === 0x50 &&
-    bytes[offset + 2] === 0x44 &&
-    bytes[offset + 3] === 0x46 &&
-    bytes[offset + 4] === 0x2D
-  ) return 'application/pdf'
+  // PDF: %PDF- anywhere in the first 1024 bytes. ISO 32000 readers accept a
+  // preamble before the header (Acrobat scans the first 1 KB), and real-world
+  // invoice PDFs arrive with leading newlines/junk: requiring offset 0
+  // rejected files every normal reader opens. Image types stay strict at
+  // offset 0: genuine image files always start with their signature, and the
+  // looseness is not needed there to keep the anti-placeholder defense tight.
+  const pdfScanEnd = Math.min(bytes.length - 5, 1024)
+  for (let i = 0; i <= pdfScanEnd; i++) {
+    if (
+      bytes[i] === 0x25 &&
+      bytes[i + 1] === 0x50 &&
+      bytes[i + 2] === 0x44 &&
+      bytes[i + 3] === 0x46 &&
+      bytes[i + 4] === 0x2D
+    ) return 'application/pdf'
+  }
   // PNG: 89 50 4E 47
   if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png'
   // JPEG: FF D8 FF
@@ -93,7 +99,7 @@ function detectFileMagic(bytes: Uint8Array): string | null {
  * application/xhtml+xml (system-generated iXBRL årsredovisningar) we instead
  * require the content to start with an XML declaration, an HTML doctype, or
  * an <html> root element (after an optional UTF-8 BOM and leading
- * whitespace). This branch is consulted ONLY for that declared type — it
+ * whitespace). This branch is consulted ONLY for that declared type: it
  * never loosens detection for PDF/PNG/JPEG/WEBP uploads.
  */
 function looksLikeXhtml(bytes: Uint8Array): boolean {
@@ -106,9 +112,27 @@ function looksLikeXhtml(bytes: Uint8Array): boolean {
 }
 
 /**
+ * JSON has no binary magic number either. For the declared type
+ * application/json (raw PSD2 responses archived as räkenskapsinformation per
+ * BFL 7 kap) the content must parse as JSON with an object or array root — a
+ * prose placeholder is not valid JSON, and a bare quoted string still fails
+ * the root check, so the anti-placeholder defense stays intact. Consulted
+ * ONLY for that declared type.
+ */
+function looksLikeJson(bytes: Uint8Array): boolean {
+  const offset = bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF ? 3 : 0
+  try {
+    const parsed = JSON.parse(Buffer.from(bytes.slice(offset)).toString('utf8'))
+    return typeof parsed === 'object' && parsed !== null
+  } catch {
+    return false
+  }
+}
+
+/**
  * Verify the buffer actually contains a file of the declared type.
  * Returns an error string or null if valid. HEIC has many ftyp brands so
- * we skip the check for now — the UI path doesn't allow HEIC anyway, only
+ * we skip the check for now: the UI path doesn't allow HEIC anyway, only
  * the MCP upload tool does, and corrupted HEIC has not been observed.
  */
 export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType: string): string | null {
@@ -117,9 +141,13 @@ export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType
     if (looksLikeXhtml(new Uint8Array(buffer))) return null
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XHTML/XML-dokument.`
   }
+  if (declaredMimeType === 'application/json') {
+    if (looksLikeJson(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett giltigt JSON-dokument.`
+  }
   const detected = detectFileMagic(new Uint8Array(buffer))
   if (!detected) {
-    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar vara skadad eller inte en riktig binärfil — vid uppladdning via API, kontrollera att file_content_base64 är base64-kodade råbytes, inte en textrepresentation.`
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar vara skadad eller inte en riktig binärfil: vid uppladdning via API, kontrollera att file_content_base64 är base64-kodade råbytes, inte en textrepresentation.`
   }
   if (detected !== declaredMimeType) {
     return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade ${detected}).`
@@ -129,7 +157,7 @@ export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType
 
 let bucketVerified = false
 
-/** @internal Reset bucket verification flag — for testing only */
+/** @internal Reset bucket verification flag: for testing only */
 export function _resetBucketVerified() {
   bucketVerified = false
 }
@@ -183,7 +211,7 @@ export async function uploadDocument(
 ): Promise<DocumentAttachment> {
   await ensureDocumentsBucket()
 
-  // Reject corrupt uploads at the boundary — see validateDocumentMagicBytes.
+  // Reject corrupt uploads at the boundary: see validateDocumentMagicBytes.
   if (file.type) {
     const magicError = validateDocumentMagicBytes(file.buffer, file.type)
     if (magicError) throw new Error(magicError)
@@ -327,7 +355,7 @@ export async function linkToJournalEntry(
   journalEntryLineId?: string
 ): Promise<DocumentAttachment> {
   // The document is company-filtered below, but the journal entry id arrives
-  // from the client and the FK only requires existence — verify it belongs to
+  // from the client and the FK only requires existence: verify it belongs to
   // the same company so a crafted id can't anchor a document to another
   // tenant's verifikation. (RLS hides foreign rows either way; this makes the
   // rejection explicit instead of a confusing downstream state.)

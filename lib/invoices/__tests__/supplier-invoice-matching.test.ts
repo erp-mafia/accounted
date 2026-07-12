@@ -120,7 +120,7 @@ describe('findSupplierInvoiceMatch', () => {
     const inv = makeSupplierInvoice({
       status: 'registered',
       remaining_amount: 10000,
-      due_date: '2024-01-01', // far away date — won't match pass 3
+      due_date: '2024-01-01', // far away date: won't match pass 3
       supplier: { ...supplier, name: 'Kontorsbolaget AB' },
     })
 

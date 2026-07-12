@@ -3,7 +3,7 @@
  *
  * Mirror of voucher-matching.ts but targets 2440 (Leverantörsskulder) debits
  * instead of 151x credits. Used when the GL already contains a verifikat that
- * pays down AP — e.g. an SIE-imported payment voucher, a manually entered
+ * pays down AP, e.g. an SIE-imported payment voucher, a manually entered
  * bank-transfer voucher, or any flow where the bookkeeping landed without
  * supplier-invoice linkage. No new journal entry is created. Only a
  * supplier_invoice_payments row is inserted pointing at the existing
@@ -13,7 +13,7 @@
  * Vouchers that book the supplier expense directly without going through 2440
  * (e.g. Dr 4010 / Cr 1930 for a non-invoiced purchase) are rejected with
  * LINK_SI_VOUCHER_NO_AP_DEBIT. The proper fix for those is a storno+correction
- * via gnubok_correct_entry — out of scope for V1.
+ * via gnubok_correct_entry: out of scope for V1.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
@@ -29,11 +29,11 @@ import type { SupplierInvoice, Supplier } from '@/types'
 
 const log = createLogger('supplier-voucher-matching')
 
-/** AP account class. BAS 2026 reserves 2440–2449 for Leverantörsskulder
+/** AP account class. BAS 2026 reserves 2440-2449 for Leverantörsskulder
  *  (2440 SEK, 2441 utländsk valuta, 2443 Skuldfakturor, 2448 övriga). The
  *  supplier sub-ledger lives in the supplier_invoices table, not in per-
  *  supplier accounts. A samlingsverifikat that pays mixed SEK + EUR
- *  suppliers will legitimately debit both 2440 and 2441 — summing across
+ *  suppliers will legitimately debit both 2440 and 2441: summing across
  *  the 244x range catches that. PR #602 Swedish-compliance fix. */
 const AP_ACCOUNT_PREFIX = '244'
 
@@ -203,7 +203,7 @@ export async function findMatchingVouchersForSupplierInvoice(
   for (const id of alreadyLinked) byEntry.delete(id)
   if (byEntry.size === 0) return []
 
-  // Period-lock flags (informational — linking is allowed in locked periods
+  // Period-lock flags (informational, linking is allowed in locked periods
   // because no JE is mutated).
   const periodIds = Array.from(
     new Set(Array.from(byEntry.values()).map((v) => v.entry.fiscal_period_id)),
@@ -270,7 +270,7 @@ function scoreCandidate(
     }
   }
 
-  // Currency check — 2440 line currency must match invoice currency (or be
+  // Currency check: 2440 line currency must match invoice currency (or be
   // unset, which we treat as the invoice currency).
   const lineCurrencyEffective = lineCurrency ?? ctx.invoice.currency
   if (lineCurrencyEffective !== ctx.invoice.currency) {
@@ -285,7 +285,7 @@ function scoreCandidate(
     !exactTotal &&
     amountsMatchFuzzy(apDebitTotal, ctx.remainingAmount)
 
-  // Supplier name in description — reuse customer-side helper since the logic
+  // Supplier name in description: reuse customer-side helper since the logic
   // (significant tokens of the counterparty name appearing in free text) is
   // identical regardless of AR vs AP.
   const supplierMatch = customerNameMatches(
@@ -526,7 +526,7 @@ export async function linkSupplierInvoiceToVoucher(
   // and applies UPDATE + INSERT in a single PG transaction so a failure on
   // either rolls back automatically. The previous TS implementation did
   // UPDATE-then-INSERT with a manual rollback that could overwrite a
-  // concurrent sibling's successful write — PR #602 review fix.
+  // concurrent sibling's successful write: PR #602 review fix.
   const { data, error } = await supabase.rpc('link_supplier_invoice_to_voucher', {
     p_supplier_invoice_id: params.supplierInvoiceId,
     p_journal_entry_id: params.journalEntryId,
@@ -560,7 +560,7 @@ export async function linkSupplierInvoiceToVoucher(
 
   // Fetch the now-updated invoice for event emission. Lightweight; the RPC
   // committed before this read so the row reflects post-link state.
-  // select('*') is intentional — the supplier_invoice.paid event payload is
+  // select('*') is intentional: the supplier_invoice.paid event payload is
   // typed as `supplierInvoice: SupplierInvoice` in lib/events/types.ts, so
   // narrowing here would either break the subscriber contract or require a
   // separate event payload type. The event stays in-process (eventBus is a
@@ -588,7 +588,7 @@ export async function linkSupplierInvoiceToVoucher(
     } catch (err) {
       // Event emission failure must not block the response, but should leave
       // an audit trail (ISO 27001:2022 A.8.15 / OWASP V16). Logged at warn
-      // because the link itself succeeded — the downstream reminder/audit
+      // because the link itself succeeded: the downstream reminder/audit
       // subscriber will need separate intervention.
       log.warn('supplier_invoice.paid event emission failed', {
         err,
@@ -600,7 +600,7 @@ export async function linkSupplierInvoiceToVoucher(
 
   // Close the loop on the bank feed: the link above only advanced the supplier
   // invoice, leaving the bank transaction that paid it in the Transactions
-  // inbox. Reconcile it to the same verifikat when unambiguous. Best-effort —
+  // inbox. Reconcile it to the same verifikat when unambiguous. Best-effort:
   // the link RPC has already committed.
   let reconciledTransactionId: string | null = null
   try {

@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Info } from 'lucide-react'
 import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatusBadge'
-import { formatDate } from '@/lib/utils'
+import { formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 
@@ -37,7 +37,7 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
   const getRole = useGetRole()
   if (chain.length === 0) return null
 
-  // Combine current entry isn't in chain — chain is "other" entries
+  // Combine current entry isn't in chain: chain is "other" entries
   // Sort chronologically
   const sorted = [...chain].sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
@@ -63,7 +63,7 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
           // A cancelled entry is residue from an aborted correction attempt:
           // it was voided before taking effect and its lines were removed, so
           // it always sums to 0,00. Without the status badge it renders
-          // exactly like a live storno — dim it and say what it is.
+          // exactly like a live storno: dim it and say what it is.
           const isCancelled = entry.status === 'cancelled'
 
           return (
@@ -89,7 +89,7 @@ export default function CorrectionChain({ currentEntryId, chain }: Props) {
                     </Badge>
                   )}
                   <span className="ml-auto text-sm tabular-nums text-muted-foreground">
-                    {total.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} kr
+                    {formatCurrency(total)}
                   </span>
                 </div>
                 {entry.description && (

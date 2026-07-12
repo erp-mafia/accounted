@@ -16,7 +16,7 @@ import { createClient } from '@/lib/supabase/client'
 //
 // The three suggestion chips below the headline give users a one-click way
 // in. They navigate to /chat/new?intent=…&prompt=… which mounts AgentChat
-// inline and swaps to /chat/[id] once the conversation is created — so the
+// inline and swaps to /chat/[id] once the conversation is created: so the
 // flow stays full-screen instead of opening a slide-in sheet.
 const SUGGESTIONS: { label: string; prompt: string }[] = [
   {
@@ -44,7 +44,7 @@ export default function ChatEmptyState() {
   if (isSandbox) {
     const handleCreateAccount = async () => {
       const supabase = createClient()
-      // Sign-out is best-effort — navigate even if Supabase is unreachable
+      // Sign-out is best-effort: navigate even if Supabase is unreachable
       // so the button never looks dead.
       try {
         await supabase.auth.signOut()
@@ -99,7 +99,7 @@ export default function ChatEmptyState() {
     )
   }
 
-  // Hidden on mobile — the sidebar IS the page when no conversation is open.
+  // Hidden on mobile: the sidebar IS the page when no conversation is open.
   // On desktop, fills the right pane with a centered prompt.
   return (
     <div className="hidden md:flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">

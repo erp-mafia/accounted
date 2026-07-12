@@ -1,13 +1,13 @@
 // Avatar registry for the specialized accountant agent.
 //
-// We use the dicebear "notionists" style — clean line illustrations that
+// We use the dicebear "notionists" style: clean line illustrations that
 // match the editorial monochrome brand without the cartoony feel of most
 // avatar libraries. 8 hand-picked seeds give distinct faces without being
 // overwhelming. The user picks one during Phase B review; the choice is
 // persisted as agent_profiles.avatar_id.
 //
 // URLs are served by dicebear's free CDN. They're public SVGs derived from
-// the seed only — no user data leaves gnubok. If we ever need fully offline
+// the seed only: no user data leaves gnubok. If we ever need fully offline
 // generation, swap to @dicebear/core npm package and render server-side.
 
 export interface AvatarOption {
@@ -22,7 +22,7 @@ function dicebearNotionists(seed: string): string {
   return `https://api.dicebear.com/9.x/notionists/svg?seed=${encodeURIComponent(seed)}&radius=50&backgroundColor=f5f3ed`
 }
 
-// Eight neutral seeds — names chosen to produce visibly different faces.
+// Eight neutral seeds: names chosen to produce visibly different faces.
 // Labels are just for the picker tooltip; the user names the agent
 // themselves in the adjacent text field.
 export const AVATAR_OPTIONS: readonly AvatarOption[] = [

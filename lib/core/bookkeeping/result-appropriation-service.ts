@@ -15,7 +15,7 @@ export const PRIOR_RESULT_ACCOUNT = '2098'
 export interface ResultAppropriationPlan {
   periodId: string
   periodName: string
-  /** entry_date for the omföring — the new period's first day. */
+  /** entry_date for the omföring: the new period's first day. */
   periodStart: string
   /** Net 2099 balance, credit-positive (a profit is > 0, a loss is < 0). */
   net: number
@@ -75,8 +75,8 @@ export async function planResultAppropriation(
     .single()
   if (!period) throw new Error('Fiscal period not found')
 
-  // Read 2099 from the period's INGÅENDE BALANS only — the carried-forward
-  // prior result that the IB entry mirrored from last year's UB — NOT the full
+  // Read 2099 from the period's INGÅENDE BALANS only: the carried-forward
+  // prior result that the IB entry mirrored from last year's UB: NOT the full
   // trial balance. The omföring must reclassify exactly that carried amount;
   // scoping to IB makes it correct even when the period already has current-year
   // 2099 activity (e.g. the retroactive catch-up script running mid-year, where
@@ -135,7 +135,7 @@ export async function planResultAppropriation(
 }
 
 /**
- * Omföring av föregående års resultat — reclassify 2099 at new-year open.
+ * Omföring av föregående års resultat: reclassify 2099 at new-year open.
  *
  * After a new fiscal year's opening balances are generated, account 2099
  * "Årets resultat" carries the prior year's result forward (the IB entry is a
@@ -148,15 +148,15 @@ export async function planResultAppropriation(
  *   loss   (2099 has a debit balance):   Dr 2098 / Cr 2099
  *
  * It is deliberately NOT folded into the opening-balance entry. The IB entry
- * must stay a faithful mirror of the prior UB, or validateBalanceContinuity()
- * — which reads IB solely from the period's opening_balance entry — would flag
+ * must stay a faithful mirror of the prior UB, or validateBalanceContinuity():
+ * which reads IB solely from the period's opening_balance entry, would flag
  * 2099 and 2098 as discrepancies and executeYearEndClosing would self-reverse.
  * A standalone entry is invisible to that check.
  *
  * The further disposition 2098 → 2091 (balanserat resultat) / 2898 (utdelning)
  * is the bolagsstämma's decision and is intentionally left to a separate step.
  *
- * Idempotent / AB-only — see planResultAppropriation for the no-op conditions.
+ * Idempotent / AB-only: see planResultAppropriation for the no-op conditions.
  * Powers both executeYearEndClosing (steady state) and the retroactive
  * catch-up script (clears any accumulated 2099 in a company's open period).
  */

@@ -5,10 +5,10 @@
  * rules under test.
  *
  * Each year is a realistic post-bokslut TrialBalancePair:
- *   - `full` — the booked state AFTER the year-end closing entry: every
- *     class 3–8 account is zeroed (equal debit/credit churn) and 2099
+ *   - `full`: the booked state AFTER the year-end closing entry: every
+ *     class 3-8 account is zeroed (equal debit/credit churn) and 2099
  *     carries the year's result.
- *   - `preClosing` — the same year WITHOUT the closing entry
+ *   - `preClosing`: the same year WITHOUT the closing entry
  *     (excludeYearEndClosing): RR accounts still open, 2099 only carries
  *     the prior-year churn from the resultatdisposition entry.
  */
@@ -28,7 +28,7 @@ const row = (
   closing_credit: credit,
 })
 
-/** Current year WITHOUT the closing entry — RR accounts open. 2099 nets to 0
+/** Current year WITHOUT the closing entry: RR accounts open. 2099 nets to 0
  *  (prior-year result IB balanced away by the disposition entry). */
 const CURRENT_PRE_CLOSING: TrialBalanceRowLike[] = [
   row('1220', 'Inventarier', 80_000, 0),
@@ -55,7 +55,7 @@ const CURRENT_PRE_CLOSING: TrialBalanceRowLike[] = [
   row('8910', 'Skatt', 21_340, 0),
 ]
 
-/** Current year WITH the closing entry — class 3–8 zeroed, 2099 = 120 000. */
+/** Current year WITH the closing entry: class 3-8 zeroed, 2099 = 120 000. */
 const CURRENT_FULL: TrialBalanceRowLike[] = [
   row('1220', 'Inventarier', 80_000, 0),
   row('1229', 'Ack avskrivningar', 0, 20_000),
@@ -147,7 +147,7 @@ export function makeInput(): IxbrlArsredovisningInput {
         'Bolaget bedriver konsultverksamhet inom IT.\n\nBolaget har sitt säte i Sundsvall.',
       vasentligaHandelser: 'Inga väsentliga händelser har inträffat under räkenskapsåret.',
       // Rows 0/1 mirror the mapper outputs (duplicate facts with the RR must
-      // be value-identical, TA §2.7.3) — same override build-input applies.
+      // be value-identical, TA §2.7.3): same override build-input applies.
       flerarsoversikt: [
         {
           year: '2025',

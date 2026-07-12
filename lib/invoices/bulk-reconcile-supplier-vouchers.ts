@@ -2,20 +2,20 @@
  * Bulk reconcile supplier invoices to already-posted GL payment vouchers.
  *
  * Context: when a company is migrated from another system (e.g. Fortnox via the
- * arcim-migration extension), the general ledger — including the bank-payment
- * vouchers that settle accounts payable (Dr 2440 / Cr 1930) — is imported
+ * arcim-migration extension), the general ledger: including the bank-payment
+ * vouchers that settle accounts payable (Dr 2440 / Cr 1930): is imported
  * separately via SIE. Supplier invoices are imported as standalone
  * `supplier_invoices` rows with NO link to those vouchers (the entity mapper
  * never sets `payment_journal_entry_id`). Fortnox is queried with
  * `?filter=unpaid`, so an invoice whose payment was booked in the source GL but
  * never registered against the leverantörsfaktura object arrives here as an
  * open payable. Once its due date passes the nightly cron flips it to
- * `overdue` — even though the settling voucher already exists in the GL.
+ * `overdue`: even though the settling voucher already exists in the GL.
  *
  * This pass links each open payable to its matching posted voucher (reusing the
  * exact same matcher + RPC behind the manual "Markera som betald → Befintlig
  * verifikation" UI flow), so genuinely-settled invoices show as paid instead of
- * falsely overdue. It NEVER creates, edits, or deletes a journal entry — it only
+ * falsely overdue. It NEVER creates, edits, or deletes a journal entry: it only
  * inserts a `supplier_invoice_payments` row pointing at the existing voucher and
  * advances the invoice's paid/remaining/status (all via the atomic
  * `link_supplier_invoice_to_voucher` RPC).
@@ -23,7 +23,7 @@
  * Safety: auto-linking is intentionally conservative. A voucher is linked
  * automatically only when the match is unambiguous (see AUTO_LINK_* constants
  * and the uniqueness rules below). Everything else is surfaced for manual review
- * rather than guessed at. The function is idempotent and order-independent — it
+ * rather than guessed at. The function is idempotent and order-independent: it
  * can be re-run any time after both halves of a migration exist.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -42,7 +42,7 @@ const log = createLogger('bulk-reconcile-supplier-vouchers')
  * Minimum confidence for an UNATTENDED auto-link. 0.95 = OCR/invoice-number hit
  * (0.99) or exact-remaining-amount AND supplier-name corroboration (0.95).
  * Amount-only matches (0.80, even with the +0.05 date bump → 0.85) are
- * deliberately excluded — too many invoices share round amounts.
+ * deliberately excluded: too many invoices share round amounts.
  */
 const AUTO_LINK_MIN_CONFIDENCE = 0.95
 /**
@@ -51,7 +51,7 @@ const AUTO_LINK_MIN_CONFIDENCE = 0.95
  * margin (not exact equality) absorbs the ±0.05 date-proximity perturbation.
  */
 const AUTO_LINK_MIN_MARGIN = 0.1
-/** 0.5 öre — mirrors the tolerance used across the matching/RPC paths. */
+/** 0.5 öre: mirrors the tolerance used across the matching/RPC paths. */
 const AMOUNT_TOLERANCE = 0.005
 /** Safety cap on invoices processed in a single run (Vercel 300s budget). */
 const DEFAULT_MAX_INVOICES = 2000
@@ -92,7 +92,7 @@ export interface ReconcileResult {
   scanned: number
   /** Invoices auto-linked to a voucher (or that would be, when dryRun). */
   autoLinked: number
-  /** Invoices with candidate(s) but not safe to auto-link — need manual review. */
+  /** Invoices with candidate(s) but not safe to auto-link: need manual review. */
   ambiguous: number
   /** Invoices with no eligible voucher candidate at all. */
   unmatched: number
@@ -105,7 +105,7 @@ export interface ReconcileResult {
 export interface ReconcileOptions {
   supabase: SupabaseClient
   companyId: string
-  /** Real user id — written onto the supplier_invoice_payments row + emitted event. */
+  /** Real user id: written onto the supplier_invoice_payments row + emitted event. */
   userId: string
   /** Compute the plan without writing. Default false. */
   dryRun?: boolean
@@ -170,7 +170,7 @@ export async function reconcileSupplierInvoiceVouchers(
   const toProcess = payables.slice(0, maxInvoices)
   if (payables.length > maxInvoices) {
     result.capped = true
-    log.warn('reconcile capped to maxInvoices — remaining payables left for a later run', {
+    log.warn('reconcile capped to maxInvoices: remaining payables left for a later run', {
       companyId,
       totalPayables: payables.length,
       cap: maxInvoices,
@@ -247,7 +247,7 @@ export async function reconcileSupplierInvoiceVouchers(
 
   // 4. Cross-invoice uniqueness: if one voucher is the top auto-pick for more
   //    than one invoice (e.g. two identical 5 000 kr invoices both grabbing the
-  //    same 5 000 kr voucher), auto-link NONE of them — demote all to review.
+  //    same 5 000 kr voucher), auto-link NONE of them: demote all to review.
   const claimsByVoucher = new Map<string, Plan[]>()
   for (const plan of autoCandidatePlans) {
     const key = plan.top!.journal_entry_id
@@ -336,7 +336,7 @@ export async function reconcileSupplierInvoiceVouchers(
       })
     } else {
       // The RPC re-validates atomically; a rejection here (race, already-linked,
-      // amount drift) means it isn't a clean auto-link — surface it.
+      // amount drift) means it isn't a clean auto-link: surface it.
       result.ambiguous++
       result.review.push({
         supplier_invoice_id: plan.invoice.id,

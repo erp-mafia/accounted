@@ -5,6 +5,19 @@ vi.mock('../lib/sync', () => ({
   syncAccountTransactions: vi.fn(),
 }))
 
+// Mock the cash-accounts service (dynamically imported by the route) so the
+// mirror + allocation passes are deterministic and observable.
+const { mockUpsertFromPsd2, mockAllocate, mockGetRevokedConnectionIds } = vi.hoisted(() => ({
+  mockUpsertFromPsd2: vi.fn(),
+  mockAllocate: vi.fn(),
+  mockGetRevokedConnectionIds: vi.fn(),
+}))
+vi.mock('@/lib/cash-accounts/service', () => ({
+  upsertFromPsd2: (...args: unknown[]) => mockUpsertFromPsd2(...args),
+  allocatePsd2LedgerAccount: (...args: unknown[]) => mockAllocate(...args),
+  getRevokedConnectionIds: (...args: unknown[]) => mockGetRevokedConnectionIds(...args),
+}))
+
 import { enableBankingExtension } from '../index'
 import { syncAccountTransactions } from '../lib/sync'
 import type { ExtensionContext } from '@/lib/extensions/types'
@@ -12,7 +25,7 @@ import type { StoredAccount } from '../types'
 
 const mockedSync = vi.mocked(syncAccountTransactions)
 
-// Locate the PATCH /accounts handler once — schema doesn't change at runtime.
+// Locate the PATCH /accounts handler once: schema doesn't change at runtime.
 const accountsRoute = enableBankingExtension.apiRoutes?.find(
   r => r.method === 'PATCH' && r.path === '/accounts'
 )
@@ -39,9 +52,15 @@ interface SupabaseStub {
   updateErrorByCall?: Array<{ message: string } | null>
   /** BAS account numbers that exist in the company's chart_of_accounts (PR 2 ledger validation). */
   chartAccountNumbers?: string[]
+  /** Existing cash_accounts rows for the company (ledger collision validation). */
+  cashAccountRows?: Array<{
+    external_uid: string | null
+    bank_connection_id: string | null
+    ledger_account: string
+  }>
   /** Last update payload (may be overwritten by a follow-up metadata update). */
   capturedUpdate?: Record<string, unknown>
-  /** All update payloads in order — first is the status flip, second the initial-sync metadata. */
+  /** All update payloads in order: first is the status flip, second the initial-sync metadata. */
   capturedUpdates?: Record<string, unknown>[]
 }
 
@@ -65,6 +84,14 @@ function buildSupabase(stub: SupabaseStub) {
               .map(v => ({ account_number: v }))
             return Promise.resolve({ data, error: null })
           }),
+        }
+      }
+      // Company-wide cash_accounts read for ledger collision validation:
+      // select().eq() awaited as a thenable.
+      if (table === 'cash_accounts') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn(() => Promise.resolve({ data: stub.cashAccountRows ?? [], error: null })),
         }
       }
       return {
@@ -121,9 +148,40 @@ function makeRequest(body: unknown): Request {
   })
 }
 
+const ALLOCATOR_DEFAULTS: Record<string, string> = {
+  SEK: '1930',
+  EUR: '1932',
+  USD: '1933',
+  GBP: '1934',
+}
+
 describe('PATCH /accounts (enable-banking)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockUpsertFromPsd2.mockResolvedValue(undefined)
+    // Default: no revoked connections; individual tests override to exercise
+    // the self-heal path.
+    mockGetRevokedConnectionIds.mockResolvedValue(new Set<string>())
+    // Allocator stand-in mirroring the real behavior: currency default first,
+    // then the next free 1931–1959 slot (skipping other currency defaults).
+    mockAllocate.mockImplementation(
+      async (
+        _supabase: unknown,
+        _companyId: unknown,
+        _userId: unknown,
+        input: { currency: string; exclude?: ReadonlySet<string> },
+      ) => {
+        const preferred = ALLOCATOR_DEFAULTS[input.currency.toUpperCase()] ?? '1930'
+        const exclude = input.exclude ?? new Set<string>()
+        if (!exclude.has(preferred)) return preferred
+        const reserved = new Set(Object.values(ALLOCATOR_DEFAULTS))
+        for (let n = 1931; n <= 1959; n++) {
+          const candidate = String(n)
+          if (!reserved.has(candidate) && !exclude.has(candidate)) return candidate
+        }
+        return null
+      },
+    )
   })
 
   it('returns 401 when unauthenticated', async () => {
@@ -304,7 +362,7 @@ describe('PATCH /accounts (enable-banking)', () => {
     )
 
     expect(res.status).toBe(200)
-    // Status field is NOT present in the update — already-active connections
+    // Status field is NOT present in the update: already-active connections
     // don't re-assert the transition, which keeps the state machine explicit.
     expect(stub.capturedUpdate).toBeDefined()
     expect('status' in (stub.capturedUpdate ?? {})).toBe(false)
@@ -313,7 +371,7 @@ describe('PATCH /accounts (enable-banking)', () => {
   it('returns 400 when ctx.companyId is absent (no user.id fallback)', async () => {
     const supabase = buildSupabase({ authUser: { id: 'user-1' }, connectionRow: null })
     const ctx = makeContext(supabase)
-    // Simulate a missing company context — should not fall back to user.id.
+    // Simulate a missing company context: should not fall back to user.id.
     const ctxWithoutCompany = { ...ctx, companyId: undefined as unknown as string }
 
     const res = await accountsRoute.handler(
@@ -487,7 +545,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(body.initial_sync_error).toBeUndefined()
 
       expect(mockedSync).not.toHaveBeenCalled()
-      // Only one update — the original selection edit, no metadata follow-up.
+      // Only one update: the original selection edit, no metadata follow-up.
       expect(stub.capturedUpdates).toHaveLength(1)
     })
 
@@ -514,7 +572,7 @@ describe('PATCH /accounts (enable-banking)', () => {
         ctx
       )
 
-      // PATCH still succeeds — the cron will retry the backfill on its next run.
+      // PATCH still succeeds: the cron will retry the backfill on its next run.
       expect(res.status).toBe(200)
       const body = await res.json()
       expect(body.success).toBe(true)
@@ -599,7 +657,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       // The error code surfaces the metadata-update failure mode so the UI
       // and audit log can distinguish it from an ingest-side failure.
       expect(body.initial_sync_error).toMatch(/^metadata_update_failed:/)
-      // Status flip still happened — connection is active, cron will retry backfill.
+      // Status flip still happened: connection is active, cron will retry backfill.
       expect(stub.capturedUpdates?.[0]?.status).toBe('active')
       expect(stub.capturedUpdates).toHaveLength(2)
     })
@@ -747,7 +805,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       const ctx = makeContext(supabase)
 
       const res = await accountsRoute.handler(
-        // No account_mappings — pure selection edit (disable acc-2)
+        // No account_mappings: pure selection edit (disable acc-2)
         makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
         ctx
       )
@@ -759,7 +817,11 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(written.find(a => a.uid === 'acc-2')?.ledger_account).toBe('1932')
     })
 
-    it('clears ledger_account when account_mappings entry sets it to null', async () => {
+    it('re-allocates ledger_account when account_mappings entry sets it to null', async () => {
+      // Explicit null means "reset to auto". accounts_data must always mirror
+      // the effective cash_accounts assignment, so the cleared account gets a
+      // fresh allocation instead of an undefined that silently falls back to
+      // 1930 at mirror time.
       mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
 
       const stub: SupabaseStub = {
@@ -786,8 +848,188 @@ describe('PATCH /accounts (enable-banking)', () => {
       )
 
       expect(res.status).toBe(200)
+      expect(mockAllocate).toHaveBeenCalledTimes(1)
       const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
-      expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBeUndefined()
+      expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1930')
+    })
+
+    it('returns 400 when two accounts map to the same ledger_account', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        chartAccountNumbers: ['1930'],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [
+            { uid: 'acc-1', currency: 'SEK', enabled: true },
+            { uid: 'acc-2', currency: 'SEK', enabled: true },
+          ],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1', 'acc-2'],
+          account_mappings: [
+            { uid: 'acc-1', ledger_account: '1930' },
+            { uid: 'acc-2', ledger_account: '1930' },
+          ],
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toMatch(/samma konto/i)
+      expect(body.duplicate_accounts).toEqual(['1930'])
+      // Nothing written — the collision is rejected before any update.
+      expect(stub.capturedUpdates).toBeUndefined()
+      expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
+    })
+
+    it('returns 400 when a mapping targets a ledger held by another connection', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        chartAccountNumbers: ['1935'],
+        cashAccountRows: [
+          { external_uid: 'other-acc', bank_connection_id: 'conn-OTHER', ledger_account: '1935' },
+        ],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1'],
+          account_mappings: [{ uid: 'acc-1', ledger_account: '1935' }],
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toMatch(/annan bankanslutning/i)
+      expect(body.conflicting_accounts).toEqual(['1935'])
+    })
+
+    it('allows a mapping onto a ledger held only by a REVOKED connection (self-heal after disconnect)', async () => {
+      // Issue #916: rows orphaned by a disconnect that predates the ledger
+      // claim release still point at the revoked connection. They must not
+      // count as foreign claims: the save goes through and upsertFromPsd2
+      // promotes the orphaned row in place.
+      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+      mockGetRevokedConnectionIds.mockResolvedValue(new Set(['conn-REVOKED']))
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        chartAccountNumbers: ['1930'],
+        cashAccountRows: [
+          { external_uid: 'old-acc', bank_connection_id: 'conn-REVOKED', ledger_account: '1930' },
+        ],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1'],
+          account_mappings: [{ uid: 'acc-1', ledger_account: '1930' }],
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      // The revoked-status lookup was scoped to the foreign connection ids.
+      expect(mockGetRevokedConnectionIds).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        ['conn-REVOKED']
+      )
+      // The mirror received the user's pick, not an overflow slot.
+      expect(mockUpsertFromPsd2).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        expect.objectContaining({
+          bank_connection_id: 'conn-1',
+          external_uid: 'acc-1',
+          ledger_account: '1930',
+        })
+      )
+    })
+
+    it('allocates distinct ledgers for legacy accounts with no mapping at all', async () => {
+      mockedSync.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [
+            { uid: 'acc-1', currency: 'SEK', enabled: true },
+            { uid: 'acc-2', currency: 'SEK', enabled: true },
+          ],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1', 'acc-2'] }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+      expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1930')
+      expect(written.find(a => a.uid === 'acc-2')?.ledger_account).toBe('1931')
+      // The mirror received the same distinct assignments.
+      const mirrorLedgers = mockUpsertFromPsd2.mock.calls.map(
+        (c) => (c[2] as { ledger_account: string }).ledger_account,
+      )
+      expect(mirrorLedgers.sort()).toEqual(['1930', '1931'])
+    })
+
+    it('preserves the mirrored cash_accounts ledger for accounts without a stored value', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        cashAccountRows: [
+          { external_uid: 'acc-1', bank_connection_id: 'conn-1', ledger_account: '1940' },
+        ],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'active',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      // No allocation — the existing mirrored assignment wins.
+      expect(mockAllocate).not.toHaveBeenCalled()
+      const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+      expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1940')
     })
 
     it('rejects account_mappings that is not an array', async () => {

@@ -1,103 +1,77 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 /**
  * GET /api/import/sie/[id]
  * Get details of a specific SIE import
  */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
-  const { id } = await params
+export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'sie_import.get',
+  async (_request, { supabase, companyId }, { params }) => {
+    const { id } = await params
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+    const { data, error } = await supabase
+      .from('sie_imports')
+      .select('*')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .single()
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
 
-  const companyId = await requireCompanyId(supabase, user.id)
+    if (!data) {
+      return NextResponse.json({ error: 'Import not found' }, { status: 404 })
+    }
 
-  const { data, error } = await supabase
-    .from('sie_imports')
-    .select('*')
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .single()
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  if (!data) {
-    return NextResponse.json({ error: 'Import not found' }, { status: 404 })
-  }
-
-  return NextResponse.json({ data })
-}
+    return NextResponse.json({ data })
+  },
+)
 
 /**
  * DELETE /api/import/sie/[id]
  * Delete an import record.
  *
  * Only failed or pending imports can be deleted. Completed imports have created
- * journal entries that are part of räkenskapsinformation — deleting the metadata
+ * journal entries that are part of räkenskapsinformation: deleting the metadata
  * without reversing entries would leave orphaned bookkeeping data, and deleting
  * both is prohibited under BFL 7 kap (7-year retention).
  */
-export async function DELETE(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
-  const { id } = await params
+export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'sie_import.delete',
+  async (_request, { supabase, companyId }, { params }) => {
+    const { id } = await params
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+    // Check current status before deleting
+    const { data: importRecord } = await supabase
+      .from('sie_imports')
+      .select('status')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .single()
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+    if (!importRecord) {
+      return NextResponse.json({ error: 'Import not found' }, { status: 404 })
+    }
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
+    if (importRecord.status === 'completed') {
+      return NextResponse.json({
+        error: 'Slutförd import kan inte raderas. Importerade verifikationer ingår i räkenskapsinformationen (BFL 7 kap).',
+      }, { status: 403 })
+    }
 
-  const companyId = await requireCompanyId(supabase, user.id)
+    const { error } = await supabase
+      .from('sie_imports')
+      .delete()
+      .eq('id', id)
+      .eq('company_id', companyId)
 
-  // Check current status before deleting
-  const { data: importRecord } = await supabase
-    .from('sie_imports')
-    .select('status')
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .single()
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
 
-  if (!importRecord) {
-    return NextResponse.json({ error: 'Import not found' }, { status: 404 })
-  }
-
-  if (importRecord.status === 'completed') {
-    return NextResponse.json({
-      error: 'Slutförd import kan inte raderas. Importerade verifikationer ingår i räkenskapsinformationen (BFL 7 kap).',
-    }, { status: 403 })
-  }
-
-  const { error } = await supabase
-    .from('sie_imports')
-    .delete()
-    .eq('id', id)
-    .eq('company_id', companyId)
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  return NextResponse.json({ success: true })
-}
+    return NextResponse.json({ success: true })
+  },
+  { requireWrite: true },
+)

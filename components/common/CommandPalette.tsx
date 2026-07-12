@@ -4,12 +4,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
-  Receipt,
+  ReceiptText,
   ArrowLeftRight,
   Users,
   Wallet,
   Building2,
   BookOpen,
+  ListTree,
   BarChart3,
   Upload,
   Package,
@@ -24,6 +25,8 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useCompany } from '@/contexts/CompanyContext'
+import { requiredCapabilityForExtension } from '@/lib/entitlements/keys'
 
 type Entry = {
   id: string
@@ -35,10 +38,10 @@ type Entry = {
 }
 
 const ACTION_ENTRIES: Entry[] = [
-  { id: 'new-invoice', label: 'Ny faktura', hint: 'Skapa & skicka faktura', icon: Receipt, href: '/invoices/new', keywords: 'fakturera ny invoice send create' },
+  { id: 'new-invoice', label: 'Ny faktura', hint: 'Skapa & skicka faktura', icon: ReceiptText, href: '/invoices?new=1', keywords: 'fakturera ny invoice send create' },
   { id: 'book-transaction', label: 'Boka transaktion', hint: 'Gå till transaktionsinkorgen', icon: ArrowLeftRight, href: '/transactions', keywords: 'transaktion bokför kategorisera categorize' },
   { id: 'new-customer', label: 'Lägg till kund', icon: Users, href: '/customers', keywords: 'kund customer ny lägg till' },
-  { id: 'new-supplier-invoice', label: 'Skapa leverantörsfaktura', icon: Wallet, href: '/supplier-invoices/new', keywords: 'leverantörsfaktura supplier invoice ny' },
+  { id: 'new-supplier-invoice', label: 'Skapa leverantörsfaktura', icon: Wallet, href: '/supplier-invoices?new=1', keywords: 'leverantörsfaktura supplier invoice ny' },
   { id: 'reports', label: 'Visa resultaträkning', hint: 'Rapporter', icon: BarChart3, href: '/reports', keywords: 'rapport resultat balans report' },
 ]
 
@@ -47,6 +50,7 @@ const PAGE_ENTRIES: Entry[] = [
   { id: 'leverantörer', label: 'Leverantörer', icon: Building2, href: '/suppliers' },
   { id: 'leverantörsfakturor', label: 'Leverantörsfakturor', icon: Wallet, href: '/supplier-invoices' },
   { id: 'bokföring', label: 'Bokföring', icon: BookOpen, href: '/bookkeeping', keywords: 'verifikat journal ledger' },
+  { id: 'kontoplan', label: 'Kontoplan', icon: ListTree, href: '/chart-of-accounts', keywords: 'kontoplan konton bas chart of accounts konto' },
   { id: 'anläggningstillgångar', label: 'Anläggningstillgångar', icon: Package, href: '/assets', keywords: 'tillgångar assets' },
   { id: 'rapporter', label: 'Rapporter', icon: BarChart3, href: '/reports' },
   { id: 'rapport-resultatrapport', label: 'Visa rapport: Resultatrapport', icon: BarChart3, href: '/reports/resultatrapport', keywords: 'rapport resultat intäkter kostnader' },
@@ -55,6 +59,7 @@ const PAGE_ENTRIES: Entry[] = [
   { id: 'rapport-moms', label: 'Visa rapport: Momsdeklaration', icon: BarChart3, href: '/reports/vat-declaration', keywords: 'rapport moms vat deklaration' },
   { id: 'rapport-huvudbok', label: 'Visa rapport: Huvudbok', icon: BookOpen, href: '/reports/huvudbok', keywords: 'rapport huvudbok ledger general konto saldo transaktioner per konto kontoutdrag kontoanalys kontokort kontohistorik balance account statement transactions' },
   { id: 'rapport-kundreskontra', label: 'Visa rapport: Kundreskontra', icon: Users, href: '/reports/kundreskontra', keywords: 'rapport kundreskontra ar kundfordringar' },
+  { id: 'rapport-bankavstamning', label: 'Bankavstämning', hint: 'Stäm av bank mot bokföring', icon: ArrowLeftRight, href: '/reports/bank-reconciliation', keywords: 'avstämning stäm av bank matcha banktransaktioner reconcile reconciliation 1930' },
   { id: 'importera', label: 'Importera', icon: Upload, href: '/import' },
   { id: 'granskning', label: 'Granskning', icon: ClipboardCheck, href: '/pending', keywords: 'pending review' },
   { id: 'löner', label: 'Löner', icon: HandCoins, href: '/salary' },
@@ -76,6 +81,19 @@ export default function CommandPalette() {
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const { capabilities } = useCompany()
+
+  // Drop entries that jump to a paywalled extension workspace the active
+  // company can't reach (e.g. the AI-only Dokumentinkorg). The page itself is
+  // gated server-side; this keeps ⌘K from offering a dead destination.
+  const allowedByCapability = useMemo(() => {
+    return (entry: Entry) => {
+      const m = entry.href.match(/^\/e\/([^/]+)\/([^/?#]+)/)
+      if (!m) return true
+      const required = requiredCapabilityForExtension(m[1], m[2])
+      return !required || capabilities.includes(required)
+    }
+  }, [capabilities])
 
   function handleOpenChange(next: boolean) {
     setOpen(next)
@@ -105,14 +123,14 @@ export default function CommandPalette() {
 
   const q = query.trim().toLowerCase()
 
-  const filteredActions = useMemo(
-    () => (q ? ACTION_ENTRIES.filter(e => matches(e, q)) : ACTION_ENTRIES),
-    [q],
-  )
-  const filteredPages = useMemo(
-    () => (q ? PAGE_ENTRIES.filter(e => matches(e, q)) : PAGE_ENTRIES.slice(0, 6)),
-    [q],
-  )
+  const filteredActions = useMemo(() => {
+    const visible = ACTION_ENTRIES.filter(allowedByCapability)
+    return q ? visible.filter(e => matches(e, q)) : visible
+  }, [q, allowedByCapability])
+  const filteredPages = useMemo(() => {
+    const visible = PAGE_ENTRIES.filter(allowedByCapability)
+    return q ? visible.filter(e => matches(e, q)) : visible.slice(0, 6)
+  }, [q, allowedByCapability])
 
   const annaFallback: Entry | null = q && filteredActions.length === 0 && filteredPages.length === 0
     ? {

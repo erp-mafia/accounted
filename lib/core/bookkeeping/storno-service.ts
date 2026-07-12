@@ -6,6 +6,7 @@ import type {
   JournalEntryLine,
 } from '@/types'
 import { validateBalance, getNextVoucherNumber } from '@/lib/bookkeeping/engine'
+import { normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import {
@@ -33,7 +34,7 @@ function round2(n: number): number {
 /**
  * True when every account's (debit − credit) sum across the proposed lines is
  * zero. Such a rättelse describes no real affärshändelse and would erase the
- * original posting without representing anything in its place — disallowed by
+ * original posting without representing anything in its place: disallowed by
  * BFL 5 kap. 5 § / BFNAR 2013:2.
  */
 function netsToZeroPerAccount(lines: CreateJournalEntryLineInput[]): boolean {
@@ -106,7 +107,7 @@ type OriginalWithLines = JournalEntry & { lines?: JournalEntryLine[] | null }
  * The storno (reversal) is always created in the original entry's period and
  * date, so the original nets to zero where it was booked. The corrected entry
  * defaults to the original's date/period too, but `options.newEntryDate` /
- * `options.newFiscalPeriodId` let a caller re-book it elsewhere — used to move
+ * `options.newFiscalPeriodId` let a caller re-book it elsewhere: used to move
  * a verifikation booked on the wrong year to its correct period (see
  * recordateEntry). When the date/period is the correction, identical lines are
  * allowed (the move itself is the meaningful change).
@@ -124,13 +125,13 @@ export async function correctEntry(
     newFiscalPeriodId?: string
     /**
      * The original entry (with lines) already loaded by the caller. When
-     * provided, we skip the redundant re-fetch — recordateEntry reads the
+     * provided, we skip the redundant re-fetch: recordateEntry reads the
      * original to copy its lines and hands it through here. This also closes
      * the small TOCTOU window a second independent read would open.
      */
     preloadedOriginal?: OriginalWithLines
   }
-): Promise<{ reversal: JournalEntry; corrected: JournalEntry }> {
+): Promise<{ reversal: JournalEntry; corrected: JournalEntry; documentRelinkError?: string }> {
   // Validate the corrected lines are balanced
   const balance = validateBalance(correctedLines)
   if (!balance.valid) {
@@ -139,12 +140,12 @@ export async function correctEntry(
 
   // Reject a rättelse with no economic effect (e.g. 1930 debit 100 / 1930
   // credit 100). Such an entry would erase the original posting without
-  // representing any affärshändelse — disallowed by BFL 5 kap. 5 §.
+  // representing any affärshändelse: disallowed by BFL 5 kap. 5 §.
   if (netsToZeroPerAccount(correctedLines)) {
     throw new MeaninglessCorrectionError('net_zero_per_account')
   }
 
-  // Fetch original entry with lines — unless the caller already loaded it.
+  // Fetch original entry with lines: unless the caller already loaded it.
   let original = options?.preloadedOriginal ?? null
   if (!original) {
     const { data, error: fetchError } = await supabase
@@ -174,7 +175,7 @@ export async function correctEntry(
   const dateOrPeriodChanged =
     correctedDate !== original.entry_date || correctedPeriodId !== original.fiscal_period_id
 
-  // Reject when the proposed lines are identical to the original entry — a
+  // Reject when the proposed lines are identical to the original entry: a
   // rättelse must actually change something. Skip this when the date/period is
   // the change (moving a verifikation to the right year keeps the same lines).
   if (!dateOrPeriodChanged && isIdenticalToOriginal(correctedLines, originalLines)) {
@@ -271,22 +272,24 @@ export async function correctEntry(
     throw new BookkeepingDatabaseError('create_reversal_entry', reversalError?.message)
   }
 
-  // Insert reversed lines (swap debit and credit)
-  const reversalLineInserts = originalLines.map((line, index) => ({
-    journal_entry_id: reversalEntry.id,
-    account_number: line.account_number,
-    account_id: line.account_id || null,
-    debit_amount: Math.round((Number(line.credit_amount) || 0) * 100) / 100,
-    credit_amount: Math.round((Number(line.debit_amount) || 0) * 100) / 100,
-    currency: line.currency || 'SEK',
-    amount_in_currency: line.amount_in_currency ? -Number(line.amount_in_currency) : null,
-    exchange_rate: line.exchange_rate || null,
-    line_description: `Storno: ${line.line_description || ''}`,
-    tax_code: line.tax_code || null,
-    cost_center: line.cost_center || null,
-    project: line.project || null,
-    sort_order: index,
-  }))
+  // Insert reversed lines (swap debit and credit, preserve dimensions)
+  const reversalLineInserts = originalLines.map((line, index) => {
+    const dimensions = normalizeLineDimensions(line)
+    return {
+      journal_entry_id: reversalEntry.id,
+      account_number: line.account_number,
+      account_id: line.account_id || null,
+      debit_amount: Math.round((Number(line.credit_amount) || 0) * 100) / 100,
+      credit_amount: Math.round((Number(line.debit_amount) || 0) * 100) / 100,
+      currency: line.currency || 'SEK',
+      amount_in_currency: line.amount_in_currency ? -Number(line.amount_in_currency) : null,
+      exchange_rate: line.exchange_rate || null,
+      line_description: `Storno: ${line.line_description || ''}`,
+      tax_code: line.tax_code || null,
+      dimensions,
+      sort_order: index,
+    }
+  })
 
   const { error: reversalLinesError } = await supabase
     .from('journal_entry_lines')
@@ -327,7 +330,7 @@ export async function correctEntry(
     )
 
     // Account IDs were resolved (and standard BAS accounts seeded) in Step 0,
-    // before the storno existed — nothing to clean up if we got this far.
+    // before the storno existed: nothing to clean up if we got this far.
     const { data: newEntry, error: correctedError } = await supabase
       .from('journal_entries')
       .insert({
@@ -352,23 +355,25 @@ export async function correctEntry(
     correctedEntry = newEntry
 
     // Insert corrected lines
-    const correctedLineInserts = correctedLines.map((line, index) => ({
-      journal_entry_id: correctedEntry.id,
-      account_number: line.account_number,
-      account_id: accountIdMap.get(line.account_number) || null,
-      debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
-      credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
-      currency: line.currency || 'SEK',
-      amount_in_currency: line.amount_in_currency
-        ? Math.round(line.amount_in_currency * 100) / 100
-        : null,
-      exchange_rate: line.exchange_rate || null,
-      line_description: line.line_description || null,
-      tax_code: line.tax_code || null,
-      cost_center: line.cost_center || null,
-      project: line.project || null,
-      sort_order: index,
-    }))
+    const correctedLineInserts = correctedLines.map((line, index) => {
+      const dimensions = normalizeLineDimensions(line)
+      return {
+        journal_entry_id: correctedEntry.id,
+        account_number: line.account_number,
+        account_id: accountIdMap.get(line.account_number) || null,
+        debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
+        credit_amount: Math.round((line.credit_amount || 0) * 100) / 100,
+        currency: line.currency || 'SEK',
+        amount_in_currency: line.amount_in_currency
+          ? Math.round(line.amount_in_currency * 100) / 100
+          : null,
+        exchange_rate: line.exchange_rate || null,
+        line_description: line.line_description || null,
+        tax_code: line.tax_code || null,
+        dimensions,
+        sort_order: index,
+      }
+    })
 
     const { error: correctedLinesError } = await supabase
       .from('journal_entry_lines')
@@ -391,7 +396,7 @@ export async function correctEntry(
     }
   } catch (err) {
     // Cancel the reversal entry (posted → cancelled). Original was never
-    // modified so no rollback needed — it's still 'posted'.
+    // modified so no rollback needed: it's still 'posted'.
     await cancelEntry(supabase, reversalEntry.id)
     throw err
   }
@@ -408,7 +413,7 @@ export async function correctEntry(
     .select('id')
 
   if (casError || !updatedOriginal || updatedOriginal.length === 0) {
-    // Concurrent reversal beat us — cancel both our entries
+    // Concurrent reversal beat us: cancel both our entries
     await cancelEntry(supabase, reversalEntry.id)
     await cancelEntry(supabase, correctedEntry!.id)
     throw new EntryAlreadyReversedError()
@@ -418,10 +423,17 @@ export async function correctEntry(
   // entry. The original is now status 'reversed'; the corrected entry is the
   // live representation of the affärshändelse, so the transaction row should
   // keep reading as booked against it (and stay correctable/uncategorizable),
-  // and the underlag should travel with it. Best-effort — the correction_of_id
-  // chain preserves traceability even if either relink fails.
+  // and the underlag should travel with it. Best-effort: the correction_of_id
+  // chain preserves traceability even if either relink fails, but a document
+  // relink failure is surfaced on the result so the caller can warn instead
+  // of silently stranding underlag on the reversed entry.
   await relinkTransactionsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
-  await relinkDocumentsToEntry(supabase, companyId, originalEntryId, correctedEntry!.id)
+  const documentRelinkError = await relinkDocumentsToEntry(
+    supabase,
+    userId,
+    originalEntryId,
+    correctedEntry!.id
+  )
 
   // ===== Step 3: Fetch complete entries =====
   const { data: finalReversal } = await supabase
@@ -439,6 +451,7 @@ export async function correctEntry(
   const result = {
     reversal: finalReversal as JournalEntry,
     corrected: finalCorrected as JournalEntry,
+    ...(documentRelinkError ? { documentRelinkError } : {}),
   }
 
   await eventBus.emit({
@@ -456,8 +469,8 @@ export async function correctEntry(
 }
 
 /**
- * Move a posted verifikation to a different date — and thereby a different
- * fiscal period — without changing its lines. Fixes a booking entered with the
+ * Move a posted verifikation to a different date, and thereby a different
+ * fiscal period: without changing its lines. Fixes a booking entered with the
  * wrong date/year (e.g. 2026-07-03 that should have been 2025-07-03).
  *
  * A posted verifikation is immutable (BFL), so this is a storno + re-book under
@@ -506,11 +519,11 @@ export async function recordateEntry(
     throw new TargetPeriodLockedError(newDate, target.lock_date)
   }
   if (!target.period_id) {
-    // 'open' but no covering period — we do not auto-create periods on a fix.
+    // 'open' but no covering period: we do not auto-create periods on a fix.
     throw new NoOpenPeriodForDateError(newDate)
   }
 
-  // Copy the original lines verbatim — they were correct; only the date was
+  // Copy the original lines verbatim: they were correct; only the date was
   // wrong. correctEntry rebuilds the storno from the original anyway.
   const originalLines = (original.lines as JournalEntryLine[]) || []
   const copiedLines: CreateJournalEntryLineInput[] = originalLines
@@ -526,6 +539,7 @@ export async function recordateEntry(
         line.amount_in_currency != null ? Number(line.amount_in_currency) : undefined,
       exchange_rate: line.exchange_rate != null ? Number(line.exchange_rate) : undefined,
       tax_code: line.tax_code || undefined,
+      dimensions: line.dimensions || undefined,
       cost_center: line.cost_center || undefined,
       project: line.project || undefined,
     }))
@@ -545,7 +559,7 @@ export async function recordateEntry(
     }
   )
 
-  // Underlag and bank-transaction links follow the corrected entry —
+  // Underlag and bank-transaction links follow the corrected entry:
   // correctEntry handles both relinks for every correction flavour.
   return result
 }
@@ -554,7 +568,7 @@ export async function recordateEntry(
  * Re-point every bank transaction from one entry to another. Used when a
  * verifikation is corrected so the transaction row keeps reading as booked
  * against the live (corrected) entry instead of the reversed original.
- * Failures are logged, not thrown — the correction chain stays traceable.
+ * Failures are logged, not thrown: the correction chain stays traceable.
  */
 async function relinkTransactionsToEntry(
   supabase: SupabaseClient,
@@ -576,27 +590,38 @@ async function relinkTransactionsToEntry(
 }
 
 /**
- * Re-point every document_attachment from one entry to another. Used when a
- * verifikation is moved to a different period so its underlag travels with the
- * live (corrected) entry. The line-level link is cleared because the corrected
- * entry has new line ids. Failures are logged, not thrown — the entry-level
- * correction chain is the source of truth for traceability.
+ * Re-point every document_attachment from one entry to another so the
+ * underlag travels with the live (corrected) entry. Goes through the
+ * relink_documents_to_correction RPC: a direct UPDATE on
+ * document_attachments.journal_entry_id is categorically blocked by the
+ * BFL immutability triggers (migration 20260506130000/150000); the RPC
+ * validates the correction chain (source reversed, target posted,
+ * target.correction_of_id = source) and performs the move under the narrow
+ * gnubok.allow_correction_relink GUC. The line-level link is cleared because
+ * the corrected entry has new line ids.
+ *
+ * Failures are logged, not thrown (the entry-level correction chain is the
+ * source of truth for traceability), but the error message is returned so
+ * correctEntry can surface a warning instead of pretending the underlag
+ * moved.
  */
 async function relinkDocumentsToEntry(
   supabase: SupabaseClient,
-  companyId: string,
+  userId: string,
   fromEntryId: string,
   toEntryId: string
-): Promise<void> {
-  const { error } = await supabase
-    .from('document_attachments')
-    .update({ journal_entry_id: toEntryId, journal_entry_line_id: null })
-    .eq('company_id', companyId)
-    .eq('journal_entry_id', fromEntryId)
+): Promise<string | undefined> {
+  const { error } = await supabase.rpc('relink_documents_to_correction', {
+    p_user_id: userId,
+    p_from_entry_id: fromEntryId,
+    p_to_entry_id: toEntryId,
+  })
   if (error) {
     console.error(
       `[storno] relinkDocumentsToEntry: failed to move documents ${fromEntryId} → ${toEntryId}:`,
       error.message
     )
+    return error.message
   }
+  return undefined
 }

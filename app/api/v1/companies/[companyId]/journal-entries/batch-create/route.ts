@@ -2,11 +2,11 @@
  * POST /api/v1/companies/{companyId}/journal-entries/batch-create
  *
  * Bulk-create draft journal entries (up to 50 per call). Each item is
- * processed independently — per-item failures don't roll back successes
+ * processed independently: per-item failures don't roll back successes
  * (partial-success semantics, matching /invoices/bulk-create and
  * /suppliers/bulk-create).
  *
- * The endpoint creates DRAFTS only — committing them is a separate per-id
+ * The endpoint creates DRAFTS only: committing them is a separate per-id
  * call. This keeps batch behaviour symmetric with the single POST and makes
  * the failure modes simpler (no half-committed batches).
  *
@@ -53,11 +53,11 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/journal-entries/batch-create',
   summary: 'Create up to 50 draft journal entries (partial-success).',
   description:
-    'Bulk-create endpoint mirroring /invoices/bulk-create and /suppliers/bulk-create. Each entry is validated and inserted independently — per-item failures do not roll back items that succeeded. Returns DRAFTS only; commit each separately. Idempotent over the whole batch. Dry-runnable.',
+    'Bulk-create endpoint mirroring /invoices/bulk-create and /suppliers/bulk-create. Each entry is validated and inserted independently: per-item failures do not roll back items that succeeded. Returns DRAFTS only; commit each separately. Idempotent over the whole batch. Dry-runnable.',
   useWhen:
     'You\'re replaying historical bookkeeping from another system, or batching a set of manual verifikationer from a spreadsheet. Use dry-run first to validate the batch.',
   doNotUseFor:
-    'Committing posted entries — use POST /{id}/commit per entry. Transactional all-or-nothing imports — passing all_or_nothing: true returns 501 NOT_IMPLEMENTED.',
+    'Committing posted entries: use POST /{id}/commit per entry. Transactional all-or-nothing imports: passing all_or_nothing: true returns 501 NOT_IMPLEMENTED.',
   pitfalls: [
     'Idempotency-Key is mandatory and covers the WHOLE batch.',
     'all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist.',
@@ -185,8 +185,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // Ownership pre-check on every distinct fiscal_period_id in the batch.
     // Bulk endpoints are particularly attractive for cross-tenant probing
     // (50 ids per call vs 1) so we batch-verify up front rather than per-
-    // item. Any unknown id fails the entire batch with a structured error
-    // — partial-success semantics only apply AFTER ownership is established.
+    // item. Any unknown id fails the entire batch with a structured error:
+    // partial-success semantics only apply AFTER ownership is established.
     const uniquePeriodIds = Array.from(new Set(body.journal_entries.map((e) => e.fiscal_period_id)))
     for (const periodId of uniquePeriodIds) {
       if (!(await ownsFiscalPeriod(ctx.supabase, ctx.companyId!, periodId))) {

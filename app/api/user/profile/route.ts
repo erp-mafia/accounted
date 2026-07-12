@@ -6,7 +6,7 @@ import { createLogger } from '@/lib/logger'
 
 const log = createLogger('user/profile')
 
-// User-scoped (not company-scoped) — same shape as /api/user/locale, so it
+// User-scoped (not company-scoped): same shape as /api/user/locale, so it
 // opts out of withRouteContext and calls requireAuth() directly (MFA still
 // enforced on hosted).
 const BodySchema = z.object({

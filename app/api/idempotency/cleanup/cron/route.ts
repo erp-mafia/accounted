@@ -5,7 +5,7 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 
 /**
- * GET /api/idempotency/cleanup/cron — hourly.
+ * GET /api/idempotency/cleanup/cron: hourly.
  * Sweeps idempotency_keys past their 24h TTL.
  */
 export const GET = withCronContext('cron.idempotency_cleanup', async (_request, ctx) => {

@@ -51,7 +51,7 @@ export interface RateLimitResult {
  * Returns `{ ok: true }` when the request is allowed.
  * Returns `{ ok: false, response }` with a 429 NextResponse when blocked.
  *
- * No-ops (allows the request) when Upstash env vars are not configured —
+ * No-ops (allows the request) when Upstash env vars are not configured:
  * intentional so local dev and self-hosted deployments without Redis still work.
  * Production hosted deployments must set UPSTASH_REDIS_REST_URL/TOKEN for the
  * limit to be enforced; absence is logged once at startup by other call sites.

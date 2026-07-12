@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchMultipleRates } from '@/lib/currency/riksbanken'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import {
@@ -24,19 +25,26 @@ export async function getOpenForeignCurrencyReceivables(
   supabase: SupabaseClient,
   companyId: string
 ): Promise<Invoice[]> {
-  const { data, error } = await supabase
-    .from('invoices')
-    .select('*')
-    .eq('company_id', companyId)
-    .in('status', ['sent', 'overdue'])
-    .neq('currency', 'SEK')
-    .not('exchange_rate', 'is', null)
-
-  if (error) {
-    throw new BookkeepingDatabaseError('fetch_currency_receivables', error.message)
+  try {
+    // Paginated with a stable id order so a company with >1000 open FX invoices
+    // is fully revalued rather than silently truncated at 1000 rows.
+    return await fetchAllRows<Invoice>(({ from, to }) =>
+      supabase
+        .from('invoices')
+        .select('*')
+        .eq('company_id', companyId)
+        .in('status', ['sent', 'overdue'])
+        .neq('currency', 'SEK')
+        .not('exchange_rate', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to)
+    , { dedupeBy: (i) => i.id })
+  } catch (err) {
+    throw new BookkeepingDatabaseError(
+      'fetch_currency_receivables',
+      err instanceof Error ? err.message : 'fetch failed'
+    )
   }
-
-  return (data || []) as Invoice[]
 }
 
 /**
@@ -48,19 +56,26 @@ export async function getOpenForeignCurrencyPayables(
   supabase: SupabaseClient,
   companyId: string
 ): Promise<SupplierInvoice[]> {
-  const { data, error } = await supabase
-    .from('supplier_invoices')
-    .select('*')
-    .eq('company_id', companyId)
-    .in('status', ['registered', 'approved', 'overdue', 'partially_paid'])
-    .neq('currency', 'SEK')
-    .not('exchange_rate', 'is', null)
-
-  if (error) {
-    throw new BookkeepingDatabaseError('fetch_currency_payables', error.message)
+  try {
+    // Paginated with a stable id order so a company with >1000 open FX payables
+    // is fully revalued rather than silently truncated at 1000 rows.
+    return await fetchAllRows<SupplierInvoice>(({ from, to }) =>
+      supabase
+        .from('supplier_invoices')
+        .select('*')
+        .eq('company_id', companyId)
+        .in('status', ['registered', 'approved', 'overdue', 'partially_paid'])
+        .neq('currency', 'SEK')
+        .not('exchange_rate', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to)
+    , { dedupeBy: (i) => i.id })
+  } catch (err) {
+    throw new BookkeepingDatabaseError(
+      'fetch_currency_payables',
+      err instanceof Error ? err.message : 'fetch failed'
+    )
   }
-
-  return (data || []) as SupplierInvoice[]
 }
 
 /**
@@ -212,7 +227,7 @@ export async function previewCurrencyRevaluation(
       account_number: '1510',
       debit_amount: Math.round(debit1510 * 100) / 100,
       credit_amount: 0,
-      line_description: 'Omvärdering kundfordringar — orealiserad kursvinst',
+      line_description: 'Omvärdering kundfordringar: orealiserad kursvinst',
     })
   }
   if (credit1510 > 0) {
@@ -220,7 +235,7 @@ export async function previewCurrencyRevaluation(
       account_number: '1510',
       debit_amount: 0,
       credit_amount: Math.round(credit1510 * 100) / 100,
-      line_description: 'Omvärdering kundfordringar — orealiserad kursförlust',
+      line_description: 'Omvärdering kundfordringar: orealiserad kursförlust',
     })
   }
   if (debit2440 > 0) {
@@ -228,7 +243,7 @@ export async function previewCurrencyRevaluation(
       account_number: '2440',
       debit_amount: Math.round(debit2440 * 100) / 100,
       credit_amount: 0,
-      line_description: 'Omvärdering leverantörsskulder — orealiserad kursvinst',
+      line_description: 'Omvärdering leverantörsskulder: orealiserad kursvinst',
     })
   }
   if (credit2440 > 0) {
@@ -236,7 +251,7 @@ export async function previewCurrencyRevaluation(
       account_number: '2440',
       debit_amount: 0,
       credit_amount: Math.round(credit2440 * 100) / 100,
-      line_description: 'Omvärdering leverantörsskulder — orealiserad kursförlust',
+      line_description: 'Omvärdering leverantörsskulder: orealiserad kursförlust',
     })
   }
   if (credit3960 > 0) {

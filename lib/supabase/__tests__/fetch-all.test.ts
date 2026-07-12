@@ -80,7 +80,7 @@ describe('fetchAllRows', () => {
     const rows: Row[] = [
       { id: 'a' },
       { id: 'b' },
-      { id: 'a' }, // an intra-page repeat is left untouched — single page is trusted
+      { id: 'a' }, // an intra-page repeat is left untouched: single page is trusted
     ]
     const out = await fetchAllRows<Row>(pagedQuery({ 0: rows }), { dedupeBy: (r) => r.id })
     expect(out).toHaveLength(3)

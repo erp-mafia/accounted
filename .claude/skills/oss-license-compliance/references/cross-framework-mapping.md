@@ -4,7 +4,7 @@ OSS license compliance findings are inputs to multiple security and compliance f
 
 ## NIST 800-53 Rev. 5
 
-National Institute of Standards and Technology Special Publication 800-53 Revision 5 — security and privacy controls for federal information systems and supporting commercial infrastructure (FedRAMP, CMMC).
+National Institute of Standards and Technology Special Publication 800-53 Revision 5: security and privacy controls for federal information systems and supporting commercial infrastructure (FedRAMP, CMMC).
 
 | Control | Name | OSS compliance mapping | Evidence artifact |
 |---------|------|------------------------|-------------------|
@@ -22,7 +22,7 @@ National Institute of Standards and Technology Special Publication 800-53 Revisi
 
 ## CIS Critical Security Controls v8.1
 
-Center for Internet Security Critical Security Controls v8.1 — prioritized, actionable safeguards.
+Center for Internet Security Critical Security Controls v8.1: prioritized, actionable safeguards.
 
 | Safeguard | Name | OSS compliance mapping | Evidence artifact |
 |-----------|------|------------------------|-------------------|

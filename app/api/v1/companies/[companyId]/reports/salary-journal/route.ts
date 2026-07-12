@@ -1,7 +1,7 @@
 /**
  * GET /api/v1/companies/{companyId}/reports/salary-journal
  *
- * Per-employee salary journal — annual or monthly window. The lönejournal
+ * Per-employee salary journal: annual or monthly window. The lönejournal
  * report.
  */
 
@@ -19,16 +19,16 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/reports/salary-journal',
   summary: 'Salary journal (lönejournal) for a year and optional month range.',
   description:
-    'Returns per-employee salary figures (gross / tax / net / avgifter / vacation accrual) summed across booked salary runs in `year`. Optional `month_from` and `month_to` limit the window. The output mirrors the dashboard\'s lönejournal export. ⚠️ KU (kontrolluppgift) preparation requires the FULL annual paid amount per employee — if any salary runs are in paid-but-unbooked state at KU time, generating KU from this report will understate wages (an SFL obligation breach). Confirm all paid runs are booked before using this report for KU.',
+    'Returns per-employee salary figures (gross / tax / net / avgifter / vacation accrual) summed across booked salary runs in `year`. Optional `month_from` and `month_to` limit the window. The output mirrors the dashboard\'s lönejournal export. ⚠️ KU (kontrolluppgift) preparation requires the FULL annual paid amount per employee: if any salary runs are in paid-but-unbooked state at KU time, generating KU from this report will understate wages (an SFL obligation breach). Confirm all paid runs are booked before using this report for KU.',
   useWhen:
     'Year-end KU preparation, employee comp reviews, reconciliation against the 7xxx wage accounts.',
   doNotUseFor:
     'Per-run drill-down (use /salary-runs/{id} once the per-employee endpoint ships). AGI declarations (POST /salary-runs/{id}/generate-agi).',
   pitfalls: [
     '`year` is required (integer 2020-2100).',
-    'Only `booked` salary runs are included — `draft`/`review`/`approved`/`paid` runs are excluded as they aren\'t legally final.',
+    'Only `booked` salary runs are included: `draft`/`review`/`approved`/`paid` runs are excluded as they aren\'t legally final.',
     '`paid`-but-unbooked runs are EXCLUDED. This means the report reconciles cleanly against BAS 7xxx (the ledger), but an AGI-vs-ledger cross-check will show a gap until the run is booked. The AGI is filed at `approved`/`paid` (Phase 5 PR-2 allows it from `review`), so reconciling AGI against this report requires waiting until every paid run is also booked.',
-    'month_from/month_to are 1–12 inclusive.',
+    'month_from/month_to are 1-12 inclusive.',
   ],
   example: {
     response: {

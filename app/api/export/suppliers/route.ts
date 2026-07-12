@@ -9,7 +9,7 @@ import type { Supplier } from '@/types'
 /**
  * GET /api/export/suppliers[?format=csv]
  *
- * Downloads the supplier register as xlsx (default) or csv. Read-only — viewers
+ * Downloads the supplier register as xlsx (default) or csv. Read-only: viewers
  * may export. Headers match the supplier importer's detector keywords so files
  * round-trip.
  */

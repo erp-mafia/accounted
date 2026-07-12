@@ -100,7 +100,7 @@ beforeEach(() => {
   mockServiceClient.mockReturnValue(makeSupabaseStub(null))
 })
 
-describe('withApiV1 — auth', () => {
+describe('withApiV1: auth', () => {
   it('returns 401 when Authorization header is missing', async () => {
     const handler = withApiV1('companies.list', async (_req, ctx) =>
       ok({ ok: true }, { requestId: ctx.requestId }),
@@ -148,7 +148,7 @@ describe('withApiV1 — auth', () => {
   })
 })
 
-describe('withApiV1 — scope', () => {
+describe('withApiV1: scope', () => {
   it('returns 403 INSUFFICIENT_SCOPE when the key lacks the required scope', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
@@ -197,7 +197,7 @@ describe('withApiV1 — scope', () => {
   })
 })
 
-describe('withApiV1 — company membership', () => {
+describe('withApiV1: company membership', () => {
   it('returns 404 when the URL companyId is not a company the user belongs to', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
@@ -254,7 +254,7 @@ describe('withApiV1 — company membership', () => {
   })
 })
 
-describe('withApiV1 — static (non-dynamic) route params', () => {
+describe('withApiV1: static (non-dynamic) route params', () => {
   // Regression for #781: GET /api/v1/companies is the only authenticated
   // static route. Next.js 16 hands it `{ params: undefined }`. The wrapper
   // must not null-deref on `params.params` after auth succeeds.
@@ -287,7 +287,7 @@ describe('withApiV1 — static (non-dynamic) route params', () => {
   })
 })
 
-describe('withApiV1 — idempotency', () => {
+describe('withApiV1: idempotency', () => {
   it('replays a cached response when the idempotency key matches', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
@@ -357,7 +357,7 @@ describe('withApiV1 — idempotency', () => {
   })
 })
 
-describe('withApiV1 — dry-run', () => {
+describe('withApiV1: dry-run', () => {
   it('threads dry_run=true from query string into context', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
@@ -429,7 +429,7 @@ describe('withApiV1 — dry-run', () => {
   })
 })
 
-describe('withApiV1 — test mode', () => {
+describe('withApiV1: test mode', () => {
   it('blocks a test-key write on a non-simulatable endpoint (403 TEST_KEY_WRITE_BLOCKED)', async () => {
     // No route modules are imported here, so the endpoint registry is empty →
     // getEndpointByConcretePath returns undefined → the wrapper must refuse the
@@ -467,7 +467,7 @@ describe('withApiV1 — test mode', () => {
     expect(handlerCalled).toBe(false)
   })
 
-  it('allows a test-key READ unchanged — no forced dry-run, real data, X-Gnubok-Mode header', async () => {
+  it('allows a test-key READ unchanged: no forced dry-run, real data, X-Gnubok-Mode header', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',
       companyId: 'company-1',
@@ -499,7 +499,7 @@ describe('withApiV1 — test mode', () => {
   })
 })
 
-describe('withApiV1 — public endpoints', () => {
+describe('withApiV1: public endpoints', () => {
   it('invokes the handler without authentication for /api/v1/health', async () => {
     let observedUserId: string | null = null
     const handler = withApiV1('health.check', async (_req, ctx) => {
@@ -563,7 +563,7 @@ describe('withApiV1 — public endpoints', () => {
   })
 })
 
-describe('withApiV1 — stable headers', () => {
+describe('withApiV1: stable headers', () => {
   it('always stamps X-Request-Id and Gnubok-Version', async () => {
     const handler = withApiV1('health.check', async (_req, ctx) =>
       ok({ status: 'ok' }, { requestId: ctx.requestId }),
@@ -575,7 +575,7 @@ describe('withApiV1 — stable headers', () => {
   })
 })
 
-describe('truncateIp — privacy-preserving IP logging', () => {
+describe('truncateIp: privacy-preserving IP logging', () => {
   it('truncates IPv4 to /24', () => {
     expect(truncateIp('203.0.113.42')).toBe('203.0.113.0/24')
   })
@@ -605,5 +605,5 @@ describe('truncateIp — privacy-preserving IP logging', () => {
   })
 })
 
-// Suppress unused-import warning — we re-export to keep the type chain visible.
+// Suppress unused-import warning: we re-export to keep the type chain visible.
 void mockStoreIdempotency

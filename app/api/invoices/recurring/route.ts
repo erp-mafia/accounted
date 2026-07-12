@@ -64,7 +64,7 @@ export const POST = withRouteContext(
     // 404 than the FK violation we'd otherwise get).
     const { data: customer } = await supabase
       .from('customers')
-      .select('id')
+      .select('id, email')
       .eq('id', input.customer_id)
       .eq('company_id', companyId)
       .maybeSingle()
@@ -73,6 +73,19 @@ export const POST = withRouteContext(
       return NextResponse.json(
         { error: 'Customer not found', type: 'not_found' },
         { status: 404 },
+      )
+    }
+
+    // auto_send without a customer email would silently degrade to a monthly
+    // draft + warning at cron time. Reject it up front instead; the dialog
+    // blocks this client-side, so this is the API backstop.
+    if (input.auto_send && !customer.email) {
+      return NextResponse.json(
+        {
+          error: 'Customer has no email address: automatic sending requires one',
+          type: 'validation_error',
+        },
+        { status: 400 },
       )
     }
 
@@ -90,6 +103,7 @@ export const POST = withRouteContext(
         customer_id: input.customer_id,
         name: input.name,
         day_of_month: input.day_of_month,
+        send_hour: input.send_hour,
         payment_terms_days: input.payment_terms_days,
         currency: input.currency,
         your_reference: input.your_reference ?? null,

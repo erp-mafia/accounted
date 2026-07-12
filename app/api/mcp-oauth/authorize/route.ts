@@ -1,7 +1,9 @@
 import crypto from 'crypto'
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { createAuthCode } from '@/lib/auth/oauth-codes'
+import { shouldEnforceMfa } from '@/lib/auth/mfa'
 import { requireCompanyId } from '@/lib/company/context'
 import { getBranding } from '@/lib/branding/service'
 import { isAllowedRedirectUri } from '@/lib/auth/oauth-allowlist'
@@ -20,7 +22,7 @@ import {
  * GET  → show consent page (or redirect to login)
  * POST → process consent, create auth code, redirect to callback
  *
- * The API key is NOT created here — it's created in the token endpoint
+ * The API key is NOT created here: it's created in the token endpoint
  * after PKCE verification, preventing orphaned keys on abandoned flows.
  */
 
@@ -29,21 +31,21 @@ type ScopeParseResult =
   | { kind: 'invalid_scope'; description: string }
 
 /**
- * Parse the OAuth `scope` query param (RFC 6749 §3.3 — space-delimited list)
+ * Parse the OAuth `scope` query param (RFC 6749 §3.3, space-delimited list)
  * into the subset of API_KEY_SCOPES the client is asking for. Used to drive
  * pre-checked defaults on the consent UI; the user's actual grant comes from
  * their checkbox selection.
  *
  * Returns:
- *   - { ok, scopes: undefined } when no scope param was supplied — the consent
+ *   - { ok, scopes: undefined } when no scope param was supplied: the consent
  *     UI pre-checks DEFAULT_OAUTH_SCOPES (read-only, GDPR Art. 25(2)).
  *   - { ok, scopes: [...] } when at least one valid scope was requested.
  *   - { invalid_scope } when a scope param was supplied but every value was
- *     unknown — refusing the request is safer than silently dropping it back
+ *     unknown: refusing the request is safer than silently dropping it back
  *     to defaults the caller didn't ask for (V10.2.6).
  *
  * The bare `mcp` marker is treated as "no granular scopes" and accepted for
- * backwards compatibility with Claude's connector — it falls through to
+ * backwards compatibility with Claude's connector: it falls through to
  * `undefined` so the read-only defaults apply.
  */
 function parseRequestedScopes(scopeParam: string | null): ScopeParseResult {
@@ -69,7 +71,7 @@ function parseRequestedScopes(scopeParam: string | null): ScopeParseResult {
  * displayed at GET. The HMAC binds the originally requested scope param to
  * the consent page that the user actually saw (V10.3.1).
  *
- * Derived from SUPABASE_SERVICE_ROLE_KEY — same root secret the auth-code
+ * Derived from SUPABASE_SERVICE_ROLE_KEY: same root secret the auth-code
  * AEAD uses, so deploying the OAuth surface doesn't require a separate
  * signing key. Missing env vars cause /authorize to fail closed.
  */
@@ -105,6 +107,31 @@ function buildLoginRedirect(request: Request): Response {
   )
 }
 
+/**
+ * Consent here mints a long-lived API key at /token, and that key bypasses
+ * MFA on every subsequent call: so the consent session itself must be AAL2.
+ * The middleware MFA gate deliberately exempts /api/mcp-oauth/* (the token
+ * endpoint is Bearer-only), which makes this route responsible for its own
+ * step-up. Returns null when the session is AAL2 (or MFA isn't required),
+ * otherwise a redirect to /mfa/verify that returns to this authorize URL.
+ */
+async function requireAal2(
+  supabase: SupabaseClient,
+  user: User,
+  request: Request,
+): Promise<Response | null> {
+  if (!shouldEnforceMfa(user)) return null
+  const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+  if (aal?.nextLevel === 'aal2' && aal?.currentLevel !== 'aal2') {
+    const url = new URL(request.url)
+    const returnTo = `${url.pathname}${url.search}`
+    return NextResponse.redirect(
+      new URL(`/mfa/verify?returnTo=${encodeURIComponent(returnTo)}`, url.origin),
+    )
+  }
+  return null
+}
+
 function errorRedirect(redirectUri: string, state: string | null, error: string, desc: string): Response {
   const url = new URL(redirectUri)
   url.searchParams.set('error', error)
@@ -114,13 +141,13 @@ function errorRedirect(redirectUri: string, state: string | null, error: string,
 }
 
 /**
- * GET /api/mcp-oauth/authorize — show consent page
+ * GET /api/mcp-oauth/authorize: show consent page
  */
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const redirectUri = url.searchParams.get('redirect_uri')
   // state and code_challenge are carried through to the POST handler via
-  // the form action's url.search, so we don't read them here — they're only
+  // the form action's url.search, so we don't read them here: they're only
   // validated on POST.
   const codeChallengeMethod = url.searchParams.get('code_challenge_method') || 'S256'
   const responseType = url.searchParams.get('response_type')
@@ -165,6 +192,9 @@ export async function GET(request: Request) {
     return buildLoginRedirect(request)
   }
 
+  const mfaRedirect = await requireAal2(supabase, user, request)
+  if (mfaRedirect) return mfaRedirect
+
   // Validate redirect_uri against allowlist (prevents open redirect). Passing
   // the authenticated client makes the trust boundary explicit (SOC 2 CC6.1).
   if (!(await isAllowedRedirectUri(redirectUri, supabase))) {
@@ -189,7 +219,7 @@ export async function GET(request: Request) {
 
   // CSP nonce for the inline consent UI controls. A nonce-bound script-src
   // makes the inline block executable while keeping the rest of the page
-  // immune to script injection — without this the consent page is
+  // immune to script injection: without this the consent page is
   // incompatible with a strict CSP and counts as unsafe-inline (ASVS V3.3,
   // SOC 2 CC6.1). The nonce is regenerated per response.
   const cspNonce = crypto.randomBytes(16).toString('base64')
@@ -204,14 +234,14 @@ export async function GET(request: Request) {
   //
   //   - Client requested specific scopes → ceiling = that set, pre-checked =
   //     that set (RFC 6749 §3.3 strict least-privilege).
-  //   - Client passed no scope (or only the legacy `mcp` marker — Claude's
+  //   - Client passed no scope (or only the legacy `mcp` marker, Claude's
   //     connector today) → ceiling = ALL_SCOPES so every read/write row
   //     renders; pre-checked = DEFAULT_OAUTH_SCOPES so only the read rows
   //     start ticked. The user has to actively tick :write to widen the
   //     grant. This preserves GDPR Art. 25(2) (defaults are minimal /
   //     read-only) while still letting the resource owner authorise write
   //     scopes per RFC 6749 §3.3 ("based on … the resource owner's
-  //     instructions") — which is the whole point of the consent step.
+  //     instructions"), which is the whole point of the consent step.
   const grantCeiling = new Set<ApiKeyScope>(parsed.scopes ?? ALL_SCOPES)
   const preChecked = new Set<ApiKeyScope>(parsed.scopes ?? DEFAULT_OAUTH_SCOPES)
   const scopeCheckboxesHtml = renderScopeCheckboxes(preChecked, grantCeiling)
@@ -224,7 +254,7 @@ export async function GET(request: Request) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="translate" content="no">
   <meta name="color-scheme" content="light">
-  <title>Anslut MCP-klient — ${appNameLower}</title>
+  <title>Anslut MCP-klient: ${appNameLower}</title>
   <style>
     :root {
       --bg: hsl(0 0% 100%);
@@ -610,7 +640,7 @@ export async function GET(request: Request) {
 }
 
 /**
- * POST /api/mcp-oauth/authorize — process consent, issue auth code
+ * POST /api/mcp-oauth/authorize: process consent, issue auth code
  */
 export async function POST(request: Request) {
   const url = new URL(request.url)
@@ -630,6 +660,12 @@ export async function POST(request: Request) {
   if (!user) {
     return buildLoginRedirect(request)
   }
+
+  // An AAL1 session must not be able to approve consent (the GET step-up can
+  // be bypassed by POSTing the form directly). The redirect lands back on the
+  // GET consent page after verification.
+  const mfaRedirect = await requireAal2(supabase, user, request)
+  if (mfaRedirect) return mfaRedirect
 
   // Pass the authenticated client so the lookup is bound to the same session
   // that the consent display ran under (SOC 2 CC6.1).
@@ -669,12 +705,12 @@ export async function POST(request: Request) {
       redirectUri,
       state,
       'invalid_request',
-      'Scope binding mismatch — consent token is invalid or has been tampered with'
+      'Scope binding mismatch: consent token is invalid or has been tampered with'
     )
   }
 
   // Validate the client's original scope request (rejects an entirely-unknown
-  // scope set — V10.2.6). The actual grant comes from the user's checkbox
+  // scope set, V10.2.6). The actual grant comes from the user's checkbox
   // selection below, not from this querystring.
   const parsed = parseRequestedScopes(querystringScopeParam)
   if (parsed.kind === 'invalid_scope') {
@@ -684,7 +720,7 @@ export async function POST(request: Request) {
   // The user selects scopes via checkboxes on the consent page. Two upper
   // bounds apply server-side, regardless of what the form posts:
   //
-  //   1. validateScopes drops any value that isn't in API_KEY_SCOPES — guards
+  //   1. validateScopes drops any value that isn't in API_KEY_SCOPES: guards
   //      against forged values from a tampered POST.
   //   2. The grant must be a subset of the ceiling derived from the client's
   //      original request:
@@ -707,7 +743,7 @@ export async function POST(request: Request) {
     ? boundedToClient
     : [...DEFAULT_OAUTH_SCOPES].filter(s => ceilingSet.has(s))
 
-  // Create auth code with userId (NO API key — that's created at /token after PKCE)
+  // Create auth code with userId (NO API key: that's created at /token after PKCE)
   const code = createAuthCode({
     userId: user.id,
     codeChallenge,
@@ -728,7 +764,7 @@ export async function POST(request: Request) {
 
 /**
  * Render the scope checkbox UI grouped by domain. Only scopes in `ceiling`
- * are surfaced — scopes outside the ceiling are dropped from the consent UI
+ * are surfaced: scopes outside the ceiling are dropped from the consent UI
  * so the user can't tick boxes that the POST handler would refuse anyway.
  * The ceiling is either the client's `scope` querystring (when specified)
  * or DEFAULT_OAUTH_SCOPES (when the client passed no scope), matching the
@@ -774,10 +810,10 @@ function renderScopeCheckboxes(
 function scopeRow(scope: ApiKeyScope, checked: boolean, kind: 'read' | 'write'): string {
   const meta = API_KEY_SCOPES[scope]
   const id = `scope-${scope.replace(/[^a-z0-9]/gi, '-')}`
-  // Labels are formatted "Område — verb" (läs/skriv/hantera/godkänn). Pull the
+  // Labels are formatted "Område: verb" (läs/skriv/hantera/godkänn). Pull the
   // prefix as the display name and only render the verb as a tag for elevated
-  // scopes — read-only is the implicit default and doesn't need a tag.
-  const [namePart, verbPart] = meta.label.split(' — ')
+  // scopes: read-only is the implicit default and doesn't need a tag.
+  const [namePart, verbPart] = meta.label.split(': ')
   const displayName = namePart ?? meta.label
   const tagHtml = verbPart && kind === 'write'
     ? `<span class="scope-tag">${escapeHtml(verbPart)}</span>`

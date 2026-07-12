@@ -1,114 +1,81 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateBody } from '@/lib/api/validate'
 import { updateDeadlineStatus, isValidTransition } from '@/lib/deadlines/status-engine'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import type { DeadlineStatus } from '@/types'
+
+const ALL_STATUSES = [
+  'upcoming',
+  'action_needed',
+  'in_progress',
+  'submitted',
+  'confirmed',
+  'overdue',
+] as const satisfies readonly DeadlineStatus[]
+
+const PatchStatusSchema = z.object({
+  status: z.enum(ALL_STATUSES),
+})
 
 /**
  * PATCH /api/deadlines/[id]/status
  * Manually update a deadline's status
  */
-export async function PATCH(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'deadline.set_status',
+  async (request, ctx, { params }) => {
+    const { id } = await params
+    const { supabase, companyId, log } = ctx
 
-  const { data: { user } } = await supabase.auth.getUser()
+    const validation = await validateBody(request, PatchStatusSchema, {
+      log,
+      operation: 'deadline.set_status',
+    })
+    if (!validation.success) return validation.response
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+    const result = await updateDeadlineStatus(supabase, id, companyId, validation.data.status)
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
+    if (!result.success) {
+      return NextResponse.json({ error: result.error }, { status: 400 })
+    }
 
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const { id } = await params
-
-  const body = await request.json()
-  const newStatus = body.status as DeadlineStatus
-
-  if (!newStatus) {
-    return NextResponse.json({ error: 'Status is required' }, { status: 400 })
-  }
-
-  const validStatuses: DeadlineStatus[] = [
-    'upcoming',
-    'action_needed',
-    'in_progress',
-    'submitted',
-    'confirmed',
-    'overdue',
-  ]
-
-  if (!validStatuses.includes(newStatus)) {
-    return NextResponse.json({ error: 'Invalid status' }, { status: 400 })
-  }
-
-  const result = await updateDeadlineStatus(supabase, id, companyId, newStatus)
-
-  if (!result.success) {
-    return NextResponse.json({ error: result.error }, { status: 400 })
-  }
-
-  return NextResponse.json({ success: true })
-}
+    return NextResponse.json({ success: true })
+  },
+  { requireWrite: true },
+)
 
 /**
  * GET /api/deadlines/[id]/status
  * Get current status and valid transitions
  */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'deadline.get_status',
+  async (_request, ctx, { params }) => {
+    const { id } = await params
+    const { supabase, companyId } = ctx
 
-  const { data: { user } } = await supabase.auth.getUser()
+    const { data: deadline, error } = await supabase
+      .from('deadlines')
+      .select('status, is_completed, due_date')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .single()
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const { id } = await params
-
-  const { data: deadline, error } = await supabase
-    .from('deadlines')
-    .select('status, is_completed, due_date')
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .single()
-
-  if (error || !deadline) {
-    return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
-  }
-
-  // Calculate valid transitions from current status
-  const validTransitions: DeadlineStatus[] = []
-  const allStatuses: DeadlineStatus[] = [
-    'upcoming',
-    'action_needed',
-    'in_progress',
-    'submitted',
-    'confirmed',
-    'overdue',
-  ]
-
-  for (const status of allStatuses) {
-    if (isValidTransition(deadline.status, status)) {
-      validTransitions.push(status)
+    if (error || !deadline) {
+      return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
     }
-  }
 
-  return NextResponse.json({
-    currentStatus: deadline.status,
-    isCompleted: deadline.is_completed,
-    dueDate: deadline.due_date,
-    validTransitions,
-  })
-}
+    // Calculate valid transitions from current status
+    const validTransitions = ALL_STATUSES.filter((status) =>
+      isValidTransition(deadline.status, status)
+    )
+
+    return NextResponse.json({
+      currentStatus: deadline.status,
+      isCompleted: deadline.is_completed,
+      dueDate: deadline.due_date,
+      validTransitions,
+    })
+  },
+)

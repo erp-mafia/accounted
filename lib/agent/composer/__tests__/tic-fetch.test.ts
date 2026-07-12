@@ -65,7 +65,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('ensureTicSnapshot — cache hit', () => {
+describe('ensureTicSnapshot: cache hit', () => {
   it('returns cached snapshot without hitting TIC when the row is fresh and v2-shaped', async () => {
     const fetchedAt = new Date(Date.now() - 60_000).toISOString() // 1 min ago
     const cached = { statuses: [], companyName: 'Cached AB' }
@@ -84,7 +84,7 @@ describe('ensureTicSnapshot — cache hit', () => {
     expect(result.source).toBe('cached')
     expect(result.snapshot).toEqual(cached)
     expect(fetch).not.toHaveBeenCalled()
-    // Only the companies SELECT should have run — no profile fetch, no update.
+    // Only the companies SELECT should have run: no profile fetch, no update.
     expect(fromCalls).toEqual(['companies'])
   })
 
@@ -112,7 +112,7 @@ describe('ensureTicSnapshot — cache hit', () => {
   })
 })
 
-describe('ensureTicSnapshot — cache miss & refetch', () => {
+describe('ensureTicSnapshot: cache miss & refetch', () => {
   it('fetches /profile and persists when no snapshot exists', async () => {
     const profile = { statuses: [], companyName: 'Fresh AB' }
     vi.mocked(fetch).mockResolvedValue(
@@ -204,7 +204,7 @@ describe('ensureTicSnapshot — cache miss & refetch', () => {
   })
 })
 
-describe('ensureTicSnapshot — degraded paths', () => {
+describe('ensureTicSnapshot: degraded paths', () => {
   it('returns fallback null when companies row does not exist', async () => {
     const { supabase } = buildSupabase({ data: null, error: null })
 
@@ -283,7 +283,7 @@ describe('ensureTicSnapshot — degraded paths', () => {
     })
 
     expect(result.source).toBe('fallback')
-    // Degrade to the stale snapshot rather than crash — the agent build path
+    // Degrade to the stale snapshot rather than crash: the agent build path
     // depends on this contract so a TIC outage never blocks onboarding.
     expect(result.snapshot).toEqual(staleSnapshot)
   })

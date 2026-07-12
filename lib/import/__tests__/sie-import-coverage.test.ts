@@ -5,7 +5,7 @@
  * couldn't cover a single account in the file. The per-voucher loop then
  * silently skipped every verifikation, finalizeImportRecord marked the
  * sie_imports row 'completed' with transactions_count=0, and the partial
- * unique index on (company_id, file_hash) held the slot — blocking retry.
+ * unique index on (company_id, file_hash) held the slot: blocking retry.
  *
  * The fix layers three guards:
  *   1. Stage-time refusal in gnubok_import_sie (covered in
@@ -42,6 +42,8 @@ function makeParsedFile(overrides?: Partial<ParsedSIEFile>): ParsedSIEFile {
     openingBalances: [{ yearIndex: 0, account: '1930', amount: 50000 }],
     closingBalances: [],
     resultBalances: [],
+    dimensions: [],
+    dimensionValues: [],
     vouchers: [
       {
         series: 'A',
@@ -78,7 +80,7 @@ function makeMapping(source: string, target: string | null): AccountMapping {
   }
 }
 
-describe('executeSIEImport — defense-in-depth coverage check', () => {
+describe('executeSIEImport: defense-in-depth coverage check', () => {
   it('refuses to insert a sie_imports row when mappings is empty', async () => {
     const { supabase } = createQueuedMockSupabase()
     const parsed = makeParsedFile()
@@ -151,7 +153,7 @@ describe('executeSIEImport — defense-in-depth coverage check', () => {
   })
 })
 
-describe('finalizeImportRecord — 0-entry downgrade', () => {
+describe('finalizeImportRecord: 0-entry downgrade', () => {
   it('flips a 0-entry success to status=failed and records the reason', async () => {
     const { supabase } = createQueuedMockSupabase()
 
@@ -233,8 +235,8 @@ describe('finalizeImportRecord — 0-entry downgrade', () => {
   })
 })
 
-describe('executeSIEImport — coverage check with derived IB (issue #675)', () => {
-  // SIE type 1/2-style file: no vouchers, no #IB 0 — only #UB -1. The
+describe('executeSIEImport: coverage check with derived IB (issue #675)', () => {
+  // SIE type 1/2-style file: no vouchers, no #IB 0: only #UB -1. The
   // current-year IB must be derived from #UB -1, and the derived accounts
   // must feed the coverage guard (before the fix this set was empty, so the
   // guard never inspected UB-1-only files at all).

@@ -68,7 +68,7 @@ async function insertDocumentLinkedToEntry(params: {
   return id
 }
 
-describe('delete_last_voucher.pg — RPC + immutability trigger interaction', () => {
+describe('delete_last_voucher.pg: RPC + immutability trigger interaction', () => {
   it('deletes the last posted voucher in a series', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const entryId = await insertPostedEntryWithLines({
@@ -80,7 +80,7 @@ describe('delete_last_voucher.pg — RPC + immutability trigger interaction', ()
         `SELECT public.delete_last_voucher($1::uuid, $2::uuid)`,
         [companyId, entryId],
       )
-      // Verify inside the txn — withUserContext rolls back on exit, so an
+      // Verify inside the txn: withUserContext rolls back on exit, so an
       // outer pool query would see the row again.
       const after = await client.query(
         `SELECT 1 FROM public.journal_entries WHERE id = $1`,
@@ -104,7 +104,7 @@ describe('delete_last_voucher.pg — RPC + immutability trigger interaction', ()
       sourceType: 'storno', reversesId: originalId,
     })
 
-    // Mark original as reversed — posted → reversed is allowed by the state
+    // Mark original as reversed: posted → reversed is allowed by the state
     // machine as long as no other fields change.
     await getPool().query(
       `UPDATE public.journal_entries SET status = 'reversed', reversed_by_id = $1 WHERE id = $2`,
@@ -266,7 +266,7 @@ describe('delete_last_voucher.pg — RPC + immutability trigger interaction', ()
   })
 
   it('deletes a draft even when the fiscal period is locked', async () => {
-    // Drafts are not bokförda — period locks (which protect committed entries)
+    // Drafts are not bokförda: period locks (which protect committed entries)
     // do not need to block draft cleanup.
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const draftId = await insertDraftJournalEntry({

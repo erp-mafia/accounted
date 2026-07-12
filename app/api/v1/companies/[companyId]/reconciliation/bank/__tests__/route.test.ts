@@ -41,16 +41,23 @@ const { runRecMock, statusMock } = vi.hoisted(() => ({
       },
     ],
     applied: 1,
-    errors: [],
+    errors: 0,
+    skippedBelowThreshold: 0,
   }),
+  // The REAL ReconciliationStatus shape from lib/reconciliation. The mock used
+  // to return the registry's invented shape (matched_transactions, bank_balance,
+  // …), which hid that documented and actual payloads had drifted apart.
   statusMock: vi.fn().mockResolvedValue({
-    matched_transactions: 100,
-    unmatched_transactions: 5,
-    unmatched_gl_lines: 2,
-    total_unmatched_amount: 1500,
-    bank_balance: 50000,
-    gl_balance: 48500,
+    bank_transaction_total: 48500,
+    gl_1930_balance: 98500,
+    gl_1930_period_movement: 47000,
+    gl_1930_opening_balance: 51500,
+    gl_1930_correction_adjustment: 0,
     difference: 1500,
+    is_reconciled: false,
+    matched_count: 100,
+    unmatched_transaction_count: 5,
+    unmatched_gl_line_count: 2,
   }),
 }))
 
@@ -143,12 +150,69 @@ describe('POST /reconciliation/bank/run', () => {
     const body = await res.json()
     expect(body.data.matches).toHaveLength(1)
     expect(body.data.applied).toBe(1)
+    expect(body.data.skipped_below_threshold).toBe(0)
     expect(runRecMock).toHaveBeenCalledWith(
       expect.anything(),
       COMPANY_ID,
       'user-1',
-      expect.objectContaining({ dryRun: false, accountNumber: '1930', cashAccountId: 'ca-1930' }),
+      // No confidence_threshold in the body: the lib gets undefined (legacy
+      // apply-everything behavior), never a silent server-invented default.
+      expect.objectContaining({
+        dryRun: false,
+        accountNumber: '1930',
+        cashAccountId: 'ca-1930',
+        confidenceThreshold: undefined,
+      }),
     )
+  })
+
+  it('passes confidence_threshold through to the matcher and surfaces skipped matches', async () => {
+    runRecMock.mockResolvedValueOnce({
+      matches: [],
+      applied: 0,
+      errors: 0,
+      skippedBelowThreshold: 2,
+    })
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
+      }),
+    )
+    const res = await runPOST(
+      postRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/reconciliation/bank/run`, {
+        confidence_threshold: 0.9,
+      }),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.skipped_below_threshold).toBe(2)
+    expect(runRecMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'user-1',
+      expect.objectContaining({ confidenceThreshold: 0.9 }),
+    )
+  })
+
+  it('rejects an out-of-range confidence_threshold with 400', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        cash_accounts: { data: { id: 'ca-1930', currency: 'SEK' }, error: null },
+      }),
+    )
+    for (const bad of [-0.1, 1.5]) {
+      const res = await runPOST(
+        postRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/reconciliation/bank/run`, {
+          confidence_threshold: bad,
+        }),
+        { params: Promise.resolve({ companyId: COMPANY_ID }) },
+      )
+      expect(res.status).toBe(400)
+    }
+    expect(runRecMock).not.toHaveBeenCalled()
   })
 
   it('rejects an unknown settlement account', async () => {
@@ -261,8 +325,12 @@ describe('GET /reconciliation/bank/status', () => {
     )
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data.matched_transactions).toBe(100)
-    expect(body.data.unmatched_transactions).toBe(5)
+    // Passthrough of the lib's ReconciliationStatus: assert the real field
+    // names so a registry/actual drift can never hide behind the mock again.
+    expect(body.data.matched_count).toBe(100)
+    expect(body.data.unmatched_transaction_count).toBe(5)
+    expect(body.data.bank_transaction_total).toBe(48500)
+    expect(body.data.is_reconciled).toBe(false)
   })
 
   it('rejects invalid date filter', async () => {

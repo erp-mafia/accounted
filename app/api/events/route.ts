@@ -1,5 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { extractBearerToken, validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { validateQuery } from '@/lib/api/validate'
 import { EventsQuerySchema } from '@/lib/api/schemas'
@@ -23,6 +23,11 @@ export async function GET(request: Request) {
   // Dual auth: API key or session
   let userId: string
   let supabase: SupabaseClient
+  // When authenticated via an API key, the key is BOUND to a specific company.
+  // Honor that binding (least privilege) rather than resolving the user's
+  // active company: otherwise a key scoped to company A would leak company B's
+  // events whenever the user's active_company_id happened to point elsewhere.
+  let keyCompanyId: string | null = null
 
   const token = extractBearerToken(request)
   if (token?.startsWith('gnubok_sk_')) {
@@ -31,17 +36,25 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: authResult.error }, { status: authResult.status })
     }
     userId = authResult.userId
+    keyCompanyId = authResult.companyId
     supabase = createServiceClientNoCookies()
   } else {
-    supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-    userId = user.id
+    // Session auth: requireAuth enforces MFA (AAL2) on hosted, unlike a bare
+    // getUser call which skips the assurance-level check.
+    const auth = await requireAuth()
+    if (auth.error) return auth.error
+    supabase = auth.supabase
+    userId = auth.user.id
   }
 
-  const companyId = await requireCompanyId(supabase, userId)
+  // Session auth resolves the active company; API-key auth uses the key's bound company.
+  const companyId = keyCompanyId ?? await requireCompanyId(supabase, userId)
+  // Defense in depth: never run the event_log query with an empty/undefined
+  // scope. requireCompanyId throws when there is no company, but guard the
+  // key-bound path too so a malformed binding can't widen the query scope.
+  if (!companyId) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
 
   // Validate query params
   const result = validateQuery(request, EventsQuerySchema)

@@ -41,9 +41,9 @@ registerEndpoint({
   useWhen:
     'You have a bank payment and a known open supplier invoice. The transaction must be negative (expense) and unlinked.',
   doNotUseFor:
-    'Categorizing a direct supplier expense without an invoice — use `:categorize`. Matching to a customer invoice — use `:match-invoice`. Bulk auto-match — `POST /reconciliation/bank/run`.',
+    'Categorizing a direct supplier expense without an invoice: use `:categorize`. Matching to a customer invoice: use `:match-invoice`. Bulk auto-match: `POST /reconciliation/bank/run`.',
   pitfalls: [
-    'Cash-method companies can settle a foreign invoice in full (booked at the payment-date rate); only a PARTIAL cash-method payment across currencies is rejected (MATCH_SI_CASH_FX_UNSUPPORTED) — pay in full, switch to accrual, or book manually.',
+    'Cash-method companies can settle a foreign invoice in full (booked at the payment-date rate); only a PARTIAL cash-method payment across currencies is rejected (MATCH_SI_CASH_FX_UNSUPPORTED): pay in full, switch to accrual, or book manually.',
     'Transaction must be negative (amount < 0). Positive returns MATCH_SI_NOT_EXPENSE.',
     'Supplier invoice must NOT be paid/credited already. paid/credited returns MATCH_SI_ALREADY_PAID; registered/approved/partially_paid/overdue are matchable.',
     'Idempotency-Key is mandatory.',
@@ -153,7 +153,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // payment. Mirrors the match-invoice path. Without this, an earlier
     // :categorize of the same transaction (e.g. as expense_office with a
     // 5460/1930 entry) would leave its JE posted alongside the new
-    // 2440/1930 supplier-invoice payment entry — two verifikationer for
+    // 2440/1930 supplier-invoice payment entry: two verifikationer for
     // one affärshändelse violates BFL 5 kap 6 §. If storno fails, abort
     // before any further state change.
     if (transaction.journal_entry_id) {
@@ -184,7 +184,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const paymentAmountInvoiceCurrency =
       transaction.currency === invoice.currency ? txAmountAbs : invoice.remaining_amount
     // SEK that actually left the bank, when known. A foreign transaction with
-    // no stored amount_sek is `null` here — the raw foreign amount must never
+    // no stored amount_sek is `null` here: the raw foreign amount must never
     // stand in (treating 19 USD as 19 SEK books "19 kr" on a ~175 kr payment).
     const bankSekStored =
       transaction.currency === 'SEK'
@@ -233,7 +233,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       txAmountAbs >= invoice.remaining_amount - 0.005
 
     // Under kontantmetoden the expense is recognised AT PAYMENT (payment-date
-    // rate), so a full foreign-currency settlement has no kursdifferens — the
+    // rate), so a full foreign-currency settlement has no kursdifferens: the
     // builder translates the whole entry to the actual bank SEK (settledBankSek)
     // below, leaving 1930 equal to the bank line. Only a PARTIAL cash-method
     // payment across rates can't be modelled cleanly (the builder books the
@@ -311,7 +311,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         if (je) journalEntryId = je.id
       }
     } catch (err) {
-      txLog.error('match-supplier-invoice: payment JE creation failed — aborting before state mutation', err as Error)
+      txLog.error('match-supplier-invoice: payment JE creation failed: aborting before state mutation', err as Error)
       const message = isBookkeepingError(err)
         ? getErrorMessage(err, { context: 'supplier_invoice' })
         : err instanceof Error
@@ -344,7 +344,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
       .eq('id', supplier_invoice_id)
       .eq('company_id', ctx.companyId!)
-      // 'overdue' must appear here — the early status guard accepts it as
+      // 'overdue' must appear here: the early status guard accepts it as
       // matchable, so excluding it here would return MATCH_SI_NOT_OPEN
       // for a legitimately payable invoice.
       .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
@@ -353,7 +353,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!updatedRows || updatedRows.length === 0) {
       // CAS guard: the invoice was settled by a concurrent request between
       // our read and write. The payment voucher we just posted belongs to no
-      // payment — cancel it and document the gap (mirrors mark-paid).
+      // payment: cancel it and document the gap (mirrors mark-paid).
       if (journalEntryId) {
         await cancelOrphanedPaymentEntry(
           ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId,

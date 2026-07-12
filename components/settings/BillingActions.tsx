@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, type ReactNode } from 'react'
+import { ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
+import { formatDateLong } from '@/lib/utils'
 import type { BillingPlan } from '@/lib/stripe/client'
 
 const PRICE: Record<BillingPlan, { amount: string; suffix: string; sub: string; cta: string }> = {
@@ -11,13 +12,13 @@ const PRICE: Record<BillingPlan, { amount: string; suffix: string; sub: string; 
     amount: '199 kr',
     suffix: '/ mån',
     sub: 'Faktureras månadsvis.',
-    cta: 'Aktivera abonnemang – 199 kr/mån',
+    cta: 'Aktivera abonnemang: 199 kr/mån',
   },
   yearly: {
     amount: '166 kr',
     suffix: '/ mån',
-    sub: '1 999 kr/år — du betalar för 10 månader.',
-    cta: 'Aktivera årsabonnemang – 1 999 kr/år',
+    sub: '1 999 kr/år: du betalar för 10 månader.',
+    cta: 'Aktivera årsabonnemang: 1 999 kr/år',
   },
 }
 
@@ -25,8 +26,20 @@ const PRICE: Record<BillingPlan, { amount: string; suffix: string; sub: string; 
  * Interactive billing CTA. Paying companies get the Stripe Customer Portal
  * (manage/cancel); everyone else gets a reactive plan picker + Checkout. Both
  * POST to a route that returns a hosted Stripe URL we redirect to.
+ *
+ * `firstChargeAt`: when the checkout route will defer the first charge to the
+ * trial's end (see billing/checkout), the date it lands. Shifts the CTA from
+ * "pay now" to "0 kr idag": the strongest risk-reversal we can make truthfully.
  */
-export function BillingActions({ isPaying, configured }: { isPaying: boolean; configured: boolean }) {
+export function BillingActions({
+  isPaying,
+  configured,
+  firstChargeAt = null,
+}: {
+  isPaying: boolean
+  configured: boolean
+  firstChargeAt?: string | null
+}) {
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
   const [plan, setPlan] = useState<BillingPlan>('yearly')
@@ -39,8 +52,12 @@ export function BillingActions({ isPaying, configured }: { isPaying: boolean; co
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload ?? {}),
       })
-      const data = (await res.json().catch(() => ({}))) as { url?: string; error?: string }
-      if (!res.ok || !data.url) throw new Error(data.error || 'Något gick fel')
+      const data = (await res.json().catch(() => ({}))) as {
+        url?: string
+        error?: string | { message?: string }
+      }
+      const errorMessage = typeof data.error === 'string' ? data.error : data.error?.message
+      if (!res.ok || !data.url) throw new Error(errorMessage || 'Något gick fel')
       window.location.href = data.url
     } catch (e) {
       toast({
@@ -96,15 +113,24 @@ export function BillingActions({ isPaying, configured }: { isPaying: boolean; co
           'yearly',
           <>
             Årsvis
-            <Badge variant="success" className="ml-2">Spara 2 mån</Badge>
+            <span className="ml-2 text-xs text-muted-foreground">Spara 2 mån</span>
           </>,
         )}
       </div>
 
       <Button size="lg" onClick={() => go('/api/billing/checkout', { plan })} disabled={loading} className="w-full">
-        {loading ? 'Öppnar…' : PRICE[plan].cta}
+        {loading ? 'Öppnar…' : firstChargeAt ? 'Starta abonnemanget: 0 kr idag' : PRICE[plan].cta}
+        {!loading && <ChevronRight className="h-4 w-4" />}
       </Button>
-      <p className="text-xs text-muted-foreground text-center">Säker betalning via Stripe · Avsluta när du vill</p>
+      {firstChargeAt && (
+        <p className="text-xs text-muted-foreground text-center">
+          Första debiteringen sker {formatDateLong(firstChargeAt)}, när provperioden slutar. Avslutar du innan dess
+          kostar det ingenting.
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground text-center">
+        Ingen bindningstid · Avsluta när du vill · Säker betalning via Stripe
+      </p>
     </div>
   )
 }

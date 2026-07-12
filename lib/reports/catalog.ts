@@ -26,7 +26,7 @@ export type ReportCategory =
  * How the report is parameterised:
  * - `fiscal-range`: fiscal period + an optional date sub-range (ReportDateRange)
  * - `fiscal`: fiscal period only
- * - `calendar`: calendar year + monthly/quarterly/yearly period (VAT family) —
+ * - `calendar`: calendar year + monthly/quarterly/yearly period (VAT family):
  *   the deliberate exception to "pick the fiscal year once"
  * - `none`: no period parameter
  */
@@ -59,6 +59,22 @@ export interface ReportDescriptor {
    * Used for reports that were never in the nav (KPI, payroll, archive…).
    */
   libraryOnly?: boolean
+  /**
+   * Accepts the per-dimension value filter (?dim_no/&dim_code → jsonb @>).
+   * P&L-safe reports ONLY: statutory outputs (balance sheet, balansrapport,
+   * kassaflöde, årsredovisning, INK2, NE, VAT, SIE) must never carry this
+   * flag; a filtered filing is a wrong filing. The whitelist is pinned by
+   * lib/reports/__tests__/dimension-statutory-guard.test.ts.
+   */
+  dimensions?: boolean
+  /** Only shown when company_settings.dimensions_enabled is true. */
+  needsDimensions?: boolean
+  /**
+   * Nav-promoted page that happens to render in the focused-report shell.
+   * Hides the report-library back link and the shell's fiscal-year selector —
+   * the view owns all of its period controls.
+   */
+  standalone?: boolean
 }
 
 /** Categories shown in the legacy desktop rail, in order. */
@@ -101,6 +117,18 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     category: 'interim',
     params: 'fiscal-range',
     exports: ['pdf', 'xlsx'],
+    dimensions: true,
+  },
+  {
+    // Resultat per projekt/kostnadsställe: value-as-column P&L matrix over
+    // one SIE dimension (Fortnox "Resultatrapport projekt").
+    slug: 'dimension-pnl',
+    labelKey: 'name_dimension_pnl',
+    descKey: 'desc_dimension_pnl',
+    category: 'interim',
+    params: 'fiscal-range',
+    exports: ['xlsx'],
+    needsDimensions: true,
   },
   {
     slug: 'balansrapport',
@@ -126,9 +154,21 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     params: 'fiscal',
     route: '/kpi',
     libraryOnly: true,
+    dimensions: true,
   },
 
   // --- Bokslut (year-end) ---
+  {
+    // The year-end closing wizard (dispositions, accruals, execute). Owns its
+    // route under /bookkeeping; surfaced here so the closing flow is reachable
+    // from Rapporter rather than only via the Bokföring header.
+    slug: 'year-end-closing',
+    labelKey: 'name_year_end_closing',
+    descKey: 'desc_year_end_closing',
+    category: 'year_end',
+    params: 'fiscal',
+    route: '/bookkeeping/year-end',
+  },
   {
     slug: 'income-statement',
     labelKey: 'name_income_statement',
@@ -136,6 +176,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     category: 'year_end',
     params: 'fiscal-range',
     exports: ['pdf', 'xlsx'],
+    dimensions: true,
   },
   {
     slug: 'balance-sheet',
@@ -171,6 +212,9 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     category: 'tax_vat',
     params: 'calendar',
     exports: ['xlsx'],
+    // Promoted to the Skatt & bokslut nav group — reached directly, not via
+    // the report library, and it manages its own period selection.
+    standalone: true,
   },
   {
     slug: 'periodisk-sammanstallning',
@@ -202,8 +246,9 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     labelKey: 'name_huvudbok',
     descKey: 'desc_huvudbok',
     category: 'ledgers',
-    params: 'fiscal',
+    params: 'fiscal-range',
     exports: ['xlsx'],
+    dimensions: true,
   },
   {
     slug: 'grundbok',
@@ -239,12 +284,12 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     // Period-scoped like the ledgers: the report page's räkenskapsår selector
     // drives the reconciliation window (issue #751). Was 'none' (periodless),
     // which left the view to host its OWN fiscal-year selector inside a
-    // loading-gated action bar — a render deadlock that hung the page on a
+    // loading-gated action bar: a render deadlock that hung the page on a
     // permanent skeleton (#771).
     params: 'fiscal',
   },
 
-  // --- Export & arkiv — library-only ---
+  // --- Export & arkiv: library-only ---
   {
     slug: 'sie-export',
     labelKey: 'name_sie_export',
@@ -261,6 +306,11 @@ export const DATE_RANGE_SLUGS: ReadonlySet<string> = new Set(
   REPORT_CATALOG.filter((r) => r.params === 'fiscal-range').map((r) => r.slug),
 )
 
+/** Reports that accept the per-dimension value filter (mounts DimensionFilter). */
+export const DIMENSION_FILTER_SLUGS: ReadonlySet<string> = new Set(
+  REPORT_CATALOG.filter((r) => r.dimensions).map((r) => r.slug),
+)
+
 export function getReport(slug: string): ReportDescriptor | undefined {
   return REPORT_CATALOG.find((r) => r.slug === slug)
 }
@@ -269,9 +319,11 @@ function isVisible(
   r: ReportDescriptor,
   entityType?: EntityType,
   hasEmployees?: boolean,
+  dimensionsEnabled?: boolean,
 ): boolean {
   if (r.entityType && r.entityType !== entityType) return false
   if (r.needsEmployees && !hasEmployees) return false
+  if (r.needsDimensions && !dimensionsEnabled) return false
   return true
 }
 
@@ -282,12 +334,18 @@ export interface ReportSection {
 }
 
 /** Grouped reports for the legacy desktop rail (excludes library-only items). */
-export function getNavSections(entityType?: EntityType): ReportSection[] {
+export function getNavSections(
+  entityType?: EntityType,
+  dimensionsEnabled?: boolean,
+): ReportSection[] {
   return NAV_CATEGORIES.map((category) => ({
     category,
     labelKey: CATEGORY_LABEL_KEY[category],
     items: REPORT_CATALOG.filter(
-      (r) => r.category === category && !r.libraryOnly && isVisible(r, entityType),
+      (r) =>
+        r.category === category &&
+        !r.libraryOnly &&
+        isVisible(r, entityType, undefined, dimensionsEnabled),
     ),
   })).filter((s) => s.items.length > 0)
 }
@@ -296,12 +354,13 @@ export function getNavSections(entityType?: EntityType): ReportSection[] {
 export function getLibrarySections(
   entityType?: EntityType,
   hasEmployees?: boolean,
+  dimensionsEnabled?: boolean,
 ): ReportSection[] {
   return LIBRARY_CATEGORIES.map((category) => ({
     category,
     labelKey: CATEGORY_LABEL_KEY[category],
     items: REPORT_CATALOG.filter(
-      (r) => r.category === category && isVisible(r, entityType, hasEmployees),
+      (r) => r.category === category && isVisible(r, entityType, hasEmployees, dimensionsEnabled),
     ),
   })).filter((s) => s.items.length > 0)
 }

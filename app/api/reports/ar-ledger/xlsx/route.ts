@@ -1,7 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import {
   reportToWorkbook,
   textColumn,
@@ -40,16 +39,7 @@ function toDate(s: string): Date | null {
   return isNaN(d.getTime()) ? null : d
 }
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext('report.ar_ledger.xlsx', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
   const asOfDate = searchParams.get('as_of_date') || undefined
 
@@ -160,4 +150,4 @@ export async function GET(request: Request) {
       { status: 500 }
     )
   }
-}
+})

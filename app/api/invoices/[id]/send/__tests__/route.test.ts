@@ -398,8 +398,8 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(status).toBe(200)
     // Final render: invoice already has an invoice_number on the fixture, so
     // preflight is skipped and InvoicePDF is called exactly once. The status
-    // passed in must be 'sent' — otherwise pdf-template.tsx renders the
-    // "UTKAST – inte en giltig faktura" banner on the customer's PDF.
+    // passed in must be 'sent': otherwise pdf-template.tsx renders the
+    // "UTKAST: inte en giltig faktura" banner on the customer's PDF.
     expect(vi.mocked(InvoicePDF)).toHaveBeenCalledTimes(1)
     const renderArgs = vi.mocked(InvoicePDF).mock.calls[0][0]
     expect(renderArgs.invoice.status).toBe('sent')

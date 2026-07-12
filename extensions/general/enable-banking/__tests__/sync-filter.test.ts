@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/entitlements/has-capability', () => ({
+  requireCapability: vi.fn().mockResolvedValue(null),
+}))
+
 import { enableBankingExtension } from '../index'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import type { StoredAccount } from '../types'
@@ -58,7 +63,7 @@ function makeRequest(): Request {
   })
 }
 
-describe('POST /sync (enable-banking) — account filtering', () => {
+describe('POST /sync (enable-banking): account filtering', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })

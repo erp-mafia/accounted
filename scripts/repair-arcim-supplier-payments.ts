@@ -87,7 +87,7 @@ async function main() {
   const supabase = createClient(url, key, { auth: { persistSession: false } })
 
   const mode = EXECUTE ? 'EXECUTE' : 'DRY RUN'
-  console.log(`=== Arcim supplier payment repair — ${mode} ===\n`)
+  console.log(`=== Arcim supplier payment repair: ${mode} ===\n`)
 
   // ---------- Step 0: verify preconditions ----------
   const { data: tic } = await supabase
@@ -254,7 +254,7 @@ async function main() {
       .eq('id', c.entryId).eq('company_id', COMPANY_ID).single()
     if (!orig) throw new Error(`Original entry not found for ${c.label}`)
     if (orig.status !== 'posted') {
-      console.log(`[skip] ${c.label} — original status is '${orig.status}' (already corrected?)`)
+      console.log(`[skip] ${c.label}: original status is '${orig.status}' (already corrected?)`)
       continue
     }
     console.log(`[plan] correct ${c.label}`)

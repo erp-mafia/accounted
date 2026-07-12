@@ -37,7 +37,7 @@ export async function createClient() {
 }
 
 export function createServiceClient() {
-  // Stateless service-role client — no cookies.
+  // Stateless service-role client: no cookies.
   // Passing user session cookies causes @supabase/ssr to send the
   // user's JWT as the Authorization header, which overrides the
   // service role key and re-enables RLS. A cookie-less client

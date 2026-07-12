@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
@@ -11,7 +11,6 @@ import {
   calculateAvgPaymentDays,
   calculateVatLiability,
 } from '@/lib/reports/kpi'
-import { requireCompanyId } from '@/lib/company/context'
 import {
   reportToWorkbook,
   textColumn,
@@ -43,13 +42,7 @@ interface SupplierRow {
   total: number
 }
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext('report.kpi.xlsx', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
   if (!periodId) {
@@ -177,10 +170,10 @@ export async function GET(request: Request) {
     const monthRows: MonthRow[] = monthlyBreakdown.months
 
     const compositionRows: CompositionRow[] = [
-      { klass: '4 — Material/varor', amount: Math.round(expenseComposition.class4 * 100) / 100 },
-      { klass: '5 — Externa kostnader', amount: Math.round(expenseComposition.class5 * 100) / 100 },
-      { klass: '6 — Externa kostnader', amount: Math.round(expenseComposition.class6 * 100) / 100 },
-      { klass: '7 — Personalkostnader', amount: Math.round(expenseComposition.class7 * 100) / 100 },
+      { klass: '4: Material/varor', amount: Math.round(expenseComposition.class4 * 100) / 100 },
+      { klass: '5: Externa kostnader', amount: Math.round(expenseComposition.class5 * 100) / 100 },
+      { klass: '6: Externa kostnader', amount: Math.round(expenseComposition.class6 * 100) / 100 },
+      { klass: '7: Personalkostnader', amount: Math.round(expenseComposition.class7 * 100) / 100 },
     ]
 
     const supplierRows: SupplierRow[] = topSuppliers
@@ -242,7 +235,7 @@ export async function GET(request: Request) {
       { status: 500 }
     )
   }
-}
+})
 
 function scaleToFraction(value: number | null): number | null {
   return value === null ? null : Math.round(value) / 100

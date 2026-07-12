@@ -13,7 +13,7 @@ import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
 import { getActiveCompanyId } from '@/lib/company/context'
-import { getCompanyCapabilities } from '@/lib/entitlements/has-capability'
+import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
 import { getBranding } from '@/lib/branding/service'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { countPendingOperations, countUnbookedTransactions } from '@/lib/worklist'
@@ -31,7 +31,7 @@ export default async function DashboardLayout({
   settingsModal,
 }: {
   children: React.ReactNode
-  // `@settingsModal` parallel slot — renders the routed settings modal over the
+  // `@settingsModal` parallel slot: renders the routed settings modal over the
   // current page on in-app navigation to /settings/*; null otherwise.
   settingsModal: React.ReactNode
 }) {
@@ -44,40 +44,35 @@ export default async function DashboardLayout({
   }
 
   // Resolve active company from user_preferences (authoritative). The
-  // `gnubok-company-id` cookie is intentionally no longer consulted here —
+  // `gnubok-company-id` cookie is intentionally no longer consulted here:
   // `getActiveCompanyId` reads from user_preferences, matching what RLS
   // sees via `current_active_company_id()`. Keeping both sides on the same
   // source avoids cross-tab / cookie divergence.
-  const companyId = await getActiveCompanyId(supabase, user.id)
+  // Team membership (with the team row embedded) only depends on user.id,
+  // so it resolves in parallel, this layout is on the critical path of
+  // every dashboard page, so sequential round-trips are wall-clock time.
+  const [companyId, headerStore, { data: teamMembership }] = await Promise.all([
+    getActiveCompanyId(supabase, user.id),
+    // Read the pathname forwarded by middleware so we can branch on it.
+    headers(),
+    supabase
+      .from('team_members')
+      .select('team_id, role, teams:team_id(*)')
+      .eq('user_id', user.id)
+      .limit(1)
+      .maybeSingle(),
+  ])
 
-  // Read the pathname forwarded by middleware so we can branch on it.
-  const headerStore = await headers()
   const pathname = headerStore.get('x-pathname') ?? ''
   const isNoCompanyAllowed = NO_COMPANY_ALLOWED_PATHS.some((p) =>
     pathname.startsWith(p)
   )
 
-  // Fetch team membership + team info
-  const { data: teamMembership } = await supabase
-    .from('team_members')
-    .select('team_id, role')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle()
-
-  let team: Team | null = null
-  if (teamMembership?.team_id) {
-    const { data: teamRow } = await supabase
-      .from('teams')
-      .select('*')
-      .eq('id', teamMembership.team_id)
-      .single()
-    team = teamRow
-  }
-
+  const team: Team | null =
+    (teamMembership?.teams as unknown as Team | null) ?? null
   const isTeamMember = !!teamMembership
 
-  // No companies — redirect to onboarding, except for allowed escape-hatch
+  // No companies: redirect to onboarding, except for allowed escape-hatch
   // routes (so the user can still reach /settings/account to delete their
   // account after archiving their last company).
   if (!companyId) {
@@ -95,6 +90,7 @@ export default async function DashboardLayout({
           team,
           isSandbox: false,
           capabilities: [],
+          trialEndsAt: null,
         }}
       >
         <AgentSheetProvider>
@@ -125,16 +121,59 @@ export default async function DashboardLayout({
     )
   }
 
-  // Fetch company + membership for context provider
+  // Fetch company + membership for context provider, together with the
+  // nav/badge data, none of these depend on each other, only on
+  // companyId/user.id, so one round-trip batch instead of two. The rare
+  // stale-cookie early return below wastes the extra reads; that's cheaper
+  // than serializing two batches on every dashboard render.
   const [
     { data: companyRow },
     { data: memberRow },
     { data: allMemberships },
+    { data: settings },
+    uncategorizedCount,
+    pendingOpsCount,
+    { data: agentProfileIdentity },
+    { data: userProfile },
+    entitlements,
+    { data: allSettingsNames },
   ] = await Promise.all([
     supabase.from('companies').select('*').eq('id', companyId).single(),
     supabase.from('company_members').select('role').eq('company_id', companyId).eq('user_id', user.id).single(),
     supabase.from('company_members').select('company_id, role, companies:company_id(id, name, org_number, entity_type, accounting_framework, created_by, team_id, archived_at, created_at, updated_at)').eq('user_id', user.id),
+    supabase
+      .from('company_settings')
+      .select('company_name, onboarding_complete, entity_type, pays_salaries, is_sandbox, dimensions_enabled')
+      .eq('company_id', companyId)
+      .single(),
+    // Shared worklist predicates (lib/worklist), the badge must show the
+    // same number as every other "att göra" surface. Notably this excludes
+    // is_ignored rows, which the old inline query here did not.
+    countUnbookedTransactions(supabase, companyId),
+    countPendingOperations(supabase, companyId),
+    // Agent identity, name + avatar, surfaced on the FAB and chat
+    // surfaces. Null when no agent_profile exists yet (banner CTA path).
+    supabase
+      .from('agent_profiles')
+      .select('display_name, avatar_id, verified_at')
+      .eq('company_id', companyId)
+      .maybeSingle(),
+    // The signed-in user's profile, shown in the bottom-left account
+    // popover (full_name + initial) so it's clear which user is logged
+    // in, distinct from the active company shown at the top.
+    supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
+    getCompanyEntitlements(supabase, companyId),
+    // Current display names for ALL the user's companies (the switcher list).
+    // RLS scopes company_settings SELECT to user_company_ids(), so this bare
+    // select returns exactly the caller's companies, letting non-active rows
+    // show company_settings.company_name instead of the frozen companies.name.
+    supabase.from('company_settings').select('company_id, company_name'),
   ])
+
+  // company_id -> current display name for every company the user belongs to.
+  const nameByCompany = new Map(
+    (allSettingsNames || []).map((s) => [s.company_id, s.company_name as string | null]),
+  )
 
   if (!companyRow || !memberRow) {
     // Stale cookie pointing to a deleted/inaccessible company.
@@ -142,14 +181,18 @@ export default async function DashboardLayout({
     const companyContextValue = {
       company: null,
       role: null,
-      companies: (allMemberships || []).filter(m => m.companies).map((m) => ({
-        company: m.companies as unknown as import('@/types').Company,
-        role: m.role as CompanyRole,
-      })),
+      companies: (allMemberships || []).filter(m => m.companies).map((m) => {
+        const c = m.companies as unknown as import('@/types').Company
+        return {
+          company: { ...c, name: nameByCompany.get(c.id) || c.name },
+          role: m.role as CompanyRole,
+        }
+      }),
       isTeamMember,
       team,
       isSandbox: false,
       capabilities: [],
+      trialEndsAt: null,
     }
 
     return (
@@ -178,39 +221,7 @@ export default async function DashboardLayout({
     )
   }
 
-  const [
-    { data: settings },
-    uncategorizedCount,
-    pendingOpsCount,
-    { data: agentProfileIdentity },
-    { data: userProfile },
-    capabilities,
-  ] = await Promise.all([
-    supabase
-      .from('company_settings')
-      .select('company_name, onboarding_complete, entity_type, pays_salaries, is_sandbox')
-      .eq('company_id', companyId)
-      .single(),
-    // Shared worklist predicates (lib/worklist) — the badge must show the
-    // same number as every other "att göra" surface. Notably this excludes
-    // is_ignored rows, which the old inline query here did not.
-    countUnbookedTransactions(supabase, companyId),
-    countPendingOperations(supabase, companyId),
-    // Agent identity — name + avatar — surfaced on the FAB and chat
-    // surfaces. Null when no agent_profile exists yet (banner CTA path).
-    supabase
-      .from('agent_profiles')
-      .select('display_name, avatar_id, verified_at')
-      .eq('company_id', companyId)
-      .maybeSingle(),
-    // The signed-in user's profile — shown in the bottom-left account
-    // popover (full_name + initial) so it's clear which user is logged
-    // in, distinct from the active company shown at the top.
-    supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
-    getCompanyCapabilities(supabase, companyId),
-  ])
-
-  // If onboarding incomplete, still render the dashboard — the page component
+  // If onboarding incomplete, still render the dashboard: the page component
   // will show the inline onboarding card instead of the normal dashboard content.
 
   // Use company_name from settings as the display name (companies.name may be stale)
@@ -226,6 +237,10 @@ export default async function DashboardLayout({
     (companyRow.entity_type as EntityType) ||
     'enskild_firma'
   const paysSalaries = settings?.pays_salaries ?? false
+  // Dimensions register visibility (Kostnadsställen & projekt nav row). Same
+  // mechanism as paysSalaries: UI gate only, never load-bearing for
+  // correctness (dimensions plan §2).
+  const dimensionsEnabled = settings?.dimensions_enabled ?? false
   const companyWithName = {
     ...companyRow,
     name: displayName,
@@ -257,16 +272,19 @@ export default async function DashboardLayout({
     role: memberRow.role as CompanyRole,
     companies: (allMemberships || []).map((m) => {
       const c = m.companies as unknown as import('@/types').Company
-      // Override active company's name with settings name
-      if (c.id === companyId) {
-        return { company: { ...c, name: displayName }, role: m.role as CompanyRole }
+      // Current display name for every company (company_settings.company_name,
+      // falling back to the frozen companies.name) so non-active switcher rows
+      // are current too. For the active company this equals `displayName`.
+      return {
+        company: { ...c, name: nameByCompany.get(c.id) || c.name },
+        role: m.role as CompanyRole,
       }
-      return { company: c, role: m.role as CompanyRole }
     }),
     isTeamMember,
     team,
     isSandbox,
-    capabilities,
+    capabilities: entitlements.capabilities,
+    trialEndsAt: entitlements.trialEndsAt,
   }
 
   return (
@@ -292,6 +310,7 @@ export default async function DashboardLayout({
             companyName={settings?.company_name || 'Min verksamhet'}
             entityType={entityType}
             paysSalaries={paysSalaries}
+            dimensionsEnabled={dimensionsEnabled}
             uncategorizedTransactionCount={uncategorizedCount}
             pendingOperationsCount={pendingOpsCount}
             isSandbox={isSandbox}

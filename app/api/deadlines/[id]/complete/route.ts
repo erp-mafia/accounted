@@ -1,63 +1,49 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 /**
  * POST /api/deadlines/[id]/complete
  * Toggle completion status of a deadline
  */
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
-  const { id } = await params
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'deadline.toggle_complete',
+  async (_request, ctx, { params }) => {
+    const { id } = await params
+    const { supabase, companyId } = ctx
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+    // First, get current deadline state
+    const { data: existing, error: fetchError } = await supabase
+      .from('deadlines')
+      .select('is_completed')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .single()
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  // First, get current deadline state
-  const { data: existing, error: fetchError } = await supabase
-    .from('deadlines')
-    .select('is_completed')
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .single()
-
-  if (fetchError) {
-    if (fetchError.code === 'PGRST116') {
-      return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
+    if (fetchError) {
+      if (fetchError.code === 'PGRST116') {
+        return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
+      }
+      return NextResponse.json({ error: fetchError.message }, { status: 500 })
     }
-    return NextResponse.json({ error: fetchError.message }, { status: 500 })
-  }
 
-  // Toggle completion
-  const newCompletedState = !existing.is_completed
-  const { data, error } = await supabase
-    .from('deadlines')
-    .update({
-      is_completed: newCompletedState,
-      completed_at: newCompletedState ? new Date().toISOString() : null,
-    })
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .select('*, customer:customers(id, name)')
-    .single()
+    // Toggle completion
+    const newCompletedState = !existing.is_completed
+    const { data, error } = await supabase
+      .from('deadlines')
+      .update({
+        is_completed: newCompletedState,
+        completed_at: newCompletedState ? new Date().toISOString() : null,
+      })
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .select('*, customer:customers(id, name)')
+      .single()
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
 
-  return NextResponse.json({ data })
-}
+    return NextResponse.json({ data })
+  },
+  { requireWrite: true },
+)

@@ -15,7 +15,7 @@ import {
 //
 // Why: the RPC now runs on the service-role client (to escape the 8s
 // statement_timeout on large imports). That client is cookie-less, so inside
-// the RPC auth.uid() is NULL — before this fix the role lookup matched nothing
+// the RPC auth.uid() is NULL: before this fix the role lookup matched nothing
 // and the function ALWAYS raised "Only company owners and admins can undo SIE
 // imports", breaking undo entirely on hosted.
 //
@@ -102,7 +102,7 @@ describe('undo_sie_import: explicit actor (service-client path)', () => {
       /owners and admins/i,
     )
 
-    // The gate fired before any mutation — the import is untouched.
+    // The gate fired before any mutation: the import is untouched.
     const { rows } = await getPool().query<{ status: string }>(
       `SELECT status FROM public.sie_imports WHERE id = $1`,
       [importId],
@@ -133,7 +133,7 @@ describe('undo_sie_import: explicit actor (service-client path)', () => {
     const importId = await insertCompletedImport({ companyId, userId, fiscalPeriodId })
     // Seed a posted import verifikat so undo has something to delete. Without it
     // the returned count is 0 regardless of behaviour, so the assertion would
-    // pass even if the function deleted nothing — making the count meaningless.
+    // pass even if the function deleted nothing: making the count meaningless.
     await insertPostedImportEntry({ companyId, userId, fiscalPeriodId })
 
     // 2-arg shape: p_user_id defaults to NULL, so the gate falls back to

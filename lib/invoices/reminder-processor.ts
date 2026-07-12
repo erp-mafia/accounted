@@ -153,7 +153,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
   const cutoffDate = new Date()
   cutoffDate.setDate(cutoffDate.getDate() - minOverdueDays)
 
-  // Positive allowlist — inherently excludes 'paid', 'partially_paid', 'cancelled', 'credited'.
+  // Positive allowlist: inherently excludes 'paid', 'partially_paid', 'cancelled', 'credited'.
   // Including 'overdue' ensures level-2 / level-3 reminders re-fire after the first reminder
   // flips status to 'overdue' (see status update below).
   const { data: overdueInvoices, error: invoiceError } = await supabase
@@ -195,7 +195,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       .select('reminder_level, response_type')
       .eq('invoice_id', invoice.id)
 
-    // Skip if customer already responded (marked paid OR disputed) — they've
+    // Skip if customer already responded (marked paid OR disputed): they've
     // told us they don't want another reminder. The business owner still needs
     // to record the actual payment (mark-paid / match-invoice) to flip status
     // and post the journal entry; we don't do that here because the customer
@@ -243,7 +243,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
       continue
     }
 
-    // Race-window guard — re-check invoice status immediately before sending.
+    // Race-window guard: re-check invoice status immediately before sending.
     // The cron runs at 08:00; a payment match arriving during the run shouldn't
     // produce a reminder for an already-paid invoice.
     const { data: currentInvoice } = await supabase
@@ -268,7 +268,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     })
 
     // Determine the lagstadgad påminnelseavgift (Lag 1981:739, max 60 kr).
-    // Clamp at 60 kr — the statute caps the fee even if company_settings
+    // Clamp at 60 kr: the statute caps the fee even if company_settings
     // somehow holds a higher value (defense in depth against a stale DB row).
     const reminderFee = company.reminder_fee_enabled
       ? Math.min(60, Math.round((company.reminder_fee_amount ?? 60) * 100) / 100)
@@ -277,7 +277,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
     // Book the fee as a journal entry. Booked BEFORE creating the
     // invoice_reminders row so we can persist fee_journal_entry_id.
     // Failure to book the fee is logged but does not abort the reminder
-    // send — the customer still needs to receive the notification.
+    // send: the customer still needs to receive the notification.
     let feeJournalEntryId: string | null = null
     if (reminderFee > 0) {
       try {
@@ -295,7 +295,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
           `Failed to book reminder fee for invoice ${invoice.invoice_number}:`,
           feeError as Error,
         )
-        // Continue — surcharge still appears in the email, but no JE is linked.
+        // Continue: surcharge still appears in the email, but no JE is linked.
       }
     }
 

@@ -175,7 +175,7 @@ export async function generateNEDeclaration(
   // Fetch company settings
   const { data: settings } = await supabase
     .from('company_settings')
-    .select('company_name, org_number, entity_type')
+    .select('company_name, org_number, entity_type, address_line1, postal_code, city, email')
     .eq('company_id', companyId)
     .single()
 
@@ -195,17 +195,20 @@ export async function generateNEDeclaration(
     throw new Error('NE declaration is only for enskild firma (sole proprietorship)')
   }
 
-  // Fetch all posted journal entries with lines for this period
-  const { data: entries, error: entriesError } = await supabase
-    .from('journal_entries')
-    .select('*, lines:journal_entry_lines(*)')
-    .eq('company_id', companyId)
-    .eq('fiscal_period_id', fiscalPeriodId)
-    .in('status', ['posted', 'reversed'])
-
-  if (entriesError) {
-    throw new Error(`Failed to fetch journal entries: ${entriesError.message}`)
-  }
+  // Fetch all posted journal entries with lines for this period.
+  // Paginated: a period can exceed PostgREST's 1000-row cap, and a silent
+  // truncation here would under-report the NE-bilaga tax declaration. PostgREST
+  // ranges count parent rows, so the embedded lines come with each entry.
+  const entries = await fetchAllRows<JournalEntry>(({ from, to }) =>
+    supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('company_id', companyId)
+      .eq('fiscal_period_id', fiscalPeriodId)
+      .in('status', ['posted', 'reversed'])
+      .order('id', { ascending: true })
+      .range(from, to)
+  , { dedupeBy: (e) => e.id })
 
   // Fetch chart of accounts for account names
   const accounts = await fetchAllRows<{ account_number: string; account_name: string }>(({ from, to }) =>
@@ -314,7 +317,7 @@ export async function generateNEDeclaration(
 
   // Add warnings
   if (!(period as FiscalPeriod).is_closed) {
-    warnings.push('Räkenskapsåret är inte stängt — deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')
+    warnings.push('Räkenskapsåret är inte stängt; deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')
   }
 
   if (rutor.R11 === 0 && totalRevenue === 0) {
@@ -334,6 +337,10 @@ export async function generateNEDeclaration(
     companyInfo: {
       companyName: settings?.company_name || 'Okänt företag',
       orgNumber: settings?.org_number || null,
+      addressLine1: settings?.address_line1 || null,
+      postalCode: settings?.postal_code || null,
+      city: settings?.city || null,
+      email: settings?.email || null,
     },
     warnings,
   }

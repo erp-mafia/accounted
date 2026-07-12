@@ -4,11 +4,11 @@ Complete field code (fältkod) tables for INK2, INK2R, and INK2S blankett types,
 
 ## Table of Contents
 
-1. [INK2 — Huvudblankett](#ink2)
-2. [INK2R — Räkenskapsschema: Balance Sheet Assets](#ink2r-assets)
-3. [INK2R — Räkenskapsschema: Balance Sheet Equity & Liabilities](#ink2r-equity)
-4. [INK2R — Räkenskapsschema: Income Statement](#ink2r-income)
-5. [INK2S — Skattemässiga justeringar](#ink2s)
+1. [INK2: Huvudblankett](#ink2)
+2. [INK2R: Räkenskapsschema: Balance Sheet Assets](#ink2r-assets)
+3. [INK2R: Räkenskapsschema: Balance Sheet Equity & Liabilities](#ink2r-equity)
+4. [INK2R: Räkenskapsschema: Income Statement](#ink2r-income)
+5. [INK2S: Skattemässiga justeringar](#ink2s)
 6. [BAS-to-SRU Mapping: Balance Sheet](#bas-balance)
 7. [BAS-to-SRU Mapping: Income Statement](#bas-income)
 8. [Sign conventions](#signs)
@@ -16,12 +16,12 @@ Complete field code (fältkod) tables for INK2, INK2R, and INK2S blankett types,
 ---
 
 <a id="ink2"></a>
-## 1. INK2 — Huvudblankett (main declaration, page 1)
+## 1. INK2: Huvudblankett (main declaration, page 1)
 
 | SRU | Row | Description |
 |---|---|---|
-| 7011 | — | Räkenskapsår fr.o.m. (YYYYMMDD) |
-| 7012 | — | Räkenskapsår t.o.m. (YYYYMMDD) |
+| 7011 | N/A | Räkenskapsår fr.o.m. (YYYYMMDD) |
+| 7012 | N/A | Räkenskapsår t.o.m. (YYYYMMDD) |
 | 7113 | 1.1 | Överskott av näringsverksamhet |
 | 7114 | 1.2 | Underskott av näringsverksamhet |
 | 7132 | 1.4 | Underlag för särskild löneskatt på pensionskostnader |
@@ -34,7 +34,7 @@ Fields 7113/7114 correspond directly to INK2S fields 8020/8021.
 ---
 
 <a id="ink2r-assets"></a>
-## 2. INK2R — Balance Sheet: Assets (Tillgångar)
+## 2. INK2R: Balance Sheet: Assets (Tillgångar)
 
 | SRU | Row | Description |
 |---|---|---|
@@ -68,7 +68,7 @@ Fields 7113/7114 correspond directly to INK2S fields 8020/8021.
 ---
 
 <a id="ink2r-equity"></a>
-## 3. INK2R — Balance Sheet: Equity & Liabilities (Eget kapital och skulder)
+## 3. INK2R: Balance Sheet: Equity & Liabilities (Eget kapital och skulder)
 
 | SRU | Row | Description |
 |---|---|---|
@@ -100,7 +100,7 @@ Fields 7113/7114 correspond directly to INK2S fields 8020/8021.
 ---
 
 <a id="ink2r-income"></a>
-## 4. INK2R — Income Statement (Resultaträkning)
+## 4. INK2R: Income Statement (Resultaträkning)
 
 | SRU | Row | Description | Sign |
 |---|---|---|---|
@@ -137,7 +137,7 @@ Fields 7113/7114 correspond directly to INK2S fields 8020/8021.
 ---
 
 <a id="ink2s"></a>
-## 5. INK2S — Skattemässiga justeringar (tax adjustments, page 4)
+## 5. INK2S: Skattemässiga justeringar (tax adjustments, page 4)
 
 | SRU | Row | Description |
 |---|---|---|

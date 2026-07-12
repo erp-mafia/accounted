@@ -1,0 +1,18 @@
+-- Drop the duplicate journal_entry_lines(journal_entry_id) index.
+--
+-- Supabase linter (duplicate_index): idx_journal_entry_lines_entry and
+-- idx_journal_entry_lines_entry_id are identical. Verified 2026-07-09 via
+-- pg_indexes on prod; both read:
+--   CREATE INDEX ... ON public.journal_entry_lines USING btree (journal_entry_id)
+--
+-- idx_journal_entry_lines_entry_id is the one this repo defines (migration
+-- 20240101000002_bookkeeping.sql), so it stays. idx_journal_entry_lines_entry
+-- exists only on databases where it was created outside the migration
+-- history, hence IF EXISTS: fresh-from-migrations databases (pg-real CI,
+-- preview branches) never had it.
+--
+-- Plain DROP INDEX, not CONCURRENTLY: CONCURRENTLY cannot run inside the
+-- migration transaction. The ACCESS EXCLUSIVE lock on journal_entry_lines is
+-- momentary; dropping an index is a catalog-only operation with no table
+-- rewrite.
+DROP INDEX IF EXISTS public.idx_journal_entry_lines_entry;

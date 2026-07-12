@@ -33,7 +33,7 @@ export const POST = withRouteContext(
 
     const { data: employees, error: empError } = await supabase
       .from('salary_run_employees')
-      .select('*, employee:employees(employment_type), line_items:salary_line_items(*)')
+      .select('*, employee:employees(employment_type, default_dimensions), line_items:salary_line_items(*)')
       .eq('salary_run_id', id)
 
     if (empError) {
@@ -107,6 +107,9 @@ export const POST = withRouteContext(
             avgifter_rate: sre.avgifter_rate,
             vacation_accrual: sre.vacation_accrual,
             vacation_accrual_avgifter: sre.vacation_accrual_avgifter,
+            // Dimensions PR8: read-at-book from the employee row, the run
+            // review shows the same live bag, so preview matches booking.
+            default_dimensions: sre.employee?.default_dimensions ?? undefined,
             line_items: (sre.line_items || []).map((li: Record<string, unknown>) => ({
               item_type: li.item_type as string,
               amount: li.amount as number,

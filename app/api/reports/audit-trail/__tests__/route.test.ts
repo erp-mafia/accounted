@@ -1,35 +1,38 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createMockRequest } from '@/tests/helpers'
+import { NextResponse } from 'next/server'
+import { createQueuedMockSupabase, createMockRequest } from '@/tests/helpers'
 
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(),
+const { supabase } = createQueuedMockSupabase()
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
+}))
+
+vi.mock('@/lib/company/context', () => ({
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
+  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
 vi.mock('@/lib/core/audit/audit-service', () => ({
   getAuditLog: vi.fn(),
 }))
 
-vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
-  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
-}))
-
-import { createClient } from '@/lib/supabase/server'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { GET } from '../route'
 
-const mockCreateClient = vi.mocked(createClient)
 const mockGetAuditLog = vi.mocked(getAuditLog)
 
-function mockAuth(userId: string | null) {
-  mockCreateClient.mockResolvedValue({
-    auth: {
-      getUser: vi.fn().mockResolvedValue({
-        data: { user: userId ? { id: userId } : null },
-      }),
-    },
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any)
+function authed() {
+  requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+}
+
+function unauthed() {
+  requireAuthMock.mockResolvedValue({
+    user: null,
+    supabase,
+    error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+  })
 }
 
 const sampleEntries = [
@@ -61,18 +64,18 @@ const sampleEntries = [
 
 beforeEach(() => {
   vi.clearAllMocks()
+  authed()
 })
 
 describe('GET /api/reports/audit-trail', () => {
   it('returns 401 when not authenticated', async () => {
-    mockAuth(null)
+    unauthed()
     const req = createMockRequest('/api/reports/audit-trail')
     const res = await GET(req)
     expect(res.status).toBe(401)
   })
 
   it('returns CSV format with correct headers', async () => {
-    mockAuth('user-1')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockGetAuditLog.mockResolvedValue({ data: sampleEntries as any, count: 2 })
 
@@ -94,7 +97,6 @@ describe('GET /api/reports/audit-trail', () => {
   })
 
   it('returns JSON format as downloadable file', async () => {
-    mockAuth('user-1')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mockGetAuditLog.mockResolvedValue({ data: sampleEntries as any, count: 2 })
 
@@ -113,8 +115,6 @@ describe('GET /api/reports/audit-trail', () => {
   })
 
   it('paginates through all entries', async () => {
-    mockAuth('user-1')
-
     // First call returns 500 entries (full page), second returns 100 (last page)
     const bigPage = Array.from({ length: 500 }, (_, i) => ({
       ...sampleEntries[0],

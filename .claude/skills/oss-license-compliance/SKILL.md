@@ -20,10 +20,10 @@ Use this skill instead of training data whenever working on OSS license scanning
 
 The skill draws from four upstream truth sources. Always pin against a version, never trust a mirror.
 
-* **SPDX License List** — `spdx/license-list-XML` (governance, source XML) and `spdx/license-list-data` (machine-readable JSON, RDFa, HTML, plaintext distributions). Ingest `licenses.json` and `exceptions.json` from `license-list-data` releases (semantic versioning, `vX.Y` or `vX.Y.Z`). Pin to a specific release for auditability.
-* **OSADL FOSS License Compatibility Matrix** — `matrix.json` (associative), `matrixseq.json` (indexed), `matrixseqexpl.json` (indexed with textual legal explanations). Ingest at scanner sync time, not at scan time.
-* **FSF compatibility logic** — encoded in this skill (see `references/compatibility-and-copyleft.md`). Cross-reference against the FSF's published compatibility tables for GPL-family transitions.
-* **REUSE Specification** — FSFE-maintained. The `reuse` linter is the canonical conformance tool; do not roll your own.
+* **SPDX License List**: `spdx/license-list-XML` (governance, source XML) and `spdx/license-list-data` (machine-readable JSON, RDFa, HTML, plaintext distributions). Ingest `licenses.json` and `exceptions.json` from `license-list-data` releases (semantic versioning, `vX.Y` or `vX.Y.Z`). Pin to a specific release for auditability.
+* **OSADL FOSS License Compatibility Matrix**: `matrix.json` (associative), `matrixseq.json` (indexed), `matrixseqexpl.json` (indexed with textual legal explanations). Ingest at scanner sync time, not at scan time.
+* **FSF compatibility logic**: encoded in this skill (see `references/compatibility-and-copyleft.md`). Cross-reference against the FSF's published compatibility tables for GPL-family transitions.
+* **REUSE Specification**: FSFE-maintained. The `reuse` linter is the canonical conformance tool; do not roll your own.
 
 ## When to consult which reference
 
@@ -49,7 +49,7 @@ Pure script logic. No reasoning required.
 * Presence and exact path of `LICENSE`, `NOTICE`, `LICENSES/` directory, `.reuse/dep5`.
 * SPDX identifier headers in source files (REUSE conformance via the `reuse` linter).
 * Manifest parsing (`pom.xml`, `build.gradle`, `package.json`, `package-lock.json`, `go.mod`, `Cargo.toml`, `requirements.txt`, `Pipfile.lock`) cross-referenced against the local `licenses.json` snapshot.
-* Version-to-license mapping for components that have changed license over time (e.g., MongoDB ≥ 4.0.3 → SSPL, Elasticsearch 7.11–7.16 → SSPL/Elastic, Redis ≥ 7.4 → RSALv2/SSPL, Terraform > 1.5.5 → BSL 1.1).
+* Version-to-license mapping for components that have changed license over time (e.g., MongoDB ≥ 4.0.3 → SSPL, Elasticsearch 7.11-7.16 → SSPL/Elastic, Redis ≥ 7.4 → RSALv2/SSPL, Terraform > 1.5.5 → BSL 1.1).
 * OSADL matrix lookup for declared license pairs.
 * `isOsiApproved` / `isFsfLibre` boolean gates from the SPDX JSON.
 * SBOM generation in SPDX or CycloneDX format.
@@ -61,10 +61,10 @@ If a check can be expressed as "does file X contain string Y" or "does pair (A, 
 
 Required when the legal trigger depends on facts about the host application that no manifest exposes.
 
-* **AGPL Section 13** — does the host expose modified AGPL code "remotely through a computer network"? Reading `Dockerfile`, `docker-compose.yml`, `kubernetes/`, deployment manifests, and `README.md` to determine whether the application is internal-only, air-gapped, or user-facing.
-* **SSPL Section 13** — does the host offer the SSPL component "as a service to third parties"? The Service Source Code definition is sweeping (management, UI, APIs, automation, monitoring, backup, storage, hosting). Requires reading architecture docs.
-* **BSL 1.1 competitive offering** — does the host constitute a product that "competes with HashiCorp's commercial offerings"? Pure business-logic question.
-* **Dual-license selection** — when a dependency offers a choice (e.g., MPL-2.0 OR Apache-2.0), the project's outbound license and intended distribution must be reconciled with the choice. Encode the choice in `.ort.yml` once resolved so it does not require reasoning on every scan.
+* **AGPL Section 13**: does the host expose modified AGPL code "remotely through a computer network"? Reading `Dockerfile`, `docker-compose.yml`, `kubernetes/`, deployment manifests, and `README.md` to determine whether the application is internal-only, air-gapped, or user-facing.
+* **SSPL Section 13**: does the host offer the SSPL component "as a service to third parties"? The Service Source Code definition is sweeping (management, UI, APIs, automation, monitoring, backup, storage, hosting). Requires reading architecture docs.
+* **BSL 1.1 competitive offering**: does the host constitute a product that "competes with HashiCorp's commercial offerings"? Pure business-logic question.
+* **Dual-license selection**: when a dependency offers a choice (e.g., MPL-2.0 OR Apache-2.0), the project's outbound license and intended distribution must be reconciled with the choice. Encode the choice in `.ort.yml` once resolved so it does not require reasoning on every scan.
 * **REUSE-style license choice** for files whose origin or intent is genuinely ambiguous.
 
 The agent's reasoning must be logged to a tamper-evident audit trail (commit-pinned input, prompt, model, output). The decision becomes the verifiable artifact.
@@ -75,10 +75,10 @@ See `references/agentic-prompts.md` for prompt templates that produce structured
 
 No script, no agent, no commit-bound artifact can resolve these. Generate evidence pointers (URLs, ticket references, document hashes) that link to external systems.
 
-* **Commercial supplier indemnification** — vendor contracts representing OSS-clean deliverables and indemnifying OSS-related IP claims.
-* **M&A and cyber insurance OSS warranties** — the SBOM and triaged conflict log are the input; the warranty document is the artifact.
-* **Shadow SaaS / SaaS-to-SaaS OAuth** — IdP logs, SaaS Management Platform (Zylo, BetterCloud) data; not in the repo.
-* **End-user-facing attribution UIs** — the LICENSE file is in the repo, but whether the deployed product surfaces it to users (Apache 2.0 §4(d), MIT attribution preservation) requires UI inspection.
+* **Commercial supplier indemnification**: vendor contracts representing OSS-clean deliverables and indemnifying OSS-related IP claims.
+* **M&A and cyber insurance OSS warranties**: the SBOM and triaged conflict log are the input; the warranty document is the artifact.
+* **Shadow SaaS / SaaS-to-SaaS OAuth**: IdP logs, SaaS Management Platform (Zylo, BetterCloud) data; not in the repo.
+* **End-user-facing attribution UIs**: the LICENSE file is in the repo, but whether the deployed product surfaces it to users (Apache 2.0 §4(d), MIT attribution preservation) requires UI inspection.
 
 Document the pointer, not the content. The compliance program is evidenced by the chain of pointers, not by duplicating external systems into the repo.
 
@@ -88,16 +88,16 @@ The scanner must run on the right diffs and stay quiet on the rest.
 
 ### Trigger on any of:
 
-* Manifest changes — `pom.xml`, `build.gradle`, `package.json`, `package-lock.json`, `go.mod`, `go.sum`, `Cargo.toml`, `Cargo.lock`, `requirements.txt`, `Pipfile.lock`, `pyproject.toml`, `composer.json`, `Gemfile.lock`.
-* Policy changes — `.ort.yml`, `.reuse/dep5`, `LICENSES/*`, `rules.kts`, `.whitesource`, scanner configuration. Forces a full repository re-baseline.
+* Manifest changes: `pom.xml`, `build.gradle`, `package.json`, `package-lock.json`, `go.mod`, `go.sum`, `Cargo.toml`, `Cargo.lock`, `requirements.txt`, `Pipfile.lock`, `pyproject.toml`, `composer.json`, `Gemfile.lock`.
+* Policy changes: `.ort.yml`, `.reuse/dep5`, `LICENSES/*`, `rules.kts`, `.whitesource`, scanner configuration. Forces a full repository re-baseline.
 * Large uncommented code blocks introduced without a corresponding manifest change. Signals copy-paste; trigger snippet scanning.
 * Dependency lockfile bumps even with no manifest change (transitive shifts).
 * New `LICENSE`, `NOTICE`, or top-level legal file changes.
 
 ### Suppress / downgrade severity for:
 
-* `/test`, `/tests`, `/__tests__`, `/spec`, `/mocks` — typically not distributed; copyleft distribution triggers do not apply. AGPL and SSPL network-use triggers may still apply if the test harness itself becomes a service.
-* `.github/workflows/`, `.gitlab-ci.yml`, internal build tooling — not distributed to end users.
+* `/test`, `/tests`, `/__tests__`, `/spec`, `/mocks`: typically not distributed; copyleft distribution triggers do not apply. AGPL and SSPL network-use triggers may still apply if the test harness itself becomes a service.
+* `.github/workflows/`, `.gitlab-ci.yml`, internal build tooling: not distributed to end users.
 * Generated code directories explicitly listed in `.ort.yml` `excludes` (with a reasoned justification).
 * Vendored documentation and example assets clearly marked as illustrative.
 
@@ -107,9 +107,9 @@ Suppression is configuration, not silence. Encode every suppression in `.ort.yml
 
 The recommended architecture is a three-layer pipeline:
 
-1. **Sync layer (scheduled, cached)** — Fetch SPDX `licenses.json`, OSADL matrix JSON, and any vendor advisory feeds. Pin versions in `.compliance/sources.lock`.
-2. **PR-time scanner (deterministic)** — ScanCode (via Docker) for source-level detection; ORT analyzer + scanner + evaluator for dependency-tree evaluation; the `reuse` linter for header conformance; SCANOSS for snippet detection if license budget allows. Output structured JSON, fail the build on hard violations, post a PR comment summarizing soft findings.
-3. **On-demand agentic auditor** — Invoked manually or on flagged dependencies. Reads the committed scan output plus repository policy artifacts (`README.md`, `architecture.md`, deployment manifests). Produces structured JSON with reasoning chain. Persists to an audit log keyed by commit SHA + prompt hash.
+1. **Sync layer (scheduled, cached)**: Fetch SPDX `licenses.json`, OSADL matrix JSON, and any vendor advisory feeds. Pin versions in `.compliance/sources.lock`.
+2. **PR-time scanner (deterministic)**: ScanCode (via Docker) for source-level detection; ORT analyzer + scanner + evaluator for dependency-tree evaluation; the `reuse` linter for header conformance; SCANOSS for snippet detection if license budget allows. Output structured JSON, fail the build on hard violations, post a PR comment summarizing soft findings.
+3. **On-demand agentic auditor**: Invoked manually or on flagged dependencies. Reads the committed scan output plus repository policy artifacts (`README.md`, `architecture.md`, deployment manifests). Produces structured JSON with reasoning chain. Persists to an audit log keyed by commit SHA + prompt hash.
 
 This separation is important: the deterministic layer must be fast and binary, the agentic layer must be slow and reasoned. Mixing them produces a scanner that is both flaky and slow.
 
@@ -119,7 +119,7 @@ Every scanner run produces, at minimum:
 
 * **SBOM** in SPDX 2.3 or CycloneDX 1.5 (preferably both). The SBOM is the lingua franca for downstream consumers (M&A diligence, cyber insurance, OpenChain conformance).
 * **Violations report** in JSON with a stable schema (eval ID, severity, license identifier, package coordinate, path, rule that fired, suppression status, evidence pointer).
-* **Attribution bundle** — concatenated `LICENSE` and `NOTICE` content for every distributed dependency, suitable for shipping in product about-screens or `THIRD_PARTY_NOTICES.md`.
+* **Attribution bundle**: concatenated `LICENSE` and `NOTICE` content for every distributed dependency, suitable for shipping in product about-screens or `THIRD_PARTY_NOTICES.md`.
 * **Audit trail entry** for every agentic decision, with commit SHA, scanned input hash, prompt, model identifier, and structured output.
 
 The SBOM and the audit trail together are the evidence packet. Everything else is derived.
@@ -128,12 +128,12 @@ The SBOM and the audit trail together are the evidence packet. Everything else i
 
 State these limits explicitly to consumers of the skill, in PR comments and in audit-package documentation.
 
-* **Dynamic linking and obfuscation** — SCA cannot see what is dynamically linked into a binary at runtime, nor can it identify obfuscated Java (ProGuard, R8) or stripped native binaries.
-* **Reachability ≠ obligation** — A copyleft dependency reached only on a dead code path is still distributed and still triggers obligations. Do not let runtime SCA reachability filters quietly suppress legal risk.
-* **Snippet false positives** — Boilerplate, autogenerated stubs, and standard algorithms produce constant noise. Confidence thresholds and persisted triage decisions in `.ort.yml` are the only way to keep alert fatigue manageable.
-* **License-change events** — A dependency licensed permissively today may relicense tomorrow (Redis 2024, HashiCorp 2023, Elastic 2021/2024). Continuous monitoring of upstream license metadata is required; a one-time scan ages out fast.
-* **Stack Overflow CC-SA** — Up to 33% of identified license conflicts in enterprise audits trace to Stack Overflow snippet pasting. Snippet scanning is the only line of defense.
-* **The agent is non-deterministic** — Two runs of the same agentic prompt against the same input may differ. Pin model versions, log prompts, and treat the audit log as the artifact rather than the model output itself.
+* **Dynamic linking and obfuscation**: SCA cannot see what is dynamically linked into a binary at runtime, nor can it identify obfuscated Java (ProGuard, R8) or stripped native binaries.
+* **Reachability ≠ obligation**: A copyleft dependency reached only on a dead code path is still distributed and still triggers obligations. Do not let runtime SCA reachability filters quietly suppress legal risk.
+* **Snippet false positives**: Boilerplate, autogenerated stubs, and standard algorithms produce constant noise. Confidence thresholds and persisted triage decisions in `.ort.yml` are the only way to keep alert fatigue manageable.
+* **License-change events**: A dependency licensed permissively today may relicense tomorrow (Redis 2024, HashiCorp 2023, Elastic 2021/2024). Continuous monitoring of upstream license metadata is required; a one-time scan ages out fast.
+* **Stack Overflow CC-SA**: Up to 33% of identified license conflicts in enterprise audits trace to Stack Overflow snippet pasting. Snippet scanning is the only line of defense.
+* **The agent is non-deterministic**: Two runs of the same agentic prompt against the same input may differ. Pin model versions, log prompts, and treat the audit log as the artifact rather than the model output itself.
 
 ## Skill scope boundaries
 

@@ -1,53 +1,43 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
-export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export const GET = withRouteContext(
+  'counterparty_template.list',
+  async (_request, { supabase, companyId }) => {
+    const { data, error } = await supabase
+      .from('categorization_templates')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .order('occurrence_count', { ascending: false })
 
-  const companyId = await requireCompanyId(supabase, user.id)
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const { data, error } = await supabase
-    .from('categorization_templates')
-    .select('*')
-    .eq('company_id', companyId)
-    .eq('is_active', true)
-    .order('occurrence_count', { ascending: false })
+    return NextResponse.json({ data })
+  },
+)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+export const DELETE = withRouteContext(
+  'counterparty_template.delete',
+  async (request, { supabase, companyId }) => {
+    let id: string | undefined
+    try {
+      const body = await request.json()
+      id = body?.id
+    } catch {
+      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+    }
+    if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
-  return NextResponse.json({ data })
-}
+    const { error } = await supabase
+      .from('categorization_templates')
+      .update({ is_active: false })
+      .eq('id', id)
+      .eq('company_id', companyId)
 
-export async function DELETE(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  let id: string | undefined
-  try {
-    const body = await request.json()
-    id = body?.id
-  } catch {
-    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
-  }
-  if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
-
-  const { error } = await supabase
-    .from('categorization_templates')
-    .update({ is_active: false })
-    .eq('id', id)
-    .eq('company_id', companyId)
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-
-  return NextResponse.json({ data: { success: true } })
-}
+    return NextResponse.json({ data: { success: true } })
+  },
+  { requireWrite: true },
+)

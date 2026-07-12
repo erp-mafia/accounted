@@ -33,7 +33,7 @@ let cache: Skill[] | null = null
 
 /**
  * SKILL.md frontmatter `description` fields are long, keyword-stuffed trigger
- * lists authored for CLI skill-matching — not display copy (the project-accounting
+ * lists authored for CLI skill-matching: not display copy (the project-accounting
  * atom is ~1,100 chars). `gnubok_list_skills` and `gnubok_get_agent_briefing`
  * surface them as one-line summaries, where the raw string gets truncated
  * mid-sentence by the client. Trim to the first sentence, or a clean word
@@ -56,8 +56,8 @@ export function toSummary(description: string, maxLen = 200): string {
 export async function loadAtomsAsSkills(supabase: SupabaseClient): Promise<Skill[]> {
   if (cache) return cache
 
-  // `body` is read from the DB (seeded by scripts/generate-skill-bodies.ts) — not
-  // from disk — so skills load identically on Vercel, Docker, and self-hosted.
+  // `body` is read from the DB (seeded by scripts/generate-skill-bodies.ts): not
+  // from disk, so skills load identically on Vercel, Docker, and self-hosted.
   // `mcp_exposed` is the curation kill-switch: only atoms flagged for the MCP
   // surface reach Claude (swarm-* audit skills never become atoms in the first
   // place; this guards against any future row that shouldn't be end-user-loadable).
@@ -94,7 +94,7 @@ export async function loadAtomsAsSkills(supabase: SupabaseClient): Promise<Skill
         }
       }
       if (!body) {
-        console.warn(`[mcp-skills] atom ${row.id}: no body in DB and no on-disk fallback — skipping`)
+        console.warn(`[mcp-skills] atom ${row.id}: no body in DB and no on-disk fallback: skipping`)
         continue
       }
     }
@@ -117,8 +117,7 @@ export async function loadAtomsAsSkills(supabase: SupabaseClient): Promise<Skill
 }
 
 /**
- * Resolve a single reference child (parent_atom_id IS NOT NULL) by exact id —
- * e.g. "horizontal/swedish-vat/vat-compliance-reference". References are
+ * Resolve a single reference child (parent_atom_id IS NOT NULL) by exact id:  * e.g. "horizontal/swedish-vat/vat-compliance-reference". References are
  * deliberately excluded from `loadAtomsAsSkills` (the listed catalog), so this
  * is the only path that surfaces them; gnubok_load_skill falls back here when a
  * slug isn't a workflow or a top-level atom. Returns null for unknown ids,

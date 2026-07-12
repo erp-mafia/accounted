@@ -5,6 +5,7 @@ import Script from "next/script";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import { Toaster } from "@/components/ui/toaster";
+import { DeployReloadPrompt } from "@/components/system/DeployReloadPrompt";
 import { ThemeProvider } from "@/components/theme-provider";
 import { RecaptLoader } from "@/components/RecaptLoader";
 import { RecaptHideWidget } from "@/components/RecaptHideWidget";
@@ -86,6 +87,7 @@ export default async function RootLayout({
           >
             {children}
             <Toaster />
+            <DeployReloadPrompt />
             <RecaptHideWidget />
           </ThemeProvider>
         </NextIntlClientProvider>

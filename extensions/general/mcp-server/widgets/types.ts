@@ -6,7 +6,7 @@
  * the host exclusively via postMessage / JSON-RPC 2.0; never via fetch().
  */
 export interface UiWidget {
-  /** Resource URI clients use to load the widget — e.g. `ui://vat-review/app.html`. */
+  /** Resource URI clients use to load the widget: e.g. `ui://vat-review/app.html`. */
   uri: string
   /** Display name shown in the host's resource list. */
   name: string

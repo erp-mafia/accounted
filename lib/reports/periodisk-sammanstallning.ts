@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { calculatePeriodDates, formatPeriodLabel } from './period-dates'
 import { calculateVatDeclaration } from './vat-declaration'
 
@@ -15,11 +16,11 @@ import { calculateVatDeclaration } from './vat-declaration'
  * momsdeklaration Ruta 35/38/39 can never drift. See §1.2 of the plan.
  *
  * Notes:
- *   - Account 3305/3105 (non-EU export) are NOT in this report — they go to
+ *   - Account 3305/3105 (non-EU export) are NOT in this report: they go to
  *     Ruta 36/40 only.
  *   - Trepartshandel (3107) is included so the report works if someone posts
  *     there manually; the invoicing UI doesn't post there today (v2).
- *   - Avropslager codes X/Y/Z are deferred to v2 — the CSV serializer asserts
+ *   - Avropslager codes X/Y/Z are deferred to v2: the CSV serializer asserts
  *     only numeric amounts in v1.
  */
 
@@ -181,29 +182,22 @@ export async function generatePeriodiskSammanstallning(
 
   const { start, end } = calculatePeriodDates(periodType, year, period)
 
-  const lines = await fetchAllRows<RawLine>(({ from, to }) =>
-    supabase
-      .from('journal_entry_lines')
-      .select(`
-        account_number,
-        debit_amount,
-        credit_amount,
-        journal_entries!inner (
-          company_id, entry_date, status, source_type, source_id
-        )
-      `)
-      .in('account_number', PS_ACCOUNTS)
-      .eq('journal_entries.company_id', companyId)
-      .in('journal_entries.status', ['posted', 'reversed'])
-      // Cash sales on 3308/3108 are not a real flow (EU reverse-charge sales
-      // always go through AR); excluded to avoid phantom rows.
-      .in('journal_entries.source_type', ['invoice_created', 'credit_note'])
-      .gte('journal_entries.entry_date', start)
-      .lte('journal_entries.entry_date', end)
-      // Stable total order for correct paging (see fetch-all.ts).
-      .order('id', { ascending: true })
-      .range(from, to) as unknown as PromiseLike<{ data: RawLine[] | null; error: { message: string } | null }>,
-  )
+  // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
+  const lines = await fetchEntryLines<RawLine>({
+    supabase,
+    entryColumns: 'company_id, entry_date, status, source_type, source_id',
+    lineColumns: 'account_number, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', companyId)
+        .in('status', ['posted', 'reversed'])
+        // Cash sales on 3308/3108 are not a real flow (EU reverse-charge sales
+        // always go through AR); excluded to avoid phantom rows.
+        .in('source_type', ['invoice_created', 'credit_note'])
+        .gte('entry_date', start)
+        .lte('entry_date', end),
+    filterLines: (q: EntryLinesQuery) => q.in('account_number', PS_ACCOUNTS),
+  })
 
   const invoiceIds = Array.from(
     new Set(
@@ -314,7 +308,7 @@ export async function generatePeriodiskSammanstallning(
       })
       blocking = true
     } else {
-      // VAT prefix check — if the raw VAT-number starts with a country code,
+      // VAT prefix check: if the raw VAT-number starts with a country code,
       // it must match the customer.country. Skatteverket uses EL for Greece.
       const rawUpper = rawVat.replace(/\s+/g, '').toUpperCase()
       const prefixMatch = rawUpper.match(/^([A-Z]{2})/)
@@ -363,7 +357,7 @@ export async function generatePeriodiskSammanstallning(
     )
   }
 
-  // Goods-sold-with-quarterly-period — blocking under SFL 35 kap. 2 §.
+  // Goods-sold-with-quarterly-period: blocking under SFL 35 kap. 2 §.
   // Companies selling goods intra-EU must file PS monthly; a quarterly filing
   // is structurally non-compliant and must not be exportable as CSV.
   if (goodsLineSeen && periodType === 'quarterly') {
@@ -384,7 +378,7 @@ export async function generatePeriodiskSammanstallning(
     const triangulation = round(acc.triangulation)
     if (services === 0 && goods === 0 && triangulation === 0) {
       // Emit a warning only if there was actual rörelse (a credit note nets
-      // services back to zero — final values are 0 but we saw activity).
+      // services back to zero: final values are 0 but we saw activity).
       if (acc.sawActivity) {
         warnings.push({
           level: 'warning',

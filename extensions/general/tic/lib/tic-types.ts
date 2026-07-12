@@ -68,7 +68,7 @@ export interface TICCompanyDocument {
   }
   // Top-level fields the Lens search index already returns alongside the
   // company core. /lookup reads these directly instead of fanning out to
-  // dedicated v2 endpoints — saves 5 calls per invocation.
+  // dedicated v2 endpoints: saves 5 calls per invocation.
   sniCodes?: Array<{
     rank?: number
     sni_2007Code?: string
@@ -139,12 +139,12 @@ export interface TICCompanyPurpose {
 }
 
 /**
- * Raw Bolagsverket beneficial-owner notification record — one per
+ * Raw Bolagsverket beneficial-owner notification record: one per
  * registration event. The latest active notification is what we care
  * about; older ones describe ownership changes over time.
  *
  * v2 shape: matches `BeneficialOwnerNotification_Dto`. Personnummer
- * (`personalIdentityNumber`) is omitted from this interface — we never
+ * (`personalIdentityNumber`) is omitted from this interface: we never
  * cache it, and the rest of the codebase has no need for it.
  */
 export interface TICBeneficialOwnerNotificationRaw {
@@ -166,7 +166,7 @@ export interface TICBeneficialOwnerNotificationRaw {
 
 /**
  * v2 `/companies/{id}/beneficial-owners` returns
- * `BeneficialOwnerNotification_Dto[]` directly — there is no wrapper.
+ * `BeneficialOwnerNotification_Dto[]` directly: there is no wrapper.
  * v1's wrapper carried an `exempts` array; v2 dropped it (no equivalent
  * endpoint exists in the Lens spec), so the cached profile no longer
  * surfaces an exempt flag.
@@ -233,7 +233,7 @@ export interface TICFinancialReportSummary {
   auditOpinion?: string
 }
 
-/** Flattened beneficial owner record — verklig huvudman per
+/** Flattened beneficial owner record: verklig huvudman per
  * Lag (2017:631). Personnummer intentionally omitted to keep PII out of the
  * cached profile; we only need name + ownership extent for downstream use
  * (e.g. dropping "are you the sole owner?" verification questions). */
@@ -266,7 +266,7 @@ export interface TICFiscalYear {
 
 /**
  * v2 `/companies/{id}/accounting-periods` returns
- * `CompanyAccountingPeriod_Dto[]` — history of period-end changes
+ * `CompanyAccountingPeriod_Dto[]`: history of period-end changes
  * (e.g. shifted year-end). Useful as a "this company changed its books"
  * indicator during onboarding.
  */
@@ -372,7 +372,7 @@ export interface TICRepresentatives {
 }
 
 /**
- * v2 `/companies/{id}/status` returns `CompanyStatus_Dto[]` — current
+ * v2 `/companies/{id}/status` returns `CompanyStatus_Dto[]`: current
  * and historical status entries (active, in liquidation, struck off,
  * etc.). Each entry has a `statusColor` (red/yellow/green/neutral) and
  * a human-readable `statusDescription` we can surface directly.

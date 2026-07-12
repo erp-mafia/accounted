@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ============================================================
-// Mock — sequential result queue
+// Mock: sequential result queue
 // ============================================================
 
 let resultIdx: number
@@ -9,7 +9,7 @@ let results: Array<{ data?: unknown; error?: unknown }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'or', 'not', 'order', 'range']) {
+  for (const m of ['select', 'eq', 'neq', 'in', 'gte', 'lte', 'lt', 'or', 'not', 'order', 'range']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
@@ -43,7 +43,7 @@ beforeEach(() => {
 })
 
 // ============================================================
-// Pure function tests — no mocks needed
+// Pure function tests: no mocks needed
 // ============================================================
 
 describe('calculatePeriodDates', () => {
@@ -183,16 +183,19 @@ describe('getVatDeclarationSummary', () => {
 // ============================================================
 // Ledger-based VAT declaration tests
 //
-// After Phase 1b refactor, the calculator does TWO queries per call:
-//   [0] fetchAllRows: journal_entry_lines on every account in ACCOUNT_RUTA
-//       (26xx VAT, 3xxx revenue, 4xxx reverse-charge cost accounts)
-//   [1] journal_entries source_type counts (used for invoice/transaction metadata)
+// The calculator queries per call (two-step entry-lines fetch, see
+// lib/bookkeeping/entry-lines.ts):
+//   [0] journal_entries matching the period (id page)
+//   [1] journal_entry_lines by entry id, filtered to ACCOUNT_RUTA accounts
+//       (26xx VAT, 3xxx revenue, 4xxx reverse-charge cost accounts);
+//       skipped entirely when [0] is empty
+//   [2] journal_entries source_type counts (invoice/transaction metadata)
 // ============================================================
 
 describe('calculateVatDeclaration', () => {
   it('returns all zeros when no ledger lines exist', async () => {
     results = [
-      { data: [], error: null },  // journal_entry_lines
+      { data: [], error: null },  // journal_entries: none → line fetch skipped
       { data: [], error: null },  // entry counts
     ]
 
@@ -213,6 +216,8 @@ describe('calculateVatDeclaration', () => {
 
   it('sums output VAT to ruta10/11/12 and revenue to ruta05', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
@@ -241,6 +246,8 @@ describe('calculateVatDeclaration', () => {
 
   it('sums input VAT from 2641 debit balance', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2641', debit_amount: 250, credit_amount: 0 },
@@ -259,6 +266,8 @@ describe('calculateVatDeclaration', () => {
 
   it('includes calculated input VAT (2645) from EU reverse charge in ruta48', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2645', debit_amount: 500, credit_amount: 0 },
@@ -276,6 +285,8 @@ describe('calculateVatDeclaration', () => {
 
   it('maps EU/export revenue to ruta39/ruta40', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '3308', debit_amount: 0, credit_amount: 8000 },
@@ -294,6 +305,8 @@ describe('calculateVatDeclaration', () => {
 
   it('handles credit notes as net reduction on revenue/VAT accounts', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           // Invoice: C2611 2500, C3001 10000
@@ -317,6 +330,8 @@ describe('calculateVatDeclaration', () => {
 
   it('calculates ruta49 as output minus input VAT', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
@@ -338,6 +353,8 @@ describe('calculateVatDeclaration', () => {
 
   it('detects refund when input VAT exceeds output VAT', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2611', debit_amount: 0, credit_amount: 500 },
@@ -365,6 +382,8 @@ describe('calculateVatDeclaration', () => {
 
   it('handles all three VAT rates in a single period', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '3001', debit_amount: 0, credit_amount: 10000 },
@@ -392,12 +411,14 @@ describe('calculateVatDeclaration', () => {
 })
 
 // ============================================================
-// Reverse charge — purchase bases (ruta 20-24) sourced from cost accounts
+// Reverse charge: purchase bases (ruta 20-24) sourced from cost accounts
 // ============================================================
 
-describe('calculateVatDeclaration — reverse charge', () => {
+describe('calculateVatDeclaration: reverse charge', () => {
   it('maps 2614/2624/2634 credit balances to ruta30/31/32', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2614', debit_amount: 0, credit_amount: 1250 },
@@ -422,6 +443,8 @@ describe('calculateVatDeclaration — reverse charge', () => {
 
   it('includes ruta30-32 in ruta49 formula', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
@@ -446,6 +469,8 @@ describe('calculateVatDeclaration — reverse charge', () => {
   it('populates ruta20 from EU goods cost accounts (4515/4516/4517)', async () => {
     // EU goods purchase: D 4515 25000, D 2645 6250, C 2614 6250, C 2440 25000
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '4515', debit_amount: 25000, credit_amount: 0 },
@@ -469,6 +494,8 @@ describe('calculateVatDeclaration — reverse charge', () => {
 
   it('populates ruta21 from EU services cost accounts (4535/4536/4537)', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '4535', debit_amount: 5000, credit_amount: 0 },
@@ -493,6 +520,8 @@ describe('calculateVatDeclaration — reverse charge', () => {
   it('populates ruta22 from non-EU services cost accounts (4531/4532/4533)', async () => {
     // Anthropic-style: D 4531 3000, D 2645 750, C 2614 750, C 2440 3000
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '4531', debit_amount: 3000, credit_amount: 0 },
@@ -515,6 +544,8 @@ describe('calculateVatDeclaration — reverse charge', () => {
   it('populates ruta23 from domestic goods reverse-charge cost accounts (4415/4416/4417)', async () => {
     // Domestic mobile reverse charge: D 4415 100000, D 2647 25000, C 2614 25000, C 2440 100000
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '4415', debit_amount: 100000, credit_amount: 0 },
@@ -537,6 +568,8 @@ describe('calculateVatDeclaration — reverse charge', () => {
 
   it('populates ruta24 from domestic services reverse-charge cost accounts (4425/4426/4427)', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '4425', debit_amount: 8000, credit_amount: 0 },
@@ -557,6 +590,8 @@ describe('calculateVatDeclaration — reverse charge', () => {
 
   it('returns zero ruta20-24 when no reverse-charge cost-account activity', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
@@ -579,6 +614,8 @@ describe('calculateVatDeclaration — reverse charge', () => {
   it('reverse-charge credit notes net out the cost-account debit balance', async () => {
     // Original purchase: D 4535 5000; reversal (credit note): C 4535 1000
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '4535', debit_amount: 5000, credit_amount: 0 },
@@ -602,6 +639,8 @@ describe('calculateVatDeclaration — reverse charge', () => {
 
   it('maps domestic reverse-charge input VAT (2647) to ruta48', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2647', debit_amount: 500, credit_amount: 0 },
@@ -624,9 +663,11 @@ describe('calculateVatDeclaration — reverse charge', () => {
 // Import (ruta 50, 60-62) and Ruta 06 (uttag) and Ruta 42 (exempt)
 // ============================================================
 
-describe('calculateVatDeclaration — import, uttag, exempt', () => {
+describe('calculateVatDeclaration: import, uttag, exempt', () => {
   it('maps import VAT accounts (2615/2625/2635) to ruta60/61/62', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2615', debit_amount: 0, credit_amount: 2500 },
@@ -650,6 +691,8 @@ describe('calculateVatDeclaration — import, uttag, exempt', () => {
   it('populates ruta50 (import beskattningsunderlag) from 4545-4547', async () => {
     // Full import flow: D 4545 10000, C 2615 2500, D 2641 2500
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '4545', debit_amount: 10000, credit_amount: 0 },
@@ -663,7 +706,7 @@ describe('calculateVatDeclaration — import, uttag, exempt', () => {
 
     const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
 
-    // Ruta 50 (base) and Ruta 60 (output VAT) BOTH non-zero — required by SKV §4.1.1.4
+    // Ruta 50 (base) and Ruta 60 (output VAT) BOTH non-zero: required by SKV §4.1.1.4
     // ERROR rule "Det måste finnas ett belopp i fält 50, eftersom det finns ett belopp i 60-62"
     expect(result.rutor.ruta50).toBe(10000)
     expect(result.rutor.ruta60).toBe(2500)
@@ -673,6 +716,8 @@ describe('calculateVatDeclaration — import, uttag, exempt', () => {
   it('populates ruta06 from uttag accounts (3401/3402/3403)', async () => {
     // Uttag: D 2010 (private withdrawal); C 3401 1000 + C 2612 250 (25% rate uttag)
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '3401', debit_amount: 0, credit_amount: 1000 },
@@ -691,6 +736,8 @@ describe('calculateVatDeclaration — import, uttag, exempt', () => {
 
   it('expanded ruta42 covers 3004, 3100, 3404, 3994, 3980', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '3004', debit_amount: 0, credit_amount: 1000 },
@@ -711,6 +758,8 @@ describe('calculateVatDeclaration — import, uttag, exempt', () => {
 
   it('maps EU/export revenue variants (3108/3105) to ruta35/36', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '3108', debit_amount: 0, credit_amount: 15000 },
@@ -729,6 +778,8 @@ describe('calculateVatDeclaration — import, uttag, exempt', () => {
 
   it('maps output VAT variant accounts (2612/2623/2636) to correct rutor', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2612', debit_amount: 0, credit_amount: 1000 }, // egna uttag 25%
@@ -749,6 +800,8 @@ describe('calculateVatDeclaration — import, uttag, exempt', () => {
 
   it('handles zero output VAT on some rates but non-zero on others', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2621', debit_amount: 0, credit_amount: 600 },
@@ -771,6 +824,8 @@ describe('calculateVatDeclaration — import, uttag, exempt', () => {
 
   it('rounds sub-öre amounts via Math.round * 100 / 100', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2611', debit_amount: 0, credit_amount: 0.001 },
@@ -797,14 +852,16 @@ describe('calculateVatDeclaration — import, uttag, exempt', () => {
 // ============================================================
 
 describe('SKV §4.1.1.4 cross-field contracts', () => {
-  it('ERROR — taxable sales base requires output VAT (rule 1)', async () => {
+  it('ERROR: taxable sales base requires output VAT (rule 1)', async () => {
     // SKV: if any of momspliktigForsaljning/momspliktigaUttag/vinstmarginal/hyresInkomst > 0,
     //      at least one of momsForsaljningUtgaende{Hog,Medel,Lag} must be > 0.
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '3001', debit_amount: 0, credit_amount: 10000 },
-          // No 2611/2621/2631 booked — would trigger SKV ERROR
+          // No 2611/2621/2631 booked: would trigger SKV ERROR
         ],
         error: null,
       },
@@ -819,17 +876,19 @@ describe('SKV §4.1.1.4 cross-field contracts', () => {
     expect(hasBase).toBe(true)
     expect(hasOutput).toBe(false)
     // Local invariant: this combination would fail SKV kontrollera with ERROR.
-    // The calculator does not auto-correct — the ledger must be fixed upstream.
+    // The calculator does not auto-correct: the ledger must be fixed upstream.
   })
 
-  it('ERROR — reverse-charge purchase base requires output VAT (rule 3)', async () => {
+  it('ERROR: reverse-charge purchase base requires output VAT (rule 3)', async () => {
     // If any of inkopVarorEU/inkopTjansterEU/inkopTjansterUtanforEU/inkopVarorSE/inkopTjansterSE > 0,
     // at least one of momsInkopUtgaende{Hog,Medel,Lag} must be > 0.
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '4535', debit_amount: 5000, credit_amount: 0 },
-          // No 2614/2624/2634 booked — would trigger SKV ERROR
+          // No 2614/2624/2634 booked: would trigger SKV ERROR
         ],
         error: null,
       },
@@ -845,13 +904,15 @@ describe('SKV §4.1.1.4 cross-field contracts', () => {
     expect(hasRcOutput).toBe(false)
   })
 
-  it('ERROR — import base requires import output VAT (rule 5)', async () => {
+  it('ERROR: import base requires import output VAT (rule 5)', async () => {
     // If import (ruta50) > 0, at least one of momsImportUtgaende{Hog,Medel,Lag} must be > 0.
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '4545', debit_amount: 10000, credit_amount: 0 },
-          // No 2615/2625/2635 booked — would trigger SKV ERROR
+          // No 2615/2625/2635 booked: would trigger SKV ERROR
         ],
         error: null,
       },
@@ -865,11 +926,13 @@ describe('SKV §4.1.1.4 cross-field contracts', () => {
     expect(r.ruta60 + r.ruta61 + r.ruta62).toBe(0)
   })
 
-  it('ERROR — import output VAT requires import base (rule 6)', async () => {
+  it('ERROR: import output VAT requires import base (rule 6)', async () => {
     // If any of momsImportUtgaende{Hog,Medel,Lag} > 0, import (ruta50) must be > 0.
     // This is the BLOCKER scenario the Phase 1b refactor fixes: previously ruta50 was
     // never populated, so any import VAT booking would fail SKV's contract.
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2615', debit_amount: 0, credit_amount: 2500 },
@@ -884,16 +947,18 @@ describe('SKV §4.1.1.4 cross-field contracts', () => {
     const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
     const r = result.rutor
 
-    // Both populated — passes SKV's rule 6
+    // Both populated: passes SKV's rule 6
     expect(r.ruta50).toBe(10000)
     expect(r.ruta60).toBe(2500)
   })
 
-  it('ERROR — summaMoms must equal (ruta10+11+12+30+31+32+60+61+62) − ruta48 (rule 7)', async () => {
+  it('ERROR: summaMoms must equal (ruta10+11+12+30+31+32+60+61+62) − ruta48 (rule 7)', async () => {
     // The calculator computes ruta49 from the formula directly, so this invariant
     // holds by construction. This test is the canary that catches drift if anyone
     // ever adds an extra term or rate to the form.
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
@@ -921,7 +986,7 @@ describe('SKV §4.1.1.4 cross-field contracts', () => {
 })
 
 // ============================================================
-// Parent/summary BAS accounts — 2610/2620/2630 (output),
+// Parent/summary BAS accounts: 2610/2620/2630 (output),
 // 2618/2628/2638 (vilande), 2640 (input parent).
 //
 // Users who post directly to the group account (manual entries, SIE imports,
@@ -929,9 +994,11 @@ describe('SKV §4.1.1.4 cross-field contracts', () => {
 // because only the leaf accounts were mapped.
 // ============================================================
 
-describe('calculateVatDeclaration — parent/summary accounts', () => {
+describe('calculateVatDeclaration: parent/summary accounts', () => {
   it('maps 2610 (parent) to ruta10 when posted directly', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '1910', debit_amount: 12500, credit_amount: 0 },
@@ -952,6 +1019,8 @@ describe('calculateVatDeclaration — parent/summary accounts', () => {
 
   it('maps 2620 (parent) to ruta11 and 2630 (parent) to ruta12', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2620', debit_amount: 0, credit_amount: 600 },
@@ -972,6 +1041,8 @@ describe('calculateVatDeclaration — parent/summary accounts', () => {
     // Vilande accounts hold output VAT for invoices that have been sent but not
     // yet paid, used by cash-method bookkeepers per BFNAR 2006:1.
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2618', debit_amount: 0, credit_amount: 500 },
@@ -993,8 +1064,10 @@ describe('calculateVatDeclaration — parent/summary accounts', () => {
   it('sums parent and sub-account balances on the same ruta', async () => {
     // If a ledger has activity on both the parent and the sub-accounts (mixed
     // bookkeeping practice, SIE imports, etc.), the ruta reflects the literal
-    // ledger total — accounting truth wins.
+    // ledger total: accounting truth wins.
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2610', debit_amount: 0, credit_amount: 1000 },
@@ -1012,6 +1085,8 @@ describe('calculateVatDeclaration — parent/summary accounts', () => {
 
   it('maps 2640 (input VAT parent) to ruta48', async () => {
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '2640', debit_amount: 200, credit_amount: 0 },
@@ -1032,6 +1107,8 @@ describe('calculateVatDeclaration — parent/summary accounts', () => {
     // correct VAT amount on the parent account. Before the fix, ruta10 read 0
     // and ruta49 incorrectly showed a refund.
     results = [
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '3001', debit_amount: 0, credit_amount: 21600 },
@@ -1052,14 +1129,16 @@ describe('calculateVatDeclaration — parent/summary accounts', () => {
   })
 })
 
-describe('calculateVatDeclaration — annual VAT spans the räkenskapsår', () => {
+describe('calculateVatDeclaration: annual VAT spans the räkenskapsår', () => {
   it('uses the fiscal period bounds for yearly when a fiscalPeriodId is given', async () => {
-    // Förlängt räkenskapsår (extended first year, 18 months) — annual VAT
+    // Förlängt räkenskapsår (extended first year, 18 months): annual VAT
     // (helårsmoms) must cover the whole period, not the calendar year that
     // period_start falls in. The first queued result feeds the fiscal_periods
     // lookup, the second the journal lines, the third the entry counts.
     results = [
       { data: { period_start: '2025-07-03', period_end: '2026-12-31' }, error: null },
+      // journal_entries page for the two-step entry-lines fetch
+      { data: [{ id: 'entry-1' }], error: null },
       {
         data: [
           { account_number: '3001', debit_amount: 0, credit_amount: 21600 },
@@ -1099,7 +1178,7 @@ describe('calculateVatDeclaration — annual VAT spans the räkenskapsår', () =
 
   it('ignores fiscalPeriodId for monthly periods (calendar month, no lookup)', async () => {
     // No fiscal_periods lookup is made for monthly, so the first queued result
-    // is the journal lines — proving the räkenskapsår path is yearly-only.
+    // is the journal lines: proving the räkenskapsår path is yearly-only.
     results = [
       { data: [], error: null }, // journal lines
       { data: [], error: null }, // entry counts
@@ -1111,5 +1190,101 @@ describe('calculateVatDeclaration — annual VAT spans the räkenskapsår', () =
 
     expect(result.period.start).toBe('2026-03-01')
     expect(result.period.end).toBe('2026-03-31')
+  })
+})
+
+// ============================================================
+// #984: settlement entries never zero the report
+// ============================================================
+
+describe('calculateVatDeclaration: settlement-shaped exclusion (#984)', () => {
+  function line(entryId: string, account: string, debit: number, credit: number) {
+    return {
+      journal_entry_id: entryId,
+      account_number: account,
+      debit_amount: debit,
+      credit_amount: credit,
+    }
+  }
+
+  it('excludes a manual momsomföring so the report survives nollställning', async () => {
+    results = [
+      {
+        data: [{ id: 'e1' }, { id: 'e2', source_type: 'manual' }],
+        error: null,
+      },
+      {
+        data: [
+          // Business activity.
+          line('e1', '2611', 0, 2500),
+          line('e1', '2641', 1000, 0),
+          line('e1', '3001', 0, 10000),
+          // Manual settlement clearing the period to 2650 (booked without
+          // the vat_settlement source_type, e.g. before #980 shipped).
+          line('e2', '2611', 2500, 0),
+          line('e2', '2641', 0, 1000),
+          line('e2', '2650', 0, 1500),
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // entry counts
+    ]
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 5)
+
+    // Without the shape exclusion every ruta reads 0 after the settlement.
+    expect(result.rutor.ruta10).toBe(2500)
+    expect(result.rutor.ruta48).toBe(1000)
+    expect(result.rutor.ruta49).toBe(1500)
+    expect(result.rutor.ruta05).toBe(10000)
+  })
+
+  it('excludes a storno of a settlement (annullera must not inflate the rutor)', async () => {
+    results = [
+      {
+        // The tagged settlement itself is filtered out by the query; its
+        // storno reversal is not, and would otherwise re-credit 2611.
+        data: [{ id: 'e1' }, { id: 'e3', source_type: 'storno' }],
+        error: null,
+      },
+      {
+        data: [
+          line('e1', '2611', 0, 100),
+          line('e3', '2611', 0, 100),
+          line('e3', '2650', 100, 0),
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // entry counts
+    ]
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 5)
+
+    expect(result.rutor.ruta10).toBe(100)
+    expect(result.rutor.ruta49).toBe(100)
+  })
+
+  it('keeps opening-balance entries: carried-in 26xx balances are unsettled VAT', async () => {
+    results = [
+      {
+        data: [{ id: 'ib', source_type: 'opening_balance' }],
+        error: null,
+      },
+      {
+        data: [
+          // Migrating company: undeclared input VAT and a prior VAT debt
+          // carried in through the same opening-balance entry.
+          line('ib', '2641', 500, 0),
+          line('ib', '2650', 0, 300),
+        ],
+        error: null,
+      },
+      { data: [], error: null }, // entry counts
+    ]
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 1)
+
+    expect(result.rutor.ruta48).toBe(500)
+    expect(result.rutor.ruta49).toBe(-500)
   })
 })

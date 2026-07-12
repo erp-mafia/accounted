@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 /**
  * Per-company rate limiter for document-inbox ingestion. Backed by the
  * `check_and_increment_inbox_quota` Postgres RPC (atomic check + increment),
- * not Upstash — keeps the limiter on the same shared distributed store the
+ * not Upstash: keeps the limiter on the same shared distributed store the
  * rest of the app already hits, and works without extra env vars on Vercel
  * and Docker self-hosters alike.
  *
@@ -32,7 +32,7 @@ export async function checkInboxUploadRateLimit(
     p_day_max: DAY_MAX,
   })
   if (error) {
-    // Fail open on infra error. The limiter is defense-in-depth — per-file
+    // Fail open on infra error. The limiter is defense-in-depth: per-file
     // size + MIME checks still apply on the upload route. Better to accept
     // an upload than 500 a real user because Postgres blipped.
     console.error('[inbox-rate-limit] RPC failed:', error)

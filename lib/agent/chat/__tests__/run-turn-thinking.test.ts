@@ -91,11 +91,11 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('runChatTurn — extended thinking wiring', () => {
+describe('runChatTurn: extended thinking wiring', () => {
   it('passes a thinking config and bumps max_tokens when the intent opts in', async () => {
     const args = await runWith({ ...baseIntent(), thinking: { budgetTokens: 2000 } })
     expect(args.thinking).toEqual({ type: 'enabled', budget_tokens: 2000 })
-    // budget must be strictly below max_tokens — we add the normal output budget.
+    // budget must be strictly below max_tokens: we add the normal output budget.
     expect(args.max_tokens).toBe(2000 + 4096)
   })
 

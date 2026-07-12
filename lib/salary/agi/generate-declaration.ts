@@ -15,7 +15,7 @@
  *
  * Per agi-filing.md:
  *   - FK570 (specifikationsnummer) MUST stay consistent per employee
- *   - Corrections resubmit with same FK570 — a different number = a new record
+ *   - Corrections resubmit with same FK570: a different number = a new record
  *   - XML is räkenskapsinformation; stored for 7-year retention per BFL 7 kap
  *   - Filing deadline: the 12th of the following month (17th in Jan/Aug for
  *     companies ≤ 40 MSEK turnover)
@@ -31,6 +31,7 @@ import {
 } from './xml-generator'
 import type { AGIEmployeeData, AGICompanyData, AGITotals } from './xml-generator'
 import { eventBus } from '@/lib/events'
+import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import type { Logger } from '@/lib/logger'
 
 // Strict runtime validation of the joined salary_run_employees row. Without
@@ -166,7 +167,7 @@ export async function generateAgiDeclaration(
 
   const { data: settings } = await supabase
     .from('company_settings')
-    .select('org_number, phone, email')
+    .select('company_name, org_number, phone, email')
     .eq('company_id', companyId)
     .single()
 
@@ -184,7 +185,7 @@ export async function generateAgiDeclaration(
     )
     .eq('salary_run_id', salaryRunId)
 
-  // An empty roster is valid — a registered employer must file a
+  // An empty roster is valid: a registered employer must file a
   // nolldeklaration (HU-only, no individuppgifter) for months without payroll.
   // Only a genuine query failure (null) is treated as an error here.
   if (!runEmployees) {
@@ -192,17 +193,20 @@ export async function generateAgiDeclaration(
   }
 
   // 4. Build AGI input shapes.
+  // Employer name on the arbetsgivardeklaration follows the current company
+  // name (company_settings.company_name), not the frozen onboarding companies.name.
+  const companyName = settings?.company_name || company.name
   const companyData: AGICompanyData = {
     orgNumber: (settings?.org_number || company.org_number || '').trim(),
-    companyName: company.name,
+    companyName,
     periodYear: run.period_year,
     periodMonth: run.period_month,
-    contactName: (profile?.full_name || company.name || '').trim(),
+    contactName: (profile?.full_name || companyName || '').trim(),
     contactPhone: (settings?.phone || '').trim(),
     contactEmail: (settings?.email || profile?.email || userEmail || '').trim(),
   }
 
-  // Load per-day absence (VAB + parental only — sick days go to FK separately).
+  // Load per-day absence (VAB + parental only: sick days go to FK separately).
   const periodStart = `${run.period_year}-${String(run.period_month).padStart(2, '0')}-01`
   const periodEndDate = new Date(Date.UTC(run.period_year, run.period_month, 0))
   const periodEnd = periodEndDate.toISOString().slice(0, 10)
@@ -282,7 +286,7 @@ export async function generateAgiDeclaration(
       const benefitCar = sumLineItemAmounts(lineItems, ['benefit_car'])
       const benefitFuel = sumLineItemAmounts(lineItems, ['benefit_fuel'])
       const benefitHousing = sumLineItemAmounts(lineItems, ['benefit_housing'])
-      // FK015 kostförmån has its own field — never fold into FK012.
+      // FK015 kostförmån has its own field: never fold into FK012.
       // Skatteverket cross-checks the krona-amount against the PBB-schablon.
       const benefitMeals = sumLineItemAmounts(lineItems, ['benefit_meals'])
       // FK012 SkatteplOvrigaFormanerUlagAG is the catch-all for taxable
@@ -321,7 +325,7 @@ export async function generateAgiDeclaration(
       if (vaxaStod && sre.avgifter_category === 'youth') {
         throw new AGIIncompleteDataError(
           `Anställd ${emp?.specification_number ?? '?'}: kan inte kombinera växa-stöd ` +
-            '(FK062/FK063) med ungdomsrabatt (avgifter_category="youth") — programmen är ömsesidigt uteslutande. ' +
+            '(FK062/FK063) med ungdomsrabatt (avgifter_category="youth"): programmen är ömsesidigt uteslutande. ' +
             'Välj ett av dem under anställdas inställningar.',
           ['vaxa_stod_eligible', 'avgifter_category'],
         )
@@ -381,7 +385,7 @@ export async function generateAgiDeclaration(
     )
 
   // 5. Build totals: avgifter by category (with rate-heuristic fallback for legacy runs).
-  // Removed-from-AGI rows (FK205 borttag) are tombstones — they must not
+  // Removed-from-AGI rows (FK205 borttag) are tombstones: they must not
   // contribute to FK497/FK487/FK499 because the prior submission's amounts
   // remain on file at Skatteverket; the borttag just removes the IU itself.
   const activeEmployees = parsedRows.filter((sre) => !sre.removed_from_agi)
@@ -411,7 +415,7 @@ export async function generateAgiDeclaration(
     0,
   )
 
-  // FK499 sjuklönekostnad — sum of paid sjuklön (days 2-14) across all
+  // FK499 sjuklönekostnad: sum of paid sjuklön (days 2-14) across all
   // employees. Day 1 is karens (unpaid); day 15+ is Försäkringskassan.
   const calcParams = ((run.calculation_params as Record<string, unknown>) ?? {}) as {
     sjuklonRate?: number
@@ -478,7 +482,7 @@ export async function generateAgiDeclaration(
   }
 
   // 6. Existing AGI determines correction status. Use `.maybeSingle()`
-  // because the lookup must tolerate the no-row case without throwing —
+  // because the lookup must tolerate the no-row case without throwing:
   // that's the FIRST-time generation path. `.single()` would surface a
   // PGRST116 row-not-found error and abort what should be a clean insert.
   const { data: existingAgi } = await supabase
@@ -639,7 +643,7 @@ export async function generateAgiDeclaration(
     .update({ agi_generated_at: new Date().toISOString() })
     .eq('id', salaryRunId)
 
-  // 10. Emit agi.generated (best-effort — never block the success path).
+  // 10. Emit agi.generated (best-effort: never block the success path).
   try {
     await eventBus.emit({
       type: 'agi.generated',
@@ -656,20 +660,16 @@ export async function generateAgiDeclaration(
   }
 
   // 11. Auto-complete the arbetsgivardeklaration deadline for this period
-  //     (Skatteförfarandelagen — AGI generation satisfies the filing
-  //     obligation). Optimistic-lock on status='pending'.
+  //     (Skatteförfarandelagen: AGI generation satisfies the filing
+  //     obligation).
   const period = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
-  await supabase
-    .from('deadlines')
-    .update({
-      status: 'completed',
-      completed_at: new Date().toISOString(),
-      completed_by: userId,
-    })
-    .eq('company_id', companyId)
-    .eq('type', 'arbetsgivardeklaration')
-    .eq('period', period)
-    .eq('status', 'pending')
+  await completeTaxDeadline(
+    supabase,
+    companyId,
+    ['arbetsgivardeklaration'],
+    period,
+    'submitted'
+  )
 
   opLog.info('AGI declaration generated', {
     requestId,

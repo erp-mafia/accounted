@@ -29,7 +29,7 @@ export const GET = withRouteContext(
       const [proposal, autoDetected] = await Promise.all([
         buildAccrualsProposal(supabase, companyId, id),
         detectPeriodisering(supabase, companyId, id).catch((err) => {
-          // Auto-detect is best-effort — a malformed invoice description
+          // Auto-detect is best-effort: a malformed invoice description
           // shouldn't break the rest of the preflight. Log + return empty.
           log.warn('auto-detect failed', { error: (err as Error)?.message })
           return []
@@ -54,7 +54,7 @@ export const GET = withRouteContext(
 //   - 17xx for förutbetalda kostnader (prepaid)
 //   - 29xx for upplupna poster (accrued / deferred)
 // Anything outside these ranges is rejected with 400 before reaching the
-// engine — keeps a compromised browser session from posting arbitrary
+// engine: keeps a compromised browser session from posting arbitrary
 // balance-sheet hits.
 const EXPENSE_ACCOUNT_RE = /^[5-8]\d{3}$/
 const REVENUE_ACCOUNT_RE = /^3\d{3}$/
@@ -212,11 +212,11 @@ export const POST = withRouteContext(
 
         // Mark the entry's description with the reversal date so future
         // bookkeepers (and a future cron) can spot the periodisering. The
-        // accrual_reversals cron is follow-up infra — once it lands, the
+        // accrual_reversals cron is follow-up infra: once it lands, the
         // entry's source_type or a metadata column can drive the auto-flip.
         //
         // Vacation-liability adjustments deliberately have empty reverses_on
-        // since 2920 carries forward — emit a different description in that
+        // since 2920 carries forward: emit a different description in that
         // case so future readers don't expect a Jan 1 reversal.
         const description = proposal.reverses_on
           ? `Periodisering: ${proposal.label} (vänds ${proposal.reverses_on})`
@@ -245,7 +245,7 @@ type PostItem = z.infer<typeof PostItemSchema>
 
 /**
  * Find a previously-posted accrual journal entry for the same kind in the
- * same period — used by the POST handler to enforce idempotency. Matches
+ * same period, used by the POST handler to enforce idempotency. Matches
  * on the description prefix that each calculator emits (see
  * accrual-detector.ts and the POST handler's description construction).
  *

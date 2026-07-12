@@ -2,7 +2,7 @@ import { defineAgentIntent } from './types'
 import { OPUS_MODEL, THINKING_BUDGET_DEEP } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
-// supplier_invoice.review — "Fråga din assistent" from a supplier invoice
+// supplier_invoice.review: "Fråga din assistent" from a supplier invoice
 // detail page. Helps the user verify a supplier invoice before attestering
 // it: BAS account, VAT treatment (reverse charge byggtjänster?), anomaly
 // detection vs. prior invoices from the same supplier, and missing-field
@@ -10,13 +10,13 @@ import { renderAgentGroundRules } from './shared-rules'
 //
 // Declarative atom mode: loads VAT + invoice compliance + accounting
 // compliance upfront, plus the company's vertical + modifier atoms. AP
-// flows benefit most from these — invoices from EU suppliers trigger
+// flows benefit most from these: invoices from EU suppliers trigger
 // reverse charge logic, bygg suppliers trigger omvänd skattskyldighet.
 //
-// Default model: Opus (per plan §8 V1 #5 — heavy intent). The reasoning
+// Default model: Opus (per plan §8 V1 #5: heavy intent). The reasoning
 // chain is non-trivial:
 //   1. Read inbox-extracted fields (supplier, total, VAT, line items)
-//   2. Compare to supplier history — anomalies?
+//   2. Compare to supplier history: anomalies?
 //   3. Detect reverse charge cases (EU, bygg)
 //   4. Verify ML 17 kap 24§ mandatory fields are present
 //   5. Propose BAS account + VAT code
@@ -100,12 +100,12 @@ export const supplierInvoiceReview = defineAgentIntent<
     'gnubok_forget_fact',
   ],
 
-  // Opus per plan §8 — anomaly detection + multi-source synthesis benefits
+  // Opus per plan §8: anomaly detection + multi-source synthesis benefits
   // from deeper reasoning than Sonnet's strength on selection tasks.
   model: OPUS_MODEL,
 
   // Reason about underlag, VAT treatment and anomalies in the thinking channel
-  // so the visible reply is a single conclusion after the booking is staged —
+  // so the visible reply is a single conclusion after the booking is staged:
   // not a pre-tool analysis echoed again post-tool. Matches the always-on
   // prompt's promise that reasoning happens in the (separately shown) tankekanal.
   thinking: { budgetTokens: THINKING_BUDGET_DEEP },
@@ -285,7 +285,7 @@ export const supplierInvoiceReview = defineAgentIntent<
         const total = it.line_total != null ? `${it.line_total.toLocaleString('sv-SE')}` : '?'
         const vat = it.vat_rate != null ? `${it.vat_rate}%` : '?'
         const acc = it.account_number ? ` → ${it.account_number}` : ' → (ingen kontering)'
-        lines.push(`  • ${it.description ?? '(beskrivning saknas)'} — ${total} ${inv.currency ?? 'SEK'} (${vat})${acc}`)
+        lines.push(`  • ${it.description ?? '(beskrivning saknas)'}: ${total} ${inv.currency ?? 'SEK'} (${vat})${acc}`)
       }
       lines.push('')
     }
@@ -294,14 +294,14 @@ export const supplierInvoiceReview = defineAgentIntent<
       lines.push('Tidigare fakturor från samma leverantör (för anomalikontroll):')
       for (const r of captured.recent_invoices_from_supplier) {
         const amt = r.total != null ? `${r.total.toLocaleString('sv-SE')} ${r.currency ?? 'SEK'}` : '?'
-        lines.push(`  • ${r.invoice_number ?? '?'} (${r.invoice_date ?? '?'}, ${r.status ?? '?'}) — ${amt}`)
+        lines.push(`  • ${r.invoice_number ?? '?'} (${r.invoice_date ?? '?'}, ${r.status ?? '?'}): ${amt}`)
       }
       lines.push('')
     }
 
     const ex = captured.inbox_extraction ?? captured.document_extraction
     if (ex) {
-      lines.push('KÄNDA FAKTA från AI-extraktion av underlaget — fråga INTE om dessa:')
+      lines.push('KÄNDA FAKTA från AI-extraktion av underlaget: fråga INTE om dessa:')
       const supplier = (ex.supplier as { name?: string | null; orgNumber?: string | null; vatNumber?: string | null } | undefined) ?? null
       const totals = (ex.totals as { total?: number | null; vatAmount?: number | null } | undefined) ?? null
       const breakdown = (ex.vatBreakdown as { rate: number; base: number; amount: number }[] | undefined) ?? []
@@ -327,10 +327,10 @@ export const supplierInvoiceReview = defineAgentIntent<
     lines.push('   - SE-leverantör: 25/12/6 % beroende på vara/tjänst.')
     lines.push('   - EU näringsidkare: omvänd skattskyldighet (2614/2645).')
     lines.push('   - Bygg i Sverige: omvänd skattskyldighet enligt ML 1 kap 2 § 1 st 4b.')
-    lines.push('   - Tredje land: import-moms via Tullverket eller deklareras via momsdeklaration ruta 60–62.')
+    lines.push('   - Tredje land: import-moms via Tullverket eller deklareras via momsdeklaration ruta 60-62.')
     lines.push('2. Avvikelse mot tidigare fakturor från samma leverantör? Beloppen i ungefär samma härad?')
     lines.push('3. Saknas obligatoriska fält (ML 17 kap 24§): fakturanummer, datum, org.nr, moms-belopp, VAT-id vid reverse charge?')
-    lines.push('4. Föreslå rätt BAS-konto för varje rad (eller för hela fakturan om bara en summarad finns). Följ leverantörens historik — gnubok_query_journal({ text: "<leverantörens namn>", source_type: "supplier_invoice", limit: 5 }) — när du väljer konto.')
+    lines.push('4. Föreslå rätt BAS-konto för varje rad (eller för hela fakturan om bara en summarad finns). Följ leverantörens historik: gnubok_query_journal({ text: "<leverantörens namn>", source_type: "supplier_invoice", limit: 5 }): när du väljer konto.')
     lines.push('5. Om du är säker, staga attestering via gnubok_approve_supplier_invoice. Annars: peka på vad som ska klargöras innan attestering.')
     lines.push('')
     lines.push('Svara på svenska, var direkt och konkret. Ditt första svar är det första användaren ser.')

@@ -10,8 +10,10 @@ import {
 } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 vi.mock('@/lib/init', () => ({
@@ -57,7 +59,7 @@ vi.mock('@/lib/core/documents/document-service', () => ({
 
 import { POST } from '../route'
 
-describe('POST /api/invoices/[id]/mark-sent — PDF archival', () => {
+describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
   const customer = makeCustomer({ id: 'cust-1', email: 'kund@test.se' })
   const company = makeCompanySettings({
@@ -89,7 +91,7 @@ describe('POST /api/invoices/[id]/mark-sent — PDF archival', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
     mockRenderToBuffer.mockResolvedValue(Buffer.from('fake-pdf'))
     mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
   })
@@ -240,7 +242,7 @@ describe('POST /api/invoices/[id]/mark-sent — PDF archival', () => {
     expect(status).toBe(200)
     // The in-memory invoice still reads 'draft' after the DB status flip
     // (it's never re-fetched). We must override it before render or
-    // pdf-template.tsx prints the "UTKAST – inte en giltig faktura" banner
+    // pdf-template.tsx prints the "UTKAST: inte en giltig faktura" banner
     // on the archived underlag.
     expect(vi.mocked(InvoicePDF)).toHaveBeenCalledTimes(1)
     const renderArgs = vi.mocked(InvoicePDF).mock.calls[0][0]

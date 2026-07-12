@@ -1,6 +1,7 @@
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 
 /**
@@ -15,18 +16,9 @@ import type { ReportSourceLine } from '@/lib/reports/source-lines'
  */
 const PAGE_LIMIT = 500
 
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ accountNumber: string }> }
-) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
+export const GET = withRouteContext<{ params: Promise<{ accountNumber: string }> }>(
+  'report.trial_balance.account_sources',
+  async (request, { supabase, companyId }, { params }) => {
   const { accountNumber } = await params
 
   const { searchParams } = new URL(request.url)
@@ -38,6 +30,14 @@ export async function GET(
       { error: 'fiscal_period_id is required' },
       { status: 400 }
     )
+  }
+
+  // Same filter as the parent report, so drill-down totals match the row the
+  // user expanded (a filtered resultatrapport row must not expand to
+  // unfiltered lines).
+  const dimFilter = parseDimensionFilterParams(searchParams)
+  if (!dimFilter.ok) {
+    return NextResponse.json({ error: dimFilter.error }, { status: 400 })
   }
 
   // Look up account name (and verify account belongs to the company)
@@ -55,60 +55,74 @@ export async function GET(
     )
   }
 
-  // Pull all lines on this account in this period. We rely on the same
-  // join+filter pattern as `generateTrialBalance`. Pagination is server-side
-  // via cursor so even an account with tens of thousands of rows stays cheap.
-  let query = supabase
-    .from('journal_entry_lines')
-    .select(`
-      debit_amount,
-      credit_amount,
-      journal_entry_id,
-      journal_entries!inner(
-        id,
-        voucher_number,
-        voucher_series,
-        entry_date,
-        description,
-        status,
-        company_id,
-        fiscal_period_id
-      )
-    `)
-    .eq('account_number', accountNumber)
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
-    .in('journal_entries.status', ['posted', 'reversed'])
-    .limit(PAGE_LIMIT + 1)
-
+  // Parse the optional cursor up front (format: <iso-date>|<voucher_number>).
+  // Pagination is applied in JS after a full, deterministically-ordered fetch.
+  let cursorDate: string | null = null
+  let cursorVoucherNum = 0
   if (cursor) {
-    // Cursor format: <iso-date>|<voucher_number>
-    const [cursorDate, cursorVoucher] = cursor.split('|')
-    const cursorVoucherNum = parseInt(cursorVoucher, 10)
-    if (!cursorDate || isNaN(cursorVoucherNum)) {
+    const [cd, cv] = cursor.split('|')
+    cursorVoucherNum = parseInt(cv, 10)
+    // The cursor is applied in JS (string compare); structurally validating the
+    // date component here is defense-in-depth against malformed/injection cursors.
+    if (!cd || !/^\d{4}-\d{2}-\d{2}$/.test(cd) || isNaN(cursorVoucherNum)) {
       return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 })
     }
-    // Filter for rows strictly after the cursor (date>cur OR same date & voucher>cur).
-    // Supabase doesn't expose tuple compare, so use an `or()` clause.
-    query = query.or(
-      `entry_date.gt.${cursorDate},and(entry_date.eq.${cursorDate},voucher_number.gt.${cursorVoucherNum})`,
-      { foreignTable: 'journal_entries' }
-    )
+    cursorDate = cd
   }
 
-  const { data, error } = await query
+  // Pull ALL lines on this account in this period, then sort + paginate in JS.
+  //
+  // Why not order/limit in SQL: `.order(col, { foreignTable })` in PostgREST
+  // sorts the *embedded* resource's rows, not the parent result set, so it
+  // cannot give us a chronological parent order. Without a stable parent order
+  // a raw `.limit()` returns an arbitrary subset that varies between identical
+  // requests, which surfaced as the trial-balance drill-down showing
+  // "different rows on every reload" for high-volume accounts. We instead page
+  // on the line PK (`id`) for a stable total order (see fetch-all.ts) and do
+  // the chronological sort here, mirroring `generateGeneralLedger`.
+  const rows = await fetchAllRows<{
+    id: string
+    debit_amount: number
+    credit_amount: number
+    dimensions: Record<string, string> | null
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    journal_entries: any
+  }>(({ from, to }) => {
+    let query = supabase
+      .from('journal_entry_lines')
+      .select(`
+        id,
+        debit_amount,
+        credit_amount,
+        dimensions,
+        journal_entry_id,
+        journal_entries!inner(
+          id,
+          voucher_number,
+          voucher_series,
+          entry_date,
+          description,
+          status,
+          company_id,
+          fiscal_period_id
+        )
+      `)
+      .eq('account_number', accountNumber)
+      .eq('journal_entries.company_id', companyId)
+      .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
+      .in('journal_entries.status', ['posted', 'reversed'])
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
+    if (dimFilter.dimensions) {
+      // jsonb containment (@>): served by idx_jel_dimensions_gin.
+      query = query.contains('dimensions', dimFilter.dimensions)
+    }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rows = (data || []) as any[]
+    return query.order('id', { ascending: true }).range(from, to)
+  }, { dedupeBy: (r) => r.id })
 
-  // Map all rows then sort in JS (date ASC, voucher_number ASC).
-  // .order({ foreignTable }) in Supabase sorts the embedded resource's rows,
-  // not the parent result set, so we cannot rely on DB ordering here.
-  // This mirrors the sort in generateGeneralLedger.
+  // Map then sort in JS (date ASC, voucher_number ASC, journal_entry_id ASC as
+  // a final deterministic tiebreak for lines sharing a date and voucher number
+  // across series).
   const allMapped: ReportSourceLine[] = rows.map((row) => ({
     journal_entry_id: row.journal_entries.id,
     voucher_number: row.journal_entries.voucher_number,
@@ -117,17 +131,32 @@ export async function GET(
     description: row.journal_entries.description || '',
     debit: Math.round((Number(row.debit_amount) || 0) * 100) / 100,
     credit: Math.round((Number(row.credit_amount) || 0) * 100) / 100,
+    ...(row.dimensions && Object.keys(row.dimensions).length > 0
+      ? { dimensions: row.dimensions }
+      : {}),
   }))
   allMapped.sort((a, b) => {
     const dateComp = a.date.localeCompare(b.date)
-    return dateComp !== 0 ? dateComp : a.voucher_number - b.voucher_number
+    if (dateComp !== 0) return dateComp
+    if (a.voucher_number !== b.voucher_number) return a.voucher_number - b.voucher_number
+    return a.journal_entry_id.localeCompare(b.journal_entry_id)
   })
-  const lines = allMapped.slice(0, PAGE_LIMIT)
 
-  // If we got more than PAGE_LIMIT rows back, the next cursor points at the
-  // last delivered row so the next call resumes from after it.
+  // Apply the cursor in JS: keep rows strictly after (date, voucher_number).
+  const afterCursor = cursorDate
+    ? allMapped.filter(
+        (l) =>
+          l.date > cursorDate! ||
+          (l.date === cursorDate! && l.voucher_number > cursorVoucherNum)
+      )
+    : allMapped
+
+  const lines = afterCursor.slice(0, PAGE_LIMIT)
+
+  // If more rows remain beyond this page, point the next cursor at the last
+  // delivered row so the next call resumes from after it.
   let next_cursor: string | null = null
-  if (rows.length > PAGE_LIMIT && lines.length > 0) {
+  if (afterCursor.length > PAGE_LIMIT && lines.length > 0) {
     const last = lines[lines.length - 1]
     next_cursor = `${last.date}|${last.voucher_number}`
   }
@@ -140,4 +169,4 @@ export async function GET(
       next_cursor,
     },
   })
-}
+})

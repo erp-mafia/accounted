@@ -7,7 +7,7 @@
  *
  * Each test stubs the bookkeeping engine (createTransactionJournalEntry,
  * createInvoicePaymentJournalEntry, reverseEntry, etc.) so the test asserts
- * the route's orchestration — wiring of params + scope + error codes —
+ * the route's orchestration (wiring of params + scope + error codes)
  * rather than reimplementing the engine.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -27,7 +27,7 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
-// Engine stubs — happy-path returns reusable across cases.
+// Engine stubs: happy-path returns reusable across cases.
 const { createTxJE, reverseEntryMock, createInvPmtJE, createInvCashJE, createSupplierInvPmtJE, findMissingAccountsMock } = vi.hoisted(() => ({
   createTxJE: vi.fn().mockResolvedValue({ id: 'je-fresh' }),
   reverseEntryMock: vi.fn().mockResolvedValue(undefined),
@@ -73,7 +73,7 @@ vi.mock('@/lib/bookkeeping/account-validation', async () => {
     findUnresolvableAccounts: findMissingAccountsMock,
   }
 })
-// category mapping is real — provides the debit/credit account guarantees.
+// category mapping is real: provides the debit/credit account guarantees.
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as categorizePOST } from '../categorize/route'
@@ -268,7 +268,7 @@ describe('POST :id/categorize', () => {
     // The v1 envelope routes typed bookkeeping errors through
     // extractBookkeepingDetails, which places account_numbers under details.
     expect(body.error.details.account_numbers).toEqual(['5410'])
-    // Engine and transaction-update must NOT run — the row stays in the
+    // Engine and transaction-update must NOT run: the row stays in the
     // categorization queue so the user can re-activate and retry.
     expect(createTxJE).not.toHaveBeenCalled()
   })
@@ -293,7 +293,7 @@ describe('POST :id/categorize', () => {
         fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
       }),
     )
-    // Pre-validation passes — race condition where an account got
+    // Pre-validation passes: race condition where an account got
     // deactivated between our chart_of_accounts read and the engine's
     // resolveAccountIds read. The engine throws and the catch in the route
     // must short-circuit to a structured 400 rather than falling through

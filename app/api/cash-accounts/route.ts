@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { getActiveCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { listForCompany } from '@/lib/cash-accounts/service'
 
 /**
@@ -15,19 +14,12 @@ import { listForCompany } from '@/lib/cash-accounts/service'
  * Query params:
  *   - enabled_only=true → only accounts with enabled=true (default returns all)
  */
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await getActiveCompanyId(supabase, user.id)
-  if (!companyId) {
-    return NextResponse.json({ error: 'No company context' }, { status: 400 })
-  }
+export const GET = withRouteContext('cash_accounts.list', async (request, ctx) => {
+  const { supabase, companyId } = ctx
 
   const url = new URL(request.url)
   const enabledOnly = url.searchParams.get('enabled_only') === 'true'
 
   const accounts = await listForCompany(supabase, companyId, { enabledOnly })
   return NextResponse.json({ data: accounts })
-}
+})

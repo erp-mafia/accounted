@@ -51,7 +51,7 @@ export default function SupplierInvoicePicker({
 
       // Status-leak guard: if a supplier invoice still says 'approved'/'overdue'
       // but already has a payment voucher attached, hide it. Partially-paid
-      // invoices intentionally pass through — they may take more payments.
+      // invoices intentionally pass through: they may take more payments.
       // Mirrors the customer-side guard in InvoicePicker.
       const fullIds = all
         .filter((inv) => inv.status === 'approved' || inv.status === 'overdue')

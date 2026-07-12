@@ -17,7 +17,7 @@ import { getPool } from '@/tests/pg/setup'
  *     + slides the window); reuse AFTER grace is 'reuse_revoked' and sets
  *     revoked_at (RFC 9700 §4.14.2); unknown → 'invalid'; revoked grant → 'revoked'.
  *
- * Inserts go through the pool (superuser, RLS-bypassing) — this is an RPC /
+ * Inserts go through the pool (superuser, RLS-bypassing): this is an RPC /
  * schema behaviour test, not an RLS test. Hashes are opaque text the RPCs
  * compare by equality, so any unique strings work.
  */
@@ -135,7 +135,7 @@ describe('api_keys rotation grace (issue #710)', () => {
         previous_key_hash: prev,
         previous_key_expires_at: new Date(Date.now() + 60_000).toISOString(),
       })
-      // Two grace-hash validations: window resets to 1, then increments to 2 —
+      // Two grace-hash validations: window resets to 1, then increments to 2:
       // proving the increment is keyed off the resolved row id, not p_key_hash.
       expect(await validate(prev)).toHaveLength(1)
       expect(await validate(prev)).toHaveLength(1)
@@ -213,7 +213,7 @@ describe('api_keys rotation grace (issue #710)', () => {
       // keeping r1).
       expect((await rotate(r1, h('r2'), h('k2'))).outcome).toBe('rotated')
 
-      // Client retries with the stale r1 — must NOT 400; it replays and gets a
+      // Client retries with the stale r1: must NOT 400; it replays and gets a
       // fresh current pair, and the grace window slides.
       const r3 = h('r3')
       const k3 = h('k3')
@@ -246,7 +246,7 @@ describe('api_keys rotation grace (issue #710)', () => {
 
       const row = await rowById(id)
       expect(row.revoked_at).not.toBeNull()
-      // The whole grant family is dead — neither current nor previous validates.
+      // The whole grant family is dead: neither current nor previous validates.
       expect(await validate(row.key_hash)).toHaveLength(0)
     })
 

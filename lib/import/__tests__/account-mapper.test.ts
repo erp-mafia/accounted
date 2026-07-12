@@ -31,6 +31,7 @@ function makeBASAccount(number: string, name: string): BASAccount {
     is_active: true,
     is_system_account: false,
     default_vat_code: null,
+    default_vat_rate: null,
     description: null,
     sru_code: null,
     k2_excluded: false,
@@ -211,7 +212,7 @@ describe('suggestMappings', () => {
     expect(result[0].targetAccount).toBe('2641')
   })
 
-  it('handles empty BAS accounts — bas_range fallback for valid accounts', () => {
+  it('handles empty BAS accounts: bas_range fallback for valid accounts', () => {
     const source = [makeSIEAccount('1510', 'Kundfordringar')]
     const result = suggestMappings(source, [])
 

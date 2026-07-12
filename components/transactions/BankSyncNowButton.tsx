@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { createClient } from '@/lib/supabase/client'
+import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 
@@ -50,7 +51,7 @@ export default function BankSyncNowButton() {
     supabase
       .from('bank_connections')
       .select('id, bank_name, status, provider')
-      // Include expired/error so the reconnect entry point survives a reload —
+      // Include expired/error so the reconnect entry point survives a reload:
       // not just active connections that can sync.
       .in('status', ['active', 'expired', 'error'])
       .eq('company_id', company.id)
@@ -64,7 +65,7 @@ export default function BankSyncNowButton() {
 
   if (!connections || connections.length === 0) return null
 
-  // Re-authorize an existing connection in place — posts the connection_id so
+  // Re-authorize an existing connection in place: posts the connection_id so
   // the server reuses the same row, then hands off to the bank's consent screen.
   async function reconnect(conn: BankConn) {
     setBusyId(conn.id)
@@ -102,7 +103,7 @@ export default function BankSyncNowButton() {
       })
       const data = await res.json()
       if (!res.ok) {
-        // A dead PSD2 session can't be fixed by retrying — surface a one-click
+        // A dead PSD2 session can't be fixed by retrying: surface a one-click
         // reconnect in the toast instead of a dead-end error.
         if (data?.reauth_required) {
           toast({
@@ -129,6 +130,9 @@ export default function BankSyncNowButton() {
           ? t('bank_sync_new_since_last_visit_one')
           : t('bank_sync_new_since_last_visit_many', { count: data.imported ?? 0 }),
       })
+      // Tell the neighbouring status chip to refetch so it doesn't keep showing
+      // the pre-sync "synced Nd ago" until a hard reload.
+      notifyBankSyncUpdated()
       router.refresh()
     } catch (error) {
       toast({

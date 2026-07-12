@@ -1,12 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
- * Arbetsgivaravgiftsunderlag — Employer contribution basis report.
+ * Arbetsgivaravgiftsunderlag: Employer contribution basis report.
  *
  * Monthly breakdown by avgifter rate category:
  * - Standard (31.42%)
  * - Reduced 65+ (10.21%)
- * - Youth (20.81%, Apr 2026–Sep 2027)
+ * - Youth (20.81%, Apr 2026-Sep 2027)
  * - Växa-stöd (10.21%)
  *
  * Used for reconciling against AGI filings (Ruta 060-062)
@@ -53,21 +54,36 @@ export async function generateAvgifterBasis(
 ): Promise<AvgifterBasisReport> {
   const r = (x: number) => Math.round(x * 100) / 100
 
-  // Load all salary run employees for booked runs this year
-  const { data: runEmployees, error } = await supabase
-    .from('salary_run_employees')
-    .select(`
-      avgifter_basis,
-      avgifter_amount,
-      avgifter_rate,
-      salary_run:salary_runs!inner(period_year, period_month, status)
-    `)
-    .eq('company_id', companyId)
-
-  if (error) throw new Error(`Failed to load avgifter data: ${error.message}`)
+  // Load all salary run employees for booked runs this year.
+  // Paginated with a stable id order: a multi-year/high-headcount company can
+  // exceed PostgREST's 1000-row cap, and a silent truncation here would
+  // under-report the arbetsgivaravgifter basis reconciled against AGI filings.
+  const runEmployees = await fetchAllRows<{
+    id: string
+    avgifter_basis: number
+    avgifter_amount: number
+    avgifter_rate: number
+    // PostgREST's type-level select parser models an embedded resource as an
+    // array, so keep this `unknown` (the rows are read via an explicit cast
+    // below) to stay assignable regardless of postgrest-js version.
+    salary_run: unknown
+  }>(({ from, to }) =>
+    supabase
+      .from('salary_run_employees')
+      .select(`
+        id,
+        avgifter_basis,
+        avgifter_amount,
+        avgifter_rate,
+        salary_run:salary_runs!inner(period_year, period_month, status)
+      `)
+      .eq('company_id', companyId)
+      .order('id', { ascending: true })
+      .range(from, to)
+  , { dedupeBy: (e) => e.id })
 
   // Filter to booked runs for the year
-  const bookedForYear = (runEmployees || []).filter(sre => {
+  const bookedForYear = runEmployees.filter(sre => {
     const run = sre.salary_run as unknown as { period_year: number; period_month: number; status: string } | null
     return run && run.period_year === year && run.status === 'booked'
   })

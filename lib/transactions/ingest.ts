@@ -41,23 +41,23 @@ type BucketEntry = {
 /**
  * Content-dedup bucket: a `{date}|{öre}` key mapped to the multiset of existing
  * rows in that bucket. Matching is by `descriptionsBridge` (prefix-containment)
- * gated by the account guard, consumed with COUNTING semantics — one entry is
- * spliced out per deduped incoming row — so two genuinely-distinct
+ * gated by the account guard, consumed with COUNTING semantics (one entry is
+ * spliced out per deduped incoming row), so two genuinely-distinct
  * same-(date,amount) transactions are never collapsed.
  */
 type DescBucket = Map<string, BucketEntry[]>
 
 interface ExistingTransactionMaps {
-  /** Booked transactions (any source) — consumed by any incoming raw transaction. */
+  /** Booked transactions (any source): consumed by any incoming raw transaction. */
   booked: DescBucket
   /**
    * Unbooked rows from ANY external import feed (Enable Banking PSD2 sync,
-   * bank-file CSV/CAMT import) — consumed by any incoming raw transaction
+   * bank-file CSV/CAMT import): consumed by any incoming raw transaction
    * regardless of source. Catches the cross-channel re-import: the same bank
    * account pulled once via PSD2 and once via a CSV/CAMT file upload (in either
    * order), plus PSD2 reconnect duplicates whose external_id regenerated.
    * Hand-entered rows (import_source manual/mcp/null) are deliberately
-   * excluded — only real feeds mirror one another, and a manual row must never
+   * excluded: only real feeds mirror one another, and a manual row must never
    * be silently consumed by an import.
    */
   unbookedImported: DescBucket
@@ -128,11 +128,11 @@ async function buildExistingTransactionMaps(
       }
     }
   } catch {
-    // Non-critical — content-based dedup will be skipped
+    // Non-critical: content-based dedup will be skipped
   }
 
   try {
-    // ALL unbooked import-feed rows — not just enable_banking. An unbooked CSV
+    // ALL unbooked import-feed rows, not just enable_banking. An unbooked CSV
     // row must dedup an incoming PSD2 sync of the same account, and an unbooked
     // PSD2 row must dedup an incoming CSV import. Feeds always set a non-null
     // import_source outside the user-created allowlist (manual/mcp); null /
@@ -165,7 +165,7 @@ async function buildExistingTransactionMaps(
       }
     }
   } catch {
-    // Non-critical — reconnect dedup will be skipped
+    // Non-critical: reconnect dedup will be skipped
   }
 
   return { booked, unbookedImported }
@@ -177,9 +177,9 @@ async function buildExistingTransactionMaps(
  * Handles:
  * 1. Deduplication via external_id
  * 1b. Content-based dedup (date+amount+description prefix) against already-booked
- *     transactions — catches cross-source duplicates, e.g. PSD2 row gets booked
+ *     transactions: catches cross-source duplicates, e.g. PSD2 row gets booked
  *     before the user later re-imports the same period via CSV.
- * 1c. Content-based dedup against unbooked enable_banking rows — catches PSD2
+ * 1c. Content-based dedup against unbooked enable_banking rows: catches PSD2
  *     reconnect duplicates AND CSV imports overlapping an active PSD2 sync (the
  *     description-prefix component makes this safe to apply across sources).
  * 2. Insert into transactions table
@@ -215,7 +215,7 @@ export async function ingestTransactions(
   // IBAN-embedded external_id changes, Layer-1 dedup misses the re-import, and
   // because both rows are the SAME feed the cross-channel mirror does not fire).
   // When on, we LOG which rows an enforcing rule WOULD treat as re-imports and
-  // count them — but never change what gets inserted. Default on; set
+  // count them, but never change what gets inserted. Default on; set
   // DEDUP_SCOPE_DRIFT_MODE=off to silence. There is deliberately NO 'enforce'
   // branch yet: we validate on real fleet data first (see the plan).
   const scopeDriftShadow = process.env.DEDUP_SCOPE_DRIFT_MODE !== 'off'
@@ -225,7 +225,7 @@ export async function ingestTransactions(
   // (this produced the observed EB↔EB and CSV↔EB 1-day-apart duplicates). When
   // on, we LOG + COUNT which surviving rows a ±1-day-tolerant rule WOULD treat
   // as re-imports, but never change what is inserted. Default on; set
-  // DEDUP_DATE_DRIFT_MODE=off to silence. No 'enforce' branch — same as
+  // DEDUP_DATE_DRIFT_MODE=off to silence. No 'enforce' branch, same as
   // scope-drift, we validate on real fleet data first.
   const dateDriftShadow = process.env.DEDUP_DATE_DRIFT_MODE !== 'off'
 
@@ -233,18 +233,18 @@ export async function ingestTransactions(
   // description prefix, plus the cross-channel mirror below). Booked rows catch
   // cross-source duplicates after they've been booked; unbooked import-feed rows
   // catch the common case where a PSD2 row is still unbooked when the user
-  // re-imports the same period via CSV — or the reverse, a CSV import that
+  // re-imports the same period via CSV, or the reverse, a CSV import that
   // predates the first PSD2 sync of the same account.
   const existingMaps = await buildExistingTransactionMaps(supabase, companyId, rawTransactions)
 
-  // Every row in one ingest call shares an import_source — EB sync passes
-  // 'enable_banking', bank-file import passes 'csv_<format>'/'camt053' — so the
+  // Every row in one ingest call shares an import_source (EB sync passes
+  // 'enable_banking', bank-file import passes 'csv_<format>'/'camt053'), so the
   // first row's source identifies this batch's channel. We use it to find
   // "cross-channel mirror" buckets: a (date, öre) bucket where the number of
   // incoming rows EQUALS the number of stored rows from a DIFFERENT feed. That
   // equality is the signal that the same set of real transactions is arriving
   // once per channel (e.g. Nordea's CSV export and its PSD2 feed), where the
-  // per-row description is known-unreliable — CSV shows the payee, PSD2 the
+  // per-row description is known-unreliable: CSV shows the payee, PSD2 the
   // OCR/message, or vice versa. Only in those buckets do we dedup on
   // (date, öre, account) without a description match (see consumeBridgingTwin).
   // An asymmetric bucket keeps the description requirement, so a genuinely-new
@@ -270,7 +270,7 @@ export async function ingestTransactions(
   }
 
   // When rawInsertOnly is set (viewer imports), skip pre-fetching supplier
-  // invoices and exchange rates — they are not used.
+  // invoices and exchange rates: they are not used.
   let unpaidSupplierInvoices: SupplierInvoice[] = []
   // Keyed by `${currency}|${date}` so each non-SEK transaction gets the
   // rate that was valid on its own transaction date, not the import date.
@@ -289,7 +289,7 @@ export async function ingestTransactions(
         .range(from, to)
     )
   } catch {
-    // Non-critical — supplier invoice matching will be skipped
+    // Non-critical: supplier invoice matching will be skipped
   }
   }
 
@@ -298,6 +298,12 @@ export async function ingestTransactions(
   // no date stamps every row at today's rate, which is wrong for historical
   // imports (issue #442). fetchExchangeRate already falls back to the last
   // 7 days when the requested day is a weekend/holiday.
+  //
+  // Concurrency is bounded: a 90-day first-sync backfill of a foreign-
+  // currency account used to fire every pair at Riksbanken simultaneously
+  // and got the whole batch rate-limited. Passing `supabase` gives
+  // fetchExchangeRate the persistent exchange_rates cache, so repeat dates
+  // cost a DB lookup instead of an API call.
   if (!options?.rawInsertOnly) {
     const uniquePairs = new Map<string, { currency: Currency; date: string }>()
     for (const t of rawTransactions) {
@@ -311,22 +317,26 @@ export async function ingestTransactions(
 
     if (uniquePairs.size > 0) {
       const pairs = Array.from(uniquePairs.entries())
-      const settled = await Promise.allSettled(
-        pairs.map(([, { currency, date }]) =>
-          fetchExchangeRate(currency, new Date(date))
+      const RATE_FETCH_CONCURRENCY = 4
+      for (let i = 0; i < pairs.length; i += RATE_FETCH_CONCURRENCY) {
+        const chunk = pairs.slice(i, i + RATE_FETCH_CONCURRENCY)
+        const settled = await Promise.allSettled(
+          chunk.map(([, { currency, date }]) =>
+            fetchExchangeRate(currency, new Date(date), supabase)
+          )
         )
-      )
-      for (let i = 0; i < pairs.length; i++) {
-        const [key] = pairs[i]
-        const outcome = settled[i]
-        if (outcome.status === 'fulfilled' && outcome.value) {
-          exchangeRatesByDate.set(key, outcome.value)
+        for (let j = 0; j < chunk.length; j++) {
+          const [key] = chunk[j]
+          const outcome = settled[j]
+          if (outcome.status === 'fulfilled' && outcome.value) {
+            exchangeRatesByDate.set(key, outcome.value)
+          }
+          // A null/rejected outcome leaves the key unset: the transaction is
+          // inserted without amount_sek/exchange_rate and remains repairable
+          // via /api/transactions/[id]/refresh-exchange-rate. Rates are never
+          // made up, fetchExchangeRate's last resort is the most recent
+          // CACHED observation, not a hardcoded number.
         }
-        // Network failures resolve inside fetchExchangeRate to getFallbackRate()
-        // (non-null, today's date), so they still populate the key. The key
-        // only stays unset when the API returns an empty observation array
-        // or the promise rejects outright — in that case amount_sek and
-        // exchange_rate remain null on the inserted transaction.
       }
     }
   }
@@ -348,7 +358,7 @@ export async function ingestTransactions(
   // ingest call shares a settlement account: enable-banking calls this per
   // account (settlementAccount = account.ledger_account), CSV import passes the
   // single account the user picked. cash_accounts.ledger_account is unique per
-  // company, so this is a single-row lookup. Tolerate a miss — the row stays
+  // company, so this is a single-row lookup. Tolerate a miss: the row stays
   // unbound (cash_account_id NULL) and reconciliation falls back to currency.
   // We never auto-create a cash account here; that would race upsertFromPsd2's
   // seed-promotion logic in lib/cash-accounts/service.ts.
@@ -367,13 +377,13 @@ export async function ingestTransactions(
   // Two per-(date, öre) bucket counts that, when EQUAL and non-zero, mark a
   // bucket as a probable scope-drift mirror:
   //   - unmatchedIncomingByBucket: incoming rows whose external_id is NOT
-  //     already stored (i.e. Layer-1 will not reconcile them — the ones that
+  //     already stored (i.e. Layer-1 will not reconcile them, the ones that
   //     would otherwise insert as fresh rows).
   //   - driftCandidateStoredByBucket: stored rows from THIS SAME feed whose id
   //     the incoming batch does NOT carry (so they are "orphaned" by a drifted
   //     id), restricted to account-compatible rows. Account compatibility uses
   //     the batch settlement account (cash_account_id), which is keyed on the
-  //     provider's STABLE account uid — not the drifting IBAN that broke the
+  //     provider's STABLE account uid, not the drifting IBAN that broke the
   //     external_id (see lib/cash-accounts/service.ts upsertFromPsd2). So a
   //     genuinely different account on the same company is never a candidate.
   // Equality is the safety signal (same as the cross-channel mirror): it means
@@ -410,8 +420,8 @@ export async function ingestTransactions(
   // ── Shadow-mode date-drift precompute (measure only) ─────────────────────
   // The content bridge matches only the EXACT (date, öre) bucket, so a twin
   // whose booking date drifted a day is invisible to it. Snapshot the stored
-  // buckets BEFORE the dedup loop — a COPY of each bucket's entries, so Layer-2's
-  // splices don't mutate what the shadow reads — so each surviving row can look
+  // buckets BEFORE the dedup loop (a COPY of each bucket's entries, so Layer-2's
+  // splices don't mutate what the shadow reads), so each surviving row can look
   // one day to either side for an account-compatible twin without disturbing
   // real dedup. Window is ±1 day (the only gap observed); a named constant so
   // widening to ±2 is one line if fleet data shows it.
@@ -435,7 +445,7 @@ export async function ingestTransactions(
   for (const raw of rawTransactions) {
     // Normalize the source title once. Guarantees a non-empty, Swedish-first
     // label for every import path (PSD2 sync + all bank-file CSV/CAMT parsers
-    // funnel into raw.description) — catching both empty/whitespace titles and
+    // funnel into raw.description): catching both empty/whitespace titles and
     // the legacy English 'Unknown' sentinel. This normalized value is stored as
     // both description and original_description below; it's what the user sees
     // and edits, and what the content-dedup key is built from.
@@ -451,7 +461,7 @@ export async function ingestTransactions(
     // OR an unbooked import-feed row shares this (date, öre) bucket and EITHER
     // (a) a *bridging* description (prefix-containment, see descriptionsBridge),
     // OR (b) the bucket is a cross-channel mirror (crossSourceMirror below).
-    // (a) catches re-imports the external_id check misses — old-format ids
+    // (a) catches re-imports the external_id check misses: old-format ids
     // re-synced after the id scheme changed, and PSD2 description enrichment
     // between syncs ("TIC" → "TIC  BG … via internet"). (b) catches the same
     // bank account imported via two channels whose descriptions don't bridge at
@@ -466,7 +476,7 @@ export async function ingestTransactions(
     // mirror is the text-independent fallback.
     //
     // Account guard: when BOTH the incoming batch and a stored entry have a known
-    // cash_account_id, they must match — so a transaction on one bank account
+    // cash_account_id, they must match, so a transaction on one bank account
     // never deduplicates a genuinely-different one on another account of the same
     // company (the content bucket is company-wide; only external_id embeds the
     // account). A null on either side falls back to bridge-allowed, leaving
@@ -523,9 +533,9 @@ export async function ingestTransactions(
     // insert. If its bucket is a symmetric same-feed scope-drift mirror (equal
     // non-zero counts of unreconciled incoming rows and account-compatible
     // same-feed drift candidates), an enforcing rule WOULD treat it as a
-    // re-import. We only record it — full content on both sides so every
+    // re-import. We only record it (full content on both sides so every
     // decision can be human-verified against real fleet data before any
-    // enforcement is switched on — then fall through and insert exactly as
+    // enforcement is switched on), then fall through and insert exactly as
     // before. This block has NO effect on result.imported/duplicates.
     if (scopeDriftShadow && batchIsImportFeed) {
       const driftCount = driftCandidateStoredByBucket.get(bucketKey) ?? 0
@@ -573,15 +583,15 @@ export async function ingestTransactions(
     // insert. The content bridge only matched its EXACT (date, öre) bucket, so a
     // twin whose booking date drifted a day is invisible to it. Look ±1 day for
     // an account-compatible stored twin that EITHER bridges by description
-    // (same/enriched title — the EB↔EB hotel/fee case) OR is a cross-feed
+    // (same/enriched title, the EB↔EB hotel/fee case) OR is a cross-feed
     // count-symmetric mirror displaced by a day (the CSV↔EB case where the
     // descriptions don't bridge). Record it for fleet validation, then insert
-    // unchanged — this block never affects result.imported/duplicates.
+    // unchanged: this block never affects result.imported/duplicates.
     //
     // Fail-safe date guard: measurement must NEVER abort a real import. raw.date
     // is always ISO in practice, but a malformed value would make shiftIsoDate
     // throw (new Date(NaN).toISOString()), so we skip detection rather than risk
-    // it. Any /^\d{4}-\d{2}-\d{2}$/ value is safe — Date.UTC normalizes
+    // it. Any /^\d{4}-\d{2}-\d{2}$/ value is safe: Date.UTC normalizes
     // out-of-range parts to a finite epoch, never NaN.
     if (dateDriftShadow && batchIsImportFeed && /^\d{4}-\d{2}-\d{2}$/.test(raw.date)) {
       let driftMatch: { entry: BucketEntry; gap: number; signal: 'desc' | 'cross-channel' } | undefined
@@ -593,7 +603,7 @@ export async function ingestTransactions(
           if (!entries) continue
           // Cross-feed count-symmetry across the drift: equal counts of incoming
           // rows in THIS bucket and account-compatible cross-feed rows one day
-          // over — the cross-channel mirror, displaced by a date drift.
+          // over, the cross-channel mirror, displaced by a date drift.
           const adjCrossFeed = entries.filter(
             (e) =>
               e.isImportFeed &&
@@ -655,7 +665,7 @@ export async function ingestTransactions(
         external_id: raw.external_id,
         date: raw.date,
         description: description,
-        // Immutable bank/PSD2 original — captured once, never overwritten by a
+        // Immutable bank/PSD2 original: captured once, never overwritten by a
         // title edit. Equals description at insert; they diverge only if the
         // user later edits the title.
         original_description: description,
@@ -696,7 +706,7 @@ export async function ingestTransactions(
     if (options?.rawInsertOnly) continue
 
     // Reconciliation against existing GL lines is intentionally NOT run on
-    // import — auto-linking made imported transactions appear "bokförda" to
+    // import: auto-linking made imported transactions appear "bokförda" to
     // the user without any explicit action. Reconciliation is now a manual
     // operation (BankReconciliationView / runReconciliation / manualLink).
 
@@ -726,13 +736,13 @@ export async function ingestTransactions(
 
           matchedInvoiceIds.add(bestMatch.invoice.id)
           result.auto_matched_invoices++
-          // Skip mapping engine — transaction has an invoice match.
+          // Skip mapping engine: transaction has an invoice match.
           // Auto-categorization would create an orphaned journal entry
           // that conflicts with the eventual invoice payment entry.
           continue
         }
       } catch {
-        // Non-critical — continue processing
+        // Non-critical: continue processing
       }
     }
 
@@ -746,7 +756,7 @@ export async function ingestTransactions(
 
         if (match && !matchedSupplierInvoiceIds.has(match.supplierInvoice.id)) {
           // ALWAYS a suggestion (potential_supplier_invoice_id), never a hard
-          // link. supplier_invoice_id is reserved for completed matches — the
+          // link. supplier_invoice_id is reserved for completed matches: the
           // match route books the payment voucher when it sets it. A sync-time
           // hard link booked nothing, left the invoice open, and then BLOCKED
           // the match route (MATCH_SI_TX_ALREADY_LINKED), stranding the
@@ -765,7 +775,7 @@ export async function ingestTransactions(
           if (match.confidence >= 0.85 && !match.ambiguous) {
             // High-confidence unambiguous hit: drain the pool so the next
             // transaction can't claim the same invoice, and skip the mapping
-            // engine — auto-categorization would create an orphaned journal
+            // engine: auto-categorization would create an orphaned journal
             // entry that conflicts with the eventual payment booking.
             unpaidSupplierInvoices = unpaidSupplierInvoices.filter(
               inv => inv.id !== match.supplierInvoice.id
@@ -775,11 +785,11 @@ export async function ingestTransactions(
             result.auto_matched_invoices++
             continue
           }
-          // Lower confidence (0.70–0.85) or ambiguous: tentative — do NOT
+          // Lower confidence (0.70-0.85) or ambiguous: tentative, do NOT
           // drain the pool.
         }
       } catch {
-        // Non-critical — continue processing
+        // Non-critical: continue processing
       }
     }
 
@@ -830,7 +840,7 @@ export async function ingestTransactions(
           }
         }
       } catch {
-        // Non-critical — continue processing
+        // Non-critical: continue processing
       }
     }
   }

@@ -303,7 +303,7 @@ export default function MockDataImportDialog<T>({
           <div className="space-y-4">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <FileSpreadsheet className="h-4 w-4" />
-              <span>{fileName} — {csvRows.length} rader</span>
+              <span>{fileName}: {csvRows.length} rader</span>
             </div>
 
             <div className="space-y-3">
@@ -323,7 +323,7 @@ export default function MockDataImportDialog<T>({
                       <SelectValue placeholder="Välj kolumn..." />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="___none___">— Välj kolumn —</SelectItem>
+                      <SelectItem value="___none___">- Välj kolumn -</SelectItem>
                       {csvHeaders.map(h => (
                         <SelectItem key={h} value={h}>{h}</SelectItem>
                       ))}
@@ -379,7 +379,7 @@ export default function MockDataImportDialog<T>({
 
             <div className="flex items-center gap-2 p-3 rounded-md bg-success/10 text-success text-sm">
               <Check className="h-4 w-4 shrink-0" />
-              <span>Giltig JSON — {jsonSummary}</span>
+              <span>Giltig JSON: {jsonSummary}</span>
             </div>
 
             <DialogFooter>

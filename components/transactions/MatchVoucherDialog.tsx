@@ -32,7 +32,7 @@ interface MatchVoucherDialogProps {
   onLinked: (transactionId: string, journalEntryId: string, voucherLabel: string) => void
 }
 
-// ±30 days around the transaction date — wide enough to catch a salary or
+// ±30 days around the transaction date: wide enough to catch a salary or
 // supplier voucher booked a few days off the bank value date, narrow enough to
 // keep the candidate list short. "Visa alla" drops the window entirely.
 const WINDOW_DAYS = 30
@@ -59,7 +59,7 @@ export function MatchVoucherDialog({
   const [submitting, setSubmitting] = useState(false)
   const [wideRange, setWideRange] = useState(false)
   // Opt-in: also surface vouchers already matched to another bank transaction,
-  // so several transactions can settle one verifikat (N:1 — a salary run paid in
+  // so several transactions can settle one verifikat (N:1: a salary run paid in
   // multiple transfers, an invoice paid in instalments).
   const [includeMatched, setIncludeMatched] = useState(false)
 
@@ -82,7 +82,7 @@ export function MatchVoucherDialog({
             }
           }
         } catch {
-          // Network hiccup — fall back to 1930 and let the user see the note.
+          // Network hiccup: fall back to 1930 and let the user see the note.
         }
         if (!signal.cancelled) {
           setAccountNumber(account)
@@ -106,9 +106,9 @@ export function MatchVoucherDialog({
         // Pre-select a strong auto-match (exact/reference/date-range) so the
         // common case is one click. Fuzzy (<0.85) is left for the user to confirm.
         // Auto-select a strong match only when nothing is chosen yet. Toggling
-        // "Visa alla datum" reloads with a wider set — it must NOT discard a
+        // "Visa alla datum" reloads with a wider set: it must NOT discard a
         // voucher the user already picked. (selected resets to '' on close.)
-        // Never auto-select an already-matched voucher — N:1 must be a
+        // Never auto-select an already-matched voucher: N:1 must be a
         // deliberate choice, not the default when "visa matchade" is on.
         const top = lines[0]
         setSelected((prev) =>
@@ -242,14 +242,14 @@ export function MatchVoucherDialog({
                 <p className="text-xs text-muted-foreground">
                   Verifikationen är redan matchad mot {selectedLine?.linked_transaction_count}{' '}
                   transaktion{(selectedLine?.linked_transaction_count ?? 0) === 1 ? '' : 'er'}.
-                  Kopplingen lägger till den här transaktionen också — t.ex. en lön utbetald i
+                  Kopplingen lägger till den här transaktionen också: t.ex. en lön utbetald i
                   flera överföringar.
                 </p>
               )}
             </>
           )}
 
-          {/* Discovery affordances — widen the date window, and surface vouchers
+          {/* Discovery affordances: widen the date window, and surface vouchers
               already matched so another transaction can be attached (N:1). */}
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pt-1">
             <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">

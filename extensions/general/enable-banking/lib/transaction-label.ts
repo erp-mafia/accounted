@@ -1,26 +1,26 @@
 /**
  * Derive a Swedish, human-readable working label for a bank transaction from
  * the structured codes an ASPSP DOES send when free-text remittance and a
- * counterparty name are both absent — the classic card-purchase / ATM / fee /
+ * counterparty name are both absent: the classic card-purchase / ATM / fee /
  * interest case that otherwise falls through to a generic placeholder.
  *
  * Pure and side-effect free, so it is trivially unit-testable and safe to call
  * inside the transaction conversion fallback chain.
  *
  * Precedence (most specific first):
- *   1. MCC (merchant_category_code) — identifies the merchant kind for a card
+ *   1. MCC (merchant_category_code): identifies the merchant kind for a card
  *      purchase. Already trusted for auto-categorization
  *      (lib/bookkeeping/mapping-engine.ts).
  *   2. ISO 20022 bank_transaction_code Domain/Family (e.g. "PMNT/CCRD").
  *   3. Keyword scan over the (often proprietary, non-normalized) code strings.
  *   4. Bare "PMNT" domain with no recognized family → direction-based generic.
  *
- * Returns null when nothing is recognized — the caller then falls through to
+ * Returns null when nothing is recognized: the caller then falls through to
  * its own final fallback (the ingest boundary normalizes any leftover empty /
  * 'Unknown' value to 'Okänd transaktion').
  *
  * The mapping tables are intentionally small starters. ASPSP coverage of these
- * codes varies and proprietary formats differ per bank — extend the tables
+ * codes varies and proprietary formats differ per bank: extend the tables
  * against real archived `psd2-response_*.json` samples as they surface.
  */
 
@@ -31,7 +31,7 @@ export interface TransactionLabelInput {
   proprietaryBankTransactionCode?: string | null
   /** Merchant category code (card transactions). */
   mcc?: string | number | null
-  /** CRDT (money in) vs DBIT (money out) — used only for the bare-domain case. */
+  /** CRDT (money in) vs DBIT (money out): used only for the bare-domain case. */
   isCredit?: boolean
 }
 
@@ -64,7 +64,7 @@ const KEYWORD_LABELS: Array<[RegExp, string]> = [
 ]
 
 export function deriveTransactionLabel(input: TransactionLabelInput): string | null {
-  // 1. MCC — most specific signal for card purchases.
+  // 1. MCC: most specific signal for card purchases.
   const mcc = input.mcc != null ? String(input.mcc).trim() : ''
   if (mcc && MCC_LABELS[mcc]) return MCC_LABELS[mcc]
 

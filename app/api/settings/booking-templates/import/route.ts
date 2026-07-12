@@ -1,7 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 
 const ImportLineSchema = z.object({
@@ -35,49 +33,46 @@ const ImportPayloadSchema = z.object({
  * Import templates from JSON (exported from another company).
  * Creates company-scoped templates for the active company.
  */
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export const POST = withRouteContext(
+  'booking_template.import',
+  async (request, ctx) => {
+    const { supabase, user, companyId } = ctx
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
+    let body: unknown
+    try {
+      body = await request.json()
+    } catch {
+      return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+    }
 
-  const companyId = await requireCompanyId(supabase, user.id)
+    const parsed = ImportPayloadSchema.safeParse(body)
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Invalid import format', details: parsed.error.issues },
+        { status: 400 },
+      )
+    }
 
-  let body: unknown
-  try {
-    body = await request.json()
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
-  }
+    const rows = parsed.data.templates.map((t) => ({
+      company_id: companyId,
+      team_id: null,
+      created_by: user.id,
+      name: t.name,
+      description: t.description,
+      category: t.category,
+      entity_type: t.entity_type,
+      lines: t.lines,
+      is_system: false,
+    }))
 
-  const parsed = ImportPayloadSchema.safeParse(body)
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: 'Invalid import format', details: parsed.error.issues },
-      { status: 400 },
-    )
-  }
+    const { data, error } = await supabase
+      .from('booking_template_library')
+      .insert(rows)
+      .select()
 
-  const rows = parsed.data.templates.map((t) => ({
-    company_id: companyId,
-    team_id: null,
-    created_by: user.id,
-    name: t.name,
-    description: t.description,
-    category: t.category,
-    entity_type: t.entity_type,
-    lines: t.lines,
-    is_system: false,
-  }))
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  const { data, error } = await supabase
-    .from('booking_template_library')
-    .insert(rows)
-    .select()
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-
-  return NextResponse.json({ data, imported: data?.length ?? 0 }, { status: 201 })
-}
+    return NextResponse.json({ data, imported: data?.length ?? 0 }, { status: 201 })
+  },
+  { requireWrite: true },
+)

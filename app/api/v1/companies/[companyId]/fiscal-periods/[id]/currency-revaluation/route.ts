@@ -1,7 +1,7 @@
 /**
  * POST /api/v1/companies/{companyId}/fiscal-periods/{id}/currency-revaluation
  *
- * Runs FX revaluation for the period — re-rates open foreign-currency AR
+ * Runs FX revaluation for the period: re-rates open foreign-currency AR
  * (1510) + AP (2440) at the closing date's rate and posts the delta to
  * 3960 / 7960. Wraps lib/bookkeeping/currency-revaluation.executeCurrencyRevaluation.
  * Records an operation row and returns 202 + operation_id.
@@ -44,7 +44,7 @@ registerEndpoint({
     'Re-running on the same period (CURRENCY_REVALUATION_ALREADY_EXISTS). Revaluing a closed period (the trigger blocks JE writes to closed periods).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'Engine returns null if no open foreign-currency items exist — the operation succeeds with result.revaluation_entry_id=null.',
+    'Engine returns null if no open foreign-currency items exist: the operation succeeds with result.revaluation_entry_id=null.',
     'as_of_date defaults to period_end if omitted.',
   ],
   example: {
@@ -97,7 +97,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       bodyAsOfDate = parsed.data.as_of_date
     }
 
-    // Ownership pre-check on the URL period — UNCONDITIONAL. Round-3
+    // Ownership pre-check on the URL period: UNCONDITIONAL. Round-3
     // missed this when as_of_date was supplied in the body (the
     // ownership-by-side-effect via period_end lookup was conditional).
     if (!(await ownsFiscalPeriod(ctx.supabase, ctx.companyId!, fiscalPeriodId))) {
@@ -106,7 +106,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Resolve as_of_date — default to period_end. Ownership is already
+    // Resolve as_of_date: default to period_end. Ownership is already
     // confirmed above, so this is a pure read.
     let asOfDate = bodyAsOfDate
     if (!asOfDate) {

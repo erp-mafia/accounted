@@ -18,7 +18,7 @@ interface VoucherCandidate {
   entry_date: string
   description: string
   // Customer side returns ar_credit_amount; supplier side returns ap_debit_amount.
-  // The picker treats them interchangeably — same UX, opposite sign convention.
+  // The picker treats them interchangeably: same UX, opposite sign convention.
   ar_credit_amount?: number
   ap_debit_amount?: number
   currency: string
@@ -47,7 +47,7 @@ interface LinkVoucherPickerProps {
    * Company accounting method. On 'cash' (kontantmetoden) the matcher searches
    * bank/cash debits (19xx) instead of AR credits (1510), so the intro + empty
    * copy switch to describe that. Defaults to 'accrual'. Only affects the
-   * customer-invoice mode's wording — the data path is decided server-side.
+   * customer-invoice mode's wording: the data path is decided server-side.
    */
   accountingMethod?: 'accrual' | 'cash'
 }
@@ -84,7 +84,7 @@ export default function LinkVoucherPicker({
   const { toast } = useToast()
   const t = useTranslations('invoice_link_voucher')
 
-  // Kontantmetoden links against a bank/cash debit (19xx), not an AR credit —
+  // Kontantmetoden links against a bank/cash debit (19xx), not an AR credit:
   // describe that. Only the customer-invoice copy varies by method.
   const isCash = mode === 'customer_invoice' && accountingMethod === 'cash'
   const introKey = isCash ? 'intro_cash' : 'intro'

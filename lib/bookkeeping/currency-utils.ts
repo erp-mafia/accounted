@@ -13,7 +13,7 @@
  * 1. If currency is SEK → return amount as-is
  * 2. If amountSek is populated → return it (pre-computed SEK value)
  * 3. If exchangeRate is available → compute amount * exchangeRate
- * 4. Fallback → return amount (legacy data safety — assumes SEK)
+ * 4. Fallback → return amount (legacy data safety: assumes SEK)
  */
 export function resolveSekAmount(
   amount: number,
@@ -33,7 +33,7 @@ export function resolveSekAmount(
     return Math.round(amount * exchangeRate * 100) / 100
   }
 
-  // Fallback: legacy data without conversion info — return original amount
+  // Fallback: legacy data without conversion info: return original amount
   return amount
 }
 

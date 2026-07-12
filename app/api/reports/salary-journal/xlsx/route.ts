@@ -1,6 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
 import { generateSalaryJournal } from '@/lib/reports/salary-journal'
 import {
   reportToWorkbook,
@@ -17,16 +16,7 @@ function toDate(s: string): Date | null {
   return isNaN(d.getTime()) ? null : d
 }
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext('report.salary_journal.xlsx', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
   const year = parseInt(searchParams.get('year') || new Date().getFullYear().toString())
   const monthFrom = searchParams.get('month_from') ? parseInt(searchParams.get('month_from')!) : undefined
@@ -110,4 +100,4 @@ export async function GET(request: Request) {
       { status: 500 }
     )
   }
-}
+})

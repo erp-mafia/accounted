@@ -14,7 +14,7 @@ import type { StoredSkattekontoTransaction } from '../types'
  * finds the existing entry and links the SKV row to it, no new draft.
  *
  * The candidate query is intentionally strict (exact amount, exact side,
- * unused entry) — false positives would be silently destructive. False
+ * unused entry): false positives would be silently destructive. False
  * negatives just fall back to "Bokför / Skapa manuellt".
  *
  * AGI period disambiguation: when transaktionstext carries an explicit period
@@ -460,7 +460,7 @@ export async function findMatchCandidates(
   }
 
   // Filter out entries already linked to another skattekonto_transactions
-  // row — those represent payments we've already accounted for.
+  // row: those represent payments we've already accounted for.
   const candidateEntryIds = Array.from(new Set(typedRows.map(r => r.journal_entries.id)))
   const { data: linked } = await supabase
     .from('skattekonto_transactions')

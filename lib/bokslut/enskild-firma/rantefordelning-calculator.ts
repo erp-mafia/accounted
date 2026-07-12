@@ -35,10 +35,10 @@ export interface RantefordelningComputation {
 
 /**
  * Compute räntefördelning for an enskild firma. Returns at most one of
- * positive or negative — the two are mutually exclusive based on sign of
+ * positive or negative: the two are mutually exclusive based on sign of
  * kapitalunderlag.
  *
- * NEVER produces a journal entry — räntefördelning is a tax-only mechanism
+ * NEVER produces a journal entry: räntefördelning is a tax-only mechanism
  * (Inkomstdeklaration 1, kapitalinkomst-fältet).
  */
 export function calculateRantefordelning(
@@ -77,7 +77,7 @@ export function calculateRantefordelning(
       label: 'Positiv räntefördelning (frivillig)',
       description: `${(positiveRate * 100).toFixed(2)} % på kapitalunderlag ${input.kapitalunderlag.toLocaleString('sv-SE')} kr. Avdrag i NE R30; motsvarande belopp redovisas som inkomst av kapital på Inkomstdeklaration 1 (T4).`,
       amount: computation.positiveAmount,
-      // NE-bilagan har bara fältet R30 — INK1 är ett separat formulär. Tidigare
+      // NE-bilagan har bara fältet R30. INK1 är ett separat formulär. Tidigare
       // sammanslagningen 'R30 / INK1 kapital' fick användare att leta efter ett
       // ruta-namn som inte finns på NE.
       ne_ruta: 'R30 (avdrag i näringsverksamhet)',

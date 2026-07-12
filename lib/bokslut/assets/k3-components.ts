@@ -1,14 +1,14 @@
 /**
  * K3 component depreciation validation (BFNAR 2012:1 ch.17.4).
  *
- * Pure functions — no I/O — so unit tests can exercise edge cases without
+ * Pure functions (no I/O) so unit tests can exercise edge cases without
  * mocking Supabase or the engine. Shared between the Zod refinement on
  * AssetCreate / AssetUpdate (`lib/api/schemas.ts`) and any callers that
  * want to validate K3 components outside the API surface (MCP, scripts).
  *
  * The cross-column rule "sum(components.cost) ≈ acquisition_cost" cannot
  * be expressed in a Postgres CHECK on JSONB, so we enforce it here. The
- * engine itself does NOT re-validate at depreciation time — callers must
+ * engine itself does NOT re-validate at depreciation time: callers must
  * ensure the asset row is consistent before persisting.
  */
 import type { K3Component } from '@/types'
@@ -28,7 +28,7 @@ export interface ValidationResult {
  * and matches the asset's acquisition cost.
  *
  * Returns the full list of issues (the API can surface all at once instead
- * of bailing on the first). The check is independent of accounting_framework —
+ * of bailing on the first). The check is independent of accounting_framework:
  * that gate sits at the API layer because this module is also used by
  * non-HTTP callers that have already decided to use K3.
  */
@@ -50,7 +50,7 @@ export function validateComponents(asset: {
 
   if (components.length === 0) {
     errors.push(
-      'k3_components får inte vara en tom lista — sätt fältet till null om asset inte använder komponentuppdelning.',
+      'k3_components får inte vara en tom lista: sätt fältet till null om asset inte använder komponentuppdelning.',
     )
     return { errors }
   }
@@ -91,7 +91,7 @@ export function validateComponents(asset: {
   const expected = Number(asset.acquisition_cost)
   if (Number.isFinite(expected) && Math.abs(totalCost - expected) > COMPONENT_SUM_TOLERANCE_KR) {
     errors.push(
-      `Komponenter summerar till ${Math.round(totalCost * 100) / 100} kr men asset.acquisition_cost är ${Math.round(expected * 100) / 100} kr — differensen får vara högst ${COMPONENT_SUM_TOLERANCE_KR} kr.`,
+      `Komponenter summerar till ${Math.round(totalCost * 100) / 100} kr men asset.acquisition_cost är ${Math.round(expected * 100) / 100} kr: differensen får vara högst ${COMPONENT_SUM_TOLERANCE_KR} kr.`,
     )
   }
 

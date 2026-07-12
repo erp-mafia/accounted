@@ -1,5 +1,5 @@
 /**
- * Pre-flight validation of an iXBRL årsredovisning — local mirror of the
+ * Pre-flight validation of an iXBRL årsredovisning: local mirror of the
  * Bolagsverket `kontrollera` service (GUIDE.md Appendix E codes).
  *
  * Runs on the assembled IxbrlArsredovisningInput BEFORE generation/upload so
@@ -67,7 +67,7 @@ const RULES: Rule[] = [
       input.totals.aretsResultat.current !== 0
     return hasRr
       ? null
-      : issue('1060', 'warn', 'Resultaträkningen verkar sakna belopp — kontrollera att räkenskapsåret innehåller bokförda transaktioner.')
+      : issue('1060', 'warn', 'Resultaträkningen verkar sakna belopp: kontrollera att räkenskapsåret innehåller bokförda transaktioner.')
   },
   (input) => {
     const hasBr = input.totals.tillgangar.current !== 0
@@ -77,7 +77,7 @@ const RULES: Rule[] = [
   },
   (input) =>
     input.underskrifter.signers.length === 0
-      ? issue('1107', 'error', 'Underskrifter saknas — årsredovisningen måste skrivas under av styrelsen (och ev. VD).')
+      ? issue('1107', 'error', 'Underskrifter saknas: årsredovisningen måste skrivas under av styrelsen (och ev. VD).')
       : null,
   (input) =>
     input.underskrifter.signers.some(
@@ -87,7 +87,7 @@ const RULES: Rule[] = [
       : null,
   (input) =>
     input.underskrifter.signers.some((signer) => !signer.signedDate)
-      ? issue('1214', 'error', 'Datum för underskrifter saknas — alla underskrifter måste ha ett datum.')
+      ? issue('1214', 'error', 'Datum för underskrifter saknas: alla underskrifter måste ha ett datum.')
       : null,
   (input) =>
     !input.faststallelseintyg.signerFirstName.trim() ||
@@ -106,7 +106,7 @@ const RULES: Rule[] = [
       : null,
   (input) =>
     monthsBetween(input.period.start, input.period.end) >= 18
-      ? issue('1046', 'error', `Räkenskapsåret ${input.period.start} – ${input.period.end} är längre än 18 månader.`)
+      ? issue('1046', 'error', `Räkenskapsåret ${input.period.start}: ${input.period.end} är längre än 18 månader.`)
       : null,
   (input) =>
     input.faststallelseintyg.arsstammaDatum &&
@@ -116,7 +116,7 @@ const RULES: Rule[] = [
   (input, today) =>
     input.faststallelseintyg.arsstammaDatum !== null &&
     input.faststallelseintyg.arsstammaDatum > today
-      ? issue('1178', 'error', `Datum för årsstämman (${input.faststallelseintyg.arsstammaDatum}) får inte vara senare än dagens datum — håll årsstämman innan inlämning.`)
+      ? issue('1178', 'error', `Datum för årsstämman (${input.faststallelseintyg.arsstammaDatum}) får inte vara senare än dagens datum: håll årsstämman innan inlämning.`)
       : null,
   (input) => {
     const bad = input.underskrifter.signers.find(
@@ -153,7 +153,7 @@ const RULES: Rule[] = [
   (input) =>
     input.faststallelseintyg.arsstammaDatum &&
     input.faststallelseintyg.genereratDatum < input.faststallelseintyg.arsstammaDatum
-      ? issue('1165', 'warn', 'Datum för underskrift av fastställelseintyget sätts till genereringsdagen, som ligger före årsstämman — Bolagsverket skriver över datumet vid signering.')
+      ? issue('1165', 'warn', 'Datum för underskrift av fastställelseintyget sätts till genereringsdagen, som ligger före årsstämman: Bolagsverket skriver över datumet vid signering.')
       : null,
 
   // ---- balance checks -----------------------------------------------------
@@ -184,7 +184,7 @@ const RULES: Rule[] = [
     const rrResult = input.totals.aretsResultat.current
     const brResult = input.br['AretsResultatEgetKapital']?.current ?? 0
     return rrResult !== brResult
-      ? issue('ACC-2099', 'error', `Årets resultat enligt resultaträkningen (${rrResult} kr) stämmer inte med eget kapital-posten Årets resultat (${brResult} kr) — kör bokslutet (resultatdisposition) innan inlämning.`)
+      ? issue('ACC-2099', 'error', `Årets resultat enligt resultaträkningen (${rrResult} kr) stämmer inte med eget kapital-posten Årets resultat (${brResult} kr): kör bokslutet (resultatdisposition) innan inlämning.`)
       : null
   },
 

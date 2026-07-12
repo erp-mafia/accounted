@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest'
 import { isForbiddenOrigin, forbiddenOriginResponse } from '../origin-guard'
+import type { mcpServerExtension as McpServerExtension } from '../index'
 
 const ENDPOINT = 'https://app.gnubok.se/api/extensions/ext/mcp-server/mcp'
 
@@ -23,7 +24,7 @@ describe('isForbiddenOrigin', () => {
   })
 
   it('allows requests without an Origin header (server-to-server clients)', () => {
-    // claude.ai backend, Claude Desktop, npx gnubok-mcp, Claude Code — none
+    // claude.ai backend, Claude Desktop, npx gnubok-mcp, Claude Code: none
     // send Origin. This is the path every known MCP client takes.
     expect(isForbiddenOrigin(makeRequest())).toBe(false)
   })
@@ -100,12 +101,16 @@ describe('forbiddenOriginResponse', () => {
 })
 
 describe('mcp-server apiRoutes origin enforcement', () => {
-  // The dynamic import pulls in the full 9k-line server module; that parse
-  // alone takes ~4s and flirts with the 5s default timeout under full-suite
-  // parallel load. The test is import-bound, not logic-bound — give it
-  // explicit headroom instead of letting machine load decide the outcome.
+  // The dynamic import pulls in the full 9k-line server module; that parse can
+  // take several seconds under full-suite parallel load. It is import-bound,
+  // not logic-bound, so warm it once in beforeAll (with generous headroom)
+  // instead of letting an individual test's clock absorb the import cost.
+  let mcpServerExtension: typeof McpServerExtension
+  beforeAll(async () => {
+    ;({ mcpServerExtension } = await import('../index'))
+  }, 60_000)
+
   it('rejects foreign-Origin requests on every /mcp method before dispatch', async () => {
-    const { mcpServerExtension } = await import('../index')
     const routes = (mcpServerExtension.apiRoutes ?? []).filter((r) => r.path === '/mcp')
     expect(routes.map((r) => r.method).sort()).toEqual(['DELETE', 'GET', 'POST'])
 
@@ -118,5 +123,5 @@ describe('mcp-server apiRoutes origin enforcement', () => {
       )
       expect(res.status, `${route.method} /mcp`).toBe(403)
     }
-  }, 20_000)
+  })
 })

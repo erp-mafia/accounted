@@ -1,5 +1,5 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 
 /**
@@ -9,19 +9,23 @@ import { getBASReference } from '@/lib/bookkeeping/bas-reference'
  * numbers. Used by ActivateAccountsDialog to render human-readable labels
  * before the user confirms activation. Unknown numbers are returned with
  * account_name=null so the UI can flag them as non-BAS.
+ *
+ * Pure in-memory reference lookup — no tenant data, so no company context is
+ * resolved; requireAuth() keeps it behind auth (MFA on hosted).
  */
 export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const auth = await requireAuth()
+  if (auth.error) return auth.error
 
   const { searchParams } = new URL(request.url)
   const raw = searchParams.get('numbers') || ''
   const numbers = [...new Set(raw.split(',').map((s) => s.trim()).filter(Boolean))]
   if (numbers.length === 0) {
     return NextResponse.json({ data: [] })
+  }
+  // The BAS catalogue is ~1,276 accounts — anything past that is abuse.
+  if (numbers.length > 2000) {
+    return NextResponse.json({ error: 'Too many account numbers' }, { status: 400 })
   }
 
   const data = numbers.map((num) => {

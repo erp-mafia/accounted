@@ -19,7 +19,7 @@ Gnubok-Version: ${API_V1_VERSION}
 
 ### Pinning
 
-Webhooks are pinned to the API version active at creation time (the \`api_version_pinned\` column on the \`webhooks\` row). Payload shapes for *your* webhook will not change until you explicitly upgrade — even if we ship a new dated version that breaks the shape for newly-created webhooks.
+Webhooks are pinned to the API version active at creation time (the \`api_version_pinned\` column on the \`webhooks\` row). Payload shapes for *your* webhook will not change until you explicitly upgrade: even if we ship a new dated version that breaks the shape for newly-created webhooks.
 
 API requests pin per-request via the \`Gnubok-Version\` request header (planned for v1.x; today every request gets the current version):
 
@@ -64,18 +64,18 @@ What does NOT count as a breaking change:
 
 ## Idempotency
 
-Every state-changing endpoint (POST, PATCH, DELETE) accepts an \`Idempotency-Key\` header. The key is a UUID you generate; the server caches the response keyed by \`(api_key_id, company_id, idempotency_key, request_body_hash)\` for 24 hours.
+Every state-changing endpoint (POST, PATCH, DELETE) accepts an \`Idempotency-Key\` header. The key is treated as an opaque string (a UUID is recommended, but any unique value works); the server caches the response keyed by \`(user_id, company_id, idempotency_key)\` for 24 hours. The canonical hash of the request body is stored alongside and compared on replay: same key + same body returns the cached response, same key + different body returns \`409 IDEMPOTENCY_KEY_REUSE\`.
 
 ### How it works
 
 - **First call with a fresh key** → executes normally; response is cached.
 - **Replay with the same key + same body** → returns the cached response with \`Idempotent-Replayed: true\` header. The original side effects are NOT re-executed.
 - **Replay with the same key + different body** → returns \`409 IDEMPOTENCY_KEY_REUSE\`. This indicates the key was reused incorrectly.
-- **Two concurrent requests with the same key** → one wins, the other waits for the cached response.
+- **Two concurrent requests with the same key** → the cache lookup takes no lock, so both may execute; the response write is best-effort (the first writer wins, the loser hits the unique-index conflict and skips). Idempotency de-duplicates *sequential* retries reliably; serialise concurrent retries of the same action on your side.
 
 ### Required vs supported
 
-Some endpoints **require** an Idempotency-Key (the create routes for resources that would be expensive to deduplicate after the fact: invoices, customers, supplier-invoices, webhooks). Calls without the header return \`400 VALIDATION_ERROR\` with field \`Idempotency-Key\`.
+Most write endpoints **require** an Idempotency-Key — not only the obvious creates (invoices, customers, supplier-invoices, webhooks) but also journal-entry and salary-run creation, invoice \`send\`, period \`lock\`/\`close\`/\`year-end\`, bank reconciliation runs, dimension-value creation, PATCH/DELETE on customers, and more. Each endpoint's reference page states whether the key is required. Calls that omit a required key return \`400 VALIDATION_ERROR\` with field \`Idempotency-Key\`.
 
 Other endpoints **support** but don't require it. Sending one is always safe.
 
@@ -89,17 +89,30 @@ curl https://app.gnubok.se/api/v1/companies/{cid}/invoices \\
   -d '{ "customer_id": "...", "items": [...] }'
 \`\`\`
 
-In an agent loop, generate the key once at the *start* of an attempt and reuse it across every retry of that single logical action — never on a fresh attempt with new inputs.
+In an agent loop, generate the key once at the *start* of an attempt and reuse it across every retry of that single logical action: never on a fresh attempt with new inputs.
 
 ---
 
 ## Dry-run
 
-Every state-changing endpoint that supports dry-run (\`x-dry-run-supported: true\` in the OpenAPI spec) accepts \`?dry_run=true\` query param **or** \`X-Dry-Run: true\` header. The endpoint executes its full validation pipeline (Zod, business rules, period-lock checks, VAT-rate compatibility, cross-tenant guards, ...) but does NOT commit. The response shape matches a successful commit:
+Every state-changing endpoint that supports dry-run (\`x-dry-run-supported: true\` in the OpenAPI spec) accepts \`?dry_run=true\` query param **or** \`X-Dry-Run: true\` header. The endpoint executes its full validation pipeline (Zod, business rules, period-lock checks, VAT-rate compatibility, cross-tenant guards, ...) but does NOT commit. A dry-run always returns **HTTP 200** with the \`X-Dry-Run: true\` response header — never the resource's normal success status (201, 204). The body wraps a preview, not the resource itself:
 
-- All \`validation_error\` shapes that a real commit would produce surface here.
-- The response \`data\` shows the would-be record with \`id: null\`, timestamps \`null\`, and any auto-generated values (voucher number, invoice number) shown as \`null\` or as the value that *would* have been allocated.
-- The response stamps \`X-Dry-Run: true\` in headers.
+- All **local** \`validation_error\` shapes that a real commit would produce surface here (Zod, business rules, period locks, cross-tenant guards). Failures that depend on external providers do **not** surface — dry-run skips them (see below), so a VIES/BankID/Skatteverket rejection only appears on the real commit.
+- \`data.preview\` holds the would-be record (same shape as the success response).
+- For **financial** writes (invoices, journal entries, period ops, salary) the preview also carries \`staged_operation_id\`, the \`journal_lines\` that would be posted, \`account_deltas\`, and \`voucher_number_assigned_on_commit\` (a projection — the committed number can differ by one or two if another writer takes the next number first).
+
+\`\`\`json
+{
+  "data": {
+    "dry_run": true,
+    "preview": { ... },
+    "staged_operation_id": "po_...",
+    "journal_lines": [{ "account": "1510", "debit": 12500, "credit": 0 }],
+    "voucher_number_assigned_on_commit": "A-2026-043"
+  },
+  "meta": { "request_id": "req_...", "api_version": "${API_V1_VERSION}" }
+}
+\`\`\`
 
 Use dry-run to:
 
@@ -113,14 +126,14 @@ Dry-run **does not** call external providers (VIES VAT validation, BankID, Skatt
 
 ## Strict-mode write semantics
 
-A v1 mutation either commits fully or returns a structured error code with no side effects. The dashboard soft-fails on partial writes (a human is there to retry); the v1 surface aborts. This means you never see "the invoice was sent but the email failed" or "the journal entry posted but the payment row didn't" — either both happened or neither did.
+A v1 mutation either commits fully or returns a structured error code with no side effects. The dashboard soft-fails on partial writes (a human is there to retry); the v1 surface aborts. This means you never see "the invoice was sent but the email failed" or "the journal entry posted but the payment row didn't": either both happened or neither did.
 
 When a multi-step write fails:
 
 - **Pre-engine failure** (validation, missing FK, period locked) → no rows written, structured error returned.
-- **Post-engine failure** (engine call succeeded, follow-up step failed) → the engine's writes are reversed via \`reverseEntry()\` (storno), the failure surfaces with code matching the failed step (e.g. \`MATCH_INVOICE_TX_LINK_FAILED\`).
+- **Post-engine failure** (engine call succeeded, follow-up step failed) → the engine's writes are reversed via \`reverseEntry()\` (storno), the failure surfaces with code matching the failed step (e.g. \`MATCH_INVOICE_LINK_TX_FAILED\`).
 
-Storno reversals are themselves immutable journal entries — the original audit trail remains visible per BFL 5 kap 5 §. \`reversal_journal_entry_id\` on the original row points at the storno.
+Storno reversals are themselves immutable journal entries: the original audit trail remains visible per BFL 5 kap 5 §. \`reversed_by_id\` on the original row points at the storno; the storno carries \`reverses_id\` back to the original.
 
 ---
 
@@ -144,5 +157,5 @@ Every successful write response carries an \`audit\` block in \`meta\`:
 }
 \`\`\`
 
-No second round-trip needed to confirm what happened — agents can chain follow-up work directly on the returned voucher number.
+No second round-trip needed to confirm what happened: agents can chain follow-up work directly on the returned voucher number.
 `

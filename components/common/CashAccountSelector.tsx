@@ -16,7 +16,7 @@ const STORAGE_KEY_PREFIX = 'Accounted:cash-account:'
 
 interface Props {
   /**
-   * Current selection — a BAS ledger account number ('1930', '1932', …).
+   * Current selection: a BAS ledger account number ('1930', '1932', …).
    * `null` would only be meaningful if "all accounts" were an option, which
    * isn't currently supported (reconciliation is always single-account).
    */
@@ -104,7 +104,7 @@ export function CashAccountSelector({
     return () => {
       cancelled = true
     }
-  // onReady excluded — lifecycle callback, shouldn't retrigger on parent renders.
+  // onReady excluded: lifecycle callback, shouldn't retrigger on parent renders.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [company?.id])
 

@@ -1,14 +1,18 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { NextResponse } from 'next/server'
+import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(),
+const { supabase } = createQueuedMockSupabase()
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
+  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
 vi.mock('@/lib/reports/full-archive-export', () => ({
@@ -16,34 +20,35 @@ vi.mock('@/lib/reports/full-archive-export', () => ({
   estimateArchiveSize: vi.fn(),
 }))
 
-import { createClient } from '@/lib/supabase/server'
 import {
   generateFullArchive,
   estimateArchiveSize,
 } from '@/lib/reports/full-archive-export'
 import { GET } from '../route'
 
-const mockCreateClient = vi.mocked(createClient)
 const mockGenerate = vi.mocked(generateFullArchive)
 const mockEstimate = vi.mocked(estimateArchiveSize)
 
-function mockAuth(userId: string | null) {
-  mockCreateClient.mockResolvedValue({
-    auth: {
-      getUser: vi.fn().mockResolvedValue({
-        data: { user: userId ? { id: userId } : null },
-      }),
-    },
-  } as any)
+function authed() {
+  requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+}
+
+function unauthed() {
+  requireAuthMock.mockResolvedValue({
+    user: null,
+    supabase,
+    error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+  })
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  authed()
 })
 
 describe('GET /api/reports/full-archive', () => {
   it('returns 401 when not authenticated', async () => {
-    mockAuth(null)
+    unauthed()
     const { status, body } = await parseJsonResponse(
       await GET(createMockRequest('/api/reports/full-archive'))
     )
@@ -52,7 +57,6 @@ describe('GET /api/reports/full-archive', () => {
   })
 
   it('returns estimate-only response when ?estimate=1', async () => {
-    mockAuth('user-1')
     mockEstimate.mockResolvedValue({
       total_bytes: 10_000_000,
       document_bytes: 5_000_000,
@@ -80,7 +84,6 @@ describe('GET /api/reports/full-archive', () => {
   })
 
   it('returns 413 archive_too_large when estimate exceeds limit', async () => {
-    mockAuth('user-1')
     mockEstimate.mockResolvedValue({
       total_bytes: 200 * 1024 * 1024,
       document_bytes: 195 * 1024 * 1024,
@@ -106,7 +109,6 @@ describe('GET /api/reports/full-archive', () => {
   })
 
   it('skips 413 when include_documents=false', async () => {
-    mockAuth('user-1')
     mockEstimate.mockResolvedValue({
       total_bytes: 200 * 1024 * 1024,
       document_bytes: 195 * 1024 * 1024,
@@ -130,7 +132,6 @@ describe('GET /api/reports/full-archive', () => {
   })
 
   it('defaults to scope=all when no params given', async () => {
-    mockAuth('user-1')
     mockEstimate.mockResolvedValue({
       total_bytes: 1_000_000,
       document_bytes: 500_000,
@@ -149,7 +150,6 @@ describe('GET /api/reports/full-archive', () => {
   })
 
   it('uses scope=period when period_id is provided without explicit scope', async () => {
-    mockAuth('user-1')
     mockEstimate.mockResolvedValue({
       total_bytes: 1_000_000,
       document_bytes: 500_000,
@@ -172,7 +172,6 @@ describe('GET /api/reports/full-archive', () => {
   })
 
   it('returns 400 when scope=period without period_id', async () => {
-    mockAuth('user-1')
     const { status, body } = await parseJsonResponse(
       await GET(
         createMockRequest('/api/reports/full-archive', {
@@ -187,7 +186,6 @@ describe('GET /api/reports/full-archive', () => {
   })
 
   it('returns 404 when generate throws "not found"', async () => {
-    mockAuth('user-1')
     mockEstimate.mockResolvedValue({
       total_bytes: 1_000_000,
       document_bytes: 500_000,

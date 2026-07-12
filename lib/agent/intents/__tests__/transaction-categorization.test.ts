@@ -14,7 +14,7 @@ function stripUuidsAndDates(text: string): string {
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '')
     // ISO dates yyyy-MM-dd
     .replace(/\d{4}-\d{2}-\d{2}/g, '')
-    // Swedish law references — "ML 2023:200", "BFNAR 2013:2", etc. The year
+    // Swedish law references: "ML 2023:200", "BFNAR 2013:2", etc. The year
     // half can collide with the BAS class-2 range, so strip the whole
     // reference before scanning for stray BAS numbers.
     .replace(/\b\d{4}:\d{1,3}\b/g, '')
@@ -71,7 +71,7 @@ describe('transaction.categorization prompt template', () => {
 
   it('does not embed a four-digit BAS account number in the prompt body', () => {
     // Bare four-digit BAS like "5420", "6540", "1930" must not appear in the
-    // prompt — only category labels. Strip UUIDs and ISO dates first so
+    // prompt, only category labels. Strip UUIDs and ISO dates first so
     // their digit fragments don't trigger false positives.
     const out = renderPrompt({ hasUnderlag: true })
     const stripped = stripUuidsAndDates(out)
@@ -127,7 +127,7 @@ describe('transaction.categorization prompt template', () => {
     // Past bookings for the same counterparty are a stronger signal than
     // the LLM's guess. Lock in the tool call. We query the actual journal
     // (gnubok_query_journal) rather than the lossy categorization_templates
-    // summary, so the agent sees full verifikat — accounts, VAT, line text.
+    // summary, so the agent sees full verifikat: accounts, VAT, line text.
     const out = renderPrompt({ hasUnderlag: true })
     expect(out).toContain('gnubok_query_journal')
     expect(out.toLowerCase()).toContain('så har du gjort förut')
@@ -158,7 +158,7 @@ describe('transaction.categorization prompt template', () => {
 
   it('directs the user to Dokumentinkorgen when underlag is missing', () => {
     // The chat sheet no longer accepts file uploads. The agent must not
-    // tell users to "drop the file in chat" or "click the paperclip" —
+    // tell users to "drop the file in chat" or "click the paperclip":
     // those affordances were removed in v5. Documents go through the
     // Dokumentinkorgen workspace.
     const out = renderPrompt({ hasUnderlag: false })
@@ -171,7 +171,7 @@ describe('transaction.categorization prompt template', () => {
 
   it('routes post-booking underlag to the verifikation, not back to Dokumentinkorgen', () => {
     // After a verifikation has been staged, the user must not be sent back
-    // to Dokumentinkorgen — the doc belongs ON the verifikation (under
+    // to Dokumentinkorgen: the doc belongs ON the verifikation (under
     // Bokföring). Inbox is for unbooked documents only.
     const noUnderlag = renderPrompt({ hasUnderlag: false })
     expect(noUnderlag).toContain('bifogas TILL VERIFIKATIONEN')

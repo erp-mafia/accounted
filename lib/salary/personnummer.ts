@@ -1,8 +1,11 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto'
+import { createLogger } from '@/lib/logger'
 
 const ALGORITHM = 'aes-256-gcm'
 const IV_LENGTH = 12
 const TAG_LENGTH = 16
+
+const logger = createLogger('salary/personnummer')
 
 /**
  * Get the encryption key from environment.
@@ -41,6 +44,19 @@ export function encryptPersonnummer(personnummer: string): string {
  * Decrypt a personnummer from storage.
  */
 export function decryptPersonnummer(encrypted: string): string {
+  // Tolerate legacy/unencrypted rows. A raw 12-digit personnummer (written by
+  // a path that skipped encryptPersonnummer, e.g. the v1 REST create route
+  // before this fix, or a seed) would otherwise be sliced as iv/ciphertext/tag
+  // and throw ERR_CRYPTO_INVALID_AUTH_TAG ("Invalid authentication tag length:
+  // 6"), 500-ing every decrypt-on-read path (roster, salary runs, payslips,
+  // KU, AGI, MCP). Real ciphertext is 80 hex chars, so a 12-digit match is
+  // unambiguously plaintext. Return it as-is and warn so the backfill can find
+  // and re-encrypt it. Value is never logged. See DECISIONS.md.
+  if (/^\d{12}$/.test(encrypted)) {
+    logger.warn('decryptPersonnummer received an unencrypted personnummer; returning as-is (row needs backfill)')
+    return encrypted
+  }
+
   const key = getEncryptionKey()
   const ivHex = encrypted.slice(0, IV_LENGTH * 2)
   const authTagHex = encrypted.slice(-TAG_LENGTH * 2)

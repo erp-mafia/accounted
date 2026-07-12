@@ -26,7 +26,7 @@ const isoDate = z.string().refine(
 
 const BulkMissingSchema = z.object({
   period_id: z.string().uuid().nullable().optional(),
-  // Single uppercase verifikationsserie (A–Z); the list sends null for "all".
+  // Single uppercase verifikationsserie (A-Z); the list sends null for "all".
   series: z.string().regex(/^[A-Z]$/).nullable().optional(),
   date_from: isoDate.nullable().optional(),
   date_to: isoDate.nullable().optional(),
@@ -40,7 +40,7 @@ const BulkMissingSchema = z.object({
 /**
  * Mark every posted, document-requiring verifikat that currently lacks an
  * underlag AND matches the active list filters (period / series / date / search)
- * as "Inget underlag krävs" — across all pages, in one action. This is the
+ * as "Inget underlag krävs", across all pages, in one action. This is the
  * scalable remedy for the "thousands of saknade underlag after a migration"
  * problem; the per-entry batch route handles selective marking.
  *

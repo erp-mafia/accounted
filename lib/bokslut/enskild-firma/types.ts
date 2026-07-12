@@ -1,5 +1,5 @@
 /**
- * EF tax mechanisms are declaration-only — they NEVER produce journal
+ * EF tax mechanisms are declaration-only: they NEVER produce journal
  * entries. The shapes here are intentionally distinct from the AB
  * `ProposedDisposition` to make the booking distinction visible at the
  * type level: every EF calculator returns an `EfDeclarationItem` and the

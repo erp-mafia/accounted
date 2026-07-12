@@ -61,12 +61,12 @@ Settings stored in `extension_data` table with composite key `(user_id, extensio
 
 ## Complexity Spectrum
 
-**Level 1 — Pure UI** (no surfaces, workspace reads core data):
+**Level 1: Pure UI** (no surfaces, workspace reads core data):
 ```typescript
 export const calendarExtension: Extension = { id: 'calendar', name: 'Kalender', version: '1.0.0' }
 ```
 
-**Level 2 — Event handler only:**
+**Level 2: Event handler only:**
 ```typescript
 export const loggerExtension: Extension = {
   id: 'example-logger', name: 'Logger', version: '1.0.0',
@@ -74,13 +74,13 @@ export const loggerExtension: Extension = {
 }
 ```
 
-**Level 3 — Service provider** (registers at module load):
+**Level 3: Service provider** (registers at module load):
 ```typescript
 registerEmailService(new ResendEmailService())
 export const emailExtension: Extension = { id: 'email', name: 'Email', version: '1.0.0' }
 ```
 
-**Level 4 — Full extension** (events + API + settings + mappingRules + onInstall):
+**Level 4: Full extension** (events + API + settings + mappingRules + onInstall):
 ```typescript
 export const receiptOcrExtension: Extension = {
   id: 'receipt-ocr', name: 'Receipt OCR', version: '1.0.0', sector: 'general',

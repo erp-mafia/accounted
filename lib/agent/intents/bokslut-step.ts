@@ -2,7 +2,7 @@ import { defineAgentIntent } from './types'
 import { OPUS_MODEL } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
-// bokslut.step — "Fråga [namn]" inside the year-end (bokslut) wizard.
+// bokslut.step: "Fråga [namn]" inside the year-end (bokslut) wizard.
 //
 // Bokslut is where users feel the most stress: many decisions (periodisering,
 // avskrivningar, dispositioner, tax provision), each with K2/K3 implications,
@@ -13,7 +13,7 @@ import { renderAgentGroundRules } from './shared-rules'
 // asset-accounting. Heavy load by design; this is when the user wants the
 // full reasoning depth.
 //
-// Opus per plan §8 V1 #6 — multi-step reasoning across rules + balances.
+// Opus per plan §8 V1 #6: multi-step reasoning across rules + balances.
 
 interface BokslutStepArgs {
   // The bokslut wizard's step id, e.g. 'accruals', 'depreciation',
@@ -70,7 +70,7 @@ export const bokslutStep = defineAgentIntent<BokslutStepArgs, CapturedBokslutSte
   model: OPUS_MODEL,
 
   capture: async ({ step_id, fiscal_year_end }, { supabase, companyId }) => {
-    // Find the latest non-locked fiscal period (the one being closed) — or
+    // Find the latest non-locked fiscal period (the one being closed): or
     // the one matching fiscal_year_end if supplied.
     let query = supabase
       .from('fiscal_periods')
@@ -115,7 +115,7 @@ export const bokslutStep = defineAgentIntent<BokslutStepArgs, CapturedBokslutSte
     lines.push('')
     lines.push(renderAgentGroundRules())
     lines.push('')
-    lines.push('Arbetssätt — hjälp användaren genom STEGET de står i:')
+    lines.push('Arbetssätt: hjälp användaren genom STEGET de står i:')
     lines.push('1. Kör gnubok_year_end_readiness för att se vad som saknas.')
     lines.push('2. Om steget är "accruals": använd gnubok_propose_accruals för periodiseringar och förklara varje förslag (när påverkar det BR/RR, varför detta belopp?).')
     lines.push('3. Om steget är "depreciation": gnubok_propose_annual_depreciation. Förklara planenlig vs. överavskrivning, K2 schablonregler vs. K3 individual.')
@@ -123,8 +123,8 @@ export const bokslutStep = defineAgentIntent<BokslutStepArgs, CapturedBokslutSte
     lines.push('5. Om steget är "arsredovisning": preview via gnubok_preview_arsredovisning, granska noter, förvaltningsberättelse, underskrifter, deadline.')
     lines.push('6. Om EF: använd gnubok_preview_ef_declaration. Räntefördelning, expansionsfond, NE-bilaga.')
     lines.push('')
-    lines.push('Var BFL-rigorös — bokslut är irreversibelt när det låses. Peka på risker innan du föreslår staging av en operation.')
-    lines.push('Svara på svenska. Ditt första svar är det första användaren ser — gå rakt på sak.')
+    lines.push('Var BFL-rigorös: bokslut är irreversibelt när det låses. Peka på risker innan du föreslår staging av en operation.')
+    lines.push('Svara på svenska. Ditt första svar är det första användaren ser: gå rakt på sak.')
     return lines.join('\n')
   },
 })

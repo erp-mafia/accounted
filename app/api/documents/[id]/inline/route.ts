@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
+import { contentDisposition } from '@/lib/api/content-disposition'
 
 /**
  * GET /api/documents/:id/inline
@@ -10,7 +11,7 @@ import { createServiceClient } from '@/lib/supabase/server'
  * an <iframe> or <img> tag.
  *
  * Supabase Storage signed URLs return `Content-Disposition: attachment`,
- * which browsers refuse to render inline — that triggers the
+ * which browsers refuse to render inline: that triggers the
  * "Det här innehållet har blockerats" error in journal entry previews.
  *
  * Defense in depth: the user's cookie-bound client authorizes access
@@ -31,7 +32,7 @@ const EXTENSION_MIME_MAP: Record<string, string> = {
  * `mime_type = null` or `application/octet-stream` (browsers sometimes
  * report empty File.type for files dragged from certain sources). Combined
  * with the new `X-Content-Type-Options: nosniff` header on this route,
- * that broke Chrome's PDF viewer for older rows — the plugin would load
+ * that broke Chrome's PDF viewer for older rows: the plugin would load
  * via <object type="application/pdf"> but refuse to parse a response
  * served as octet-stream. Falling back to the file extension covers every
  * legacy row without a DB backfill.
@@ -87,15 +88,16 @@ export async function GET(
     )
   }
 
-  const safeFileName = doc.file_name.replace(/[\r\n"]/g, '_')
-
   return new NextResponse(blob, {
     status: 200,
     headers: {
       'Content-Type': resolveContentType(doc.file_name, doc.mime_type),
-      'Content-Disposition': `inline; filename="${safeFileName}"`,
+      // RFC 5987 dual form: NFD filenames from macOS/iOS uploads contain
+      // combining marks (> 0xFF), which undici Headers reject as non-
+      // ByteString values; splicing the raw name here 500ed the route.
+      'Content-Disposition': contentDisposition('inline', doc.file_name),
       'Cache-Control': 'private, max-age=300',
-      // Block MIME sniffing — Content-Type is derived from DB metadata
+      // Block MIME sniffing: Content-Type is derived from DB metadata
       // (with extension fallback for legacy rows), never from response
       // content. Without nosniff a tampered file_name extension could
       // serve a stored document under an attacker-chosen MIME type.

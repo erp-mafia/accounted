@@ -7,7 +7,7 @@ const CHUNK_SIZE = 500
  * document required) by inserting rows into journal_entry_no_doc_required.
  *
  * The flag lives in a sidecar table so the verifikation itself stays immutable
- * per BFL — same write the single-entry route performs, just batched. Inserts
+ * per BFL: same write the single-entry route performs, just batched. Inserts
  * are chunked (Postgres/PostgREST payload safety) and idempotent: rows that
  * already exist are left untouched (`ignoreDuplicates`).
  *

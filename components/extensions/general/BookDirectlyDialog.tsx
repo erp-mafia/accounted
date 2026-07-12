@@ -15,10 +15,13 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Plus, Trash2, AlertTriangle, Search, Check } from 'lucide-react'
+import { Loader2, Plus, Trash2, AlertTriangle, Search, Check, BookmarkPlus } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
+import { TemplateForm } from '@/components/settings/TemplateForm'
+import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
@@ -29,7 +32,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
-import type { BASAccount, CashAccount, FiscalPeriod, InvoiceExtractionResult } from '@/types'
+import type { BASAccount, BookingTemplateLibrary, CashAccount, FiscalPeriod, InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
   id: string
@@ -67,17 +70,30 @@ interface FormLine {
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '' }
 
+// Swedish entity labels for the "Spara som mall" editor. Hard-coded to match
+// this dialog's Swedish-only surface (the shared TemplateForm handles the rest
+// of its own strings bilingually).
+const TEMPLATE_ENTITY_LABELS: Record<string, string> = {
+  all: 'Alla',
+  enskild_firma: 'Enskild firma',
+  aktiebolag: 'Aktiebolag',
+}
+
 interface Props {
   open: boolean
   onOpenChange: (v: boolean) => void
   item: InboxItem
+  /** Signed URL + mime of the inbox document, threaded from the workspace so
+      the underlag can be shown beside the form without an extra round-trip. */
+  docUrl?: string | null
+  docMime?: string | null
   onSuccess: () => void | Promise<void>
 }
 
 // Compute the prefill lines. Booking is always in SEK (BFL/BFNAR), so when
 // a transaction is selected and the document is in a foreign currency, the
 // transaction's SEK amount is the canonical figure. The cost-account row
-// stays blank — the user must pick a cost account themselves.
+// stays blank: the user must pick a cost account themselves.
 // bankAccount defaults to '1930' but is replaced by the resolved ledger account
 // once the cash-accounts fetch completes.
 function buildPrefillLines(
@@ -89,7 +105,7 @@ function buildPrefillLines(
   const docVat = item.extracted_data?.totals?.vatAmount ?? null
   const docCurrency = item.extracted_data?.invoice?.currency ?? 'SEK'
 
-  // Prefer the transaction amount when available — it's already in SEK and
+  // Prefer the transaction amount when available: it's already in SEK and
   // matches the bank movement we'll be marking as booked.
   const total = selectedTransactionAmount != null
     ? Math.abs(selectedTransactionAmount)
@@ -138,7 +154,7 @@ function buildPrefillLines(
 
 // Rank candidates by closeness to the underlag's SEK value. `targetSek` is the
 // document total already converted to SEK (the bank charge for a 216 USD
-// receipt is ~2 109 kr, not 216) — ranking against the raw foreign total used
+// receipt is ~2 109 kr, not 216): ranking against the raw foreign total used
 // to bury the real match far down the list. Null target → leave order intact.
 function rankBySekCloseness(
   rows: PickerTransaction[],
@@ -149,7 +165,7 @@ function rankBySekCloseness(
   return [...rows].sort((a, b) => Math.abs(txSekAmount(a) - abs) - Math.abs(txSekAmount(b) - abs))
 }
 
-export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess }: Props) {
+export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = null, docMime = null, onSuccess }: Props) {
   const { toast } = useToast()
   const { company } = useCompany()
 
@@ -161,7 +177,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
   // pending, or unsupported.
   const [fxRate, setFxRate] = useState<number | null>(null)
 
-  // null = fetch pending; array = loaded (may be empty on error — falls back to '1930')
+  // null = fetch pending; array = loaded (may be empty on error: falls back to '1930')
   const [cashAccounts, setCashAccounts] = useState<CashAccount[] | null>(null)
 
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
@@ -181,7 +197,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
   // pattern of gating JournalEntryForm on bankAccount !== null.
   const [lines, setLines] = useState<FormLine[]>(() => buildPrefillLines(item))
 
-  // Transaction picker — optional selection.
+  // Transaction picker: optional selection.
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(
     item.matched_transaction_id
   )
@@ -191,8 +207,14 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
 
   const [isSubmitting, setIsSubmitting] = useState(false)
 
+  // "Spara som mall" — derive amount-parameterised template lines from the
+  // current konteringsrader so the user can save the pattern they just worked
+  // out. Labels come from the loaded BAS chart; the user reviews/edits in the
+  // shared TemplateForm before saving.
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false)
+
   // Reset state when a different item opens the dialog. We pass bankAccount
-  // here but it may still be null (fetch in flight) — in that case '1930' is
+  // here but it may still be null (fetch in flight): in that case '1930' is
   // used as a placeholder and the prefill-update effect below will overwrite
   // the settlement line once the fetch resolves.
   useEffect(() => {
@@ -226,7 +248,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
         const rate = body?.data?.rate
         if (typeof rate === 'number' && rate > 0) setFxRate(rate)
       })
-      .catch(() => { /* leave null — ranking falls back to face amounts */ })
+      .catch(() => { /* leave null: ranking falls back to face amounts */ })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, targetCurrency, item.id])
@@ -247,14 +269,14 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
         setCashAccounts((json.data ?? []) as CashAccount[])
       })
       .catch(() => {
-        // Fall back to empty list — resolveAccount will return '1930'
+        // Fall back to empty list: resolveAccount will return '1930'
         if (!cancelled) setCashAccounts([])
       })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, item.id])
 
-  // SEK-equivalent of the underlag total — the anchor for ranking candidates.
+  // SEK-equivalent of the underlag total: the anchor for ranking candidates.
   const targetSek = useMemo(() => {
     if (targetAmount == null) return null
     if (targetCurrency === 'SEK') return targetAmount
@@ -264,7 +286,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
 
   // When the user picks a transaction (or the toggle changes), re-derive
   // the prefilled amounts so foreign-currency invoices follow the SEK
-  // figure on the actual bank movement. Normalised to SEK — a foreign bank
+  // figure on the actual bank movement. Normalised to SEK: a foreign bank
   // row is booked at its SEK value, never its face amount.
   const selectedTransactionAmount = useMemo(() => {
     if (!selectedTransactionId) return null
@@ -287,7 +309,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     return targetCurrency
   }, [selectedTransactionId, transactions, targetCurrency])
 
-  // Resolved bank account — null while the cash-accounts fetch is in flight.
+  // Resolved bank account: null while the cash-accounts fetch is in flight.
   // Derived from the cash accounts list; falls back to '1930' if the list is
   // empty or no single-currency match exists.
   const bankAccount = useMemo<string | null>(() => {
@@ -300,10 +322,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     if (!open) return
     // Update amounts when the transaction selection or resolved bank account
     // changes, but preserve user-entered account numbers. This handles "user
-    // typed cost account, then picked an SEK-denominated transaction" — we
+    // typed cost account, then picked an SEK-denominated transaction": we
     // want the SEK figure to flow into the line amounts without forgetting
     // their account pick. bankAccount may be null while the fetch is in flight;
-    // pass '1930' as a safe placeholder in that case — the effect re-runs once
+    // pass '1930' as a safe placeholder in that case: the effect re-runs once
     // the fetch resolves and bankAccount becomes non-null.
     setLines((current) => {
       const next = buildPrefillLines(item, selectedTransactionAmount, bankAccount ?? '1930')
@@ -353,7 +375,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     }
   }, [entryDate, periods, periodId])
 
-  // Fetch unmatched transactions whenever the dialog opens — the picker
+  // Fetch unmatched transactions whenever the dialog opens: the picker
   // is always visible now (selection is optional).
   useEffect(() => {
     if (!open) return
@@ -398,7 +420,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
   }, [rankedTransactions, txSearch])
 
   // Pin the already-selected/matched transaction to the top so it's always
-  // visible — otherwise a correct match that ranks past the rendered cap looks
+  // visible: otherwise a correct match that ranks past the rendered cap looks
   // unselected and the user re-picks it. The pinned row carries a "Matchad"
   // badge when it's the one matched in the inbox.
   const displayedTransactions = useMemo(() => {
@@ -421,6 +443,19 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
     }
   }, [lines])
 
+  // Account number → BAS name, so derived template lines get meaningful labels.
+  const accountNameMap = useMemo(
+    () => Object.fromEntries(accounts.map((a) => [a.account_number, a.account_name])),
+    [accounts],
+  )
+
+  // Template lines derived from the current booking. Empty (<2 usable lines)
+  // disables the "Spara som mall" button.
+  const derivedTemplateLines = useMemo(
+    () => deriveTemplateLinesFromBooking(lines, accountNameMap),
+    [lines, accountNameMap],
+  )
+
   const updateLine = useCallback((idx: number, patch: Partial<FormLine>) => {
     setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)))
   }, [])
@@ -435,7 +470,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
 
   // Replace the line set with a booking template's computed rows. The picker
   // hands back JournalEntryForm-shaped lines; we keep only the three fields
-  // book-direct posts. A meaningful supplier description is preserved — the
+  // book-direct posts. A meaningful supplier description is preserved: the
   // template name only fills an empty field.
   const handleTemplateApply = useCallback(
     (
@@ -511,7 +546,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
       onOpenChange(false)
     } catch (err) {
       if (err instanceof Error && err.message === 'cancelled') {
-        // User dismissed the activation dialog — no toast needed
+        // User dismissed the activation dialog: no toast needed
       } else {
         const anyErr = err as { body?: unknown; status?: number }
         toast({
@@ -530,7 +565,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Bokför direkt</DialogTitle>
           <DialogDescription>
@@ -538,7 +573,20 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-6 pt-2">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,560px)]">
+          {/* Document column: sticky on desktop so the underlag stays visible
+              while the form scrolls; stacks above the form on smaller screens. */}
+          <div className="h-[45vh] lg:sticky lg:top-0 lg:h-[72vh] lg:self-start">
+            <DocumentViewerPane
+              documentId={item.document_id}
+              mime={docMime}
+              downloadUrl={docUrl}
+              className="h-full"
+            />
+          </div>
+
+          {/* Booking form */}
+          <div className="space-y-6 pt-2">
           {/* Metadata row */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-1.5">
@@ -571,7 +619,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
                         : null
                     return (
                       <SelectItem key={p.id} value={p.id}>
-                        {p.period_start} – {p.period_end}
+                        {p.period_start}: {p.period_end}
                         {lockState && ` (${lockState})`}
                       </SelectItem>
                     )
@@ -592,13 +640,13 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
             />
           </div>
 
-          {/* Transaction picker — always shown, selection is optional. */}
+          {/* Transaction picker: always shown, selection is optional. */}
           <div className="rounded-lg border p-4 space-y-3">
             <div className="space-y-0.5">
               <Label className="text-sm">Koppla till banktransaktion (valfritt)</Label>
               <p className="text-xs text-muted-foreground">
                 Välj en transaktion om dokumentet motsvarar en redan-bokad
-                bankhändelse — den bokas då samtidigt. Lämna tom för en
+                bankhändelse: den bokas då samtidigt. Lämna tom för en
                 fristående verifikation.
               </p>
             </div>
@@ -634,7 +682,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
                           <button
                             type="button"
                             className={cn(
-                              'w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left text-sm transition-colors',
+                              'w-full flex items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors',
                               isSelected
                                 ? 'bg-primary/10 border-l-2 border-primary'
                                 : 'border-l-2 border-transparent hover:bg-accent/40'
@@ -722,7 +770,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
             {targetCurrency !== 'SEK' && selectedTransactionAmount != null && (
               <p className="text-[11px] text-muted-foreground">
                 Underlaget är i {targetCurrency}. Bokföringen sker i SEK enligt
-                transaktionens belopp. Momsraden har lämnats bort — vid behov
+                transaktionens belopp. Momsraden har lämnats bort: vid behov
                 lägg till en rad för omvänd skattskyldighet manuellt.
               </p>
             )}
@@ -823,6 +871,21 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
                       : targetSek ?? undefined
                   }
                 />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowSaveTemplate(true)}
+                  disabled={isSubmitting || derivedTemplateLines.length < 2}
+                  title={
+                    derivedTemplateLines.length < 2
+                      ? 'Fyll i minst två konteringsrader med konto och belopp'
+                      : undefined
+                  }
+                >
+                  <BookmarkPlus className="h-3.5 w-3.5 mr-1.5" />
+                  Spara som mall
+                </Button>
               </div>
               {totals.balanced ? (
                 <Badge variant="success" className="text-[11px]">
@@ -887,6 +950,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
               </Button>
             </div>
           </div>
+          </div>
         </div>
       </DialogContent>
       <ActivateAccountsDialog
@@ -895,6 +959,45 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, onSuccess
         onConfirm={confirmActivation}
         onCancel={cancelActivation}
       />
+
+      {/* Save the current kontering as a reusable template. Amounts are stored
+          as ratios of the total, so the user picks a fresh amount when applying
+          the mall later. The shared TemplateForm re-seeds from the derived lines
+          each time the dialog opens (Radix unmounts its content when closed). */}
+      <Dialog open={showSaveTemplate} onOpenChange={setShowSaveTemplate}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Spara som bokföringsmall</DialogTitle>
+            <DialogDescription>
+              Spara den här konteringen som en återanvändbar mall. Beloppen sparas
+              som andelar av totalsumman — du anger ett nytt belopp när du använder
+              mallen. Kontrollera raderna nedan innan du sparar.
+            </DialogDescription>
+          </DialogHeader>
+          {showSaveTemplate && (
+            <TemplateForm
+              mode="create"
+              entityLabels={TEMPLATE_ENTITY_LABELS}
+              initialTemplate={{
+                id: '',
+                company_id: null,
+                team_id: null,
+                created_by: null,
+                name: description.trim(),
+                description: '',
+                category: 'other',
+                entity_type: company?.entity_type ?? 'all',
+                lines: derivedTemplateLines,
+                is_system: false,
+                is_active: true,
+                created_at: '',
+                updated_at: '',
+              } satisfies BookingTemplateLibrary}
+              onSaved={() => setShowSaveTemplate(false)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </Dialog>
   )
 }

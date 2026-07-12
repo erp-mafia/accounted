@@ -2,7 +2,7 @@
  * Typed access to the generated taxonomy concept registry.
  *
  * The registry JSON is generated from the official element lists by
- * scripts/generate-taxonomy-registry.ts — never edit it by hand. CI guards
+ * scripts/generate-taxonomy-registry.ts: never edit it by hand. CI guards
  * staleness via `npm run taxonomy:check`.
  *
  * Taxonomy versions are data, not code: each version is its own generated
@@ -52,7 +52,7 @@ export function getRegistry(id: string): TaxonomyRegistry {
   const registry = REGISTRIES[id]
   if (!registry) {
     throw new Error(
-      `Unknown taxonomy registry "${id}" — known: ${Object.keys(REGISTRIES).join(', ')}`,
+      `Unknown taxonomy registry "${id}": known: ${Object.keys(REGISTRIES).join(', ')}`,
     )
   }
   return registry

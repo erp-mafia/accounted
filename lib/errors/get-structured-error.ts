@@ -8,7 +8,7 @@
  *   - message_en gives the agent a translation it can act on without parsing
  *     Swedish tokens
  *   - remediation, when present, points the agent at a tool/args/resource
- *     that fixes the problem. Optional — only set when there's a clear
+ *     that fixes the problem. Optional: only set when there's a clear
  *     mechanical next step
  *
  * Both MCP and REST consume this. errorResponse() below produces the standard
@@ -28,6 +28,7 @@ import {
   CannotCorrectNonPostedError,
   CannotReverseNonPostedError,
   CannotReverseStornoError,
+  DimensionValidationError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
   FiscalPeriodNotFoundError,
@@ -50,11 +51,60 @@ export interface StructuredError {
   message_en: string
   remediation?: StructuredErrorRemediation
   /**
-   * Present (true) only when the failure is transient. Agents may retry the
-   * same request after a short backoff. Absent or false means the request
-   * will fail the same way until inputs or system state change.
+   * ALWAYS present. `true` → transient failure: the identical request may
+   * succeed after a short backoff (pair with idempotency_key on staging
+   * tools). `false` → permanent for these inputs: retrying is wasted work
+   * until arguments or system state change. From the registry entry when the
+   * code declares it; otherwise inferred by isTransientFailure().
    */
-  retryable?: boolean
+  retryable: boolean
+}
+
+// Postgres SQLSTATEs that indicate a transient condition: the same statement
+// can succeed on retry without any input change.
+const TRANSIENT_SQLSTATES = new Set([
+  '40001', // serialization_failure
+  '40P01', // deadlock_detected
+  '57014', // query_canceled (statement timeout)
+  '57P03', // cannot_connect_now
+  '53300', // too_many_connections
+  '53400', // configuration_limit_exceeded
+  '55P03', // lock_not_available
+  '08000', // connection_exception
+  '08003', // connection_does_not_exist
+  '08006', // connection_failure
+])
+
+const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 502, 503, 504, 522, 524])
+
+// Message-level signatures for transient failures. Tools commonly wrap DB
+// errors as plain `Error(\`Database error: ${message}\`)`, losing the
+// SQLSTATE: these patterns survive that wrapping.
+const TRANSIENT_MESSAGE_PATTERNS = [
+  /fetch failed/i,
+  /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN/,
+  /socket hang up/i,
+  /deadlock detected/i,
+  /could not serialize access/i,
+  /canceling statement due to statement timeout/i,
+  /connection terminated/i,
+  /too many clients/i,
+  /rate limit/i,
+  /timed out/i,
+]
+
+function isTransientFailure(error: unknown, message: string): boolean {
+  if (typeof error === 'object' && error !== null) {
+    const obj = error as Record<string, unknown>
+    const inner = typeof obj.error === 'object' && obj.error !== null ? (obj.error as Record<string, unknown>) : undefined
+    for (const c of [obj.code, inner?.code]) {
+      if (typeof c === 'string' && TRANSIENT_SQLSTATES.has(c)) return true
+    }
+    for (const s of [obj.status, obj.statusCode]) {
+      if (typeof s === 'number' && TRANSIENT_HTTP_STATUSES.has(s)) return true
+    }
+  }
+  return TRANSIENT_MESSAGE_PATTERNS.some((re) => re.test(message))
 }
 
 interface StructuredErrorOptions {
@@ -137,7 +187,11 @@ export function getStructuredError(
   const message_en = extractEnglishMessage(error)
   const message_sv = getErrorMessage(error)
 
-  const code = extractCode(error) ?? inferCode(message_en) ?? 'UNKNOWN_ERROR'
+  const transient = isTransientFailure(error, message_en)
+  let code = extractCode(error) ?? inferCode(message_en) ?? 'UNKNOWN_ERROR'
+  // Nothing more specific matched but the failure is transient: surface the
+  // stable TRANSIENT_ERROR code so agents can dispatch on it.
+  if (code === 'UNKNOWN_ERROR' && transient) code = 'TRANSIENT_ERROR'
 
   const entry = getErrorEntry(code)
   let remediation = entry?.remediation
@@ -155,7 +209,9 @@ export function getStructuredError(
     message_sv,
     message_en,
     ...(remediation ? { remediation } : {}),
-    ...(entry?.retryable ? { retryable: true } : {}),
+    // Registry declaration wins; otherwise the transient inference decides.
+    // Always explicit: agents must never have to distinguish absent from false.
+    retryable: entry?.retryable ?? transient,
   }
 }
 
@@ -191,6 +247,22 @@ interface ErrorResponseContext {
 
 interface MinimalLogger {
   error: (msg: string, ...args: unknown[]) => void
+  warn?: (msg: string, ...args: unknown[]) => void
+}
+
+/**
+ * 4xx outcomes are expected request failures (auth, validation, domain
+ * guards) — log them at warn so Vercel's runtime-error clustering surfaces
+ * only genuine 5xx. Falls back to error when the caller's logger has no warn.
+ */
+function logAtLevel(
+  log: MinimalLogger,
+  httpStatus: number,
+  msg: string,
+  ...args: unknown[]
+): void {
+  if (httpStatus < 500 && log.warn) log.warn(msg, ...args)
+  else log.error(msg, ...args)
 }
 
 function entryFor(code: string): StructuredErrorEntry {
@@ -257,12 +329,12 @@ export function errorResponse(
   log: MinimalLogger,
   ctx: ErrorResponseContext = {},
 ): NextResponse {
-  // 1. Bookkeeping domain errors — route through the registry, preserving
+  // 1. Bookkeeping domain errors: route through the registry, preserving
   //    the structured details each typed error class carries.
   if (isBookkeepingError(err)) {
     const { code, details } = extractBookkeepingDetails(err)
-    log.error(code, err as Error, { requestId: ctx.requestId })
     const entry = entryFor(code)
+    logAtLevel(log, entry.httpStatus, code, err as Error, { requestId: ctx.requestId })
     return buildResponse(code, entry, ctx.requestId, details ?? ctx.details)
   }
 
@@ -273,7 +345,7 @@ export function errorResponse(
       message: i.message,
       code: i.code,
     }))
-    log.error('validation failed', err as Error, {
+    logAtLevel(log, 400, 'validation failed', err as Error, {
       requestId: ctx.requestId,
       issueCount: issues.length,
     })
@@ -285,27 +357,31 @@ export function errorResponse(
   // 3. Postgres errors
   if (isPostgresError(err)) {
     const mapped = postgresCodeToStructured(err.code)
+    if (mapped) {
+      const entry = entryFor(mapped)
+      logAtLevel(log, entry.httpStatus, 'database error', err as unknown as Error, {
+        requestId: ctx.requestId,
+        pgCode: err.code,
+      })
+      const details = mergeDetails({ pgCode: err.code }, ctx.details)
+      return buildResponse(mapped, entry, ctx.requestId, details)
+    }
     log.error('database error', err as unknown as Error, {
       requestId: ctx.requestId,
       pgCode: err.code,
     })
-    if (mapped) {
-      const entry = entryFor(mapped)
-      const details = mergeDetails({ pgCode: err.code }, ctx.details)
-      return buildResponse(mapped, entry, ctx.requestId, details)
-    }
   }
 
   // 4. Errors with a known structured code on them
   const code = extractCode(err)
   if (code && getErrorEntry(code)) {
     const entry = entryFor(code)
-    log.error(`${code}`, err instanceof Error ? err : new Error(String(err)), { requestId: ctx.requestId })
     const status = ctx.status ?? entry.httpStatus
+    logAtLevel(log, status, `${code}`, err instanceof Error ? err : new Error(String(err)), { requestId: ctx.requestId })
     return buildResponse(code, { ...entry, httpStatus: status }, ctx.requestId, ctx.details)
   }
 
-  // 5. Fallback — log the actual error so we can still debug
+  // 5. Fallback: log the actual error so we can still debug
   log.error('unhandled error', err instanceof Error ? err : new Error(String(err)), {
     requestId: ctx.requestId,
   })
@@ -366,6 +442,9 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
   if (err instanceof MeaninglessCorrectionError) {
     return { code: err.code, details: { reason: err.reason } }
   }
+  if (err instanceof DimensionValidationError) {
+    return { code: err.code, details: { issues: err.issues } }
+  }
   if (err instanceof NoOpenPeriodForDateError) {
     return { code: err.code, details: { date: err.date } }
   }
@@ -404,7 +483,7 @@ function buildResponse(
 
 /**
  * Construct an envelope-shaped error directly from a code (when the route
- * already knows the failure mode). Skips dispatch — useful inside a handler
+ * already knows the failure mode). Skips dispatch: useful inside a handler
  * that wants the standard shape without throwing.
  */
 export function errorResponseFromCode(
@@ -413,8 +492,8 @@ export function errorResponseFromCode(
   ctx: ErrorResponseContext & { reason?: string } = {},
 ): NextResponse {
   const entry = entryFor(code)
-  log.error(code, ctx.reason ?? entry.message_en, { requestId: ctx.requestId })
   const status = ctx.status ?? entry.httpStatus
+  logAtLevel(log, status, code, ctx.reason ?? entry.message_en, { requestId: ctx.requestId })
   return buildResponse(
     code,
     {

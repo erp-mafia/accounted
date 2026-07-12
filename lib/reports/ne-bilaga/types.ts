@@ -44,23 +44,23 @@ export interface NEDeclaration {
     }>
     total: number
   }>
-  // Company info for SRU
+  // Company info for SRU (orgNumber for enskild firma is the owner's personnummer)
   companyInfo: {
     companyName: string
     orgNumber: string | null
+    addressLine1: string | null
+    postalCode: string | null
+    city: string | null
+    email: string | null
   }
   // Warnings
   warnings: string[]
 }
 
-// SRU file format types
-export interface SRURecord {
-  fieldCode: string
-  value: string | number
-}
-
-export interface SRUFile {
-  records: SRURecord[]
+// A complete SRU submission: two files (INFO.SRU + BLANKETTER.SRU), ISO 8859-1 encoded by the route.
+export interface SRUSubmission {
+  infoSru: string
+  blanketterSru: string
   generatedAt: string
 }
 

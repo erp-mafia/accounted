@@ -21,7 +21,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { listEndpoints } from '../registry'
-// Side-effect import — every route file's registerEndpoint() runs at
+// Side-effect import: every route file's registerEndpoint() runs at
 // module load time and populates the shared ENDPOINTS map.
 import '../load-routes'
 
@@ -30,7 +30,7 @@ describe('v1 spec snapshot', () => {
 
   it('matches the recorded endpoint count', () => {
     // Update intentionally when adding/removing endpoints. The count is
-    // the cheapest first-line check — if it changes unexpectedly, CI
+    // the cheapest first-line check: if it changes unexpectedly, CI
     // surfaces the surprise before reviewers have to spot it in the diff.
     expect(endpoints.length).toMatchSnapshot('endpoint-count')
   })
@@ -53,7 +53,7 @@ describe('v1 spec snapshot', () => {
     // The /docs/api/reference pages and /llms-full.txt aggregator both
     // assume every endpoint registers complete metadata. A registerEndpoint
     // call that omits any of these fields would render a page with empty
-    // sections — surface the omission here instead.
+    // sections: surface the omission here instead.
     for (const ep of endpoints) {
       const ctx = `${ep.method} ${ep.path}`
       expect(ep.summary, `${ctx}: missing summary`).toBeTruthy()
@@ -66,9 +66,9 @@ describe('v1 spec snapshot', () => {
 
       // Defense-in-depth: every endpoint MUST explicitly declare its
       // scope (or the literal sentinel `null` for genuinely public
-      // endpoints — e.g. /api/v1/health). `undefined` means the
+      // endpoints: e.g. /api/v1/health). `undefined` means the
       // registerEndpoint call silently dropped the field, which would
-      // make the wrapper treat the route as unauthenticated. CC6.3 —
+      // make the wrapper treat the route as unauthenticated. CC6.3:
       // surfacing the omission in CI prevents accidental public
       // exposure of new endpoints.
       expect(

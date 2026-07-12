@@ -9,6 +9,7 @@ import {
   fetchReceivingEmail,
   fetchInboundAttachment,
   extractLocalPartForDomain,
+  parseRecipients,
   isEmailReceivedEvent,
   ResendSignatureError,
 } from './lib/resend-inbound'
@@ -17,6 +18,14 @@ import {
   getActiveInbox,
   composeInboxAddress,
 } from './lib/inbox-provisioning'
+import {
+  claimCustomDomain,
+  checkCustomDomainVerification,
+  removeCustomDomain,
+  getCustomDomain,
+  findCompanyForRecipientDomains,
+  applyDomainStatusFromWebhook,
+} from './lib/custom-domains'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
@@ -24,7 +33,10 @@ import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema } from '@/lib/api/schemas'
+import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
+import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
+import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { simpleParser } from 'mailparser'
@@ -54,7 +66,7 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024
 const MAX_ATTACHMENTS_PER_EMAIL = 20
 
 // AI extraction is tuned for single-page receipts/invoices. Documents above
-// this page count tend to be sales reports, bank statements, or contracts —
+// this page count tend to be sales reports, bank statements, or contracts:
 // Bedrock churns for minutes and still extracts nothing useful (issue #553).
 // Above the limit we skip extraction entirely; the document still lands in
 // the inbox and can be attached to a transaction or converted manually.
@@ -62,7 +74,7 @@ const MAX_PAGES_FOR_AUTO_EXTRACT = 3
 
 // Returns the page count for a PDF buffer, or null if the buffer isn't a
 // parseable PDF. Errors fall through so callers can treat "unknown" the same
-// as "small enough" — preserves today's behavior on malformed inputs.
+// as "small enough": preserves today's behavior on malformed inputs.
 async function countPdfPages(buffer: ArrayBuffer): Promise<number | null> {
   try {
     const pdf = await PDFDocument.load(buffer, { updateMetadata: false })
@@ -74,7 +86,7 @@ async function countPdfPages(buffer: ArrayBuffer): Promise<number | null> {
 
 // Sandbox companies (24h anonymous demo accounts) skip the Bedrock extraction
 // pipeline entirely. The document still uploads, the inbox row still lands,
-// and the user can fill the fields in by hand — but no Claude tokens are
+// and the user can fill the fields in by hand, but no Claude tokens are
 // spent on a throwaway account. See migration 20260311120000 for the column.
 async function isSandboxCompany(
   supabase: import('@supabase/supabase-js').SupabaseClient,
@@ -90,14 +102,14 @@ async function isSandboxCompany(
 }
 
 // Partial-update schema for the /items/:id/fields PATCH route. Only the
-// scalar fields the UI exposes for inline editing — line items and
+// scalar fields the UI exposes for inline editing: line items and
 // vatBreakdown stay AI-managed for now and are preserved by the merge.
 const NullableString = z.string().trim().max(500).nullable()
 const NullableDate = z
   .string()
   .regex(
     /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/,
-    'Invalid date — expected YYYY-MM-DD'
+    'Invalid date: expected YYYY-MM-DD'
   )
   // Catch impossible calendar dates like 2026-02-30 that pass the regex.
   .refine((v) => !Number.isNaN(Date.parse(v)), 'Invalid calendar date')
@@ -122,7 +134,7 @@ const UpdateExtractedDataSchema = z.object({
       invoiceDate: NullableDate,
       dueDate: NullableDate,
       paymentReference: NullableString,
-      // ISO 4217 — three uppercase letters. We accept the user's edit only
+      // ISO 4217: three uppercase letters. We accept the user's edit only
       // if it looks like a real currency code; loose strings would otherwise
       // flow into the supplier-invoice-creation step and produce a faktura
       // with an invalid currency (cf. ML 17 kap 24§ p.9).
@@ -139,6 +151,27 @@ const UpdateExtractedDataSchema = z.object({
     .partial()
     .optional(),
 })
+
+// Claim body for POST /inbox/domain. Length-capped only: real validation
+// (punycode, hostname shape, blocklist) lives in normalizeInboundDomain /
+// validateClaimableDomain so the same rules apply to every caller.
+const ClaimDomainSchema = z.object({
+  domain: z.string().trim().min(1).max(255),
+})
+
+// Custom inbound domains are fully built but deliberately not exposed,
+// product decision 2026-07-02: the default is the Fortnox-style shared
+// address (+ user-side forwarding); own-domain inbound waits for real demand.
+// Flip INBOX_CUSTOM_DOMAINS_ENABLED=true to re-enable the /inbox/domain
+// routes. The globe entry point in InvoiceInboxWorkspace was removed at the
+// same time. Restore it when re-enabling.
+const customDomainsEnabled = () => process.env.INBOX_CUSTOM_DOMAINS_ENABLED === 'true'
+
+const customDomainsDisabledResponse = () =>
+  NextResponse.json(
+    { error: 'Egen domän är inte tillgänglig.', code: 'FEATURE_DISABLED' },
+    { status: 403 }
+  )
 
 const UPLOAD_ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -209,22 +242,30 @@ async function uploadAndExtract(
   // skip extraction. Bedrock would otherwise block the upload response for
   // minutes on a 6-page sales report and return nothing useful. Images and
   // non-PDFs are never gated (single-page by definition). countPdfPages
-  // returns null on malformed PDFs — we treat null as "not gated" and fall
+  // returns null on malformed PDFs: we treat null as "not gated" and fall
   // through to the existing extraction path so today's behavior is preserved.
   const pageCount =
     file.type === 'application/pdf' ? await countPdfPages(file.buffer) : null
   const gatedByPageCount =
     pageCount != null && pageCount > MAX_PAGES_FOR_AUTO_EXTRACT
   const sandbox = await isSandboxCompany(supabase, companyId)
-  // Skip-reason priority: sandbox > page-count > client opt-out. Sandbox
-  // wins because it's a hard cost-control rule, not a heuristic.
-  const skipReason: 'too_many_pages' | 'client_opt_out' | 'sandbox' | null = sandbox
-    ? 'sandbox'
-    : gatedByPageCount
-      ? 'too_many_pages'
-      : opts.skipExtraction
-        ? 'client_opt_out'
-        : null
+  // Paid-tier gate: AI document OCR (Bedrock, via extractInvoiceFields) is the
+  // `ai` capability. A company without it (free/manual tier) must never trigger
+  // paid extraction: we seed an empty skeleton exactly like the sandbox / BYO-
+  // extraction path, so the document is still stored and can be filled in
+  // manually. Highest priority (a hard paywall rule, not a heuristic).
+  const hasAiEntitlement = await hasCapability(supabase, companyId, CAPABILITY.ai)
+  // Skip-reason priority: no-AI-entitlement > sandbox > page-count > client opt-out.
+  const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'client_opt_out' | 'sandbox' | null =
+    !hasAiEntitlement
+      ? 'no_ai_entitlement'
+      : sandbox
+        ? 'sandbox'
+        : gatedByPageCount
+          ? 'too_many_pages'
+          : opts.skipExtraction
+            ? 'client_opt_out'
+            : null
   const skipExtraction = skipReason !== null
 
   // Bring-your-own-extraction: skip the Bedrock call entirely and seed an
@@ -626,14 +667,14 @@ export const invoiceInboxExtension: Extension = {
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
-        // Rate-limit BYO extraction the same way fresh uploads are limited —
+        // Rate-limit BYO extraction the same way fresh uploads are limited:
         // both paths inject extracted_data into invoice_inbox_items, so an
         // unbounded BYO loop is the same abuse surface as an upload flood
         // (ISO 27001 A.8.12, data-injection guard).
         const rl = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
         if (!rl.ok) {
           return NextResponse.json(
-            { error: `För många förfrågningar — försök igen om en stund.` },
+            { error: `För många förfrågningar, försök igen om en stund.` },
             {
               status: 429,
               headers: rl.retryAfterSec ? { 'Retry-After': String(rl.retryAfterSec) } : undefined,
@@ -646,7 +687,7 @@ export const invoiceInboxExtension: Extension = {
           const json = await request.json()
           // ExtractionSchema doesn't include `confidence` (the AI path tacks
           // it on after parsing). BYO data gets 0.95 so downstream UI can
-          // distinguish it from a perfect AI parse — financial-data
+          // distinguish it from a perfect AI parse: financial-data
           // provenance per ISO 27001 A.8.12.
           const parsed = ExtractionSchema.parse(json)
           extracted = { ...parsed, confidence: 0.95 }
@@ -719,7 +760,7 @@ export const invoiceInboxExtension: Extension = {
 
         // Audit the BYO override so financial-data provenance is traceable
         // (GDPR Art. 5(1)(f), SOC 2 CC9.2). Failure logged but never blocks
-        // the response — the override has already happened.
+        // the response: the override has already happened.
         try {
           await appendProcessingHistory({
             companyId: ctx.companyId,
@@ -779,7 +820,7 @@ export const invoiceInboxExtension: Extension = {
 
         if (!item) return NextResponse.json({ error: 'Inbox item not found' }, { status: 404 })
         if (item.created_supplier_invoice_id) {
-          return NextResponse.json({ error: 'Redan bokfört — kan inte ersätta bilden.' }, { status: 409 })
+          return NextResponse.json({ error: 'Redan bokfört, kan inte ersätta bilden.' }, { status: 409 })
         }
         if (item.document_id) {
           return NextResponse.json({ error: 'Posten har redan en bilaga.' }, { status: 409 })
@@ -795,7 +836,7 @@ export const invoiceInboxExtension: Extension = {
             upload_source: 'file_upload',
           })
 
-          // Same page-count gate as /upload (issue #553) — attaching a 6-page
+          // Same page-count gate as /upload (issue #553): attaching a 6-page
           // sales report to an existing inbox row should not block on Bedrock.
           // Sandbox companies skip Bedrock unconditionally.
           const pageCount =
@@ -803,11 +844,18 @@ export const invoiceInboxExtension: Extension = {
           const gatedByPageCount =
             pageCount != null && pageCount > MAX_PAGES_FOR_AUTO_EXTRACT
           const sandbox = await isSandboxCompany(ctx.supabase, ctx.companyId)
-          const skipReason: 'too_many_pages' | 'sandbox' | null = sandbox
-            ? 'sandbox'
-            : gatedByPageCount
-              ? 'too_many_pages'
-              : null
+          // Paid-tier gate: no `ai` capability → no Bedrock OCR (seed empty
+          // skeleton; the attached document is still stored). Same paywall as
+          // the shared upload path above.
+          const hasAiEntitlement = await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.ai)
+          const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'sandbox' | null =
+            !hasAiEntitlement
+              ? 'no_ai_entitlement'
+              : sandbox
+                ? 'sandbox'
+                : gatedByPageCount
+                  ? 'too_many_pages'
+                  : null
           const skipExtraction = skipReason !== null
 
           const { data: extracted } = skipExtraction
@@ -961,7 +1009,7 @@ export const invoiceInboxExtension: Extension = {
         }
 
         // Fetch the inbox item's document_id so we can mirror it to
-        // transactions.document_id below — the TransactionInboxCard reads
+        // transactions.document_id below: the TransactionInboxCard reads
         // that column to decide whether to show the paperclip/file-check
         // indicators on the /transactions list. Without this, a row that
         // has a matched inbox item still appears doc-less in the UI.
@@ -1095,7 +1143,7 @@ export const invoiceInboxExtension: Extension = {
         if (!item) return NextResponse.json({ error: 'Inbox item not found' }, { status: 404 })
         if (item.created_supplier_invoice_id) {
           return NextResponse.json(
-            { error: 'Redan bokfört — kan inte köra om tolkningen.' },
+            { error: 'Redan bokfört, kan inte köra om tolkningen.' },
             { status: 409 },
           )
         }
@@ -1104,6 +1152,13 @@ export const invoiceInboxExtension: Extension = {
             { error: 'Ingen bilaga att tolka om.' },
             { status: 400 },
           )
+        }
+
+        // Paid-tier gate: retry is an explicit "run AI OCR now" action, so a
+        // company without the `ai` capability is hard-blocked (403) rather than
+        // silently emptied: there is nothing to retry without the entitlement.
+        if (!(await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.ai))) {
+          return capabilityBlockedResponse(CAPABILITY.ai)
         }
 
         if (await isSandboxCompany(ctx.supabase, ctx.companyId)) {
@@ -1151,7 +1206,7 @@ export const invoiceInboxExtension: Extension = {
               error_message: null,
               extracted_data: extracted as unknown as Record<string, unknown>,
               // Retry is user-initiated and bypasses the page-count gate by
-              // design — the user explicitly opted into the slow path.
+              // design: the user explicitly opted into the slow path.
               extraction_skipped: false,
             })
             .eq('id', id)
@@ -1263,6 +1318,123 @@ export const invoiceInboxExtension: Extension = {
       },
     },
 
+    // ── Custom inbound domain: read current state ────────────
+    {
+      method: 'GET',
+      path: '/inbox/domain',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        if (!customDomainsEnabled()) return customDomainsDisabledResponse()
+
+        try {
+          const row = await getCustomDomain(ctx.supabase, ctx.companyId)
+          // null when the company has no custom domain: the UI renders the
+          // claim form in that case.
+          return NextResponse.json({ data: row })
+        } catch (err) {
+          return NextResponse.json(
+            { error: err instanceof Error ? err.message : 'Failed to load domain' },
+            { status: 500 }
+          )
+        }
+      },
+    },
+
+    // ── Custom inbound domain: claim (admin/owner only) ──────
+    {
+      method: 'POST',
+      path: '/inbox/domain',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        if (!customDomainsEnabled()) return customDomainsDisabledResponse()
+
+        const isAdmin = await isCompanyAdmin(ctx.supabase, ctx.userId, ctx.companyId)
+        if (!isAdmin) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
+
+        // Sandbox companies are anonymous 24h demo accounts: letting them
+        // register domains in our Resend account is a pure abuse vector.
+        if (await isSandboxCompany(ctx.supabase, ctx.companyId)) {
+          return NextResponse.json(
+            { error: 'Egen domän är inte tillgänglig i sandlådan.' },
+            { status: 403 }
+          )
+        }
+
+        // Claiming hits the Resend domains API: share the per-company inbox
+        // quota so a claim/delete loop can't burn the provider budget.
+        const limit = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
+        if (!limit.ok) {
+          return NextResponse.json(
+            { error: 'För många förfrågningar, försök igen om en stund.', retry_after: limit.retryAfterSec },
+            { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } },
+          )
+        }
+
+        let body: z.infer<typeof ClaimDomainSchema>
+        try {
+          body = ClaimDomainSchema.parse(await request.json())
+        } catch (err) {
+          return NextResponse.json(
+            { error: err instanceof Error ? err.message : 'Invalid request body' },
+            { status: 400 }
+          )
+        }
+
+        const result = await claimCustomDomain(ctx.supabase, ctx.companyId, body.domain)
+        if (!result.ok) {
+          return NextResponse.json({ error: result.error }, { status: result.status })
+        }
+        return NextResponse.json({ data: result.data })
+      },
+    },
+
+    // ── Custom inbound domain: re-check verification ─────────
+    {
+      method: 'POST',
+      path: '/inbox/domain/verify',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        if (!customDomainsEnabled()) return customDomainsDisabledResponse()
+
+        const isAdmin = await isCompanyAdmin(ctx.supabase, ctx.userId, ctx.companyId)
+        if (!isAdmin) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
+
+        // verify() triggers a DNS check at Resend: rate-limit the button.
+        const limit = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
+        if (!limit.ok) {
+          return NextResponse.json(
+            { error: 'För många kontroller, försök igen om en stund.', retry_after: limit.retryAfterSec },
+            { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } },
+          )
+        }
+
+        const result = await checkCustomDomainVerification(ctx.supabase, ctx.companyId)
+        if (!result.ok) {
+          return NextResponse.json({ error: result.error }, { status: result.status })
+        }
+        return NextResponse.json({ data: result.data })
+      },
+    },
+
+    // ── Custom inbound domain: remove (admin/owner only) ─────
+    {
+      method: 'DELETE',
+      path: '/inbox/domain',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        if (!customDomainsEnabled()) return customDomainsDisabledResponse()
+
+        const isAdmin = await isCompanyAdmin(ctx.supabase, ctx.userId, ctx.companyId)
+        if (!isAdmin) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
+
+        const result = await removeCustomDomain(ctx.supabase, ctx.companyId)
+        if (!result.ok) {
+          return NextResponse.json({ error: result.error }, { status: result.status })
+        }
+        return NextResponse.json({ data: result.data })
+      },
+    },
+
     // ── Resend Inbound webhook (Svix-signed, no user auth) ──
     {
       method: 'POST',
@@ -1288,44 +1460,87 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'Verification failed' }, { status: 500 })
         }
 
+        // Resend pushes domain.* lifecycle events to the same webhook. Apply
+        // domain.updated to custom-domain rows so verification flips without
+        // the user pressing "Kontrollera igen" (requires the event type to be
+        // subscribed on the Resend webhook; harmless when it isn't).
+        if (event.type === 'domain.updated') {
+          const domainServiceSupabase = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!
+          )
+          const matched = await applyDomainStatusFromWebhook(domainServiceSupabase, {
+            id: event.data.id,
+            status: event.data.status,
+            records: event.data.records,
+          })
+          return NextResponse.json({ data: { domain_updated: matched } })
+        }
+
         if (!isEmailReceivedEvent(event)) {
           return NextResponse.json({ data: { ignored: event.type } }, { status: 200 })
         }
 
         const { email_id, to, from, subject, message_id, created_at } = event.data
 
-        const localPart = extractLocalPartForDomain(to, domain)
-        if (!localPart) {
-          console.warn('[invoice-inbox/inbound] No recipient matched domain', { to, domain })
-          return NextResponse.json({ error: 'No matching recipient' }, { status: 404 })
-        }
-
         const serviceSupabase = createClient(
           process.env.NEXT_PUBLIC_SUPABASE_URL!,
           process.env.SUPABASE_SERVICE_ROLE_KEY!
         )
 
-        const { data: inbox } = await serviceSupabase
-          .from('company_inboxes')
-          .select('id, company_id, status')
-          .eq('local_part', localPart)
-          .maybeSingle()
+        // Recipient → company resolution. Shared-domain addresses first
+        // (existing local_part flow), then per-company verified custom
+        // domains. Custom domains are catch-all by design: MX routing is
+        // per-domain, and a supplier typing fakturor@ instead of faktura@
+        // must land in the inbox rather than silently vanish (Resend has
+        // already accepted the message; there is no bounce path).
+        let companyId: string | null = null
+        let sharedInboxStatus: string | null = null
 
-        if (!inbox) {
-          return NextResponse.json({ error: 'Address not found' }, { status: 404 })
+        const localPart = extractLocalPartForDomain(to, domain)
+        if (localPart) {
+          const { data: inbox } = await serviceSupabase
+            .from('company_inboxes')
+            .select('id, company_id, status')
+            .eq('local_part', localPart)
+            .maybeSingle()
+          if (inbox) {
+            sharedInboxStatus = inbox.status
+            if (inbox.status === 'active') companyId = inbox.company_id
+          }
         }
-        if (inbox.status !== 'active') {
-          return NextResponse.json({ error: 'Address no longer active' }, { status: 410 })
+
+        if (!companyId) {
+          const customDomains = parseRecipients(to)
+            .map((r) => r.domain)
+            .filter((d) => d !== domain.toLowerCase())
+          if (customDomains.length > 0) {
+            const match = await findCompanyForRecipientDomains(serviceSupabase, customDomains)
+            if (match) companyId = match.companyId
+          }
+        }
+
+        if (!companyId) {
+          // Preserve the pre-custom-domain status semantics: 410 for a
+          // deprecated/blocked shared address, 404 otherwise.
+          if (sharedInboxStatus && sharedInboxStatus !== 'active') {
+            return NextResponse.json({ error: 'Address no longer active' }, { status: 410 })
+          }
+          console.warn('[invoice-inbox/inbound] No recipient matched', { to, domain })
+          return NextResponse.json(
+            { error: localPart ? 'Address not found' : 'No matching recipient' },
+            { status: 404 }
+          )
         }
 
         const { data: company } = await serviceSupabase
           .from('companies')
           .select('created_by')
-          .eq('id', inbox.company_id)
+          .eq('id', companyId)
           .single()
 
         if (!company?.created_by) {
-          console.error('[invoice-inbox/inbound] Company has no created_by', inbox.company_id)
+          console.error('[invoice-inbox/inbound] Company has no created_by', companyId)
           return NextResponse.json({ error: 'Company owner missing' }, { status: 500 })
         }
         const userId = company.created_by
@@ -1343,13 +1558,13 @@ export const invoiceInboxExtension: Extension = {
         const rawAttachments = fullEmail.attachments ?? []
 
         // Per-company rate limit (30/min, 500/day). Same Postgres-backed
-        // RPC as /upload. Acknowledge + drop on cap — returning 429 to
+        // RPC as /upload. Acknowledge + drop on cap: returning 429 to
         // Resend would just consume more budget via their retry.
-        const limit = await checkInboxUploadRateLimit(serviceSupabase, inbox.company_id)
+        const limit = await checkInboxUploadRateLimit(serviceSupabase, companyId)
         if (!limit.ok) {
           try {
             await appendProcessingHistory({
-              companyId: inbox.company_id,
+              companyId,
               correlationId: email_id,
               aggregateType: 'System',
               aggregateId: email_id,
@@ -1379,7 +1594,7 @@ export const invoiceInboxExtension: Extension = {
         if (truncatedCount > 0) {
           try {
             await appendProcessingHistory({
-              companyId: inbox.company_id,
+              companyId,
               correlationId: email_id,
               aggregateType: 'System',
               aggregateId: email_id,
@@ -1401,7 +1616,7 @@ export const invoiceInboxExtension: Extension = {
 
         if (attachments.length === 0) {
           await serviceSupabase.from('invoice_inbox_items').insert({
-            company_id: inbox.company_id,
+            company_id: companyId,
             user_id: userId,
             status: 'error',
             source: 'email',
@@ -1419,7 +1634,7 @@ export const invoiceInboxExtension: Extension = {
         const results: Array<{ attachment_id: string; inbox_item_id?: string; error?: string; duplicate?: boolean }> = []
 
         // Persist a "rejected" inbox row so the user has visibility into the drop.
-        // Without this, attachments that fail MIME validation vanish silently —
+        // Without this, attachments that fail MIME validation vanish silently,
         // a common Gmail "forward as attachment" foot-gun until we added .eml
         // handling below.
         const logRejection = async (
@@ -1434,7 +1649,7 @@ export const invoiceInboxExtension: Extension = {
           // oversized values when read back into the UI / audit trails.
           try {
             await serviceSupabase.from('invoice_inbox_items').insert({
-              company_id: inbox.company_id,
+              company_id: companyId,
               user_id: userId,
               status: 'error',
               source: 'email',
@@ -1505,7 +1720,7 @@ export const invoiceInboxExtension: Extension = {
                 const innerResult = await uploadAndExtract(
                   serviceSupabase,
                   userId,
-                  inbox.company_id,
+                  companyId,
                   { name: innerName, buffer: innerArrayBuffer, type: innerType },
                   'email',
                   {
@@ -1537,7 +1752,7 @@ export const invoiceInboxExtension: Extension = {
             const result = await uploadAndExtract(
               serviceSupabase,
               userId,
-              inbox.company_id,
+              companyId,
               { name: download.filename, buffer: download.buffer, type: download.contentType },
               'email',
               {
@@ -1650,7 +1865,7 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'Supplier not found' }, { status: 404 })
         }
 
-        // Periodisering requires faktureringsmetoden — mirror the main
+        // Periodisering requires faktureringsmetoden: mirror the main
         // /api/supplier-invoices guard so kontantmetod companies never store
         // accrual fields the booking would silently ignore.
         const hasAccrualItems = body.items.some(
@@ -1658,7 +1873,7 @@ export const invoiceInboxExtension: Extension = {
         )
         if (hasAccrualItems && body.reverse_charge) {
           // Omvänd skattskyldighet: the expense line carries the VAT base for
-          // rutor 20–32 — deferring the net to a 17xx interim account would
+          // rutor 20-32: deferring the net to a 17xx interim account would
           // corrupt the momsdeklaration. Same guard as /api/supplier-invoices.
           return errorResponseFromCode('SI_CREATE_ACCRUAL_REVERSE_CHARGE', ctx.log)
         }
@@ -1699,7 +1914,7 @@ export const invoiceInboxExtension: Extension = {
             vat_code: bodyItem.vat_code || null,
             vat_rate: vatRate,
             vat_amount: vatAmount,
-            // Self-assessed RC rate (0.06/0.12/0.25) or null — engine defaults
+            // Self-assessed RC rate (0.06/0.12/0.25) or null: engine defaults
             // to 25% huvudregeln when null for a reverse-charge invoice.
             reverse_charge_rate: body.reverse_charge ? (bodyItem.reverse_charge_rate ?? null) : null,
             // Periodisering: frozen onto the line; the balance account
@@ -1761,7 +1976,7 @@ export const invoiceInboxExtension: Extension = {
 
         if (invoiceError || !invoice) {
           // A unique-index hit on (company_id, supplier_id,
-          // supplier_invoice_number) is a recoverable conflict — the user
+          // supplier_invoice_number) is a recoverable conflict: the user
           // already registered this invoice (often manually, then tried to
           // convert the same inbox document). Mirror the main
           // /api/supplier-invoices route and return a friendly 409 with the
@@ -1777,7 +1992,7 @@ export const invoiceInboxExtension: Extension = {
             // supplier_invoices SELECT policy is
             // `company_id IN (SELECT user_company_ids())`. Combined with the
             // explicit company_id filter below, this lookup can only ever
-            // resolve an invoice the caller's own company owns — the returned
+            // resolve an invoice the caller's own company owns: the returned
             // details are never cross-tenant (OWASP ASVS V8.2.1; ISO 27001
             // A.8.3; GDPR art.25(2)).
             const { data: existing } = await ctx.supabase
@@ -1878,7 +2093,7 @@ export const invoiceInboxExtension: Extension = {
 
               if (hasAccrualItems) {
                 // Schedules + catch-up dissolutions for deferred lines. Never
-                // fatal — the registration entry is committed; failures are
+                // fatal: the registration entry is committed; failures are
                 // retried/surfaced via the periodiseringar page.
                 const idBySortOrder = new Map(
                   ((insertedItems ?? []) as Array<{ id: string; sort_order: number }>).map(
@@ -1922,7 +2137,7 @@ export const invoiceInboxExtension: Extension = {
             // Engine threw (period lock, unbalanced entry, etc.) instead of
             // cleanly returning null. Roll back the supplier invoice so the inbox
             // item is never marked converted against an unbooked invoice (an orphan
-            // understating 2440/2641), then surface the error — mirroring the main
+            // understating 2440/2641), then surface the error: mirroring the main
             // /api/supplier-invoices route's registration catch.
             await ctx.supabase
               .from('supplier_invoices')
@@ -1976,7 +2191,7 @@ export const invoiceInboxExtension: Extension = {
     },
 
     // ── Book inbox item directly as a manual journal entry ─
-    // For kontantmetoden users (and ad-hoc receipts) — bypasses the
+    // For kontantmetoden users (and ad-hoc receipts): bypasses the
     // supplier-invoice flow entirely. Optionally links to a bank
     // transaction; otherwise produces a standalone verifikation
     // (e.g. private outlay, cash receipt). The source document is
@@ -2079,7 +2294,7 @@ export const invoiceInboxExtension: Extension = {
           )
         }
 
-        // Link the source document to the new entry. Best-effort — the
+        // Link the source document to the new entry. Best-effort: the
         // entry itself is already posted; surfacing the failure shouldn't
         // roll it back, but log so support can re-link manually.
         if (item.document_id) {
@@ -2112,7 +2327,7 @@ export const invoiceInboxExtension: Extension = {
         }
 
         // Mark the inbox item as resolved by writing the FK. The status
-        // column is intentionally left at 'received' — terminal state is
+        // column is intentionally left at 'received': terminal state is
         // encoded via created_journal_entry_id / matched_transaction_id
         // (see migration 20260504180000_invoice_inbox_remove_ai_columns).
         const { error: updateError } = await ctx.supabase
@@ -2127,7 +2342,7 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: updateError.message }, { status: 500 })
         }
 
-        // The engine already emits journal_entry.committed — no need to
+        // The engine already emits journal_entry.committed: no need to
         // re-emit. Transaction categorization is implicit: the entry is
         // already source-linked to the transaction via source_type.
 
@@ -2136,6 +2351,49 @@ export const invoiceInboxExtension: Extension = {
             journal_entry: journalEntry,
             inbox_item_id: id,
             transaction_id: transaction?.id ?? null,
+          },
+        })
+      },
+    },
+
+    // ── Bulk-book selected inbox items (Modell B) ─────────────
+    // "Bokför valda" in the Underlag selection bar. Each selected item is
+    // booked against its matched bank transaction (which already carries the
+    // SEK amount) using one shared category + VAT treatment: individual
+    // verifikat, not a samlingsverifikation. Unmatched / already-booked /
+    // supplier-invoice-linked items are skipped, not errored, so the batch is
+    // resilient. Reuses the same categorize core as the single-item agent flow,
+    // so reverse-charge moms on foreign services is handled correctly.
+    {
+      method: 'POST',
+      path: '/items/bulk-book',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        let body: z.infer<typeof BulkBookInboxSchema>
+        try {
+          const json = await request.json()
+          body = BulkBookInboxSchema.parse(json)
+        } catch (err) {
+          return NextResponse.json(
+            { error: err instanceof Error ? err.message : 'Invalid request body' },
+            { status: 400 }
+          )
+        }
+
+        const { booked, skipped } = await bulkBookMatchedInboxItems(
+          ctx.supabase,
+          ctx.userId,
+          ctx.companyId,
+          body,
+        )
+
+        return NextResponse.json({
+          data: {
+            booked_count: booked.length,
+            skipped_count: skipped.length,
+            booked,
+            skipped,
           },
         })
       },

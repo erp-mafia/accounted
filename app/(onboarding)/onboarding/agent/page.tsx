@@ -2,12 +2,14 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { headers } from 'next/headers'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { hasCapability } from '@/lib/entitlements/has-capability'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ensureTicSnapshot } from '@/lib/agent/composer/tic-fetch'
 import AgentOnboarding from '@/components/onboarding/agent/AgentOnboarding'
 
 export const dynamic = 'force-dynamic'
 
-// /onboarding/agent — Phase A (real-timed build) and Phase B (review) of the
+// /onboarding/agent: Phase A (real-timed build) and Phase B (review) of the
 // specialized accountant agent build sequence.
 //
 // Plan refs: dev_docs/specialized-agent-plan.md §7 (Build-sequence UX),
@@ -21,76 +23,86 @@ export default async function AgentOnboardingPage() {
   const companyId = await getActiveCompanyId(supabase, user.id)
   if (!companyId) redirect('/onboarding')
 
-  // Sandbox companies ship with a pre-built verified agent_profile — the
+  // Paywall: the build flow drives the gated composer stream (ai capability).
+  // Send non-payers to billing where the assistant is pitched, instead of a
+  // build sequence that 403s mid-stream.
+  if (!(await hasCapability(supabase, companyId, CAPABILITY.ai))) {
+    redirect('/settings/billing')
+  }
+
+  // Everything that doesn't depend on the TIC snapshot loads in one batch:
+  // the settings row (carrying the is_sandbox gate + the onboarding-form
+  // data, moms_period, fiscal_year_start_month, f_skatt, city, …, that
+  // never makes it onto `companies` proper), the greeting profile, any
+  // existing agent profile, and the atom registry titles ("Konsult It"-style
+  // slug labels look ugly; the registry has them as authored).
+  const [
+    { data: settings },
+    { data: profile },
+    { data: existingProfile },
+    { data: atomRows },
+    hdrs,
+  ] = await Promise.all([
+    supabase
+      .from('company_settings')
+      .select(
+        'is_sandbox, city, address_line1, postal_code, f_skatt, vat_registered, moms_period, fiscal_year_start_month, employee_count, has_employees',
+      )
+      .eq('company_id', companyId)
+      .maybeSingle(),
+    supabase.from('profiles').select('full_name').eq('id', user.id).single(),
+    supabase
+      .from('agent_profiles')
+      .select('company_id, profile_summary, verified_at')
+      .eq('company_id', companyId)
+      .maybeSingle(),
+    supabase
+      .from('agent_atom_registry')
+      .select('id, title')
+      .eq('is_active', true)
+      .is('parent_atom_id', null), // skill titles only; reference children never appear as profile chips
+    headers(),
+  ])
+
+  // Sandbox companies ship with a pre-built verified agent_profile: the
   // build flow on this page would call TIC and the gated composer stream,
   // both of which 403. Send them back to the dashboard where the demo
   // assistant is already visible via the sheet preview.
-  const { data: settingsForSandbox } = await supabase
-    .from('company_settings')
-    .select('is_sandbox')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (settingsForSandbox?.is_sandbox) redirect('/')
+  if (settings?.is_sandbox) redirect('/')
 
   // Trigger the TIC live-fetch + cache before the field-resolving query
   // below. ensureTicSnapshot is fast on cache-hit (single SELECT) and
-  // best-effort on miss — it never throws. Phase A still runs through the
+  // best-effort on miss: it never throws. Phase A still runs through the
   // streaming endpoint; this just lets the initial Phase B render show the
   // SNI/verksamhetsbeskrivning when the user returns to the page after
   // stream completion.
-  const hdrs = await headers()
   const cookieHeader = hdrs.get('cookie') ?? ''
   const host = hdrs.get('host') ?? 'localhost:3000'
   const proto = hdrs.get('x-forwarded-proto') ?? (host.startsWith('localhost') ? 'http' : 'https')
   const origin = `${proto}://${host}`
   // upgradeV1: this is the one place the v2-only sections (statuses,
   // beneficialOwners, payrolls, …) materially drive the composer, and it's
-  // a deliberate once-per-company action — safe to spend the TIC calls to
+  // a deliberate once-per-company action: safe to spend the TIC calls to
   // bring a pre-v2 snapshot up to date.
   await ensureTicSnapshot({ supabase, companyId, cookieHeader, origin, upgradeV1: true })
 
   // Fetch the small handful of fields we render directly into Phase B so the
   // user sees real values (not "Laddar…") the moment the stream finishes.
-  // company_settings is a separate fetch because it carries the onboarding-
-  // form data (moms_period, fiscal_year_start_month, f_skatt, city, …) that
-  // never makes it onto `companies` proper.
-  const [{ data: company }, { data: profile }, { data: existingProfile }, { data: settings }] =
-    await Promise.all([
-      supabase
-        .from('companies')
-        .select('name, entity_type, org_number, tic_snapshot')
-        .eq('id', companyId)
-        .single(),
-      supabase.from('profiles').select('full_name').eq('id', user.id).single(),
-      supabase
-        .from('agent_profiles')
-        .select('company_id, profile_summary, verified_at')
-        .eq('company_id', companyId)
-        .maybeSingle(),
-      supabase
-        .from('company_settings')
-        .select(
-          'city, address_line1, postal_code, f_skatt, vat_registered, moms_period, fiscal_year_start_month, employee_count, has_employees',
-        )
-        .eq('company_id', companyId)
-        .maybeSingle(),
-    ])
+  // Must run AFTER ensureTicSnapshot, it reads the tic_snapshot that call
+  // may have just written.
+  const { data: company } = await supabase
+    .from('companies')
+    .select('name, entity_type, org_number, tic_snapshot')
+    .eq('id', companyId)
+    .single()
 
   if (!company) redirect('/onboarding')
 
   const firstName = profile?.full_name?.split(' ')[0] ?? null
-  // Pre-render-friendly snapshot of company info — used to seed Phase B fields
+  // Pre-render-friendly snapshot of company info: used to seed Phase B fields
   // before the stream completes so the layout doesn't jump.
   const initialFields = buildInitialFields(company, settings)
 
-  // Atom titles — slug-derived labels look ugly ("Konsult It",
-  // "Single Shareholder Ab Fmb"). Fetch the registry titles once and pass them
-  // to the review card so chips render as authored.
-  const { data: atomRows } = await supabase
-    .from('agent_atom_registry')
-    .select('id, title')
-    .eq('is_active', true)
-    .is('parent_atom_id', null) // skill titles only; reference children never appear as profile chips
   const atomTitles: Record<string, string> = {}
   for (const row of (atomRows ?? []) as { id: string; title: string }[]) {
     atomTitles[row.id] = row.title
@@ -111,7 +123,7 @@ export default async function AgentOnboardingPage() {
 
 interface InitialFields {
   entity_type_label: string
-  // Multiple SNI codes — most companies have one but some are
+  // Multiple SNI codes: most companies have one but some are
   // multi-vertical (e.g. konsult + lagerförsäljning).
   sni_codes: { code: string; name: string }[]
   // Verksamhetsbeskrivning (purpose) from Bolagsverket via TIC.
@@ -190,7 +202,7 @@ function buildInitialFields(
     if (settings.moms_period) {
       vatPeriod = momsPeriodLabel(settings.moms_period)
     }
-    // settings.fiscal_year_start_month is the user-confirmed value — only
+    // settings.fiscal_year_start_month is the user-confirmed value: only
     // overwrite the TIC-derived label if the user has explicitly set it
     // (i.e. when there was no TIC fiscalYear AND they entered it manually).
     if (!fiscalPeriod && settings.fiscal_year_start_month != null) {
@@ -240,7 +252,7 @@ function momsPeriodLabel(period: string): string {
   }
 }
 
-// "fiscal_year_start_month=1" → "januari–december".
+// "fiscal_year_start_month=1" → "januari-december".
 function fiscalYearLabel(startMonth: number): string {
   const months = [
     'januari',
@@ -259,5 +271,5 @@ function fiscalYearLabel(startMonth: number): string {
   if (startMonth < 1 || startMonth > 12) return ''
   const startIdx = startMonth - 1
   const endIdx = (startIdx + 11) % 12
-  return `${months[startIdx]}–${months[endIdx]}`
+  return `${months[startIdx]}-${months[endIdx]}`
 }

@@ -3,7 +3,7 @@
  *   - quickstart: send your first invoice (high-leverage onboarding path)
  *   - webhooks: end-to-end webhook setup with sig verification + retry handling
  *   - ingest-bank-transactions: bank file → categorised + invoice-matched
- *   - file-vat-declaration: compute rutor 05–62, reconcile against GL,
+ *   - file-vat-declaration: compute rutor 05-62, reconcile against GL,
  *     manual submission to Skatteverket (includes 2026-04-01 livsmedel
  *     12% → 6% rate-change transition)
  *   - run-payroll-and-agi: draft → calculate → approve → mark-paid →
@@ -32,7 +32,7 @@ interface CookbookEntry {
 export const COOKBOOK: CookbookEntry[] = [
   {
     slug: 'quickstart',
-    title: 'Quickstart — send your first invoice',
+    title: 'Quickstart: send your first invoice',
     markdown: QUICKSTART_MD,
     description: 'Five minutes from a fresh sandbox to an emailed invoice.',
   },
@@ -64,7 +64,7 @@ export const COOKBOOK: CookbookEntry[] = [
     slug: 'file-vat-declaration',
     title: 'Compute and review a VAT declaration',
     markdown: COOKBOOK_VAT_DECLARATION_MD,
-    description: 'Compute momsdeklaration rutor 05–62 and reconcile against the GL before manual submission to Skatteverket. Includes the 2026-04-01 livsmedel 12% → 6% rate-change transition.',
+    description: 'Compute momsdeklaration rutor 05-62 and reconcile against the GL before manual submission to Skatteverket. Includes the 2026-04-01 livsmedel 12% → 6% rate-change transition.',
   },
   {
     slug: 'run-payroll-and-agi',
@@ -95,7 +95,7 @@ export function buildPlaceholderMd(entry: CookbookEntry): string {
     '',
     '## Coming soon',
     '',
-    `This narrative cookbook recipe is in the queue alongside the Phase 6 PR-3 hardening work. The endpoints are live and documented — start from the [reference page](${link?.href ?? '/docs/api/reference'}) below and the [quickstart](/docs/api/cookbook/quickstart) for the auth + idempotency + dry-run patterns; the recipe will be a guided narrative on top.`,
+    `This narrative cookbook recipe is in the queue alongside the Phase 6 PR-3 hardening work. The endpoints are live and documented: start from the [reference page](${link?.href ?? '/docs/api/reference'}) below and the [quickstart](/docs/api/cookbook/quickstart) for the auth + idempotency + dry-run patterns; the recipe will be a guided narrative on top.`,
     '',
     link
       ? `**Reference:** [${link.label}](${link.href})`
@@ -103,7 +103,7 @@ export function buildPlaceholderMd(entry: CookbookEntry): string {
     '',
     '**Related cookbooks already shipped:**',
     '',
-    '- [Quickstart — send your first invoice](/docs/api/cookbook/quickstart)',
+    '- [Quickstart: send your first invoice](/docs/api/cookbook/quickstart)',
     '- [Set up webhooks and verify signatures](/docs/api/cookbook/webhooks)',
   ].join('\n')
 }

@@ -3,6 +3,11 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { UpdateRecurringScheduleSchema } from '@/lib/api/schemas'
+import {
+  computeInitialRunDate,
+  computeNextRunDate,
+  getStockholmDateHour,
+} from '@/lib/invoices/recurring-schedule-service'
 
 ensureInitialized()
 
@@ -67,6 +72,94 @@ export const PATCH = withRouteContext(
     const updateRow: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(scheduleFields)) {
       if (v !== undefined) updateRow[k] = v
+    }
+
+    // Turning auto_send on (or moving the schedule to another customer while
+    // it is on) requires the customer to have an email address; otherwise
+    // every cron run degrades to a draft + warning. Mirrors the create
+    // route's guard.
+    if (input.auto_send === true || input.customer_id !== undefined) {
+      const { data: current } = await supabase
+        .from('recurring_invoice_schedules')
+        .select('auto_send, customer_id')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .single()
+
+      if (!current) {
+        return NextResponse.json(
+          { error: 'Schedule not found', type: 'not_found' },
+          { status: 404 },
+        )
+      }
+
+      const effectiveAutoSend = input.auto_send ?? current.auto_send
+      if (effectiveAutoSend) {
+        const { data: customer } = await supabase
+          .from('customers')
+          .select('email')
+          .eq('id', input.customer_id ?? current.customer_id)
+          .eq('company_id', companyId)
+          .maybeSingle()
+
+        if (!customer?.email) {
+          return NextResponse.json(
+            {
+              error: 'Customer has no email address: automatic sending requires one',
+              type: 'validation_error',
+            },
+            { status: 400 },
+          )
+        }
+      }
+    }
+
+    // Recompute next_run_date when either the schedule is being reactivated
+    // (from a stale date) or its day-of-month actually changed via an edit.
+    if (input.status === 'active' || input.day_of_month !== undefined) {
+      const { data: existing } = await supabase
+        .from('recurring_invoice_schedules')
+        .select('next_run_date, day_of_month')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .single()
+
+      if (!existing) {
+        return NextResponse.json(
+          { error: 'Schedule not found', type: 'not_found' },
+          { status: 404 },
+        )
+      }
+
+      const reactivating = input.status === 'active'
+      const dayChanged =
+        input.day_of_month !== undefined && input.day_of_month !== existing.day_of_month
+      const effectiveDay = input.day_of_month ?? existing.day_of_month
+      const { date: todayStockholm } = getStockholmDateHour(new Date())
+      const stockholmToday = new Date(`${todayStockholm}T00:00:00Z`)
+
+      // Recompute to the next STRICTLY-future occurrence (never today, so an
+      // edit or reactivation can't trigger a same-hour surprise send; today's
+      // invoice is the explicit run-now action instead) when either:
+      //   - reactivating a schedule whose date already passed (e.g. the safety
+      //     pause when the send-hour cron shipped), or
+      //   - the day-of-month changed, so "Nästa körning" follows the new day.
+      // Editing other fields (name, items, time) leaves next_run_date alone,
+      // so an unrelated edit never skips an imminent send.
+      const staleOnReactivate = reactivating && existing.next_run_date <= todayStockholm
+      if (staleOnReactivate || dayChanged) {
+        const rolled = computeInitialRunDate(stockholmToday, effectiveDay)
+        updateRow.next_run_date =
+          rolled === todayStockholm
+            ? computeNextRunDate(stockholmToday, effectiveDay)
+            : rolled
+      }
+
+      // A conscious reactivation invalidates any lingering warning (the
+      // safety-pause note, or a stale failure from months ago).
+      if (reactivating) {
+        updateRow.last_run_warning = null
+      }
     }
 
     if (Object.keys(updateRow).length > 0) {
@@ -143,7 +236,7 @@ export const PATCH = withRouteContext(
             .insert(restoreRows)
           if (restoreError) {
             log.error(
-              'failed to restore schedule items after failed replace — schedule may be left empty',
+              'failed to restore schedule items after failed replace: schedule may be left empty',
               restoreError,
               { scheduleId: id },
             )

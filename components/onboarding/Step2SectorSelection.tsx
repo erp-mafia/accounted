@@ -22,7 +22,7 @@ export default function Step2SectorSelection({ onNext, onBack, isSaving }: Step2
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold">Vilken bransch verkar du inom?</h2>
+        <h2 className="text-lg">Vilken bransch verkar du inom?</h2>
         <p className="text-sm text-muted-foreground mt-1">
           Vi anpassar verktyg och tillägg baserat på din bransch. Du kan alltid ändra detta senare.
         </p>
@@ -36,7 +36,7 @@ export default function Step2SectorSelection({ onNext, onBack, isSaving }: Step2
             <Card
               key={sector.slug}
               className={cn(
-                'cursor-pointer transition-all',
+                'cursor-pointer transition-colors',
                 isSelected
                   ? 'border-primary ring-2 ring-primary/20'
                   : 'hover:border-primary/50'

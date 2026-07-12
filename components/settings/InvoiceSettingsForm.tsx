@@ -51,6 +51,22 @@ export function InvoiceSettingsForm({ settings }: InvoiceSettingsFormProps) {
       </div>
 
       <div className="space-y-2">
+        <Label htmlFor="next_arrival_number">{t('arrival_start_label')}</Label>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <Input
+            id="next_arrival_number"
+            name="next_arrival_number"
+            type="number"
+            min="1"
+            defaultValue={settings.next_arrival_number || 1}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {t('arrival_start_help')}
+        </p>
+      </div>
+
+      <div className="space-y-2">
         <Label htmlFor="invoice_default_notes">{t('default_notes_label')}</Label>
         <Textarea
           id="invoice_default_notes"

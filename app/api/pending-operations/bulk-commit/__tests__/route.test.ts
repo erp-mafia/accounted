@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import {
   createMockRequest,
   parseJsonResponse,
@@ -7,9 +8,12 @@ import {
 import { eventBus } from '@/lib/events/bus'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
+
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 vi.mock('@/lib/company/context', () => ({
@@ -17,8 +21,9 @@ vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
+const requireWriteMock = vi.fn()
 vi.mock('@/lib/auth/require-write', () => ({
-  requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+  requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
 const mockCommit = vi.fn()
@@ -56,11 +61,16 @@ describe('POST /api/pending-operations/bulk-commit', () => {
     vi.clearAllMocks()
     eventBus.clear()
     reset()
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
+    requireWriteMock.mockResolvedValue({ ok: true })
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
 
     const request = createMockRequest('/api/pending-operations/bulk-commit', {
       method: 'POST',
@@ -71,6 +81,22 @@ describe('POST /api/pending-operations/bulk-commit', () => {
 
     expect(status).toBe(401)
     expect(body).toEqual({ error: 'Unauthorized' })
+  })
+
+  it('returns 403 for a viewer without write permission', async () => {
+    requireWriteMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    })
+
+    const request = createMockRequest('/api/pending-operations/bulk-commit', {
+      method: 'POST',
+      body: { ids: [VALID_ID_1] },
+    })
+    const response = await POST(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(403)
   })
 
   it('returns 400 when ids array is empty', async () => {
@@ -182,7 +208,7 @@ describe('POST /api/pending-operations/bulk-commit', () => {
       {
         id: VALID_ID_2,
         status: 'skipped',
-        error: 'Hög risk — kräver individuellt godkännande',
+        error: 'Hög risk: kräver individuellt godkännande',
       },
     ])
     expect(body.data.summary).toEqual({

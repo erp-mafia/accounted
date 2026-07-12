@@ -4,7 +4,7 @@ import { validatePeriodDuration } from '@/lib/bookkeeping/validate-period-durati
 import type { FiscalPeriod, PeriodStatus } from '@/types'
 
 /**
- * Lock a fiscal period — prevents new journal entries from being posted.
+ * Lock a fiscal period: prevents new journal entries from being posted.
  * Requires: period exists, belongs to company, not already locked/closed.
  */
 export async function lockPeriod(
@@ -73,7 +73,7 @@ export async function lockPeriod(
 }
 
 /**
- * Unlock a fiscal period — clears `locked_at` so new entries can be posted.
+ * Unlock a fiscal period: clears `locked_at` so new entries can be posted.
  * Requires: period exists, belongs to company, is currently locked, not closed.
  */
 export async function unlockPeriod(
@@ -127,7 +127,7 @@ export async function unlockPeriod(
     action: 'UPDATE',
     table_name: 'fiscal_periods',
     record_id: fiscalPeriodId,
-    description: `Period unlocked: ${result.name} (${result.period_start} – ${result.period_end})`,
+    description: `Period unlocked: ${result.name} (${result.period_start} to ${result.period_end})`,
     old_state: { locked_at: priorLockedAt },
     new_state: { locked_at: null },
   })
@@ -141,7 +141,7 @@ export async function unlockPeriod(
 }
 
 /**
- * Close a fiscal period — marks it as permanently closed.
+ * Close a fiscal period: marks it as permanently closed.
  * Requires: period is locked AND closing_entry_id is set (year-end must run first).
  */
 export async function closePeriod(
@@ -215,7 +215,7 @@ export async function createNextPeriod(
     throw new Error('Current fiscal period not found')
   }
 
-  // Compute next period start (day after current end) in pure UTC — see
+  // Compute next period start (day after current end) in pure UTC, see
   // findNextPeriod for the DST off-by-one rationale.
   const nextStart = new Date(current.period_end + 'T00:00:00Z')
   nextStart.setUTCDate(nextStart.getUTCDate() + 1)
@@ -225,14 +225,14 @@ export async function createNextPeriod(
   // can be longer/shorter than 12 months per BFL 3 kap.
   const nextEnd = new Date(nextStart)
   nextEnd.setUTCMonth(nextEnd.getUTCMonth() + 12)
-  // Go to last day of the previous month — setUTCDate(0) rolls back into
+  // Go to last day of the previous month: setUTCDate(0) rolls back into
   // the prior month's last day.
   nextEnd.setUTCDate(0)
 
   const nextStartStr = nextStart.toISOString().slice(0, 10)
   const nextEndStr = nextEnd.toISOString().slice(0, 10)
 
-  // Validate period duration — subsequent periods always start on 1st of month
+  // Validate period duration: subsequent periods always start on 1st of month
   const durationError = validatePeriodDuration(nextStartStr, nextEndStr, { isFirstPeriod: false })
   if (durationError) {
     throw new Error(durationError)
@@ -434,14 +434,14 @@ export interface PeriodStatusForDate {
   status: PeriodStatusValue
   /**
    * For `locked` status: either the period's `locked_at` timestamp (ISO) or the
-   * company-wide `bookkeeping_locked_through` date (ISO) — whichever applies.
+   * company-wide `bookkeeping_locked_through` date (ISO), whichever applies.
    * `null` for open/closed.
    */
   lock_date: string | null
 }
 
 /**
- * Resolve the period status for a given affärshändelse date — answers
+ * Resolve the period status for a given affärshändelse date: answers
  * "can a verifikation with this entry_date be posted right now?" using the
  * same two-layer logic the DB triggers enforce:
  *
@@ -467,7 +467,7 @@ export async function resolvePeriodStatusForDate(
     .maybeSingle()
   const lockThrough = settings?.bookkeeping_locked_through ?? null
   if (lockThrough && date <= lockThrough) {
-    // Find the covering period if any — useful for widget greying.
+    // Find the covering period if any: useful for widget greying.
     const { data: period } = await supabase
       .from('fiscal_periods')
       .select('id')
@@ -488,7 +488,7 @@ export async function resolvePeriodStatusForDate(
     .maybeSingle()
 
   if (!period) {
-    // No covering period — treated as open at this layer; the engine's own
+    // No covering period: treated as open at this layer; the engine's own
     // ensure-period helper will create one. Agents should still warn the user.
     return { period_id: null, status: 'open', lock_date: null }
   }

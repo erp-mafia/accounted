@@ -10,9 +10,9 @@ import { validateBody } from '@/lib/api/validate'
 //
 // Hardening on every UPDATE:
 //   - .eq('id', signatureId) + .eq('company_id', companyId)
-//   - .eq('fiscal_period_id', id from URL) — enforces the REST contract so
+//   - .eq('fiscal_period_id', id from URL): enforces the REST contract so
 //     /periods/A/signatures/SIG_FROM_B can't bypass the path scope
-//   - .eq('status', 'pending') — state-machine guard so a signed or declined
+//   - .eq('status', 'pending'): state-machine guard so a signed or declined
 //     row can't be flipped back
 const PatchSchema = z.object({
   status: z.enum(['signed', 'declined']),

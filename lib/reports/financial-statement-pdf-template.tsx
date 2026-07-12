@@ -267,7 +267,7 @@ export function FinancialStatementPDF({
 }: FinancialStatementPDFProps) {
   const companyDisplayName = company.company_name || ''
   const periodLabel = period.start && period.end
-    ? `${formatDateSv(period.start)} – ${formatDateSv(period.end)}`
+    ? `${formatDateSv(period.start)}: ${formatDateSv(period.end)}`
     : ''
 
   return (
@@ -357,7 +357,7 @@ export function FinancialStatementPDF({
         )}
 
         <View style={styles.disclaimer} fixed>
-          <Text style={styles.disclaimerTitle}>Arbetsutkast – ej undertecknat</Text>
+          <Text style={styles.disclaimerTitle}>Arbetsutkast: ej undertecknat</Text>
           <Text style={styles.disclaimerText}>
             Detta dokument är ett internt arbetsutkast och utgör inte en godkänd
             årsredovisning enligt ÅRL 2 kap 7 §. Den formella årsredovisningen ska

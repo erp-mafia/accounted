@@ -38,7 +38,7 @@ function makeAsset(overrides: Partial<Asset> = {}): Asset {
 const FULL_YEAR_2025 = { period_start: '2025-01-01', period_end: '2025-12-31' }
 
 // ============================================================
-// validateComponents — pure validator
+// validateComponents: pure validator
 // ============================================================
 
 describe('validateComponents', () => {
@@ -85,7 +85,7 @@ describe('validateComponents', () => {
   })
 
   it('cost mismatch within 1 kr tolerance → no error', () => {
-    // 99_999.5 vs 100_000 — öre rounding shouldn't fail
+    // 99_999.5 vs 100_000: öre rounding shouldn't fail
     const components: K3Component[] = [
       { name: 'A', cost: 50_000, useful_life_months: 60 },
       { name: 'B', cost: 49_999.5, useful_life_months: 60 },
@@ -174,7 +174,7 @@ describe('validateComponents', () => {
     expect(errors.length).toBeGreaterThan(0)
   })
 
-  it('aggregates multiple errors — does not bail on first', () => {
+  it('aggregates multiple errors: does not bail on first', () => {
     const components: K3Component[] = [
       { name: 'A', cost: -100, useful_life_months: 0 },
       { name: 'B', cost: 50_000, useful_life_months: 60, salvage_value: 60_000 },
@@ -189,7 +189,7 @@ describe('validateComponents', () => {
 })
 
 // ============================================================
-// computeComponentDepreciation — engine
+// computeComponentDepreciation: engine
 // ============================================================
 
 describe('computeComponentDepreciation', () => {
@@ -227,7 +227,7 @@ describe('computeComponentDepreciation', () => {
       ],
     })
     // Full-year sum = 47_500. Jul 1 - Dec 31 = 184 days, 184/365 ≈ 0.5041.
-    // Per-component rounding may slightly drift — accept ~5_900–6_100 per row sum.
+    // Per-component rounding may slightly drift: accept ~5_900-6_100 per row sum.
     const result = computeComponentDepreciation(asset, FULL_YEAR_2025)
     expect(result.proRated).toBe(true)
     expect(result.amount).toBeGreaterThan(23_500)
@@ -278,7 +278,7 @@ describe('computeComponentDepreciation', () => {
   })
 
   it('skips components fully past end-of-life (window collapses)', () => {
-    // Component with 12-month life acquired Jan 1, 2023 — fully depreciated by
+    // Component with 12-month life acquired Jan 1, 2023: fully depreciated by
     // Jan 1, 2024. For fiscal year 2025 (Jan 1 - Dec 31) the window is empty.
     const asset = makeAsset({
       acquisition_date: '2023-01-01',
@@ -323,14 +323,14 @@ describe('computeComponentDepreciation', () => {
 })
 
 // ============================================================
-// computeAnnualDepreciation dispatch — k3_components precedence
+// computeAnnualDepreciation dispatch: k3_components precedence
 // ============================================================
 
-describe('computeAnnualDepreciation — K3 dispatch', () => {
+describe('computeAnnualDepreciation: K3 dispatch', () => {
   it('routes to component depreciation when k3_components is non-empty', () => {
     const asset = makeAsset({
       acquisition_cost: 1_000_000,
-      // method+life on the asset would compute different number — engine should ignore them
+      // method+life on the asset would compute different number: engine should ignore them
       depreciation_method: 'declining_balance_30',
       useful_life_months: 60,
       k3_components: [
@@ -346,7 +346,7 @@ describe('computeAnnualDepreciation — K3 dispatch', () => {
   })
 
   it('K2-path stays byte-equivalent: linear asset without k3_components is unchanged', () => {
-    // 60_000 / 5yr = 12_000 per year — same as the linear baseline test.
+    // 60_000 / 5yr = 12_000 per year: same as the linear baseline test.
     const asset = makeAsset({
       acquisition_cost: 60_000,
       useful_life_months: 60,
@@ -363,7 +363,7 @@ describe('computeAnnualDepreciation — K3 dispatch', () => {
   })
 
   it('K2-path stays byte-equivalent: empty array of components is treated as "no components"', () => {
-    // Engine guards with .length > 0 — an empty array must fall through to
+    // Engine guards with .length > 0: an empty array must fall through to
     // the method-based dispatch so a tampered DB row doesn't zero out the
     // depreciation silently.
     const asset = makeAsset({

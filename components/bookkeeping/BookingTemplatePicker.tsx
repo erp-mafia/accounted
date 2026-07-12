@@ -3,7 +3,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import {
   Dialog,
@@ -18,7 +17,7 @@ import type { BookingTemplateLibrary, BookingTemplateCategory, EntityType } from
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
 interface Props {
-  onApply: (lines: FormLine[], description: string) => void
+  onApply: (lines: FormLine[], description: string, category?: BookingTemplateCategory) => void
   entityType?: EntityType
   /** Prefill the "total amount" field when the caller already knows it (e.g.
    *  booking from an underlag with a known total). The user can still edit it. */
@@ -42,7 +41,7 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   // Prefill the amount from the caller's known total each time the picker
-  // opens. Only when provided — callers without a known amount (e.g. the
+  // opens. Only when provided: callers without a known amount (e.g. the
   // journal-entry form) keep the blank-then-type behaviour.
   useEffect(() => {
     if (open && defaultAmount != null && defaultAmount > 0) {
@@ -115,7 +114,7 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
     const lines = applyTemplate(selected.lines, totalAmount)
     // Fire-and-forget MRU bump so this template surfaces at the top next time.
     fetch(`/api/settings/booking-templates/${selected.id}/touch`, { method: 'POST' }).catch(() => {})
-    onApply(lines, selected.name)
+    onApply(lines, selected.name, selected.category)
     setOpen(false)
     setSelectedId(null)
     setAmount('')
@@ -136,14 +135,15 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
         </DialogHeader>
 
         {/* Search + category filter */}
-        <div className="flex flex-col sm:flex-row gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+        <div className="flex flex-col gap-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Sök mall..."
               className="pl-9"
+              autoFocus
             />
           </div>
           <div className="flex gap-1 flex-wrap">
@@ -193,17 +193,14 @@ export default function BookingTemplatePicker({ onApply, entityType, defaultAmou
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-sm">{t.name}</span>
-                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0">
-                          <ScopeIcon className="h-3 w-3 mr-0.5" />
+                      <div className="font-medium text-sm">{t.name}</div>
+                      <div className="flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5">
+                        <ScopeIcon className="h-3 w-3 shrink-0" />
+                        <span>
                           {SCOPE_LABELS[scope]}
-                        </Badge>
-                        {t.entity_type !== 'all' && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 shrink-0">
-                            {t.entity_type === 'enskild_firma' ? 'EF' : 'AB'}
-                          </Badge>
-                        )}
+                          {t.entity_type !== 'all' &&
+                            ` · ${t.entity_type === 'enskild_firma' ? 'EF' : 'AB'}`}
+                        </span>
                       </div>
                       {t.description && (
                         <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">

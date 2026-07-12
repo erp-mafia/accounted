@@ -30,7 +30,7 @@ describe('updateDraftEntry', () => {
     ).rejects.toBeInstanceOf(JournalEntryNotFoundError)
   })
 
-  it('refuses to edit a posted entry — only drafts are editable', async () => {
+  it('refuses to edit a posted entry: only drafts are editable', async () => {
     const q = createQueuedMockSupabase()
     q.enqueue({ data: { id: 'e1', status: 'posted', voucher_series: 'A' }, error: null })
     await expect(

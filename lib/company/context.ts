@@ -37,7 +37,7 @@ export async function getActiveCompanyId(
   supabase: SupabaseClient,
   userId: string
 ): Promise<string | null> {
-  // 1. user_preferences — authoritative
+  // 1. user_preferences: authoritative
   const { data: prefs } = await supabase
     .from('user_preferences')
     .select('active_company_id')
@@ -76,7 +76,7 @@ export async function getActiveCompanyId(
  *
  * `company_settings.entity_type` is the read-primary source (what the user
  * edits in settings and what the sidebar reads), with the canonical
- * `companies.entity_type` as the fallback — mirroring app/api/settings and the
+ * `companies.entity_type` as the fallback: mirroring app/api/settings and the
  * report engines. Returns null only if the company can't be found.
  */
 export async function getCompanyEntityType(
@@ -98,6 +98,40 @@ export async function getCompanyEntityType(
     .maybeSingle()
 
   return (company?.entity_type as EntityType | undefined) ?? null
+}
+
+/**
+ * Resolve a company's current display name.
+ *
+ * `company_settings.company_name` is the read-primary source (what the user
+ * edits in Settings and what the invoice PDF renders), with the canonical
+ * `companies.name` as the fallback. `companies.name` is written once at
+ * onboarding (via create_company_with_owner) and never updated afterwards, so
+ * reading it directly shows a stale name after a rename (e.g. a lagerbolag
+ * renamed post-signup). Mirrors getCompanyEntityType and the invoice surfaces.
+ *
+ * Returns null only if the company can't be resolved from either table.
+ */
+export async function getCompanyDisplayName(
+  supabase: SupabaseClient,
+  companyId: string
+): Promise<string | null> {
+  const { data: settings } = await supabase
+    .from('company_settings')
+    .select('company_name')
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  // Truthiness (not != null) so an empty string falls through to companies.name.
+  if (settings?.company_name) return settings.company_name as string
+
+  const { data: company } = await supabase
+    .from('companies')
+    .select('name')
+    .eq('id', companyId)
+    .maybeSingle()
+
+  return (company?.name as string | undefined) ?? null
 }
 
 /**
@@ -153,7 +187,7 @@ export async function setActiveCompany(
     throw new CompanyContextError('User is not a member of this company', 'not_member')
   }
 
-  // Update user_preferences — this is the authoritative value RLS reads.
+  // Update user_preferences: this is the authoritative value RLS reads.
   // The write MUST be verified: an UPDATE filtered out by RLS affects zero
   // rows without raising an error, which previously made failed switches
   // look successful while middleware kept resolving the old company (#701).
@@ -181,7 +215,7 @@ export async function setActiveCompany(
     )
   }
 
-  // Refresh the cookie as a compat hint — only after the DB write is
+  // Refresh the cookie as a compat hint: only after the DB write is
   // confirmed, so the cookie can never diverge from user_preferences.
   const cookieStore = await cookies()
   cookieStore.set(COMPANY_COOKIE, companyId, {

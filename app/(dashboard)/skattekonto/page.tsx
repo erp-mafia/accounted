@@ -5,6 +5,8 @@ import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { PageHeader } from '@/components/ui/page-header'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
@@ -16,9 +18,15 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
-import { formatCurrency } from '@/lib/utils'
+import {
+  formatCurrency,
+  formatDate,
+  formatDateLong,
+  formatDateTime,
+} from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
+  AlertCircle,
   Copy,
   ExternalLink,
   FileCheck,
@@ -26,6 +34,8 @@ import {
   Link2,
   RefreshCw,
 } from 'lucide-react'
+import { useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import type {
   SkatteverketSaldoResponse,
   SkattekontoTransactionWithSuggestion,
@@ -59,12 +69,18 @@ interface MatchCandidate {
 
 export default function SkattekontoPage() {
   const { toast } = useToast()
+  const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const [saldo, setSaldo] = useState<SaldoEnvelope | null>(null)
   const [tx, setTx] = useState<TransaktionerEnvelope['data'] | null>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [bookingId, setBookingId] = useState<string | null>(null)
   const [notConnected, setNotConnected] = useState(false)
+  const [loadError, setLoadError] = useState(false)
+  // Set when a sync fails with an auth error while a connection exists
+  // (expired session, missing scope, revoked token). Rendered as a banner —
+  // the stored data below stays visible and usable.
+  const [reconnectMessage, setReconnectMessage] = useState<string | null>(null)
   const [matchOpenFor, setMatchOpenFor] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
@@ -74,6 +90,7 @@ export default function SkattekontoPage() {
 
   const reload = useCallback(async () => {
     setLoading(true)
+    setLoadError(false)
     try {
       const [saldoRes, txRes] = await Promise.all([
         fetch('/api/extensions/ext/skatteverket/skattekonto/saldo'),
@@ -85,6 +102,14 @@ export default function SkattekontoPage() {
         return
       }
 
+      // A non-auth failure must NOT fall through to the "inget saldo hämtat
+      // ännu"-tomvy — that reads as "not configured" when the truth is "the
+      // fetch broke". Surface it as an error with a retry instead.
+      if (!saldoRes.ok) {
+        setLoadError(true)
+        return
+      }
+
       const saldoJson = (await saldoRes.json()) as SaldoEnvelope
       setSaldo(saldoJson)
 
@@ -92,6 +117,8 @@ export default function SkattekontoPage() {
         const txJson = (await txRes.json()) as TransaktionerEnvelope
         setTx(txJson.data)
       }
+    } catch {
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -109,12 +136,28 @@ export default function SkattekontoPage() {
       })
       const json = await res.json()
       if (!res.ok) {
+        // 401 covers several distinct auth states (see handleSkvError in the
+        // skatteverket extension). Only NOT_CONNECTED means "no connection
+        // exists" — the rest (SESSION_EXPIRED, MISSING_SCOPE, TOKEN_REVOKED,
+        // …) fire while Inställningar truthfully shows the stored token as
+        // "Ansluten". Showing the full "inte anslutet"-tomvy for those
+        // contradicts the settings panel; show the server's actual reason
+        // with a reconnect CTA instead.
         if (res.status === 401) {
-          setNotConnected(true)
+          if (json.code === 'NOT_CONNECTED') {
+            setNotConnected(true)
+          } else {
+            setReconnectMessage(
+              typeof json.error === 'string' && json.error
+                ? json.error
+                : 'Anslutningen mot Skatteverket behöver förnyas. Anslut igen med BankID.',
+            )
+          }
           return
         }
         throw new Error(json.error || 'Synk misslyckades')
       }
+      setReconnectMessage(null)
       toast({
         title: 'Skattekonto synkroniserat',
         description: `${json.data.booked} bokförda, ${json.data.upcoming} kommande`,
@@ -227,19 +270,41 @@ export default function SkattekontoPage() {
       <div className="space-y-6">
         <PageHeading />
         <Card>
-          <CardContent className="flex flex-col items-center py-12 text-center">
-            <Landmark className="mb-4 h-10 w-10 text-muted-foreground/40" />
-            <p className="mb-1 font-medium">Skatteverket är inte anslutet</p>
-            <p className="mb-4 max-w-md text-sm text-muted-foreground">
-              För att se saldo och transaktioner på skattekontot behöver du
-              ansluta med BankID i inställningarna.
-            </p>
-            <Button asChild>
-              <Link href="/settings/tax">
-                <ExternalLink className="mr-2 h-4 w-4" />
-                Anslut Skatteverket
-              </Link>
-            </Button>
+          <CardContent className="p-0">
+            <EmptyState
+              icon={Landmark}
+              title="Skatteverket är inte anslutet"
+              description="För att se saldo och transaktioner på skattekontot behöver du ansluta med BankID i inställningarna."
+            >
+              <Button asChild>
+                <Link href="/settings/tax">
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  Anslut Skatteverket
+                </Link>
+              </Button>
+            </EmptyState>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="space-y-6">
+        <PageHeading />
+        <Card>
+          <CardContent className="p-0">
+            <EmptyState
+              icon={AlertCircle}
+              title="Kunde inte hämta skattekontot"
+              description="Något gick fel när saldo och transaktioner skulle hämtas. Försök igen om en stund."
+            >
+              <Button variant="outline" onClick={() => void reload()}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Försök igen
+              </Button>
+            </EmptyState>
           </CardContent>
         </Card>
       </div>
@@ -250,12 +315,30 @@ export default function SkattekontoPage() {
     <div className="space-y-6">
       <PageHeading
         right={
-          <Button onClick={syncNow} disabled={syncing}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-            {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
-          </Button>
+          // The span carries the tooltip: `title` is suppressed on disabled elements.
+          <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
+            <Button onClick={syncNow} disabled={syncing || !hasSkvCapability}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+              {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
+            </Button>
+          </span>
         }
       />
+
+      {reconnectMessage && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
+            <p className="text-sm">{reconnectMessage}</p>
+          </div>
+          <Button asChild variant="outline" size="sm">
+            <Link href="/settings/tax">
+              <ExternalLink className="mr-2 h-3.5 w-3.5" />
+              Anslut igen
+            </Link>
+          </Button>
+        </div>
+      )}
 
       <BalanceHero saldo={saldo} loading={loading} onCopyOcr={copyOcr} />
 
@@ -325,17 +408,7 @@ export default function SkattekontoPage() {
 }
 
 function PageHeading({ right }: { right?: React.ReactNode }) {
-  return (
-    <div className="flex items-end justify-between gap-4">
-      <div>
-        <h1 className="font-serif text-3xl">Skattekonto</h1>
-        <p className="text-sm text-muted-foreground">
-          Saldo och transaktioner från Skatteverket
-        </p>
-      </div>
-      {right}
-    </div>
-  )
+  return <PageHeader title="Skattekonto" action={right} />
 }
 
 function BalanceHero({
@@ -361,7 +434,7 @@ function BalanceHero({
     return (
       <Card>
         <CardContent className="py-12 text-center text-sm text-muted-foreground">
-          Inget saldo hämtat ännu — klicka på &quot;Synkronisera nu&quot;.
+          Inget saldo hämtat ännu: klicka på &quot;Synkronisera nu&quot;.
         </CardContent>
       </Card>
     )
@@ -380,7 +453,7 @@ function BalanceHero({
               Skatteverket
             </p>
             <p
-              className={`font-serif text-4xl tabular-nums ${
+              className={`font-display text-2xl tabular-nums ${
                 skvNegative ? 'text-destructive' : 'text-foreground'
               }`}
             >
@@ -397,7 +470,7 @@ function BalanceHero({
               Kronofogden
             </p>
             <p
-              className={`font-serif text-4xl tabular-nums ${
+              className={`font-display text-2xl tabular-nums ${
                 kfmNegative ? 'text-destructive' : 'text-foreground'
               }`}
             >
@@ -438,7 +511,7 @@ function BalanceHero({
               Saldo per
             </p>
             <p className="font-medium tabular-nums">
-              {new Date(data.senastUppdaterad).toLocaleString('sv-SE')}
+              {formatDateLong(data.senastUppdaterad)}
             </p>
           </div>
         </div>
@@ -447,9 +520,9 @@ function BalanceHero({
           <p className="text-xs text-muted-foreground">
             Synkas automatiskt varje natt. Senast synkad{' '}
             <span className="tabular-nums">
-              {new Date(saldo.lastSyncedAt).toLocaleString('sv-SE')}
+              {formatDateTime(saldo.lastSyncedAt)}
             </span>
-            . Skatteverket uppdaterar saldot periodvis — datumet ovan ändras
+            . Skatteverket uppdaterar saldot periodvis: datumet ovan ändras
             inte varje gång du synkroniserar.
           </p>
         )}
@@ -508,9 +581,11 @@ function TransactionTable({
           const isBooked = !!row.journal_entry_id
           return (
             <TableRow key={row.id}>
-              <TableCell className="tabular-nums">{row.transaktionsdatum}</TableCell>
+              <TableCell className="tabular-nums">{formatDate(row.transaktionsdatum)}</TableCell>
               {showForfallodatum && (
-                <TableCell className="tabular-nums">{row.forfallodatum ?? '–'}</TableCell>
+                <TableCell className="tabular-nums">
+                  {row.forfallodatum ? formatDate(row.forfallodatum) : '-'}
+                </TableCell>
               )}
               <TableCell>
                 {row.transaktionstext}
@@ -523,7 +598,7 @@ function TransactionTable({
                           voucher_number: row.match_suggestion.voucher_number,
                         })
                       : 'utkast'}{' '}
-                    ({row.match_suggestion.entry_date})
+                    ({formatDate(row.match_suggestion.entry_date)})
                   </p>
                 )}
               </TableCell>
@@ -539,9 +614,7 @@ function TransactionTable({
                     Bokförd
                   </Badge>
                 ) : row.match_suggestion ? (
-                  <Badge variant="outline" className="border-warning text-warning">
-                    Möjlig dublett
-                  </Badge>
+                  <Badge variant="warning">Möjlig dublett</Badge>
                 ) : (
                   <Badge variant="outline">Ej bokförd</Badge>
                 )}
@@ -607,7 +680,7 @@ function MatchDialog({
           <DialogDescription>
             {row && (
               <>
-                {row.transaktionsdatum} • {row.transaktionstext} •{' '}
+                {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}
                 <span className="tabular-nums">
                   {formatCurrency(Number(row.belopp_skatteverket))}
                 </span>
@@ -649,7 +722,7 @@ function MatchDialog({
               <TableBody>
                 {candidates.map(c => (
                   <TableRow key={c.journal_entry_id}>
-                    <TableCell className="tabular-nums">{c.entry_date}</TableCell>
+                    <TableCell className="tabular-nums">{formatDate(c.entry_date)}</TableCell>
                     <TableCell className="tabular-nums">
                       {formatVoucher(c)}
                     </TableCell>

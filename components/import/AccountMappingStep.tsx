@@ -139,7 +139,7 @@ export default function AccountMappingStep({
           <CardTitle>Kontomappning</CardTitle>
           <CardDescription>
             Varje konto i SIE-filen kopplas till ett konto i din kontoplan.
-            De flesta matchas automatiskt — granska de osäkra nedan.
+            De flesta matchas automatiskt: granska de osäkra nedan.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -343,7 +343,7 @@ function ConfidenceBadge({
   }
 
   if (confidence >= 0.9) {
-    return <Badge variant="default" className="bg-success">Exakt</Badge>
+    return <Badge variant="success">Exakt</Badge>
   }
 
   if (confidence >= 0.7) {

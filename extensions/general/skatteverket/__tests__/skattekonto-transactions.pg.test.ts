@@ -34,7 +34,7 @@ async function insertSkattekontoTransaction(params: {
   return id
 }
 
-describe('skattekonto_transactions.pg — RLS tenant isolation', () => {
+describe('skattekonto_transactions.pg: RLS tenant isolation', () => {
   it('a user only sees rows for their own company', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
@@ -83,7 +83,7 @@ describe('skattekonto_transactions.pg — RLS tenant isolation', () => {
     const a = await seedCompany()
     const b = await seedCompany()
     await insertSkattekontoTransaction({ companyId: a.companyId, dedupKey: 'id:555' })
-    // Different tenant, same dedup_key — should succeed.
+    // Different tenant, same dedup_key: should succeed.
     await expect(
       insertSkattekontoTransaction({ companyId: b.companyId, dedupKey: 'id:555' }),
     ).resolves.toBeDefined()

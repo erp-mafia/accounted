@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { Badge } from '@/components/ui/badge'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -13,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import {
   CheckCircle,
   AlertCircle,
@@ -150,7 +149,7 @@ export default function ImportReviewStep({
   const hasOpeningBalances = preview.openingBalanceTotal > 0
   const hasTransactions = preview.voucherCount > 0
   // An import whose fiscal year already ended in a prior calendar year is a
-  // historical/migration import — the underlag live in the old system, so the
+  // historical/migration import: the underlag live in the old system, so the
   // exemption is especially apt. Nudges (does not force) the toggle.
   const isHistoricalImport = (() => {
     if (!preview.fiscalYearEnd) return false
@@ -158,7 +157,7 @@ export default function ImportReviewStep({
     const startOfThisYear = new Date(new Date().getFullYear(), 0, 1)
     return !isNaN(end.getTime()) && end < startOfThisYear
   })()
-  // Identity-mapped accounts whose #KONTO name differs from the BAS default —
+  // Identity-mapped accounts whose #KONTO name differs from the BAS default:
   // mirrors the filter in syncMappedAccounts, so the count matches what the
   // import would actually rename/create with a custom name.
   const customNameCount = mappings.filter(
@@ -183,7 +182,7 @@ export default function ImportReviewStep({
                   {preview.voucherCount} verifikationer bearbetas
                 </p>
               </div>
-              <div className="text-2xl font-display font-medium tabular-nums text-muted-foreground">
+              <div className="text-2xl font-display tabular-nums text-muted-foreground">
                 {elapsed}s
               </div>
               <p className="text-sm text-muted-foreground max-w-sm">
@@ -224,11 +223,11 @@ export default function ImportReviewStep({
                 <p className="font-medium">Räkenskapsår</p>
                 <p className="text-sm text-muted-foreground">
                   {preview.fiscalYearStart
-                    ? new Date(preview.fiscalYearStart).toLocaleDateString('sv-SE')
+                    ? formatDate(preview.fiscalYearStart)
                     : '?'}{' '}
                   -{' '}
                   {preview.fiscalYearEnd
-                    ? new Date(preview.fiscalYearEnd).toLocaleDateString('sv-SE')
+                    ? formatDate(preview.fiscalYearEnd)
                     : '?'}
                 </p>
               </div>
@@ -348,9 +347,9 @@ export default function ImportReviewStep({
                     const isDefault = defaultSeries === letter
                     const isExisting = existingSeries.has(letter)
                     const suffix = isDefault
-                      ? ' — standard'
+                      ? ', standard'
                       : isExisting
-                        ? ' — används redan'
+                        ? ', används redan'
                         : ''
                     return (
                       <SelectItem key={letter} value={letter}>
@@ -366,21 +365,21 @@ export default function ImportReviewStep({
             </div>
           )}
 
-          {/* No-underlag exemption — keeps a multi-year migration from flooding
+          {/* No-underlag exemption: keeps a multi-year migration from flooding
               "Att hantera: saknade underlag" with thousands of items. */}
           <div className="flex items-start justify-between border-t pt-6">
             <div className="space-y-0.5 pr-4">
               <Label htmlFor="mark-no-doc-required" className="font-medium flex items-center gap-2">
                 Markera som &quot;Inget underlag krävs&quot;
                 {isHistoricalImport && (
-                  <Badge variant="secondary" className="text-[10px] font-normal">
-                    Rekommenderas vid migrering
-                  </Badge>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    · Rekommenderas vid migrering
+                  </span>
                 )}
               </Label>
               <p className="text-sm text-muted-foreground">
                 Märker alla importerade verifikationer som att de inte behöver något
-                separat underlag — underlagen finns kvar i ditt tidigare system. Annars
+                separat underlag: underlagen finns kvar i ditt tidigare system. Annars
                 hamnar de under &quot;Att hantera: saknade underlag&quot;. Kan ändras per
                 verifikation efteråt.
               </p>

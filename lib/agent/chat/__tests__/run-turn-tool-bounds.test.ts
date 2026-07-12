@@ -7,7 +7,7 @@ import { boundToolResultText, MAX_TOOL_RESULT_CHARS } from '../run-turn'
 // OCR/PDF text) would therefore re-introduce the context rot we keep out of the
 // system prompt. boundToolResultText caps the serialized payload.
 
-describe('boundToolResultText — tool-return discipline', () => {
+describe('boundToolResultText: tool-return discipline', () => {
   it('passes small results through unchanged', () => {
     const small = JSON.stringify({ rows: [{ account: '1930', amount: 1000 }] })
     expect(boundToolResultText(small)).toBe(small)

@@ -1,22 +1,15 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateEmployeeSchema } from '@/lib/api/schemas'
-import { requireCompanyId, getCompanyEntityType } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { getCompanyEntityType } from '@/lib/company/context'
 import { decryptPersonnummer, encryptPersonnummer, extractLast4, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 
 ensureInitialized()
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext('salary.employees.list', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
   const activeOnly = searchParams.get('active') !== 'false'
 
@@ -35,25 +28,16 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  // Mask personnummer — show birthdate, hide the 4-digit suffix
+  // Mask personnummer: show birthdate, hide the 4-digit suffix
   const masked = (data || []).map(emp => ({
     ...emp,
     personnummer: maskPersonnummer(decryptPersonnummer(emp.personnummer)),
   }))
 
   return NextResponse.json({ data: masked })
-}
+})
 
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const POST = withRouteContext('salary.employees.create', async (request, { supabase, companyId, user }) => {
   const validation = await validateBody(request, CreateEmployeeSchema)
   if (!validation.success) return validation.response
   const body = validation.data
@@ -111,6 +95,8 @@ export async function POST(request: Request) {
       vaxa_stod_eligible: body.vaxa_stod_eligible,
       vaxa_stod_start: body.vaxa_stod_start || null,
       vaxa_stod_end: body.vaxa_stod_end || null,
+      // Dimensions PR8: bag for the employee's P&L cost lines at booking.
+      default_dimensions: body.default_dimensions ?? {},
     })
     .select()
     .single()
@@ -128,4 +114,4 @@ export async function POST(request: Request) {
       personnummer: maskPersonnummer(body.personnummer),
     },
   }, { status: 201 })
-}
+}, { requireWrite: true })

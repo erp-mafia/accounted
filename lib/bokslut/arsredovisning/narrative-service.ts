@@ -5,20 +5,20 @@ export interface NarrativeOverrides {
   important_events: string | null
   resultatdisposition: string | null
   /** ISO date of the AGM (årsstämma) where the årsredovisning was adopted.
-   *  Populates the fastställelseintyg date blank — without it the PDF
+   *  Populates the fastställelseintyg date blank: without it the PDF
    *  cannot be filed at Bolagsverket without manual pen-and-ink edit. */
   agm_date: string | null
-  /** ÅRL 5:13 § — andel av långfristiga skulder som förfaller senare än
+  /** ÅRL 5:13 §: andel av långfristiga skulder som förfaller senare än
    *  fem år efter balansdagen. Null/0 → "Inga skulder förfaller efter mer
    *  än fem år." rendered in the note. */
   long_term_debt_over_five_years: number | null
-  /** ÅRL 5:14 § — ställda säkerheter (panter, företagsinteckningar). Null
+  /** ÅRL 5:14 §: ställda säkerheter (panter, företagsinteckningar). Null
    *  → "Inga." */
   securities_pledged: string | null
-  /** ÅRL 5:15 § — eventualförpliktelser (borgensåtaganden, garantier).
+  /** ÅRL 5:15 §: eventualförpliktelser (borgensåtaganden, garantier).
    *  Null → "Inga." */
   contingent_liabilities: string | null
-  /** BFNAR 2016:10 kap. 19 / BFNAR 2012:1 kap. 8 — moderföretagets namn.
+  /** BFNAR 2016:10 kap. 19 / BFNAR 2012:1 kap. 8: moderföretagets namn.
    *  Note is emitted only when this is set; org_number and city are
    *  optional follow-up details. */
   parent_company_name: string | null
@@ -50,7 +50,7 @@ export interface NarrativeRow {
 
 const TABLE = 'arsredovisning_narratives'
 
-// Explicit projection — keeps user_id and other internal audit fields out
+// Explicit projection: keeps user_id and other internal audit fields out
 // of API responses. GDPR Art.25.2 / ISO A.8.3 data-minimization: callers
 // only need the narrative content + last-updated timestamp.
 const NARRATIVE_API_COLUMNS =
@@ -58,7 +58,7 @@ const NARRATIVE_API_COLUMNS =
 
 /**
  * Load persisted narrative overrides for a fiscal period. Returns null when
- * the user hasn't customised anything yet — caller then falls back to the
+ * the user hasn't customised anything yet: caller then falls back to the
  * auto-generated boilerplate in buildArsredovisningData.
  */
 export async function getNarrative(
@@ -78,8 +78,8 @@ export async function getNarrative(
 
 /**
  * Upsert narrative overrides for a fiscal period. Composite UNIQUE constraint
- * (company_id, fiscal_period_id) — see migration
- * 20260517160000_narrative_agm_date_and_composite_unique.sql — makes the
+ * (company_id, fiscal_period_id) (see migration
+ * 20260517160000_narrative_agm_date_and_composite_unique.sql) makes the
  * onConflict path resolve to an UPDATE within the same tenant, so repeated
  * saves cleanly replace prior content instead of stacking rows.
  */

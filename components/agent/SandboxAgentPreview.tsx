@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
  * /api/agent/invoke which is server-gated by guardSandbox(), so the input
  * would just produce a 403. Instead of showing that as a raw error, we
  * render a brief description of what the assistant does in prod and a
- * single "Skapa konto" CTA. Same chrome (header) as the real chat — only
+ * single "Skapa konto" CTA. Same chrome (header) as the real chat: only
  * the body swaps out.
  *
  * Mirrors the look of the empty-state but with an explanation block so the
@@ -28,13 +28,13 @@ export default function SandboxAgentPreview({
 
   async function handleCreateAccount() {
     const supabase = createClient()
-    // Sign-out is best-effort — a transient Supabase failure shouldn't
+    // Sign-out is best-effort: a transient Supabase failure shouldn't
     // strand the user on a dead button; navigate to /register either way
     // and let the registration flow re-init auth state.
     try {
       await supabase.auth.signOut()
     } catch {
-      // Intentionally swallowed — see comment above.
+      // Intentionally swallowed: see comment above.
     }
     router.push('/register')
   }
@@ -51,7 +51,7 @@ export default function SandboxAgentPreview({
             <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
               {name} är en specialiserad bokföringsassistent som kan
               kategorisera transaktioner, granska leverantörsfakturor och
-              svara på frågor om din bokföring — kalibrerad mot dina
+              svara på frågor om din bokföring: kalibrerad mot dina
               kontoplaner, verksamhet och svensk skattelagstiftning.
             </p>
             <p className="text-sm text-muted-foreground mt-3 leading-relaxed">
@@ -66,7 +66,7 @@ export default function SandboxAgentPreview({
               <span className="text-foreground mt-0.5">·</span>
               <span>
                 <span className="text-foreground">Föreslår bokföring</span>{' '}
-                för oklassificerade transaktioner — du godkänner i ett klick.
+                för oklassificerade transaktioner: du godkänner i ett klick.
               </span>
             </li>
             <li className="flex items-start gap-2">

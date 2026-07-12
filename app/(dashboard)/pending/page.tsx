@@ -41,11 +41,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import {
   ClipboardCheck,
-  ArrowLeftRight,
-  Users,
-  Receipt,
   Bot,
-  BookOpen,
   ChevronDown,
   Loader2,
   Lock,
@@ -60,18 +56,79 @@ import type {
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
 import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
 
-const OPERATION_LABEL_KEYS: Record<string, { labelKey: string; icon: typeof ArrowLeftRight; variant: 'default' | 'secondary' | 'outline' }> = {
-  categorize_transaction: { labelKey: 'type_categorize_transaction', icon: ArrowLeftRight, variant: 'default' },
-  create_customer: { labelKey: 'type_create_customer', icon: Users, variant: 'secondary' },
-  create_invoice: { labelKey: 'type_create_invoice', icon: Receipt, variant: 'outline' },
-  create_transaction: { labelKey: 'type_create_transaction', icon: ArrowLeftRight, variant: 'secondary' },
-  create_voucher: { labelKey: 'type_create_voucher', icon: BookOpen, variant: 'outline' },
-  correct_entry: { labelKey: 'type_correct_entry', icon: BookOpen, variant: 'outline' },
-  reverse_entry: { labelKey: 'type_reverse_entry', icon: BookOpen, variant: 'outline' },
-  mark_invoice_paid: { labelKey: 'type_mark_invoice_paid', icon: Receipt, variant: 'default' },
-  send_invoice: { labelKey: 'type_send_invoice', icon: Receipt, variant: 'outline' },
-  mark_invoice_sent: { labelKey: 'type_mark_invoice_sent', icon: Receipt, variant: 'outline' },
-  match_transaction_invoice: { labelKey: 'type_match_transaction_invoice', icon: ArrowLeftRight, variant: 'secondary' },
+// Short human label (i18n key in the "pending" namespace) for each staged
+// operation_type. Keep in sync with OPERATION_RISK_TIERS in
+// lib/pending-operations/risk-tiers.ts: every operation an agent can stage
+// needs a label here, otherwise the Granskning list falls back to the raw
+// snake_case tool name (e.g. "create_supplier_invoice_from_inbox"), which is
+// long and pushes the meta row to wrap awkwardly on mobile.
+const OPERATION_LABEL_KEYS: Record<string, string> = {
+  categorize_transaction: 'type_categorize_transaction',
+  create_customer: 'type_create_customer',
+  create_invoice: 'type_create_invoice',
+  create_transaction: 'type_create_transaction',
+  create_voucher: 'type_create_voucher',
+  correct_entry: 'type_correct_entry',
+  reverse_entry: 'type_reverse_entry',
+  mark_invoice_paid: 'type_mark_invoice_paid',
+  send_invoice: 'type_send_invoice',
+  mark_invoice_sent: 'type_mark_invoice_sent',
+  match_transaction_invoice: 'type_match_transaction_invoice',
+  // Master data
+  create_supplier: 'type_create_supplier',
+  create_article: 'type_create_article',
+  update_article: 'type_update_article',
+  create_dimension_value: 'type_create_dimension_value',
+  // Supplier invoices
+  create_supplier_invoice_from_inbox: 'type_create_supplier_invoice_from_inbox',
+  create_self_billed_supplier_invoice: 'type_create_self_billed_supplier_invoice',
+  approve_supplier_invoice: 'type_approve_supplier_invoice',
+  credit_supplier_invoice: 'type_credit_supplier_invoice',
+  // Invoices
+  credit_invoice: 'type_credit_invoice',
+  convert_invoice: 'type_convert_invoice',
+  // Documents & links
+  attach_document_to_transaction: 'type_attach_document_to_transaction',
+  link_document_to_voucher: 'type_link_document_to_voucher',
+  link_invoice_voucher: 'type_link_invoice_voucher',
+  link_supplier_invoice_voucher: 'type_link_supplier_invoice_voucher',
+  link_transaction_journal_entry: 'type_link_transaction_journal_entry',
+  uncategorize_transaction: 'type_uncategorize_transaction',
+  retag_line_dimensions: 'type_retag_line_dimensions',
+  // Bulk booking / allocation
+  match_batch_allocate: 'type_match_batch_allocate',
+  bulk_book_transactions: 'type_bulk_book_transactions',
+  bulk_book_inbox_items: 'type_bulk_book_inbox_items',
+  // Periods, year-end, depreciation
+  close_period: 'type_close_period',
+  lock_period: 'type_lock_period',
+  unlock_period: 'type_unlock_period',
+  set_opening_balances: 'type_set_opening_balances',
+  run_year_end: 'type_run_year_end',
+  run_currency_revaluation: 'type_run_currency_revaluation',
+  post_annual_depreciation: 'type_post_annual_depreciation',
+  explain_voucher_gap: 'type_explain_voucher_gap',
+  // SIE
+  import_sie: 'type_import_sie',
+  undo_sie_import: 'type_undo_sie_import',
+  // Payroll & Skatteverket filings
+  create_salary_run: 'type_create_salary_run',
+  generate_agi: 'type_generate_agi',
+  submit_vat_declaration: 'type_submit_vat_declaration',
+  submit_agi: 'type_submit_agi',
+}
+
+// Fallback for an operation_type with no entry above (e.g. a newly added op
+// not yet given a label): turn "create_supplier_invoice_from_inbox" into
+// "Create supplier invoice from inbox" so it never surfaces as raw snake_case.
+function humanizeOperationType(operationType: string): string {
+  const spaced = operationType.replace(/_/g, ' ')
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1)
+}
+
+function operationLabel(operationType: string, t: (key: string) => string): string {
+  const labelKey = OPERATION_LABEL_KEYS[operationType]
+  return labelKey ? t(labelKey) : humanizeOperationType(operationType)
 }
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
@@ -95,9 +152,7 @@ const bulkActionDescriptions: Record<string, (count: number) => string> = {
 function bulkActionLabel(operationType: string, count: number, t: (key: string) => string): string {
   const fn = bulkActionDescriptions[operationType]
   if (fn) return fn(count)
-  const entry = OPERATION_LABEL_KEYS[operationType]
-  const fallback = entry ? t(entry.labelKey) : operationType
-  return `${count} × ${fallback}`
+  return `${count} × ${operationLabel(operationType, t)}`
 }
 
 // Full-sentence warning for the single-op confirmation dialog AND the inline
@@ -105,7 +160,7 @@ function bulkActionLabel(operationType: string, count: number, t: (key: string) 
 // one line; the dialog shows it in full. Order roughly low → high risk so
 // reviewers scanning the source see the destructive paths grouped together.
 const singleActionWarnings: Record<string, string> = {
-  // Low/medium risk — light verifikation work
+  // Low/medium risk: light verifikation work
   create_transaction: 'Genom att klicka godkänn så skapar du en transaktion.',
   create_customer: 'Genom att klicka godkänn så skapar du en kund.',
   create_invoice: 'Genom att klicka godkänn så skapas ett fakturautkast (det skickas inte).',
@@ -116,10 +171,10 @@ const singleActionWarnings: Record<string, string> = {
   send_invoice: 'Genom att klicka godkänn så skickas fakturan till kunden.',
   mark_invoice_paid: 'Genom att klicka godkänn så bokförs en betalning på fakturan.',
   mark_invoice_sent: 'Genom att klicka godkänn så märks fakturan som skickad och en verifikation skapas.',
-  // High risk — period/year-end/voucher edits. These are the ones the reviewer
+  // High risk: period/year-end/voucher edits. These are the ones the reviewer
   // really needs the warning for, so we keep them concrete: name the
   // irreversibility or compliance consequence, not the generic risk-level.
-  lock_period: 'Genom att klicka godkänn så låses perioden — inga nya verifikationer kan bokföras tills den låses upp.',
+  lock_period: 'Genom att klicka godkänn så låses perioden: inga nya verifikationer kan bokföras tills den låses upp.',
   unlock_period: 'Genom att klicka godkänn så låses perioden upp. Använd endast för rättelser; lås igen efter.',
   close_period: 'Genom att klicka godkänn så stängs perioden permanent (BFL). Stängningen kan inte ångras.',
   run_year_end: 'Genom att klicka godkänn så körs bokslut: resultatkonton nollställs, perioden låses, nästa period skapas.',
@@ -127,14 +182,14 @@ const singleActionWarnings: Record<string, string> = {
   run_currency_revaluation: 'Genom att klicka godkänn så bokförs valutaomvärdering (3960/7960).',
   create_voucher: 'Genom att klicka godkänn så bokförs verifikationen med ett nytt löpnummer.',
   correct_entry: 'Genom att klicka godkänn så stornas originalverifikationen och en rättelse bokförs (BFL 5 kap 5§).',
-  reverse_entry: 'Genom att klicka godkänn så stornas verifikationen — originalet behålls synligt (BFL 5 kap).',
+  reverse_entry: 'Genom att klicka godkänn så stornas verifikationen: originalet behålls synligt (BFL 5 kap).',
   credit_invoice: 'Genom att klicka godkänn så skapas en kreditfaktura och originalverifikationen stornas.',
   credit_supplier_invoice: 'Genom att klicka godkänn så krediteras leverantörsfakturan och registreringsverifikationen stornas.',
   approve_supplier_invoice: 'Genom att klicka godkänn så attesteras leverantörsfakturan och blir betalningsbar.',
   convert_invoice: 'Genom att klicka godkänn så konverteras proformafakturan till en riktig faktura med F-nummer.',
   import_sie: 'Genom att klicka godkänn så importeras SIE-filen: räkenskapsperiod, ingående balans och verifikationer skapas.',
   explain_voucher_gap: 'Genom att klicka godkänn så dokumenteras förklaringen för verifikationsluckan (BFNAR 2013:2).',
-  post_annual_depreciation: 'Genom att klicka godkänn så bokförs planenlig avskrivning — en verifikation per tillgång.',
+  post_annual_depreciation: 'Genom att klicka godkänn så bokförs planenlig avskrivning: en verifikation per tillgång.',
 }
 
 function singleActionWarning(operationType: string): string {
@@ -173,7 +228,7 @@ const REJECTION_CATEGORY_LABELS: Record<PendingOperationRejectionCategory, strin
 /**
  * Human origin line for a staged operation. Many reviewers never used the AI
  * chat themselves (a colleague or consultant did), so the raw actor_label is
- * not enough context — spell out where the proposal came from.
+ * not enough context: spell out where the proposal came from.
  */
 function originLabel(
   op: PendingOperation,
@@ -183,7 +238,7 @@ function originLabel(
     case 'agent_chat':
       return t('origin_agent_chat')
     // The claude.ai MCP connector mints a gnubok_sk_ key, so MCP traffic
-    // arrives as actor_type='api_key' with the key name as actor_label —
+    // arrives as actor_type='api_key' with the key name as actor_label:
     // keep the label so users with several integrations can tell which one
     // staged the op. 'mcp_oauth' is declared but currently unreachable.
     case 'mcp_oauth':
@@ -223,8 +278,33 @@ function formatRelativeTime(dateStr: string): string {
 }
 
 function CategorizePreview({ data }: { data: Record<string, unknown> }) {
+  // The exact journal lines the approval will post (net cost line, VAT line,
+  // gross bank line, SEK) — staged by the server since the preview-lines fix.
+  const lines = (data.lines as Array<{ account_number?: string; debit_amount?: number; credit_amount?: number; description?: string }>) || []
   const vatLines = (data.vat_lines as Array<{ account_number: string; debit_amount: number; credit_amount: number; description: string }>) || []
 
+  if (lines.length > 0) {
+    return (
+      <div className="space-y-1 text-sm">
+        <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
+        {lines.map((line, i) => {
+          const debitAmt = typeof line.debit_amount === 'number' ? line.debit_amount : 0
+          const creditAmt = typeof line.credit_amount === 'number' ? line.credit_amount : 0
+          return (
+            <div key={i} className="flex justify-between gap-4 font-mono text-xs">
+              <span className="truncate">{line.account_number ?? '?'}{line.description ? ` ${line.description}` : ''}</span>
+              <span className="tabular-nums shrink-0">
+                {debitAmt > 0 ? `D ${formatCurrency(debitAmt)}` : `K ${formatCurrency(creditAmt)}`}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  // Legacy summary for operations staged before the preview carried full
+  // lines: debit/credit accounts + gross amount + separate VAT rows.
   return (
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
@@ -304,11 +384,11 @@ function InvoicePreview({ data }: { data: Record<string, unknown> }) {
       )}
       <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Netto</span>
-        <span className="font-mono tabular-nums text-right">{formatCurrency(data.subtotal as number, (data.currency as string) || 'SEK')}</span>
+        <span className="tabular-nums text-right">{formatCurrency(data.subtotal as number, (data.currency as string) || 'SEK')}</span>
         <span className="text-muted-foreground">Moms</span>
-        <span className="font-mono tabular-nums text-right">{formatCurrency(data.vat_amount as number, (data.currency as string) || 'SEK')}</span>
+        <span className="tabular-nums text-right">{formatCurrency(data.vat_amount as number, (data.currency as string) || 'SEK')}</span>
         <span className="font-medium">Totalt</span>
-        <span className="font-mono tabular-nums font-medium text-right">{formatCurrency(data.total as number, (data.currency as string) || 'SEK')}</span>
+        <span className="tabular-nums font-medium text-right">{formatCurrency(data.total as number, (data.currency as string) || 'SEK')}</span>
       </div>
     </div>
   )
@@ -353,7 +433,7 @@ function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency
         <div key={i} className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs items-baseline">
           <span className="font-mono text-muted-foreground">{line.account_number}</span>
           <span className="truncate">
-            {line.account_name || line.line_description || '—'}
+            {line.account_name || line.line_description || '-'}
           </span>
           <span className="font-mono tabular-nums text-right w-24">
             {line.debit_amount > 0 ? formatCurrency(line.debit_amount, currency || 'SEK') : ''}
@@ -427,7 +507,7 @@ function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
     <div className="space-y-4 text-sm">
       <div>
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
-          Originalverifikation V{original.voucher ?? ''} — {original.entry_date ?? ''}
+          Originalverifikation V{original.voucher ?? ''}, {original.entry_date ?? ''}
         </p>
         <p className="text-xs text-muted-foreground italic mb-2">{original.description ?? ''}</p>
         {original.lines && original.lines.length > 0 && (
@@ -469,7 +549,7 @@ function renderPrimitive(value: unknown): string {
 }
 
 function GenericPreview({ data }: { data: Record<string, unknown> }) {
-  // Skip period_status here — it's surfaced in the dedicated banner, not the
+  // Skip period_status here: it's surfaced in the dedicated banner, not the
   // generic key-value dump (otherwise the approver sees the same fact twice).
   const entries = Object.entries(data).filter(([k, v]) => v != null && v !== '' && k !== 'period_status')
   return (
@@ -514,7 +594,7 @@ function OperationPreview({ op }: { op: PendingOperation }) {
 
 /**
  * Inline period-lock banner. Renders when the staged operation touches a
- * period that's already locked or closed — the server's commit-time trigger
+ * period that's already locked or closed: the server's commit-time trigger
  * will reject it, so we tell the approver up front rather than letting them
  * click and see a generic "Misslyckades" toast. The fiscal_period_id link
  * goes to the periods management page where unlocking is possible.
@@ -527,7 +607,7 @@ function PeriodLockBanner({ period }: { period: PeriodStatusShape }) {
       <div className="flex-1">
         <p className="font-medium text-destructive">
           {period.status === 'closed'
-            ? 'Perioden är stängd permanent (BFL) — kan inte ändras.'
+            ? 'Perioden är stängd permanent (BFL): kan inte ändras.'
             : `Perioden är låst${lockedThrough ? ` t.o.m. ${lockedThrough}` : ''}.`}
         </p>
         <p className="text-xs text-muted-foreground mt-0.5">
@@ -572,7 +652,7 @@ export default function PendingOperationsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showBulkDialog, setShowBulkDialog] = useState(false)
   const [isBulkCommitting, setIsBulkCommitting] = useState(false)
-  // Reject dialog state — separate from the generic destructive-confirm so we
+  // Reject dialog state: separate from the generic destructive-confirm so we
   // can ask for a category + free-text reason that feeds back to the agent.
   const [rejectOp, setRejectOp] = useState<PendingOperation | null>(null)
   const [rejectCategory, setRejectCategory] = useState<PendingOperationRejectionCategory | ''>('')
@@ -629,7 +709,7 @@ export default function PendingOperationsPage() {
   }, [fetchAllCounts])
 
   // Realtime subscription: refetch when ANY pending_operations row changes for
-  // this company. RLS scopes the channel automatically — we don't see other
+  // this company. RLS scopes the channel automatically: we don't see other
   // tenants' events. We refetch the whole list (rather than patching state
   // in-place) so server-side filtering, sorting, and computed fields stay in
   // sync with whatever the API route returned. The counts endpoint isn't
@@ -789,7 +869,7 @@ export default function PendingOperationsPage() {
   const showBulkControls = activeTab === 'pending'
   // Pending ops that meet two criteria: not high risk AND the period covering
   // them is open. We exclude locked/closed periods from bulk because they will
-  // be rejected at commit time anyway — silently letting the user "select all"
+  // be rejected at commit time anyway: silently letting the user "select all"
   // and watching some fail is a worse UX than excluding them up front.
   const bulkEligible = useMemo(
     () =>
@@ -827,7 +907,7 @@ export default function PendingOperationsPage() {
     }
   }
 
-  // "Approve all of this type" — find ops with the same operation_type that are bulk-eligible
+  // "Approve all of this type": find ops with the same operation_type that are bulk-eligible
   function selectAllOfType(operationType: string) {
     const ids = bulkEligible
       .filter((op) => op.operation_type === operationType)
@@ -864,7 +944,7 @@ export default function PendingOperationsPage() {
   const showFilterDot = sourceFilter !== 'all'
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <PageHeader
         title={t('title')}
         description={t('subtitle')}
@@ -933,14 +1013,6 @@ export default function PendingOperationsPage() {
         </DropdownMenu>
       </div>
 
-      {/* First-time reviewers haven't necessarily used the AI chat that staged
-          these — say what the buttons do and that ignoring a proposal is safe. */}
-      {activeTab === 'pending' && (
-        <p className="text-xs text-muted-foreground">
-          {t('explainer')} {t('auto_expiry_note')}
-        </p>
-      )}
-
       <DataList>
         {showBulkControls && bulkEligible.length > 0 && (
           <DataListHeader>
@@ -964,14 +1036,13 @@ export default function PendingOperationsPage() {
               </label>
             </div>
 
-            {/* Only worth showing when there's more than one type to pick from —
+            {/* Only worth showing when there's more than one type to pick from:
                 with a single type it just duplicates "Markera alla". */}
             {typeCounts.length >= 2 && selectedCount === 0 && (
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-xs text-muted-foreground">{t('quick_pick')}</span>
                 {typeCounts.map(([type, count]) => {
-                  const entry = OPERATION_LABEL_KEYS[type]
-                  const label = entry ? t(entry.labelKey) : type
+                  const label = operationLabel(type, t)
                   return (
                     <Button
                       key={type}
@@ -1032,10 +1103,7 @@ export default function PendingOperationsPage() {
           />
         ) : (
           filteredOperations.map((op) => {
-            const entry = OPERATION_LABEL_KEYS[op.operation_type]
-            const config = entry
-              ? { label: t(entry.labelKey), icon: entry.icon, variant: entry.variant }
-              : { label: op.operation_type, icon: ClipboardCheck, variant: 'default' as const }
+            const label = operationLabel(op.operation_type, t)
             const isExpanded = expandedId === op.id
             const period = getPeriodStatus(op)
             const periodLocked = period != null && period.status !== 'open'
@@ -1111,14 +1179,14 @@ export default function PendingOperationsPage() {
               >
                 <DataListPrimary>{op.title}</DataListPrimary>
                 <DataListMeta>
-                  <span className="font-medium text-foreground/70">{config.label}</span>
+                  <span className="font-medium text-foreground/70">{label}</span>
                   {isAgent && (
                     <>
                       <DataListMetaSeparator />
                       <span className="inline-flex items-center gap-1">
                         <Bot className="h-3 w-3" />
                         {/* The origin line doubles as the deep-link into the
-                            originating conversation — no separate strip needed. */}
+                            originating conversation: no separate strip needed. */}
                         {conversationId ? (
                           <a
                             href={`/pending?conversation=${conversationId}`}
@@ -1155,7 +1223,7 @@ export default function PendingOperationsPage() {
                 {op.status === 'rejected' && op.rejection_category && (
                   <p className="mt-1 text-xs text-muted-foreground">
                     Avvisad: {REJECTION_CATEGORY_LABELS[op.rejection_category]}
-                    {op.rejection_reason ? ` — "${op.rejection_reason}"` : ''}
+                    {op.rejection_reason ? `, "${op.rejection_reason}"` : ''}
                   </p>
                 )}
                 {/* rejection_category is always NULL on auto-expired rows, so
@@ -1210,7 +1278,7 @@ export default function PendingOperationsPage() {
         </div>
       </ConfirmationDialog>
 
-      {/* Reject dialog — category + free-text reason. Both optional so the user
+      {/* Reject dialog: category + free-text reason. Both optional so the user
           can still reject quickly without filling anything in. */}
       <Dialog open={rejectOp != null} onOpenChange={(open) => { if (!open) setRejectOp(null) }}>
         <DialogContent className="sm:max-w-md">
@@ -1252,7 +1320,7 @@ export default function PendingOperationsPage() {
                 maxLength={2000}
               />
               <p className="text-xs text-muted-foreground">
-                Synlig för agenten via gnubok_get_recent_rejections — hjälper den att korrigera nästa förslag.
+                Synlig för agenten via gnubok_get_recent_rejections: hjälper den att korrigera nästa förslag.
               </p>
             </div>
           </div>

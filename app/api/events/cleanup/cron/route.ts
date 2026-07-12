@@ -4,13 +4,13 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 
 /**
- * GET /api/events/cleanup/cron — daily 02:00 UTC.
+ * GET /api/events/cleanup/cron: daily 02:00 UTC.
  *
  * Differentiated retention:
  * - Delivery events (invoice.created, transaction.synced, …): 30 days. They
  *   exist for external automation polling (n8n/Make/Zapier) and go stale fast.
  * - Agent telemetry (mcp.*, agent.*): 180 days. Error-rate trends and
- *   skill-load correlation need more than one month of signal — a 30-day
+ *   skill-load correlation need more than one month of signal: a 30-day
  *   window made it impossible to tell whether a tool or skill change actually
  *   moved failure rates.
  *
@@ -41,7 +41,7 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
     return errorResponse(deliveryError, ctx.log, { requestId: ctx.requestId })
   }
 
-  // Pass 2: everything past 180 days — catches the telemetry rows pass 1 skipped.
+  // Pass 2: everything past 180 days, catches the telemetry rows pass 1 skipped.
   const { error: telemetryError, count: telemetryCount } = await supabase
     .from('event_log')
     .delete({ count: 'exact' })

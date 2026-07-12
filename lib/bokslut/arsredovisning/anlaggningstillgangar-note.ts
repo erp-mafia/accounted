@@ -16,7 +16,7 @@
  *
  * Driven entirely off the assets table. Accumulated depreciation is
  * computed from the linear schedule (acquisition_date, useful_life_months,
- * salvage_value) at the relevant as-of date — we do not depend on
+ * salvage_value) at the relevant as-of date: we do not depend on
  * journal-derived avskrivningskonton because not all companies post
  * monthly avskrivningar.
  */
@@ -191,7 +191,7 @@ const fmt = (n: number) => Math.round(n).toLocaleString('sv-SE')
 
 /**
  * Build the anläggningstillgångar roll-forward note. Returns null when no
- * assets fall within the period — the caller should skip the note.
+ * assets fall within the period: the caller should skip the note.
  */
 export function buildAnlaggningstillgangarNote(params: {
   noteNumber: number

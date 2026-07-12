@@ -38,7 +38,7 @@ function createQueueMockSupabase() {
 }
 
 const POSTED_VOUCHER = { id: 'je-1', entry_date: '2026-05-10', status: 'posted' }
-// cash_accounts.id is a UUID — scopeTransactionsToAccount asserts that shape.
+// cash_accounts.id is a UUID: scopeTransactionsToAccount asserts that shape.
 const CA_1930 = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 const CA_1932 = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
 const SEK_PRIMARY = { id: CA_1930, ledger_account: '1930', currency: 'SEK', is_primary: true }
@@ -55,7 +55,7 @@ function enqueueManualLinkSuccess(
   enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null, cash_account_id: null, amount: txAmount, currency: 'SEK' }) })
   enqueue({ data: { id: 'je-1', user_id: 'company-1', status: 'posted' } })
   enqueue({ data: [{ debit_amount: Math.max(txAmount, 0), credit_amount: Math.max(-txAmount, 0), account_number: '1930' }] })
-  enqueue({ data: null, error: null }) // update
+  enqueue({ data: [{ id: 'tx-1' }] }) // update: .select('id') returns the updated row
 }
 
 describe('autoReconcileTransactionForLinkedVoucher', () => {

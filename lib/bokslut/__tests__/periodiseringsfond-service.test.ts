@@ -25,7 +25,7 @@ describe('proposeAvsattning', () => {
   it('caps avsättning at 25% of base', () => {
     const result = proposeAvsattning({
       skattemassigtResultatBeforeAvsattning: 400_000,
-      desiredAmount: 200_000, // user asks for 50% — should be capped
+      desiredAmount: 200_000, // user asks for 50%: should be capped
       fiscalYear: 2025,
     })
     expect(result).not.toBeNull()

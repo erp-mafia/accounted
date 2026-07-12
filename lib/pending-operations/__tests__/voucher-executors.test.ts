@@ -121,14 +121,14 @@ describe('commitPendingOperation: create_voucher', () => {
       // (migration 20260420120001_journal_entry_commit_metadata.sql).
       'user_accept'
     )
-    // findFiscalPeriod must NOT be called when fiscal_period_id is supplied —
+    // findFiscalPeriod must NOT be called when fiscal_period_id is supplied:
     // it's the caller's explicit choice.
     expect(findFiscalPeriod).not.toHaveBeenCalled()
   })
 
   it('runs the executor inside the opts.actor attribution scope (migration 20260619120000)', async () => {
     // The real commitEntry reads getActor() and forwards it to the commit RPC.
-    // Here we assert the dispatcher establishes the scope around the executor —
+    // Here we assert the dispatcher establishes the scope around the executor:
     // the engine mock captures what attribution it would have seen.
     let seenActor: CommitActor | undefined
     vi.mocked(createJournalEntry).mockImplementationOnce(async () => {
@@ -415,7 +415,7 @@ describe('commitPendingOperation: create_voucher', () => {
         entry_date: '2026-03-15',
         description: 'ordinary manual voucher, mid-year, on class-1 accounts',
         fiscal_period_id: 'fp-1',
-        // is_opening_balance omitted — must NOT trigger the IB path or its
+        // is_opening_balance omitted: must NOT trigger the IB path or its
         // extra fiscal_periods lookup, even though the lines are class 1/2.
         lines: [
           { account_number: '1930', debit_amount: 250, credit_amount: 0 },
@@ -508,7 +508,7 @@ describe('commitPendingOperation: create_voucher', () => {
   // gnubok_create_voucher accepts an optional inbox_item_id. On commit, the
   // executor must stamp invoice_inbox_items.created_journal_entry_id (the
   // signal that drops the row out of "needs action") and attach the OCR
-  // document to the new JE. Status is left untouched — the status CHECK only
+  // document to the new JE. Status is left untouched: the status CHECK only
   // allows received|error, so the link column alone marks the row processed.
 
   it('inbox-direct: posts the entry, links the inbox row, and attaches the document', async () => {
@@ -522,13 +522,13 @@ describe('commitPendingOperation: create_voucher', () => {
 
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update — 1 row claimed
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update: 1 row claimed
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
     const op = makePendingOp({
       params: {
         entry_date: '2026-05-12',
-        description: 'Kvitto Clas Ohlson — adapter',
+        description: 'Kvitto Clas Ohlson: adapter',
         fiscal_period_id: 'fp-1',
         inbox_item_id: 'inbox-1',
         document_id: 'doc-1',
@@ -562,7 +562,7 @@ describe('commitPendingOperation: create_voucher', () => {
 
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update — 1 row claimed
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update: 1 row claimed
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
     const op = makePendingOp({
@@ -587,7 +587,7 @@ describe('commitPendingOperation: create_voucher', () => {
   })
 
   it('inbox-direct: document attach failure does NOT roll back the posted entry', async () => {
-    // The verifikat is already posted and immutable — failing the doc link
+    // The verifikat is already posted and immutable: failing the doc link
     // must not cascade into a failed commit, only a logged warning.
     vi.mocked(createJournalEntry).mockResolvedValueOnce(
       makeJournalEntry({ id: 'je-link-fails', voucher_number: 19 })
@@ -596,7 +596,7 @@ describe('commitPendingOperation: create_voucher', () => {
 
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })
-    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update — 1 row claimed
+    enqueue({ data: [{ id: 'inbox-1' }], error: null }) // inbox update: 1 row claimed
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
     const op = makePendingOp({
@@ -619,7 +619,7 @@ describe('commitPendingOperation: create_voucher', () => {
     expect(result.data).toMatchObject({ journal_entry_id: 'je-link-fails', inbox_linked: true })
   })
 
-  it('inbox-direct: zero-rows-updated (another commit already claimed the inbox) — voucher posted, inbox_linked=false, no doc attach', async () => {
+  it('inbox-direct: zero-rows-updated (another commit already claimed the inbox): voucher posted, inbox_linked=false, no doc attach', async () => {
     // Race scenario the .is('created_journal_entry_id', null) predicate is
     // designed to catch: two pending ops on the same inbox item commit in
     // parallel, the loser sees 0 rows updated.
@@ -650,7 +650,7 @@ describe('commitPendingOperation: create_voucher', () => {
 
     expect(result.status).toBe('committed')
     expect(result.data).toMatchObject({ inbox_linked: false })
-    // Critical: document MUST NOT be linked to the racing loser JE — the
+    // Critical: document MUST NOT be linked to the racing loser JE: the
     // inbox already points at the winner's JE.
     expect(linkToJournalEntry).not.toHaveBeenCalled()
   })
@@ -689,14 +689,14 @@ describe('commitPendingOperation: create_voucher', () => {
 
   it('no inbox_item_id: does not touch invoice_inbox_items at all', async () => {
     // Regression guard: standalone voucher creation must not query the inbox
-    // table — that would surprise users who never use the inbox flow.
+    // table: that would surprise users who never use the inbox flow.
     vi.mocked(createJournalEntry).mockResolvedValueOnce(
       makeJournalEntry({ id: 'je-standalone', voucher_number: 21 })
     )
 
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })
-    enqueue({ data: null, error: null }) // dispatcher's commit update — no inbox call between
+    enqueue({ data: null, error: null }) // dispatcher's commit update: no inbox call between
 
     const op = makePendingOp({
       params: {
@@ -1104,7 +1104,7 @@ describe('commitPendingOperation: reverse_entry', () => {
         fiscal_periods: { is_closed: false },
       },
       error: null,
-    }) // pre-flight fetch — per-period OK
+    }) // pre-flight fetch: per-period OK
     // resolvePeriodStatusForDate: company_settings says 2025-12-31 lock_through.
     enqueue({ data: { bookkeeping_locked_through: '2025-12-31' }, error: null })
     enqueue({ data: { id: 'fp-1' }, error: null }) // covering period lookup

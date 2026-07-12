@@ -4,18 +4,28 @@
  *
  * The audit found two repository-wide problems that are being remediated in
  * dedicated campaigns (A1 = route auth/MFA, D1 = money rounding). Those touch
- * hundreds of sites and won't land in one PR — so this guard makes sure the
+ * hundreds of sites and won't land in one PR: so this guard makes sure the
  * count can only go DOWN, never up, while the migrations are in flight.
  *
  * Checks:
- *   1. raw-route-auth  — an `app/api/**\/route.ts` that calls
+ *   1. raw-route-auth : an `app/api/**\/route.ts` that calls
  *      `supabase.auth.getUser()` directly instead of going through
  *      `requireAuth()` / `withRouteContext()` (the only guards that enforce
  *      MFA AAL2 on hosted). Tracked as a file-set so a NEW offending route
  *      fails CI even if an old one was fixed in the same PR.
- *   2. naive-ore-round — `Math.round(x * 100) / 100`, which is subtly wrong on
+ *   2. naive-ore-round: `Math.round(x * 100) / 100`, which is subtly wrong on
  *      exact-half values (see lib/money.ts `roundOre`). Tracked as a count.
  *      The canonical rounding modules are excluded.
+ *   3. direct-jel-insert: a file that inserts into `journal_entry_lines`
+ *      outside the sanctioned writers. During the dimensions dual-write window
+ *      every line writer must derive cost_center/project via
+ *      lineDimensionColumns() from the dimensions JSONB map
+ *      (lib/bookkeeping/dimension-resolver.ts): a new direct insert site can
+ *      silently diverge the mirror columns. Tracked as a file-set.
+ *   4. pinned-dep    : a dependency pinned to an exact version (PINNED_DEPS)
+ *      whose package.json spec or locked version drifted from the pin. Guards
+ *      against a repeat of the @anthropic-ai/bedrock-sdk 0.32.0 prod outage
+ *      (empty Bedrock stream). No baseline: any drift is a hard failure.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -31,7 +41,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const BASELINE_PATH = path.join(ROOT, 'scripts', 'checks', 'antipatterns-baseline.json')
 
 const IGNORE_DIRS = new Set(['node_modules', '.next', '.git', 'dist', 'build', 'coverage'])
-// The sanctioned home of the öre-round implementation — must not count against itself.
+// The sanctioned home of the öre-round implementation: must not count against itself.
 const ROUND_EXEMPT = new Set(['lib/money.ts', 'lib/bokslut/rounding.ts'])
 
 const RAW_AUTH_RE = /\.auth\.getUser\(/
@@ -75,6 +85,37 @@ function findRawRouteAuth() {
     .sort()
 }
 
+// Sanctioned journal_entry_lines insert sites. engine/storno write mirrors via
+// dimension-resolver; sie-import and sandbox seed write neither dims nor
+// mirrors (DB defaults keep them consistent).
+const JEL_INSERT_SANCTIONED = new Set([
+  'lib/bookkeeping/engine.ts',
+  'lib/core/bookkeeping/storno-service.ts',
+  'lib/import/sie-import.ts',
+  'app/api/sandbox/seed/route.ts',
+])
+// Matches an insert CHAINED on the lines table (`.from('journal_entry_lines').insert(`,
+// with optional whitespace/newlines in the chain): select-only readers don't count.
+const JEL_INSERT_CHAIN_RE = /\.from\(\s*['"]journal_entry_lines['"]\s*\)\s*\.\s*(insert|upsert)\(/
+
+/** Files that insert into journal_entry_lines outside the sanctioned writers. */
+function findDirectJelInserts() {
+  const files = [
+    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  return files
+    .filter((f) => {
+      const r = rel(f)
+      if (JEL_INSERT_SANCTIONED.has(r)) return false
+      if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
+      return JEL_INSERT_CHAIN_RE.test(fs.readFileSync(f, 'utf8'))
+    })
+    .map(rel)
+    .sort()
+}
+
 /** Count of naive Math.round(x*100)/100 occurrences (lines) across source. */
 function countNaiveRound() {
   const files = [
@@ -93,9 +134,44 @@ function countNaiveRound() {
   return count
 }
 
+// Dependencies pinned to an EXACT version on purpose, because a bump broke prod
+// and must not silently return via `npm update`, a dependabot bump, or a manual
+// install. Any drift (in package.json OR the lockfile) fails CI. See DECISIONS.md.
+const PINNED_DEPS = [
+  {
+    name: '@anthropic-ai/bedrock-sdk',
+    version: '0.29.1',
+    reason:
+      '0.32.0 (grouped dependabot bump #884) broke Bedrock streaming in prod: empty stream, ' +
+      '"request ended without sending any chunks", taking down the AI assistant + invoice OCR. ' +
+      'Keep 0.29.1 until 0.32.x streaming is verified against Bedrock.',
+  },
+]
+
+/** Pinned deps whose package.json spec or locked version drifted from the pin. */
+function findPinnedDepViolations() {
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
+  const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'))
+  const declared = { ...pkg.dependencies, ...pkg.devDependencies }
+  const out = []
+  for (const pin of PINNED_DEPS) {
+    const spec = declared[pin.name]
+    if (spec !== undefined && spec !== pin.version) {
+      out.push({ ...pin, where: 'package.json', actual: spec })
+    }
+    const locked = lock.packages?.[`node_modules/${pin.name}`]?.version
+    if (locked !== undefined && locked !== pin.version) {
+      out.push({ ...pin, where: 'package-lock.json', actual: locked })
+    }
+  }
+  return out
+}
+
 const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
+  directJelInsert: findDirectJelInserts(),
+  pinnedDepViolations: findPinnedDepViolations(),
 }
 
 const isUpdate = process.argv.includes('--update')
@@ -136,6 +212,38 @@ if (newAuthFiles.length) {
   console.error('  → wrap the route in withRouteContext (or call requireAuth) so MFA is enforced.')
 }
 
+// 1b. direct-jel-insert: allowlist lives in this file (JEL_INSERT_SANCTIONED),
+// no baseline: any unsanctioned insert site is a hard failure.
+if (current.directJelInsert.length) {
+  failed = true
+  console.error(
+    `\n✗ direct-jel-insert: ${current.directJelInsert.length} file(s) insert into journal_entry_lines ` +
+      `outside the sanctioned writers:`,
+  )
+  current.directJelInsert.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → route line writes through lib/bookkeeping/engine.ts, or derive cost_center/project via\n' +
+      '    lineDimensionColumns() (lib/bookkeeping/dimension-resolver.ts) and add the file to\n' +
+      '    JEL_INSERT_SANCTIONED in this script with a justification.',
+  )
+}
+
+// 1c. pinned-dep: a version-pinned dependency must match its pin EXACTLY, in
+// both package.json and the lockfile. No baseline: any drift is a hard failure.
+if (current.pinnedDepViolations.length) {
+  failed = true
+  console.error(`\n✗ pinned-dep: ${current.pinnedDepViolations.length} version-pinned dependency change(s):`)
+  current.pinnedDepViolations.forEach((v) =>
+    console.error(
+      `    ${v.name} in ${v.where}: found "${v.actual}", must be exactly "${v.version}".\n      ${v.reason}`,
+    ),
+  )
+  console.error(
+    '  → restore the pin (npm install <name>@<version> --save-exact). Only change PINNED_DEPS in\n' +
+      '    this script once the upstream regression is confirmed fixed.',
+  )
+}
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -156,9 +264,9 @@ if (fixedAuthFiles.length || current.naiveOreRound < baseline.naiveOreRound.coun
 }
 
 if (failed) {
-  console.error('\nAntipattern guard failed — see above.')
+  console.error('\nAntipattern guard failed: see above.')
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, direct-jel-insert: 0, pinned-dep: 0).`,
 )

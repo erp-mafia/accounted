@@ -1,28 +1,13 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { createLogger } from '@/lib/logger'
 
-const log = createLogger('api.supplier_invoices.id')
-
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'supplier_invoice.get',
+  async (_request, { supabase, companyId }, { params }) => {
   const { id } = await params
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
 
   const { data: invoice, error } = await supabase
     .from('supplier_invoices')
@@ -38,25 +23,13 @@ export async function GET(
   }
 
   return NextResponse.json({ data: invoice })
-}
+  },
+)
 
-export async function PUT(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'supplier_invoice.update',
+  async (request, { supabase, companyId }, { params }) => {
   const { id } = await params
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
 
   // Only allow editing registered invoices
   const { data: existing } = await supabase
@@ -94,25 +67,14 @@ export async function PUT(
   }
 
   return NextResponse.json({ data })
-}
+  },
+  { requireWrite: true },
+)
 
-export async function DELETE(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
+export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'supplier_invoice.delete',
+  async (_request, { supabase, companyId, log }, { params }) => {
   const { id } = await params
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
 
   // Only allow deleting registered invoices without journal entries
   const { data: existing } = await supabase
@@ -126,7 +88,7 @@ export async function DELETE(
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
-  // Block direct deletion of credit notes — deleting just the row would orphan the
+  // Block direct deletion of credit notes: deleting just the row would orphan the
   // posted reversal JE and silently break momsdeklaration. The user must instead
   // run "Ångra kreditering" on the original, which storno-reverses the JE and
   // restores the original's status atomically.
@@ -149,9 +111,9 @@ export async function DELETE(
 
   // Booked invoices must go through the credit flow (mirrors the credit-note
   // guard above). Two independent blockers:
-  //   (a) a posted registration verifikat — deleting the row would orphan it
+  //   (a) a posted registration verifikat: deleting the row would orphan it
   //       and silently understate 2440/2641 for the momsdeklaration;
-  //   (b) an accrual schedule — accrual_schedules.supplier_invoice_id is
+  //   (b) an accrual schedule: accrual_schedules.supplier_invoice_id is
   //       ON DELETE RESTRICT, so the invoice DELETE below would fail AFTER the
   //       items were already deleted, leaving a broken invoice with zero rows.
   if (existing.registration_journal_entry_id) {
@@ -188,4 +150,6 @@ export async function DELETE(
   }
 
   return NextResponse.json({ success: true })
-}
+  },
+  { requireWrite: true },
+)

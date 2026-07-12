@@ -84,7 +84,7 @@ export default function ArticleDetailPage({
 
   // Update runs through useSubmitWithAccountActivation so an
   // ACCOUNTS_NOT_IN_CHART response (revenue account not yet activated) opens
-  // the standard activate-and-retry dialog — same UX as the journal entry form.
+  // the standard activate-and-retry dialog: same UX as the journal entry form.
   const pendingUpdateRef = useRef<CreateArticleInput | null>(null)
   const submitUpdate = useCallback(async () => {
     const response = await fetch(`/api/articles/${id}`, {
@@ -189,17 +189,15 @@ export default function ArticleDetailPage({
               <Icon className="h-6 w-6 text-primary" />
             </div>
             <div>
-              <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{article.name}</h1>
+              <h1 className="font-display text-2xl md:text-3xl tracking-tight">{article.name}</h1>
               <div className="flex items-center gap-2 mt-1">
-                <Badge variant="secondary">{t(ARTICLE_TYPE_KEY[article.type])}</Badge>
-                {article.article_number && (
-                  <span className="text-sm text-muted-foreground tabular-nums">
-                    {article.article_number}
-                  </span>
-                )}
                 <Badge variant={article.active ? 'success' : 'secondary'}>
                   {article.active ? t('status_active') : t('status_inactive')}
                 </Badge>
+                <span className="text-sm text-muted-foreground tabular-nums">
+                  {t(ARTICLE_TYPE_KEY[article.type])}
+                  {article.article_number ? ` · #${article.article_number}` : ''}
+                </span>
               </div>
             </div>
           </div>
@@ -276,7 +274,7 @@ export default function ArticleDetailPage({
             {article.type === 'tjanst' && article.housework_type && (
               <div className="text-sm flex items-center justify-between">
                 <span className="text-muted-foreground">{t('label_housework')}</span>
-                <Badge variant="secondary">{article.housework_type}</Badge>
+                <span>{article.housework_type}</span>
               </div>
             )}
           </CardContent>

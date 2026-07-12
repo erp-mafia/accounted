@@ -2,7 +2,7 @@ import { defineAgentIntent } from './types'
 import { SONNET_MODEL, THINKING_BUDGET_STANDARD } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
-// invoice.draft — "Fråga om denna faktura" from the invoice form.
+// invoice.draft: "Fråga om denna faktura" from the invoice form.
 //
 // Declarative atom mode: loads VAT + invoice compliance + e-invoicing
 // upfront, plus the company's vertical + modifier atoms. The agent helps
@@ -12,7 +12,7 @@ import { renderAgentGroundRules } from './shared-rules'
 //
 // The user does the actual drafting in the form; this intent advises.
 // gnubok_create_invoice / send_invoice are NOT in the tool list because
-// the form already submits to those endpoints — the agent shouldn't race
+// the form already submits to those endpoints: the agent shouldn't race
 // the form.
 //
 // Plan ref: dev_docs/specialized-agent-plan.md §8 (V1 intent #2).
@@ -87,7 +87,7 @@ export const invoiceDraft = defineAgentIntent<InvoiceDraftArgs, CapturedInvoiceD
 
   capture: async ({ customer_id, invoice_id }, { supabase, companyId }) => {
     // Resolve the effective customer_id. When the FAB lands here from
-    // /invoices/[id] it only knows invoice_id — read customer_id off the
+    // /invoices/[id] it only knows invoice_id: read customer_id off the
     // invoice row so the customer section of the prompt isn't empty.
     type InvoiceRow = {
       id: string
@@ -209,12 +209,12 @@ export const invoiceDraft = defineAgentIntent<InvoiceDraftArgs, CapturedInvoiceD
         lines.push('Senaste fakturor till denna kund:')
         for (const r of captured.recent_invoices) {
           const amt = r.total != null ? `${r.total.toLocaleString('sv-SE')} ${r.currency ?? 'SEK'}` : '?'
-          lines.push(`  • ${r.invoice_number ?? '?'} (${r.invoice_date ?? '?'}, ${r.status ?? '?'}) — ${amt}`)
+          lines.push(`  • ${r.invoice_number ?? '?'} (${r.invoice_date ?? '?'}, ${r.status ?? '?'}): ${amt}`)
         }
         lines.push('')
       }
     } else {
-      lines.push('Ingen kund vald ännu. Be användaren välja eller skapa en kund först om de behöver hjälp med momsbehandling — momskod beror på kundens land och typ.')
+      lines.push('Ingen kund vald ännu. Be användaren välja eller skapa en kund först om de behöver hjälp med momsbehandling: momskod beror på kundens land och typ.')
       lines.push('')
     }
 
@@ -232,17 +232,17 @@ export const invoiceDraft = defineAgentIntent<InvoiceDraftArgs, CapturedInvoiceD
       }
     }
 
-    lines.push('Arbetssätt: hämta information via verktygsanrop FÖRST (tyst — statusraderna visar att du söker, och ditt resonemang sker i tankekanalen), föreslå sedan. Skriv din förklaring EN gång efteråt, inte i flera block runt anropen.')
+    lines.push('Arbetssätt: hämta information via verktygsanrop FÖRST (tyst: statusraderna visar att du söker, och ditt resonemang sker i tankekanalen), föreslå sedan. Skriv din förklaring EN gång efteråt, inte i flera block runt anropen.')
     lines.push('- Hjälp användaren välja rätt momsbehandling baserat på kundens land + typ + VAT-validering:')
     lines.push('  · SE-kund: 25/12/6 % beroende på vara/tjänst.')
     lines.push('  · EU näringsidkare med validerat VAT-nr: omvänd skattskyldighet (reverse charge) på tjänster.')
     lines.push('  · EU privatperson: SE-moms (eller OSS-tröskel om varor).')
     lines.push('  · Utanför EU: export, 0 %.')
     lines.push('- Föreslå betalningsvillkor, OCR/Bankgiro-uppgifter, eventuell ROT/RUT, EU-text på fakturan vid reverse charge.')
-    lines.push('- Du SKAPAR INTE fakturan — användaren gör det själv i formuläret. Du rådger.')
-    lines.push('- Om kunden saknar VAT-nummer men är EU-näringsidkare, säg till — VIES-validering krävs för reverse charge.')
+    lines.push('- Du SKAPAR INTE fakturan. Användaren gör det själv i formuläret. Du rådger.')
+    lines.push('- Om kunden saknar VAT-nummer men är EU-näringsidkare, säg till: VIES-validering krävs för reverse charge.')
     lines.push('')
-    lines.push('Svara på svenska och var direkt — ditt första svar är det första användaren ser.')
+    lines.push('Svara på svenska och var direkt: ditt första svar är det första användaren ser.')
     return lines.join('\n')
   },
 })

@@ -5,7 +5,7 @@
  * commit-side executors reach the Skatteverket extension only through the
  * registry-resolved `services` channel. This module defines the SHARED shape
  * the extension's commit services return and the recoverable-error class the
- * dispatcher uses to release an op back to `pending` — both live in core so the
+ * dispatcher uses to release an op back to `pending`: both live in core so the
  * extension (which may import core freely) and `commit.ts` agree on the
  * contract without core ever importing the extension.
  */
@@ -52,7 +52,7 @@ export interface SkatteverketCommitServices {
  * Thrown by a commit executor when the failure is recoverable (extension
  * disabled, no SKV connection, rate-limited). The dispatcher catches it,
  * releases the atomic claim back to `pending`, and surfaces { error, code,
- * http_status } — mirroring the AccountsNotInChartError release path.
+ * http_status }: mirroring the AccountsNotInChartError release path.
  */
 export class SkatteverketRecoverableError extends Error {
   constructor(

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
@@ -23,7 +23,7 @@ vi.mock('@/lib/branding/service', () => ({
   getBranding: () => mocks.getBranding(),
 }))
 
-import { GET } from '../route'
+import { GET, POST } from '../route'
 
 function buildAuthorizeUrl(params: Record<string, string>): string {
   const url = new URL('http://localhost/api/mcp-oauth/authorize')
@@ -31,9 +31,18 @@ function buildAuthorizeUrl(params: Record<string, string>): string {
   return url.toString()
 }
 
-function buildSupabase(user: { id: string } | null, companyName = 'Test AB') {
+function buildSupabase(
+  user: { id: string } | null,
+  companyName = 'Test AB',
+  aal: { currentLevel: string; nextLevel: string } = { currentLevel: 'aal2', nextLevel: 'aal2' },
+) {
   return {
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user }, error: null }) },
+    auth: {
+      getUser: vi.fn().mockResolvedValue({ data: { user }, error: null }),
+      mfa: {
+        getAuthenticatorAssuranceLevel: vi.fn().mockResolvedValue({ data: aal, error: null }),
+      },
+    },
     from: vi.fn().mockReturnValue({
       select: vi.fn().mockReturnValue({
         eq: vi.fn().mockReturnValue({
@@ -47,7 +56,7 @@ function buildSupabase(user: { id: string } | null, companyName = 'Test AB') {
   }
 }
 
-describe('GET /api/mcp-oauth/authorize — CSP', () => {
+describe('GET /api/mcp-oauth/authorize: CSP', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
@@ -96,7 +105,7 @@ describe('GET /api/mcp-oauth/authorize — CSP', () => {
 
     const csp = response.headers.get('Content-Security-Policy') ?? ''
     expect(csp).toContain('https://claude.com')
-    // Origin only — no path, no query string in the source expression.
+    // Origin only: no path, no query string in the source expression.
     expect(csp).not.toContain('/api/oauth/callback')
     expect(csp).not.toContain('env=prod')
   })
@@ -104,7 +113,7 @@ describe('GET /api/mcp-oauth/authorize — CSP', () => {
   it('renders both read and write rows when client passes only the legacy `mcp` scope marker', async () => {
     // Claude's connector sends scope=mcp today. The consent UI must render
     // every scope group so the user can opt into write/approval rows if they
-    // want — but each write/approve row MUST start unchecked. Affirmative
+    // want, but each write/approve row MUST start unchecked. Affirmative
     // opt-in is the access-control gate (GDPR Art. 25(2), ISO 27001:2022
     // A.5.18 / A.8.2, SOC 2 CC6.3, ASVS V10.2.2 / V2.3.1).
     const request = new Request(
@@ -185,5 +194,94 @@ describe('GET /api/mcp-oauth/authorize — CSP', () => {
     // Important: the form-action whitelist must never be populated from an
     // untrusted origin. A 400 here keeps the allowlist as the single source
     // of truth for which origins can land at this endpoint.
+  })
+})
+
+describe('MFA step-up on /api/mcp-oauth/authorize', () => {
+  // Consent here ultimately mints a long-lived API key that bypasses MFA on
+  // every subsequent request, so an AAL1 (password-only) session must never
+  // reach the consent page or approve it. The middleware MFA gate exempts
+  // /api/mcp-oauth/*, making the route responsible for its own step-up.
+  const authorizeParams = {
+    response_type: 'code',
+    redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+    code_challenge: 'abc',
+    code_challenge_method: 'S256',
+    scope: 'mcp',
+    state: 'xyz',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
+    vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'false')
+    mocks.isAllowedRedirectUri.mockResolvedValue(true)
+    mocks.requireCompanyId.mockResolvedValue('company-1')
+    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('GET redirects an AAL1 session to /mfa/verify with returnTo', async () => {
+    mocks.createClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, 'Test AB', { currentLevel: 'aal1', nextLevel: 'aal2' }),
+    )
+
+    const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
+
+    expect(response.status).toBeGreaterThanOrEqual(300)
+    expect(response.status).toBeLessThan(400)
+    const location = new URL(response.headers.get('location')!)
+    expect(location.pathname).toBe('/mfa/verify')
+    const returnTo = new URL(location.searchParams.get('returnTo')!, location.origin)
+    expect(returnTo.pathname).toBe('/api/mcp-oauth/authorize')
+    expect(returnTo.searchParams.get('state')).toBe('xyz')
+  })
+
+  it('POST rejects an AAL1 session even when the consent form is forged', async () => {
+    mocks.createClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, 'Test AB', { currentLevel: 'aal1', nextLevel: 'aal2' }),
+    )
+
+    const formData = new FormData()
+    formData.set('consent', 'allow')
+    const response = await POST(
+      new Request(buildAuthorizeUrl(authorizeParams), { method: 'POST', body: formData }),
+    )
+
+    expect(response.status).toBeGreaterThanOrEqual(300)
+    expect(response.status).toBeLessThan(400)
+    expect(new URL(response.headers.get('location')!).pathname).toBe('/mfa/verify')
+    // No auth code must be minted: the redirect target is the step-up page,
+    // never the client callback.
+    expect(response.headers.get('location')).not.toContain('code=')
+  })
+
+  it('GET renders consent for an AAL2 session', async () => {
+    mocks.createClient.mockResolvedValue(
+      buildSupabase({ id: 'user-1' }, 'Test AB', { currentLevel: 'aal2', nextLevel: 'aal2' }),
+    )
+
+    const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
+    expect(response.status).toBe(200)
+  })
+
+  it('GET skips step-up for BankID-linked users (inherently 2FA)', async () => {
+    const supabase = buildSupabase(
+      { id: 'user-1' },
+      'Test AB',
+      { currentLevel: 'aal1', nextLevel: 'aal2' },
+    )
+    ;(supabase.auth.getUser as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: { user: { id: 'user-1', app_metadata: { bankid_linked: true } } },
+      error: null,
+    })
+    mocks.createClient.mockResolvedValue(supabase)
+
+    const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
+    expect(response.status).toBe(200)
   })
 })

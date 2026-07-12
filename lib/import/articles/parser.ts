@@ -38,7 +38,7 @@ function normalizeVatRate(raw: string | null): { rate: number; note: string | nu
   let n = parseFloat(cleaned)
   // Unparseable (e.g. a Fortnox `momskod` like "MP1") → default with a note.
   if (Number.isNaN(n)) {
-    return { rate: 25, note: `Kunde inte tolka momssats "${raw}" — satt till 25 %` }
+    return { rate: 25, note: `Kunde inte tolka momssats "${raw}": satt till 25 %` }
   }
   // Fraction form (0.25 → 25).
   if (n > 0 && n < 1) n = n * 100
@@ -133,7 +133,7 @@ export function parseArticlesFile(
   // Surface incl-VAT price columns once for the whole file.
   if (columns.price_col !== null && INCL_VAT_HEADER_RE.test(headers[columns.price_col] ?? '')) {
     warnings.push(
-      `Priskolumnen "${headers[columns.price_col]}" verkar vara inkl. moms — priser importeras som exkl. moms. Kontrollera värdena.`,
+      `Priskolumnen "${headers[columns.price_col]}" verkar vara inkl. moms: priser importeras som exkl. moms. Kontrollera värdena.`,
     )
   }
 
@@ -187,7 +187,7 @@ export function parseArticlesFile(
       unit,
       price_excl_vat: price,
       vat_rate: vatRate,
-      // A note means the rate was snapped or defaulted — flag it for review.
+      // A note means the rate was snapped or defaulted: flag it for review.
       vat_rate_adjusted: vatNote !== null,
       revenue_account: revenueAccount,
       cost_price: costPrice,

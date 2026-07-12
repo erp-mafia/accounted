@@ -3,7 +3,7 @@
  *
  * List chart-of-accounts entries (BAS chart). Filter by ?class=1..8
  * (BAS account class) and ?active=false (include archived). Sorted by
- * sort_order — agents can render the BAS hierarchy directly from this.
+ * sort_order: agents can render the BAS hierarchy directly from this.
  */
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
@@ -39,13 +39,13 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/accounts',
   summary: 'List chart-of-accounts entries (BAS chart).',
   description:
-    'Returns every account in the company\'s chart of accounts, ordered by sort_order (the BAS canonical sequence). Filter by ?class=<1..8> (BAS account class — 1=assets, 2=equity/liabilities, 3=revenue, 4=cost of goods sold, 5=övriga externa kostnader (rents, supplies, services), 6=övriga externa kostnader (marketing, professional services, IT), 7=labour, 8=financial). Note: BAS 5xxx and 6xxx are both övriga externa kostnader but cover distinct subgroups — see the BAS chart for the canonical mapping. Pass ?active=false to include archived accounts.',
+    'Returns every account in the company\'s chart of accounts, ordered by sort_order (the BAS canonical sequence). Filter by ?class=<1..8> (BAS account class: 1=assets, 2=equity/liabilities, 3=revenue, 4=cost of goods sold, 5=övriga externa kostnader (rents, supplies, services), 6=övriga externa kostnader (marketing, professional services, IT), 7=labour, 8=financial). Note: BAS 5xxx and 6xxx are both övriga externa kostnader but cover distinct subgroups; see the BAS chart for the canonical mapping. Pass ?active=false to include archived accounts.',
   useWhen:
     'You need account numbers and names to render verifikation tables, build a custom report, or look up the canonical BAS label for an account.',
   doNotUseFor:
-    'Fetching balances — use the trial-balance report. Creating new accounts — this endpoint is read-only in v1 (use the dashboard).',
+    'Fetching balances: use the trial-balance report. Creating new accounts: this endpoint is read-only in v1 (use the dashboard).',
   pitfalls: [
-    'account_number is a STRING — "1930", not 1930. The leading character can be 0 in non-BAS plans.',
+    'account_number is a STRING: "1930", not 1930. The leading character can be 0 in non-BAS plans.',
     'is_system_account=true means the account was seeded by Accounted and cannot be archived or renamed.',
     'Default filter excludes archived accounts; pass ?active=false to include them.',
   ],

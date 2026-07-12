@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import type {
   Asset,
   AssetCategory,
@@ -14,13 +16,13 @@ import type {
  * Default BAS account triples per category. The user can override at create
  * time; these only kick in when the form doesn't specify accounts. Every
  * account here MUST exist in BAS_REFERENCE (lib/bookkeeping/bas-data/) so the
- * engine's backfillStandardBASAccounts can seed it on a minimal chart —
+ * engine's backfillStandardBASAccounts can seed it on a minimal chart:
  * otherwise depreciation throws AccountsNotInChartError (#755). A guard test in
  * asset-service.test.ts enforces that invariant.
  *
  * vehicle (1240) and computer (1250) both sit in the maskiner-och-inventarier
  * asset range, so their depreciation maps to 7832 (Avskrivningar på
- * inventarier, verktyg och installationer) — 7833/7834 are not in the standard
+ * inventarier, verktyg och installationer). 7833/7834 are not in the standard
  * BAS catalog (removed as non-standard in #463).
  */
 export const DEFAULT_ACCOUNTS_BY_CATEGORY: Record<
@@ -60,7 +62,7 @@ export interface CreateAssetInput {
 
 /**
  * Create a new asset. Defaults BAS accounts from the category mapping when
- * the caller doesn't override them. Does NOT post a journal entry — the
+ * the caller doesn't override them. Does NOT post a journal entry: the
  * acquisition is assumed to already be in the books (bank payment or
  * supplier invoice). Posting an acquisition entry alongside an existing
  * payment would double-count.
@@ -116,19 +118,28 @@ export async function listAssets(
   companyId: string,
   options: { activeOnly?: boolean } = {},
 ): Promise<Asset[]> {
-  let query = supabase
-    .from('assets')
-    .select('*')
-    .eq('company_id', companyId)
-    .order('acquisition_date', { ascending: true })
+  // Paginated past PostgREST's silent 1000-row cap — the depreciation engine
+  // iterates this list, so truncation would silently skip assets at year-end.
+  // Secondary order on id gives the stable total order .range() paging
+  // requires; acquisition_date alone is not unique.
+  try {
+    return await fetchAllRows<Asset>(({ from, to }) => {
+      let query = supabase
+        .from('assets')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('acquisition_date', { ascending: true })
+        .order('id', { ascending: true })
 
-  if (options.activeOnly) {
-    query = query.is('disposed_at', null)
+      if (options.activeOnly) {
+        query = query.is('disposed_at', null)
+      }
+
+      return query.range(from, to)
+    })
+  } catch (err) {
+    throw new Error(`Failed to list assets: ${err instanceof Error ? err.message : String(err)}`)
   }
-
-  const { data, error } = await query
-  if (error) throw new Error(`Failed to list assets: ${error.message}`)
-  return (data ?? []) as Asset[]
 }
 
 export async function getAsset(
@@ -148,7 +159,7 @@ export async function getAsset(
 
 /**
  * Thrown when the caller tries to correct an asset's acquisition basis
- * (date / cost / category) after that basis has already driven postings —
+ * (date / cost / category) after that basis has already driven postings:
  * i.e. the asset is disposed, or planenliga avskrivningar have been booked.
  * Allowing the edit would silently desync the posted vouchers from the
  * register, so the caller must reverse/storno first. The `code` field is
@@ -160,8 +171,8 @@ export class AssetCorrectionBlockedError extends Error {
   constructor(readonly reason: 'disposed' | 'depreciation_posted') {
     super(
       reason === 'disposed'
-        ? 'Cannot correct acquisition date/cost/category of a disposed asset — reverse the disposal first.'
-        : 'Cannot correct acquisition date/cost/category after depreciation has been posted — reverse the depreciation (storno) first.',
+        ? 'Cannot correct acquisition date/cost/category of a disposed asset: reverse the disposal first.'
+        : 'Cannot correct acquisition date/cost/category after depreciation has been posted: reverse the depreciation (storno) first.',
     )
     this.name = 'AssetCorrectionBlockedError'
   }
@@ -170,7 +181,7 @@ export class AssetCorrectionBlockedError extends Error {
 export interface UpdateAssetInput {
   name?: string
   notes?: string | null
-  /** "Correction" fields — they redefine the depreciation basis, so changing
+  /** "Correction" fields: they redefine the depreciation basis, so changing
    *  them implies the original entry was wrong. Only permitted while the asset
    *  is neither disposed nor depreciated (updateAsset() enforces; throws
    *  AssetCorrectionBlockedError otherwise). Use the disposal/storno flow for a
@@ -178,7 +189,7 @@ export interface UpdateAssetInput {
   category?: AssetCategory
   acquisition_date?: string
   acquisition_cost?: number
-  /** Salvage value, useful life, method, accounts — editable as long as the
+  /** Salvage value, useful life, method, accounts: editable as long as the
    *  asset isn't disposed yet (DB trigger enforces this beyond the API).
    *  Unlike the correction fields above, revising useful life or method is a
    *  legitimate *prospective* change and stays allowed after depreciation. */
@@ -199,7 +210,7 @@ export interface UpdateAssetInput {
 
 /**
  * True when at least one depreciation_schedules row for this asset is linked
- * to a posted journal entry. A `head` count keeps it cheap — we only need
+ * to a posted journal entry. A `head` count keeps it cheap: we only need
  * existence, not the rows. Used to gate acquisition-basis corrections.
  */
 async function hasPostedDepreciation(
@@ -227,12 +238,12 @@ async function hasPostedDepreciation(
  * hasPostedDepreciation. We look at the ledger instead: any posted CREDIT to
  * the asset's ackumulerade-avskrivningar account (12x9) is depreciation.
  *
- * The wrinkle is shared accounts — siblings in the same category default to
+ * The wrinkle is shared accounts: siblings in the same category default to
  * the same 12x9, so a sibling's *engine* avskrivning would otherwise look like
  * depreciation of this asset. We exclude entries that depreciation_schedules
  * attributes to a *different* asset, so engine siblings don't cause a false
  * block. What remains is depreciation tied to this asset (engine or manual)
- * plus the rare case of a manual sibling entry on a shared account — there we
+ * plus the rare case of a manual sibling entry on a shared account, there we
  * err toward blocking, which is the safe direction for a basis correction.
  */
 async function hasManualDepreciationPosted(
@@ -240,7 +251,7 @@ async function hasManualDepreciationPosted(
   companyId: string,
   asset: Asset,
 ): Promise<boolean> {
-  // Engine-posted depreciation entries that belong to OTHER assets — these are
+  // Engine-posted depreciation entries that belong to OTHER assets: these are
   // safely attributable and must not block a correction of this asset.
   const { data: otherSched, error: schedError } = await supabase
     .from('depreciation_schedules')
@@ -259,21 +270,26 @@ async function hasManualDepreciationPosted(
       .filter((id): id is string => id !== null),
   )
 
-  const { data: lines, error } = await supabase
-    .from('journal_entry_lines')
-    .select('journal_entry_id, journal_entries!inner(company_id, status)')
-    .eq('account_number', asset.bas_accumulated_account)
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.status', 'posted')
-    .gt('credit_amount', 0)
-  if (error) {
+  // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts): posted
+  // entries for the company first, then their lines on the accumulated
+  // account with a credit.
+  let lines: { journal_entry_id: string }[]
+  try {
+    lines = await fetchEntryLines<{ journal_entry_id: string }>({
+      supabase,
+      lineColumns: 'journal_entry_id',
+      filterEntries: (q: EntryLinesQuery) =>
+        q.eq('company_id', companyId).eq('status', 'posted'),
+      filterLines: (q: EntryLinesQuery) =>
+        q.eq('account_number', asset.bas_accumulated_account).gt('credit_amount', 0),
+      attachEntriesAs: null,
+    })
+  } catch (err) {
     throw new Error(
-      `Failed to scan ledger depreciation for asset ${asset.id}: ${error.message}`,
+      `Failed to scan ledger depreciation for asset ${asset.id}: ${err instanceof Error ? err.message : String(err)}`,
     )
   }
-  return ((lines ?? []) as { journal_entry_id: string }[]).some(
-    (line) => !siblingEngineEntries.has(line.journal_entry_id),
-  )
+  return lines.some((line) => !siblingEngineEntries.has(line.journal_entry_id))
 }
 
 export async function updateAsset(
@@ -316,7 +332,7 @@ export async function updateAsset(
     if (existing.disposed_at) {
       throw new AssetCorrectionBlockedError('disposed')
     }
-    // Engine-driven (depreciation_schedules) OR hand-posted (ledger) — either
+    // Engine-driven (depreciation_schedules) OR hand-posted (ledger): either
     // means the basis has driven postings and a correction must go via storno.
     if (
       (await hasPostedDepreciation(supabase, companyId, assetId)) ||
@@ -330,7 +346,7 @@ export async function updateAsset(
   // The BAS triple is category-scoped (INK2R mapping + engine defaults depend
   // on it). When the category changes and the caller didn't supply explicit
   // accounts, reset the triple to the new category's defaults so the chart
-  // stays aligned — mirrors createAsset()'s defaulting.
+  // stays aligned, mirrors createAsset()'s defaulting.
   if (
     input.category !== undefined &&
     existing &&
@@ -362,7 +378,7 @@ export async function updateAsset(
     const ranges = BAS_RANGES_BY_CATEGORY[finalCategory]
     if (input.bas_asset_account && !inBasRange(input.bas_asset_account, ranges.asset)) {
       throw new Error(
-        `bas_asset_account ${input.bas_asset_account} is outside ${ranges.asset[0]}–${ranges.asset[1]} for ${finalCategory}`,
+        `bas_asset_account ${input.bas_asset_account} is outside ${ranges.asset[0]}-${ranges.asset[1]} for ${finalCategory}`,
       )
     }
     if (
@@ -370,7 +386,7 @@ export async function updateAsset(
       !inBasRange(input.bas_accumulated_account, ranges.accumulated)
     ) {
       throw new Error(
-        `bas_accumulated_account ${input.bas_accumulated_account} is outside ${ranges.accumulated[0]}–${ranges.accumulated[1]} for ${finalCategory}`,
+        `bas_accumulated_account ${input.bas_accumulated_account} is outside ${ranges.accumulated[0]}-${ranges.accumulated[1]} for ${finalCategory}`,
       )
     }
     if (
@@ -378,10 +394,10 @@ export async function updateAsset(
       !inBasRange(input.bas_expense_account, ranges.expense)
     ) {
       throw new Error(
-        `bas_expense_account ${input.bas_expense_account} is outside ${ranges.expense[0]}–${ranges.expense[1]} for ${finalCategory}`,
+        `bas_expense_account ${input.bas_expense_account} is outside ${ranges.expense[0]}-${ranges.expense[1]} for ${finalCategory}`,
       )
     }
-    // Anskaffning and ackumulerade-avskrivningar must be different accounts —
+    // Anskaffning and ackumulerade-avskrivningar must be different accounts:
     // see CreateAssetSchema validateBasOverrides for the rationale.
     const finalAsset = input.bas_asset_account ?? existing.bas_asset_account
     const finalAccumulated = input.bas_accumulated_account ?? existing.bas_accumulated_account
@@ -425,7 +441,7 @@ export async function updateAsset(
       Number(finalTarget) >= Number(finalCost)
     ) {
       throw new Error(
-        'restvarde_target måste vara lägre än anskaffningsvärdet — annars finns inget kvar att skriva av.',
+        'restvarde_target måste vara lägre än anskaffningsvärdet: annars finns inget kvar att skriva av.',
       )
     }
   }
@@ -462,7 +478,7 @@ function inBasRange(account: string, range: [string, string]): boolean {
 }
 
 export interface DisposeAssetInput {
-  /** ISO date of disposal — typically the day of sale or scrapping. */
+  /** ISO date of disposal: typically the day of sale or scrapping. */
   disposed_at: string
   /** Cash / receivable received for the asset, INCLUDING VAT when applicable.
    *  Zero for scrapping. */
@@ -471,7 +487,7 @@ export interface DisposeAssetInput {
    *  proceeds. Defaults to 1930 (företagskonto). */
   proceeds_account?: string
   /** Fiscal period the disposal entry lands in. Caller resolves this from
-   *  disposed_at — we don't auto-derive to keep the period-lock check at
+   *  disposed_at: we don't auto-derive to keep the period-lock check at
    *  the route layer. */
   fiscal_period_id: string
   /**
@@ -493,7 +509,7 @@ export interface DisposeAssetInput {
    */
   vat_treatment?: VatTreatment
   /**
-   * Jämkning amount per ML 8a kap 7 § — when the disposal happens inside
+   * Jämkning amount per ML 8a kap 7 §: when the disposal happens inside
    * the korrigeringstid, the originally-deducted input VAT must be
    * partially paid back. The caller computes this via
    * computeJamkningAmount() (lib/bokslut/assets/jamkning.ts) and passes
@@ -531,7 +547,7 @@ export interface DisposalResult {
  *   - Credit 2641 + Debit loss account for the jämkning amount when the
  *     disposal happens inside the korrigeringstid (ML 8a kap 4-7 §§)
  *   - Debit 78xx (loss on sale) OR Credit 30xx (gain on sale) for the
- *     net gain / loss vs NBV — accounts branch on category (3013/7813
+ *     net gain / loss vs NBV: accounts branch on category (3013/7813
  *     for immaterial, 3971/7971 for building / markanläggning, 3973/7973
  *     for everything else).
  *
@@ -573,7 +589,7 @@ export async function disposeAsset(
   // the engine self-defending against direct callers (MCP, scripts).
   if (proceedsVat > 0.005 && !vatTreatment) {
     throw new Error(
-      'vat_treatment krävs när proceeds_vat > 0 — engine kan inte avgöra rätt 26xx-konto.',
+      'vat_treatment krävs när proceeds_vat > 0: engine kan inte avgöra rätt 26xx-konto.',
     )
   }
   // Treatments that produce no VAT line must carry 0 VAT.
@@ -589,7 +605,7 @@ export async function disposeAsset(
     )
   }
 
-  // Gain/loss is computed on the NET proceeds — VAT is pass-through and
+  // Gain/loss is computed on the NET proceeds: VAT is pass-through and
   // never hits the income statement.
   const netBookValue = round2(acquisitionCost - accumulated)
   const gainOrLoss = round2(proceedsNet - netBookValue)
@@ -602,7 +618,7 @@ export async function disposeAsset(
   //
   // Booking direction: We credit 2641 to reverse the original input-VAT
   // deduction (2641 normal balance is debit; a credit reduces the
-  // deduction). The offset is debited to BAS 6991 — jämkning is a VAT
+  // deduction). The offset is debited to BAS 6991: jämkning is a VAT
   // correction per ML 8a kap, NOT a disposal loss, so it must NOT hit
   // the 78xx förlust-vid-avyttring accounts. See the jämkning lines
   // below for details.
@@ -633,7 +649,7 @@ export async function disposeAsset(
     })
   }
 
-  // Output VAT line — credit the matching 26xx account.
+  // Output VAT line: credit the matching 26xx account.
   if (proceedsVat > 0.005 && vatTreatment) {
     const vatAccount = outputVatAccountFor(vatTreatment)
     if (vatAccount) {
@@ -646,7 +662,7 @@ export async function disposeAsset(
     }
   }
 
-  // Disposal gain/loss accounts vary by asset class — BAS 2026 splits them
+  // Disposal gain/loss accounts vary by asset class: BAS 2026 splits them
   // because INK2R routes each pair to a different field. Mixing them
   // misclassifies in the tax declaration.
   //   - immaterial            → 3013 (vinst) / 7813 (förlust)
@@ -674,7 +690,7 @@ export async function disposeAsset(
     })
   }
 
-  // Jämkning lines — credit 2641 + debit 6991. Jämkning is a VAT
+  // Jämkning lines: credit 2641 + debit 6991. Jämkning is a VAT
   // correction per ML 8a kap, NOT a disposal loss. Routing it through
   // the 78xx förlust-vid-avyttring accounts would distort both the
   // gain/loss line on the income statement and the INK2R mapping, and
@@ -697,7 +713,7 @@ export async function disposeAsset(
     })
   }
 
-  // K3 component breakdown — when the asset was depreciated per-component,
+  // K3 component breakdown: when the asset was depreciated per-component,
   // we surface the component list in the journal entry notes so auditors
   // can trace which underlying components contributed to the disposal.
   // Gain/loss math is unchanged: total book value is still
@@ -817,7 +833,7 @@ async function sumPostedDepreciation(
  * Sum prior depreciation booked against an asset's 78xx avskrivningskonto
  * up to and including `asOfDate`. Reads from journal_entry_lines so manually-
  * posted avskrivningsverifikationer (i.e. not driven by depreciation_schedules)
- * are also counted — the declining-balance engine needs the most accurate
+ * are also counted: the declining-balance engine needs the most accurate
  * net book value to compute the next period's charge.
  *
  * Only counts posted entries against the asset's `bas_expense_account`
@@ -851,25 +867,30 @@ export async function getAccumulatedDepreciationAsOf(
   }
   if (!asset) return 0
 
+  // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
   type Row = { debit_amount: number | string | null; credit_amount: number | string | null }
-  const { data, error } = await supabase
-    .from('journal_entry_lines')
-    .select(
-      'debit_amount, credit_amount, journal_entries!inner(company_id, status, entry_date)',
-    )
-    .eq('account_number', asset.bas_expense_account)
-    .eq('journal_entries.company_id', asset.company_id)
-    .eq('journal_entries.status', 'posted')
-    .lte('journal_entries.entry_date', asOfDate)
-
-  if (error) {
+  let data: Row[]
+  try {
+    data = await fetchEntryLines<Row>({
+      supabase,
+      lineColumns: 'debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', asset.company_id)
+          .eq('status', 'posted')
+          .lte('entry_date', asOfDate),
+      filterLines: (q: EntryLinesQuery) =>
+        q.eq('account_number', asset.bas_expense_account),
+      attachEntriesAs: null,
+    })
+  } catch (err) {
     throw new Error(
-      `Failed to sum accumulated depreciation for asset ${assetId}: ${error.message}`,
+      `Failed to sum accumulated depreciation for asset ${assetId}: ${err instanceof Error ? err.message : String(err)}`,
     )
   }
 
-  return ((data ?? []) as Row[]).reduce((sum, row) => {
-    // Expense account — normal balance is debit. Net = debit − credit so
+  return data.reduce((sum, row) => {
+    // Expense account: normal balance is debit. Net = debit − credit so
     // any storno (reversal) is netted out.
     return sum + ((Number(row.debit_amount) || 0) - (Number(row.credit_amount) || 0))
   }, 0)

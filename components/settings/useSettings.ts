@@ -17,7 +17,7 @@ export interface SettingsState {
   settings: CompanySettings | null
   /** True while the fetch for the active company is in flight. */
   isLoading: boolean
-  /** True once a fetch finished without a row (or errored) — distinct from loading. */
+  /** True once a fetch finished without a row (or errored): distinct from loading. */
   error: boolean
   updateSettings: (updates: Partial<CompanySettings>) => void
   refetch: () => Promise<void>
@@ -27,11 +27,11 @@ export interface SettingsState {
  * Standalone settings fetcher: loads `company_settings` for the active company
  * (resolved from CompanyContext). Use this OUTSIDE the settings surface (e.g. the
  * reports VAT view). Inside the settings surface, read the shared instance with
- * `useSettings()` instead — `SettingsProvider` mounts exactly one of these so
+ * `useSettings()` instead: `SettingsProvider` mounts exactly one of these so
  * switching sections reuses the loaded data rather than refetching.
  *
  * Auth is already enforced by middleware before any authenticated page renders,
- * so this no longer round-trips `auth.getUser()` — it gates purely on the
+ * so this no longer round-trips `auth.getUser()`: it gates purely on the
  * resolved company id, removing a request from the path the skeleton waits on.
  */
 export function useCompanySettings(): SettingsState {
@@ -55,7 +55,7 @@ export function useCompanySettings(): SettingsState {
 
     const supabase = createClient()
     // maybeSingle() so a missing row resolves to { data: null } instead of
-    // throwing PGRST116 — a company created outside the onboarding flow may have
+    // throwing PGRST116: a company created outside the onboarding flow may have
     // no company_settings row yet, and that must not be treated as a hard error
     // mid-query (it's surfaced as `error` below once the fetch settles).
     const { data, error: queryError } = await supabase

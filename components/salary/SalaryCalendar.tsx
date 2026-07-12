@@ -11,7 +11,7 @@ import {
   startOfMonth,
   startOfWeek,
 } from 'date-fns'
-import { sv } from 'date-fns/locale'
+import { enUS, sv } from 'date-fns/locale'
 import {
   Activity,
   Baby,
@@ -27,6 +27,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -68,21 +69,22 @@ interface WorkedDay {
 }
 
 interface AbsenceTypeMeta {
-  label: string
-  shortLabel: string
+  /** Translation keys in the `salary_calendar` namespace. */
+  labelKey: string
+  shortLabelKey: string
   icon: LucideIcon
   pillClass: string
 }
 
 const TYPE_META: Record<AbsenceType, AbsenceTypeMeta> = {
-  sick:          { label: 'Sjukfrånvaro',     shortLabel: 'Sjuk',   icon: HeartPulse,   pillClass: 'bg-red-100 text-red-800' },
-  vab:           { label: 'VAB',              shortLabel: 'VAB',    icon: Baby,         pillClass: 'bg-amber-100 text-amber-800' },
-  parental:      { label: 'Föräldraledighet', shortLabel: 'Förä.',  icon: Heart,        pillClass: 'bg-emerald-100 text-emerald-800' },
-  pregnancy:     { label: 'Graviditetspenning', shortLabel: 'Grav.', icon: Heart,       pillClass: 'bg-pink-100 text-pink-800' },
-  care_relative: { label: 'Närståendepenning', shortLabel: 'Närst.', icon: Heart,       pillClass: 'bg-blue-100 text-blue-800' },
-  study:         { label: 'Studieledig',      shortLabel: 'Studie', icon: Activity,     pillClass: 'bg-indigo-100 text-indigo-800' },
-  unpaid_leave:  { label: 'Tjänstledig utan lön', shortLabel: 'Tjänstl.', icon: MinusCircle, pillClass: 'bg-slate-100 text-slate-800' },
-  other_leave:   { label: 'Övrig ledighet',   shortLabel: 'Övrigt', icon: Activity,     pillClass: 'bg-zinc-100 text-zinc-800' },
+  sick:          { labelKey: 'type_sick',          shortLabelKey: 'type_sick_short',          icon: HeartPulse,   pillClass: 'bg-red-100 text-red-800' },
+  vab:           { labelKey: 'type_vab',           shortLabelKey: 'type_vab_short',           icon: Baby,         pillClass: 'bg-amber-100 text-amber-800' },
+  parental:      { labelKey: 'type_parental',      shortLabelKey: 'type_parental_short',      icon: Heart,        pillClass: 'bg-emerald-100 text-emerald-800' },
+  pregnancy:     { labelKey: 'type_pregnancy',     shortLabelKey: 'type_pregnancy_short',     icon: Heart,        pillClass: 'bg-pink-100 text-pink-800' },
+  care_relative: { labelKey: 'type_care_relative', shortLabelKey: 'type_care_relative_short', icon: Heart,        pillClass: 'bg-blue-100 text-blue-800' },
+  study:         { labelKey: 'type_study',         shortLabelKey: 'type_study_short',         icon: Activity,     pillClass: 'bg-indigo-100 text-indigo-800' },
+  unpaid_leave:  { labelKey: 'type_unpaid_leave',  shortLabelKey: 'type_unpaid_leave_short',  icon: MinusCircle,  pillClass: 'bg-slate-100 text-slate-800' },
+  other_leave:   { labelKey: 'type_other_leave',   shortLabelKey: 'type_other_leave_short',   icon: Activity,     pillClass: 'bg-zinc-100 text-zinc-800' },
 }
 
 const TYPE_ORDER: AbsenceType[] = ['sick', 'vab', 'parental', 'pregnancy', 'care_relative', 'study', 'unpaid_leave', 'other_leave']
@@ -119,6 +121,9 @@ export function SalaryCalendar({
   onChange,
   onAbsenceCountsChange,
 }: SalaryCalendarProps) {
+  const t = useTranslations('salary_calendar')
+  const locale = useLocale()
+  const dateLocale = locale === 'en' ? enUS : sv
   const isHourly = salaryType === 'hourly'
   const periodStartDate = useMemo(() => parseISO(periodStart), [periodStart])
   const periodEndDate = useMemo(() => parseISO(periodEnd), [periodEnd])
@@ -151,15 +156,15 @@ export function SalaryCalendar({
       }
       const responses = await Promise.all(requests)
       const absJson = await responses[0]!.json()
-      if (!responses[0]!.ok) throw new Error(absJson.error || 'Kunde inte ladda frånvaro')
+      if (!responses[0]!.ok) throw new Error(absJson.error || t('error_load_absence'))
       setAbsences(absJson.data ?? [])
       if (isHourly && responses[1]) {
         const wJson = await responses[1].json()
-        if (!responses[1].ok) throw new Error(wJson.error || 'Kunde inte ladda arbetade timmar')
+        if (!responses[1].ok) throw new Error(wJson.error || t('error_load_worked'))
         setWorked(wJson.data ?? [])
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Okänt fel')
+      setError(e instanceof Error ? e.message : t('unknown_error'))
     } finally {
       setLoading(false)
     }
@@ -180,7 +185,7 @@ export function SalaryCalendar({
     return m
   }, [absences])
 
-  // Live counts within the pay period — unique dates per category. Emit so
+  // Live counts within the pay period: unique dates per category. Emit so
   // the parent can render day badges without waiting for a recalculation.
   // Parental groups parental + pregnancy + care_relative to match how the
   // existing snapshot column lumps them.
@@ -246,7 +251,7 @@ export function SalaryCalendar({
   const handleCellDblClick = (date: Date) => {
     if (readOnly) return
     const key = format(date, 'yyyy-MM-dd')
-    // Only open the inspector if there's something to inspect — otherwise
+    // Only open the inspector if there's something to inspect: otherwise
     // it would just be an empty dialog.
     if (workedMap.has(key) || (absenceMap.get(key)?.length ?? 0) > 0) {
       setInspecting(key)
@@ -272,9 +277,7 @@ export function SalaryCalendar({
 
   const handleBulkDelete = async () => {
     if (selected.size === 0 || readOnly) return
-    if (!confirm(
-      `Ta bort allt (arbetad tid och frånvaro) på ${selected.size} ${selected.size === 1 ? 'dag' : 'dagar'}?`,
-    )) return
+    if (!confirm(t('confirm_bulk_delete', { count: selected.size }))) return
     setDeleting(true)
     setError(null)
     try {
@@ -288,7 +291,7 @@ export function SalaryCalendar({
           )
           if (!wRes.ok) {
             const j = await wRes.json().catch(() => ({}))
-            throw new Error(j.error || `Kunde inte ta bort arbetad tid på ${date}`)
+            throw new Error(j.error || t('error_delete_worked_date', { date }))
           }
         }
         const aRes = await fetch(
@@ -297,14 +300,14 @@ export function SalaryCalendar({
         )
         if (!aRes.ok) {
           const j = await aRes.json().catch(() => ({}))
-          throw new Error(j.error || `Kunde inte ta bort frånvaro på ${date}`)
+          throw new Error(j.error || t('error_delete_absence_date', { date }))
         }
       }
       clearSelection()
       await load()
       onChange?.()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Okänt fel')
+      setError(e instanceof Error ? e.message : t('unknown_error'))
     } finally {
       setDeleting(false)
     }
@@ -319,18 +322,18 @@ export function SalaryCalendar({
             variant="ghost"
             size="sm"
             onClick={() => setVisibleMonth(prev => addDays(startOfMonth(prev), -1))}
-            aria-label="Föregående månad"
+            aria-label={t('prev_month')}
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <span className="text-sm font-medium tabular-nums">
-            {format(visibleMonth, 'MMMM yyyy', { locale: sv })}
+            {format(visibleMonth, 'MMMM yyyy', { locale: dateLocale })}
           </span>
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setVisibleMonth(prev => addDays(endOfMonth(prev), 1))}
-            aria-label="Nästa månad"
+            aria-label={t('next_month')}
           >
             <ChevronRight className="h-4 w-4" />
           </Button>
@@ -342,18 +345,18 @@ export function SalaryCalendar({
             size="sm"
             onClick={handleFillWeekdays}
             className="text-xs"
-            title="Markera alla vardagar i perioden som inte redan har arbetad tid"
+            title={t('fill_weekdays_title')}
           >
             <CalendarPlus className="mr-1 h-3.5 w-3.5" />
-            Fyll vardagar
+            {t('fill_weekdays')}
           </Button>
         )}
       </div>
 
       {/* Weekday header */}
       <div className="grid grid-cols-7 border-b bg-muted/40 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        {['Mån', 'Tis', 'Ons', 'Tor', 'Fre', 'Lör', 'Sön'].map(d => (
-          <div key={d} className="px-2 py-1.5 text-center">{d}</div>
+        {(['wd_mon', 'wd_tue', 'wd_wed', 'wd_thu', 'wd_fri', 'wd_sat', 'wd_sun'] as const).map(d => (
+          <div key={d} className="px-2 py-1.5 text-center">{t(d)}</div>
         ))}
       </div>
 
@@ -387,7 +390,7 @@ export function SalaryCalendar({
                 today && 'ring-1 ring-inset ring-primary/40',
                 isSelected && 'ring-2 ring-inset ring-primary bg-primary/5',
               )}
-              title={hasContent ? 'Dubbelklicka för detaljer' : undefined}
+              title={hasContent ? t('cell_details_title') : undefined}
             >
               <span className={cn('tabular-nums', today && 'font-semibold')}>
                 {format(date, 'd')}
@@ -411,10 +414,10 @@ export function SalaryCalendar({
                             'inline-flex items-center gap-0.5 rounded-full px-1 py-px text-[10px] font-medium',
                             meta.pillClass,
                           )}
-                          title={`${meta.label} (${a.hours}h)`}
+                          title={t('pill_title', { label: t(meta.labelKey), hours: String(a.hours) })}
                         >
                           <Icon className="h-2.5 w-2.5" aria-hidden />
-                          <span>{meta.shortLabel}</span>
+                          <span>{t(meta.shortLabelKey)}</span>
                         </span>
                       )
                     })}
@@ -431,12 +434,12 @@ export function SalaryCalendar({
         <span>
           {isHourly && (
             <>
-              Arbetade timmar i perioden:{' '}
+              {t('worked_hours_in_period')}{' '}
               <span className="tabular-nums font-medium text-foreground">{periodTotalHours} h</span>
               {' · '}
             </>
           )}
-          Klicka för att markera, shift-klicka för intervall, dubbelklicka för detaljer.
+          {t('hint_click')}
         </span>
       </div>
 
@@ -447,18 +450,18 @@ export function SalaryCalendar({
             <span className="inline-flex h-3 w-3 items-center justify-center rounded-full bg-emerald-100">
               <Clock className="h-2 w-2 text-emerald-800" aria-hidden />
             </span>
-            <span>Arbetad tid</span>
+            <span>{t('worked_time')}</span>
           </span>
         )}
-        {TYPE_ORDER.map(t => {
-          const meta = TYPE_META[t]
+        {TYPE_ORDER.map(type => {
+          const meta = TYPE_META[type]
           const Icon = meta.icon
           return (
-            <span key={t} className="inline-flex items-center gap-1">
+            <span key={type} className="inline-flex items-center gap-1">
               <span className={cn('inline-flex h-3 w-3 items-center justify-center rounded-full', meta.pillClass)}>
                 <Icon className="h-2 w-2" aria-hidden />
               </span>
-              <span>{meta.label}</span>
+              <span>{t(meta.labelKey)}</span>
             </span>
           )
         })}
@@ -475,12 +478,12 @@ export function SalaryCalendar({
         <div className="flex flex-wrap items-center justify-between gap-2 border-t bg-muted/40 px-3 py-2">
           <div className="text-xs">
             <span className="font-medium tabular-nums">{selected.size}</span>{' '}
-            {selected.size === 1 ? 'dag' : 'dagar'} valda
+            {t('days_selected', { count: selected.size })}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="ghost" size="sm" onClick={clearSelection} disabled={deleting}>
               <X className="mr-1 h-3.5 w-3.5" />
-              Rensa val
+              {t('clear_selection')}
             </Button>
             <Button
               variant="outline"
@@ -493,14 +496,14 @@ export function SalaryCalendar({
               ) : (
                 <Trash2 className="mr-1 h-3.5 w-3.5" />
               )}
-              Ta bort
+              {t('delete')}
             </Button>
             <Button variant="outline" size="sm" onClick={() => setBulkMode('absence')} disabled={deleting}>
-              Frånvaro…
+              {t('absence_action')}
             </Button>
             {isHourly && (
               <Button size="sm" onClick={() => setBulkMode('worked')} disabled={deleting}>
-                Arbetade timmar…
+                {t('worked_hours_action')}
               </Button>
             )}
           </div>
@@ -577,6 +580,7 @@ function BulkWorkedDialog({
   onClose,
   onSaved,
 }: BulkWorkedDialogProps) {
+  const t = useTranslations('salary_calendar')
   const [hours, setHours] = useState<string>('8')
   const [notes, setNotes] = useState<string>('')
   const [submitting, setSubmitting] = useState(false)
@@ -592,7 +596,7 @@ function BulkWorkedDialog({
     setConflicts([])
     try {
       if (!isFinite(hoursNum) || hoursNum < 0 || hoursNum > 24) {
-        throw new Error('Timmar måste vara mellan 0 och 24')
+        throw new Error(t('error_hours_range'))
       }
       // 0 hours = "no worked time on these days" → delete any existing rows.
       // Avoids tripping the DB CHECK (hours > 0) and matches user intent.
@@ -604,7 +608,7 @@ function BulkWorkedDialog({
           )
           if (!res.ok) {
             const j = await res.json().catch(() => ({}))
-            throw new Error(j.error || `Kunde inte ta bort ${date}`)
+            throw new Error(j.error || t('error_delete_date', { date }))
           }
         }
         onSaved([])
@@ -625,10 +629,10 @@ function BulkWorkedDialog({
         setConflicts(json.data?.conflicts ?? [])
         return
       }
-      if (!res.ok) throw new Error(json.error || 'Kunde inte spara timmar')
+      if (!res.ok) throw new Error(json.error || t('error_save_hours'))
       onSaved([])
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Okänt fel')
+      setError(e instanceof Error ? e.message : t('unknown_error'))
     } finally {
       setSubmitting(false)
     }
@@ -638,17 +642,17 @@ function BulkWorkedDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Arbetade timmar</DialogTitle>
+          <DialogTitle>{t('bulk_worked_title')}</DialogTitle>
           <DialogDescription>
             {isClear
-              ? `Arbetad tid tas bort för ${dates.length} ${dates.length === 1 ? 'dag' : 'dagar'}.`
-              : `${dates.length} ${dates.length === 1 ? 'dag' : 'dagar'} markeras som arbetade. Befintliga timmar för dessa datum skrivs över.`}
+              ? t('bulk_worked_clear_desc', { count: dates.length })
+              : t('bulk_worked_desc', { count: dates.length })}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
           <div className="space-y-1.5">
-            <label className="text-xs font-medium" htmlFor="bulk-w-hours">Timmar per dag</label>
+            <label className="text-xs font-medium" htmlFor="bulk-w-hours">{t('hours_per_day')}</label>
             <input
               id="bulk-w-hours"
               type="number"
@@ -661,12 +665,12 @@ function BulkWorkedDialog({
               className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm tabular-nums shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             />
             <p className="text-[11px] text-muted-foreground">
-              Sätt till 0 för att ta bort arbetad tid på de valda dagarna.
+              {t('hours_zero_hint')}
             </p>
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium" htmlFor="bulk-w-notes">Anteckning (valfri)</label>
+            <label className="text-xs font-medium" htmlFor="bulk-w-notes">{t('notes_label')}</label>
             <textarea
               id="bulk-w-notes"
               value={notes}
@@ -680,7 +684,7 @@ function BulkWorkedDialog({
           {conflicts.length > 0 && (
             <div className="space-y-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs">
               <div className="font-medium text-amber-900">
-                {conflicts.length} {conflicts.length === 1 ? 'dag utelämnades' : 'dagar utelämnades'} — kombinationen med befintlig frånvaro hade överstigit 24 timmar.
+                {t('conflicts_worked', { count: conflicts.length })}
               </div>
               <ul className="list-disc space-y-0.5 pl-4 text-amber-800 tabular-nums">
                 {conflicts.map(c => <li key={c.date}>{c.date}</li>)}
@@ -694,13 +698,13 @@ function BulkWorkedDialog({
         </div>
 
         <DialogFooter className="gap-2">
-          <Button variant="outline" size="sm" onClick={onClose} disabled={submitting}>Stäng</Button>
+          <Button variant="outline" size="sm" onClick={onClose} disabled={submitting}>{t('close')}</Button>
           {conflicts.length > 0 ? (
-            <Button size="sm" onClick={() => onSaved(conflicts)}>OK</Button>
+            <Button size="sm" onClick={() => onSaved(conflicts)}>{t('ok')}</Button>
           ) : (
             <Button size="sm" onClick={handleSave} disabled={submitting}>
               {submitting && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
-              {isClear ? 'Ta bort' : 'Spara'}
+              {isClear ? t('delete') : t('save')}
             </Button>
           )}
         </DialogFooter>
@@ -726,6 +730,7 @@ function BulkAbsenceDialog({
   onClose,
   onSaved,
 }: BulkAbsenceDialogProps) {
+  const t = useTranslations('salary_calendar')
   const [absenceType, setAbsenceType] = useState<AbsenceType>('sick')
   const [hours, setHours] = useState<string>('8')
   const [notes, setNotes] = useState<string>('')
@@ -740,9 +745,9 @@ function BulkAbsenceDialog({
     try {
       const hoursNum = parseFloat(hours)
       if (!isFinite(hoursNum) || hoursNum <= 0 || hoursNum > 24) {
-        throw new Error('Timmar måste vara mellan 0 och 24')
+        throw new Error(t('error_hours_range'))
       }
-      // No batch endpoint for absence — call POST per date so we can isolate
+      // No batch endpoint for absence: call POST per date so we can isolate
       // 24h-cap conflicts. Pay-period sized loops are fine.
       const localConflicts: BulkConflict[] = []
       for (const date of dates) {
@@ -764,7 +769,7 @@ function BulkAbsenceDialog({
         }
         if (!res.ok) {
           const j = await res.json().catch(() => ({}))
-          throw new Error(j.error || `Kunde inte spara frånvaro på ${date}`)
+          throw new Error(j.error || t('error_save_absence_date', { date }))
         }
       }
       if (localConflicts.length > 0) {
@@ -773,7 +778,7 @@ function BulkAbsenceDialog({
       }
       onSaved([])
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Okänt fel')
+      setError(e instanceof Error ? e.message : t('unknown_error'))
     } finally {
       setSubmitting(false)
     }
@@ -783,28 +788,27 @@ function BulkAbsenceDialog({
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Frånvaro</DialogTitle>
+          <DialogTitle>{t('bulk_absence_title')}</DialogTitle>
           <DialogDescription>
-            {dates.length} {dates.length === 1 ? 'dag' : 'dagar'} markeras som frånvaro.
-            Sjuklöneberäkning, karensavdrag och AGI-rapportering härleds automatiskt.
+            {t('bulk_absence_desc', { count: dates.length })}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
           <div className="space-y-1.5">
-            <label className="text-xs font-medium">Typ</label>
+            <label className="text-xs font-medium">{t('type_label')}</label>
             <Select value={absenceType} onValueChange={v => setAbsenceType(v as AbsenceType)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {TYPE_ORDER.map(t => (
-                  <SelectItem key={t} value={t}>{TYPE_META[t].label}</SelectItem>
+                {TYPE_ORDER.map(type => (
+                  <SelectItem key={type} value={type}>{t(TYPE_META[type].labelKey)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium" htmlFor="bulk-a-hours">Timmar per dag</label>
+            <label className="text-xs font-medium" htmlFor="bulk-a-hours">{t('hours_per_day')}</label>
             <input
               id="bulk-a-hours"
               type="number"
@@ -818,7 +822,7 @@ function BulkAbsenceDialog({
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium" htmlFor="bulk-a-notes">Anteckning (valfri)</label>
+            <label className="text-xs font-medium" htmlFor="bulk-a-notes">{t('notes_label')}</label>
             <textarea
               id="bulk-a-notes"
               value={notes}
@@ -832,7 +836,7 @@ function BulkAbsenceDialog({
           {conflicts.length > 0 && (
             <div className="space-y-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs">
               <div className="font-medium text-amber-900">
-                {conflicts.length} {conflicts.length === 1 ? 'dag utelämnades' : 'dagar utelämnades'} — kombinationen med befintlig arbetad tid hade överstigit 24 timmar.
+                {t('conflicts_absence', { count: conflicts.length })}
               </div>
               <ul className="list-disc space-y-0.5 pl-4 text-amber-800 tabular-nums">
                 {conflicts.map(c => <li key={c.date}>{c.date}</li>)}
@@ -846,13 +850,13 @@ function BulkAbsenceDialog({
         </div>
 
         <DialogFooter className="gap-2">
-          <Button variant="outline" size="sm" onClick={onClose} disabled={submitting}>Stäng</Button>
+          <Button variant="outline" size="sm" onClick={onClose} disabled={submitting}>{t('close')}</Button>
           {conflicts.length > 0 ? (
-            <Button size="sm" onClick={() => onSaved(conflicts)}>OK</Button>
+            <Button size="sm" onClick={() => onSaved(conflicts)}>{t('ok')}</Button>
           ) : (
             <Button size="sm" onClick={handleSave} disabled={submitting}>
               {submitting && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
-              Spara
+              {t('save')}
             </Button>
           )}
         </DialogFooter>
@@ -882,6 +886,9 @@ function DayInspectorDialog({
   onClose,
   onChanged,
 }: DayInspectorDialogProps) {
+  const t = useTranslations('salary_calendar')
+  const locale = useLocale()
+  const dateLocale = locale === 'en' ? enUS : sv
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
@@ -893,12 +900,12 @@ function DayInspectorDialog({
       const res = await fetch(`/api/salary/employees/${employeeId}/worked-hours?date=${date}`, { method: 'DELETE' })
       if (!res.ok) {
         const j = await res.json().catch(() => ({}))
-        throw new Error(j.error || 'Kunde inte ta bort arbetad tid')
+        throw new Error(j.error || t('error_delete_worked'))
       }
       onChanged()
       onClose()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Okänt fel')
+      setError(e instanceof Error ? e.message : t('unknown_error'))
     } finally {
       setBusy(null)
     }
@@ -914,13 +921,13 @@ function DayInspectorDialog({
       )
       if (!res.ok) {
         const j = await res.json().catch(() => ({}))
-        throw new Error(j.error || 'Kunde inte ta bort frånvaro')
+        throw new Error(j.error || t('error_delete_absence'))
       }
       onChanged()
       // Stay open if there's other content; close if this was the last entry.
       if (absences.length === 1 && !worked) onClose()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Okänt fel')
+      setError(e instanceof Error ? e.message : t('unknown_error'))
     } finally {
       setBusy(null)
     }
@@ -931,10 +938,10 @@ function DayInspectorDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {format(parseISO(date), 'd MMMM yyyy', { locale: sv })}
+            {format(parseISO(date), 'd MMMM yyyy', { locale: dateLocale })}
           </DialogTitle>
           <DialogDescription>
-            Översikt av arbetad tid och frånvaro på den här dagen.
+            {t('inspector_desc')}
           </DialogDescription>
         </DialogHeader>
 
@@ -944,8 +951,8 @@ function DayInspectorDialog({
               <div className="flex items-center gap-2 text-sm">
                 <Clock className="h-4 w-4 text-emerald-700" />
                 <div>
-                  <div className="font-medium">Arbetad tid</div>
-                  <div className="text-xs text-muted-foreground tabular-nums">{worked.hours} timmar</div>
+                  <div className="font-medium">{t('worked_time')}</div>
+                  <div className="text-xs text-muted-foreground tabular-nums">{t('hours_count', { hours: String(worked.hours) })}</div>
                   {worked.notes && <div className="text-xs text-muted-foreground italic">{worked.notes}</div>}
                 </div>
               </div>
@@ -954,7 +961,7 @@ function DayInspectorDialog({
                 size="sm"
                 onClick={handleDeleteWorked}
                 disabled={busy !== null}
-                aria-label="Ta bort arbetad tid"
+                aria-label={t('delete_worked_aria')}
               >
                 {busy === 'worked' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
               </Button>
@@ -969,8 +976,8 @@ function DayInspectorDialog({
                 <div className="flex items-center gap-2 text-sm">
                   <Icon className="h-4 w-4" />
                   <div>
-                    <div className="font-medium">{meta.label}</div>
-                    <div className="text-xs opacity-80 tabular-nums">{a.hours} timmar</div>
+                    <div className="font-medium">{t(meta.labelKey)}</div>
+                    <div className="text-xs opacity-80 tabular-nums">{t('hours_count', { hours: String(a.hours) })}</div>
                     {a.notes && <div className="text-xs opacity-70 italic">{a.notes}</div>}
                   </div>
                 </div>
@@ -979,7 +986,7 @@ function DayInspectorDialog({
                   size="sm"
                   onClick={() => handleDeleteAbsence(a)}
                   disabled={busy !== null}
-                  aria-label="Ta bort frånvaro"
+                  aria-label={t('delete_absence_aria')}
                 >
                   {busy === a.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                 </Button>
@@ -989,7 +996,7 @@ function DayInspectorDialog({
 
           {!worked && absences.length === 0 && (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              Inga registreringar på den här dagen.
+              {t('no_entries')}
             </p>
           )}
 
@@ -999,7 +1006,7 @@ function DayInspectorDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" size="sm" onClick={onClose}>Stäng</Button>
+          <Button variant="outline" size="sm" onClick={onClose}>{t('close')}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

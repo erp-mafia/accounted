@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Globe, CheckCircle2, AlertTriangle, RefreshCcw, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
@@ -19,6 +20,7 @@ interface Props {
 }
 
 export function TaxTableStatus({ year, compact = false }: Props) {
+  const t = useTranslations('salary_tax_tables')
   const [status, setStatus] = useState<Status | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -43,7 +45,7 @@ export function TaxTableStatus({ year, compact = false }: Props) {
     return (
       <div className="text-xs text-muted-foreground flex items-center gap-1.5">
         <Loader2 className="h-3 w-3 animate-spin" />
-        Kontrollerar skattetabeller…
+        {t('checking')}
       </div>
     )
   }
@@ -58,10 +60,10 @@ export function TaxTableStatus({ year, compact = false }: Props) {
 
   const label =
     status.source === 'api'
-      ? `Skattetabeller för ${status.year} hämtas live från Skatteverket`
+      ? t('source_api', { year: status.year })
       : status.source === 'fallback'
-        ? `Skatteverkets API är inte nåbart — använder lokal reservdata för ${status.year}`
-        : `Skattetabeller för ${status.year} kunde inte hämtas`
+        ? t('source_fallback', { year: status.year })
+        : t('source_unavailable', { year: status.year })
 
   if (compact) {
     return (
@@ -78,7 +80,7 @@ export function TaxTableStatus({ year, compact = false }: Props) {
         <Icon className={`h-4 w-4 ${iconColor}`} />
         <span>{label}</span>
       </div>
-      <Button variant="ghost" size="sm" onClick={check} disabled={loading} aria-label="Kontrollera igen">
+      <Button variant="ghost" size="sm" onClick={check} disabled={loading} aria-label={t('recheck')}>
         {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
       </Button>
     </div>

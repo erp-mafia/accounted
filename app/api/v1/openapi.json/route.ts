@@ -1,5 +1,5 @@
 /**
- * GET /api/v1/openapi.json — public OpenAPI 3.1 spec for the v1 surface.
+ * GET /api/v1/openapi.json: public OpenAPI 3.1 spec for the v1 surface.
  *
  * Generated from the Zod schema registry at request time. Cached for 5
  * minutes in shared caches.

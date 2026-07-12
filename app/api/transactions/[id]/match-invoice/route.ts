@@ -83,8 +83,8 @@ export const POST = withRouteContext(
 
     // Defense-in-depth: the InvoicePicker UI filters proformas / delivery
     // notes out of the candidate list, but a direct API call could still
-    // pass a proforma id. A proforma is not a faktura per ML 17 kap 24§ —
-    // no VAT obligation, no binding payment — so matching one against a
+    // pass a proforma id. A proforma is not a faktura per ML 17 kap 24§:
+    // no VAT obligation, no binding payment: so matching one against a
     // bank receipt would book income and VAT incorrectly.
     const docType = (invoice as { document_type?: string }).document_type ?? 'invoice'
     if (docType !== 'invoice') {
@@ -107,7 +107,7 @@ export const POST = withRouteContext(
     // invoice.currency; invoice_payments rows carry currency =
     // invoice.currency with amount in that currency. When tx and invoice
     // currencies differ, we convert tx.amount (SEK) to invoice currency
-    // using the Riksbanken spot rate on the payment date (ML 8 kap 21–23§)
+    // using the Riksbanken spot rate on the payment date (ML 8 kap 21-23§)
     // and accumulate / record in invoice currency throughout. The JE-lines
     // helper gets the same converted amount so the verifikat balances
     // exactly (FX-diff posted to 3960/7960). A manual rate may be supplied
@@ -124,7 +124,7 @@ export const POST = withRouteContext(
           // trail: 'manual' = caller-supplied from a bank statement (Riksbanken
           // had no rate for the date), 'riksbanken' = spot rate fetched on the
           // payment date. A manual override on a money path must be traceable
-          // (BFL 5 kap 6–7§; ML 8 kap 21–23§).
+          // (BFL 5 kap 6-7§; ML 8 kap 21-23§).
           source: 'manual' | 'riksbanken'
         }
 
@@ -172,7 +172,7 @@ export const POST = withRouteContext(
     }
 
     // Hard-duplicate guard: if the invoice is 'sent'/'overdue' but already
-    // has a payment voucher attached (status leak), refuse — booking again
+    // has a payment voucher attached (status leak), refuse: booking again
     // would double-credit 1510 / double-debit 1930. Partially-paid invoices
     // pass through; additional payments are legitimate.
     if (invoice.status === 'sent' || invoice.status === 'overdue') {
@@ -222,7 +222,7 @@ export const POST = withRouteContext(
         }
       } else {
         if (!candidate || candidate.journal_entry_id !== expected_journal_entry_id) {
-          // Either no current duplicate (force is moot — caller should retry
+          // Either no current duplicate (force is moot: caller should retry
           // without force) or the candidate the caller claims to have seen
           // doesn't match what we detect now. Reject so an automation can't
           // smuggle force=true past the guard with a guessed id.
@@ -237,7 +237,7 @@ export const POST = withRouteContext(
         dismissedCandidateId = candidate.journal_entry_id
       }
     } catch (err) {
-      // Detection failure must not block the non-force match — log and
+      // Detection failure must not block the non-force match: log and
       // continue. force=true requires a successful detection, so re-throw
       // its branch as a clean 500 via the wrapper.
       if (force) {
@@ -262,7 +262,7 @@ export const POST = withRouteContext(
     }
 
     // Storno conflicting auto-categorization JE before any other state change.
-    // If storno fails, return immediately — nothing else has been modified.
+    // If storno fails, return immediately: nothing else has been modified.
     if (transaction.journal_entry_id) {
       try {
         await reverseEntry(supabase, companyId, user.id, transaction.journal_entry_id)
@@ -297,7 +297,7 @@ export const POST = withRouteContext(
       ? fx.paidInInvoiceCurrency
       : transaction.amount
 
-    // Overshoot guard + paid/remaining math — shared with the v1 and agent
+    // Overshoot guard + paid/remaining math: shared with the v1 and agent
     // (commit) paths via planInvoicePayment so they cannot drift again. Runs
     // before any JE is created, so a doomed match never burns a voucher number.
     // Pure-SEK settlements absorb sub-krona öresavrundning (booked to 3740 by
@@ -325,7 +325,7 @@ export const POST = withRouteContext(
 
     // Drive the JE shape from the INVOICE'S booking state, not from the
     // company's current accounting_method setting. If the invoice was already
-    // booked at send (Dr 1510 / Cr 30xx + VAT) we MUST clear 1510 here —
+    // booked at send (Dr 1510 / Cr 30xx + VAT) we MUST clear 1510 here:
     // otherwise the receivable stays orphaned and 30xx + VAT get double-
     // counted. This happens when a company sent invoices under accrual,
     // then flipped to kontantmetoden before payment arrived.
@@ -380,7 +380,7 @@ export const POST = withRouteContext(
       } else {
         // Clearing entry against 1510. Covers accrual, cash-with-prior-JE
         // (mid-stream switch), and cash partial. The cash partial path is
-        // intentional — under kontantmetoden 1510 has no prior balance, so
+        // intentional: under kontantmetoden 1510 has no prior balance, so
         // partials leave a credit on 1510 that gets resolved on final
         // payment when createInvoiceCashEntry would normally run.
         //
@@ -388,8 +388,8 @@ export const POST = withRouteContext(
         // is byte-identical to what the preview route showed the user. For
         // same-currency invoices that's just 1930/1510. For cross-currency
         // it also posts a 3960/7960 FX-diff line so the verifikat balances
-        // per BFL 5 kap 4–5§. Bypasses createInvoicePaymentJournalEntry on
-        // this single path (mark-paid and other callers still use it) —
+        // per BFL 5 kap 4-5§. Bypasses createInvoicePaymentJournalEntry on
+        // this single path (mark-paid and other callers still use it):
         // see lib/bookkeeping/invoice-payment-lines.ts for the contract.
         const fiscalPeriodId = await findFiscalPeriod(supabase, companyId!, transaction.date)
         if (!fiscalPeriodId) {
@@ -437,7 +437,7 @@ export const POST = withRouteContext(
         return errorResponse(err, txLog, { requestId })
       }
       txLog.error('failed to create payment journal entry', err as Error)
-      // Other errors are recorded but don't abort the match — the user can
+      // Other errors are recorded but don't abort the match: the user can
       // re-book the verifikation manually.
       if (isBookkeepingError(err)) {
         journalEntryError = getErrorMessage(err, { context: 'invoice' })
@@ -450,7 +450,7 @@ export const POST = withRouteContext(
     // was archived on send to the new payment journal entry. document_
     // attachments.journal_entry_id is one-to-one, so we insert a parallel
     // row pointing at the same storage_path. Same WORM file, second JE
-    // pointer — no copy, no schema change. Non-blocking (BFL 7 kap audit
+    // pointer: no copy, no schema change. Non-blocking (BFL 7 kap audit
     // gap, but the bank line + invoice still exist as evidence).
     if (journalEntryId && invoice.journal_entry_id) {
       try {
@@ -516,7 +516,7 @@ export const POST = withRouteContext(
     }
 
     // The "intäkt bokförs vid slutbetalning" note only applies to genuine
-    // kontantmetoden partials — invoices that were never booked. When the
+    // kontantmetoden partials: invoices that were never booked. When the
     // invoice was booked under accrual, the clearing entry already handles
     // the partial cleanly and the note would be misleading.
     const cashMethodNote = (!invoiceAlreadyBooked && accountingMethod === 'cash' && !isFullyPaid)
@@ -526,8 +526,8 @@ export const POST = withRouteContext(
     // Provenance for a manually-supplied FX rate. The Riksbanken spot rate is
     // self-documenting (rate + rate_date are reproducible), but a rate the
     // user typed from their bank statement is an override of the ML 8 kap
-    // 21–23§ obligation and must leave a trail on the verifikat's payment row
-    // (BFL 5 kap 6–7§ — the verifikation must reflect the actual affärshändelse).
+    // 21-23§ obligation and must leave a trail on the verifikat's payment row
+    // (BFL 5 kap 6-7§: the verifikation must reflect the actual affärshändelse).
     const manualRateNote =
       fx.required && fx.source === 'manual'
         ? `Manuell valutakurs ${fx.rate} ${invoice.currency}/SEK (betalningsdatum ${transaction.date})`
@@ -538,8 +538,8 @@ export const POST = withRouteContext(
     // Payment row stores amount in INVOICE currency (the column unit). For
     // same-currency that's tx.amount; for cross-currency it's the spot-rate
     // conversion above. exchange_rate records the rate ACTUALLY USED for
-    // this payment — Riksbanken (or manual override) on tx.date — per
-    // ML 8 kap 21–23§. Falling back to invoice.exchange_rate would record
+    // this payment: Riksbanken (or manual override) on tx.date: per
+    // ML 8 kap 21-23§. Falling back to invoice.exchange_rate would record
     // the invoice-date rate, which is what the round-7/8 bot reviews
     // explicitly flagged as wrong.
     const { error: paymentInsertError } = await supabase
@@ -586,7 +586,7 @@ export const POST = withRouteContext(
       matchConfidence: 1.0,
       matchMethod: 'manual_confirm',
       // rate_source / exchange_rate live inside new_state (the persisted JSON
-      // column) so a manual override — a user-supplied money-path input — is
+      // column) so a manual override: a user-supplied money-path input: is
       // distinguishable from an automatic Riksbanken lookup in the audit trail
       // (swarm V16 / SOC 2 CC6.1 / GDPR Art.5(1)(f)). Same-currency matches
       // carry rate_source: null.

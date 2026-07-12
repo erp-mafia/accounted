@@ -233,7 +233,7 @@ function updateSchemaJson(name: string): void {
   enumArray.push(name)
 
   fs.writeFileSync(schemaPath, JSON.stringify(schema, null, 2) + '\n', 'utf-8')
-  console.log(`  Updated extensions.schema.json — added "${name}" to enum array.`)
+  console.log(`  Updated extensions.schema.json: added "${name}" to enum array.`)
 }
 
 // ── Main ─────────────────────────────────────────────────────

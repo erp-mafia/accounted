@@ -13,6 +13,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-payment-lines'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { ORE_TOLERANCE } from '@/lib/money'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
@@ -50,7 +51,9 @@ export const GET = withRouteContext(
       // amount_sek is needed for the cash-method preview: a foreign-currency
       // settlement is translated at the payment-date rate (the SEK that left
       // the bank), mirroring the committed verifikat from the POST handler.
-      .select('id, date, amount, currency, amount_sek')
+      // cash_account_id resolves which BAS account this bank line actually
+      // settles from, mirroring the POST handler's settlement-account lookup.
+      .select('id, date, amount, currency, amount_sek, cash_account_id')
       .eq('id', transactionId)
       .eq('company_id', companyId)
       .single()
@@ -70,13 +73,22 @@ export const GET = withRouteContext(
 
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('accounting_method, last_supplier_payment_account')
+      .select('accounting_method')
       .eq('company_id', companyId)
       .single()
 
     const accountingMethod = settings?.accounting_method || 'accrual'
-    const paymentAccount =
-      (settings as { last_supplier_payment_account?: string } | null)?.last_supplier_payment_account || '1930'
+
+    // Same resolution as the POST handler: credit the cash account this
+    // transaction is actually linked to, never the sticky
+    // last_supplier_payment_account (that setting reflects the manual
+    // mark-paid/private-funds flow, not a real matched bank transaction).
+    const paymentAccount = await resolveSettlementAccount(
+      supabase,
+      companyId!,
+      transaction.cash_account_id,
+      log,
+    )
 
     const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
@@ -98,7 +110,7 @@ export const GET = withRouteContext(
       // same way the committed verifikat does. The bank SEK is only known when
       // the transaction is in SEK or carries a stored amount_sek; for a foreign
       // transaction without it we fall back to the invoice's own rate (the raw
-      // foreign amount must never be used — that would render 19 USD as 19 kr).
+      // foreign amount must never be used: that would render 19 USD as 19 kr).
       const bankSek =
         transaction.currency === 'SEK'
           ? Math.abs(transaction.amount)
@@ -112,7 +124,7 @@ export const GET = withRouteContext(
 
       // Mirror createSupplierInvoiceCashEntry: per-item expense debit + VAT
       // debit + bank credit. We only need a faithful preview, not exact
-      // account-mapping fidelity — show one aggregate expense line per item
+      // account-mapping fidelity: show one aggregate expense line per item
       // (or a single fallback line if items are missing).
       let totalAmountSek = 0
       let totalVatSek = 0
@@ -132,7 +144,7 @@ export const GET = withRouteContext(
         }
       } else {
         // Pass null for the pre-computed SEK so cashRate (payment-date rate)
-        // drives the translation — resolveSekAmount would otherwise prefer the
+        // drives the translation: resolveSekAmount would otherwise prefer the
         // invoice-rate *_sek columns and ignore the rate.
         const subSek = resolveSekAmount(si.subtotal, null, si.currency, cashRate)
         const vatSek = resolveSekAmount(si.vat_amount, null, si.currency, cashRate)
@@ -166,8 +178,8 @@ export const GET = withRouteContext(
       const si = invoice as SupplierInvoice
       const isPureSek = transaction.currency === 'SEK' && si.currency === 'SEK'
       if (isPureSek) {
-        // Shared builder so the previewed lines — including any 3740
-        // öresavrundning row — are byte-identical to what the POST commits.
+        // Shared builder so the previewed lines (including any 3740
+        // öresavrundning row) are byte-identical to what the POST commits.
         const remainingSek = si.remaining_amount ?? si.total
         const bankSek = Math.abs(transaction.amount)
         const { lines: clearingLines, oreDiffSek } = buildSupplierPaymentClearingLines({

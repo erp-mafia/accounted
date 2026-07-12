@@ -155,7 +155,7 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div>
-          <h1 className="font-display text-2xl md:text-3xl font-medium tracking-tight">{t('title')}</h1>
+          <h1 className="font-display text-2xl md:text-3xl tracking-tight">{t('title')}</h1>
           <p className="text-muted-foreground">
             {t('subtitle', { number: invoice.invoice_number ?? '' })}
           </p>
@@ -179,9 +179,6 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
       <Card>
         <CardHeader>
           <CardTitle>{t('original_card_title')}</CardTitle>
-          <CardDescription>
-            {t('original_card_description')}
-          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4 text-sm">

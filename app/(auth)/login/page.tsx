@@ -276,7 +276,7 @@ function LoginPageContent() {
             </p>
           </div>
 
-          <div className="rounded-xl border bg-card p-4">
+          <div className="rounded-lg border bg-card p-4">
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
               {showResetPassword ? tAuth('email_sent_hint_reset') : tAuth('email_sent_hint_login')}
             </p>
@@ -327,7 +327,7 @@ function LoginPageContent() {
             </p>
           </div>
 
-          <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+          <div className="rounded-lg border bg-card p-6">
             <form onSubmit={handleResetPassword} className="space-y-5">
               <div className="space-y-2">
                 <Label htmlFor="email">{tAuth('email_label')}</Label>
@@ -382,7 +382,7 @@ function LoginPageContent() {
           </p>
         </div>
 
-        <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+        <div className="rounded-lg border bg-card p-6">
           {callbackError === 'auth_error' && (
             <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
               <p className="text-sm font-medium text-destructive">
@@ -412,13 +412,12 @@ function LoginPageContent() {
                     {tAuth('bankid_no_account_body')}
                   </p>
                   <p className="mt-2">
-                    <button
-                      type="button"
-                      onClick={() => setBankIdNoAccount(null)}
+                    <Link
+                      href="/register"
                       className="text-xs text-amber-600 underline underline-offset-2 hover:text-amber-800 dark:text-amber-400"
                     >
                       {tAuth('bankid_no_account_create')}
-                    </button>
+                    </Link>
                   </p>
                 </div>
               ) : (

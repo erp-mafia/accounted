@@ -1,10 +1,10 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL } from '@/lib/agent/composer/client'
 
-// onboarding.empty — "Hjälp mig komma igång" on an empty-state page
+// onboarding.empty: "Hjälp mig komma igång" on an empty-state page
 // (no transactions, no customers, no invoices, etc.).
 //
-// Progressive atom mode — keeps the prompt small so the agent can fan out
+// Progressive atom mode: keeps the prompt small so the agent can fan out
 // to whichever horizontal skill matches the empty area. Captures the route
 // + subject so the agent knows whether to talk about banking connection,
 // invoice creation, customer setup, etc.
@@ -13,7 +13,7 @@ interface OnboardingEmptyArgs {
   // The route the user is on, e.g. '/transactions', '/customers'. Optional.
   route?: string | null
   // The subject of the empty state, e.g. 'transactions', 'customers',
-  // 'invoices'. Optional — derived from route when absent.
+  // 'invoices'. Optional: derived from route when absent.
   subject?: string | null
 }
 
@@ -59,7 +59,7 @@ export const onboardingEmpty = defineAgentIntent<OnboardingEmptyArgs, CapturedOn
     if (captured.route) lines.push(`Route: ${captured.route}`)
     lines.push('')
     lines.push(
-      'Förklara kort vad sidan är till för och vilka 1–2 nästa steg som ger mest värde för just denna användare. Var konkret. Svara på svenska.',
+      'Förklara kort vad sidan är till för och vilka 1-2 nästa steg som ger mest värde för just denna användare. Var konkret. Svara på svenska.',
     )
     return lines.join('\n')
   },

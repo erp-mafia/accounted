@@ -1,7 +1,8 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
+import { parseReportDateRange, type DateRange } from '@/lib/reports/date-range'
 import {
   reportToWorkbook,
   textColumn,
@@ -29,16 +30,7 @@ function toDate(s: string): Date | string {
   return isNaN(d.getTime()) ? s : d
 }
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext('report.general_ledger.xlsx', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
   const accountFrom = searchParams.get('account_from') || undefined
@@ -54,12 +46,38 @@ export async function GET(request: Request) {
     .eq('company_id', companyId)
     .single()
 
+  const dimFilter = parseDimensionFilterParams(searchParams)
+  if (!dimFilter.ok) {
+    return NextResponse.json({ error: dimFilter.error }, { status: 400 })
+  }
+
+  // Validate the optional date sub-range against the fiscal period bounds.
+  const { data: period } = await supabase
+    .from('fiscal_periods')
+    .select('period_start, period_end')
+    .eq('id', periodId)
+    .eq('company_id', companyId)
+    .single()
+
+  let range: DateRange = {}
+  if (period) {
+    const parsed = parseReportDateRange(searchParams, period)
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 })
+    }
+    range = parsed.range
+  }
+
   try {
-    const report = await generateGeneralLedger(supabase, companyId, periodId, accountFrom, accountTo)
+    const report = await generateGeneralLedger(supabase, companyId, periodId, accountFrom, accountTo, {
+      dimensions: dimFilter.dimensions,
+      fromDate: range.fromDate,
+      toDate: range.toDate,
+    })
 
     // Flatten accounts + their lines into a single sheet. Each account contributes
     // an opening-balance row, its lines (with running balance), and a closing
-    // row — matching how huvudbok is read in Fortnox/Visma.
+    // row: matching how huvudbok is read in Fortnox/Visma.
     const rows: FlatRow[] = []
     for (const acc of report.accounts) {
       rows.push({
@@ -99,6 +117,24 @@ export async function GET(request: Request) {
       })
     }
 
+    // Partial-view disclosure: a filtered huvudbok starts balance accounts
+    // at zero IB (opening balances cannot be dimension-scoped): the export
+    // must say so or a project-filtered ledger reads as a full one.
+    const disclosure = dimensionFilterDisclosure(dimFilter.dimensions)
+    if (disclosure) {
+      rows.unshift({
+        account_number: disclosure,
+        account_name: '',
+        date: null as unknown as Date,
+        voucher: '',
+        description: 'Ingående balanser ingår inte i filtrerad vy',
+        source_type: '',
+        debit: null as unknown as number,
+        credit: null as unknown as number,
+        balance: null as unknown as number,
+      })
+    }
+
     const buffer = reportToWorkbook<FlatRow>([
       {
         name: 'Huvudbok',
@@ -128,7 +164,7 @@ export async function GET(request: Request) {
       },
     ])
 
-    const filename = xlsxFilename('huvudbok', companyRow?.company_name ?? '', report.period.end)
+    const filename = xlsxFilename(`huvudbok${dimensionFilterFileSuffix(dimFilter.dimensions)}`, companyRow?.company_name ?? '', report.period.end)
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -141,4 +177,4 @@ export async function GET(request: Request) {
       { status: 500 }
     )
   }
-}
+})

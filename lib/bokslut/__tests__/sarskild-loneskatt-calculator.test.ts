@@ -5,19 +5,24 @@ import {
 } from '../tax-provision/sarskild-loneskatt-calculator'
 
 function makeSupabaseWithPensionLines(rows: Array<{ debit_amount: number; credit_amount: number }>) {
-  const builder = {
-    select: vi.fn(),
-    eq: vi.fn(),
-    gte: vi.fn(),
-    lte: vi.fn(),
-    then: undefined as unknown as (resolve: (v: { data: unknown; error: unknown }) => void) => void,
+  // The calculator uses the two-step entry-lines fetch
+  // (lib/bookkeeping/entry-lines.ts): call 1 reads journal_entries, call 2
+  // reads journal_entry_lines for those entry ids.
+  const responses: Array<{ data: unknown; error: unknown }> = [
+    { data: [{ id: 'entry-1' }], error: null },
+    { data: rows, error: null },
+  ]
+  let call = 0
+  const makeBuilder = () => {
+    const result = responses[call++] ?? { data: null, error: null }
+    const b: Record<string, unknown> = {}
+    for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'order', 'range']) {
+      b[m] = vi.fn().mockReturnValue(b)
+    }
+    b.then = (resolve: (v: { data: unknown; error: unknown }) => void) => resolve(result)
+    return b
   }
-  builder.select.mockReturnValue(builder)
-  builder.eq.mockReturnValue(builder)
-  builder.gte.mockReturnValue(builder)
-  builder.lte.mockReturnValue(builder)
-  builder.then = (resolve) => resolve({ data: rows, error: null })
-  return { from: vi.fn().mockReturnValue(builder) } as unknown as Parameters<
+  return { from: vi.fn().mockImplementation(() => makeBuilder()) } as unknown as Parameters<
     typeof calculateSarskildLoneskatt
   >[0]
 }

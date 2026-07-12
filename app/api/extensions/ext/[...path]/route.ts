@@ -1,9 +1,11 @@
-import { createClient } from '@/lib/supabase/server'
+import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { requireCompanyId } from '@/lib/company/context'
+import { requireCapability } from '@/lib/entitlements/has-capability'
+import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
 import { createLogger } from '@/lib/logger'
 import type { ApiRouteDefinition } from '@/lib/extensions/types'
 
@@ -23,7 +25,7 @@ function generateRequestId(): string {
  *      `Felreferens: req_…`
  *
  * Non-JSON responses (HTML for OAuth callbacks, file downloads) only get the
- * header — body rewriting is reserved for the canonical envelope shape.
+ * header: body rewriting is reserved for the canonical envelope shape.
  */
 async function decorateResponse(response: Response, requestId: string): Promise<Response> {
   if (!response.headers.get('X-Request-Id')) {
@@ -54,7 +56,7 @@ async function decorateResponse(response: Response, requestId: string): Promise<
           })
         }
       } catch {
-        // Body wasn't valid JSON — leave it alone.
+        // Body wasn't valid JSON: leave it alone.
       }
     }
   }
@@ -69,13 +71,13 @@ export const maxDuration = 300
 
 /**
  * Per-extension runtime feature flags. Lets ops toggle an integration off
- * without redeploying or removing it from extensions.config.json — useful
+ * without redeploying or removing it from extensions.config.json: useful
  * for phased rollouts (dev tenants → design partners → general).
  *
  * The flag is checked on every request. If the env var is not exactly the
  * string "true", the dispatcher returns 503 with `code: 'EXTENSION_DISABLED'`.
  *
- * Server-side env vars only — no NEXT_PUBLIC_ prefix. Next.js inlines
+ * Server-side env vars only: no NEXT_PUBLIC_ prefix. Next.js inlines
  * NEXT_PUBLIC_* into the client bundle at build time, so a flip on Vercel
  * without a redeploy would create split-brain (server returns 503,
  * client still renders the enabled flow). UI panels detect the 503 by
@@ -197,7 +199,7 @@ async function handleRequest(
 
   // Config sanity check: these flags are orthogonal and the combination is
   // nonsensical. `skipAuth` already implies no company resolution, so adding
-  // `skipCompanyContext: true` is at best redundant — and if a maintainer
+  // `skipCompanyContext: true` is at best redundant, and if a maintainer
   // intended "auth required, no company" but also wrote `skipAuth: true`,
   // the auth requirement would be silently dropped (skipAuth fires first
   // below). Fail loudly instead of masking the mistake.
@@ -210,7 +212,7 @@ async function handleRequest(
   }
 
   // For skipAuth routes (e.g. OAuth callbacks from external providers),
-  // skip user auth, toggle check, and AI consent — dispatch immediately
+  // skip user auth, toggle check, and AI consent: dispatch immediately
   if (matchedRoute.skipAuth) {
     let handlerRequest = request
     if (Object.keys(extractedParams).length > 0) {
@@ -232,16 +234,16 @@ async function handleRequest(
     return decorateResponse(response, requestId)
   }
 
-  // Auth check
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return decorateResponse(
-      NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
-      requestId,
-    )
+  // Auth check: requireAuth() enforces MFA (AAL2) on hosted, which the previous
+  // inline supabase.auth.getUser() did not. This dispatcher is the single
+  // chokepoint for the entire enabled-extension surface (banking sync, document
+  // upload/booking, supplier-invoice flows, migration), so enforcing MFA here
+  // closes the gap across all of them at once.
+  const auth = await requireAuth()
+  if (auth.error) {
+    return decorateResponse(auth.error, requestId)
   }
+  const { user, supabase } = auth
 
   // If path params were extracted, create a new Request with them as search params
   let handlerRequest = request
@@ -263,7 +265,7 @@ async function handleRequest(
 
   // Routes that are authenticated but run before a company exists (TIC
   // /lookup during onboarding, for example) opt out of company resolution.
-  // Dispatch without a context — handlers that opt in must not rely on ctx.
+  // Dispatch without a context: handlers that opt in must not rely on ctx.
   if (matchedRoute.skipCompanyContext) {
     const response = await matchedRoute.handler(handlerRequest)
     log.info('extension call completed', {
@@ -275,6 +277,23 @@ async function handleRequest(
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  // Paywall: this dispatcher is the single chokepoint for the whole enabled-
+  // extension API surface (same reasoning as the MFA gate above), so an
+  // extension whose workspace is a paid service (EXTENSION_REQUIRED_CAPABILITY,
+  // e.g. the AI-only invoice-inbox) gates EVERY one of its company-context routes
+  // here, not just its AI-extraction steps. Mirrors the sidebar/page gate off the
+  // same map. The skipAuth ingestion webhook (/inbound) returned above is exempt
+  // by construction: a lapsed company's inbound documents must still be stored
+  // (freeze-and-retain), and booked documents stay reachable via the verifikat.
+  const requiredCapability = requiredCapabilityForExtensionId(extensionId)
+  if (requiredCapability) {
+    const blocked = await requireCapability(supabase, companyId, requiredCapability)
+    if (blocked) {
+      log.info('extension call blocked: capability required', { capability: requiredCapability })
+      return decorateResponse(blocked, requestId)
+    }
+  }
 
   // Build context and dispatch
   const ctx = createExtensionContext(supabase, user.id, companyId, extensionId, requestId)

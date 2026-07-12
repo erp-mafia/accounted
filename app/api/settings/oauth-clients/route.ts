@@ -1,16 +1,15 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { z } from 'zod'
 
 /**
- * GET  /api/settings/oauth-clients — list the current user's registered
+ * GET  /api/settings/oauth-clients: list the current user's registered
  *                                    redirect URIs.
- * POST /api/settings/oauth-clients — register a new redirect URI for use
+ * POST /api/settings/oauth-clients: register a new redirect URI for use
  *                                    with the MCP OAuth flow.
  *
  * Built-in patterns (claude.ai, claude.com, localhost) bypass this table
- * entirely — registrations here are only for self-hosted custom apps.
+ * entirely: registrations here are only for self-hosted custom apps.
  */
 
 const RegistrationSchema = z.object({
@@ -29,66 +28,62 @@ const RegistrationSchema = z.object({
     .max(500),
 })
 
-export async function GET() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export const GET = withRouteContext(
+  'oauth_client.list',
+  async (_request, { supabase, user }) => {
+    const { data, error } = await supabase
+      .from('oauth_client_registrations')
+      .select('id, client_name, redirect_uri, created_at, revoked_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
 
-  const { data, error } = await supabase
-    .from('oauth_client_registrations')
-    .select('id, client_name, redirect_uri, created_at, revoked_at')
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: false })
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  return NextResponse.json({ data })
-}
-
-export async function POST(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  let body: z.infer<typeof RegistrationSchema>
-  try {
-    const json = await request.json()
-    body = RegistrationSchema.parse(json)
-  } catch (err) {
-    const message =
-      err instanceof z.ZodError
-        ? err.issues[0]?.message ?? 'Ogiltig redirect URI'
-        : err instanceof SyntaxError
-          ? 'Ogiltig JSON i request body'
-          : 'Ogiltig redirect URI'
-    return NextResponse.json({ error: message }, { status: 400 })
-  }
-
-  const { data, error } = await supabase
-    .from('oauth_client_registrations')
-    .insert({
-      user_id: user.id,
-      client_name: body.client_name,
-      redirect_uri: body.redirect_uri,
-    })
-    .select('id, client_name, redirect_uri, created_at')
-    .single()
-
-  if (error) {
-    // Unique-index violation on redirect_uri → 409
-    if (error.code === '23505') {
-      return NextResponse.json(
-        { error: 'Den här redirect URI:n är redan registrerad.' },
-        { status: 409 }
-      )
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 })
     }
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
 
-  return NextResponse.json({ data })
-}
+    return NextResponse.json({ data })
+  },
+)
+
+export const POST = withRouteContext(
+  'oauth_client.create',
+  async (request, { supabase, user }) => {
+    let body: z.infer<typeof RegistrationSchema>
+    try {
+      const json = await request.json()
+      body = RegistrationSchema.parse(json)
+    } catch (err) {
+      const message =
+        err instanceof z.ZodError
+          ? err.issues[0]?.message ?? 'Ogiltig redirect URI'
+          : err instanceof SyntaxError
+            ? 'Ogiltig JSON i request body'
+            : 'Ogiltig redirect URI'
+      return NextResponse.json({ error: message }, { status: 400 })
+    }
+
+    const { data, error } = await supabase
+      .from('oauth_client_registrations')
+      .insert({
+        user_id: user.id,
+        client_name: body.client_name,
+        redirect_uri: body.redirect_uri,
+      })
+      .select('id, client_name, redirect_uri, created_at')
+      .single()
+
+    if (error) {
+      // Unique-index violation on redirect_uri → 409
+      if (error.code === '23505') {
+        return NextResponse.json(
+          { error: 'Den här redirect URI:n är redan registrerad.' },
+          { status: 409 }
+        )
+      }
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+
+    return NextResponse.json({ data })
+  },
+  { requireWrite: true },
+)

@@ -1,7 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
-import { requireCompanyId } from '@/lib/company/context'
 
 /**
  * GET /api/bookkeeping/fiscal-periods/period-status?date=YYYY-MM-DD
@@ -11,19 +10,13 @@ import { requireCompanyId } from '@/lib/company/context'
  * the covering period's label so the UI can show "flyttas till <år>" before a
  * write is attempted. Mirrors resolvePeriodStatusForDate / the DB triggers.
  */
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+export const GET = withRouteContext('period.status_for_date', async (request, ctx) => {
+  const { supabase, companyId } = ctx
 
   const date = new URL(request.url).searchParams.get('date')
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return NextResponse.json({ error: 'Ogiltigt datum (förväntat ÅÅÅÅ-MM-DD)' }, { status: 400 })
   }
-
-  const companyId = await requireCompanyId(supabase, user.id)
 
   try {
     const status = await resolvePeriodStatusForDate(supabase, companyId, date)
@@ -58,4 +51,4 @@ export async function GET(request: Request) {
       { status: 500 }
     )
   }
-}
+})

@@ -114,14 +114,14 @@ export default function SandboxPage() {
             Testa {branding.appName.toLowerCase()} utan att registrera dig
           </h1>
           <p className="text-muted-foreground text-sm mt-2 leading-relaxed">
-            Utforska ett fullt demoföretag med riktig data — helt gratis.
+            Utforska ett fullt demoföretag med riktig data: helt gratis.
           </p>
         </div>
 
         <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
           <p className="mb-6 rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
             AI-assistenten och externa tjänster (e-post, bankuppkoppling,
-            valutakurser, Skatteverket) är avstängda i sandlådan — de
+            valutakurser, Skatteverket) är avstängda i sandlådan: de
             kräver ett riktigt konto.
           </p>
 

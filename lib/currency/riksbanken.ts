@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import type { Currency, ExchangeRate } from '@/types'
 
@@ -13,13 +14,117 @@ const SERIES_IDS: Record<Currency, string> = {
   DKK: 'SEKDKKPMI',
 }
 
+const RIKSBANKEN_HEADERS = { Accept: 'application/json' }
+
 /**
- * Fetch exchange rates from Riksbanken API
- * Uses their public API for daily exchange rates
+ * One retry on 429/5xx, honoring Retry-After (capped at 5s). Riksbanken
+ * rate-limits the public API; without this the morning sync cron's fan-out
+ * turned a single 429 into a failed rate for the whole batch.
+ */
+async function fetchWithRetry(url: string): Promise<Response> {
+  const first = await fetch(url, { headers: RIKSBANKEN_HEADERS, next: { revalidate: 3600 } })
+  if (first.status !== 429 && first.status < 500) return first
+  const retryAfterSeconds = Number.parseInt(first.headers.get('retry-after') ?? '', 10)
+  const delayMs = Number.isFinite(retryAfterSeconds)
+    ? Math.min(retryAfterSeconds * 1000, 5000)
+    : 800
+  await new Promise((resolve) => setTimeout(resolve, delayMs))
+  return fetch(url, { headers: RIKSBANKEN_HEADERS, next: { revalidate: 3600 } })
+}
+
+/** Cache reads/writes are best-effort — a cache failure must never block a rate. */
+async function readCachedRate(
+  supabase: SupabaseClient,
+  currency: Currency,
+  rateDate: string,
+): Promise<ExchangeRate | null> {
+  try {
+    const { data } = await supabase
+      .from('exchange_rates')
+      .select('rate, observation_date')
+      .eq('currency', currency)
+      .eq('rate_date', rateDate)
+      .maybeSingle()
+    if (!data) return null
+    return { currency, rate: Number(data.rate), date: data.observation_date as string }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Best-effort cache write. INSERT on exchange_rates is service-role only
+ * (migration 20260710100000): the shared cache feeds money math, so a user
+ * client must not be able to poison a (currency, rate_date) pair for every
+ * tenant. When called with an authenticated client (bank file import,
+ * refresh-exchange-rate, manual bank sync) the upsert is rejected by RLS;
+ * supabase-js reports that as a resolved { error }, not a throw, and the
+ * result is deliberately not inspected: the fetched rate is returned to the
+ * caller regardless, and the service-role sync cron fills the cache instead.
+ */
+async function writeCachedRate(
+  supabase: SupabaseClient,
+  currency: Currency,
+  rateDate: string,
+  rate: ExchangeRate,
+): Promise<void> {
+  try {
+    await supabase.from('exchange_rates').upsert(
+      {
+        currency,
+        rate_date: rateDate,
+        rate: rate.rate,
+        observation_date: rate.date,
+        source: 'riksbanken',
+      },
+      { onConflict: 'currency,rate_date', ignoreDuplicates: true },
+    )
+  } catch {
+    // best-effort: a cache write failure must never block the rate
+  }
+}
+
+async function readLatestCachedRate(
+  supabase: SupabaseClient,
+  currency: Currency,
+  onOrBefore: string,
+): Promise<ExchangeRate | null> {
+  try {
+    const { data } = await supabase
+      .from('exchange_rates')
+      .select('rate, observation_date')
+      .eq('currency', currency)
+      .lte('rate_date', onOrBefore)
+      .order('rate_date', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (!data) return null
+    return { currency, rate: Number(data.rate), date: data.observation_date as string }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Fetch the exchange rate for a currency on a given date from Riksbanken's
+ * public API, with an optional persistent read-through cache.
+ *
+ * Pass `supabase` from server contexts (the sync cron's ingest path does) to
+ * read/write the shared exchange_rates cache — repeat dates then cost one DB
+ * lookup instead of an API call, across all companies.
+ *
+ * Failure semantics: when Riksbanken is unreachable/rate-limited even after
+ * one retry, the most recent CACHED observation on or before the date is
+ * returned. With no cache hit either, returns null — never a hardcoded
+ * number. (Hardcoded fallback rates used to get silently booked into
+ * amount_sek whenever the 05:00 cron got 429'd.) Callers treat null as "no
+ * rate": the transaction is inserted without amount_sek/exchange_rate and
+ * can be repaired via /api/transactions/[id]/refresh-exchange-rate.
  */
 export async function fetchExchangeRate(
   currency: Currency,
-  date?: Date
+  date?: Date,
+  supabase?: SupabaseClient,
 ): Promise<ExchangeRate | null> {
   if (currency === 'SEK') {
     return {
@@ -38,33 +143,42 @@ export async function fetchExchangeRate(
     return null
   }
 
+  if (supabase) {
+    const cached = await readCachedRate(supabase, currency, formattedDate)
+    if (cached) return cached
+  }
+
   try {
     // Riksbanken's public API endpoint
     const url = `https://api.riksbank.se/swea/v1/Observations/${seriesId}/${formattedDate}/${formattedDate}`
+    const response = await fetchWithRetry(url)
 
-    const response = await fetch(url, {
-      headers: {
-        Accept: 'application/json',
-      },
-      next: { revalidate: 3600 }, // Cache for 1 hour
-    })
+    let result: ExchangeRate | null = null
 
-    // 204 = no data for this date (e.g. rate not published yet today)
-    // Also handle non-ok responses by falling back to a recent date range
-    if (!response.ok || response.status === 204) {
-      // Fetch the last 7 days to find the most recent available rate
+    if (response.status === 429 || response.status >= 500) {
+      // Rate-limited/unavailable even after the retry. Do NOT fire the
+      // 7-day range request — it would hit the same limiter and double the
+      // load, which is how the old code turned one 429 into two.
+      throw new Error(`Failed to fetch exchange rate: ${response.status}`)
+    }
+
+    if (response.ok && response.status !== 204) {
+      const data = await response.json()
+      if (data && data.length > 0) {
+        result = { currency, rate: parseFloat(data[0].value), date: data[0].date }
+      }
+    }
+
+    // 204 / empty / 404: no observation for this exact date (weekend,
+    // holiday, rate not published yet) — look back 7 days for the latest.
+    if (!result) {
       const to = formattedDate
       const fromDate = new Date(targetDate)
       fromDate.setDate(fromDate.getDate() - 7)
       const from = fromDate.toISOString().split('T')[0]
 
       const fallbackUrl = `https://api.riksbank.se/swea/v1/Observations/${seriesId}/${from}/${to}`
-      const fallbackResponse = await fetch(fallbackUrl, {
-        headers: {
-          Accept: 'application/json',
-        },
-        next: { revalidate: 3600 },
-      })
+      const fallbackResponse = await fetchWithRetry(fallbackUrl)
 
       if (!fallbackResponse.ok || fallbackResponse.status === 204) {
         throw new Error(`Failed to fetch exchange rate: ${fallbackResponse.status}`)
@@ -73,36 +187,31 @@ export async function fetchExchangeRate(
       const fallbackData = await fallbackResponse.json()
       if (fallbackData && fallbackData.length > 0) {
         const latest = fallbackData[fallbackData.length - 1]
-        return {
-          currency,
-          rate: parseFloat(latest.value),
-          date: latest.date,
-        }
-      }
-
-      return null
-    }
-
-    const data = await response.json()
-    if (data && data.length > 0) {
-      return {
-        currency,
-        rate: parseFloat(data[0].value),
-        date: data[0].date,
+        result = { currency, rate: parseFloat(latest.value), date: latest.date }
       }
     }
 
-    return null
+    if (result && supabase) {
+      await writeCachedRate(supabase, currency, formattedDate, result)
+    }
+    return result
   } catch (error) {
-    log.error('Error fetching exchange rate:', error)
-    // Return fallback rates for development/testing
-    return getFallbackRate(currency)
+    // warn, not error: with the cached fallback below this is a degraded-mode
+    // path, and the transaction stays repairable either way.
+    log.warn('Error fetching exchange rate:', error)
+    if (supabase) {
+      const cached = await readLatestCachedRate(supabase, currency, formattedDate)
+      if (cached) return cached
+    }
+    return null
   }
 }
 
 /**
- * Fallback exchange rates for when API is unavailable
- * These should be updated periodically
+ * Fallback exchange rates for when the API is unavailable. Display-only:
+ * fetchMultipleRates uses these to keep its fully-populated-Map contract.
+ * The booking path (fetchExchangeRate) never returns them — a made-up rate
+ * silently booked into amount_sek is worse than no rate.
  */
 function getFallbackRate(currency: Currency): ExchangeRate {
   const fallbackRates: Record<Currency, number> = {

@@ -84,7 +84,7 @@ export default function Step4VatAccounting({
   const accountingMethod = watch('accounting_method')
 
   // Auto-fill VAT number when vat_registered toggles on. Derive via the shared
-  // helper so a 12-digit personnummer (enskild firma) gets its century dropped —
+  // helper so a 12-digit personnummer (enskild firma) gets its century dropped:
   // building SE${orgNumber}01 verbatim produced SE + 14 digits and failed
   // validation on save.
   useEffect(() => {
@@ -127,7 +127,7 @@ export default function Step4VatAccounting({
           })} className="space-y-6">
             {/* VAT section */}
             <div className="space-y-4">
-              <h3 className="font-medium flex items-center gap-2">
+              <h3 className="flex items-center gap-2">
                 <InfoTooltip
                   content={
                     <div className="space-y-2">

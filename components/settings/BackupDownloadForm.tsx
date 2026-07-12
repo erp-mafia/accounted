@@ -185,7 +185,7 @@ export function BackupDownloadForm() {
     <div className="space-y-8">
       <Card>
         <CardHeader>
-          <CardTitle>{t('create_backup_title')}</CardTitle>
+          <CardTitle className="text-base">{t('create_backup_title')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-2">
@@ -222,7 +222,7 @@ export function BackupDownloadForm() {
                 {periods.length === 0 && <option value="">{t('no_fiscal_years')}</option>}
                 {periods.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.period_start} – {p.period_end}
+                    {p.period_start}: {p.period_end}
                   </option>
                 ))}
               </select>
@@ -243,7 +243,7 @@ export function BackupDownloadForm() {
             />
           </div>
 
-          <div className="rounded-md border border-border/60 bg-muted/30 p-3 text-sm">
+          <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
             <div className="flex items-center gap-2 text-muted-foreground">
               <Info className="h-3.5 w-3.5" />
               {isLoadingEstimate ? (

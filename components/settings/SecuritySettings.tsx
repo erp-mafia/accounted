@@ -131,7 +131,7 @@ export function SecuritySettings() {
       const { error } = await supabase.auth.mfa.unenroll({ factorId: mfaFactorId })
 
       if (error) {
-        // mfa.unenroll requires AAL2 — for BankID-linked users at AAL1 (the
+        // mfa.unenroll requires AAL2: for BankID-linked users at AAL1 (the
         // shouldEnforceMfa skip path), this is the only way to step up.
         if (error.message?.includes('AAL2')) {
           router.push(
@@ -168,7 +168,7 @@ export function SecuritySettings() {
     <div className="space-y-6">
       {bankIdEnabled && <BankIdSettings />}
 
-      {/* BankID-only users with no password — banner above everything else */}
+      {/* BankID-only users with no password: banner above everything else */}
       {hasPassword === false && (
         <Card>
           <CardHeader>
@@ -194,7 +194,7 @@ export function SecuritySettings() {
         </Card>
       )}
 
-      {/* Change password — hidden when the user has no password (the banner
+      {/* Change password: hidden when the user has no password (the banner
           above handles the set-initial-password flow). */}
       {hasPassword !== false && (
       <Card>
@@ -252,7 +252,7 @@ export function SecuritySettings() {
       </Card>
       )}
 
-      {/* MFA — hidden for self-hosted */}
+      {/* MFA: hidden for self-hosted */}
       {!isSelfHosted && (
         <Card>
           <CardHeader>
@@ -272,11 +272,11 @@ export function SecuritySettings() {
               </div>
             ) : hasMfa ? (
               <div className="space-y-4">
-                <div className="flex items-center gap-3 p-4 rounded-lg border bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-900">
-                  <ShieldCheck className="h-5 w-5 text-green-600 dark:text-green-500" />
+                <div className="flex items-center gap-3 p-4 rounded-lg border border-border bg-secondary">
+                  <ShieldCheck className="h-5 w-5 text-success" />
                   <div>
-                    <p className="font-medium text-green-900 dark:text-green-100">{t('mfa_active_title')}</p>
-                    <p className="text-sm text-green-700 dark:text-green-400">
+                    <p className="font-medium text-foreground">{t('mfa_active_title')}</p>
+                    <p className="text-sm text-muted-foreground">
                       {t('mfa_active_description')}
                     </p>
                   </div>

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import {
   createMockRequest,
   parseJsonResponse,
@@ -8,8 +9,10 @@ import {
 } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 vi.mock('@/lib/init', () => ({
@@ -43,11 +46,15 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     vi.clearAllMocks()
     reset()
     eventBus.clear()
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
 
     const request = createMockRequest('/api/supplier-invoices/inv-1/uncredit', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
@@ -170,9 +177,9 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     expect(body.data.status).toBe('paid')
   })
 
-  it('handles cash method (credit row without registration_journal_entry_id) — skips reverseEntry and restores to registered', async () => {
+  it('handles cash method (credit row without registration_journal_entry_id): skips reverseEntry and restores to registered', async () => {
     // Pure cash-method: neither the original nor the credit row have a
-    // registration JE. The original must not be restored to 'approved' —
+    // registration JE. The original must not be restored to 'approved':
     // that would assert a verifikation that never existed (sambandskravet,
     // BFL 4 kap 2§). 'registered' is the correct state.
     const original = makeSupplierInvoice({
@@ -276,7 +283,7 @@ describe('POST /api/supplier-invoices/[id]/uncredit', () => {
     })
 
     enqueue({ data: original, error: null })
-    // Find credit row filters out status='reversed' — nothing comes back
+    // Find credit row filters out status='reversed': nothing comes back
     enqueue({ data: null, error: null })
     enqueue({
       data: { ...original, status: 'approved', remaining_amount: 5000 },

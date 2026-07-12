@@ -14,7 +14,7 @@
  * target user before re-seeding. Without --force the script bails if
  * either company already exists for that user.
  *
- * External systems (Gmail / Calendar / Drive / Slack) are out of scope —
+ * External systems (Gmail / Calendar / Drive / Slack) are out of scope:
  * a checklist is printed at the end for manual setup.
  *
  * Requires SUPABASE_SERVICE_ROLE_KEY in .env.local.
@@ -22,7 +22,9 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { config as dotenv } from 'dotenv'
+import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
+import { encryptPersonnummer } from '@/lib/salary/personnummer'
 
 dotenv({ path: resolve(process.cwd(), '.env.local') })
 
@@ -41,7 +43,7 @@ const args = process.argv.slice(2)
 const emailArg = args.find((a) => !a.startsWith('--'))
 if (!emailArg) {
   console.error('Usage: npx tsx scripts/seed-demo-account.ts <email> [--force]')
-  console.error('Refusing to run without an explicit target email — the script')
+  console.error('Refusing to run without an explicit target email: the script')
   console.error('seeds demo data and `--force` wipes existing Konsult AB / Konsult')
   console.error('Holding AB owned by the target user before re-seeding.')
   process.exit(1)
@@ -77,7 +79,7 @@ async function findUser(email: string): Promise<string> {
 }
 
 // Verifikationsnummer skip-list: introduces deliberate gaps that require
-// explanations under BFNAR 2013:2 — used for the voucher-gap demo.
+// explanations under BFNAR 2013:2, used for the voucher-gap demo.
 const VOUCHER_GAPS: Record<number, Set<number>> = {
   2025: new Set([123, 287]),
 }
@@ -639,7 +641,15 @@ async function seedEmployees(ctx: CompanyCtx): Promise<Record<string, string>> {
       email: 'johan@konsult.se',
     },
   ]
-  const rows = seeds.map((s) => ({ user_id: ctx.userId, company_id: ctx.companyId, ...s }))
+  // personnummer is stored encrypted at rest (aes-256-gcm); the read paths
+  // decrypt it. Seeding the raw value would 500 the roster / salary flows with
+  // ERR_CRYPTO_INVALID_AUTH_TAG. Encrypt here, keep personnummer_last4 plain.
+  const rows = seeds.map((s) => ({
+    user_id: ctx.userId,
+    company_id: ctx.companyId,
+    ...s,
+    personnummer: encryptPersonnummer(s.personnummer),
+  }))
   const { data, error } = await sb.from('employees').insert(rows).select('id, first_name')
   if (error) throw new Error(`employees: ${error.message}`)
   return Object.fromEntries((data ?? []).map((e) => [e.first_name, e.id]))
@@ -678,7 +688,7 @@ async function createInvoice(ctx: CompanyCtx, fy: number, inv: InvoiceSeed): Pro
           : null
   const reverseChargeText =
     inv.vatTreatment === 'reverse_charge'
-      ? 'Reverse charge — buyer is liable for VAT (Article 196 EU VAT Directive)'
+      ? 'Reverse charge: buyer is liable for VAT (Article 196 EU VAT Directive)'
       : null
 
   const { data, error } = await sb
@@ -742,7 +752,7 @@ async function createInvoice(ctx: CompanyCtx, fy: number, inv: InvoiceSeed): Pro
     ctx,
     fy,
     inv.date,
-    `Faktura ${inv.number} — ${inv.customerName}`,
+    `Faktura ${inv.number}: ${inv.customerName}`,
     'invoice_created',
     lines,
     { sourceId: data.id }
@@ -895,7 +905,7 @@ async function createSupplierInvoice(
     ctx,
     fy,
     inv.date,
-    `Lev.faktura ${inv.number} — ${inv.supplierName}`,
+    `Lev.faktura ${inv.number}: ${inv.supplierName}`,
     'supplier_invoice_registered',
     regLines,
     { sourceId: data.id }
@@ -950,7 +960,7 @@ async function seedFY2025(
 ): Promise<void> {
   console.log('[4] FY2025: opening balances + invoices + expenses + salary')
 
-  // Opening balance for 2025 (start small — 50k bank, no AR)
+  // Opening balance for 2025 (start small, 50k bank, no AR)
   await postEntry(
     ctx,
     2025,
@@ -963,7 +973,7 @@ async function seedFY2025(
     ]
   )
 
-  // Customer invoices: 78 invoices spread Jan–Dec 2025, all paid same week,
+  // Customer invoices: 78 invoices spread Jan-Dec 2025, all paid same week,
   // mixing Klient AB / Berlin GmbH / Nordic Tech / Liten Studio.
   const klient = customers['Klient AB']
   const berlin = customers['Berlin GmbH']
@@ -1022,7 +1032,7 @@ async function seedFY2025(
       vatTreatment: 'standard_25',
       vatRate: 25,
       subtotal,
-      description: `Konsulttjänster vecka ${week + 2}, 2025 — 24h`,
+      description: `Konsulttjänster vecka ${week + 2}, 2025: 24h`,
       hours: 24,
       unitPrice: 1200,
       paidAmount: round2(subtotal * 1.25),
@@ -1048,7 +1058,7 @@ async function seedFY2025(
       vatTreatment: 'reverse_charge',
       vatRate: 0,
       subtotal: 25000,
-      description: `Workshop fee — month ${m}/2025`,
+      description: `Workshop fee: month ${m}/2025`,
       paidAmount: 25000,
       paidAt: paid.toISOString().slice(0, 10),
     })
@@ -1072,7 +1082,7 @@ async function seedFY2025(
       vatTreatment: 'export',
       vatRate: 0,
       subtotal: 13000,
-      description: `Konsulttjänst export — månad ${m}/2025`,
+      description: `Konsulttjänst export: månad ${m}/2025`,
       paidAmount: 13000,
       paidAt: paid.toISOString().slice(0, 10),
     })
@@ -1097,7 +1107,7 @@ async function seedFY2025(
       vatTreatment: 'standard_25',
       vatRate: 25,
       subtotal: 8000,
-      description: `Konsulttjänst — ${i + 1}/6, 2025`,
+      description: `Konsulttjänst: ${i + 1}/6, 2025`,
       hours: 8,
       unitPrice: 1000,
       paidAmount: 10000,
@@ -1106,7 +1116,7 @@ async function seedFY2025(
   }
   // Total invoices: 48 + 12 + 12 + 6 = 78 ✓ (~1.84M revenue)
 
-  // Monthly salary entries for Anna (full year 2025) — 12 × (gross 65000 →
+  // Monthly salary entries for Anna (full year 2025): 12 × (gross 65000 →
   // tax ~14300, net 50700, social fees 20423). Use simplified BAS:
   // DR 7210 65000 / CR 2710 14300, CR 1930 50700 (one entry per month)
   // DR 7510 20423 / CR 2731 20423
@@ -1151,7 +1161,7 @@ async function seedFY2025(
     )
   }
 
-  // 9 months WeWork rent (Apr–Dec)
+  // 9 months WeWork rent (Apr-Dec)
   let arrival25 = 1
   for (let m = 4; m <= 12; m++) {
     const date = dt(2025, m, 1)
@@ -1176,7 +1186,7 @@ async function seedFY2025(
     )
   }
 
-  // Monthly SaaS bundle (Notion + Linear) — booked as own entry per month
+  // Monthly SaaS bundle (Notion + Linear): booked as own entry per month
   for (let m = 1; m <= 12; m++) {
     const date = dt(2025, m, 5)
     await postEntry(
@@ -1194,7 +1204,7 @@ async function seedFY2025(
     )
   }
 
-  // Monthly travel (resor) — varying amounts ~50k/yr total
+  // Monthly travel (resor): varying amounts ~50k/yr total
   const travelMonthly = [3500, 4200, 5100, 3800, 4500, 4900, 2800, 5300, 4600, 4100, 4800, 5200]
   for (let m = 1; m <= 12; m++) {
     const date = dt(2025, m, 28)
@@ -1236,7 +1246,7 @@ async function seedFY2025(
     )
   }
 
-  // Monthly representation (50% deductible — booked as 6071 "ej avdragsgill" for simplicity)
+  // Monthly representation (50% deductible: booked as 6071 "ej avdragsgill" for simplicity)
   for (let m = 1; m <= 12; m++) {
     const date = dt(2025, m, 22)
     const gross = 1800 + (m % 3) * 400
@@ -1344,7 +1354,7 @@ async function seedFY2025(
     )
   }
 
-  // VAT settlement summary at year-end (balance-sheet only — no P&L impact)
+  // VAT settlement summary at year-end (balance-sheet only: no P&L impact)
   await postEntry(
     ctx,
     2025,
@@ -1384,8 +1394,8 @@ async function seedFY2026Konsult(
   let invSeq = 1
   const num = () => `F-2026${String(invSeq++).padStart(4, '0')}`
 
-  // 18 weekly Klient AB Jan–Apr 2026 (16 weeks * but 18 invoices means biweekly-ish)
-  // Distribute 18 weekly across 16 weeks Jan 6 – Apr 27
+  // 18 weekly Klient AB Jan-Apr 2026 (16 weeks * but 18 invoices means biweekly-ish)
+  // Distribute 18 weekly across 16 weeks Jan 6 to Apr 27
   const klientDates: { date: string; week: number }[] = []
   let kd = new Date('2026-01-06')
   for (let i = 0; i < 18; i++) {
@@ -1444,7 +1454,7 @@ async function seedFY2026Konsult(
       vatTreatment: 'standard_25',
       vatRate: 25,
       subtotal,
-      description: `Konsulttjänster vecka ${klientDates[i].week}, 2026 — 24h`,
+      description: `Konsulttjänster vecka ${klientDates[i].week}, 2026: 24h`,
       hours: 24,
       unitPrice: 1200,
       paidAmount,
@@ -1452,7 +1462,7 @@ async function seedFY2026Konsult(
     })
   }
 
-  // 8 Berlin GmbH fixed-fee workshops Jan–Apr; 1 overdue 30, rest paid
+  // 8 Berlin GmbH fixed-fee workshops Jan-Apr; 1 overdue 30, rest paid
   const berlinAmounts = [42000, 35000, 48000, 28000, 55000, 32000, 38000, 41000]
   for (let i = 0; i < 8; i++) {
     const month = Math.min(4, Math.floor(i / 2) + 1)
@@ -1473,7 +1483,7 @@ async function seedFY2026Konsult(
       vatTreatment: 'reverse_charge',
       vatRate: 0,
       subtotal: berlinAmounts[i],
-      description: `Workshop ${i + 1}/2026 — Berlin GmbH`,
+      description: `Workshop ${i + 1}/2026: Berlin GmbH`,
       paidAmount: isOverdue ? 0 : berlinAmounts[i],
       paidAt,
     })
@@ -1496,13 +1506,13 @@ async function seedFY2026Konsult(
       vatTreatment: 'export',
       vatRate: 0,
       subtotal: 14000,
-      description: `Konsulttjänst export — månad ${month}/2026`,
+      description: `Konsulttjänst export: månad ${month}/2026`,
       paidAmount: 14000,
       paidAt,
     })
   }
 
-  // 2 Helsinki Oy — 1 paid, 1 sent (not overdue per prompt distribution)
+  // 2 Helsinki Oy, 1 paid, 1 sent (not overdue per prompt distribution)
   for (let i = 0; i < 2; i++) {
     const month = i === 0 ? 2 : 4
     const date = dt(2026, month, 18)
@@ -1519,7 +1529,7 @@ async function seedFY2026Konsult(
       vatTreatment: 'reverse_charge',
       vatRate: 0,
       subtotal: 20000,
-      description: `Konsulttjänst — Helsinki Oy ${month}/2026`,
+      description: `Konsulttjänst: Helsinki Oy ${month}/2026`,
       paidAmount: isPaid ? 20000 : 0,
       paidAt: isPaid ? dt(2026, month + 1, 5) : undefined,
     })
@@ -1536,11 +1546,11 @@ async function seedFY2026Konsult(
     vatTreatment: 'standard_25',
     vatRate: 25,
     subtotal: 9500,
-    description: 'Konsulttjänst mars — Liten Studio',
+    description: 'Konsulttjänst mars: Liten Studio',
     paidAmount: 0,
   })
 
-  // 4 May 2026 invoices — unpaid, no reminder yet
+  // 4 May 2026 invoices, unpaid, no reminder yet
   for (let i = 0; i < 4; i++) {
     const date = dt(2026, 5, 1 + i)
     const dueD = new Date(date)
@@ -1555,14 +1565,14 @@ async function seedFY2026Konsult(
       vatTreatment: 'standard_25',
       vatRate: 25,
       subtotal: 28800,
-      description: `Konsulttjänster maj — vecka ${18 + i}, 2026`,
+      description: `Konsulttjänster maj: vecka ${18 + i}, 2026`,
       hours: 24,
       unitPrice: 1200,
       paidAmount: 0,
     })
   }
 
-  // ── Stripe payouts (3 in May) — create 8 sub-invoices first, batch them
+  // ── Stripe payouts (3 in May): create 8 sub-invoices first, batch them
   // We'll create 8 small "Stripe customer" invoices grouped into 3 payouts
   const stripeCustomer = liten // reuse Liten as a generic Stripe billed party
   const stripeBatches: Array<{
@@ -1595,7 +1605,7 @@ async function seedFY2026Konsult(
         vatTreatment: 'standard_25',
         vatRate: 25,
         subtotal,
-        description: 'Stripe-betalning — engångsuppdrag',
+        description: 'Stripe-betalning: engångsuppdrag',
         paidAmount: gross,
         paidAt: batch.payoutDate,
       }
@@ -1614,7 +1624,7 @@ async function seedFY2026Konsult(
         { account: '1930', credit: batch.fee },
       ]
     )
-    // Bank transaction for Stripe payout (combined net) — already booked individual incomings;
+    // Bank transaction for Stripe payout (combined net): already booked individual incomings;
     // here we add a memo transaction for the payout aggregation
     await sb.from('transactions').insert({
       user_id: ctx.userId,
@@ -1632,7 +1642,7 @@ async function seedFY2026Konsult(
     })
   }
 
-  // Supplier invoices Jan–Apr — arrival_number must be unique per company
+  // Supplier invoices Jan-Apr: arrival_number must be unique per company
   // across both fiscal years, so continue from the highest existing number.
   const { data: maxArr } = await sb
     .from('supplier_invoices')
@@ -1771,7 +1781,7 @@ async function seedFY2026Konsult(
     arrival++
   )
 
-  // Apple iPad Pro — fixed asset (1230) 18000 SEK + 25% moms
+  // Apple iPad Pro: fixed asset (1230) 18000 SEK + 25% moms
   await createSupplierInvoice(
     ctx,
     2026,
@@ -1816,7 +1826,7 @@ async function seedFY2026Konsult(
     )
   }
 
-  // Salary entries Jan–Apr 2026 for Anna, Erik, Johan
+  // Salary entries Jan-Apr 2026 for Anna, Erik, Johan
   const salaries = [
     { name: 'Anna Andersson', gross: 65000, tax: 14300, net: 50700, soc: 20423 },
     { name: 'Erik Ek', gross: 52000, tax: 11440, net: 40560, soc: 16338 },
@@ -1839,7 +1849,7 @@ async function seedFY2026Konsult(
       ctx,
       2026,
       payDate,
-      `Lön ${m}/2026 — Anna, Erik, Johan`,
+      `Lön ${m}/2026: Anna, Erik, Johan`,
       'salary_payment',
       [
         { account: '7010', debit: totalGross, description: 'Bruttolöner' },
@@ -1881,19 +1891,36 @@ async function seedInboxAndUncategorized(
 ): Promise<void> {
   console.log('[6] inbox AWS PDF + 5 uncategorized + voucher gaps')
 
-  // Synthetic AWS PDF storage row (no actual file upload — storage path
-  // exists for demo, file content can be uploaded later via UI)
-  const fakeHash = 'demo' + Math.random().toString(36).slice(2, 18).padEnd(60, '0')
+  // Synthetic AWS invoice PDF: upload a tiny but valid PDF so the nightly
+  // integrity-verify cron can download the object and match its real
+  // SHA-256, instead of failing forever on a fabricated hash with no file.
+  const awsPdfBuffer = Buffer.from(
+    [
+      '%PDF-1.4',
+      '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+      '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
+      '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >> endobj',
+      'trailer << /Root 1 0 R >>',
+      '%%EOF',
+    ].join('\n'),
+    'utf8'
+  )
+  const awsPdfPath = `${ctx.userId}/${ctx.companyId}/inbox/aws-2026-05-05.pdf`
+  const { error: uploadErr } = await sb.storage
+    .from('documents')
+    .upload(awsPdfPath, awsPdfBuffer, { contentType: 'application/pdf', upsert: true })
+  if (uploadErr) throw new Error(`storage upload AWS PDF: ${uploadErr.message}`)
+  const awsPdfHash = createHash('sha256').update(awsPdfBuffer).digest('hex')
   const { data: doc, error: docErr } = await sb
     .from('document_attachments')
     .insert({
       user_id: ctx.userId,
       company_id: ctx.companyId,
-      storage_path: `${ctx.userId}/${ctx.companyId}/inbox/aws-2026-05-05.pdf`,
+      storage_path: awsPdfPath,
       file_name: 'aws-2026-05-05.pdf',
-      file_size_bytes: 124567,
+      file_size_bytes: awsPdfBuffer.length,
       mime_type: 'application/pdf',
-      sha256_hash: fakeHash,
+      sha256_hash: awsPdfHash,
       version: 1,
       is_current_version: true,
       uploaded_by: ctx.userId,
@@ -1910,7 +1937,7 @@ async function seedInboxAndUncategorized(
     source: 'email',
     document_type: 'supplier_invoice',
     email_from: 'aws-billing@amazon.com',
-    email_subject: 'Your AWS Invoice — May 2026',
+    email_subject: 'Your AWS Invoice: May 2026',
     email_received_at: '2026-05-05T07:34:00Z',
     document_id: doc.id,
     extracted_data: {
@@ -1923,8 +1950,8 @@ async function seedInboxAndUncategorized(
       vat_amount: 0,
       total: 247.0,
       line_items: [
-        { description: 'EC2 — t3.medium hours', amount: 198.5 },
-        { description: 'S3 — Standard storage', amount: 48.5 },
+        { description: 'EC2: t3.medium hours', amount: 198.5 },
+        { description: 'S3: Standard storage', amount: 48.5 },
       ],
     },
     confidence: 0.91,
@@ -1942,7 +1969,7 @@ async function seedInboxAndUncategorized(
       user_id: ctx.userId,
       company_id: ctx.companyId,
       date: minus(2),
-      description: 'SJ AB — biljett',
+      description: 'SJ AB: biljett',
       amount: -487,
       currency: 'SEK',
       amount_sek: -487,
@@ -1995,7 +2022,7 @@ async function seedInboxAndUncategorized(
       user_id: ctx.userId,
       company_id: ctx.companyId,
       date: minus(11),
-      description: 'TRAFIK SL — månadskort',
+      description: 'TRAFIK SL: månadskort',
       amount: -156,
       currency: 'SEK',
       amount_sek: -156,
@@ -2258,10 +2285,10 @@ async function main(): Promise<void> {
   //
   // Pragmatic approach: AFTER all entries are posted, NULL out and DELETE
   // requires bypassing the trigger. The cleanest path is to simply NOT
-  // create entries at those slots — but our voucher counter is monotonic.
+  // create entries at those slots, but our voucher counter is monotonic.
   // We'll skip-numbers up-front by NOT actually creating the entries:
   // Instead, we'll bump the counter by inserting then deleting the lines
-  // and the entry — which will fail.
+  // and the entry, which will fail.
   //
   // Real solution: emit a "draft" entry then leave it as draft forever.
   // The detect_voucher_gaps RPC counts gaps among posted entries.
@@ -2302,7 +2329,7 @@ async function main(): Promise<void> {
   console.log('')
   console.log('Manual setup still required (out of scope for this script):')
   console.log(' - Gmail demo account: AWS billing email + Stripe payout confirmations')
-  console.log(' - Google Calendar: week 28 Apr–4 May meetings')
+  console.log(' - Google Calendar: week 28 Apr to 4 May meetings')
   console.log(' - Google Drive: folder "Kvitton 2026" / "Bokslut 2025"')
   console.log(' - Slack: #ekonomi channel + DM with gnubok-bot')
   console.log(' - Voucher gaps A123 + A287 in FY2025: see scripts/seed-demo-voucher-gaps.sql')

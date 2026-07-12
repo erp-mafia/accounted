@@ -31,14 +31,14 @@ interface AccountingFrameworkFormProps {
 
 /**
  * K2/K3 selector for AB. Lives on the bookkeeping settings page. Renders nothing
- * for non-AB entities — the parent gates this component by entity_type.
+ * for non-AB entities: the parent gates this component by entity_type.
  *
- * UX rules (regulatory area — kept in Swedish):
+ * UX rules (regulatory area: kept in Swedish):
  *   - Default is K2 (matches the column default and BFNAR 2016:10 baseline).
  *   - Switching K2 → K3 fires a confirmation dialog. The recommendation per
  *     BFN is that the choice is permanent for the company once made; we
  *     surface that as a warning, not a block, so the user can still revert.
- *   - The save is its own request (PATCH /api/company/current) — separate
+ *   - The save is its own request (PATCH /api/company/current): separate
  *     from /api/settings because the column lives on companies, not on
  *     company_settings.
  */
@@ -115,8 +115,8 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="k2">K2 (BFNAR 2016:10) — mindre företag</SelectItem>
-            <SelectItem value="k3">K3 (BFNAR 2012:1) — större företag</SelectItem>
+            <SelectItem value="k2">K2 (BFNAR 2016:10): mindre företag</SelectItem>
+            <SelectItem value="k3">K3 (BFNAR 2012:1): större företag</SelectItem>
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">

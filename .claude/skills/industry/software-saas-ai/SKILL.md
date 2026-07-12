@@ -1,9 +1,9 @@
 ---
 id: vertical/software-saas-ai
 tier: vertical
-title: "Software, SaaS & AI-produktbolag (SNI 58.21–63.12)"
+title: "Software, SaaS & AI-produktbolag (SNI 58.21-63.12)"
 description: >
-  Swedish bookkeeping for software, SaaS and AI product companies (SNI 58.21, 58.29, 62.01, 62.03, 63.11, 63.12). Use whenever a Swedish AB or EF has recurring digital product revenue, US/EU cloud and LLM vendors in the supplier ledger (AWS, OpenAI, Anthropic, Stripe, GitHub), runs personaloptioner or KPO programs, books förutbetalda intäkter for annual prepay (2979), capitalizes development costs under K3 chapter 18, files OSS-deklaration, or operates under a US Delaware parent with a Swedish opco. Trigger on indirect cues: GL containing 1010 plus 2089 plus 4531/4535, 3:12-reformen 2026, K2-vs-K3 choice for SaaS, omvänd betalningsskyldighet on API costs, EU AI Act conformity, transfer pricing for cost-plus dev shops. Distinct from konsult-it (hourly billing) — prefer this skill when subscription/usage-based digital product revenue dominates.
+  Swedish bookkeeping for software, SaaS and AI product companies (SNI 58.21, 58.29, 62.01, 62.03, 63.11, 63.12). Use whenever a Swedish AB or EF has recurring digital product revenue, US/EU cloud and LLM vendors in the supplier ledger (AWS, OpenAI, Anthropic, Stripe, GitHub), runs personaloptioner or KPO programs, books förutbetalda intäkter for annual prepay (2979), capitalizes development costs under K3 chapter 18, files OSS-deklaration, or operates under a US Delaware parent with a Swedish opco. Trigger on indirect cues: GL containing 1010 plus 2089 plus 4531/4535, 3:12-reformen 2026, K2-vs-K3 choice for SaaS, omvänd betalningsskyldighet on API costs, EU AI Act conformity, transfer pricing for cost-plus dev shops. Distinct from konsult-it (hourly billing): prefer this skill when subscription/usage-based digital product revenue dominates.
 sni_prefixes: ["58.21", "58.29", "62.01", "62.03", "63.11", "63.12"]
 trigger_signals:
   text_patterns:
@@ -48,7 +48,7 @@ Bolag med SNI 58.21/58.29/62.01/62.03/63.11/63.12 vars huvudsakliga intäkt är 
 
 **Faktureringskadens.** Dominerande mönster: månatlig eller årlig prenumeration förskottsfakturerad, ofta via Stripe/Adyen/Paddle. Sekundärt: usage-/seat-baserad efterskottsfakturering. Reseller- och marketplace-flöden (Apple App Store, Google Play, AWS Marketplace) kräver särskild momsanalys: plattformen är presumerad säljare till slutkund per Art. 9a EU-genomförandeförordning (EU) 282/2011, utvecklaren tillhandahåller B2B-tjänst till plattformen.
 
-**Kostnadsrytm.** Molnberäkning, API och SaaS-prenumerationer dominerar OPEX och utgör typiskt 25–50% av kostnadsmassan. Övervägande del USD/EUR-fakturerat med valutaexponering. Månadsslut kräver upplupna kostnader på AWS/OpenAI/Anthropic eftersom invoices typiskt anländer 3–10 dagar in i efterföljande månad.
+**Kostnadsrytm.** Molnberäkning, API och SaaS-prenumerationer dominerar OPEX och utgör typiskt 25-50% av kostnadsmassan. Övervägande del USD/EUR-fakturerat med valutaexponering. Månadsslut kräver upplupna kostnader på AWS/OpenAI/Anthropic eftersom invoices typiskt anländer 3-10 dagar in i efterföljande månad.
 
 **Avstämning.** Stripe payout-avstämning kritisk: Stripe Reporting till bankinflöde mot 1930, Stripe-avgift mot 6570, FX-effekt mot 7960/8330. Periodisering av förutbetalda intäkter månadsvis vid bokslut och i månadsbokslut för ARR/MRR-rapportering.
 
@@ -99,7 +99,7 @@ Verifierat mot BAS 2025 officiell kontoplan (bas.se/kontoplaner). Avvikelser fr�
 
 **Free trials/freemium.** Ingen intäktsbokning före betalningsförpliktelse uppstår (K3 23.2 + 2.18 grundkriterier). Konverteringstid till betald plan utlöser periodiseringsstart.
 
-**Reseller-avtal principal vs agent.** Bruttoredovisningsprincipen K3 23.2 + 2.5–2.6. Provisionsbaserat uppdrag K2 6.9: netto. Bedömning sker enligt grundprinciper, ej IFRS 15 control-test.
+**Reseller-avtal principal vs agent.** Bruttoredovisningsprincipen K3 23.2 + 2.5-2.6. Provisionsbaserat uppdrag K2 6.9: netto. Bedömning sker enligt grundprinciper, ej IFRS 15 control-test.
 
 **Skatteverket vägledning:** rattsligvagledning, Inkomstskatt, Näringsverksamhet, Uppdrag på löpande räkning resp. fast pris (https://www4.skatteverket.se/rattsligvagledning/edition/2023.16/324730.html).
 
@@ -111,7 +111,7 @@ Verifierat mot BAS 2025 officiell kontoplan (bas.se/kontoplaner). Avvikelser fr�
 
 **Fond för utvecklingsutgifter.** ÅRL 4 kap 2 §: aktiebolag som aktiverar måste föra över motsvarande belopp från fritt EK till **fond för utvecklingsutgifter** (bundet EK, konto 2089). ÅRL 4 kap 7 §: fonden får tas i anspråk endast för fondemission/nyemission eller förlusttäckning. ÅRL 4 kap 8 §: fonden minskas vid avskrivning/nedskrivning/avyttring med överföring till fritt EK.
 
-**Avskrivningstid.** ÅRL 4 kap 4 § 2 st: om nyttjandeperiod inte kan fastställas tillförlitligt antas 5 år. I praktiken används 3–5 år för mjukvara.
+**Avskrivningstid.** ÅRL 4 kap 4 § 2 st: om nyttjandeperiod inte kan fastställas tillförlitligt antas 5 år. I praktiken används 3-5 år för mjukvara.
 
 **Strategiskt K2 vs K3-val.** Bolag med betydande utvecklingsutgifter och optionsprogram bör välja K3 från start. **Kritisk förändring 2026:** Nya K2 1.1A g (BFNAR 2025:1, ikraft för räkenskapsår som inleds efter 2025-12-31) förbjuder K2 för bolag som förvärvat varor/tjänster mot aktierelaterade ersättningar under räkenskapsåret. SaaS-startups med personaloptioner kan inte längre välja K2.
 
@@ -127,12 +127,12 @@ Skatteverket: https://www4.skatteverket.se/rattsligvagledning/edition/2025.2/324
 |---|---|---|
 | B2B-tjänst inom EU (huvudregel) | **6 kap 33 §** | Omsatt i köparens land, omvänd betalningsskyldighet hos köparen. Krav VIES-validering av köparens VAT-nr; sparat verifikat. Periodisk sammanställning. Faktura: "reverse charge". Konto 3308 |
 | B2B-tjänst utanför EU | **6 kap 33 §** | Omsatt utomlands, ej svensk moms. Konto 3305. Faktura: "Outside scope of Swedish VAT" |
-| B2C digitala/elektroniska tjänster inom EU | **6 kap 56–57 §§**, tröskel 99 680 kr (10 000 EUR) i **6 kap 62–65 §§** | OSS-deklaration via Skatteverket (unionsordningen), destinationslandets momssats, **22 kap ML** |
-| B2C tjänster utanför EU | **6 kap 58–59 §§** | Utanför svensk moms |
+| B2C digitala/elektroniska tjänster inom EU | **6 kap 56-57 §§**, tröskel 99 680 kr (10 000 EUR) i **6 kap 62-65 §§** | OSS-deklaration via Skatteverket (unionsordningen), destinationslandets momssats, **22 kap ML** |
+| B2C tjänster utanför EU | **6 kap 58-59 §§** | Utanför svensk moms |
 
 **OSS-valutaomräkning.** Beloppen redovisas i EUR. Vid annan transaktionsvaluta används **ECB-kursen för den SISTA dagen av redovisningsperioden** (kvartalet), eller nästa publicerade kurs om ECB inte publicerar den dagen. Detta följer EU:s momsdirektiv art. 366.
 
-**App store / marketplace facilitator.** Skatteverkets tidigare ställningstagande 2014-12-04 dnr 131 664810-14/111 **upphävdes 2022-12-19 (dnr 8-2059749)** med motivering att EU-kommissionens förklarande anmärkningar och Skatteverkets rättsliga vägledning täcker frågan. Materiella regeln **kvarstår** via direkt tillämplig **art. 9a EU-genomförandeförordning 282/2011**: plattform (Apple App Store, Google Play) är presumerad säljare till slutkund om plattformen (a) godkänner debiteringen, (b) godkänner leveransen, eller (c) sätter allmänna villkor. Utvecklaren tillhandahåller B2B-tjänst till plattformen och tillämpar omvänd betalningsskyldighet (Apple Distribution Intl, IE-VAT; Google Commerce Ltd, IE-VAT), konto 3308 plus periodisk sammanställning. Marketplace facilitator för **varor** via elektroniskt gränssnitt: ML 2023:200 5 kap 4–6 §§.
+**App store / marketplace facilitator.** Skatteverkets tidigare ställningstagande 2014-12-04 dnr 131 664810-14/111 **upphävdes 2022-12-19 (dnr 8-2059749)** med motivering att EU-kommissionens förklarande anmärkningar och Skatteverkets rättsliga vägledning täcker frågan. Materiella regeln **kvarstår** via direkt tillämplig **art. 9a EU-genomförandeförordning 282/2011**: plattform (Apple App Store, Google Play) är presumerad säljare till slutkund om plattformen (a) godkänner debiteringen, (b) godkänner leveransen, eller (c) sätter allmänna villkor. Utvecklaren tillhandahåller B2B-tjänst till plattformen och tillämpar omvänd betalningsskyldighet (Apple Distribution Intl, IE-VAT; Google Commerce Ltd, IE-VAT), konto 3308 plus periodisk sammanställning. Marketplace facilitator för **varor** via elektroniskt gränssnitt: ML 2023:200 5 kap 4-6 §§.
 
 Skatteverket: https://www4.skatteverket.se/rattsligvagledning/edition/2025.1/409182.html.
 
@@ -155,9 +155,9 @@ Skatteverket: https://www4.skatteverket.se/rattsligvagledning/edition/2025.1/409
 
 VIES-validering av EU-leverantörers VAT-nummer ska göras periodiskt och dokumenteras (screenshot/timestamp). Stripe, Adyen, Paddle: betalningstjänst undantagen från moms (ML 10 kap 3 §, finansiell tjänst). Avgift bokas brutto på 6570 utan momsberäkning.
 
-**Periodisering API-kostnader.** Matcha mot intäkt månadsvis. Vid betydande månads-end-cutoff: upplupna kostnader 2990 baserat på dashboard-rapporter (AWS Cost Explorer, OpenAI Usage). Verifikatet ska referera till underliggande rapport, faktura kommer 3–10 dagar in i nästa månad.
+**Periodisering API-kostnader.** Matcha mot intäkt månadsvis. Vid betydande månads-end-cutoff: upplupna kostnader 2990 baserat på dashboard-rapporter (AWS Cost Explorer, OpenAI Usage). Verifikatet ska referera till underliggande rapport, faktura kommer 3-10 dagar in i nästa månad.
 
-**Momsdeklaration ruta-rapportering (verifierat oförändrat 2025–2026):**
+**Momsdeklaration ruta-rapportering (verifierat oförändrat 2025-2026):**
 - Inköp tjänster annat EU-land (4531): beskattningsunderlag i **ruta 21**, utgående moms 25% i **ruta 30**, ingående avdrag i **ruta 48**
 - Inköp tjänster utanför EU (4535): beskattningsunderlag i **ruta 22**, utgående moms 25% i **ruta 30**, ingående avdrag i **ruta 48**
 - Försäljning tjänster B2B annat EU-land (3308): **ruta 39** plus periodisk sammanställning
@@ -165,7 +165,7 @@ VIES-validering av EU-leverantörers VAT-nummer ska göras periodiskt och dokume
 
 ### 4.5 Personaloptioner
 
-**Kvalificerade personaloptioner, IL 11 a kap** (SFS 2017:1212, ikraft 2018-01-01; utvidgning prop. 2021/22:25, SFS 2021:1147, ikraft 2022-01-01). **Ingen ytterligare reform genomförd 2023–maj 2026.** 3:12-utredningens slutbetänkande väntades 2026-01-19 om KPO i 3:12-systemet; ingen prop. publicerad ännu (flaggad öppen fråga).
+**Kvalificerade personaloptioner, IL 11 a kap** (SFS 2017:1212, ikraft 2018-01-01; utvidgning prop. 2021/22:25, SFS 2021:1147, ikraft 2022-01-01). **Ingen ytterligare reform genomförd 2023-maj 2026.** 3:12-utredningens slutbetänkande väntades 2026-01-19 om KPO i 3:12-systemet; ingen prop. publicerad ännu (flaggad öppen fråga).
 
 Aktuella villkor:
 - Medelantal anställda (koncern) under 150 (11 a kap 6 §)
@@ -183,10 +183,10 @@ Effekt: skatte- och socialavgiftsbefrielse vid förvärv och utnyttjande; vinst 
 
 **Icke-kvalificerade personaloptioner**, IL 10 kap 11 §: förmånsbeskattning vid utnyttjande som lön (tjänsteinkomst), arbetsgivaravgifter på förmånsvärdet.
 
-**Teckningsoptioner**, IL 41–44 kap: beroende på utformning antingen kapitalvinst- eller tjänstebeskattning per HFD-praxis.
+**Teckningsoptioner**, IL 41-44 kap: beroende på utformning antingen kapitalvinst- eller tjänstebeskattning per HFD-praxis.
 
 **Bokföring K3 kap 26 "Aktierelaterade ersättningar":**
-- Egetkapitalreglerade (vanliga personaloptioner, KPO): kostnad redovisas över intjänandeperiod mot eget kapital (26.3, 26.5a, 26.6–26.7). Verkligt värde vid tilldelningstidpunkten, omvärderas ej. Endast antalet förväntat intjänade instrument justeras varje balansdag.
+- Egetkapitalreglerade (vanliga personaloptioner, KPO): kostnad redovisas över intjänandeperiod mot eget kapital (26.3, 26.5a, 26.6-26.7). Verkligt värde vid tilldelningstidpunkten, omvärderas ej. Endast antalet förväntat intjänade instrument justeras varje balansdag.
 - Kontantreglerade (syntetiska optioner, SARs): skuld baserad på aktiekurs, omvärderas (26.4, 26.5b).
 - Sociala avgifter på samma sätt som ersättningen (26.20).
 - Värderingsmodell (Black-Scholes, binomial) ej föreskriven i K3 men praxis.
@@ -218,7 +218,7 @@ K10-blankett ska lämnas årligen av varje delägare som äger kvalificerade and
 
 **Konvertibla skuldebrev (KVL)** regleras av **ABL 15 kap** (emissionsbeslut, riktade emissioner, registrering). Redovisning K3 BFNAR 2012:1 kap 22 "Finansiella instrument": konvertibel uppdelas i skuldkomponent (diskonterat kassaflöde till marknadsränta) och egetkapitalkomponent (residual). K2 saknar uppdelningskrav, redovisas som skuld till nominellt belopp.
 
-**Investeraravdrag, IL 43 kap.** Oförändrade beloppsgränser 2024–maj 2026; mindre teknisk EU-statsstödsanpassning prop. 2023/24:80, ikraft 2024-07-01:
+**Investeraravdrag, IL 43 kap.** Oförändrade beloppsgränser 2024-maj 2026; mindre teknisk EU-statsstödsanpassning prop. 2023/24:80, ikraft 2024-07-01:
 - Avdrag 50% av betalningen för andelar vid bildande eller nyemission
 - Max underlag per fysisk person/år: **1 300 000 kr**, max avdrag 650 000 kr/år
 - Skatteeffekt 30% av avdraget = max 195 000 kr/år
@@ -235,9 +235,9 @@ Skatteverket: https://www.skatteverket.se/privat/skatter/vardepapper/investerara
 
 **US Delaware C-corp parent + svenskt opco** (YC-/Stripe Atlas-struktur). Vanlig vid YC, US VC-runda eller global enterprise-försäljning.
 
-**Transfer pricing.** Korrigeringsregeln armlängdsprincipen **IL 14 kap 19–20 §§** (HFD 2016:45 Diligentia). Bedömning enligt OECD TPG. För svenskt opco som utvecklingscentrum: typiskt **cost-plus** med markup 5–12% beroende på funktion/risk; opcot bär kontraktsutvecklarrisk.
+**Transfer pricing.** Korrigeringsregeln armlängdsprincipen **IL 14 kap 19-20 §§** (HFD 2016:45 Diligentia). Bedömning enligt OECD TPG. För svenskt opco som utvecklingscentrum: typiskt **cost-plus** med markup 5-12% beroende på funktion/risk; opcot bär kontraktsutvecklarrisk.
 
-**Dokumentationsskyldighet.** **39 kap 15–16 f §§ skatteförfarandelagen (2011:1244), SFL** (inte IL). Master file/local file-struktur per BEPS Action 13 (prop. 2016/17:47, ikraft för beskattningsår som börjar efter 2017-03-31). Undantag 39 kap 16 a § SFL: intressegemenskap med under 250 anställda och omsättning högst 450 MSEK eller balansomslutning högst 400 MSEK befrias från dokumentation. Land-för-land-rapportering 33 a kap SFL.
+**Dokumentationsskyldighet.** **39 kap 15-16 f §§ skatteförfarandelagen (2011:1244), SFL** (inte IL). Master file/local file-struktur per BEPS Action 13 (prop. 2016/17:47, ikraft för beskattningsår som börjar efter 2017-03-31). Undantag 39 kap 16 a § SFL: intressegemenskap med under 250 anställda och omsättning högst 450 MSEK eller balansomslutning högst 400 MSEK befrias från dokumentation. Land-för-land-rapportering 33 a kap SFL.
 
 **Fast driftställe (PE-risk).** Bedömning per OECD modellavtal art. 5 och svenska skatteavtal. Risk att US parent har PE i Sverige om svenska anställda har avtalsmandat ("dependent agent PE"). Mitigera genom: skriftliga begränsningar, ingen avtalsslutning i Sverige för USA-räkning, separata kontrakt till svenskt opco.
 
@@ -245,7 +245,7 @@ Skatteverket: https://www4.skatteverket.se/rattsligvagledning/edition/2025.1/324
 
 ### 4.9 FoU-avdrag och växa-stöd
 
-**FoU-avdrag på arbetsgivaravgifter.** **Lag (2023:747)** om särskilt avdrag vid beräkning av arbetsgivaravgifter och allmän löneavgift för personer som arbetar med FoU, ikraft 2024-01-01 (prop. 2023/24:14). Ersatte tidigare regler i socialavgiftslagen 2 kap 29–31 §§.
+**FoU-avdrag på arbetsgivaravgifter.** **Lag (2023:747)** om särskilt avdrag vid beräkning av arbetsgivaravgifter och allmän löneavgift för personer som arbetar med FoU, ikraft 2024-01-01 (prop. 2023/24:14). Ersatte tidigare regler i socialavgiftslagen 2 kap 29-31 §§.
 
 - Avdrag = 20% av avgiftsunderlaget för FoU-personal
 - **Sammanlagt tak per koncern och kalendermånad: 3 MSEK** (1,5 MSEK från arbetsgivaravgifterna plus resterande från allmän löneavgift), 8 § lag 2023:747
@@ -277,7 +277,7 @@ Ikraft 2024-08-01. Tillämpningsdatum staggrade per art. 113.
 | Tier | Originaldatum | Status maj 2026 |
 |---|---|---|
 | Förbjudna AI-praktiker (art. 5) plus AI-kompetens (art. 4) | 2025-02-02 | Tillämpas |
-| GPAI-modeller (art. 51–55), governance (kap VII), notified bodies (kap III §4), sanktioner (kap XII) | 2025-08-02 | Tillämpas |
+| GPAI-modeller (art. 51-55), governance (kap VII), notified bodies (kap III §4), sanktioner (kap XII) | 2025-08-02 | Tillämpas |
 | Annex III high-risk-system plus transparens (art. 50) | 2026-08-02 | **Skjuts upp till 2027-12-02** per Digital Omnibus-överenskommelse 2026-05-07 (preliminär, ej publicerad i OJEU) |
 | Annex I high-risk produktsäkerhet (art. 6(1)) | 2027-08-02 | **Skjuts upp till 2028-08-02** per Digital Omnibus |
 
@@ -387,7 +387,7 @@ Aktiveras när **API-leverantörer (OpenAI, Anthropic, Mistral, Cohere, Lambda L
 - Anthropic: workspaces usage report
 - AWS Bedrock: CloudWatch metrics per modell-ARN
 
-Lagra kund-ID i request metadata och avstäm månadsvis. Allokering bokas via interna fördelningskonton (4910–4998-gruppen) eller direkt mot kund-/produkt-dimensioner i redovisningssystemet (Fortnox projektdimension, Visma kostnadsbärare).
+Lagra kund-ID i request metadata och avstäm månadsvis. Allokering bokas via interna fördelningskonton (4910-4998-gruppen) eller direkt mot kund-/produkt-dimensioner i redovisningssystemet (Fortnox projektdimension, Visma kostnadsbärare).
 
 **COGS-attribution per kund.** Möjliggör verklig bruttomarginalsanalys per kund/plan, kritiskt för pricing och churn-modellering. Den månatliga matchningen API-cost mot intäkt sker via:
 1. Periodiserad intäkt månadsvis från 2979 till 3001/3305/3308

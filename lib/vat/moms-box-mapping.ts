@@ -49,8 +49,8 @@ export type MomsBox =
  * Used for cross-validation (Export VAT Monitor, EU Sales List) and any
  * UI that needs to label a journal line by its declaration ruta.
  *
- * Must stay aligned with `ACCOUNT_RUTA` in `lib/reports/vat-declaration.ts`
- * — a regression test asserts that every account mapped here points at the
+ * Must stay aligned with `ACCOUNT_RUTA` in `lib/reports/vat-declaration.ts`:
+ * a regression test asserts that every account mapped here points at the
  * matching ruta and vice versa.
  */
 export const ACCOUNT_TO_BOX: Record<string, MomsBox> = {

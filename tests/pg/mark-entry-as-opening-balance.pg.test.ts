@@ -128,7 +128,7 @@ describe('mark_entry_as_opening_balance RPC', () => {
     const companyId = await insertCompany({ createdBy: userId })
     await insertCompanyMember({ companyId, userId, role: 'owner' })
     const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
-    // 1510 receivable / 2440 payable — balance-sheet only, no 19xx bank line.
+    // 1510 receivable / 2440 payable: balance-sheet only, no 19xx bank line.
     const entryId = await insertPostedEntry({
       userId, companyId, fiscalPeriodId, voucherNumber: 1,
       lines: [
@@ -176,7 +176,7 @@ describe('mark_entry_as_opening_balance RPC', () => {
   })
 })
 
-describe('enforce_journal_entry_immutability — source_type retag carve-out', () => {
+describe('enforce_journal_entry_immutability: source_type retag carve-out', () => {
   it('blocks a bare source_type UPDATE when the bypass flag is NOT set', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedOwner()
     const entryId = await insertPostedEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })

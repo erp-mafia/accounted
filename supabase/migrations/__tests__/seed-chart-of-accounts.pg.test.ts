@@ -9,7 +9,7 @@ import { getPool } from '@/tests/pg/setup'
  * Background: this mapping has regressed once already (2026-03-30 multi-tenant
  * refactor copy-pasted the original 2024 buggy seed back in). The engine and
  * the VAT-rutor mapping both route by account number, so a mislabel in this
- * function never breaks any other test — only the chart-of-accounts UI shows
+ * function never breaks any other test: only the chart-of-accounts UI shows
  * the wrong text. This test is the canary.
  *
  * The diacritic + SRU groups below cover the 2026-05-16 migration that
@@ -97,7 +97,7 @@ describe('seed_chart_of_accounts', () => {
   })
 })
 
-describe('seed_chart_of_accounts — Swedish characters', () => {
+describe('seed_chart_of_accounts: Swedish characters', () => {
   it('inserts Swedish-character account names byte-for-byte for aktiebolag', async () => {
     const { companyId } = await seedCompany()
     await callSeed(companyId, 'aktiebolag')
@@ -194,7 +194,7 @@ describe('seed_chart_of_accounts — Swedish characters', () => {
   })
 })
 
-describe('seed_chart_of_accounts — SRU codes', () => {
+describe('seed_chart_of_accounts: SRU codes', () => {
   it('populates sru_code for every seeded account so the K1 chart can produce SRU/INK2 filings', async () => {
     const { companyId } = await seedCompany()
     await callSeed(companyId, 'aktiebolag')
@@ -226,7 +226,7 @@ describe('seed_chart_of_accounts — SRU codes', () => {
   })
 })
 
-describe('seed_chart_of_accounts — invariants', () => {
+describe('seed_chart_of_accounts: invariants', () => {
   it('is idempotent: a second call on a company that already has accounts is a no-op', async () => {
     const { companyId } = await seedCompany()
     await callSeed(companyId, 'aktiebolag')

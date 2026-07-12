@@ -113,7 +113,7 @@ export function calculateSjuklon(
 
 /**
  * Calculate VAB (vård av barn) deduction.
- * Full daily rate deduction — Försäkringskassan compensates the parent.
+ * Full daily rate deduction: Försäkringskassan compensates the parent.
  * Semesterlönegrundande for first 120 days (180 for sole custody) per §17b.
  */
 export function calculateVabDeduction(
@@ -181,13 +181,13 @@ export function calculateVacationPay(params: {
   const dailyRate = r(params.monthlySalary / 21)
 
   if (params.vacationRule === 'none') {
-    // No accrual — vacation is included in monthly pay. No tillägg paid.
+    // No accrual: vacation is included in monthly pay. No tillägg paid.
     return {
       amount: 0,
       tillagg: 0,
       steps: [{
         label: 'Semesterlön (avstängd)',
-        formula: 'ingen separat semesterlön — ingår i månadslönen',
+        formula: 'ingen separat semesterlön: ingår i månadslönen',
         input: { days: params.vacationDaysTaken },
         output: 0,
       }],

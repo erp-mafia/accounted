@@ -1,4 +1,4 @@
-# 3:12-reglerna (IL 57 kap) — full reference
+# 3:12-reglerna (IL 57 kap): full reference
 
 ## IBB-tabell (inkomstbasbelopp)
 
@@ -11,7 +11,7 @@
 
 K10 lämnas året efter inkomståret. K10 vår 2026 avser inkomstår 2025 och använder **IBB 2024 = 76 200**. K10 vår 2027 avser inkomstår 2026 och använder **IBB 2025 = 80 600**.
 
-## Gränsbelopp — gamla reglerna (t.o.m. inkomstår 2025)
+## Gränsbelopp: gamla reglerna (t.o.m. inkomstår 2025)
 
 ### Förenklingsregeln (IL 57 kap 11a§)
 Schablonbelopp = **2,75 × IBB året före beskattningsåret**, fördelas på andelar.
@@ -25,7 +25,7 @@ Gränsbelopp = årets gränsbelopp + sparat utdelningsutrymme uppräknat med SLR
 
 Årets gränsbelopp = **omkostnadsbelopp × klyvningsräntan** (SLR + 9 procentenheter) **+ lönebaserat utrymme**.
 
-### Lönebaserat utrymme (IL 57 kap 16–19a§§)
+### Lönebaserat utrymme (IL 57 kap 16-19a§§)
 
 **Beräkning.** 50 % av kontant lönesumma i bolaget + dotterbolag året före beskattningsåret. Tak: lönebaserat utrymme för en delägare får inte överstiga **50 × egen kontant lön**.
 
@@ -53,9 +53,9 @@ För K10 vår 2026 (inkomstår 2025, IBB 2024 = 76 200):
 
 För inkomstår 2025: utdelningstak = 90 × 80 600 = **7 254 000 SEK**.
 
-## SFS 2025:1361 — reformen (ikraft 2026-01-01)
+## SFS 2025:1361: reformen (ikraft 2026-01-01)
 
-Riksdagsbeslut 2025-12-03. Tillämpas första gången på beskattningsår som **börjar efter 2025-12-31** — alltså inkomstår 2026, K10 vår 2027. Inkomstår 2025 (K10 vår 2026) följer gamla reglerna oförändrat.
+Riksdagsbeslut 2025-12-03. Tillämpas första gången på beskattningsår som **börjar efter 2025-12-31**: alltså inkomstår 2026, K10 vår 2027. Inkomstår 2025 (K10 vår 2026) följer gamla reglerna oförändrat.
 
 ### Huvudförändringar
 
@@ -70,7 +70,7 @@ Riksdagsbeslut 2025-12-03. Tillämpas första gången på beskattningsår som **
 
 4. **Kapitalandelskrav 4 % slopas.** Mindre minoritetsägare får tillgång till lönebaserat utrymme.
 
-5. **Uppräkning av sparat utdelningsutrymme slopas.** Tidigare uppräkning (SLR + 3 pe) försvinner — sparat utrymme värdesäkras inte längre.
+5. **Uppräkning av sparat utdelningsutrymme slopas.** Tidigare uppräkning (SLR + 3 pe) försvinner: sparat utrymme värdesäkras inte längre.
 
 6. **Karenstid sänks 5 → 4 år.** Tillämpas på beskattningsår efter 2026-12-31.
 
@@ -85,7 +85,7 @@ Riksdagsbeslut 2025-12-03. Tillämpas första gången på beskattningsår som **
 
 ## Utomståenderegeln (IL 57 kap 5§)
 
-Aktierna är inte kvalificerade om utomstående **direkt eller indirekt** äger **minst 30 %** av andelarna i företaget och har rätt till motsvarande del av utdelning, under förutsättning att förhållandet bestått under hela beskattningsåret och de fem föregående beskattningsåren — om inte **särskilda skäl** föranleder annat.
+Aktierna är inte kvalificerade om utomstående **direkt eller indirekt** äger **minst 30 %** av andelarna i företaget och har rätt till motsvarande del av utdelning, under förutsättning att förhållandet bestått under hela beskattningsåret och de fem föregående beskattningsåren, om inte **särskilda skäl** föranleder annat.
 
 ### HFD-praxis senaste fem år
 
@@ -93,7 +93,7 @@ Aktierna är inte kvalificerade om utomstående **direkt eller indirekt** äger 
 |---|---|
 | **HFD 2021 ref. 40 ("Valedo")** | A/B-aktiestruktur med carried interest till nyckelpersoner → särskilda skäl, kvalificerade trots >30 % utomstående. |
 | **HFD 2023 ref. 11** (mål 5807-22) | Nyemission från extern investerare smittar inte mottagarens andra bolag om ägarsambandet bryts. Bryter trenden från tidigare smitto-domar. |
-| **HFD 2024 ref. 8** (mål 2887-23) | Villkorade tillskott + vetorätt slår **inte** ut utomståenderegeln — restriktiv tolkning av "särskilda skäl"; utomstående krävs ha **verkligt ekonomiskt risktagande**, men inte fullt symmetrisk rösträtt. |
+| **HFD 2024 ref. 8** (mål 2887-23) | Villkorade tillskott + vetorätt slår **inte** ut utomståenderegeln: restriktiv tolkning av "särskilda skäl"; utomstående krävs ha **verkligt ekonomiskt risktagande**, men inte fullt symmetrisk rösträtt. |
 | **HFD 2024 ref. 51** (mål 1372-24) | Direkt + indirekt ägande hos samma närståendekrets → kapitalsmitta kvarstår; konsolidering av smitta-doktrinen efter 2023 ref. 11. |
 
 ## Samma eller likartad verksamhet (IL 57 kap 4§ 1 st p. 1)
@@ -102,7 +102,7 @@ Aktier är kvalificerade om delägaren eller närstående under beskattningsåre
 
 **Klassisk fälla:** flytta verksamhet till nytt AB och låta gamla AB ligga vilande som "5:25-trädabolag". Karenstiden måste löpa ut innan vilande bolagets aktier blir okvalificerade. Reform 2026 sänker 5 → 4 år.
 
-## K10-blanketten — kritiska fält
+## K10-blanketten: kritiska fält
 
 - **Avsnitt A**: omkostnadsbelopp (anskaffningsutgift uppräknad enligt 57:9).
 - **Avsnitt B**: gränsbelopp enligt förenklingsregeln (B.1) **eller** huvudregeln (B.2 + lönebaserat utrymme B.3).
@@ -127,14 +127,14 @@ Brytpunkt: huvudregeln vinner när 50 % × lönesumman > 209 550 → **lönesumm
 
 ## Lagreferenser
 
-- IL (1999:1229) 57 kap — fåmansföretagsreglerna i sin helhet.
-- IL 57 kap 4§ — kvalificerade andelar.
-- IL 57 kap 5§ — utomståenderegeln.
-- IL 57 kap 11§ — gränsbelopp.
-- IL 57 kap 11a§ — förenklingsregeln (utgår 2026).
-- IL 57 kap 12§ — huvudregeln.
-- IL 57 kap 16–19a§§ — lönebaserat utrymme + löneuttagskrav + kapitalandelskrav.
-- IL 57 kap 20§ — takbelopp utdelning (90 IBB).
-- IL 57 kap 22§ — takbelopp kapitalvinst (100 IBB / 5 år).
-- SFS 2025:1361 — 2026-reformen.
-- SKV ställningstagande dnr 131 764318-09/111 (2009-11-16) — lönedefinition.
+- IL (1999:1229) 57 kap: fåmansföretagsreglerna i sin helhet.
+- IL 57 kap 4§: kvalificerade andelar.
+- IL 57 kap 5§: utomståenderegeln.
+- IL 57 kap 11§: gränsbelopp.
+- IL 57 kap 11a§: förenklingsregeln (utgår 2026).
+- IL 57 kap 12§: huvudregeln.
+- IL 57 kap 16-19a§§: lönebaserat utrymme + löneuttagskrav + kapitalandelskrav.
+- IL 57 kap 20§: takbelopp utdelning (90 IBB).
+- IL 57 kap 22§: takbelopp kapitalvinst (100 IBB / 5 år).
+- SFS 2025:1361: 2026-reformen.
+- SKV ställningstagande dnr 131 764318-09/111 (2009-11-16): lönedefinition.

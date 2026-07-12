@@ -1,12 +1,12 @@
 /**
  * POST /api/v1/companies/{companyId}/fiscal-periods/{id}/close
  *
- * Closes a fiscal period — sets is_closed=true and closed_at. Requires the
+ * Closes a fiscal period: sets is_closed=true and closed_at. Requires the
  * period to be locked AND year-end closing to have been executed (i.e.
  * closing_entry_id IS NOT NULL). Wraps lib/core/bookkeeping/period-service.closePeriod.
  * Synchronous; the actual closing-entry work happens earlier via /year-end.
  *
- * Per BFL 5 kap 8 §, close is IRREVERSIBLE — there is no /unlock-after-close path.
+ * Per BFL 5 kap 8 §, close is IRREVERSIBLE: there is no /unlock-after-close path.
  */
 
 import { z } from 'zod'
@@ -32,7 +32,7 @@ registerEndpoint({
   useWhen:
     'Final step in the year-end flow: lock → year-end → close. Closing freezes the period for BFL 7 kap retention.',
   doNotUseFor:
-    'Locking a period (use /lock). Running the year-end closing entry (use /year-end). UNDOING a close (not supported — irreversible).',
+    'Locking a period (use /lock). Running the year-end closing entry (use /year-end). UNDOING a close (not supported, irreversible).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'IRREVERSIBLE. Once is_closed=true, the period is read-only forever (BFL 5 kap 8 § + 7 kap).',

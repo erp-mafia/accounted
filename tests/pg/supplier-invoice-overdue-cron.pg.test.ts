@@ -10,7 +10,7 @@ import { getPool } from '@/tests/pg/setup'
  * 20260607120000_supplier_invoice_overdue_skip_paid_and_credit_notes.sql.
  *
  * Regression: supplier invoices (and credit notes) with remaining_amount = 0
- * were being flipped to 'overdue' by the daily cron — surfacing in the UI as
+ * were being flipped to 'overdue' by the daily cron: surfacing in the UI as
  * "Förfallen" with "kvar att betala 0 kr". Credit notes are the systematic
  * case: they are created status='registered', remaining_amount=0,
  * due_date=today, so the cron caught them the next day.

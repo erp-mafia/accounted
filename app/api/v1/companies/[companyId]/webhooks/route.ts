@@ -1,8 +1,8 @@
 /**
- * /api/v1/companies/{companyId}/webhooks — list + create webhook subscriptions.
+ * /api/v1/companies/{companyId}/webhooks: list + create webhook subscriptions.
  *
- * GET   — list all webhooks for the company. Secret never exposed.
- * POST  — create. Returns the secret EXACTLY ONCE in the response. Idempotent
+ * GET: list all webhooks for the company. Secret never exposed.
+ * POST: create. Returns the secret EXACTLY ONCE in the response. Idempotent
  *         via Idempotency-Key. Dry-runnable.
  *
  * Phase 6 PR-1 ships the substrate; subsequent commits within this PR will:
@@ -89,7 +89,7 @@ const WEBHOOK_LIST_COLUMNS =
   'id, name, event_type, webhook_url, active, api_version_pinned, disabled_at, disabled_reason, created_at'
 
 // ──────────────────────────────────────────────────────────────────
-// GET — list webhooks
+// GET: list webhooks
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -98,11 +98,11 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/webhooks',
   summary: 'List webhook subscriptions for a company.',
   description:
-    'Returns all webhook subscriptions for the company. The HMAC signing secret is never exposed by this endpoint — it is returned exactly once when the webhook is created.',
+    'Returns all webhook subscriptions for the company. The HMAC signing secret is never exposed by this endpoint: it is returned exactly once when the webhook is created.',
   useWhen:
     'You need to enumerate the webhook subscriptions an integration has registered, e.g. to build a UI listing or sync state with an external system.',
   doNotUseFor:
-    'Reading delivery history (use GET /webhooks/{id}/deliveries). Reading the secret (it is unrecoverable after the create response — generate a new webhook if lost).',
+    'Reading delivery history (use GET /webhooks/{id}/deliveries). Reading the secret (it is unrecoverable after the create response: generate a new webhook if lost).',
   pitfalls: [
     'Disabled webhooks (auto-disabled after HTTP 410, or manually disabled via PATCH) appear in the list with active=false and a disabled_reason.',
   ],
@@ -149,19 +149,18 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // Wrap as `{ webhooks: [...] }` to match the registered
     // WebhooksListResponse schema and the inline example. Use `ok()`
-    // (not `paginated()`) — the registered schema is an OBJECT envelope,
+    // (not `paginated()`): the registered schema is an OBJECT envelope,
     // not a top-level list. `paginated()` wraps the value in
     // `{ data, meta }` and would surface as `data: [...]` instead of the
     // documented `data: { webhooks: [...] }`. Cursor pagination on this
-    // surface would require a fields-level array under the envelope —
-    // out of scope for the v1.0 contract since the webhook-count ceiling
+    // surface would require a fields-level array under the envelope:     // out of scope for the v1.0 contract since the webhook-count ceiling
     // per company is bounded.
     return ok({ webhooks: data ?? [] }, { requestId: ctx.requestId })
   },
 )
 
 // ──────────────────────────────────────────────────────────────────
-// POST — create webhook
+// POST: create webhook
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -170,11 +169,11 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/webhooks',
   summary: 'Register a webhook subscription.',
   description:
-    'Creates a webhook subscription for one event type. The response includes a freshly generated HMAC signing secret, returned EXACTLY ONCE — store it on the receiver side immediately. The webhook is pinned to the current API version on creation; payload shapes for this webhook will not change until you explicitly upgrade.',
+    'Creates a webhook subscription for one event type. The response includes a freshly generated HMAC signing secret, returned EXACTLY ONCE: store it on the receiver side immediately. The webhook is pinned to the current API version on creation; payload shapes for this webhook will not change until you explicitly upgrade.',
   useWhen:
     'You are wiring a downstream integration that needs push notifications instead of polling.',
   doNotUseFor:
-    'Subscribing to internal MCP telemetry events (mcp.tool_called etc. are not delivered as webhooks). Replacing an existing webhook URL — use PATCH instead.',
+    'Subscribing to internal MCP telemetry events (mcp.tool_called etc. are not delivered as webhooks). Replacing an existing webhook URL: use PATCH instead.',
   pitfalls: [
     'The secret is returned exactly once. If lost, delete and recreate the webhook.',
     'Delivery is at-least-once with exponential backoff (1m / 5m / 30m / 2h / 12h / 24h / 48h). Receivers MUST be idempotent.',
@@ -241,7 +240,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // Elevated-scope check for high-sensitivity payloads. Subscribing to
     // salary_run.* or agi.generated routes personnummer + lönesummor +
-    // skatteavdrag to an external receiver — a payroll-grade exposure.
+    // skatteavdrag to an external receiver: a payroll-grade exposure.
     // Require BOTH webhooks:manage AND payroll:read so a key minted only
     // for webhook management can't reach the payroll surface. The same
     // pattern will extend to other sensitive event families when they
@@ -296,7 +295,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const secret = `whsec_${generateWebhookSecret()}`
 
-    // No user_id field on the webhooks table — the column never existed
+    // No user_id field on the webhooks table: the column never existed
     // in the automation_webhooks predecessor (20260415000000_schema_sync.sql)
     // and webhooks_v2 (20260515170000) didn't add it. Actor attribution
     // lives on created_by_api_key_id instead (which leads back to the
@@ -321,11 +320,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
 
-    // V16 audit log — webhook lifecycle event. Records creation + actor
+    // V16 audit log: webhook lifecycle event. Records creation + actor
     // attribution. new_state captures the row WITHOUT the secret (signing
     // material must not land in the audit trail). A failed audit write
     // is logged structurally so SIEM tooling can alert on the gap
-    // (CC7.2) — we don't roll back the create on audit failure because
+    // (CC7.2): we don't roll back the create on audit failure because
     // the webhook itself is already persisted.
     const created_row = data as Record<string, unknown> & { id: string }
     const { error: auditErr } = await ctx.supabase.from('audit_log').insert({
@@ -352,7 +351,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     // Secret returned exactly once. Caller must persist it on the receiver
-    // side — Accounted will not surface it on any subsequent endpoint.
+    // side: Accounted will not surface it on any subsequent endpoint.
     // Cache-Control: no-store mirrors the rotate-secret response (A.8.12 /
     // Art.25) so no intermediary (CDN / proxy / gateway log / browser
     // cache) persists the secret beyond the direct response chain.

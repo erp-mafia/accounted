@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl'
 import { BankDetailsForm, validateBankFields } from '@/components/settings/BankDetailsForm'
 import { InvoiceSettingsForm } from '@/components/settings/InvoiceSettingsForm'
+import { InvoiceEmailTextsSettings } from '@/components/settings/InvoiceEmailTextsSettings'
 import { InvoicePreviewCard } from '@/components/settings/InvoicePreviewCard'
 import { PdfPrintSettings } from '@/components/settings/PdfPrintSettings'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
@@ -42,8 +43,11 @@ export function InvoicingSettingsContent() {
         ? formatPlusgiroNumber((formData.get('plusgiro') as string).trim())
         : null,
       swish: normaliseSwish(formData.get('swish') as string) || null,
+      iban: (formData.get('iban') as string || '').replace(/\s/g, '').toUpperCase() || null,
+      bic: (formData.get('bic') as string || '').replace(/\s/g, '').toUpperCase() || null,
       invoice_prefix: (formData.get('invoice_prefix') as string) || null,
       next_invoice_number: parseInt(formData.get('next_invoice_number') as string) || 1,
+      next_arrival_number: parseInt(formData.get('next_arrival_number') as string) || 1,
       invoice_default_days: parseInt(formData.get('invoice_default_days') as string) || 30,
       invoice_default_notes: (formData.get('invoice_default_notes') as string) || null,
       default_our_reference: (formData.get('default_our_reference') as string) || null,
@@ -69,9 +73,14 @@ export function InvoicingSettingsContent() {
         </div>
       </SettingsFormWrapper>
 
-      {/* PDF settings — saves individually via toggle switches */}
+      {/* PDF settings: saves individually via toggle switches */}
       <div className="border-t border-border pt-8">
         <PdfPrintSettings settings={settings} onUpdate={updateSettings} />
+      </div>
+
+      {/* Invoice email texts: autosaves on blur */}
+      <div className="border-t border-border pt-8">
+        <InvoiceEmailTextsSettings settings={settings} onUpdate={updateSettings} />
       </div>
     </div>
   )

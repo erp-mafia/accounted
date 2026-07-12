@@ -1,13 +1,9 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { AccountBalancesQuerySchema } from '@/lib/api/schemas'
 import { getOpeningBalances } from '@/lib/reports/opening-balances'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { createLogger } from '@/lib/logger'
-
-const log = createLogger('api.bookkeeping.account-balances')
 
 /**
  * Per-account saldo as of a date. Used by the journal-entry form to show
@@ -24,21 +20,17 @@ const log = createLogger('api.bookkeeping.account-balances')
  * companies behave identically. The opening-balance entry is excluded from
  * period activity to avoid double-counting its lines.
  */
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+export const GET = withRouteContext('bookkeeping.account_balances', async (request, ctx) => {
+  const { supabase, companyId, log } = ctx
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const params = validateQuery(request, AccountBalancesQuerySchema)
+  const params = validateQuery(request, AccountBalancesQuerySchema, {
+    log,
+    operation: 'bookkeeping.account_balances',
+  })
   if (!params.success) return params.response
   const { accounts, as_of } = params.data
 
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  // Find the fiscal period containing as_of (any state — we want a reference
+  // Find the fiscal period containing as_of (any state: we want a reference
   // saldo even for closed/locked periods).
   const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')
@@ -159,4 +151,4 @@ export async function GET(request: Request) {
       }
     }),
   })
-}
+})

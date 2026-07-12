@@ -42,11 +42,11 @@ describe('buildInvoiceWriteData', () => {
     expect(result.invoiceFields.total).toBe(12500)
     expect(result.invoiceFields.remaining_amount).toBe(12500)
     expect(result.invoiceFields.vat_rate).toBe(25)
-    // The route owns these — the builder must never set them.
+    // The route owns these: the builder must never set them.
     expect(result.invoiceFields).not.toHaveProperty('invoice_number')
     expect(result.invoiceFields).not.toHaveProperty('status')
     expect(result.invoiceFields).not.toHaveProperty('user_id')
-    // Item row carries no invoice_id — the route adds it.
+    // Item row carries no invoice_id: the route adds it.
     expect(result.items).toHaveLength(1)
     expect(result.items[0]).not.toHaveProperty('invoice_id')
     expect(result.items[0]).toMatchObject({
@@ -56,6 +56,34 @@ describe('buildInvoiceWriteData', () => {
       vat_rate: 25,
       vat_amount: 2500,
     })
+  })
+
+  it('maps payment_link_url to a concrete trimmed value, null when absent', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'swedish_business' })
+    const withLink = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      payment_link_url: '  https://buy.stripe.com/test_abc123  ',
+      items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+    })
+    expect(withLink.ok).toBe(true)
+    if (!withLink.ok) return
+    expect(withLink.invoiceFields.payment_link_url).toBe('https://buy.stripe.com/test_abc123')
+
+    // Absent input must still produce an explicit null (not undefined):
+    // supabase-js drops undefined keys, and a draft edit that cleared the
+    // field relies on the NULL actually being written.
+    const { supabase: supabase2, enqueue: enqueue2 } = createQueuedMockSupabase()
+    enqueue2({ data: { vat_registered: true }, error: null })
+    const withoutLink = await call(enqueue2, supabase2 as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+    })
+    expect(withoutLink.ok).toBe(true)
+    if (!withoutLink.ok) return
+    expect(withoutLink.invoiceFields.payment_link_url).toBeNull()
   })
 
   it('handles a mixed-rate invoice (vat_rate becomes null on the header)', async () => {

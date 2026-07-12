@@ -1,38 +1,27 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 
 /**
- * DELETE /api/settings/api-keys/[id] — Revoke an API key (soft delete)
+ * DELETE /api/settings/api-keys/[id]: Revoke an API key (soft delete)
  */
-export async function DELETE(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const supabase = await createClient()
-  const { id } = await params
-  const { data: { user } } = await supabase.auth.getUser()
+export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'api_key.revoke',
+  async (_request, ctx, { params }) => {
+    const { id } = await params
+    const { supabase, companyId } = ctx
 
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+    const { error } = await supabase
+      .from('api_keys')
+      .update({ revoked_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .is('revoked_at', null)
 
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
 
-  const companyId = await requireCompanyId(supabase, user.id)
-
-  const { error } = await supabase
-    .from('api_keys')
-    .update({ revoked_at: new Date().toISOString() })
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .is('revoked_at', null)
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
-
-  return NextResponse.json({ success: true })
-}
+    return NextResponse.json({ success: true })
+  },
+  { requireWrite: true },
+)

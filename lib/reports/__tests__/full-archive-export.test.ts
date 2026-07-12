@@ -1,7 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import JSZip from 'jszip'
-import { generateFullArchive, estimateArchiveSize } from '../full-archive-export'
+import {
+  generateFullArchive,
+  generateBaseDataArchive,
+  estimateArchiveSize,
+  MASTER_DATA_DUMP_TABLES,
+} from '../full-archive-export'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 
@@ -17,7 +22,10 @@ vi.mock('../trial-balance', () => ({
 
 vi.mock('../income-statement', () => ({
   generateIncomeStatement: vi.fn().mockResolvedValue({
-    sections: [], netResult: 0, period: { start: '2024-01-01', end: '2024-12-31' },
+    revenue_sections: [], total_revenue: 0,
+    expense_sections: [], total_expenses: 0,
+    financial_sections: [], total_financial: 0,
+    net_result: 0, period: { start: '2024-01-01', end: '2024-12-31' },
   }),
 }))
 
@@ -122,6 +130,16 @@ describe('generateFullArchive', () => {
       expect(zip.file('dokument/manifest.json')).not.toBeNull()
       expect(zip.file('revision/behandlingshistorik.json')).not.toBeNull()
       expect(zip.file('revision/systemdokumentation.json')).not.toBeNull()
+      // Human-readable layer: CSV twins + the Swedish README.
+      expect(zip.file('rapporter/saldobalans.csv')).not.toBeNull()
+      expect(zip.file('rapporter/resultatrakning.csv')).not.toBeNull()
+      expect(zip.file('rapporter/balansrakning.csv')).not.toBeNull()
+      expect(zip.file('rapporter/huvudbok.csv')).not.toBeNull()
+      const readme = zip.file('LÄSMIG.txt')
+      expect(readme).not.toBeNull()
+      const readmeText = await readme!.async('text')
+      expect(readmeText).toContain('Test AB')
+      expect(readmeText).toContain('Räkenskapsår')
     })
 
     it('handles missing documents gracefully', async () => {
@@ -247,8 +265,12 @@ describe('generateFullArchive', () => {
       expect(zip.file('sie/2024-01-01_2024-12-31.se')).not.toBeNull()
       expect(zip.file('rapporter/2023-01-01_2023-12-31/saldobalans.json')).not.toBeNull()
       expect(zip.file('rapporter/2024-01-01_2024-12-31/saldobalans.json')).not.toBeNull()
+      expect(zip.file('rapporter/2024-01-01_2024-12-31/saldobalans.csv')).not.toBeNull()
+      expect(zip.file('rapporter/2024-01-01_2024-12-31/huvudbok.csv')).not.toBeNull()
       expect(zip.file('revision/behandlingshistorik.json')).not.toBeNull()
       expect(zip.file('revision/systemdokumentation.json')).not.toBeNull()
+      const readmeText = await zip.file('LÄSMIG.txt')!.async('text')
+      expect(readmeText).toContain('Hela bokföringen')
       // No root bokforing.se in all-mode
       expect(zip.file('bokforing.se')).toBeNull()
     })
@@ -335,7 +357,16 @@ describe('generateFullArchive', () => {
         { data: [PERIOD_2024] },
         {
           data: [
-            // Draft entry — journal_entry_id present but voucher_number is null
+            // True orphan: uploaded but never linked to any entry. Backups
+            // must still carry it (inbox items are räkenskapsinformation).
+            {
+              id: 'doc-orphan',
+              file_name: 'inbox.pdf',
+              storage_path: 'p/inbox.pdf',
+              journal_entry_id: null,
+              journal_entries: null,
+            },
+            // Draft entry: journal_entry_id present but voucher_number is null
             {
               id: 'doc-draft',
               file_name: 'invoice.pdf',
@@ -360,7 +391,7 @@ describe('generateFullArchive', () => {
             },
           ],
         },
-        // entryIdToPeriodId map — draft and posted both resolve to PERIOD_2024
+        // entryIdToPeriodId map: draft and posted both resolve to PERIOD_2024
         {
           data: [
             { id: 'e-draft', fiscal_period_id: PERIOD_2024.id },
@@ -381,6 +412,10 @@ describe('generateFullArchive', () => {
       }>
       const byId = Object.fromEntries(manifest.map((m) => [m.document_id, m]))
 
+      // Unlinked orphan -> _okopplade, included in the backup
+      expect(byId['doc-orphan'].voucher_number).toBeNull()
+      expect(byId['doc-orphan'].zip_path).toBe('dokument/_okopplade/inbox.pdf')
+
       // Draft -> _okopplade, no voucher prefix
       expect(byId['doc-draft'].voucher_number).toBeNull()
       expect(byId['doc-draft'].zip_path).toBe('dokument/_okopplade/invoice.pdf')
@@ -392,7 +427,8 @@ describe('generateFullArchive', () => {
         'dokument/2024/A5_kvitto_doc-coll.pdf'
       )
 
-      // Both files exist in the ZIP
+      // All files exist in the ZIP
+      expect(zip.file('dokument/_okopplade/inbox.pdf')).not.toBeNull()
       expect(zip.file('dokument/_okopplade/invoice.pdf')).not.toBeNull()
       expect(zip.file('dokument/2024/A5_kvitto.pdf')).not.toBeNull()
       expect(zip.file('dokument/2024/A5_kvitto_doc-coll.pdf')).not.toBeNull()
@@ -428,26 +464,31 @@ describe('generateFullArchive', () => {
         created_at: '2024-11-01T09:55:00Z',
       }
 
+      // Master-data dump runs sequentially over MASTER_DATA_DUMP_TABLES.
+      // Direct tables issue one query; via-tables issue a parent-id query and,
+      // when parents exist, one chunked child query.
+      const masterDataQueue = MASTER_DATA_DUMP_TABLES.flatMap((t): { data: unknown }[] => {
+        if (t.name === 'customers') {
+          return [{ data: [{ id: 'cust-1', name: 'Acme AB' }] }]
+        }
+        if (t.name === 'invoice_items') {
+          return [
+            { data: [{ id: 'inv-1' }] }, // parent ids (invoices)
+            { data: [{ id: 'item-1', invoice_id: 'inv-1', description: 'Konsulttid' }] },
+          ]
+        }
+        if (t.via) return [{ data: [] }] // no parents -> no child query
+        if (t.name === 'company_settings') return [{ data: [COMPANY_ROW] }]
+        return [{ data: [] }]
+      })
+
       enqueueMany([
         { data: COMPANY_ROW }, // fetchCompany
         { data: [PERIOD_2024] }, // fetchAllPeriods
         { data: [] }, // document_attachments
         { data: [importRow] }, // sie_imports
         { data: [{ source_account: '9999', target_account: '1510' }] }, // sie_account_mappings
-        { data: [{ id: 'cust-1', name: 'Acme AB' }] }, // customers
-        { data: [{ id: 'sup-1', name: 'Supplier AB' }] }, // suppliers
-        { data: [{ id: 'inv-1', invoice_number: 'F-001' }] }, // invoices
-        { data: [] }, // invoice_items
-        { data: [] }, // invoice_payments
-        { data: [] }, // supplier_invoices
-        { data: [] }, // supplier_invoice_items
-        { data: [] }, // receipts
-        { data: [] }, // receipt_line_items
-        { data: [] }, // transactions
-        { data: [] }, // mapping_rules
-        { data: [] }, // categorization_templates
-        { data: [] }, // bank_file_imports
-        { data: [COMPANY_ROW] }, // company_settings
+        ...masterDataQueue,
       ])
 
       const buffer = await generateFullArchive(supabase as any, 'company-1', {
@@ -468,23 +509,19 @@ describe('generateFullArchive', () => {
       expect(imports[0].filename).toBe('original.se')
       expect(zip.file('sie/account_mappings.json')).not.toBeNull()
 
-      expect(zip.file('data/customers.json')).not.toBeNull()
-      expect(zip.file('data/suppliers.json')).not.toBeNull()
-      expect(zip.file('data/invoices.json')).not.toBeNull()
-      expect(zip.file('data/invoice_items.json')).not.toBeNull()
-      expect(zip.file('data/invoice_payments.json')).not.toBeNull()
-      expect(zip.file('data/supplier_invoices.json')).not.toBeNull()
-      expect(zip.file('data/supplier_invoice_items.json')).not.toBeNull()
-      expect(zip.file('data/receipts.json')).not.toBeNull()
-      expect(zip.file('data/receipt_line_items.json')).not.toBeNull()
-      expect(zip.file('data/transactions.json')).not.toBeNull()
-      expect(zip.file('data/mapping_rules.json')).not.toBeNull()
-      expect(zip.file('data/categorization_templates.json')).not.toBeNull()
-      expect(zip.file('data/bank_file_imports.json')).not.toBeNull()
-      expect(zip.file('data/company_settings.json')).not.toBeNull()
+      // Every table in the dump contract gets a file, even when empty.
+      for (const t of MASTER_DATA_DUMP_TABLES) {
+        expect(zip.file(`data/${t.file}`), `data/${t.file}`).not.toBeNull()
+      }
 
       const customers = JSON.parse(await zip.file('data/customers.json')!.async('text'))
       expect(customers).toEqual([{ id: 'cust-1', name: 'Acme AB' }])
+
+      // Child table fetched via parent ids (invoice_items has no company_id).
+      const items = JSON.parse(await zip.file('data/invoice_items.json')!.async('text'))
+      expect(items).toEqual([
+        { id: 'item-1', invoice_id: 'inv-1', description: 'Konsulttid' },
+      ])
     })
 
     it('skips raw SIE blobs when include_documents is false but keeps metadata', async () => {
@@ -519,6 +556,75 @@ describe('generateFullArchive', () => {
       expect(zip.file('sie/original/manifest.json')).toBeNull()
       expect(zip.file('data/customers.json')).not.toBeNull()
     })
+  })
+})
+
+describe('generateBaseDataArchive', () => {
+  let supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']
+  let enqueueMany: ReturnType<typeof createQueuedMockSupabase>['enqueueMany']
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockGetAuditLog.mockResolvedValue({ data: [], count: 0 })
+    const mock = createQueuedMockSupabase()
+    supabase = mock.supabase
+    enqueueMany = mock.enqueueMany
+  })
+
+  it('bundles unlinked documents, master data, SIE sources and the audit trail', async () => {
+    const masterDataQueue = MASTER_DATA_DUMP_TABLES.flatMap((t): { data: unknown }[] => {
+      if (t.name === 'customers') return [{ data: [{ id: 'cust-1', name: 'Acme AB' }] }]
+      if (t.via) return [{ data: [] }]
+      return [{ data: [] }]
+    })
+
+    enqueueMany([
+      { data: COMPANY_ROW }, // fetchCompany
+      { data: [PERIOD_2024] }, // fetchAllPeriods
+      {
+        data: [
+          // Orphan: goes into Grunddata.
+          {
+            id: 'doc-orphan',
+            file_name: 'inbox.pdf',
+            storage_path: 'p/inbox.pdf',
+            journal_entry_id: null,
+            journal_entries: null,
+          },
+          // Linked to a posted entry: belongs to the period archive, not here.
+          {
+            id: 'doc-linked',
+            file_name: 'kvitto.pdf',
+            storage_path: 'p/kvitto.pdf',
+            journal_entry_id: 'e-1',
+            journal_entries: { voucher_number: 5, voucher_series: 'A', entry_date: '2024-05-01' },
+          },
+        ],
+      }, // document_attachments
+      { data: [{ id: 'e-1', fiscal_period_id: PERIOD_2024.id }] }, // entry->period map
+      { data: [] }, // sie_imports
+      { data: [] }, // sie_account_mappings
+      ...masterDataQueue,
+    ])
+
+    const buffer = await generateBaseDataArchive(supabase as any, 'company-1')
+    const zip = await JSZip.loadAsync(buffer)
+
+    const manifest = JSON.parse(await zip.file('dokument/manifest.json')!.async('text'))
+    expect(manifest).toHaveLength(1)
+    expect(manifest[0].document_id).toBe('doc-orphan')
+    expect(zip.file('dokument/_okopplade/inbox.pdf')).not.toBeNull()
+
+    expect(zip.file('data/customers.json')).not.toBeNull()
+    expect(zip.file('sie/imports.json')).not.toBeNull()
+    expect(zip.file('revision/behandlingshistorik.json')).not.toBeNull()
+    expect(zip.file('revision/systemdokumentation.json')).not.toBeNull()
+
+    const readme = await zip.file('LÄSMIG.txt')!.async('text')
+    expect(readme).toContain('Grunddata')
+    // Period-scoped content stays out of Grunddata.
+    expect(zip.file('bokforing.se')).toBeNull()
+    expect(zip.file('rapporter/saldobalans.json')).toBeNull()
   })
 })
 

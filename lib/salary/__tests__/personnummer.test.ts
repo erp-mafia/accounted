@@ -113,3 +113,17 @@ describe('encryption roundtrip', () => {
     expect(a).not.toBe(b)
   })
 })
+
+describe('decryptPersonnummer tolerance for unencrypted rows', () => {
+  it('passes a raw 12-digit personnummer through unchanged (no crash)', () => {
+    // A row stored unencrypted (pre-fix v1 create, or a seed) would otherwise
+    // be sliced as iv/ciphertext/tag and throw ERR_CRYPTO_INVALID_AUTH_TAG
+    // ("Invalid authentication tag length: 6"), 500-ing the whole roster.
+    expect(decryptPersonnummer('190001010000')).toBe('190001010000')
+  })
+
+  it('still decrypts genuine ciphertext', () => {
+    const enc = encryptPersonnummer('199001019802')
+    expect(decryptPersonnummer(enc)).toBe('199001019802')
+  })
+})

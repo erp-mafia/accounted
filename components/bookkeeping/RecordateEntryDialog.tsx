@@ -93,7 +93,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
   const dateChanged = ISO_DATE.test(newDate) && newDate !== entry.entry_date
   const targetOpen = preview?.status === 'open' && !!preview?.period_id
   const noCoveringPeriod = preview?.status === 'open' && !preview?.period_id
-  // Soft, non-blocking advisory when moving into a past date — the moms for
+  // Soft, non-blocking advisory when moving into a past date: the moms for
   // that period may already have been filed.
   const today = new Date().toISOString().slice(0, 10)
   const movingIntoPast = dateChanged && newDate < today
@@ -151,7 +151,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
         <div className="rounded-lg bg-muted/50 border p-3 text-sm text-muted-foreground">
           <p className="font-medium text-foreground mb-1">Flytta verifikationen till rätt datum</p>
           <p>
-            En bokförd verifikation kan inte ändras direkt. Raderna behålls oförändrade — istället
+            En bokförd verifikation kan inte ändras direkt. Raderna behålls oförändrade: istället
             skapas automatiskt:
           </p>
           <ol className="list-decimal list-inside mt-1 space-y-0.5">

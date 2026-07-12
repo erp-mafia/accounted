@@ -67,7 +67,7 @@ export const swedbankFormat: BankFileFormat = {
     const issues: BankFileParseIssue[] = []
     let skippedRows = 0
 
-    // Find the header row — may be line 0 or line 1 (if line 0 is metadata)
+    // Find the header row: may be line 0 or line 1 (if line 0 is metadata)
     let headerLineIdx = -1
     for (let i = 0; i < Math.min(lines.length, 3); i++) {
       if (isSwedbankHeader(lines[i])) {
@@ -98,7 +98,7 @@ export const swedbankFormat: BankFileFormat = {
       h.trim().toLowerCase().replace(/"/g, '')
     )
 
-    // Find column indices — support both abbreviated and full header names
+    // Find column indices: support both abbreviated and full header names
     const dateIdx = headers.findIndex((h) =>
       matchesHeader(h, ['bokfdag', 'bokföringsdatum', 'datum'])
     )
@@ -165,7 +165,7 @@ export const swedbankFormat: BankFileFormat = {
 
       // Build description: use reference (counterparty) as primary, text as secondary
       const description = reference && textDesc
-        ? `${reference} — ${textDesc}`
+        ? `${reference}: ${textDesc}`
         : reference || textDesc || 'Unknown'
 
       transactions.push({

@@ -36,7 +36,7 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'invoice.match_confirmed',
   'supplier_invoice.match_confirmed',
   'supplier_invoice.confirmed',
-  // MCP telemetry — every tool invocation, tools/list call, and resources/read.
+  // MCP telemetry: every tool invocation, tools/list call, and resources/read.
   // Lightweight metadata only. mcp.*/agent.* rows are retained 180 days by the
   // cleanup cron (error-rate trends need more than the 30-day delivery window).
   'mcp.tool_called',
@@ -48,14 +48,15 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'mcp.workflow_started',
   'mcp.workflow_completed',
   'mcp.next_hint_followed',
-  // Every successful gnubok_load_skill, all tiers — which atoms agents
+  // Every successful gnubok_load_skill, all tiers: which atoms agents
   // actually load. Joined against mcp.tool_called error rates to measure
   // whether a loaded atom helps or hurts.
   'mcp.skill_loaded',
-  // Agent self-reported feedback — surfaces "this tool was missing", "this
-  // description was wrong", etc. Quarterly review → roadmap.
+  // Agent self-reported feedback: surfaces "this tool was missing", "this
+  // description was wrong", etc. Reviewed weekly (matches the gnubok_feedback
+  // reply copy); triage → dev_docs/mcp_optimization_plan.md.
   'agent.feedback',
-  // Bank connection consent lifecycle — required audit trail per ASVS V16
+  // Bank connection consent lifecycle: required audit trail per ASVS V16
   // and GDPR Art.30 (records of processing) for PSD2 consent decisions.
   'bank_connection.consent_granted',
   'bank_connection.account_selection_changed',
@@ -88,7 +89,7 @@ function extractEntityId(payload: Record<string, unknown>): string | null {
   }
 
   // Flat-string ID fields on events that don't carry a full entity object.
-  // Bank connection events fall into this category — the connection lives in
+  // Bank connection events fall into this category: the connection lives in
   // an extension table, so we record its id directly. invoice.draft_deleted
   // carries only invoiceId because the row is already gone.
   if (typeof payload.connectionId === 'string') {
@@ -128,8 +129,32 @@ function stripMetaFields(payload: Record<string, unknown>): Record<string, unkno
   return data
 }
 
+/** Delay before the single retry of a network-class insert failure. */
+const RETRY_DELAY_MS = 250
+
+/**
+ * Network-class failure: supabase-js (undici) surfaces a dead connection as
+ * "TypeError: fetch failed", typically when the insert races Vercel function
+ * suspension. Only this class is retried; Postgres errors (constraint
+ * violations, RLS, bad columns) would fail identically on a retry.
+ */
+function isTransientNetworkError(message: string): boolean {
+  return message.includes('fetch failed')
+}
+
+/**
+ * Telemetry events (mcp.*, agent.*) are best-effort metrics: a lost row is
+ * not actionable, so their final persistence failure logs at warn. Business
+ * events (journal_entry.*, invoice.*, etc.) feed webhook delivery and stay
+ * at error level.
+ */
+function isTelemetryEvent(eventType: string): boolean {
+  return eventType.startsWith('mcp.') || eventType.startsWith('agent.')
+}
+
 /**
  * Persist a single event to the event_log table.
+ * Retries once on network-class failures ("fetch failed") after a short delay.
  */
 async function persistEvent(
   eventType: string,
@@ -139,19 +164,27 @@ async function persistEvent(
   data: Record<string, unknown>
 ): Promise<void> {
   const supabase = createServiceClientNoCookies()
+  const row = {
+    user_id: userId,
+    company_id: companyId,
+    event_type: eventType,
+    entity_id: entityId,
+    data,
+  }
 
-  const { error } = await supabase
-    .from('event_log')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      event_type: eventType,
-      entity_id: entityId,
-      data,
-    })
+  let { error } = await supabase.from('event_log').insert(row)
+
+  if (error && isTransientNetworkError(error.message)) {
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS))
+    ;({ error } = await supabase.from('event_log').insert(row))
+  }
 
   if (error) {
-    log.error(`Failed to persist event ${eventType}:`, error.message)
+    if (isTelemetryEvent(eventType)) {
+      log.warn(`Failed to persist event ${eventType}:`, error.message)
+    } else {
+      log.error(`Failed to persist event ${eventType}:`, error.message)
+    }
   }
 }
 
@@ -176,7 +209,7 @@ export function registerEventLogHandler(): (() => void)[] {
           return
         }
 
-        // transaction.synced carries an array — batch insert
+        // transaction.synced carries an array: batch insert
         if (eventType === 'transaction.synced' && Array.isArray(rawPayload.transactions)) {
           const transactions = rawPayload.transactions as Array<Record<string, unknown>>
           if (transactions.length === 0) return

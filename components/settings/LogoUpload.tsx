@@ -117,7 +117,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
 
       {preview ? (
         <div className="space-y-3">
-          <div className="inline-block rounded-lg border border-border/60 bg-muted/30 p-4">
+          <div className="inline-block rounded-lg border border-border bg-muted/30 p-4">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={preview}
@@ -157,7 +157,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
           onDragLeave={handleDragLeave}
           disabled={isUploading}
           className={`flex flex-col items-center justify-center w-full max-w-xs rounded-lg border-2 border-dashed py-8 px-4 text-center transition-colors disabled:opacity-50 ${
-            isDragging ? 'border-foreground bg-muted/40' : 'border-border/60 hover:border-border hover:bg-muted/20'
+            isDragging ? 'border-foreground bg-muted/40' : 'border-border hover:border-border hover:bg-muted/20'
           }`}
         >
           {isUploading ? (

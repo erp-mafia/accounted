@@ -23,7 +23,7 @@ const baseRule = (overrides: Partial<ShiftPremiumRule> = {}): ShiftPremiumRule =
 
 const r2 = (n: number) => Math.round(n * 100) / 100
 
-describe('computePremiumLines — basic semantics', () => {
+describe('computePremiumLines: basic semantics', () => {
   it('returns no lines when there are no rules', () => {
     const result = computePremiumLines({
       employeeId: 'emp-1',
@@ -64,7 +64,7 @@ describe('computePremiumLines — basic semantics', () => {
   })
 })
 
-describe('computePremiumLines — weekend rule', () => {
+describe('computePremiumLines: weekend rule', () => {
   it('Saturday 06:00-22:00 with 33% rule generates 8h × 33% premium', () => {
     const weekendRule = baseRule({
       id: 'r-weekend',
@@ -113,19 +113,19 @@ describe('computePremiumLines — weekend rule', () => {
   })
 })
 
-describe('computePremiumLines — holiday gating for ob_holiday', () => {
+describe('computePremiumLines: holiday gating for ob_holiday', () => {
   it('ob_holiday fires on Midsommarafton 2025 (Friday, June 20) but not on a regular Sunday', () => {
     const holidayRule = baseRule({
       id: 'r-holiday',
       name: 'OB helgdag',
-      day_of_week: [1, 2, 3, 4, 5, 6, 7], // all days — gating is by holiday calendar, not weekday
+      day_of_week: [1, 2, 3, 4, 5, 6, 7], // all days: gating is by holiday calendar, not weekday
       start_time: '00:00',
       end_time: '00:00', // full 24h window
       premium_percent: 100,
       item_type: 'ob_holiday',
     })
 
-    // Midsommarafton 2025 is Friday 20 June — a Swedish public holiday despite being a weekday.
+    // Midsommarafton 2025 is Friday 20 June: a Swedish public holiday despite being a weekday.
     const midsommarafton = computePremiumLines({
       employeeId: 'emp-1',
       baseHourlyRate: 250,
@@ -137,7 +137,7 @@ describe('computePremiumLines — holiday gating for ob_holiday', () => {
     expect(midsommarafton[0].hours).toBe(8)
     expect(midsommarafton[0].amount).toBe(r2(250 * 8 * 1.0))
 
-    // A regular Sunday — 2026-05-31 is a plain Sunday (after Pingstdagen on the 24th), not a holiday.
+    // A regular Sunday: 2026-05-31 is a plain Sunday (after Pingstdagen on the 24th), not a holiday.
     // The same rule must NOT fire because day_of_week matching alone is not enough for ob_holiday.
     const regularSunday = computePremiumLines({
       employeeId: 'emp-1',
@@ -149,7 +149,7 @@ describe('computePremiumLines — holiday gating for ob_holiday', () => {
   })
 })
 
-describe('computePremiumLines — night shift crossing midnight', () => {
+describe('computePremiumLines: night shift crossing midnight', () => {
   it('22:00-06:00 night rule covers both halves correctly', () => {
     const nightRule = baseRule({
       id: 'r-night',
@@ -194,7 +194,7 @@ describe('computePremiumLines — night shift crossing midnight', () => {
   })
 })
 
-describe('computePremiumLines — partial overlap', () => {
+describe('computePremiumLines: partial overlap', () => {
   it('weekday rule 18:00-22:00 with shift 16:00-22:00 generates 4h premium', () => {
     const eveningRule = baseRule({
       id: 'r-eve',
@@ -217,7 +217,7 @@ describe('computePremiumLines — partial overlap', () => {
   })
 })
 
-describe('computePremiumLines — overlapping rules', () => {
+describe('computePremiumLines: overlapping rules', () => {
   it('priority wins when two rules cover the same interval', () => {
     const lowPriority = baseRule({
       id: 'r-low',
@@ -285,8 +285,8 @@ describe('computePremiumLines — overlapping rules', () => {
   })
 })
 
-describe('computePremiumLines — hours-only fallback', () => {
-  it('hours-only worked day uses default 08:00-17:00 — only weekday-daytime rules match', () => {
+describe('computePremiumLines: hours-only fallback', () => {
+  it('hours-only worked day uses default 08:00-17:00: only weekday-daytime rules match', () => {
     const eveningRule = baseRule({
       id: 'r-eve',
       day_of_week: [1, 2, 3, 4, 5],
@@ -316,7 +316,7 @@ describe('computePremiumLines — hours-only fallback', () => {
   })
 })
 
-describe('computePremiumLines — employee filtering', () => {
+describe('computePremiumLines: employee filtering', () => {
   it('employee-specific rule does not apply to other employees', () => {
     const rule = baseRule({
       id: 'r-specific',
@@ -366,7 +366,7 @@ describe('computePremiumLines — employee filtering', () => {
   })
 })
 
-describe('computePremiumLines — multiple worked days', () => {
+describe('computePremiumLines: multiple worked days', () => {
   it('emits one line per (workDate × winning rule)', () => {
     const weekendRule = baseRule({
       id: 'r-weekend',
@@ -392,7 +392,7 @@ describe('computePremiumLines — multiple worked days', () => {
   })
 })
 
-describe('computePremiumLines — invalid inputs', () => {
+describe('computePremiumLines: invalid inputs', () => {
   it('zero hourly rate yields no premium', () => {
     const rule = baseRule({ day_of_week: [6], start_time: '06:00', end_time: '22:00', item_type: 'ob_weekend' })
     const result = computePremiumLines({

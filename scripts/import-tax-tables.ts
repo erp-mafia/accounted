@@ -7,7 +7,7 @@
  * Output: lib/salary/tax-tables-fallback.ts
  *
  * Record format (49 chars per line):
- *   chars 0-4   (width 5): prefix  — "30B29" = monthly/belopp, table 29
+ *   chars 0-4   (width 5): prefix : "30B29" = monthly/belopp, table 29
  *   chars 5-11  (width 7): income_from
  *   chars 12-18 (width 7): income_to
  *   chars 19-23 (width 5): column 1 tax amount (SEK)
@@ -18,7 +18,7 @@
  *   chars 44-48 (width 5): column 6
  *
  * We import only B-rows (absolute amounts). %-rows (percentage-based, used for
- * incomes above the highest B-row bracket) are skipped — matches the behavior
+ * incomes above the highest B-row bracket) are skipped: matches the behavior
  * of the Skatteverket API path which also fetches only B-rows.
  *
  * Usage:
@@ -125,13 +125,13 @@ function emitModule(year: number, tables: ParsedTable[]): string {
     .join(',\n')
 
   return `/**
- * AUTO-GENERATED — do not edit by hand.
+ * AUTO-GENERATED: do not edit by hand.
  *
  * Source: data/tax-tables/${year}/allmanna-tabeller-manad.txt (Skatteverket SKV 434)
  * Generator: scripts/import-tax-tables.ts
  *
  * Emergency fallback for lib/salary/tax-tables.ts when the Skatteverket
- * open-data API is unreachable. Do not use as the primary source — the API
+ * open-data API is unreachable. Do not use as the primary source: the API
  * is authoritative.
  *
  * Rows: ${totalRows} across tables ${tableNumbers}
@@ -142,7 +142,7 @@ export type FallbackTaxRow = readonly [
   number, number, number, number, number, number, number, number,
 ]
 
-/** Tables keyed by municipal tax rate number (29–42). */
+/** Tables keyed by municipal tax rate number (29-42). */
 export type FallbackTaxYear = Readonly<Record<number, readonly FallbackTaxRow[]>>
 
 export const FALLBACK_TAX_TABLES_${year}: FallbackTaxYear = {
@@ -166,7 +166,7 @@ function main() {
   const tables = parseFile(inputPath)
 
   if (tables.length === 0) {
-    throw new Error('No B-rows parsed — check input file format')
+    throw new Error('No B-rows parsed: check input file format')
   }
 
   const totalRows = tables.reduce((sum, t) => sum + t.rows.length, 0)

@@ -143,7 +143,7 @@ describe('POST /api/account/delete', () => {
         ban_duration: expect.any(String),
       })
     )
-    // Email must NOT be scrubbed — retaining it is what blocks re-signup
+    // Email must NOT be scrubbed: retaining it is what blocks re-signup
     // with the same address. Recovery goes through support instead.
     const updatePayload = updateUserById.mock.calls[0][1]
     expect(updatePayload).not.toHaveProperty('email')

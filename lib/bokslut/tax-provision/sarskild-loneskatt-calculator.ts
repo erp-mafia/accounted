@@ -1,15 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import type { ProposedDisposition } from '../types'
 
 /** Särskild löneskatt på pensionskostnader (SLP). 24.26 % per SLF 1991:687. */
 export const SLP_RATE = 0.2426
 
 export interface SlpComputation {
-  /** Total pension cost during the period — sum of posted debits on accounts
-   *  7410–7419 (pensionsförsäkringspremier, individuella pensioner, etc.). */
+  /** Total pension cost during the period: sum of posted debits on accounts
+   *  7410-7419 (pensionsförsäkringspremier, individuella pensioner, etc.). */
   pensionCostsBooked: number
-  /** Optional manual adjustment — e.g. avsättning till pensionsskuld on 2210
-   *  bokad under perioden som inte ligger på 7410–7419 men ska SLP-belastas. */
+  /** Optional manual adjustment: e.g. avsättning till pensionsskuld on 2210
+   *  bokad under perioden som inte ligger på 7410-7419 men ska SLP-belastas. */
   manualAdjustment: number
   /** Base for SLP = pensionCostsBooked + manualAdjustment. */
   base: number
@@ -25,7 +26,7 @@ export interface SlpComputation {
  * på 7410-7419 (tjänstepensionspremier) och avsättningar till pensionsskuld.
  *
  * Caller can supply `manualAdjustment` to include pensionsavsättningar made on
- * 2210 (avsättning för pensioner) that aren't reflected in 7410-7419 — common
+ * 2210 (avsättning för pensioner) that aren't reflected in 7410-7419: common
  * when companies book direct to the avsättningskonto rather than via a cost
  * account.
  */
@@ -35,24 +36,30 @@ export async function calculateSarskildLoneskatt(
   fiscalPeriodId: string,
   options: { manualAdjustment?: number } = {},
 ): Promise<ProposedDisposition | null> {
-  const { data, error } = await supabase
-    .from('journal_entry_lines')
-    .select(
-      'account_number, debit_amount, credit_amount, journal_entries!inner(company_id, fiscal_period_id, status)',
+  type Row = { debit_amount: number | string | null; credit_amount: number | string | null }
+  // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
+  let data: Row[]
+  try {
+    data = await fetchEntryLines<Row>({
+      supabase,
+      lineColumns: 'account_number, debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', fiscalPeriodId)
+          .eq('status', 'posted'),
+      filterLines: (q: EntryLinesQuery) =>
+        q.gte('account_number', '7410').lte('account_number', '7419'),
+      attachEntriesAs: null,
+    })
+  } catch (err) {
+    throw new Error(
+      `Failed to fetch pension costs: ${err instanceof Error ? err.message : String(err)}`,
     )
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.fiscal_period_id', fiscalPeriodId)
-    .eq('journal_entries.status', 'posted')
-    .gte('account_number', '7410')
-    .lte('account_number', '7419')
-
-  if (error) {
-    throw new Error(`Failed to fetch pension costs: ${error.message}`)
   }
 
-  type Row = { debit_amount: number | string | null; credit_amount: number | string | null }
-  const pensionCostsBooked = ((data ?? []) as Row[]).reduce((sum, row) => {
-    // Cost account — normal balance is debit, so net = debit − credit.
+  const pensionCostsBooked = data.reduce((sum, row) => {
+    // Cost account: normal balance is debit, so net = debit − credit.
     return sum + ((Number(row.debit_amount) || 0) - (Number(row.credit_amount) || 0))
   }, 0)
 

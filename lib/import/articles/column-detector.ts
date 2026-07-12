@@ -16,7 +16,7 @@ const NAME_EN_KEYWORDS = [
   'engelskt namn', 'benämning engelska',
 ]
 
-// Note: bare 'kod'/'code' are deliberately excluded — they collide with
+// Note: bare 'kod'/'code' are deliberately excluded: they collide with
 // Fortnox's "Momskod" (a VAT column). EAN is detected first so "EAN-nummer"
 // is claimed before the generic 'nummer'/'number' here.
 const ARTICLE_NUMBER_KEYWORDS = [
@@ -65,7 +65,7 @@ const NOTES_KEYWORDS = [
  * Detect article-register columns from headers.
  *
  * Detection order matters: more specific columns are claimed first (via the
- * shared `taken` set) so a generic keyword can't swallow them — e.g. EAN before
+ * shared `taken` set) so a generic keyword can't swallow them: e.g. EAN before
  * the article number ("EAN-nummer" must not be read as the article number), and
  * the English name before the generic name column.
  */
@@ -112,8 +112,8 @@ export function detectArticleColumns(headers: string[]): DetectedArticleColumns 
     ean_col,
     housework_type_col,
     notes_col,
-    // Confidence is a 0–1 heuristic score (not money), only compared against the
-    // 0.8 skip-mapping threshold — no öre rounding needed.
+    // Confidence is a 0-1 heuristic score (not money), only compared against the
+    // 0.8 skip-mapping threshold: no öre rounding needed.
     confidence: Math.min(confidence, 1),
   }
 }

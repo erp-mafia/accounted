@@ -10,7 +10,7 @@
  * the actual work is sub-second: in-memory XML generation, one UPSERT into
  * agi_declarations, one UPDATE on salary_runs.agi_generated_at, one
  * optimistic-lock UPDATE on deadlines, one event emit. Using the
- * `operations` substrate here would be over-engineering — the response
+ * `operations` substrate here would be over-engineering: the response
  * comes back fast enough that polling would just be friction. Documented
  * as a deliberate plan deviation.
  *
@@ -23,7 +23,7 @@
  * dashboard exactly. The Swedish-compliance review in PR-1 suggested
  * tightening to `approved+` because AGI from `review` could submit
  * incorrect figures to Skatteverket. That's a real concern but a design
- * decision orthogonal to this PR — narrowing the gate would diverge from
+ * decision orthogonal to this PR: narrowing the gate would diverge from
  * the dashboard's behavior. Tracked for a future tightening.
  */
 
@@ -61,17 +61,17 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs/:id/generate-agi',
   summary: 'Generate the Skatteverket AGI XML for a salary run.',
   description:
-    'Generates the arbetsgivardeklaration-på-individnivå XML for the run (HU section + per-employee IU + Frånvarouppgift for VAB/parental), upserts the agi_declarations row (correction-aware), stamps salary_runs.agi_generated_at, emits `agi.generated`, and auto-completes the `arbetsgivardeklaration` deadline. Returns the XML as a string field in the v1 envelope — agents extract `data.xml` and forward to Skatteverket directly (Mina Sidor upload or via a connected extension).',
+    'Generates the arbetsgivardeklaration-på-individnivå XML for the run (HU section + per-employee IU + Frånvarouppgift for VAB/parental), upserts the agi_declarations row (correction-aware), stamps salary_runs.agi_generated_at, emits `agi.generated`, and auto-completes the `arbetsgivardeklaration` deadline. Returns the XML as a string field in the v1 envelope: agents extract `data.xml` and forward to Skatteverket directly (Mina Sidor upload or via a connected extension).',
   useWhen:
     'You\'ve reviewed (or approved / paid / booked) a salary run and need to file AGI with Skatteverket. The Skatteverket filing deadline is the 12th of the following month (17th in Jan / Aug for companies ≤40 MSEK turnover).',
   doNotUseFor:
-    'Submitting the AGI to Skatteverket — this endpoint only generates and persists the XML. Submission is a separate flow via the (optional) `skatteverket` extension.',
+    'Submitting the AGI to Skatteverket: this endpoint only generates and persists the XML. Submission is a separate flow via the (optional) `skatteverket` extension.',
   pitfalls: [
-    'Run status must be one of review, approved, paid, booked, corrected — `draft` returns 400 AGI_GENERATE_NOT_BOOKABLE.',
+    'Run status must be one of review, approved, paid, booked, corrected: `draft` returns 400 AGI_GENERATE_NOT_BOOKABLE.',
     'Generating AGI from a `review`-status run risks submitting figures that will change at `:approve`. The dashboard allows this for flexibility; agents should prefer `approved+` unless an early-warning workflow specifically wants the preview.',
-    'Subsequent calls for the same period UPDATE the agi_declarations row (is_correction=true) and overwrite the XML. The FK570 specifikationsnummer stays consistent per employee — different number = new record per Skatteverket spec.',
+    'Subsequent calls for the same period UPDATE the agi_declarations row (is_correction=true) and overwrite the XML. The FK570 specifikationsnummer stays consistent per employee: different number = new record per Skatteverket spec.',
     'AGI_INCOMPLETE_DATA returns 400 when company contact info is missing (org_number, contact name, phone, email). Fix via /settings/company before retrying.',
-    'The XML content is räkenskapsinformation — BFL 7 kap retention applies. The agi_declarations row is never auto-deleted.',
+    'The XML content is räkenskapsinformation: BFL 7 kap retention applies. The agi_declarations row is never auto-deleted.',
   ],
   example: {
     response: {
@@ -115,7 +115,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const salaryRunId = idParse.data
 
-    // The helper is essentially idempotent — calling twice produces the
+    // The helper is essentially idempotent: calling twice produces the
     // same XML with the second call marked is_correction=true. We do NOT
     // expose a dry-run here because the only state the helper changes is
     // (a) the agi_declarations row (cheap, idempotent), (b) the
@@ -126,7 +126,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Pull the user's email so we can fall back to it when neither
     // company_settings.email nor profiles.email is present. The wrapper
-    // doesn't carry the email — fetch via supabase auth admin.
+    // doesn't carry the email: fetch via supabase auth admin.
     const { data: userRecord } = await ctx.supabase.auth.admin.getUserById(ctx.userId)
     const userEmail = userRecord?.user?.email ?? null
 
@@ -149,7 +149,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // OWASP V3.2 / V4 (HTTP response header injection prevention) +
-    // path-traversal hardening — sanitise the filename. The orgNumber
+    // path-traversal hardening: sanitise the filename. The orgNumber
     // comes from company_settings (user-editable) so it can in theory
     // carry stray characters. The period digits are server-generated
     // but we strip anything non-numeric defensively. The resulting

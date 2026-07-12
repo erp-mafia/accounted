@@ -124,7 +124,7 @@ function ArticlesPageInner() {
 
   // Create runs through useSubmitWithAccountActivation so an ACCOUNTS_NOT_IN_CHART
   // response (revenue account not yet activated) opens the standard
-  // activate-and-retry dialog instead of failing — same UX as the journal entry form.
+  // activate-and-retry dialog instead of failing: same UX as the journal entry form.
   const pendingCreateRef = useRef<CreateArticleInput | null>(null)
   const submitCreate = useCallback(async () => {
     const response = await fetch('/api/articles', {
@@ -240,6 +240,7 @@ function ArticlesPageInner() {
         action={
           <div className="flex items-center gap-2">
             <ReportExportMenu
+              size="default"
               items={[
                 { format: 'xlsx', href: '/api/export/articles' },
                 { format: 'csv', href: '/api/export/articles?format=csv' },
@@ -363,7 +364,7 @@ function ArticlesPageInner() {
                       onClick={() => router.push(`/articles/${article.id}`)}
                     >
                       <TableCell className="tabular-nums text-muted-foreground">
-                        {article.article_number || '—'}
+                        {article.article_number || '-'}
                       </TableCell>
                       <TableCell className="font-medium">
                         <Link
@@ -374,10 +375,8 @@ function ArticlesPageInner() {
                           {article.name}
                         </Link>
                       </TableCell>
-                      <TableCell>
-                        <Badge variant="secondary">
-                          {t(ARTICLE_TYPE_LABEL_KEYS[article.type])}
-                        </Badge>
+                      <TableCell className="text-muted-foreground">
+                        {t(ARTICLE_TYPE_LABEL_KEYS[article.type])}
                       </TableCell>
                       <TableCell className="text-muted-foreground">{article.unit}</TableCell>
                       <TableCell className="text-right tabular-nums">
@@ -409,15 +408,9 @@ function ArticlesPageInner() {
                         <CardTitle className="text-base truncate group-hover:text-primary transition-colors">
                           {article.name}
                         </CardTitle>
-                        <div className="flex items-center gap-2 mt-1">
-                          <Badge variant="secondary">
-                            {t(ARTICLE_TYPE_LABEL_KEYS[article.type])}
-                          </Badge>
-                          {article.article_number && (
-                            <span className="text-xs text-muted-foreground tabular-nums">
-                              {article.article_number}
-                            </span>
-                          )}
+                        <div className="mt-1 text-xs text-muted-foreground tabular-nums">
+                          {t(ARTICLE_TYPE_LABEL_KEYS[article.type])}
+                          {article.article_number ? ` · #${article.article_number}` : ''}
                         </div>
                       </div>
                       <span className="font-display text-lg tabular-nums shrink-0">
@@ -452,7 +445,21 @@ function ArticlesPageInner() {
 
 export default function ArticlesPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense
+      fallback={
+        <div className="space-y-8">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <Skeleton className="h-9 w-40" />
+            <Skeleton className="h-10 w-32" />
+          </div>
+          <div className="space-y-3">
+            {[1, 2, 3, 4].map((i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </div>
+        </div>
+      }
+    >
       <ArticlesPageInner />
     </Suspense>
   )

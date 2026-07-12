@@ -40,6 +40,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Claude Code session worktrees are full repo copies: without this,
+    // local `npm run lint` / `check:lint` walks them (and their node_modules
+    // siblings), inflating the report until the ratchet's JSON parse fails.
+    ".claude/worktrees/**",
   ]),
 ]);
 

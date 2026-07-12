@@ -59,6 +59,9 @@ export const POST = withRouteContext(
         remaining_amount: 0,
         is_credit_note: true,
         credited_invoice_id: id,
+        // Copy the original's dimension bag so the reversal nets against the
+        // same dimension cells in reports (dimensions PR7).
+        default_dimensions: original.default_dimensions ?? {},
       })
       .select()
       .single()
@@ -86,6 +89,9 @@ export const POST = withRouteContext(
       // Preserve the self-assessed RC rate so the credit-note verifikat
       // reverses fiktiv moms at the same rate the original was booked at.
       reverse_charge_rate: item.reverse_charge_rate,
+      // Dims copied for display parity; the journal reversal reads the
+      // ORIGINAL items below (dimensions PR7).
+      dimensions: item.dimensions ?? {},
     }))
 
     await supabase.from('supplier_invoice_items').insert(creditItems)
@@ -98,7 +104,7 @@ export const POST = withRouteContext(
 
     const accountingMethod = (settings?.accounting_method as AccountingMethod) || 'accrual'
 
-    // Cash method: skip — no original registration entry to reverse;
+    // Cash method: skip, no original registration entry to reverse;
     // recognition is deferred until refund.
     let journalEntryId: string | null = null
     if (accountingMethod === 'accrual') {
@@ -123,7 +129,7 @@ export const POST = withRouteContext(
         }
       } catch (err) {
         // Roll back the orphan credit-note row (items cascade-delete) on JE
-        // failure — same momsdeklaration-integrity concern as the POST route.
+        // failure: same momsdeklaration-integrity concern as the POST route.
         await supabase.from('supplier_invoices').delete().eq('id', creditNote.id).eq('company_id', companyId)
 
         if (isBookkeepingError(err)) {
@@ -144,7 +150,7 @@ export const POST = withRouteContext(
     // already-posted dissolutions so origin + dissolutions + stornos +
     // credit-note net to zero on both the interim and cost accounts.
     // Best-effort: a reversal hiccup (e.g. locked period) must not block the
-    // credit itself — the schedule stays active and visible for follow-up,
+    // credit itself: the schedule stays active and visible for follow-up,
     // and the response carries a PARTIAL-style warning (same pattern as the
     // supplier-create route's ACCRUAL_SCHEDULE_FAILED warning).
     const warnings: Array<{ code: string; message: string }> = []
@@ -161,7 +167,7 @@ export const POST = withRouteContext(
           code: 'ACCRUAL_CANCEL_PARTIAL',
           message:
             'Fakturan krediterades, men en eller flera periodiseringsverifikat ' +
-            'kunde inte vändas. Periodiseringen är fortfarande aktiv — ' +
+            'kunde inte vändas. Periodiseringen är fortfarande aktiv: ' +
             'kontrollera under Bokföring → Periodiseringar.',
         })
       }

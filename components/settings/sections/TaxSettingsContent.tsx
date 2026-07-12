@@ -22,7 +22,7 @@ export function TaxSettingsContent() {
 
   const hasSkatteverketExtension = ENABLED_EXTENSION_IDS.has('skatteverket')
 
-  // Skatteverket OAuth callback — the connect flow returns to /settings/tax with
+  // Skatteverket OAuth callback: the connect flow returns to /settings/tax with
   // a status query param (returnTo set in SkatteverketConnectPanel).
   useEffect(() => {
     const connected = searchParams.get('skv_connected')
@@ -70,18 +70,21 @@ export function TaxSettingsContent() {
     }
   }
 
-  // Sandbox companies don't connect to the real Skatteverket — hide the panel,
+  // Sandbox companies don't connect to the real Skatteverket: hide the panel,
   // matching the old Skatteverket tab's visibility gate. Read straight off the
   // already-loaded settings row (no separate query needed).
   const showSkatteverket = hasSkatteverketExtension && !settings.is_sandbox
 
   return (
     <div className="space-y-8">
+      {/* Connection panel first: the skattekonto and momsdeklaration pages
+          send users here specifically to (re)connect — below the long tax
+          form it sat out of view. */}
+      {showSkatteverket && <SkatteverketConnectPanel />}
+
       <SettingsFormWrapper onSave={handleSave} className="space-y-0">
         <TaxSettingsForm settings={settings} />
       </SettingsFormWrapper>
-
-      {showSkatteverket && <SkatteverketConnectPanel />}
     </div>
   )
 }

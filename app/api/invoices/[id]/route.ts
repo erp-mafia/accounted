@@ -13,7 +13,7 @@ import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import type { InvoiceDocumentType } from '@/types'
 
-ensureInitialized() // Module-level — wires the audit-log handler for invoice.draft_deleted.
+ensureInitialized() // Module-level: wires the audit-log handler for invoice.draft_deleted.
 
 const log = createLogger('api.invoices.cancel')
 
@@ -26,7 +26,7 @@ const log = createLogger('api.invoices.cancel')
  *    deleted. No F-series number was consumed, so there is no gap to document
  *    (ML 17 kap 24§). invoice_items cascade via the FK.
  *  - Numbered draft (created directly, or finalized via "Granska och skapa"):
- *    makulerad — the row and its number are retained and status flips to
+ *    makulerad: the row and its number are retained and status flips to
  *    'cancelled', keeping the F-series gap-free per ML 17 kap 24§ / BFNAR 2013:2.
  *
  * Only drafts may be removed either way. Sent / paid invoices are immutable per
@@ -66,7 +66,7 @@ export async function DELETE(
   }
 
   // Unnumbered drafts (saved via "Spara som utkast", never finalized) are not
-  // yet issued invoices — no F-series number was consumed — so they can be hard
+  // yet issued invoices (no F-series number was consumed) so they can be hard
   // deleted with no gap in the sequence (ML 17 kap 24§). invoice_items cascade
   // via the FK (ON DELETE CASCADE); an un-finalized draft has no journal entry
   // or linked document. The status='draft' + invoice_number IS NULL guard makes
@@ -86,14 +86,14 @@ export async function DELETE(
     }
 
     if (!removed || removed.length === 0) {
-      // Finalized between fetch and delete — refuse rather than fall through to
+      // Finalized between fetch and delete: refuse rather than fall through to
       // makulering of a now-issued invoice.
       return errorResponseFromCode('INVOICE_CANCEL_RACE', log)
     }
 
     // The row is gone, so there's no journal trace of the removal. Emit an
     // audit event carrying the identifiers so the event log records who deleted
-    // which draft and when — the makulering path leaves a journal/status trail,
+    // which draft and when: the makulering path leaves a journal/status trail,
     // a hard delete otherwise leaves none.
     await eventBus.emit({
       type: 'invoice.draft_deleted',
@@ -131,14 +131,14 @@ export async function DELETE(
 /**
  * PATCH /api/invoices/[id]
  *
- * Edit a DRAFT invoice (or proforma / delivery note) in place — header fields
+ * Edit a DRAFT invoice (or proforma / delivery note) in place: header fields
  * AND line items. Only drafts are editable: a journal entry (verifikat) is
  * created when an invoice is sent (mark-sent / send) or, for kontantmetoden, at
  * payment, so a draft has no committed entry and BFL immutability (guard rail #1)
  * does not yet apply. Sent / paid / cancelled / credited invoices are immutable
  * and must be reversed via a credit note instead.
  *
- * The invoice's number and status are preserved — editing never (re)allocates a
+ * The invoice's number and status are preserved: editing never (re)allocates a
  * number nor changes lifecycle state, and never emits invoice.created (numbered
  * drafts already emitted it at create; unnumbered ones emit on finalize). The
  * validation + computation is shared with POST /api/invoices via
@@ -170,9 +170,9 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       return errorResponseFromCode('INVOICE_NOT_FOUND', ctxLog, { requestId })
     }
 
-    // journal_entry_id is belt-and-suspenders — a draft shouldn't carry one,
+    // journal_entry_id is belt-and-suspenders: a draft shouldn't carry one,
     // but if some flow ever booked it, refuse the edit (the entry is immutable).
-    // Shared predicate (lib/invoices/is-editable-draft) — the single source of
+    // Shared predicate (lib/invoices/is-editable-draft): the single source of
     // truth the detail and edit pages also gate on, so the rule can't drift.
     if (!isEditableInvoiceDraft(existing)) {
       return errorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctxLog, { requestId })

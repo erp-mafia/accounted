@@ -1,16 +1,13 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { ensureInitialized } from '@/lib/init'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { uploadDocument } from '@/lib/core/documents/document-service'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
-import { createLogger } from '@/lib/logger'
 import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
 
 ensureInitialized()
@@ -20,26 +17,12 @@ ensureInitialized()
  *
  * Manually marks a draft invoice as sent (for invoices delivered outside the system).
  * Under faktureringsmetoden (accrual): creates the journal entry (Debit 1510, Credit 30xx/26xx).
- * Under kontantmetoden (cash): no journal entry — booking happens at payment.
+ * Under kontantmetoden (cash): no journal entry; booking happens at payment.
  */
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'invoice.mark_sent',
+  async (request, { supabase, user, companyId, log }, { params }) => {
   const { id } = await params
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
-  const log = createLogger('invoice.mark-sent', { companyId, invoiceId: id })
 
   // Fetch invoice
   const { data: invoice, error: invoiceError } = await supabase
@@ -108,7 +91,7 @@ export async function POST(
         journalEntryId = journalEntry.id
 
         // Periodiserade lines: create schedules + catch-up dissolutions now
-        // that the revenue entry exists. Failures are logged, never fatal —
+        // that the revenue entry exists. Failures are logged, never fatal:
         // the verifikat is committed.
         const accrual = await createSchedulesForCustomerInvoice(
           supabase,
@@ -130,7 +113,7 @@ export async function POST(
           .update({ journal_entry_id: journalEntry.id })
           .eq('id', id)
         if (linkError) {
-          // Don't fail mark-sent — the verifikat committed; only the link
+          // Don't fail mark-sent: the verifikat committed; only the link
           // failed. But log it through the structured logger so it reaches log
           // aggregation/alerting: this write silently no-ops when the
           // journal_entry_id column is missing (it was absent in prod until the
@@ -166,8 +149,8 @@ export async function POST(
       }
 
       // The DB status flip already happened above, but the in-memory `invoice`
-      // is stale and still reads 'draft' — override here so the archived
-      // underlag isn't stamped "UTKAST – inte en giltig faktura".
+      // is stale and still reads 'draft': override here so the archived
+      // underlag isn't stamped "UTKAST: inte en giltig faktura".
       const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
       const { branding, company: renderCompany } = await prepareInvoicePdfRender(
         settings as CompanySettings,
@@ -208,4 +191,6 @@ export async function POST(
     status: 'sent',
     journal_entry_id: journalEntryId,
   })
-}
+  },
+  { requireWrite: true },
+)

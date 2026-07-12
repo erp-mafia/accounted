@@ -210,3 +210,81 @@ describe('proposePaymentLines', () => {
     })
   })
 })
+
+describe('proposePaymentLines: dimensions propagation (PR7)', () => {
+  const bag = { '1': 'KS01', '6': 'P001' }
+
+  it('accrual: every proposed line carries a copy of the invoice default bag', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput(), default_dimensions: bag },
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines).toHaveLength(2)
+    for (const line of lines) {
+      expect(line.dimensions).toEqual(bag)
+      // A copy, not the shared reference: editing one line must not mutate
+      // the invoice bag or a sibling line.
+      expect(line.dimensions).not.toBe(bag)
+    }
+    expect(lines[0].dimensions).not.toBe(lines[1].dimensions)
+  })
+
+  it('accrual with FX difference: the 3960 line carries the bag too', () => {
+    const lines = proposePaymentLines({
+      invoice: {
+        ...makeInvoiceInput({
+          total: 1000,
+          total_sek: 10000,
+          currency: 'EUR',
+          exchange_rate: 10,
+        }),
+        default_dimensions: bag,
+      },
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+      exchangeRateDifference: 500,
+    })
+
+    expect(lines).toHaveLength(3)
+    expect(lines[2].account_number).toBe('3960')
+    for (const line of lines) {
+      expect(line.dimensions).toEqual(bag)
+    }
+  })
+
+  it('cash: payment, revenue and VAT lines all carry the bag', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput(), default_dimensions: bag },
+      accountingMethod: 'cash',
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines).toHaveLength(3)
+    expect(lines.map((l) => l.account_number)).toEqual(['1930', '3001', '2611'])
+    for (const line of lines) {
+      expect(line.dimensions).toEqual(bag)
+    }
+  })
+
+  it('absent or empty bag → no dimensions key on any line', () => {
+    const withoutBag = proposePaymentLines({
+      invoice: makeInvoiceInput(),
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+    })
+    for (const line of withoutBag) {
+      expect('dimensions' in line).toBe(false)
+    }
+
+    const withEmptyBag = proposePaymentLines({
+      invoice: { ...makeInvoiceInput(), default_dimensions: {} },
+      accountingMethod: 'cash',
+      entityType: 'enskild_firma',
+    })
+    for (const line of withEmptyBag) {
+      expect('dimensions' in line).toBe(false)
+    }
+  })
+})

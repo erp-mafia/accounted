@@ -5,6 +5,7 @@ import {
   CannotCorrectNonPostedError,
   CannotReverseNonPostedError,
   CurrencyRevaluationAlreadyExistsError,
+  DimensionValidationError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
   FiscalPeriodNotFoundError,
@@ -49,7 +50,7 @@ describe('Typed bookkeeping errors', () => {
 
   it('AccountsNotInChartError sorts numerically, not by UTF-16 code units', () => {
     // Default string sort would order ['245', '1930'] as ['1930', '245']
-    // because '1' < '2'. That's wrong for accounts — a user looking at the
+    // because '1' < '2'. That's wrong for accounts: a user looking at the
     // toast and walking down their kontoplan expects numeric order.
     const err = new AccountsNotInChartError(['1930', '245', '5410'])
     expect(err.accountNumbers).toEqual(['245', '1930', '5410'])
@@ -152,6 +153,25 @@ describe('Typed bookkeeping errors', () => {
     expect(err.message).toContain('commit_entry')
     expect(err.message).not.toContain('undefined')
   })
+
+  it('DimensionValidationError carries issues and a Swedish message naming every code', () => {
+    const err = new DimensionValidationError([
+      { sie_dim_no: '6', code: 'P999', reason: 'unknown_value' },
+      { sie_dim_no: '1', code: 'KS-GAMMAL', reason: 'archived_value' },
+      { sie_dim_no: '9', code: null, reason: 'unknown_dimension' },
+    ])
+    expect(err.code).toBe('DIMENSION_VALIDATION_FAILED')
+    expect(err.name).toBe('DimensionValidationError')
+    expect(err).toBeInstanceOf(Error)
+    expect(err.issues).toHaveLength(3)
+    expect(err.message).toContain(
+      'Okänt kostnadsställe/projekt: "P999" (dimension 6). Skapa värdet i registret först.'
+    )
+    expect(err.message).toContain(
+      '"KS-GAMMAL" är arkiverat: återaktivera värdet för att använda det.'
+    )
+    expect(err.message).toContain('Okänd dimension 9. Skapa dimensionen i registret först.')
+  })
 })
 
 describe('isAccountsNotInChartError', () => {
@@ -180,6 +200,11 @@ describe('isBookkeepingError', () => {
     expect(isBookkeepingError(new CurrencyRevaluationAlreadyExistsError())).toBe(true)
     expect(isBookkeepingError(new InvalidMappingResultError('1930', '3001'))).toBe(true)
     expect(isBookkeepingError(new BookkeepingDatabaseError('commit_entry', 'x'))).toBe(true)
+    expect(
+      isBookkeepingError(
+        new DimensionValidationError([{ sie_dim_no: '6', code: 'X', reason: 'unknown_value' }])
+      )
+    ).toBe(true)
   })
 
   it('returns false for plain Error', () => {
@@ -290,6 +315,21 @@ describe('bookkeepingErrorResponse', () => {
     const body = await response.json()
     expect(body.error.code).toBe('INVALID_MAPPING_RESULT')
     expect(body.error.details).toEqual({ debitAccount: null, creditAccount: '3001' })
+  })
+
+  it('returns 400 for DimensionValidationError with issue details and Swedish message', async () => {
+    const response = bookkeepingErrorResponse(
+      new DimensionValidationError([{ sie_dim_no: '6', code: 'P999', reason: 'unknown_value' }])
+    )!
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body.error.code).toBe('DIMENSION_VALIDATION_FAILED')
+    expect(body.error.message).toBe(
+      'Okänt kostnadsställe/projekt: "P999" (dimension 6). Skapa värdet i registret först.'
+    )
+    expect(body.error.details).toEqual({
+      issues: [{ sie_dim_no: '6', code: 'P999', reason: 'unknown_value' }],
+    })
   })
 
   it('returns 500 for BookkeepingDatabaseError with operation tag', async () => {

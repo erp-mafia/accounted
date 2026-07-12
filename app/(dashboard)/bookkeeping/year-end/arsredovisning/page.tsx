@@ -10,9 +10,11 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageHeader } from '@/components/ui/page-header'
 import { ArrowLeft, FileDown, Plus, ExternalLink, Loader2, Save, CheckCircle2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
+import { formatCurrency } from '@/lib/utils'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { DigitalInlamning, INLAMNING_COMING_SOON } from '@/components/bokslut/DigitalInlamning'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
@@ -29,7 +31,7 @@ export default function ArsredovisningPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Editable narrative fields — persisted to arsredovisning_narratives so
+  // Editable narrative fields: persisted to arsredovisning_narratives so
   // the PDF always reflects the latest saved version and a refresh / new
   // user picks up the same content.
   const [description, setDescription] = useState('')
@@ -293,7 +295,7 @@ export default function ArsredovisningPage() {
             <CardTitle className="text-base">Välj räkenskapsår</CardTitle>
             <p className="text-sm text-muted-foreground">
               Välj det räkenskapsår du vill se årsredovisningen för. Du kan
-              förhandsgranska och ladda ner PDF-utkastet utan att stänga året — det
+              förhandsgranska och ladda ner PDF-utkastet utan att stänga året: det
               fullständiga bokslutet görs sedan via{' '}
               <Link href="/bookkeeping/year-end" className="text-foreground underline underline-offset-4 decoration-muted-foreground/40 hover:decoration-foreground">
                 Bokslut
@@ -373,7 +375,7 @@ export default function ArsredovisningPage() {
             <p className="text-muted-foreground mt-1">
               Dokumentet innehåller kassaflödesanalys, förändring av eget kapital och
               utökade noter (uppskjuten skatt, redovisningsprinciper, materiella
-              anläggningstillgångar) — krav som följer K3 men inte K2.
+              anläggningstillgångar): krav som följer K3 men inte K2.
             </p>
           </CardContent>
         </Card>
@@ -381,14 +383,14 @@ export default function ArsredovisningPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Förvaltningsberättelse — narrativ</CardTitle>
+          <CardTitle className="text-base">Förvaltningsberättelse: narrativ</CardTitle>
           <p className="text-sm text-muted-foreground">
             Texten nedan visas i PDF:en. Klicka på <strong>Spara texten</strong> nedan
             för att behålla ändringarna mellan sessioner.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <Label htmlFor="ar-description">Verksamhetsbeskrivning</Label>
             <Textarea
               id="ar-description"
@@ -397,7 +399,7 @@ export default function ArsredovisningPage() {
               rows={3}
             />
           </div>
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <Label htmlFor="ar-events">Väsentliga händelser</Label>
             <Textarea
               id="ar-events"
@@ -406,7 +408,7 @@ export default function ArsredovisningPage() {
               rows={4}
             />
           </div>
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <Label htmlFor="ar-rd">Resultatdisposition</Label>
             <Textarea
               id="ar-rd"
@@ -415,7 +417,7 @@ export default function ArsredovisningPage() {
               rows={3}
             />
           </div>
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <Label htmlFor="ar-agm-date">Datum för årsstämma</Label>
             <Input
               id="ar-agm-date"
@@ -425,7 +427,7 @@ export default function ArsredovisningPage() {
               className="max-w-[220px]"
             />
             <p className="text-xs text-muted-foreground">
-              Datum då årsstämman fastställde årsredovisningen — fyller i datumraden på
+              Datum då årsstämman fastställde årsredovisningen: fyller i datumraden på
               fastställelseintyget i PDF:en (krävs för inlämning till Bolagsverket).
             </p>
           </div>
@@ -440,7 +442,7 @@ export default function ArsredovisningPage() {
                 fält visas som &quot;Inga.&quot; i PDF:en.
               </p>
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <Label htmlFor="ar-ltd">
                 Långfristiga skulder förfallande efter mer än fem år (kr)
               </Label>
@@ -457,7 +459,7 @@ export default function ArsredovisningPage() {
                 ÅRL 5:13 §. Lämna tomt om inga skulder förfaller senare än fem år.
               </p>
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <Label htmlFor="ar-securities">Ställda säkerheter</Label>
               <Textarea
                 id="ar-securities"
@@ -468,7 +470,7 @@ export default function ArsredovisningPage() {
               />
               <p className="text-xs text-muted-foreground">ÅRL 5:14 §.</p>
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <Label htmlFor="ar-contingent">Eventualförpliktelser</Label>
               <Textarea
                 id="ar-contingent"
@@ -479,9 +481,9 @@ export default function ArsredovisningPage() {
               />
               <p className="text-xs text-muted-foreground">ÅRL 5:15 §.</p>
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <Label htmlFor="ar-parent-name">
-                Moderföretag — namn (om koncerntillhörighet)
+                Moderföretag: namn (om koncerntillhörighet)
               </Label>
               <Input
                 id="ar-parent-name"
@@ -491,11 +493,11 @@ export default function ArsredovisningPage() {
               />
               <p className="text-xs text-muted-foreground">
                 BFNAR 2016:10 kap. 19 / BFNAR 2012:1 kap. 8. Lämna tomt om bolaget
-                inte ingår i en koncern — noten utelämnas då.
+                inte ingår i en koncern: noten utelämnas då.
               </p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <Label htmlFor="ar-parent-orgnr">Moderföretagets org.nr</Label>
                 <Input
                   id="ar-parent-orgnr"
@@ -504,7 +506,7 @@ export default function ArsredovisningPage() {
                   placeholder="556677-8899"
                 />
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <Label htmlFor="ar-parent-city">Moderföretagets säte</Label>
                 <Input
                   id="ar-parent-city"
@@ -551,34 +553,34 @@ export default function ArsredovisningPage() {
           <CardTitle className="text-base">Flerårsöversikt</CardTitle>
         </CardHeader>
         <CardContent>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs uppercase tracking-wider text-muted-foreground border-b border-border">
-                <th className="py-2">År</th>
-                <th className="py-2 text-right">Nettoomsättning</th>
-                <th className="py-2 text-right">Resultat efter fin.</th>
-                <th className="py-2 text-right">Soliditet</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>År</TableHead>
+                <TableHead className="text-right">Nettoomsättning</TableHead>
+                <TableHead className="text-right">Resultat efter fin.</TableHead>
+                <TableHead className="text-right">Soliditet</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {data.forvaltningsberattelse.flerarsoversikt.map((row) => (
-                <tr key={row.year} className="border-b border-border last:border-b-0">
-                  <td className="py-2">{row.year}</td>
-                  <td className="py-2 text-right tabular-nums">
-                    {row.net_revenue.toLocaleString('sv-SE')}
-                  </td>
-                  <td className="py-2 text-right tabular-nums">
-                    {row.result_after_financial.toLocaleString('sv-SE')}
-                  </td>
-                  <td className="py-2 text-right tabular-nums">
+                <TableRow key={row.year}>
+                  <TableCell>{row.year}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCurrency(row.net_revenue)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCurrency(row.result_after_financial)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
                     {row.soliditet_pct === null
-                      ? '—'
+                      ? '-'
                       : `${row.soliditet_pct.toFixed(1)} %`}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
 
@@ -587,7 +589,7 @@ export default function ArsredovisningPage() {
           <CardTitle className="text-base">Underskrifter</CardTitle>
           <p className="text-sm text-muted-foreground">
             Lägg till varje styrelseledamot + VD som ska skriva under. BankID-signering
-            kommer i en kommande version — för nu visas slottar och status här, och
+            kommer i en kommande version: för nu visas slottar och status här, och
             själva underskriften görs på pappret.
           </p>
         </CardHeader>
@@ -677,7 +679,7 @@ export default function ArsredovisningPage() {
                 <FileDown className="mr-2 h-4 w-4" /> Ladda ner PDF (utkast)
               </Link>
             </Button>
-            {/* Bolagsverket-delarna blurras tills integrationen är godkänd —
+            {/* Bolagsverket-delarna blurras tills integrationen är godkänd:
                 rubriken, instruktionstexten och PDF-knappen förblir skarpa. */}
             <span
               inert={INLAMNING_COMING_SOON}
@@ -709,7 +711,7 @@ export default function ArsredovisningPage() {
             }
           >
           {data.warnings.length > 0 && (
-            <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-warning-foreground space-y-1">
+            <div className="rounded-md border border-border bg-muted/30 p-3 text-xs space-y-1">
               <p className="font-medium">Innan inlämning till Bolagsverket:</p>
               <ul className="list-disc pl-5 space-y-1">
                 {data.warnings.map((w, i) => (
@@ -718,12 +720,12 @@ export default function ArsredovisningPage() {
               </ul>
             </div>
           )}
-          <div className="rounded-md border border-warning/40 bg-warning/5 p-3 text-xs text-warning-foreground">
+          <div className="rounded-md border border-border bg-muted/30 p-3 text-xs">
             <strong>Notis om digital inlämning:</strong> Digital inlämning (iXBRL) av
             årsredovisning föreslås bli obligatorisk för K2/K3-aktiebolag för
             räkenskapsår som inleds efter 2025-12-31. Använd avsnittet{' '}
             <strong>Digital inlämning</strong> nedan för att granska, validera och lämna
-            in årsredovisningen som iXBRL — PDF:en ovan är ett läsexemplar.
+            in årsredovisningen som iXBRL. PDF:en ovan är ett läsexemplar.
           </div>
           </div>
         </CardContent>

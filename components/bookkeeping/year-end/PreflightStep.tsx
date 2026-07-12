@@ -51,7 +51,7 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
             <div>
               <CardTitle className="text-base">{report.period.name}</CardTitle>
               <p className="text-sm text-muted-foreground tabular-nums">
-                {report.period.period_start} – {report.period.period_end}
+                {report.period.period_start}: {report.period.period_end}
               </p>
             </div>
             {report.ready ? (

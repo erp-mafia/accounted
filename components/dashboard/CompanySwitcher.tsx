@@ -91,7 +91,7 @@ export default function CompanySwitcher() {
       return
     }
     // Notify every other open tab of the same user so they hard-reload
-    // onto the new company. BroadcastChannel is best-effort — if the
+    // onto the new company. BroadcastChannel is best-effort: if the
     // browser doesn't support it (very old) we still hard-reload
     // ourselves, and other tabs will self-correct via the visibilitychange
     // / pageshow listeners in CompanyTabSync on their next focus event.
@@ -101,10 +101,10 @@ export default function CompanySwitcher() {
         channel.postMessage({ companyId })
         channel.close()
       } catch {
-        // Ignore — hard reload still happens below
+        // Ignore: hard reload still happens below
       }
     }
-    // Hard navigation — tears down React state, router cache, in-flight
+    // Hard navigation: tears down React state, router cache, in-flight
     // fetches, blob URLs, etc. This is the whole point: nothing from the
     // previous company can survive the switch.
     window.location.assign('/')
@@ -113,14 +113,14 @@ export default function CompanySwitcher() {
   // Always allow opening the dropdown (to show "Lägg till företag")
   const hasMultiple = companies.length > 1
 
-  // No companies yet — show a direct "Lägg till företag" link instead of
+  // No companies yet: show a direct "Lägg till företag" link instead of
   // the switcher so the user can still create one. Hidden in sandbox mode.
   if (!company && companies.length === 0) {
     if (isSandbox) return null
     return (
       <Link
         href="/select-company"
-        className="flex items-center gap-2 w-full text-left rounded-lg border border-dashed border-border/60 hover:border-foreground/30 hover:bg-muted/40 -mx-1 px-2 py-1.5 transition-all duration-150"
+        className="flex items-center gap-2 w-full text-left rounded-lg border border-dashed border-border/60 hover:border-foreground/30 hover:bg-muted/40 -mx-1 px-2 py-1.5 transition-colors duration-150"
       >
         <Plus className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
         <span className="text-[13px] text-muted-foreground truncate">{t('add_company')}</span>
@@ -133,7 +133,7 @@ export default function CompanySwitcher() {
       <button
         ref={triggerRef}
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 w-full text-left rounded-lg border border-transparent hover:border-border/60 hover:bg-muted/40 -mx-1 px-2 py-1.5 transition-all duration-150"
+        className="flex items-center gap-1.5 w-full text-left rounded-lg border border-transparent hover:border-border/60 hover:bg-muted/40 -mx-1 px-2 py-1.5 transition-colors duration-150"
         aria-expanded={open}
         aria-haspopup="listbox"
       >

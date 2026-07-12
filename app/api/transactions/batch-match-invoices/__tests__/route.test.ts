@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { parseJsonResponse, createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
+import { NextResponse } from 'next/server'
+import { createMockRequest, parseJsonResponse, createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: () => Promise.resolve(mockSupabase),
+
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 const mockGetBestInvoiceMatch = vi.fn()
@@ -13,13 +16,21 @@ vi.mock('@/lib/invoices/invoice-matching', () => ({
 
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
+const requireWriteMock = vi.fn()
 vi.mock('@/lib/auth/require-write', () => ({
-  requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+  requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
 import { POST } from '../route'
+
+function makeReq() {
+  return createMockRequest('/api/transactions/batch-match-invoices', { method: 'POST' })
+}
+
+const routeParams = { params: Promise.resolve({}) }
 
 describe('POST /api/transactions/batch-match-invoices', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -27,17 +38,36 @@ describe('POST /api/transactions/batch-match-invoices', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
   })
 
   it('returns 401 when not authenticated', async () => {
-    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
 
-    const response = await POST()
+    const response = await POST(makeReq(), routeParams)
     const { status, body } = await parseJsonResponse(response)
 
     expect(status).toBe(401)
     expect(body).toEqual({ error: 'Unauthorized' })
+  })
+
+  it('returns 403 when the caller is a viewer', async () => {
+    requireWriteMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    })
+
+    const response = await POST(makeReq(), routeParams)
+    const { status, body } = await parseJsonResponse(response)
+
+    expect(status).toBe(403)
+    expect(body).toEqual({ error: 'Forbidden' })
+    expect(mockGetBestInvoiceMatch).not.toHaveBeenCalled()
   })
 
   it('calls the invoice matcher with companyId (not user.id) and records the match', async () => {
@@ -47,7 +77,7 @@ describe('POST /api/transactions/batch-match-invoices', () => {
 
     mockGetBestInvoiceMatch.mockResolvedValue({ invoice: { id: 'inv-1' }, confidence: 0.9 })
 
-    const response = await POST()
+    const response = await POST(makeReq(), routeParams)
     const { status, body } = await parseJsonResponse<{ processed: number; matched: number }>(response)
 
     expect(status).toBe(200)
@@ -75,7 +105,7 @@ describe('POST /api/transactions/batch-match-invoices', () => {
 
     mockGetBestInvoiceMatch.mockResolvedValue(null)
 
-    const response = await POST()
+    const response = await POST(makeReq(), routeParams)
     const { status, body } = await parseJsonResponse<{ processed: number; matched: number }>(response)
 
     expect(status).toBe(200)
@@ -85,7 +115,7 @@ describe('POST /api/transactions/batch-match-invoices', () => {
   it('returns 500 when the transaction fetch fails', async () => {
     enqueue({ data: null, error: { message: 'boom' } })
 
-    const response = await POST()
+    const response = await POST(makeReq(), routeParams)
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
     expect(status).toBe(500)

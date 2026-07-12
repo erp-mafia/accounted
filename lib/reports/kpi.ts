@@ -36,7 +36,7 @@ export function calculateCashPosition(rows: TrialBalanceRow[]): number {
  * (negative = att återfå) from trial balance rows.
  *
  * Uses the same 26xx accounts as the momsdeklaration so the result mirrors
- * ruta 49: output VAT (rutor 10–12, 30–32, 60–62) − input VAT (ruta 48).
+ * ruta 49: output VAT (rutor 10-12, 30-32, 60-62) − input VAT (ruta 48).
  * Reverse-charge and import pairs (e.g. 2614 credit + 2645 debit) therefore
  * net to zero instead of inflating the receivable (#715).
  *

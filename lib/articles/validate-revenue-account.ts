@@ -4,13 +4,13 @@ import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 /**
  * Classify a per-article revenue-account override against the company's chart:
  *
- * - 'ok'          — active class-3 account in the chart; accept as-is.
- * - 'activatable' — a class-3 account that is merely missing/inactive: either
+ * - 'ok'          : active class-3 account in the chart; accept as-is.
+ * - 'activatable' : a class-3 account that is merely missing/inactive: either
  *                   an inactive chart row or a known BAS class-3 number not yet
  *                   in the chart. Routes translate this to ACCOUNTS_NOT_IN_CHART
  *                   so the standard activate-and-retry dialog flow applies
  *                   (same UX as the journal entry form).
- * - 'invalid'     — anything else: a non-revenue account or a number unknown to
+ * - 'invalid'     : anything else: a non-revenue account or a number unknown to
  *                   both the chart and the BAS catalogue. Never bookable.
  *
  * Throws on an unexpected DB error so the route wrapper maps it to the canonical

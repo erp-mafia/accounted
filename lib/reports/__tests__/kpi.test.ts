@@ -116,7 +116,7 @@ describe('calculateVatLiability', () => {
     expect(calculateVatLiability(rows)).toBe(15000)
   })
 
-  it('nets EU reverse charge (2614 + 2645) to zero — issue #715', () => {
+  it('nets EU reverse charge (2614 + 2645) to zero: issue #715', () => {
     const rows = [
       makeTrialBalanceRow({ account_number: '2614', closing_credit: 2500 }),
       makeTrialBalanceRow({ account_number: '2645', closing_debit: 2500 }),
@@ -187,8 +187,8 @@ describe('calculateVatLiability', () => {
 
 describe('VAT widget account lists (derived from ACCOUNT_RUTA)', () => {
   // Drift guard: an ACCOUNT_RUTA change that alters these lists changes the
-  // dashboard widget's semantics — update this snapshot deliberately.
-  it('output accounts cover rutor 10–12, 30–32 and 60–62', () => {
+  // dashboard widget's semantics: update this snapshot deliberately.
+  it('output accounts cover rutor 10-12, 30-32 and 60-62', () => {
     expect([...VAT_OUTPUT_ACCOUNTS].sort()).toEqual([
       '2610', '2611', '2612', '2613', '2614', '2615', '2616', '2618',
       '2620', '2621', '2622', '2623', '2624', '2625', '2626', '2628',

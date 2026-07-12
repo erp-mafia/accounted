@@ -86,7 +86,7 @@ export function KPIExpenseMixChart({ composition }: KPIExpenseMixChartProps) {
                 {t('expense_mix_total')}
               </span>
               <span
-                className="font-display text-lg font-medium tabular-nums"
+                className="font-display text-lg tabular-nums"
                 title={formatCurrency(total)}
               >
                 {totalCompact}

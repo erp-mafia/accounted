@@ -15,12 +15,12 @@ interface AttachDocumentPreviewProps {
  * the pairing without cross-referencing IDs.
  */
 export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewProps) {
-  const txDescription = (data.transaction_description as string) || '—'
+  const txDescription = (data.transaction_description as string) || '-'
   const txAmount = data.transaction_amount as number | undefined
   const txCurrency = (data.transaction_currency as string) || 'SEK'
   const txDate = data.transaction_date as string | undefined
 
-  const docFileName = (data.document_file_name as string) || '—'
+  const docFileName = (data.document_file_name as string) || '-'
   const docVendor = data.document_vendor_name as string | undefined
   const docAmount = data.document_amount as number | undefined
   const docCurrency = (data.document_currency as string) || txCurrency
@@ -41,11 +41,11 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <PreviewCard label="Transaktion">
-          <Row label="Datum" value={txDate ? formatDate(txDate) : '—'} tabular />
+          <Row label="Datum" value={txDate ? formatDate(txDate) : '-'} tabular />
           <Row label="Beskrivning" value={txDescription} />
           <Row
             label="Belopp"
-            value={typeof txAmount === 'number' ? formatCurrency(txAmount, txCurrency) : '—'}
+            value={typeof txAmount === 'number' ? formatCurrency(txAmount, txCurrency) : '-'}
             tabular
           />
         </PreviewCard>
@@ -78,7 +78,7 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
             <p className="mt-1 text-xs">
               Befintligt dokument{existingDocName ? ` (${existingDocName})` : ''} är markerat som
               räkenskapsinformation enligt BFL 7 kap. Att ersätta det här gör det tidigare
-              verifikationsunderlaget otillgängligt — bekräfta att du har originalet sparat innan
+              verifikationsunderlaget otillgängligt: bekräfta att du har originalet sparat innan
               du godkänner.
             </p>
           </div>

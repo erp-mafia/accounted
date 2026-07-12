@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
+import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Plus, Trash2, Globe } from 'lucide-react'
 
@@ -124,7 +125,7 @@ export function OAuthClientsPanel() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle>{t('title')}</CardTitle>
+              <CardTitle className="text-base">{t('title')}</CardTitle>
               <CardDescription>
                 {t('description')}
               </CardDescription>
@@ -141,13 +142,11 @@ export function OAuthClientsPanel() {
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : clients.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <Globe className="h-8 w-8 text-muted-foreground/50 mb-3" />
-              <p className="text-sm text-muted-foreground">{t('empty_title')}</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {t('empty_help')}
-              </p>
-            </div>
+            <EmptyState
+              icon={Globe}
+              title={t('empty_title')}
+              description={t('empty_help')}
+            />
           ) : (
             <div className="space-y-3">
               {clients.map((c) => (

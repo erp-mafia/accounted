@@ -42,6 +42,10 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { InvoiceExtractionResult } from '@/types'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
+import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
+import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
+// InboxCustomDomainDialog (egen domän) is built but gated off: see
+// INBOX_CUSTOM_DOMAINS_ENABLED in extensions/general/invoice-inbox/index.ts.
 import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 
@@ -64,7 +68,7 @@ interface InboxItem {
   created_supplier_invoice_id: string | null
   created_journal_entry_id: string | null
   error_message: string | null
-  // True when AI extraction was skipped — either because the upload caller
+  // True when AI extraction was skipped: either because the upload caller
   // passed skip_extraction=true (MCP/agent path) or because the server's
   // page-count gate skipped a PDF above the auto-extract limit (issue #553).
   // Distinct from status='error' (extraction failed) and from extracted_data
@@ -109,7 +113,7 @@ function pickSupplierName(item: InboxItem): string | null {
 }
 
 // True when extraction produced at least one usable field. Distinguishes a
-// deterministically-parsed underlag (fields present — render the editable
+// deterministically-parsed underlag (fields present: render the editable
 // list) from an item whose extracted_data is null/empty (AI never ran, or ran
 // and found nothing). Currency is ignored because emptyExtraction() seeds it
 // to 'SEK', so it is never a sign that extraction actually happened.
@@ -131,7 +135,7 @@ function hasAnyExtractedField(data: InvoiceExtractionResult | null): boolean {
 //
 // Precedence mirrors the FieldsRail: a booked item (supplier invoice OR a
 // direct journal entry) is done and drops out of the active inbox. A
-// matched-but-unbooked item is "linked" — it STAYS in the inbox as its own
+// matched-but-unbooked item is "linked": it STAYS in the inbox as its own
 // category because the bank payment still needs booking (a document attached
 // to a transaction is not the same as a booked one). An extraction failure is
 // "error"; everything else needs a first action.
@@ -161,8 +165,8 @@ function WorkspaceSkeleton() {
           </div>
           <Skeleton className="h-8 w-28 shrink-0" />
         </header>
-        <div className="flex-1 grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)_320px] lg:grid-cols-[280px_minmax(0,1fr)_340px] min-h-0">
-          <aside className="border-r overflow-hidden bg-muted/20 pt-3">
+        <div className="flex-1 grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_340px] min-h-0">
+          <aside className="border-b xl:border-b-0 xl:border-r overflow-hidden bg-muted/20 pt-3">
             <div className="px-3 pb-3 space-y-2 border-b">
               <Skeleton className="h-8 w-full" />
               <div className="flex flex-wrap gap-1">
@@ -187,8 +191,8 @@ function WorkspaceSkeleton() {
               ))}
             </ul>
           </aside>
-          <main className="overflow-hidden bg-muted/10 hidden md:block" />
-          <aside className="border-l overflow-hidden hidden md:block" />
+          <main className="overflow-hidden bg-muted/10 hidden xl:block" />
+          <aside className="border-l overflow-hidden hidden xl:block" />
         </div>
       </div>
     </div>
@@ -206,7 +210,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // List filter + search (client-side over the already-fetched items list).
-  // Defaults to 'todo' — the active inbox (everything not yet booked) — so
+  // Defaults to 'todo': the active inbox (everything not yet booked), so
   // booked underlag drop out of the default view while attached-but-unbooked
   // ones stay visible.
   const [filter, setFilter] = useState<'todo' | 'linked' | 'booked' | 'error' | 'all'>('todo')
@@ -233,9 +237,16 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [isRotating, setIsRotating] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
   const [bookDirectOpen, setBookDirectOpen] = useState(false)
+  // Bulk-book selected underlag (Modell B): the "Bokför valda" selection-bar
+  // action. The dialog filters the selection to bookable items itself.
+  const [bulkBookOpen, setBulkBookOpen] = useState(false)
   // Match-to-bank-transaction picker (opens when user clicks "Matcha mot
   // transaktion" on an unmatched inbox item).
   const [matchPickerOpen, setMatchPickerOpen] = useState(false)
+  // "Skapa leverantörsfaktura" modal for the selected underlag: opens in
+  // place (instead of navigating to a form page) so the user lands right back
+  // here to pick the next document.
+  const [createSupplierInvoiceOpen, setCreateSupplierInvoiceOpen] = useState(false)
   // Cash method users see "Bokför direkt" as the primary CTA; accrual users
   // see "Skapa leverantörsfaktura". Defaults to 'accrual' until we've read
   // the company settings so we don't flicker the CTA order on first paint.
@@ -282,7 +293,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   useEffect(() => {
     fetchItems()
     fetchInboxAddress()
-    // Resolve the company's bookkeeping method — drives CTA hierarchy.
+    // Resolve the company's bookkeeping method: drives CTA hierarchy.
     fetch('/api/settings')
       .then((r) => (r.ok ? r.json() : null))
       .then((body) => {
@@ -295,9 +306,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   }, [fetchItems, fetchInboxAddress])
 
   // Realtime: refetch when any invoice_inbox_items row changes for this
-  // company. The inbox is routinely resolved "out of band" — the in-app agent
+  // company. The inbox is routinely resolved "out of band": the in-app agent
   // sheet commits a staged create_supplier_invoice_from_inbox / book-direct
-  // operation, the /pending page approves one, or another tab books it — and
+  // operation, the /pending page approves one, or another tab books it, and
   // none of those paths call this component's fetchItems(). Without this, a
   // booked underlag stayed in "Att göra" until a manual reload (issue #600).
   // RLS scopes the channel to the user's company, so we never receive other
@@ -322,7 +333,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   }, [fetchItems])
 
   // Read the onboarding-dismissed flag from localStorage after mount
-  // (SSR-safe — no window access during initial render).
+  // (SSR-safe: no window access during initial render).
   useEffect(() => {
     if (typeof window === 'undefined') return
     try {
@@ -330,7 +341,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         window.localStorage.getItem('gnubok.inbox.onboarding.dismissed') === '1'
       )
     } catch {
-      // private browsing — keep default (show card)
+      // private browsing: keep default (show card)
     }
   }, [])
 
@@ -343,7 +354,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     setOnboardingDismissed(true)
   }, [])
 
-  // Onboarding card visibility — derived from real progress so a user who
+  // Onboarding card visibility: derived from real progress so a user who
   // already has a working inbox flow never sees the guide. Once they finish
   // all three steps, the card auto-hides on next render.
   const hasInboxAddress = !!inboxAddress
@@ -373,7 +384,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   }, [items])
 
   // Pills, in order. The error pill only appears when there's something errored
-  // (or it's the active filter) — keeps the happy-path inbox uncluttered.
+  // (or it's the active filter): keeps the happy-path inbox uncluttered.
   const pills = useMemo(() => {
     const list: { key: typeof filter; label: string; count: number }[] = [
       { key: 'todo', label: 'Att göra', count: statusCounts.todo },
@@ -390,7 +401,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const filteredItems = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
     return items.filter((item) => {
-      // Status filter. "todo" is the active inbox — everything except booked.
+      // Status filter. "todo" is the active inbox: everything except booked.
       const status = deriveInboxStatus(item)
       if (filter === 'todo' && status === 'booked') return false
       if (filter === 'linked' && status !== 'linked') return false
@@ -398,7 +409,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       if (filter === 'error' && status !== 'error') return false
       // 'all' → no status narrowing
 
-      // Search filter — supplier name, email subject/from, placeholder filename
+      // Search filter: supplier name, email subject/from, placeholder filename
       if (term === '') return true
       const haystack = [
         item.extracted_data?.supplier?.name,
@@ -462,8 +473,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     file: File,
     options: { autoSelect: boolean } = { autoSelect: true },
   ) => {
-    // Optimistic placeholder — gives the user an immediate visual response
-    // for the 3–8s while extraction runs. Removed once the real row arrives.
+    // Optimistic placeholder: gives the user an immediate visual response
+    // for the 3-8s while extraction runs. Removed once the real row arrives.
     const tempId = `temp-${crypto.randomUUID()}`
     const placeholder: InboxItem = {
       id: tempId,
@@ -504,7 +515,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         toast({
           title: 'Dokument uppladdat',
           description: pages
-            ? `Stort dokument (${pages} sidor) — AI-tolkning skippad. Du kan koppla det till en transaktion eller skapa leverantörsfaktura manuellt.`
+            ? `Stort dokument (${pages} sidor): AI-tolkning skippad. Du kan koppla det till en transaktion eller skapa leverantörsfaktura manuellt.`
             : 'AI-tolkning skippad. Du kan koppla dokumentet till en transaktion eller skapa leverantörsfaktura manuellt.',
         })
       } else {
@@ -531,14 +542,14 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     }
   }, [fetchItems, handleSelect, toast])
 
-  // Sequential queue — running multiple extractions concurrently would
+  // Sequential queue: running multiple extractions concurrently would
   // hammer pdfjs on slow boxes. Per-file placeholder rows + the queue
   // counter on the upload button surface progress.
   const uploadFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return
     if (files.length === 1) {
       // Single-file drop: keep the historic behavior of jumping the detail
-      // pane to the new item. Skip the queue counter — it would just flash.
+      // pane to the new item. Skip the queue counter: it would just flash.
       await uploadFile(files[0], { autoSelect: true })
       return
     }
@@ -605,6 +616,21 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   const clearSelection = useCallback(() => setSelectedIds(new Set()), [])
 
+  // The selected rows, and how many of them can actually be bulk-booked
+  // (matched to a transaction and not yet booked). Drives the "Bokför valda"
+  // button enabled-state and feeds the bulk-book dialog.
+  const selectedItems = useMemo(
+    () => items.filter((it) => selectedIds.has(it.id)),
+    [items, selectedIds],
+  )
+  const bookableSelectedCount = useMemo(
+    () =>
+      selectedItems.filter(
+        (it) => it.matched_transaction_id && !it.created_journal_entry_id && !it.created_supplier_invoice_id,
+      ).length,
+    [selectedItems],
+  )
+
   const handleBulkDelete = useCallback(async () => {
     if (selectedIds.size === 0) return
     if (!confirm(`Ta bort ${selectedIds.size} poster ur inkorgen?`)) return
@@ -630,7 +656,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       const succeeded = deletable.length - failed
       const parts: string[] = []
       if (succeeded > 0) parts.push(`${succeeded} borttagna`)
-      if (skipped > 0) parts.push(`${skipped} kopplade till leverantörsfaktura — hoppade över`)
+      if (skipped > 0) parts.push(`${skipped} kopplade till leverantörsfaktura, hoppade över`)
       if (failed > 0) parts.push(`${failed} misslyckades`)
       toast({
         title: 'Bulkborttagning klar',
@@ -775,11 +801,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
       {/* Three-section body. Below xl (iPad portrait/landscape + phone) the
           sections stack vertically as a single scrollable feed. With the app
-          sidebar eating ~256px, even iPad landscape (1024–1180px viewport)
-          has only ~570px of workspace — too tight for 3 panes. At xl+ they
+          sidebar eating ~256px, even iPad landscape (1024-1180px viewport)
+          has only ~570px of workspace: too tight for 3 panes. At xl+ they
           sit side-by-side as three panes. */}
       <div className="xl:flex-1 grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)_340px] xl:min-h-0 xl:overflow-hidden">
-        {/* List — flows naturally below xl; bounded with internal scroll at xl+ */}
+        {/* List: flows naturally below xl; bounded with internal scroll at xl+ */}
         <aside className="border-b xl:border-b-0 xl:border-r bg-muted/20 pt-3 xl:overflow-y-auto xl:block">
           {items.length > 0 && (
             <div className="px-3 pb-3 space-y-2 border-b">
@@ -822,42 +848,75 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             </div>
           )}
           {selectedIds.size > 0 && (
-            <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b bg-background/95 backdrop-blur px-3 py-2 text-xs">
-              <span className="font-medium">{selectedIds.size} valda</span>
-              <div className="flex items-center gap-1">
+            <div className="sticky top-0 z-10 flex flex-col gap-3 border-b bg-background/95 backdrop-blur px-4 py-3">
+              {/* Count */}
+              <span className="text-xs text-muted-foreground tabular-nums">
+                <span className="font-medium text-foreground">{selectedIds.size}</span>{' '}
+                {selectedIds.size === 1 ? 'markerad' : 'markerade'}
+              </span>
+              {/* Primary action: the one solid button */}
+              <Button
+                variant="default"
+                size="sm"
+                className="h-8 w-full text-xs"
+                onClick={() => setBulkBookOpen(true)}
+                disabled={isBulkDeleting || bookableSelectedCount === 0}
+                title={
+                  bookableSelectedCount === 0
+                    ? 'Inget av de valda underlagen är matchat mot en banktransaktion'
+                    : undefined
+                }
+              >
+                <Check className="h-3.5 w-3.5 mr-1.5" />
+                Bokför valda
+              </Button>
+              {/* Secondary actions: outlined, so they read as buttons */}
+              <div className="flex items-center gap-2">
+                {identity.isVerified && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 flex-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() =>
+                      openAgentSheet({
+                        intentId: 'inbox.bulk-book',
+                        intentArgs: { item_ids: Array.from(selectedIds) },
+                        contextRef: 'inbox:bulk',
+                      })
+                    }
+                    disabled={isBulkDeleting}
+                  >
+                    <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                    Fråga assistenten
+                  </Button>
+                )}
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  className="h-7 text-xs"
-                  onClick={clearSelection}
-                  disabled={isBulkDeleting}
-                >
-                  Avmarkera
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  className="h-7 text-xs"
+                  className={cn(
+                    'h-8 px-2 text-xs text-muted-foreground hover:text-destructive hover:border-destructive/40',
+                    identity.isVerified ? 'flex-none' : 'flex-1'
+                  )}
                   onClick={handleBulkDelete}
                   disabled={isBulkDeleting}
                 >
                   {isBulkDeleting ? (
-                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                   ) : (
-                    <Trash2 className="h-3 w-3 mr-1" />
+                    <Trash2 className="h-3.5 w-3.5 mr-1.5" />
                   )}
                   Ta bort
                 </Button>
               </div>
             </div>
           )}
-          {items.length === 0 ? (
+          {!hasAnyItem ? (
             // On desktop the preview pane is always visible alongside this
             // column, so showing the onboarding card here would duplicate it.
-            // On mobile the layout is a master-detail toggle and the user is
-            // stuck on the list view until they pick a row — without a card
-            // here they'd have no way to reach the explainer at all. So:
-            // compact card on mobile only, quiet empty state on desktop.
+            // Below xl the panes stack into one feed, so the sibling preview
+            // and fields panes are hidden when the inbox is empty (see their
+            // classNames): this list is the only onboarding surface there.
+            // So: compact card on mobile only, quiet empty state on desktop.
             showOnboarding ? (
               <>
                 <div className="xl:hidden">
@@ -886,7 +945,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           ) : filteredItems.length === 0 ? (
             <div className="p-6 text-center text-xs text-muted-foreground">
               {filter === 'todo'
-                ? 'Inget att åtgärda — allt är bearbetat.'
+                ? 'Inget att åtgärda; allt är bearbetat.'
                 : 'Inga poster matchar filtret.'}
             </div>
           ) : (
@@ -906,9 +965,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           )}
         </aside>
 
-        {/* Document preview (hero) */}
+        {/* Document preview (hero). When the inbox is empty there is nothing
+            to preview and no row can be selected, so below xl (stacked feed)
+            this pane is hidden: the list's compact onboarding card is the
+            single onboarding surface, avoiding a duplicated card. */}
         <main
-          className="xl:overflow-hidden bg-muted/10 relative xl:block min-h-[55vh] xl:min-h-0"
+          className={cn(
+            'xl:overflow-hidden bg-muted/10 relative xl:block min-h-[55vh] xl:min-h-0',
+            !hasAnyItem && 'hidden xl:block'
+          )}
         >
           {selected ? (
             <DocumentPreview docUrl={docUrl} docMime={docMime} isProcessing={!!selected.isPlaceholder} />
@@ -940,9 +1005,14 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
         {/* Fields rail. Below xl it stacks below the preview as part of the
             single vertical feed (top border for separation). At xl+ it's the
-            third pane with a left border. */}
+            third pane with a left border. With an empty inbox no row can be
+            selected, so below xl it is hidden to keep the stacked empty state
+            to just the list column. */}
         <aside
-          className="border-t xl:border-t-0 xl:border-l xl:overflow-y-auto pt-4 xl:block pb-4"
+          className={cn(
+            'border-t xl:border-t-0 xl:border-l xl:overflow-y-auto pt-4 xl:block pb-4',
+            !hasAnyItem && 'hidden xl:block'
+          )}
         >
           {selected ? (
             <FieldsRail
@@ -950,6 +1020,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               accountingMethod={accountingMethod}
               onDelete={() => handleDelete(selected.id)}
               onBookDirect={() => setBookDirectOpen(true)}
+              onCreateSupplierInvoice={() => setCreateSupplierInvoiceOpen(true)}
               onMatchTransaction={() => setMatchPickerOpen(true)}
               onUnmatchTransaction={async () => {
                 const targetId = selected.id
@@ -1014,11 +1085,35 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         open={bookDirectOpen}
         onOpenChange={setBookDirectOpen}
         item={selected}
+        docUrl={docUrl}
+        docMime={docMime}
         onSuccess={async () => {
           await Promise.all([fetchItems(), handleSelect(selected.id)])
         }}
       />
     )}
+    {selected && (
+      <NewSupplierInvoiceDialog
+        open={createSupplierInvoiceOpen}
+        onOpenChange={setCreateSupplierInvoiceOpen}
+        inboxItemId={selected.id}
+        onCreated={async () => {
+          // Stay in the inbox (the whole point of the modal): close, then
+          // refresh the list + the selected item so it shows as converted.
+          setCreateSupplierInvoiceOpen(false)
+          await Promise.all([fetchItems(), handleSelect(selected.id)])
+        }}
+      />
+    )}
+    <BulkBookInboxDialog
+      open={bulkBookOpen}
+      onOpenChange={setBulkBookOpen}
+      items={selectedItems}
+      onSuccess={async () => {
+        clearSelection()
+        await fetchItems()
+      }}
+    />
     {selected && (
       <TransactionMatchPicker
         open={matchPickerOpen}
@@ -1050,7 +1145,7 @@ function InboxRow({
   onClick: () => void
   isChecked: boolean
   onToggleChecked: () => void
-  /** True when bulk-select mode is active anywhere in the list — keeps the
+  /** True when bulk-select mode is active anywhere in the list: keeps the
       checkbox visible (otherwise it's hover-only on desktop). */
   anyChecked: boolean
 }) {
@@ -1182,7 +1277,7 @@ export function DocumentPreview({
           />
         </div>
       ) : (
-        // PDF: iframe needs explicit height — frame fills the available pane.
+        // PDF: iframe needs explicit height, frame fills the available pane.
         <div className="h-full w-full max-w-3xl bg-background rounded-md border overflow-hidden">
           <iframe src={docUrl} className="w-full h-full border-0" title="Underlag" />
         </div>
@@ -1225,7 +1320,7 @@ function OnboardingCard({
     {
       done: hasAnyItem,
       title: 'Ladda upp eller maila in ett underlag',
-      hint: 'accounted tolkar fakturan eller kvittot åt dig och fyller i fält automatiskt.',
+      hint: 'Accounted tolkar fakturan eller kvittot åt dig och fyller i fält automatiskt.',
     },
     {
       done: hasResolvedItem,
@@ -1268,19 +1363,9 @@ function OnboardingCard({
           </Badge>
         </div>
         <p className={cn('text-muted-foreground', compact ? 'text-[11px]' : 'text-xs')}>
-          Underlagen samlas här — från mail eller filuppladdning — och kan
-          matchas mot bankhändelser eller bokföras direkt.
-        </p>
-        <p className={cn('text-muted-foreground', compact ? 'text-[11px]' : 'text-xs')}>
-          Gratis under beta för Open-användare. Ingår senare i Pro-planen.{' '}
-          <a
-            href="https://www.gnubok.se/priser"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:underline"
-          >
-            Se priser →
-          </a>
+          Underlagen samlas här (från mail eller filuppladdning) och kan
+          matchas mot bankhändelser eller bokföras direkt. Inkorgen är alltid
+          gratis; AI-tolkning av underlag ingår i abonnemanget.
         </p>
       </div>
 
@@ -1335,7 +1420,7 @@ function OnboardingCard({
         })}
       </ol>
 
-      {/* CTA matches the current step. No CTA for step 3 — it requires the user to pick a row. */}
+      {/* CTA matches the current step. No CTA for step 3: it requires the user to pick a row. */}
       {currentStep === 0 && (
         <Button
           size={compact ? 'sm' : 'default'}
@@ -1429,6 +1514,7 @@ function FieldsRail({
   accountingMethod,
   onDelete,
   onBookDirect,
+  onCreateSupplierInvoice,
   onMatchTransaction,
   onUnmatchTransaction,
   onAskAssistant,
@@ -1440,6 +1526,7 @@ function FieldsRail({
   accountingMethod: AccountingMethod
   onDelete: () => void
   onBookDirect: () => void
+  onCreateSupplierInvoice: () => void
   onMatchTransaction: () => void
   onUnmatchTransaction: () => Promise<void>
   onAskAssistant?: (transactionId: string) => void
@@ -1452,7 +1539,7 @@ function FieldsRail({
   const data = item.extracted_data
   const isProcessed = !!item.created_supplier_invoice_id
   const isBookedDirectly = !isProcessed && !!item.created_journal_entry_id
-  // "Resolved" now means a journal entry exists — matched_transaction_id alone
+  // "Resolved" now means a journal entry exists: matched_transaction_id alone
   // is not resolved, it's the prerequisite for booking against that tx.
   const isLinkedToTransaction = !isProcessed && !isBookedDirectly && !!item.matched_transaction_id
   const isResolved = isProcessed || isBookedDirectly
@@ -1545,12 +1632,12 @@ function FieldsRail({
         </div>
       )}
 
-      {/* Hint only — creation happens on the leverantörsfaktura form via "Skapa & välj" */}
+      {/* Hint only: creation happens on the leverantörsfaktura form via "Skapa & välj" */}
       {showNoMatchHint && (
         <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
           Ingen leverantör matchade{' '}
           <span className="text-foreground font-medium">{extractedSupplierName}</span>
-          {' — leverantören skapas när du klickar Skapa leverantörsfaktura.'}
+          {': leverantören skapas när du klickar Skapa leverantörsfaktura.'}
         </div>
       )}
 
@@ -1581,7 +1668,7 @@ function FieldsRail({
           </div>
         ) : !hasAnyExtractedField(data) && !hasAi ? (
           // No fields were extracted (AI never ran) and the company doesn't have
-          // the AI capability. Show an upsell in place of the blank field list —
+          // the AI capability. Show an upsell in place of the blank field list:
           // upload and manual entry stay available via the actions below.
           <div className="rounded-lg border border-border bg-secondary/40 px-4 py-3 text-left">
             <div className="flex items-center gap-2 text-sm font-medium">
@@ -1589,7 +1676,7 @@ function FieldsRail({
               AI-tolkning ingår i abonnemanget
             </div>
             <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-              Uppgradera för att låta accounted läsa av leverantör, belopp och
+              Uppgradera för att låta Accounted läsa av leverantör, belopp och
               moms automatiskt. Du kan fortfarande fylla i fälten manuellt eller
               koppla dokumentet till en transaktion nedan.
             </p>
@@ -1607,7 +1694,7 @@ function FieldsRail({
         )}
       </div>
 
-      {/* Actions — hidden while AI extraction is in flight */}
+      {/* Actions: hidden while AI extraction is in flight */}
       {!item.isPlaceholder && (
       <div className="border-t px-4 py-3 space-y-2">
         {isProcessed && item.created_supplier_invoice_id ? (
@@ -1627,7 +1714,7 @@ function FieldsRail({
         ) : isLinkedToTransaction && item.matched_transaction_id ? (
           <>
             {/* Matched-to-tx state: show the bridge to booking. The user
-                picks one of two actions — book themselves with the
+                picks one of two actions: book themselves with the
                 deterministic dialog, or hand off to the assistant. */}
             <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-xs">
               <div className="flex items-center gap-1.5 text-success font-medium mb-1">
@@ -1679,7 +1766,7 @@ function FieldsRail({
           <>
             {/* Unmatched state: the canonical next step is to find the bank
                 transaction this underlag belongs to. Two escape hatches sit
-                below it — "Skapa leverantörsfaktura" for users who want
+                below it: "Skapa leverantörsfaktura" for users who want
                 supplier-invoice tracking (accrual flow), and "Bokför som
                 verifikat" for underlag that aren't a supplier invoice at all
                 (bank fees, owner expenses, the underlag for a correction). The
@@ -1703,16 +1790,14 @@ function FieldsRail({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-64">
-                <DropdownMenuItem asChild>
-                  <Link
-                    href={`/supplier-invoices/new?inbox_item_id=${item.id}`}
-                    className="flex flex-col items-start gap-1"
-                  >
-                    <span>Skapa leverantörsfaktura</span>
-                    <span className="text-xs text-muted-foreground">
-                      För leverantörsskulder du vill följa (periodisering).
-                    </span>
-                  </Link>
+                <DropdownMenuItem
+                  onClick={onCreateSupplierInvoice}
+                  className="flex flex-col items-start gap-1"
+                >
+                  <span>Skapa leverantörsfaktura</span>
+                  <span className="text-xs text-muted-foreground">
+                    För leverantörsskulder du vill följa (periodisering).
+                  </span>
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={onBookDirect}
@@ -1735,11 +1820,11 @@ function FieldsRail({
           disabled={isDeleting || isResolved}
           title={
             isProcessed
-              ? 'Kopplad till leverantörsfaktura — kan inte tas bort'
+              ? 'Kopplad till leverantörsfaktura, kan inte tas bort'
               : isBookedDirectly
-                ? 'Bokförd — kan inte tas bort'
+                ? 'Bokförd, kan inte tas bort'
                 : isLinkedToTransaction
-                  ? 'Kopplad till transaktion — koppla loss innan borttagning'
+                  ? 'Kopplad till transaktion, koppla loss innan borttagning'
                   : undefined
           }
         >
@@ -1868,7 +1953,7 @@ export function EditableFieldsList({
     Object.fromEntries(FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])) as Record<FieldKey, string>
   )
   // Per-field provenance: a populated field starts "AI-filled" (its value came
-  // from the extraction) and flips to user-verified once the user edits it —
+  // from the extraction) and flips to user-verified once the user edits it:
   // mirrors the create form's AiFilledIndicator. Reset when switching items.
   const [edited, setEdited] = useState<Partial<Record<FieldKey, boolean>>>({})
   const timersRef = useRef<Partial<Record<FieldKey, ReturnType<typeof setTimeout>>>>({})
@@ -1899,7 +1984,7 @@ export function EditableFieldsList({
 
   // Re-seed drafts when the server returns normalised values (e.g. uppercased
   // currency, trimmed strings). Only update fields where the local draft
-  // matches the previous server value — i.e. the user hasn't typed anything
+  // matches the previous server value, i.e. the user hasn't typed anything
   // newer that we'd otherwise clobber.
   useEffect(() => {
     let dirty = false
@@ -2015,7 +2100,7 @@ export function EditableFieldsList({
             </label>
             <AiFilledIndicator
               active={drafts[f.key].trim() !== '' && !edited[f.key]}
-              title="Ifyllt av AI — kontrollera mot dokumentet"
+              title="Ifyllt av AI: kontrollera mot dokumentet"
             />
           </div>
           <Input
@@ -2026,7 +2111,7 @@ export function EditableFieldsList({
             onChange={(e) => onChange(f.key, e.target.value)}
             onBlur={() => onBlur(f.key)}
             disabled={disabled}
-            placeholder="—"
+            placeholder="-"
             className={cn(
               'h-8 text-sm border-transparent bg-transparent px-2 -mx-2 hover:border-border focus-visible:border-ring',
               drafts[f.key] === '' && 'text-muted-foreground/50 italic'
@@ -2054,7 +2139,7 @@ export function EditableFieldsList({
       )}
       {disabled && (
         <p className="text-[10px] text-muted-foreground/70 pt-2">
-          Posten är kopplad till en leverantörsfaktura — fälten kan inte ändras.
+          Posten är kopplad till en leverantörsfaktura: fälten kan inte ändras.
         </p>
       )}
     </div>

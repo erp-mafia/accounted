@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -15,7 +14,7 @@ import type { EfDeclarationItem } from '@/lib/bokslut/enskild-firma/types'
 
 interface EfDeclarationSectionProps {
   fiscalPeriodId: string
-  /** Bokfört resultat (income statement net_result) — shown as the surplus
+  /** Bokfört resultat (income statement net_result): shown as the surplus
    *  base in the wizard header. Server recomputes from the trial balance. */
   bookedSurplus: number
   /** Closing year of the fiscal period (for periodiseringsfond cohort). */
@@ -56,12 +55,12 @@ const DEFAULT_OVERRIDES: EfOverrideInputs = {
 }
 
 /**
- * EF declaration step — fetches the four calculator outputs (egenavgifter,
+ * EF declaration step: fetches the four calculator outputs (egenavgifter,
  * räntefördelning, periodiseringsfond-EF, expansionsfond) from the server
  * so the same source-of-truth (computeEfDeclarationPreview) is used by
  * wizard, MCP tool and NE-bilaga.
  *
- * EF tax mechanisms are declaration-only — they NEVER produce journal
+ * EF tax mechanisms are declaration-only: they NEVER produce journal
  * entries. The banner makes that BFL distinction visible.
  *
  * Override inputs persist to localStorage scoped by fiscal period id, so
@@ -89,7 +88,7 @@ export function EfDeclarationSection({
         setOverrides({ ...DEFAULT_OVERRIDES, ...parsed })
       }
     } catch {
-      // Ignore — start with defaults.
+      // Ignore: start with defaults.
     }
   }, [storageKey])
 
@@ -99,7 +98,7 @@ export function EfDeclarationSection({
     try {
       window.localStorage.setItem(storageKey, JSON.stringify(overrides))
     } catch {
-      // Quota exceeded or disabled — non-fatal.
+      // Quota exceeded or disabled, non-fatal.
     }
   }, [storageKey, overrides])
 
@@ -165,13 +164,13 @@ export function EfDeclarationSection({
 
   return (
     <div className="space-y-6">
-      {/* BFL distinction banner — EF values are declaration-only, never booked. */}
+      {/* BFL distinction banner: EF values are declaration-only, never booked. */}
       <Card className="border-border bg-secondary/40">
         <CardContent className="p-4 flex items-start gap-3">
           <Info className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
           <p className="text-sm text-muted-foreground">
             <span className="font-medium text-foreground">
-              Skattemässiga justeringar — NE-bilaga
+              Skattemässiga justeringar: NE-bilaga
             </span>
             <br />
             För enskild firma bokförs varken skatt, egenavgifter, fonder eller räntefördelning.
@@ -180,7 +179,7 @@ export function EfDeclarationSection({
         </CardContent>
       </Card>
 
-      {/* "No journal entries posted" banner — surfaced when the period has
+      {/* "No journal entries posted" banner: surfaced when the period has
           zero posted vouchers, so the user knows the surplus is 0 because
           nothing's booked yet, not because the calculators failed. */}
       {noPostedEntries && (
@@ -211,7 +210,7 @@ export function EfDeclarationSection({
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1">
-              <Label className="text-xs">Egenavgifter — kategori</Label>
+              <Label className="text-xs">Egenavgifter: kategori</Label>
               <select
                 className="border border-border rounded-md h-9 text-sm px-2 w-full bg-background"
                 value={overrides.category}
@@ -267,7 +266,7 @@ export function EfDeclarationSection({
               />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Tidigare expansionsfond — saldo</Label>
+              <Label className="text-xs">Tidigare expansionsfond: saldo</Label>
               <Input
                 type="number"
                 step="1"
@@ -327,9 +326,7 @@ export function EfDeclarationSection({
               <div className="flex-1">
                 <CardTitle className="text-base">{item.label}</CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">{item.description}</p>
-                <Badge variant="outline" className="mt-2">
-                  {item.ne_ruta}
-                </Badge>
+                <p className="text-xs text-muted-foreground mt-1">NE-ruta {item.ne_ruta}</p>
               </div>
               <p className="font-display text-2xl tabular-nums shrink-0">
                 {formatCurrency(item.amount)}
@@ -351,7 +348,7 @@ export function EfDeclarationSection({
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Info className="h-4 w-4 text-muted-foreground" />
-            NE-bilaga räkenskapsschema (R1–R11)
+            NE-bilaga räkenskapsschema (R1-R11)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             Räkenskapsschema-delen genereras automatiskt från bokföringen för räkenskapsåret {fiscalYear}.
@@ -361,11 +358,11 @@ export function EfDeclarationSection({
         <CardContent>
           <Button asChild variant="outline">
             <Link
-              href={`/api/reports/ne-bilaga?fiscal_period_id=${fiscalPeriodId}`}
+              href={`/api/reports/ne-bilaga?period_id=${fiscalPeriodId}&format=sru`}
               prefetch={false}
             >
               <FileDown className="mr-2 h-4 w-4" />
-              Förhandsgranska NE-bilaga
+              Ladda ner NE-bilaga (SRU)
             </Link>
           </Button>
         </CardContent>

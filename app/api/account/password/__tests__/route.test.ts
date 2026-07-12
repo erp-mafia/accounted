@@ -1,15 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
 vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(),
   createServiceClient: vi.fn(),
 }))
 
-import { createClient, createServiceClient } from '@/lib/supabase/server'
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
+}))
+
+import { createServiceClient } from '@/lib/supabase/server'
 import { POST } from '../route'
 
-const mockCreateClient = vi.mocked(createClient)
 const mockCreateServiceClient = vi.mocked(createServiceClient)
 
 type AuthMetadata = Record<string, unknown>
@@ -23,13 +27,18 @@ function mockUserClient(opts: {
     error: opts.updateUserError ?? null,
   })
 
-  mockCreateClient.mockResolvedValue({
-    auth: {
-      getUser: vi.fn().mockResolvedValue({ data: { user: opts.user } }),
-      updateUser,
-    },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const supabase = { auth: { updateUser } } as any
+
+  if (opts.user) {
+    requireAuthMock.mockResolvedValue({ user: opts.user, supabase, error: null })
+  } else {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+  }
 
   return { updateUser }
 }
@@ -131,7 +140,7 @@ describe('POST /api/account/password', () => {
 
       expect(status).toBe(200)
       expect(body.data?.ok).toBe(true)
-      // Did NOT go through the user session — that path would fail with AAL2.
+      // Did NOT go through the user session: that path would fail with AAL2.
       expect(updateUser).not.toHaveBeenCalled()
       // Password set via admin
       expect(passwordSetCall(updateUserById)).toEqual([

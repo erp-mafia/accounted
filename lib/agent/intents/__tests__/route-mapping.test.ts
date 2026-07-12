@@ -37,7 +37,7 @@ describe('routeToIntent', () => {
   })
 
   it('routes /invoices/[id]/credit to invoice.draft with the parent id', () => {
-    // The credit-note form is still an invoice context — same intent, same
+    // The credit-note form is still an invoice context: same intent, same
     // captured entity. The :credit suffix isn't its own intent.
     const out = routeToIntent('/invoices/abc-123/credit')
     expect(out.intentId).toBe('invoice.draft')
@@ -54,7 +54,7 @@ describe('routeToIntent', () => {
   })
 
   it('does NOT route /supplier-invoices/new to supplier_invoice.review (no entity yet)', () => {
-    // There's no invoice to review yet — fall through so the Opus intent
+    // There's no invoice to review yet: fall through so the Opus intent
     // doesn't fire on an empty capture.
     const out = routeToIntent('/supplier-invoices/new')
     expect(out.intentId).toBe('general.help')
@@ -71,7 +71,7 @@ describe('routeToIntent', () => {
     expect(out.contextRef).toBeUndefined()
   })
 
-  it('routes /bookkeeping/year-end to bokslut.step (matches the page button — no two-agents-on-one-page)', () => {
+  it('routes /bookkeeping/year-end to bokslut.step (matches the page button: no two-agents-on-one-page)', () => {
     const out = routeToIntent('/bookkeeping/year-end')
     expect(out.intentId).toBe('bokslut.step')
     expect(out.intentArgs).toEqual({ step_id: null })

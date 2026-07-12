@@ -20,7 +20,7 @@ export function SandboxBanner() {
   return (
     <div className="relative z-50 flex items-center justify-center gap-x-3 gap-y-1 bg-warning px-10 py-2 text-sm text-warning-foreground sm:px-4 flex-wrap">
       <span className="font-medium text-center text-xs sm:text-sm">
-        Sandlådemiljö — AI och externa tjänster är avstängda. Data raderas efter 24h.
+        Sandlådemiljö: AI och externa tjänster är avstängda. Data raderas efter 24h.
       </span>
       <button
         onClick={handleCreateAccount}

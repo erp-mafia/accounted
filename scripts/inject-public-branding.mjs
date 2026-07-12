@@ -12,7 +12,7 @@
  * placeholder survives the build, and docker-entrypoint.sh substitutes the
  * runtime value via sed at container start.
  *
- * public/sw.js is gitignored — the source of truth is the template.
+ * public/sw.js is gitignored: the source of truth is the template.
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'

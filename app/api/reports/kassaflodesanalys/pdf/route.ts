@@ -1,21 +1,11 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
 import { KassaflodesanalysPDF } from '@/lib/reports/kassaflodesanalys-pdf-template'
-import { requireCompanyId } from '@/lib/company/context'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import type { CompanySettings } from '@/types'
 
-export async function GET(request: Request) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const companyId = await requireCompanyId(supabase, user.id)
-
+export const GET = withRouteContext('report.kassaflodesanalys.pdf', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
   const periodId = searchParams.get('period_id')
 
@@ -77,4 +67,4 @@ export async function GET(request: Request) {
       { status: 500 }
     )
   }
-}
+})

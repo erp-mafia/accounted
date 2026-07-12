@@ -7,32 +7,36 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { checkRevenueAccount } from '@/lib/articles/validate-revenue-account'
 import { AccountsNotInChartError, accountsNotInChartResponse } from '@/lib/bookkeeping/errors'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Article } from '@/types'
 
 ensureInitialized()
 
-// GET /api/articles — list the active company's articles. `?include_inactive=1`
+// GET /api/articles: list the active company's articles. `?include_inactive=1`
 // returns soft-deactivated ones too (the register page can show an archive view).
 export const GET = withRouteContext(
   'article.list',
   async (request, ctx) => {
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId } = ctx
 
     const includeInactive = new URL(request.url).searchParams.get('include_inactive') === '1'
 
-    let query = supabase
-      .from('articles')
-      .select('*')
-      .eq('company_id', companyId)
-    if (!includeInactive) query = query.eq('active', true)
-
-    const { data, error } = await query.order('name', { ascending: true })
-
-    if (error) {
-      log.error('article list failed', error)
-      return errorResponse(error, log, { requestId })
-    }
+    // Article registers can exceed PostgREST's silent 1000-row cap (imported
+    // product catalogs), so paginate. The secondary order on id gives the
+    // stable total order .range() paging requires — name alone is not unique.
+    // Errors thrown here surface via the wrapper's canonical envelope.
+    const data = await fetchAllRows(({ from, to }) => {
+      let query = supabase
+        .from('articles')
+        .select('*')
+        .eq('company_id', companyId)
+      if (!includeInactive) query = query.eq('active', true)
+      return query
+        .order('name', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to)
+    })
 
     return NextResponse.json({ data })
   },

@@ -1,8 +1,6 @@
-import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
-import { requireCompanyId } from '@/lib/company/context'
-import { requireWritePermission } from '@/lib/auth/require-write'
+import { withRouteContext } from '@/lib/api/with-route-context'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generateSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
@@ -18,11 +16,14 @@ ensureInitialized()
  *
  * Per BFL: Generated payment file is räkenskapsinformation linked to the
  * salary journal entry. Subject to 7-year retention.
+ *
+ * requireWrite: this GET mutates state (stamps tax_payment_file_generated_at
+ * on the AGI declaration), so it retains the non-viewer role gate the
+ * hand-rolled version enforced.
  */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ period: string }> }
-) {
+export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
+  'tax_payment.payment_file',
+  async (request, { supabase, companyId }, { params }) => {
   const { period } = await params
   const periodMatch = /^(\d{4})-(\d{2})$/.exec(period)
   if (!periodMatch) {
@@ -33,15 +34,6 @@ export async function GET(
   }
   const periodYear = parseInt(periodMatch[1], 10)
   const periodMonth = parseInt(periodMatch[2], 10)
-
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const writeCheck = await requireWritePermission(supabase, user.id)
-  if (!writeCheck.ok) return writeCheck.response
-
-  const companyId = await requireCompanyId(supabase, user.id)
 
   const { data: agi } = await supabase
     .from('agi_declarations')
@@ -145,12 +137,14 @@ export async function GET(
       'Content-Disposition': `attachment; filename="${result.filename}"`,
     },
   })
-}
+  },
+  { requireWrite: true },
+)
 
 /**
  * Tax payment deadline = the 12th of the month *following* the AGI period.
  * (Skatteverket also accepts the 17th in Jan/Aug for turnover ≤40 MSEK, but
- * the conservative date is the 12th — money must be on the Skattekonto by
+ * the conservative date is the 12th: money must be on the Skattekonto by
  * then to avoid kostnadsränta.)
  */
 function computeTaxPaymentDate(periodYear: number, periodMonth: number): string {

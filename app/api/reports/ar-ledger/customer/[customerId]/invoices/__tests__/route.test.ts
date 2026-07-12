@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import { createMockRequest, createMockRouteParams } from '@/tests/helpers'
 
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(),
+const requireAuthMock = vi.fn()
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: (...args: unknown[]) => requireAuthMock(...args),
 }))
 
 vi.mock('@/lib/company/context', () => ({
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
@@ -13,10 +16,7 @@ vi.mock('@/lib/bookkeeping/currency-utils', () => ({
   resolveSekAmount: vi.fn((amount: number) => amount),
 }))
 
-import { createClient } from '@/lib/supabase/server'
 import { GET } from '../route'
-
-const mockCreateClient = vi.mocked(createClient)
 
 interface QueryResult {
   data: unknown
@@ -24,17 +24,11 @@ interface QueryResult {
 }
 
 function buildSupabase(
-  user: { id: string } | null,
   customer: { id: string; name: string } | null,
   invoicesResult: QueryResult,
   entriesResult: QueryResult
 ) {
-  let invoiceCallNum = 0
-  let entryCallNum = 0
   return {
-    auth: {
-      getUser: vi.fn().mockResolvedValue({ data: { user } }),
-    },
     from: vi.fn().mockImplementation((table: string) => {
       if (table === 'customers') {
         return {
@@ -44,7 +38,6 @@ function buildSupabase(
         }
       }
       if (table === 'invoices') {
-        invoiceCallNum += 1
         return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn().mockReturnThis(),
@@ -55,7 +48,6 @@ function buildSupabase(
         }
       }
       // journal_entries
-      entryCallNum += 1
       return {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
@@ -63,8 +55,19 @@ function buildSupabase(
         then: (resolve: (v: QueryResult) => void) => resolve(entriesResult),
       }
     }),
-    _stats: () => ({ invoiceCallNum, entryCallNum }),
   }
+}
+
+function authWith(supabase: unknown) {
+  requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+}
+
+function unauthed() {
+  requireAuthMock.mockResolvedValue({
+    user: null,
+    supabase: {},
+    error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+  })
 }
 
 beforeEach(() => {
@@ -73,9 +76,7 @@ beforeEach(() => {
 
 describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
   it('returns 401 when not authenticated', async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase(null, null, { data: [], error: null }, { data: [], error: null }) as never
-    )
+    unauthed()
     const req = createMockRequest(
       '/api/reports/ar-ledger/customer/cust-1/invoices'
     )
@@ -84,8 +85,8 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
   })
 
   it('returns 404 when customer is unknown', async () => {
-    mockCreateClient.mockResolvedValue(
-      buildSupabase({ id: 'user-1' }, null, { data: [], error: null }, { data: [], error: null }) as never
+    authWith(
+      buildSupabase(null, { data: [], error: null }, { data: [], error: null })
     )
     const req = createMockRequest(
       '/api/reports/ar-ledger/customer/cust-1/invoices'
@@ -118,13 +119,12 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
         source_id: 'inv-1',
       },
     ]
-    mockCreateClient.mockResolvedValue(
+    authWith(
       buildSupabase(
-        { id: 'user-1' },
         { id: 'cust-1', name: 'Acme AB' },
         { data: invoices, error: null },
         { data: entries, error: null }
-      ) as never
+      )
     )
     const req = createMockRequest(
       '/api/reports/ar-ledger/customer/cust-1/invoices'

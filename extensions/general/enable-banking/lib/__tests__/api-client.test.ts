@@ -40,7 +40,7 @@ describe('api-client', () => {
     it('aborts fetch after timeout', async () => {
       fetchSpy.mockImplementation(
         () => new Promise((_, reject) => {
-          // Simulate a hanging request — the AbortController will fire
+          // Simulate a hanging request: the AbortController will fire
           setTimeout(() => reject(new DOMException('Aborted', 'AbortError')), 100)
         })
       )
@@ -84,6 +84,45 @@ describe('api-client', () => {
       const result = await getASPSPs('SE')
       expect(result).toEqual([{ name: 'TestBank', country: 'SE' }])
       expect(fetchSpy).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not retry a 429 whose body signals a daily quota', async () => {
+      // PSD2 unattended consents cap balance calls per DAY (observed body:
+      // "Consent daily limit 4 is exceeded"). A retry a second later cannot
+      // succeed against a daily quota, so it must fail fast.
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      fetchSpy.mockResolvedValueOnce(
+        new Response('{"message":"Consent daily limit 4 is exceeded"}', { status: 429 })
+      )
+
+      await expect(getAccountBalances('acc-1')).rejects.toThrow(
+        'Failed to get account balances (429)'
+      )
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('still retries a 429 without a daily-limit body (transient rate limit)', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      fetchSpy
+        .mockResolvedValueOnce(new Response('Too Many Requests', { status: 429 }))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ balances: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+
+      const result = await getAccountBalances('acc-1')
+      expect(result).toEqual([])
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+
+      warnSpy.mockRestore()
     })
 
     it('does not retry on 400 errors', async () => {
@@ -305,7 +344,7 @@ describe('api-client', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-      // Fresh Response per call — a body can only be read once.
+      // Fresh Response per call: a body can only be read once.
       fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
 
       await expect(
@@ -321,7 +360,7 @@ describe('api-client', () => {
   })
 
   // -------------------------------------------------------------------------
-  // getAllTransactions — same first-page fallbacks via the paginated path
+  // getAllTransactions: same first-page fallbacks via the paginated path
   // -------------------------------------------------------------------------
   describe('getAllTransactions fallbacks', () => {
     const ASPSP_ERROR_BODY =
@@ -390,7 +429,7 @@ describe('api-client', () => {
         ) // page 1 ok, hands back a continuation_key
         .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // page 2 fails
 
-      // A continuation_key is scoped to its window, so page 2 must not narrow —
+      // A continuation_key is scoped to its window, so page 2 must not narrow:
       // it fails fast instead.
       await expect(
         getAllTransactions('acc-1', '2026-02-07', '2026-06-07')
@@ -424,7 +463,7 @@ describe('JWT cache', () => {
       _resetTokenCache: vi.fn(),
     }))
 
-    // The actual cache test is in jwt.ts — we verify the cache function exists
+    // The actual cache test is in jwt.ts: we verify the cache function exists
     const jwt = await import('../jwt')
     expect(typeof jwt._resetTokenCache).toBe('function')
   })

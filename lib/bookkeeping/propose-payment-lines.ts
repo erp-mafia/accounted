@@ -2,7 +2,7 @@
  * Pure function to compute proposed journal entry lines for an invoice payment.
  * Used by the PaymentBookingDialog to pre-fill the editable line grid.
  *
- * No DB or Supabase dependency — all inputs are plain data.
+ * No DB or Supabase dependency: all inputs are plain data.
  */
 import { resolveSekAmount } from './currency-utils'
 import { getRevenueAccount, getOutputVatAccount } from './invoice-entries'
@@ -23,6 +23,14 @@ export interface ProposePaymentLinesInput {
     exchange_rate?: number | null
     vat_treatment: VatTreatment
     items?: InvoiceItem[]
+    /**
+     * Dimensions PR7: the invoice's default bag. Stamped on every proposed
+     * line: the payment dialog always submits its (editable) lines, so the
+     * preview IS the booked entry and must re-propagate the tag like the
+     * no-override generator path does. Per-item bags are not split out here
+     * (the preview groups per rate); users can retag lines in the grid.
+     */
+    default_dimensions?: Record<string, string> | null
   }
   accountingMethod: 'accrual' | 'cash'
   entityType: EntityType
@@ -44,7 +52,7 @@ function toFormAmount(n: number): string {
  * Otherwise the payment clears the receivable (invoice_paid).
  *
  * Shared so the dialog's voucher preview and the route's actual booking always
- * resolve the same series — they must not drift.
+ * resolve the same series: they must not drift.
  */
 export function resolveInvoicePaymentSourceType(opts: {
   invoiceAlreadyBooked: boolean
@@ -65,10 +73,17 @@ export function proposePaymentLines(input: ProposePaymentLinesInput): FormLine[]
   const paymentAccount = input.paymentAccount || '1930'
   const desc = invoice.invoice_number ? `Betalning faktura ${invoice.invoice_number}` : 'Betalning faktura'
 
-  if (accountingMethod === 'accrual') {
-    return proposeAccrualLines(invoice, paymentAccount, desc, exchangeRateDifference)
+  const lines = accountingMethod === 'accrual'
+    ? proposeAccrualLines(invoice, paymentAccount, desc, exchangeRateDifference)
+    : proposeCashLines(invoice, paymentAccount, desc, entityType)
+
+  // Dimensions PR7: re-propagate the invoice default onto every proposed leg
+  // (matches createInvoicePaymentJournalEntry/createInvoiceCashEntry).
+  const bag = invoice.default_dimensions
+  if (bag && Object.keys(bag).length > 0) {
+    return lines.map((line) => ({ ...line, dimensions: { ...bag } }))
   }
-  return proposeCashLines(invoice, paymentAccount, desc, entityType)
+  return lines
 }
 
 function proposeAccrualLines(
@@ -154,7 +169,7 @@ function proposeCashLines(
   }
 
   // Build credit lines per VAT rate group. Free-text / blank rows carry no
-  // amounts and never book — drop them first.
+  // amounts and never book: drop them first.
   const creditLines: FormLine[] = []
   const billableItems = (invoice.items ?? []).filter((item) => item.line_type !== 'text')
 

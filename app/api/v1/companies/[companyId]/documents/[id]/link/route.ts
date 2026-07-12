@@ -11,7 +11,7 @@
  * into the resolved state. The stamp is best-effort: a failure is logged but
  * does not fail the request (the document link is the legally-relevant write).
  *
- * The link is REVERSIBLE — set journal_entry_id back via the dashboard if
+ * The link is REVERSIBLE: set journal_entry_id back via the dashboard if
  * needed (no unlink endpoint in v1 yet to keep the WORM contract tight).
  * Once the journal entry it points at is committed (status='posted'), the
  * document row is effectively immutable per BFL 7 kap.
@@ -53,11 +53,11 @@ registerEndpoint({
   useWhen:
     'A document was uploaded without a journal_entry_id (e.g. bulk import) and you now want to attach it to a posted verifikation. Pass inbox_item_id when the document came from the invoice inbox so the item is marked resolved in one call.',
   doNotUseFor:
-    'Unlinking — no v1 unlink endpoint. The dashboard exposes a manual override; v1 keeps the WORM contract by refusing to revert posted-JE links.',
+    'Unlinking: no v1 unlink endpoint. The dashboard exposes a manual override; v1 keeps the WORM contract by refusing to revert posted-JE links.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'Both the document and the journal_entry_id must belong to the caller\'s company. NOT_FOUND on mismatch (enumeration hardening).',
-    'Re-linking an already-linked document overwrites the previous journal_entry_id — confirm the old target is what you intend to break.',
+    'Re-linking an already-linked document overwrites the previous journal_entry_id: confirm the old target is what you intend to break.',
     'inbox_item_id stamping is best-effort: if the stamp fails the document link still succeeds. Use POST /api/v1/companies/:companyId/inbox-items/:id/stamp to stamp independently.',
   ],
   example: {
@@ -115,7 +115,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Ownership pre-check: document AND target JE must both belong to the
     // caller's company before the link write. Otherwise the row could
     // persist with a cross-tenant journal_entry_id pointer. Capture
-    // `.error` on both — a DB fault must not silently masquerade as a
+    // `.error` on both: a DB fault must not silently masquerade as a
     // NOT_FOUND (round-1 finding).
     const [docRes, jeRes] = await Promise.all([
       ctx.supabase
@@ -164,7 +164,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // WORM guard: if this document is ALREADY linked to a posted JE, refuse
     // the overwrite. BFL 5 kap 5 § + 7 kap require posted räkenskaps-
     // information (incl. the link to underlying documents) to remain
-    // immutable. The pre-check confirms the new target — without this
+    // immutable. The pre-check confirms the new target: without this
     // additional check the caller could silently break the link to an
     // already-posted verifikation.
     if (doc.journal_entry_id && doc.journal_entry_id !== body.journal_entry_id) {

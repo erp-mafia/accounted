@@ -11,7 +11,7 @@ export interface CreateSalaryRunResult {
  *
  * There is no single-statement RPC for this fan-out, so it is not atomic at the
  * DB level. To avoid leaving a half-populated run behind on a mid-loop failure,
- * we compensating-delete the parent run on any error — FK cascade
+ * we compensating-delete the parent run on any error: FK cascade
  * (salary_run_employees → salary_runs, salary_line_items → salary_run_employees,
  * both ON DELETE CASCADE) cleans up any children already inserted.
  *
@@ -21,7 +21,13 @@ export async function createSalaryRunWithEmployees(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  params: { periodYear: number; periodMonth: number; paymentDate: string },
+  params: {
+    periodYear: number
+    periodMonth: number
+    paymentDate: string
+    voucherSeries?: string
+    notes?: string
+  },
 ): Promise<CreateSalaryRunResult> {
   const { data: run, error: runError } = await supabase
     .from('salary_runs')
@@ -31,6 +37,9 @@ export async function createSalaryRunWithEmployees(
       period_year: params.periodYear,
       period_month: params.periodMonth,
       payment_date: params.paymentDate,
+      // Omitted → DB defaults ('A' / NULL) so the MCP commit path is unchanged.
+      ...(params.voucherSeries ? { voucher_series: params.voucherSeries } : {}),
+      ...(params.notes ? { notes: params.notes } : {}),
     })
     .select()
     .single()
@@ -49,7 +58,7 @@ export async function createSalaryRunWithEmployees(
       .eq('company_id', companyId)
       .eq('is_active', true)
 
-    // Pay period bounds (inclusive) — used to skip employees whose employment
+    // Pay period bounds (inclusive): used to skip employees whose employment
     // does not overlap the run. employment_start is NOT NULL on employees;
     // employment_end is nullable for ongoing employments.
     const periodStart = `${params.periodYear}-${String(params.periodMonth).padStart(2, '0')}-01`
@@ -107,7 +116,7 @@ export async function createSalaryRunWithEmployees(
 
     return { run: run as Record<string, unknown>, employeeCount: eligibleEmployees.length }
   } catch (err) {
-    // Compensating delete — never leave a half-populated run. Cascade removes
+    // Compensating delete: never leave a half-populated run. Cascade removes
     // any salary_run_employees / salary_line_items already inserted.
     await supabase.from('salary_runs').delete().eq('id', run.id).eq('company_id', companyId)
     throw err

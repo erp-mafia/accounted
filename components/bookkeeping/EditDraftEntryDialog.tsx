@@ -22,7 +22,7 @@ interface Props {
  * Edit a DRAFT verifikat. Wraps JournalEntryForm in edit mode, pre-filled from
  * the draft's header + lines; the form PATCHes the entry in place and it stays
  * a draft (the user posts it separately). Only ever opened for status==='draft'
- * entries — the engine + DB triggers reject edits on committed entries anyway.
+ * entries: the engine + DB triggers reject edits on committed entries anyway.
  */
 export default function EditDraftEntryDialog({ entry, open, onOpenChange, onUpdated }: Props) {
   const t = useTranslations('bookkeeping')
@@ -35,6 +35,10 @@ export default function EditDraftEntryDialog({ entry, open, onOpenChange, onUpda
       debit_amount: Number(l.debit_amount) > 0 ? String(l.debit_amount) : '',
       credit_amount: Number(l.credit_amount) > 0 ? String(l.credit_amount) : '',
       line_description: l.line_description || '',
+      // Carry the line's dimensions into the form: the PATCH replaces all
+      // lines, so omitting this would silently strip existing tags.
+      dimensions:
+        l.dimensions && Object.keys(l.dimensions).length > 0 ? { ...l.dimensions } : undefined,
     }))
 
   return (

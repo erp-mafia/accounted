@@ -13,7 +13,7 @@
  *      Hard fail before any state changes.
  *   2. Customer has no email → 400 INVOICE_SEND_NO_CUSTOMER_EMAIL.
  *   3. Company settings missing → 404 INVOICE_SEND_COMPANY_SETTINGS_MISSING.
- *   4. Cancelled invoices are rejected — sending one would silently
+ *   4. Cancelled invoices are rejected: sending one would silently
  *      re-activate it (the status flip below has no race guard tightening
  *      `cancelled`). Returns 400 INVOICE_SEND_CANCELLED.
  *   5. Preflight PDF render (with a placeholder F-PREVIEW number) validates
@@ -21,6 +21,10 @@
  *      500 INVOICE_SEND_PDF_RENDER_FAILED, no number burned.
  *   6. ensureInvoiceNumber allocates the F-series number atomically.
  *      Fail → 500 INVOICE_SEND_NUMBER_ASSIGN_FAILED.
+ *   6b. Auto-create an online payment link (extension-provided, e.g. Stripe)
+ *      and persist it on the invoice row. Best-effort: a provider or persist
+ *      failure never blocks the send; it surfaces as a PAYMENT_LINK_FAILED
+ *      warning on the response once the email is delivered.
  *   7. Final PDF render with the real number.
  *   8. Email send via Resend (the email extension). Fail → 502
  *      INVOICE_SEND_PROVIDER_FAILED. The number IS consumed at this point;
@@ -30,8 +34,8 @@
  *      (accrual + real invoice), PDF archival via uploadDocument,
  *      invoice.sent event emission.
  *
- * Idempotent (mandatory Idempotency-Key). Dry-runnable — dry-run goes
- * through steps 1–5 (validation + preflight PDF) without allocating a
+ * Idempotent (mandatory Idempotency-Key). Dry-runnable: dry-run goes
+ * through steps 1-5 (validation + preflight PDF) without allocating a
  * number, sending email, or mutating state.
  */
 
@@ -43,7 +47,8 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
-import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { prepareInvoicePdfRender, buildSwishQrDataUrl, buildPaymentLinkQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import { applyPaymentLinkToInvoice } from '@/lib/extensions/payment-links'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInvoiceEmailHtml,
@@ -57,10 +62,8 @@ import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
-
-const INVOICE_SEND_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, converted_from_id, paid_at, paid_amount, remaining_amount, created_at, updated_at'
 
 const InvoiceSendResponse = z.object({
   id: z.string().uuid(),
@@ -89,9 +92,9 @@ registerEndpoint({
     'Re-sending an already-sent invoice (returns 409 INVOICE_UPDATE_NOT_DRAFT). Sending a delivery note (no F-series lifecycle). Sending a credit note (use the :credit endpoint to issue the kreditfaktura; subsequent re-send of the credit note via :mark-sent is the supported path).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'Email service must be configured — without RESEND_API_KEY + RESEND_FROM_EMAIL the endpoint returns 503 INVOICE_SEND_EMAIL_NOT_CONFIGURED.',
+    'Email service must be configured: without RESEND_API_KEY + RESEND_FROM_EMAIL the endpoint returns 503 INVOICE_SEND_EMAIL_NOT_CONFIGURED.',
     'Customer must have an email address. 400 INVOICE_SEND_NO_CUSTOMER_EMAIL otherwise.',
-    'A cancelled invoice is rejected (400 INVOICE_SEND_CANCELLED) — its F-series number is preserved for compliance but the document is not a valid faktura.',
+    'A cancelled invoice is rejected (400 INVOICE_SEND_CANCELLED): its F-series number is preserved for compliance but the document is not a valid faktura.',
     'Email failure before the status flip leaves the F-series number consumed but the invoice in `draft` status. Same orphan window as :mark-sent (architecturally tracked, matches internal route).',
     'After the email succeeds, journal-entry/archive/event failures become warnings on the response; the invoice IS marked sent regardless.',
   ],
@@ -139,7 +142,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Sandbox demo never sends a real email — guard the whole pipeline
+    // Sandbox demo never sends a real email: guard the whole pipeline
     // before any number is allocated or PDF is rendered.
     const blocked = await guardSandbox(ctx.supabase, ctx.companyId!)
     if (blocked) return blocked
@@ -155,11 +158,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Fetch invoice + customer + items.
+    // Fetch invoice + customer + items. Uses the shared full projections so
+    // the row feeding the PDF/email/journal entry cannot drift from what GET
+    // returns: an earlier hand-rolled list here silently dropped
+    // deduction_total, which made v1-sent ROT/RUT invoices overstate
+    // "Att betala" (default_dimensions must also stay: createInvoiceJournalEntry
+    // reads the bag off this row).
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(
-        `${INVOICE_SEND_RESPONSE_COLUMNS}, customer:customers(id, name, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, revenue_account)`,
+        `${INVOICE_FULL_COLUMNS}, customer:customers(id, name, customer_number, email, customer_type, country, address_line1, address_line2, postal_code, city, vat_number), items:invoice_items(${INVOICE_ITEM_FULL_COLUMNS})`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
@@ -188,7 +196,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Reject already-sent — same contract as :mark-sent. Re-send is not a
+    // Reject already-sent: same contract as :mark-sent. Re-send is not a
     // supported v1 operation; use the dashboard or a fresh credit-and-reissue.
     if (typed.status !== 'draft') {
       return v1ErrorResponseFromCode('INVOICE_UPDATE_NOT_DRAFT', ctx.log, {
@@ -197,7 +205,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Reject delivery notes — they have a different (D-series) lifecycle.
+    // Reject delivery notes: they have a different (D-series) lifecycle.
     if (typed.document_type === 'delivery_note') {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
@@ -209,12 +217,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // Reject credit notes. `:credit` creates them atomically in 'sent' state
-    // with their own number — there is no v1 path that produces a draft
+    // with their own number: there is no v1 path that produces a draft
     // credit note, so reaching :send with credited_invoice_id set is either
     // a misuse or a manual DB edit. Allowing it would give a credit note
-    // an F-series number; ML 17 kap 22–23§ require (a) a distinct
+    // an F-series number; ML 17 kap 22-23§ require (a) a distinct
     // kreditfaktura series and (b) an explicit back-reference to the
-    // original invoice's löpnummer — neither enforced by this route.
+    // original invoice's löpnummer: neither enforced by this route.
     // Any future "send a credit note" v1 path MUST honor both.
     if (typed.credited_invoice_id) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -247,10 +255,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // Step 3: company settings. The whole CompanySettings shape is passed to
-    // the InvoicePDF template — header info, bank details, contact, address,
+    // the InvoicePDF template: header info, bank details, contact, address,
     // entity type. `select('*')` is intentional: CompanySettings is a flat
     // owner-facing config object with no sensitive columns today (no API
-    // tokens, no billing data — those live in scoped tables). If a future
+    // tokens, no billing data: those live in scoped tables). If a future
     // migration adds a sensitive column, the right fix is to put it in a
     // separate table, not retrofit a column allow-list here.
     const { data: company, error: companyErr } = await ctx.supabase
@@ -333,7 +341,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Step 7: final PDF render with the assigned number. typed.invoice_number
     // was mutated by ensureInvoiceNumber. Re-read to be safe. A re-read
-    // failure (transient connection error) is non-fatal — `typed.invoice_number`
+    // failure (transient connection error) is non-fatal: `typed.invoice_number`
     // was just written by the RPC in step 6, so it's the authoritative
     // in-memory value. Log a warning and fall back.
     const { data: numbered, error: reReadErr } = await ctx.supabase
@@ -354,10 +362,30 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const finalInvoiceNumber =
       (numbered as { invoice_number?: string } | null)?.invoice_number ?? typed.invoice_number
+
+    // Step 6b: auto-create an online payment link (extension-provided, e.g.
+    // Stripe) now that the number exists, so the email button and PDF QR
+    // carry it. Failure degrades to a PAYMENT_LINK_FAILED warning: the
+    // faktura is legally valid without a link. The helper mirrors the link
+    // onto the in-memory row only after a successful persist so a link on
+    // the PDF can always be matched back to the row.
+    const { failure: paymentLinkFailure } = await applyPaymentLinkToInvoice(
+      ctx.supabase,
+      ctx.companyId!,
+      ctx.userId,
+      typed as Invoice,
+      ctx.log,
+      {
+        invoiceNumber: finalInvoiceNumber,
+        logPrefix: 'invoices.send: ',
+        logContext: { invoiceId },
+      },
+    )
+
     // Also override `status` to 'sent' on the in-memory copy. The actual DB
     // flip happens at step 9a (after email delivery), but if we render with
     // the stale 'draft' status the customer receives a PDF stamped
-    // "UTKAST – inte en giltig faktura".
+    // "UTKAST: inte en giltig faktura".
     const renderableInvoice: Invoice = {
       ...(typed as Invoice),
       invoice_number: finalInvoiceNumber,
@@ -368,6 +396,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     try {
       const { branding, company: renderCompany } = await prepareInvoicePdfRender(settings)
       const swishQrDataUrl = await buildSwishQrDataUrl(settings, renderableInvoice)
+      const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: renderableInvoice,
@@ -377,6 +406,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           originalInvoiceNumber,
           branding,
           swishQrDataUrl,
+          paymentLinkQrDataUrl,
         }),
       )
     } catch (err) {
@@ -432,10 +462,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Email has been delivered. Subsequent failures surface as warnings.
     const warnings: { code: string; message: string }[] = []
 
+    if (paymentLinkFailure) {
+      warnings.push({ code: 'PAYMENT_LINK_FAILED', message: paymentLinkFailure })
+    }
+
     // Step 9a: status flip to 'sent'. The `.eq('status', 'draft')` is an
     // optimistic-lock guard against a concurrent state change between fetch
     // and write. PostgREST returns `{ error: null }` for 0-row updates, so
-    // we MUST `.select('id')` and check the row count — a silent zero-row
+    // we MUST `.select('id')` and check the row count: a silent zero-row
     // miss would leave the DB in 'draft' while the response claims 'sent'
     // and the email is already gone.
     let statusFlipped = true
@@ -460,7 +494,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       warnings.push({
         code: 'STATUS_UPDATE_FAILED',
         message:
-          'Email delivered but the invoice could not be marked as sent. Reconcile manually — the DB row may still be in draft.',
+          'Email delivered but the invoice could not be marked as sent. Reconcile manually: the DB row may still be in draft.',
       })
     }
 

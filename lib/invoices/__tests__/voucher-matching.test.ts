@@ -11,7 +11,7 @@ import {
 import { eventBus } from '@/lib/events/bus'
 
 // ============================================================
-// validateVoucherForInvoiceLink — happy path + reject codes
+// validateVoucherForInvoiceLink: happy path + reject codes
 // ============================================================
 
 describe('validateVoucherForInvoiceLink', () => {
@@ -28,7 +28,7 @@ describe('validateVoucherForInvoiceLink', () => {
     const invoice = setup(
       makeInvoice({ remaining_amount: 0, paid_amount: 1000, total: 1000, currency: 'SEK' }),
     )
-    enqueue({ data: null }) // unused — we short-circuit before querying
+    enqueue({ data: null }) // unused: we short-circuit before querying
     const result = await validateVoucherForInvoiceLink(
       supabase as never,
       'company-1',
@@ -173,7 +173,7 @@ describe('validateVoucherForInvoiceLink', () => {
     })
     enqueue({
       data: [
-        // An AR-clearing voucher (1510 credit) — valid on accrual, but on cash
+        // An AR-clearing voucher (1510 credit): valid on accrual, but on cash
         // there is no 19xx debit so it must not match.
         { account_number: '1510', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
         { account_number: '3001', debit_amount: 1000, credit_amount: 0, currency: 'SEK' },
@@ -365,7 +365,7 @@ describe('validateVoucherForInvoiceLink', () => {
 })
 
 // ============================================================
-// findMatchingVouchersForInvoice — empty + ranking smoke test
+// findMatchingVouchersForInvoice: empty + ranking smoke test
 // ============================================================
 
 describe('findMatchingVouchersForInvoice', () => {
@@ -450,7 +450,7 @@ describe('findMatchingVouchersForInvoice', () => {
 })
 
 // ============================================================
-// linkInvoiceToVoucher — outcome shape & event emission
+// linkInvoiceToVoucher: outcome shape & event emission
 // ============================================================
 
 describe('linkInvoiceToVoucher', () => {
@@ -460,7 +460,7 @@ describe('linkInvoiceToVoucher', () => {
   })
 
   // linkInvoiceToVoucher now delegates validation + writes to the atomic
-  // link_invoice_to_voucher RPC (audit C2) — the wrapper's job is calling it
+  // link_invoice_to_voucher RPC (audit C2): the wrapper's job is calling it
   // with the right args and mapping the jsonb result/transport errors through.
   // Guard behaviour itself is covered by voucher-matching.pg.test.ts against
   // the real RPC.

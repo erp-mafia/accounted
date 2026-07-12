@@ -132,13 +132,15 @@ describe('POST /api/transactions/bulk-book', () => {
       error: null,
     })
 
-    // applyTemplate stub — return a balanced 3-line set per call.
+    // applyTemplate stub: return a balanced 3-line set per call.
     vi.mocked(applyTemplate).mockImplementation((_lines, total) => [
       { account_number: '1930', debit_amount: String(total), credit_amount: '', line_description: 'Bank' },
       { account_number: '3001', debit_amount: '', credit_amount: String(total * 0.8), line_description: 'Försäljning' },
       { account_number: '2611', debit_amount: '', credit_amount: String(total * 0.2), line_description: 'Utg moms 25%' },
     ])
 
+    // Account dimension rules pre-check (PR10) — none configured.
+    enqueue({ data: [], error: null })
     // RPC returns happy path.
     enqueue({
       data: {

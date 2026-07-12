@@ -6,12 +6,12 @@
  *   2. Resolve the company logo into a format @react-pdf/renderer can draw.
  *   3. Build the optional Swish payment QR.
  *
- * Why the logo needs resolving (issue #772 — "Logotyp kommer inte med på
+ * Why the logo needs resolving (issue #772: "Logotyp kommer inte med på
  * fakturor"): @react-pdf/renderer's <Image> only decodes JPG and PNG, but the
  * logo upload route and the `logos` storage bucket both accept SVG and WebP.
  * When the logo is an SVG/WebP, @react-pdf fails to decode it and *silently*
- * swallows the error (a console.warn inside a try/catch in its fetchImage step)
- * — so the invoice renders fine but with no logo, and nothing surfaces.
+ * swallows the error (a console.warn inside a try/catch in its fetchImage step):
+ * so the invoice renders fine but with no logo, and nothing surfaces.
  *
  * Fix: fetch the stored logo and re-encode it to a PNG data URL via sharp, then
  * hand the template a company whose `logo_url` is that data URL. This makes the
@@ -27,6 +27,7 @@ import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('invoice.swish-qr')
+const paymentLinkLog = createLogger('invoice.payment-link-qr')
 
 export interface InvoicePdfRenderExtras {
   branding: InvoiceBranding
@@ -39,8 +40,8 @@ export interface InvoicePdfRenderExtras {
   company: CompanySettings
 }
 
-// A company's logo is reused across every invoice render — and twice per send
-// (preflight + final render), and once per invoice in recurring/batch loops —
+// A company's logo is reused across every invoice render, and twice per send
+// (preflight + final render), and once per invoice in recurring/batch loops:
 // so cache the re-encoded result keyed by logo URL. Only successes are cached
 // (with a short TTL); a transient fetch blip is retried on the next render
 // rather than sticking around as a logo-less invoice. Bounded so a long-lived
@@ -56,10 +57,10 @@ const LOGO_MAX_PX = 600
 
 // Bound the logo fetch so a slow or oversized response can't hang or balloon an
 // invoice render. logo_url is currently always a Supabase `logos`-bucket public
-// URL (set only by the upload route), so SSRF is not reachable today — these
+// URL (set only by the upload route), so SSRF is not reachable today: these
 // caps are defense-in-depth for that invariant plus plain robustness.
 const LOGO_FETCH_TIMEOUT_MS = 5_000
-const LOGO_MAX_BYTES = 5 * 1024 * 1024 // 5 MB — generous for a logo, bounds memory
+const LOGO_MAX_BYTES = 5 * 1024 * 1024 // 5 MB: generous for a logo, bounds memory
 
 // Coalesce concurrent renders of the same logo (preflight + final on a send, and
 // every invoice in a recurring/batch loop) onto one in-flight fetch+encode
@@ -69,12 +70,12 @@ const logoInflight = new Map<string, Promise<string | null>>()
 /**
  * Fetch a stored logo and re-encode it to a PNG data URL. Returns null on any
  * failure (network error, timeout, oversized payload, unreadable image, sharp
- * unavailable) — the caller then keeps the original URL, which @react-pdf can
+ * unavailable): the caller then keeps the original URL, which @react-pdf can
  * still fetch directly for PNG/JPEG logos. Concurrent calls for the same URL
  * share a single in-flight request.
  */
 async function resolveLogoDataUrl(logoUrl: string): Promise<string | null> {
-  // Already embedded — nothing to fetch or convert.
+  // Already embedded: nothing to fetch or convert.
   if (logoUrl.startsWith('data:')) return logoUrl
 
   const cached = logoDataUrlCache.get(logoUrl)
@@ -159,18 +160,41 @@ export async function prepareInvoicePdfRender(
  * Build the Swish payment QR for an invoice as a PNG data URL, or null when:
  * Swish display is off, there's no/invalid Swish number, the invoice isn't in
  * SEK (Swish is SEK-only), or the amount is not positive. Generated locally with
- * the `qrcode` lib — no call to any Swish API. Pass the result to InvoicePDF's
+ * the `qrcode` lib: no call to any Swish API. Pass the result to InvoicePDF's
  * `swishQrDataUrl` prop; the template gates rendering on the same payment box
  * that already shows the Swish number.
  */
+/**
+ * Build the payment-link QR for an invoice as a PNG data URL, or null when the
+ * invoice carries no payment_link_url or it isn't a payable document (credit
+ * notes, proformas and delivery notes show no payment box). The URL was
+ * https-validated at write time (lib/api/schemas.ts); the QR simply encodes it
+ * locally with the `qrcode` lib: no call to any payment provider.
+ */
+export async function buildPaymentLinkQrDataUrl(invoice: Invoice): Promise<string | null> {
+  const url = invoice.payment_link_url?.trim()
+  if (!url) return null
+  const docType = invoice.document_type || 'invoice'
+  if (docType !== 'invoice' || invoice.credited_invoice_id) return null
+  try {
+    return await QRCode.toDataURL(url, { margin: 1, width: 240, errorCorrectionLevel: 'M' })
+  } catch (err) {
+    paymentLinkLog.warn('payment link QR generation failed', {
+      invoiceId: invoice.id,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+}
+
 export async function buildSwishQrDataUrl(
   company: CompanySettings,
   invoice: Invoice,
 ): Promise<string | null> {
-  // Swish on invoices is "coming soon" — gated off in pdf-template. Bail before
+  // Swish on invoices is "coming soon": gated off in pdf-template. Bail before
   // any work while the feature is disabled.
   if (!SHOW_SWISH_ON_INVOICE) return null
-  // Swish display off is the normal "no QR" case — stay quiet. Every other
+  // Swish display off is the normal "no QR" case: stay quiet. Every other
   // skip is logged so a missing QR is diagnosable instead of silent.
   if (!(company.invoice_show_swish ?? false)) return null
   if ((invoice.currency ?? 'SEK') !== 'SEK') {

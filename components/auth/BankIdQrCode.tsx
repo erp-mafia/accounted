@@ -56,7 +56,7 @@ export function BankIdQrCode({ qrStartToken, qrStartSecret }: BankIdQrCodeProps)
       })
       setSvgData(svg)
     } catch {
-      // Silently fail — next tick will retry
+      // Silently fail: next tick will retry
     }
 
     elapsedRef.current++

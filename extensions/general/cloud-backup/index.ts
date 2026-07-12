@@ -1,5 +1,5 @@
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import {
   buildAuthorizationUrl,
   exchangeCodeForTokens,
@@ -19,6 +19,7 @@ import {
   LAST_SYNC_KEY,
   SCHEDULE_KEY,
 } from './lib/sync'
+import { stockholmHourToUtcHour } from './lib/schedule'
 import type {
   CloudBackupStatus,
   GoogleDriveConnection,
@@ -38,7 +39,8 @@ async function loadConnection(
 
 const DEFAULT_SCHEDULE: GoogleDriveSchedule = {
   enabled: false,
-  hour_utc: 3, // 05:00 Swedish summer time / 04:00 winter — low-traffic default
+  hour_utc: 3,
+  hour_local: 5, // 05:00 Swedish time, DST-stable: low-traffic default
   last_auto_sync_at: null,
   last_auto_sync_status: null,
   last_auto_sync_error: null,
@@ -53,7 +55,7 @@ export const cloudBackupExtension: Extension = {
   // The canonical entry point for cloud-backup is now `/import#cloud-backup`
   // (under "Importera/Exportera"). `/settings/backup` is preserved as a
   // permanent redirect to that anchor so legacy bookmarks and OAuth callbacks
-  // keep working — see `app/(dashboard)/settings/backup/page.tsx`.
+  // keep working: see `app/(dashboard)/settings/backup/page.tsx`.
   settingsPanel: {
     label: 'Molnsynkronisering',
     path: '/settings/backup',
@@ -128,7 +130,40 @@ export const cloudBackupExtension: Extension = {
             company_folder_id: null,
           }
           await ctx.settings.set(CONNECTION_KEY, connection)
-          return redirect('connected')
+
+          // First-time connections get daily auto-sync on by default: a
+          // backup that defaults to off protects nobody. Reconnects keep
+          // whatever schedule the user had.
+          const existingSchedule =
+            await ctx.settings.get<GoogleDriveSchedule>(SCHEDULE_KEY)
+          const firstConnect = !existingSchedule
+          if (firstConnect) {
+            await ctx.settings.set(SCHEDULE_KEY, {
+              ...DEFAULT_SCHEDULE,
+              enabled: true,
+            })
+          }
+
+          // Kick off the first backup after the redirect response is sent, so
+          // the user lands back on the card immediately while the archive
+          // builds in the background.
+          const syncOrigin = process.env.NEXT_PUBLIC_APP_URL || origin
+          after(async () => {
+            try {
+              await performSync({
+                supabase: ctx.supabase,
+                companyId: ctx.companyId,
+                userId: ctx.userId,
+                origin: syncOrigin,
+                includeDocuments: true,
+                allowDocumentFallback: true,
+              })
+            } catch (err) {
+              ctx.log.error('initial sync after connect failed', err)
+            }
+          })
+
+          return redirect(firstConnect ? 'connected_first' : 'connected')
         } catch (err) {
           ctx.log.error('oauth callback failed', err)
           return redirect(
@@ -180,6 +215,7 @@ export const cloudBackupExtension: Extension = {
         const schedule = await ctx.settings.get<GoogleDriveSchedule>(SCHEDULE_KEY)
         const status: CloudBackupStatus = {
           connected: !!connection,
+          needs_reauth: connection?.status === 'needs_reauth',
           account_email: connection?.account_email ?? null,
           connected_at: connection?.connected_at ?? null,
           last_sync: lastSync ?? null,
@@ -201,8 +237,9 @@ export const cloudBackupExtension: Extension = {
       },
     },
 
-    // Update the auto-sync schedule. Preserves `last_auto_sync_*` fields the
-    // cron writes — those are not user-editable.
+    // Update the auto-sync schedule. Preserves the fields the cron writes
+    // (`last_auto_sync_*`, failure counter, alert throttle): those are not
+    // user-editable.
     {
       method: 'PUT',
       path: '/schedule',
@@ -211,24 +248,38 @@ export const cloudBackupExtension: Extension = {
         try {
           const body = (await request.json()) as {
             enabled?: boolean
+            hour_local?: number
             hour_utc?: number
           }
           if (typeof body.enabled !== 'boolean') {
             return jsonError('enabled must be a boolean', 400)
           }
-          if (
-            typeof body.hour_utc !== 'number' ||
-            !Number.isInteger(body.hour_utc) ||
-            body.hour_utc < 0 ||
-            body.hour_utc > 23
-          ) {
-            return jsonError('hour_utc must be an integer between 0 and 23', 400)
+          const validHour = (h: unknown): h is number =>
+            typeof h === 'number' && Number.isInteger(h) && h >= 0 && h <= 23
+
+          let hourLocal: number | undefined
+          let hourUtc: number
+          if (validHour(body.hour_local)) {
+            // Preferred: Stockholm wall-clock hour, DST-stable. hour_utc is
+            // mirrored (today's offset) so legacy readers keep a sane value.
+            hourLocal = body.hour_local
+            hourUtc = stockholmHourToUtcHour(body.hour_local)
+          } else if (validHour(body.hour_utc)) {
+            // Legacy UTC-only request: leave hourLocal undefined so any
+            // stored hour_local is cleared below. The scheduler prefers
+            // hour_local, so keeping a stale value would make the schedule
+            // ignore the requested UTC hour.
+            hourUtc = body.hour_utc
+          } else {
+            return jsonError('hour_local must be an integer between 0 and 23', 400)
           }
 
           const existing = await ctx.settings.get<GoogleDriveSchedule>(SCHEDULE_KEY)
           const updated: GoogleDriveSchedule = {
+            ...existing,
             enabled: body.enabled,
-            hour_utc: body.hour_utc,
+            hour_utc: hourUtc,
+            hour_local: hourLocal,
             last_auto_sync_at: existing?.last_auto_sync_at ?? null,
             last_auto_sync_status: existing?.last_auto_sync_status ?? null,
             last_auto_sync_error: existing?.last_auto_sync_error ?? null,
@@ -245,7 +296,7 @@ export const cloudBackupExtension: Extension = {
       },
     },
 
-    // Generate an archive and upload it to Drive. Returns the Drive file info.
+    // Generate the archive set and sync it to Drive. Returns the sync summary.
     {
       method: 'POST',
       path: '/sync',
@@ -254,6 +305,7 @@ export const cloudBackupExtension: Extension = {
         try {
           const body = (await request.json().catch(() => ({}))) as {
             include_documents?: boolean
+            allow_document_fallback?: boolean
           }
           const origin =
             process.env.NEXT_PUBLIC_APP_URL || new URL(request.url).origin
@@ -263,11 +315,15 @@ export const cloudBackupExtension: Extension = {
             userId: ctx.userId,
             origin,
             includeDocuments: body.include_documents !== false,
+            allowDocumentFallback: body.allow_document_fallback === true,
           })
 
           if (!result.ok) {
             if (result.reason === 'not_connected') {
               return jsonError('not_connected', 400)
+            }
+            if (result.reason === 'needs_reauth') {
+              return jsonError('needs_reauth', 400)
             }
             if (result.reason === 'archive_too_large') {
               return NextResponse.json(
@@ -286,6 +342,8 @@ export const cloudBackupExtension: Extension = {
             data: {
               ...result.lastSync,
               web_view_link: result.webViewLink,
+              uploaded_count: result.uploadedCount,
+              skipped_count: result.skippedCount,
             },
           })
         } catch (err) {

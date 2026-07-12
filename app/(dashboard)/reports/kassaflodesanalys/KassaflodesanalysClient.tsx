@@ -32,7 +32,7 @@ interface CashRowProps {
 
 function CashRow({ label, amount }: CashRowProps) {
   return (
-    <div className="flex items-center justify-between py-1.5 text-sm">
+    <div className="flex items-center justify-between py-1 text-sm">
       <span className="text-foreground">{label}</span>
       <span className="tabular-nums text-right">{formatAmount(amount)}</span>
     </div>
@@ -96,9 +96,9 @@ export function KassaflodesanalysClient() {
     <div className="space-y-8">
       <Link
         href="/reports"
-        className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
       >
-        <ArrowLeft className="h-3.5 w-3.5" />
+        <ArrowLeft className="h-4 w-4" />
         Rapporter
       </Link>
       <PageHeader title="Kassaflödesanalys" />
@@ -159,13 +159,13 @@ export function KassaflodesanalysClient() {
           <Skeleton className="h-32" />
         </div>
       ) : error ? (
-        <Card className="border-destructive/40">
+        <Card className="border-destructive">
           <CardContent className="p-6 text-sm text-destructive">{error}</CardContent>
         </Card>
       ) : report ? (
         <div className="space-y-6">
           <p className="text-sm text-muted-foreground">
-            Period: {formatDate(report.period_start)} – {formatDate(report.period_end)}
+            Period: {formatDate(report.period_start)} till {formatDate(report.period_end)}
           </p>
 
           {/* Section 1: Löpande verksamhet */}
@@ -265,7 +265,7 @@ export function KassaflodesanalysClient() {
           {/* Total */}
           <Card>
             <CardContent className="p-6">
-              <div className="flex items-center justify-between text-base font-medium">
+              <div className="flex items-center justify-between">
                 <span className="font-display text-lg">Årets kassaflöde</span>
                 <span className="font-display text-lg tabular-nums">
                   {formatAmount(report.total_cash_flow)}
@@ -278,8 +278,8 @@ export function KassaflodesanalysClient() {
           <Card
             className={
               report.reconciliation.is_reconciled
-                ? 'border-success/40 bg-success/5'
-                : 'border-destructive/60 bg-destructive/5'
+                ? 'border-border bg-muted/30'
+                : 'border-destructive'
             }
           >
             <CardContent className="p-6 space-y-3">
@@ -291,8 +291,8 @@ export function KassaflodesanalysClient() {
                 )}
                 <span className="font-medium">
                   {report.reconciliation.is_reconciled
-                    ? 'Avstämning OK — kassaflödet stämmer med 19xx'
-                    : 'Avstämning misslyckades — kontrollera bokföringen'}
+                    ? 'Avstämning OK: kassaflödet stämmer med 19xx'
+                    : 'Avstämning misslyckades: kontrollera bokföringen'}
                 </span>
               </div>
               <div className="space-y-1 text-sm">
@@ -313,7 +313,7 @@ export function KassaflodesanalysClient() {
                   amount={report.reconciliation.delta_calculated}
                 />
                 {!report.reconciliation.is_reconciled && (
-                  <div className="flex items-center justify-between border-t border-destructive/40 pt-2 mt-2 text-sm font-medium text-destructive">
+                  <div className="flex items-center justify-between border-t border-destructive pt-2 mt-2 text-sm font-medium text-destructive">
                     <span>Avvikelse</span>
                     <span className="tabular-nums text-right">
                       {formatAmount(report.reconciliation.mismatch_amount)}

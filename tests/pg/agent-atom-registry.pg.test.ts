@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { seedCompany } from '@/tests/pg/fixtures'
 import { withUserContext } from '@/tests/pg/setup'
 
-describe('agent_atom_registry.pg — seed + RLS', () => {
+describe('agent_atom_registry.pg: seed + RLS', () => {
   it('seed migration populated active atoms with non-null bodies and no swarm-* ids', async () => {
     const { userId } = await seedCompany()
     const rows = await withUserContext(userId, async (client) => {
@@ -14,7 +14,7 @@ describe('agent_atom_registry.pg — seed + RLS', () => {
 
     // The generated seed migration (…_seed_agent_atom_bodies.sql) runs during replay.
     expect(rows.length).toBeGreaterThan(0)
-    // Every active atom has a real body inlined — the production read path depends
+    // Every active atom has a real body inlined: the production read path depends
     // on this (no disk fallback in prod).
     for (const r of rows) {
       expect(r.body, `atom ${r.id} body should be non-empty`).toBeTruthy()
@@ -82,7 +82,7 @@ describe('agent_atom_registry.pg — seed + RLS', () => {
       )
       expect(sel.rows[0]!.n).toBeGreaterThan(0)
 
-      // No INSERT policy for authenticated — the catalog ships via service-role
+      // No INSERT policy for authenticated: the catalog ships via service-role
       // migrations only.
       await expect(
         client.query(

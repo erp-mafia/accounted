@@ -52,7 +52,7 @@ export default function BankFileResultStep({
               <p className="font-medium text-destructive">Databasfel</p>
               <p className="mt-1 font-mono text-xs text-muted-foreground break-all">
                 {result.first_error.message}
-                {result.first_error.details ? ` — ${result.first_error.details}` : ''}
+                {result.first_error.details ? `: ${result.first_error.details}` : ''}
                 {result.first_error.code ? ` (${result.first_error.code})` : ''}
               </p>
             </div>

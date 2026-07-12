@@ -1,14 +1,14 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL } from '@/lib/agent/composer/client'
 
-// kpi.explain — "Förklara siffran" on a KPI card / nyckeltal.
+// kpi.explain: "Förklara siffran" on a KPI card / nyckeltal.
 //
 // The user sees a number ("rörelsemarginal 12 %") and wants to know what
 // drove it, how it compares to last period, and whether it's healthy for
 // their type of business. The agent reads the trial balance / income
 // statement, surfaces the underlying accounts, and contextualizes.
 //
-// Light-touch intent — captures only what the user looked at. The agent
+// Light-touch intent: captures only what the user looked at. The agent
 // fetches the rest via tools.
 
 interface KpiExplainArgs {
@@ -72,10 +72,10 @@ export const kpiExplain = defineAgentIntent<KpiExplainArgs, CapturedKpiExplain>(
     lines.push('Arbetssätt:')
     lines.push('1. Förklara KORT vad nyckeltalet mäter och hur det räknas ut (formel + ingående konton).')
     lines.push('2. Hämta gnubok_get_kpi_report / gnubok_get_income_statement för att se vad som driver siffran just nu.')
-    lines.push('3. Peka på vad användaren kan göra om siffran är låg eller hög — utan att moralisera.')
+    lines.push('3. Peka på vad användaren kan göra om siffran är låg eller hög: utan att moralisera.')
     lines.push('4. Om det är ovanligt för deras bransch eller jämförelseperiod, säg det.')
     lines.push('')
-    lines.push('Svara på svenska, max 4–5 korta stycken. Ditt första svar är det första användaren ser.')
+    lines.push('Svara på svenska, max 4-5 korta stycken. Ditt första svar är det första användaren ser.')
     return lines.join('\n')
   },
 })

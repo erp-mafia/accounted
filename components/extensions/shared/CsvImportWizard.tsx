@@ -116,7 +116,7 @@ export default function CsvImportWizard({
     <Card className={className}>
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
-          {step === 1 && <><Upload className="h-4 w-4" /> Steg 1: Valj fil</>}
+          {step === 1 && <><Upload className="h-4 w-4" /> Steg 1: Välj fil</>}
           {step === 2 && <><FileText className="h-4 w-4" /> Steg 2: Kolumnmappning</>}
           {step === 3 && <><Check className="h-4 w-4" /> Import klar</>}
         </CardTitle>
@@ -127,11 +127,11 @@ export default function CsvImportWizard({
             <div className="border-2 border-dashed rounded-lg p-8 text-center">
               <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
               <p className="text-sm text-muted-foreground mb-3">
-                Valj en CSV-fil att importera
+                Välj en CSV-fil att importera
               </p>
               <Label htmlFor="csv-upload" className="cursor-pointer">
                 <Button variant="outline" size="sm" asChild>
-                  <span>Valj fil</span>
+                  <span>Välj fil</span>
                 </Button>
               </Label>
               <input
@@ -161,7 +161,7 @@ export default function CsvImportWizard({
                     onValueChange={(val) => setMappings(prev => ({ ...prev, [field.key]: val }))}
                   >
                     <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Valj kolumn..." />
+                      <SelectValue placeholder="Välj kolumn..." />
                     </SelectTrigger>
                     <SelectContent>
                       {headers.map(h => (
@@ -218,7 +218,7 @@ export default function CsvImportWizard({
             </div>
             <p className="font-medium">{importCount} rader importerades</p>
             <p className="text-sm text-muted-foreground mt-1">
-              Fran {fileName}
+              Från {fileName}
             </p>
             <Button variant="outline" size="sm" onClick={reset} className="mt-4">
               Importera fler

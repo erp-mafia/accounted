@@ -36,6 +36,7 @@ const SOURCE_TYPES = [
   'supplier_invoice_cash_payment',
   'currency_revaluation',
   'reminder_fee',
+  'vat_settlement',
 ] as const
 
 /**

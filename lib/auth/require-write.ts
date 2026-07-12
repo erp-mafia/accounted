@@ -67,7 +67,7 @@ export async function requireWritePermission(
  * Resolves the caller's role in the active company without blocking viewers.
  *
  * Unlike `requireWritePermission()` (which returns 403 for viewers), this
- * returns the actual role so the caller can make conditional decisions —
+ * returns the actual role so the caller can make conditional decisions:
  * e.g. allowing viewers to import raw bank transactions but nothing else.
  *
  * Use `requireWritePermission()` for routes that are fully off-limits to

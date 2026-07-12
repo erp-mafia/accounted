@@ -1,12 +1,12 @@
 /**
  * POST /api/v1/companies/{companyId}/imports/bank
  *
- * Bank-file import. Multipart upload — the file is the request body. The
+ * Bank-file import. Multipart upload: the file is the request body. The
  * route:
  *   1. Decodes the file (UTF-8 / Windows-1252 auto-detected).
  *   2. Detects the bank file format (SEB / Swedbank / Nordea / Handelsbanken
  *      / Lansforsakringar / Lunar / ICA Banken / Skandia / CAMT053 /
- *      Nordea Business / generic CSV) — or honors the optional `format`
+ *      Nordea Business / generic CSV), or honors the optional `format`
  *      override.
  *   3. Parses transactions.
  *   4. Records a `bank_file_imports` row and ingests transactions via
@@ -45,7 +45,7 @@ const BankImportAccepted = z.object({
   poll_url: z.string(),
 })
 
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB — matches dashboard
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB: matches dashboard
 
 registerEndpoint({
   operation: 'imports.bank',
@@ -53,7 +53,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/imports/bank',
   summary: 'Import a bank-file (CSV / XML / CAMT053).',
   description:
-    'Accepts a bank statement file (UTF-8 / Windows-1252, up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries — see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.',
+    'Accepts a bank statement file (UTF-8 / Windows-1252, up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.',
   useWhen:
     'Importing a bank statement export for a period. Common with PSD2 bank connections that don\'t auto-sync, or for legacy bank accounts.',
   doNotUseFor:
@@ -62,7 +62,7 @@ registerEndpoint({
     'File size cap: 10 MB. Larger files require splitting client-side.',
     '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, generic_csv, camt053.',
     'Duplicate detection is by external_id (composed from date + amount + counterparty); a re-import of the same file with the same flag set typically deduplicates rather than creating doubles.',
-    'BFL 5 kap 6-7 §§ note: this endpoint creates `transactions` rows (the underlag for a verifikation), NOT verifikationer themselves. The verifikation content requirements are in BFL 5 kap 6-7 §§; until each transaction is matched to an invoice/supplier-invoice (POST /transactions/{id}/match-*) or categorised (POST /transactions/{id}/categorize), the bookkeeping obligation isn\'t discharged. A successful import here means the data is ingested — not booked.',
+    'BFL 5 kap 6-7 §§ note: this endpoint creates `transactions` rows (the underlag for a verifikation), NOT verifikationer themselves. The verifikation content requirements are in BFL 5 kap 6-7 §§; until each transaction is matched to an invoice/supplier-invoice (POST /transactions/{id}/match-*) or categorised (POST /transactions/{id}/categorize), the bookkeeping obligation isn\'t discharged. A successful import here means the data is ingested: not booked.',
     'A successful import returns operation_id; poll /operations/{id} for the final ingested/duplicates/errors counts.',
   ],
   example: {
@@ -120,7 +120,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // Validate `format` against the canonical BankFileFormatId enum BEFORE
     // letting it reach parseBankFile / detectFileFormat. A raw cast would
     // pass any string through and rely on the parser to surface
-    // BANK_FILE_FORMAT_UNKNOWN — better to fail with VALIDATION_ERROR up
+    // BANK_FILE_FORMAT_UNKNOWN: better to fail with VALIDATION_ERROR up
     // front so an attacker-supplied value never reaches the format module
     // (V2.2 / PI1.1 hardening).
     const formatParam = url.searchParams.get('format')
@@ -199,57 +199,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     )
 
     try {
-      // Cross-company collision pre-check. The `bank_file_imports` unique
-      // constraint is `(user_id, file_hash)` — set when the table was
-      // designed for the single-tenant single-company-per-user world. If
-      // the same user is a member of two companies and uploads the same
-      // file to both, a naive upsert with onConflict='user_id,file_hash'
-      // would silently overwrite the first company's row with the second
-      // company_id. Pre-check for that case and surface a structured
-      // error so an agent sees the explicit conflict instead of a
-      // silently-stolen row.
-      //
-      // A migration to widen the unique constraint to (user_id, file_hash,
-      // company_id) is the proper fix; that's an engine-PR concern.
-      const { data: existingImport } = await ctx.supabase
-        .from('bank_file_imports')
-        .select('id, company_id, filename, imported_at, status')
-        .eq('user_id', ctx.userId)
-        .eq('file_hash', fileHash)
-        .maybeSingle()
-      if (existingImport && (existingImport as { company_id: string }).company_id !== ctx.companyId) {
-        // Log the cross-tenant collision details server-side for operator
-        // investigation (CC7.2 — audit trail), but do NOT echo the other
-        // company's id or the other import's id back to the caller. Doing
-        // so would be a cross-tenant enumeration vector (V8.2.1 / CC6.1).
-        // The caller sees a fixed error code + a generic message; the
-        // server log carries enough context to debug.
-        ctx.log.warn('bank import: cross-company file-hash collision', {
-          fileHash,
-          attemptedCompanyId: ctx.companyId,
-          existingCompanyId: (existingImport as { company_id: string }).company_id,
-          existingImportId: (existingImport as { id: string }).id,
-        })
-        await failOperation(
-          ctx.supabase,
-          {
-            id: op.id,
-            error: {
-              code: 'BANK_IMPORT_DUPLICATE_OTHER_COMPANY',
-              message: 'This file has already been imported into another company by this user.',
-            },
-          },
-          ctx.log,
-        )
-        return v1ErrorResponseFromCode('BANK_IMPORT_DUPLICATE_OTHER_COMPANY', ctx.log, {
-          requestId: ctx.requestId,
-          // Deliberately empty details — see comment above.
-        })
-      }
-
       // Record the import row so the dashboard's "bank file imports" tab
-      // shows v1 imports too. `upsert` on (user_id, file_hash) gives
-      // duplicate-rerun protection for the same-company case.
+      // shows v1 imports too. The unique constraint is (company_id,
+      // file_hash) since 20260707130000, so the same user importing the
+      // same statement into two companies is two independent rows, and the
+      // upsert gives duplicate-rerun protection within one company. The
+      // old (user_id, file_hash) key and its cross-company pre-check
+      // (BANK_IMPORT_DUPLICATE_OTHER_COMPANY) are gone.
       await ctx.supabase
         .from('bank_file_imports')
         .upsert(
@@ -264,7 +220,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
             date_from: parseResult.date_from,
             date_to: parseResult.date_to,
           },
-          { onConflict: 'user_id,file_hash' },
+          { onConflict: 'company_id,file_hash' },
         )
 
       // Convert parsed transactions to the RawTransaction shape that
@@ -288,12 +244,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         raw,
       )
 
-      // Mark the bank_file_imports row complete. Scope by all three
-      // identifying fields — `(user_id, file_hash)` is the unique
-      // constraint today but adding `company_id` is defense in depth:
-      // even if a concurrent same-user same-hash import in a different
-      // company slipped past the pre-check, this update can never
-      // overwrite the wrong company's status row.
+      // Mark the bank_file_imports row complete. The unique constraint is
+      // `(company_id, file_hash)` since 20260707130000; scoping the update by
+      // user_id as well is defense in depth so a concurrent same-hash import
+      // can never overwrite the wrong company's status row.
       await ctx.supabase
         .from('bank_file_imports')
         .update({

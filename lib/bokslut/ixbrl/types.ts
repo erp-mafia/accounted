@@ -3,7 +3,7 @@
  *
  * This is a separate shape from ArsredovisningData (the PDF model) because
  * iXBRL needs concept-keyed amounts for BOTH years (jämförelsesiffror are
- * mandatory — kontrollera codes 3006/3007), while the PDF model carries
+ * mandatory: kontrollera codes 3006/3007), while the PDF model carries
  * label-based single-year lines. The mapper (k2-mapper.ts) produces the
  * concept-keyed parts from trial balances; build-input.ts assembles the rest
  * from the same sources the PDF uses.
@@ -24,7 +24,7 @@ export interface FlerarsRow {
   year: string
   nettoomsattning: number
   resultatEfterFinansiellaPoster: number
-  /** Percent with one decimal, e.g. 35.5 — null when not computable. */
+  /** Percent with one decimal, e.g. 35.5: null when not computable. */
   soliditetPct: number | null
 }
 
@@ -46,7 +46,7 @@ export interface EgetKapitalForandring {
 }
 
 export interface Resultatdisposition {
-  /** Balanserat resultat ONLY (2090–2096 + 2098) — must stay value-identical
+  /** Balanserat resultat ONLY (2090-2096 + 2098): must stay value-identical
    *  to the BalanseratResultat fact in BR/eget kapital (TA §2.7.3). */
   balanseratResultat: number
   /** Fri överkursfond (2097), shown as its own row tagged Overkursfond. */
@@ -71,7 +71,7 @@ export interface IxbrlSigner {
   /** Visible role label, e.g. "Styrelseledamot", "Verkställande direktör". */
   role: string | null
   /** ISO date for DatumForUndertecknande (per-signer, TA §2.9.1).
-   *  Null when the signature request has not been signed yet — the date fact
+   *  Null when the signature request has not been signed yet: the date fact
    *  is then omitted (never fabricated) and preflight 1214 blocks filing. */
   signedDate: string | null
 }
@@ -81,12 +81,12 @@ export interface IxbrlArsredovisningInput {
     name: string
     /** Formatted with dash, e.g. "556999-9999". */
     orgNumber: string
-    /** Säte (city) — used in underskrifter and allmänt om verksamheten. */
+    /** Säte (city): used in underskrifter and allmänt om verksamheten. */
     city: string | null
   }
   period: { start: string; end: string }
   previousPeriod: { start: string; end: string } | null
-  /** True when this is the company's first fiscal year — jämförelsesiffror
+  /** True when this is the company's first fiscal year: jämförelsesiffror
    *  may then legitimately be absent (3006/3007 exemption). */
   isFirstFiscalYear: boolean
 
@@ -119,12 +119,12 @@ export interface IxbrlArsredovisningInput {
      *  list note on UndertecknandeArsredovisningDatum). */
     dateringsdatum: string | null
     signers: IxbrlSigner[]
-    /** True when a VD is among the signers — drives FinansiellRapportList. */
+    /** True when a VD is among the signers: drives FinansiellRapportList. */
     harVd: boolean
   }
 
   faststallelseintyg: {
-    /** AGM date — must be > räkenskapsårets sista dag (kontrollera 1101).
+    /** AGM date: must be > räkenskapsårets sista dag (kontrollera 1101).
      *  Null when no AGM date is recorded: the document renders a visible
      *  placeholder instead of a fabricated date and preflight 1103 blocks
      *  filing (Bolagsverket kontrollera 1103 semantics). */
@@ -133,7 +133,7 @@ export interface IxbrlArsredovisningInput {
     signerFirstName: string
     signerLastName: string
     signerRole: string
-    /** Document generation date — Bolagsverket overwrites at actual signing
+    /** Document generation date: Bolagsverket overwrites at actual signing
      *  (TA §4.4: set today's date). */
     genereratDatum: string
   }

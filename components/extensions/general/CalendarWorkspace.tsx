@@ -45,7 +45,7 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
       setCustomers(customersData || [])
     } catch {
       toast({
-        title: 'Kunde inte hamta data',
+        title: 'Kunde inte hämta data',
         variant: 'destructive',
       })
     } finally {
