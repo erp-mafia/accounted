@@ -32,7 +32,7 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           # On main: push `latest` + commit-sha tags.
@@ -73,7 +73,7 @@ jobs:
           cache-to: type=gha,scope=${{ github.ref_name }},mode=max
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3.7.0
+        uses: sigstore/cosign-installer@v4.1.2
 
       - name: Sign the image (keyless OIDC)
         env:
@@ -114,7 +114,7 @@ jobs:
         # hiccup can't redden an otherwise-good publish.
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
           category: trivy

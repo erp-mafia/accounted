@@ -18,7 +18,7 @@ jobs:
         with:
           # Full history so the merge-base with the PR base branch exists.
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
       - name: Require pg-real coverage for trigger/RPC/RLS migrations
@@ -52,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
