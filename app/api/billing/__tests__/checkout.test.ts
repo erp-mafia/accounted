@@ -143,6 +143,24 @@ describe('POST /api/billing/checkout', () => {
     expect(sessionsCreate.mock.calls[0][0].subscription_data.trial_end).toBeUndefined()
   })
 
+  it('enables automatic VAT, tax-id collection and address capture on the session', async () => {
+    enqueue({ data: { stripe_customer_id: 'cus_existing' } }) // subscription row
+    enqueue({ data: null }) // no trial grant
+    sessionsCreate.mockResolvedValue({ url: 'https://stripe.test/session' })
+
+    const req = createMockRequest('/api/billing/checkout', { method: 'POST', body: { plan: 'monthly' } })
+    await POST(req, routeParams)
+
+    expect(sessionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        automatic_tax: { enabled: true },
+        tax_id_collection: { enabled: true },
+        billing_address_collection: 'required',
+        customer_update: { name: 'auto', address: 'auto' },
+      }),
+    )
+  })
+
   it('creates a Stripe customer when none exists yet', async () => {
     enqueue({ data: null }) // no existing subscription row
     enqueue({ data: null }) // no trial grant

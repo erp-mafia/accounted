@@ -121,6 +121,17 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
     mode: 'subscription',
     customer: customerId,
     line_items: [{ price: priceId, quantity: 1 }],
+    // Swedish VAT: the Price is net (tax_behavior=exclusive in Stripe), so Stripe
+    // Tax adds 25% moms for SE customers and applies reverse charge for EU-B2B with
+    // a valid VAT number. automatic_tax carries onto the created subscription, so
+    // renewals (and the first charge after a deferred trial) stay taxed. The rate
+    // can only compute with a customer address, and a compliant momsfaktura needs
+    // it too; customer_update persists the address + tax id onto the pre-created
+    // customer for future invoices.
+    automatic_tax: { enabled: true },
+    tax_id_collection: { enabled: true },
+    billing_address_collection: 'required',
+    customer_update: { name: 'auto', address: 'auto' },
     client_reference_id: companyId,
     metadata: { company_id: companyId },
     subscription_data: {
