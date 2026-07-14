@@ -2713,6 +2713,7 @@ export const tools: McpTool[] = [
               amount: { type: 'number', description: 'Positive = income, negative = expense.' },
               description: { type: 'string', description: 'Free-text description shown in /transactions.' },
               currency: { type: 'string', description: 'ISO 4217 code. Default SEK.' },
+              ledger_account: { type: 'string', description: 'Optional BAS 19xx cash account (e.g. "1935") this row settles on. Binds it to a manual kassakonto so reconciliation and voucher matching resolve the right account instead of falling back to 1930.' },
               bank_connection_id: { type: 'string', description: 'Optional UUID of a bank_connections row to associate with.' },
               external_id: { type: 'string', description: 'Optional external reference (e.g., Airtable record ID). Shown in the preview; the DB enforces uniqueness per user, so the second commit of the same external_id will fail at approval.' },
             },
@@ -2744,6 +2745,7 @@ export const tools: McpTool[] = [
         const amount = Number(item.amount)
         const description = ((item.description as string) ?? '').trim()
         const currency = ((item.currency as string) || 'SEK').toUpperCase()
+        const ledgerAccount = (item.ledger_account as string) || null
         const bankConnectionId = (item.bank_connection_id as string) || null
         const externalId = (item.external_id as string) || null
 
@@ -2756,12 +2758,18 @@ export const tools: McpTool[] = [
         if (!description) {
           throw new Error(`transactions[${i}].description is required.`)
         }
+        // Restrict the hint to BAS group 19 (kassa/bank): binding a transaction
+        // to a non-cash account would misroute reconciliation and matching.
+        if (ledgerAccount && !/^19\d{2}$/.test(ledgerAccount)) {
+          throw new Error(`transactions[${i}].ledger_account must be a BAS 19xx cash account (e.g. "1935").`)
+        }
 
         const params = {
           date,
           amount,
           description,
           currency,
+          ledger_account: ledgerAccount,
           bank_connection_id: bankConnectionId,
           external_id: externalId,
         }
