@@ -32,6 +32,7 @@ const FORMAT_NAMES: Record<string, string> = {
   skandia: 'Skandia',
   lunar: 'Lunar',
   northmill: 'Northmill',
+  wise: 'Wise',
   generic_csv: 'CSV (manuell mappning)',
   camt053: 'ISO 20022 camt.053',
 }
@@ -135,6 +136,7 @@ export default function BankFileUploadStep({
                 <SelectItem value="skandia">Skandia</SelectItem>
                 <SelectItem value="lunar">Lunar</SelectItem>
                 <SelectItem value="northmill">Northmill</SelectItem>
+                <SelectItem value="wise">Wise</SelectItem>
                 <SelectItem value="camt053">ISO 20022 camt.053 (XML)</SelectItem>
                 <SelectItem value="generic_csv">Annan CSV (manuell mappning)</SelectItem>
               </SelectContent>

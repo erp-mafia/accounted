@@ -17,6 +17,7 @@ import { icaBankenFormat } from './formats/ica-banken'
 import { skandiaFormat } from './formats/skandia'
 import { lunarFormat } from './formats/lunar'
 import { northmillFormat } from './formats/northmill'
+import { wiseFormat } from './formats/wise'
 import { camt053Format } from './formats/camt053'
 import { genericCSVFormat } from './formats/generic-csv'
 
@@ -38,6 +39,7 @@ const FORMATS: BankFileFormat[] = [
   skandiaFormat,
   lunarFormat,
   northmillFormat,
+  wiseFormat,
   genericCSVFormat,
 ]
 
@@ -140,6 +142,13 @@ export function generateExternalId(
   // For camt.053, prefer the raw_line which contains the entry reference
   if (formatId === 'camt053' && tx.raw_line && !tx.raw_line.startsWith('camt053_entry_')) {
     return `camt053_${tx.raw_line}`
+  }
+
+  // Wise carries the stable transfer ID (TRANSFER-…, PLAN_ORDER-…, plus a
+  // `-fee` suffix for fee rows) in raw_line: use it so re-importing the same
+  // statement dedups exactly instead of relying on the row hash.
+  if (formatId === 'wise' && tx.raw_line) {
+    return `wise_${tx.raw_line}`
   }
 
   // For CSV formats, create a composite hash

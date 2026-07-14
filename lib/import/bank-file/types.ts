@@ -53,6 +53,7 @@ export type BankFileFormatId =
   | 'skandia'
   | 'lunar'
   | 'northmill'
+  | 'wise'
   | 'generic_csv'
   | 'camt053'
 
