@@ -2115,3 +2115,55 @@ describe('Wise format', () => {
     expect(result.stats.skipped_rows).toBe(1)
   })
 })
+
+describe('Wise format hardening', () => {
+  const row = (over: Partial<Record<string, string>> = {}) => {
+    const f: Record<string, string> = {
+      id: 'TRANSFER-1', status: 'COMPLETED', direction: 'IN',
+      created: '2026-06-01 10:00:00', finished: '2026-06-01 10:00:00',
+      sfeeA: '', sfeeC: '', tfeeA: '', tfeeC: '',
+      sname: 'X', samt: '100.0', scur: 'SEK', tname: 'Y', tamt: '100.0', tcur: 'SEK',
+      rate: '1', ref: '', batch: '', by: '', cat: 'General', note: '', ...over,
+    }
+    return [
+      f.id, f.status, f.direction, `"${f.created}"`, `"${f.finished}"`,
+      f.sfeeA, f.sfeeC, f.tfeeA, f.tfeeC, `"${f.sname}"`, f.samt, f.scur,
+      `"${f.tname}"`, f.tamt, f.tcur, f.rate, f.ref, f.batch, `"${f.by}"`, f.cat, f.note,
+    ].join(',')
+  }
+
+  it('fails hard on an unsupported Direction (e.g. NEUTRAL conversion)', () => {
+    const csv = [WISE_HEADER, row({ id: 'PLAN_ORDER-9', direction: 'NEUTRAL', scur: 'USD', tcur: 'SEK' })].join('\n')
+    expect(() => parseBankFile(csv, 'wise.csv')).toThrow(/unsupported Direction "NEUTRAL"/)
+  })
+
+  it('does not import a row with a blank status', () => {
+    const csv = [WISE_HEADER, row({ status: '' })].join('\n')
+    const result = parseBankFile(csv, 'wise.csv')
+    expect(result.transactions).toHaveLength(0)
+    expect(result.stats.skipped_rows).toBe(1)
+  })
+
+  it('rejects a partially numeric amount instead of coercing it', () => {
+    const csv = [WISE_HEADER, row({ samt: '12abc', tamt: '12abc' })].join('\n')
+    const result = parseBankFile(csv, 'wise.csv')
+    expect(result.transactions).toHaveLength(0)
+    expect(result.issues.some((iss) => /Invalid amount/.test(iss.message))).toBe(true)
+  })
+
+  it('skips a row with no movement currency rather than defaulting to SEK', () => {
+    const csv = [WISE_HEADER, row({ direction: 'IN', tcur: '' })].join('\n')
+    const result = parseBankFile(csv, 'wise.csv')
+    expect(result.transactions).toHaveLength(0)
+    expect(result.issues.some((iss) => /Missing\/invalid currency/.test(iss.message))).toBe(true)
+  })
+
+  it('does not inherit the movement currency for a fee with no currency', () => {
+    const csv = [WISE_HEADER, row({ sfeeA: '2.20', sfeeC: '' })].join('\n')
+    const result = parseBankFile(csv, 'wise.csv')
+    // Main row still imports; the fee is dropped with a warning, not booked in SEK.
+    expect(result.transactions).toHaveLength(1)
+    expect(result.transactions[0].raw_line).toBe('TRANSFER-1')
+    expect(result.issues.some((iss) => /no currency/.test(iss.message))).toBe(true)
+  })
+})

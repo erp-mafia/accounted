@@ -35,10 +35,16 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
 
-/** Parse a Wise amount ("2500.0", "520.00"). `.` decimal, no thousands sep. */
+/**
+ * Parse a Wise amount ("2500.0", "520.00", "-2.20"). Wise amounts are plain
+ * decimals: optional sign, digits, optional `.` fraction, no thousands
+ * separator. Reject anything else: bare parseFloat would silently turn "12abc"
+ * into 12 and "1,234" into 1, corrupting the imported amount. NaN = reject.
+ */
 function parseWiseAmount(value: string | undefined): number {
   if (!value) return NaN
-  const cleaned = value.replace(/\s/g, '')
+  const cleaned = value.trim()
+  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return NaN
   return parseFloat(cleaned)
 }
 
@@ -117,17 +123,34 @@ export const wiseFormat: BankFileFormat = {
       const wiseId = at(idx.id)
       const status = at(idx.status).toUpperCase()
 
-      // Only settled movements affect the balance.
-      if (status && status !== 'COMPLETED') {
+      // Only settled movements affect the balance. A blank/missing status is
+      // NOT completed, so it must not slip through: require an exact match.
+      if (status !== 'COMPLETED') {
         skippedRows++
         continue
       }
 
+      // Direction drives the sign. An unrecognized value (blank, or NEUTRAL for
+      // a balance conversion/cashback, or anything Wise adds later) must NOT be
+      // guessed: silently treating it as income mis-signs real money. Fail the
+      // whole import so it surfaces (the parse route turns this throw into
+      // BANK_FILE_PARSE_FAILED). Proper conversion handling is tracked in #1019.
       const direction = at(idx.direction).toUpperCase()
+      if (direction !== 'IN' && direction !== 'OUT') {
+        throw new Error(
+          `Wise import: unsupported Direction "${at(idx.direction)}" on ${wiseId || `row ${i + 1}`}`,
+        )
+      }
       const isOut = direction === 'OUT'
 
       // Book the side that moved on the balance: target for IN, source for OUT.
-      const currency = (isOut ? at(idx.sourceCurrency) : at(idx.targetCurrency)).toUpperCase() || 'SEK'
+      // Never invent a currency: a missing/malformed one is a bad row, skip it.
+      const currency = (isOut ? at(idx.sourceCurrency) : at(idx.targetCurrency)).trim().toUpperCase()
+      if (!/^[A-Z]{3}$/.test(currency)) {
+        issues.push({ row: i + 1, message: `Missing/invalid currency on ${wiseId || 'row'}`, severity: 'warning' })
+        skippedRows++
+        continue
+      }
       const rawAmount = parseWiseAmount(isOut ? at(idx.sourceAmount) : at(idx.targetAmount))
 
       const date = wiseDate(at(idx.finishedOn)) || wiseDate(at(idx.createdOn))
@@ -171,13 +194,26 @@ export const wiseFormat: BankFileFormat = {
         { amountCol: idx.targetFeeAmount, currencyCol: idx.targetFeeCurrency, suffix: 'tgtfee' },
       ]
       for (const spec of feeSpecs) {
-        const fee = parseWiseAmount(at(spec.amountCol))
-        if (!Number.isFinite(fee) || fee <= 0) continue
+        const feeRaw = at(spec.amountCol).trim()
+        if (!feeRaw) continue // No fee column value: normal, most rows.
+        const fee = parseWiseAmount(feeRaw)
+        if (fee === 0) continue // Explicit 0.00 fee: nothing to book, no warning.
+        if (!Number.isFinite(fee) || fee < 0) {
+          issues.push({ row: i + 1, message: `Invalid fee amount "${feeRaw}" on ${wiseId || 'row'}`, severity: 'warning' })
+          continue
+        }
+        // Never inherit the movement currency for the fee: a fee amount without
+        // its own currency is a bad row, so flag and skip it rather than guess.
+        const feeCurrency = at(spec.currencyCol).trim().toUpperCase()
+        if (!/^[A-Z]{3}$/.test(feeCurrency)) {
+          issues.push({ row: i + 1, message: `Fee on ${wiseId || 'row'} has no currency; skipped`, severity: 'warning' })
+          continue
+        }
         transactions.push({
           date,
           description: `Wise avgift${counterparty ? ` (${counterparty})` : ''}`,
           amount: round2(-Math.abs(fee)),
-          currency: (at(spec.currencyCol) || currency).toUpperCase(),
+          currency: feeCurrency,
           balance: null,
           reference: reference || null,
           counterparty: 'Wise',
