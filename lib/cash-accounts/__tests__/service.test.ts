@@ -561,7 +561,7 @@ describe('upsertFromPsd2', () => {
 // ── ensureManualCashAccount ──────────────────────────────────────────────
 
 interface ManualStub {
-  lookup: { data: { id: string } | null; error?: { message: string } | null }
+  lookup: { data: { id: string; currency?: string } | null; error?: { message: string } | null }
   insert?: { data: { id: string } | null; error?: { message: string; code?: string } | null }
   reread?: { data: { id: string } | null; error?: { message: string } | null }
   inserted: Array<Record<string, unknown>>
@@ -606,10 +606,18 @@ function makeManualSupabase(stub: ManualStub): SupabaseClient {
 }
 
 describe('ensureManualCashAccount', () => {
-  it('returns the existing row id without inserting', async () => {
-    const stub: ManualStub = { lookup: { data: { id: 'ca-1' } }, inserted: [], lookupCount: 0 }
+  it('returns the existing row id without inserting when the currency matches', async () => {
+    const stub: ManualStub = { lookup: { data: { id: 'ca-1', currency: 'SEK' } }, inserted: [], lookupCount: 0 }
     const id = await ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1935', 'sek')
     expect(id).toBe('ca-1')
+    expect(stub.inserted).toHaveLength(0)
+  })
+
+  it('throws when the existing row is a different currency (UNIQUE ledger conflict)', async () => {
+    const stub: ManualStub = { lookup: { data: { id: 'ca-usd', currency: 'USD' } }, inserted: [], lookupCount: 0 }
+    await expect(
+      ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1935', 'SEK'),
+    ).rejects.toThrow(/denominated in USD, not SEK/)
     expect(stub.inserted).toHaveLength(0)
   })
 

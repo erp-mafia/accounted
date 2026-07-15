@@ -512,14 +512,26 @@ export async function ensureManualCashAccount(
 ): Promise<string> {
   const existing = await supabase
     .from('cash_accounts')
-    .select('id')
+    .select('id, currency')
     .eq('company_id', companyId)
     .eq('ledger_account', ledgerAccount)
     .maybeSingle()
   if (existing.error) {
     throw new Error(`ensureManualCashAccount lookup failed: ${existing.error.message}`)
   }
-  if (existing.data) return (existing.data as { id: string }).id
+  if (existing.data) {
+    const row = existing.data as { id: string; currency: string | null }
+    // (company_id, ledger_account) is UNIQUE, so a ledger holds exactly one
+    // currency. A different-currency transaction pointing at the same ledger is
+    // a real conflict (e.g. a SEK row landing on a ledger already claimed for
+    // USD): fail loudly instead of binding it to the wrong-currency account.
+    if (row.currency && row.currency.toUpperCase() !== currency.toUpperCase()) {
+      throw new Error(
+        `Cash account ${ledgerAccount} is denominated in ${row.currency}, not ${currency.toUpperCase()}`,
+      )
+    }
+    return row.id
+  }
 
   const insert = await supabase
     .from('cash_accounts')
