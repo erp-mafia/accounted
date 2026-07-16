@@ -4,6 +4,7 @@
 
 import { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { TaxDeadlineType, DeadlineStatus } from '@/types'
 
 const log = createLogger('deadline-generator')
@@ -39,6 +40,23 @@ export function didTaxFieldsChange(
     }
   }
   return false
+}
+
+/**
+ * Decide whether a settings save should (re)generate tax deadlines.
+ *
+ * Regenerate when a tax-relevant field changed OR when the company has no
+ * system-generated deadlines yet. The second case is the common one: tax
+ * settings are filled at onboarding, so a later save with no tax-field change
+ * used to skip generation entirely and the deadlines page stayed empty even
+ * though the settings were "filled in". Backfilling an empty set is safe: there
+ * is no existing status/progress to clobber.
+ */
+export function shouldRegenerateTaxDeadlines(
+  taxFieldsChanged: boolean,
+  existingSystemDeadlineCount: number
+): boolean {
+  return taxFieldsChanged || existingSystemDeadlineCount === 0
 }
 
 /**
@@ -240,20 +258,29 @@ export async function generateNewYearDeadlines(
 ): Promise<{ usersProcessed: number; totalCreated: number }> {
   const newYear = new Date().getFullYear()
 
-  // Fetch all companies with company settings
-  const { data: allSettings, error } = await supabase
-    .from('company_settings')
-    .select('company_id, entity_type, moms_period, f_skatt, vat_registered, pays_salaries, fiscal_year_start_month')
-
-  if (error) {
-    log.error('Error fetching company settings:', error)
-    throw error
-  }
+  // Fetch all companies with company settings. Paginate: PostgREST silently
+  // caps a plain .select() at 1000 rows, which would leave companies beyond the
+  // cap without next-year deadlines every January.
+  const allSettings = await fetchAllRows<{
+    company_id: string
+    entity_type: CompanySettingsForDeadlines['entity_type']
+    moms_period: CompanySettingsForDeadlines['moms_period']
+    f_skatt: boolean
+    vat_registered: boolean
+    pays_salaries: boolean | null
+    fiscal_year_start_month: number
+  }>(({ from, to }) =>
+    supabase
+      .from('company_settings')
+      .select('company_id, entity_type, moms_period, f_skatt, vat_registered, pays_salaries, fiscal_year_start_month')
+      .order('company_id', { ascending: true })
+      .range(from, to)
+  )
 
   let usersProcessed = 0
   let totalCreated = 0
 
-  for (const settings of allSettings || []) {
+  for (const settings of allSettings) {
     try {
       const result = await generateTaxDeadlinesForUser(
         supabase,

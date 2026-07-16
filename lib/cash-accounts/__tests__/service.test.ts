@@ -16,6 +16,7 @@ import {
   defaultLedgerForCurrency,
   getRevokedConnectionIds,
   upsertFromPsd2,
+  ensureManualCashAccount,
 } from '../service'
 
 type CashRow = { ledger_account: string; bank_connection_id: string | null }
@@ -554,5 +555,112 @@ describe('upsertFromPsd2', () => {
     await expect(
       upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT),
     ).rejects.toThrow(/duplicate key/)
+  })
+})
+
+// ── ensureManualCashAccount ──────────────────────────────────────────────
+
+interface ManualStub {
+  lookup: { data: { id: string; currency?: string } | null; error?: { message: string } | null }
+  insert?: { data: { id: string } | null; error?: { message: string; code?: string } | null }
+  reread?: { data: { id: string } | null; error?: { message: string } | null }
+  inserted: Array<Record<string, unknown>>
+  lookupCount: number
+}
+
+function makeManualSupabase(stub: ManualStub): SupabaseClient {
+  return {
+    from: vi.fn((table: string) => {
+      expect(table).toBe('cash_accounts')
+      return {
+        // lookup / reread path: select().eq().eq().maybeSingle()
+        select: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              maybeSingle: vi.fn(() => {
+                stub.lookupCount += 1
+                // First maybeSingle = initial lookup; a second = post-23505 reread.
+                const r = stub.lookupCount === 1 ? stub.lookup : stub.reread ?? { data: null }
+                return Promise.resolve({ data: r.data, error: r.error ?? null })
+              }),
+            })),
+          })),
+        })),
+        // insert().select('id').single()
+        insert: vi.fn((payload: Record<string, unknown>) => {
+          stub.inserted.push(payload)
+          return {
+            select: vi.fn(() => ({
+              single: vi.fn(() =>
+                Promise.resolve({
+                  data: stub.insert?.data ?? null,
+                  error: stub.insert?.error ?? null,
+                }),
+              ),
+            })),
+          }
+        }),
+      }
+    }),
+  } as unknown as SupabaseClient
+}
+
+describe('ensureManualCashAccount', () => {
+  it('returns the existing row id without inserting when the currency matches', async () => {
+    const stub: ManualStub = { lookup: { data: { id: 'ca-1', currency: 'SEK' } }, inserted: [], lookupCount: 0 }
+    const id = await ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1935', 'sek')
+    expect(id).toBe('ca-1')
+    expect(stub.inserted).toHaveLength(0)
+  })
+
+  it('throws when the existing row is a different currency (UNIQUE ledger conflict)', async () => {
+    const stub: ManualStub = { lookup: { data: { id: 'ca-usd', currency: 'USD' } }, inserted: [], lookupCount: 0 }
+    await expect(
+      ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1935', 'SEK'),
+    ).rejects.toThrow(/denominated in USD, not SEK/)
+    expect(stub.inserted).toHaveLength(0)
+  })
+
+  it('creates a manual row (source=manual, uppercased currency) when none exists', async () => {
+    const stub: ManualStub = {
+      lookup: { data: null },
+      insert: { data: { id: 'ca-new' } },
+      inserted: [],
+      lookupCount: 0,
+    }
+    const id = await ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1935', 'sek')
+    expect(id).toBe('ca-new')
+    expect(stub.inserted[0]).toMatchObject({
+      company_id: 'c1',
+      ledger_account: '1935',
+      currency: 'SEK',
+      source: 'manual',
+      is_primary: false,
+      enabled: true,
+    })
+  })
+
+  it('re-reads the winner on a 23505 race instead of throwing', async () => {
+    const stub: ManualStub = {
+      lookup: { data: null },
+      insert: { data: null, error: { message: 'duplicate key', code: '23505' } },
+      reread: { data: { id: 'ca-winner' } },
+      inserted: [],
+      lookupCount: 0,
+    }
+    const id = await ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1935', 'SEK')
+    expect(id).toBe('ca-winner')
+  })
+
+  it('throws on a non-race insert failure', async () => {
+    const stub: ManualStub = {
+      lookup: { data: null },
+      insert: { data: null, error: { message: 'boom' } },
+      inserted: [],
+      lookupCount: 0,
+    }
+    await expect(
+      ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1935', 'SEK'),
+    ).rejects.toThrow(/boom/)
   })
 })

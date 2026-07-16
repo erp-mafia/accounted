@@ -1247,248 +1247,99 @@ export async function importVouchers(
 
   results.seriesUsed = [...seriesGroups.keys()]
 
-  // Batch insert journal entries (in chunks of 100) with retry logic.
-  // Retries handle transient errors (Supabase rate limits, Cloudflare 500s).
-  const BATCH_SIZE = 100
-  const MAX_RETRIES = 3
-  const INTER_BATCH_DELAY_MS = 50  // Prevent rate limiting under sustained load
-  let retriedBatches = 0
-  let failedBatches = 0
+  const voucherBySourceId = new Map(preparedVouchers.map((voucher) => [voucher.sourceId, voucher]))
+  const rpcPayload = preparedVouchers.map((voucher) => ({
+    sourceId: voucher.sourceId,
+    series: voucher.series,
+    date: voucher.date,
+    description: voucher.description,
+    sourceSeries: voucher.sourceSeries,
+    sourceNumber: voucher.sourceNumber,
+    sourceType: voucher.sourceType,
+    lines: voucher.lines.map((line, lineIndex) => ({
+      account_number: line.account_number,
+      account_id: accountIdMap.get(line.account_number) || null,
+      debit_amount: line.debit_amount,
+      credit_amount: line.credit_amount,
+      currency: 'SEK',
+      line_description: line.line_description,
+      sort_order: lineIndex,
+      // dimensions jsonb is the source of truth; cost_center/project are
+      // GENERATED mirrors the DB derives from it. SIE object-list codes carry
+      // through so imported dimension data is not dropped (dimensions PR5 #866).
+      dimensions: normalizeLineDimensions({ dimensions: line.dimensions ?? null }),
+    })),
+  }))
 
-  // Process each series as an independent mini-import. Voucher numbers must
-  // be monotonically increasing within a series; grouping first guarantees
-  // that without needing to interleave series-specific counters in one loop.
-  let seriesIndex = 0
-  for (const [series, groupVouchers] of seriesGroups) {
-    // Get starting voucher number for this series
-    const { data: startNumber } = await supabase.rpc('next_voucher_number', {
-      p_company_id: companyId,
-      p_fiscal_period_id: fiscalPeriodId,
-      p_series: series,
+  type ImportSieJournalEntriesRpcResult = {
+    inserted_entries?: Array<{
+      id: string
+      sourceId: string
+      series: string
+      voucherNumber: number
+      sourceType: 'import' | 'opening_balance'
+    }>
+    skipped_duplicates?: Array<{ sourceId?: string; reason?: string }>
+    validation_errors?: Array<{ sourceId?: string; message?: string }>
+  }
+
+  const { data: rpcResult, error: rpcError } = await supabase.rpc('import_sie_journal_entries', {
+    p_company_id: companyId,
+    p_user_id: userId,
+    p_fiscal_period_id: fiscalPeriodId,
+    p_entries: rpcPayload,
+  })
+
+  if (rpcError) {
+    results.errors.push(`SIE-verifikationer kunde inte importeras atomiskt: ${rpcError.message}`)
+    results.failedBatches = 1
+    return results
+  }
+
+  const structuredResult = (rpcResult ?? {}) as ImportSieJournalEntriesRpcResult
+  for (const validationError of structuredResult.validation_errors ?? []) {
+    results.errors.push(
+      validationError.sourceId
+        ? `${validationError.sourceId}: ${validationError.message ?? 'valideringsfel'}`
+        : validationError.message ?? 'Valideringsfel vid SIE-import',
+    )
+  }
+  for (const skippedDuplicate of structuredResult.skipped_duplicates ?? []) {
+    results.errors.push(
+      skippedDuplicate.sourceId
+        ? `${skippedDuplicate.sourceId}: duplicerad verifikation hoppades över`
+        : 'Duplicerad verifikation hoppades över',
+    )
+  }
+
+  if (results.errors.length > 0) {
+    return results
+  }
+
+  for (const inserted of structuredResult.inserted_entries ?? []) {
+    const voucher = voucherBySourceId.get(inserted.sourceId)
+    if (!voucher) continue
+
+    results.voucherNumberMapping.push({
+      sourceId: inserted.sourceId,
+      series: inserted.series,
+      targetNumber: inserted.voucherNumber,
     })
 
-    const currentVoucherNumber = (startNumber as number) || 1
-
-    // Reserve the full voucher number range upfront to prevent concurrent
-    // operations from claiming numbers in our range during batch insertion.
-    const reservedHighest = currentVoucherNumber + groupVouchers.length - 1
-    await supabase.rpc('reserve_voucher_range', {
-      p_company_id: companyId,
-      p_fiscal_period_id: fiscalPeriodId,
-      p_series: series,
-      p_highest_used: reservedHighest,
-    })
-
-    let highestInsertedVoucher = currentVoucherNumber - 1  // nothing inserted yet
-
-  for (let batchStart = 0; batchStart < groupVouchers.length; batchStart += BATCH_SIZE) {
-    const batch = groupVouchers.slice(batchStart, batchStart + BATCH_SIZE)
-    const batchNumber = Math.floor(batchStart / BATCH_SIZE) + 1
-    let batchWasRetried = false
-
-    // Prepare journal entry headers
-    const entryInserts = batch.map((v, i) => ({
-      user_id: userId,
-      company_id: companyId,
-      fiscal_period_id: fiscalPeriodId,
-      voucher_number: currentVoucherNumber + batchStart + i,
-      voucher_series: series,
-      entry_date: v.date,
-      description: v.description,
-      source_type: v.sourceType,
-      source_voucher_series: v.sourceSeries,
-      source_voucher_number: v.sourceNumber,
-      status: 'posted',
-      committed_at: new Date().toISOString(),
-    }))
-
-    // Insert headers with retry
-    let entries: { id: string }[] | null = null
-    let lastEntryError: string | null = null
-
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      if (attempt > 0) {
-        batchWasRetried = true
-        const backoffMs = Math.pow(2, attempt - 1) * 1000 // 1s, 2s, 4s
-        console.log(`[sie-import] Retrying batch ${batchNumber} (attempt ${attempt + 1}/${MAX_RETRIES + 1}) after ${backoffMs}ms`)
-        await new Promise(resolve => setTimeout(resolve, backoffMs))
-      }
-
-      const { data, error: entryError } = await supabase
-        .from('journal_entries')
-        .insert(entryInserts)
-        .select('id')
-
-      if (!entryError && data) {
-        entries = data
-        lastEntryError = null
-        break
-      }
-
-      lastEntryError = entryError?.message || 'Failed to insert entries'
+    results.ids.push(inserted.id)
+    if (inserted.sourceType === 'import') {
+      results.importTypedIds.push(inserted.id)
     }
+    results.created++
 
-    if (!entries) {
-      failedBatches++
-      results.errors.push(
-        `Batch ${batchNumber} misslyckades efter ${MAX_RETRIES + 1} försök: ${lastEntryError}`
+    for (const line of voucher.lines) {
+      const net = line.debit_amount - line.credit_amount
+      results.movementsByAccount.set(
+        line.account_number,
+        (results.movementsByAccount.get(line.account_number) || 0) + net
       )
-      continue
-    }
-
-    // Prepare all lines for this batch
-    const allLines: {
-      journal_entry_id: string
-      account_number: string
-      account_id: string | null
-      debit_amount: number
-      credit_amount: number
-      currency: string
-      line_description: string | null
-      sort_order: number
-      dimensions: Record<string, string>
-    }[] = []
-
-    for (let i = 0; i < batch.length; i++) {
-      const entryId = entries[i]?.id
-      if (!entryId) continue
-
-      const voucher = batch[i]
-      const assignedNumber = currentVoucherNumber + batchStart + i
-      voucher.lines.forEach((line, lineIndex) => {
-        // dimensions jsonb is the source of truth; cost_center/project are
-        // derived mirrors: the same dual-write every sanctioned writer uses
-        // (see lib/bookkeeping/dimension-resolver.ts). SIE object-list codes
-        // survive verbatim on lines (legacy free-text is a documented
-        // exception to the registry format rules).
-        const dims = normalizeLineDimensions({ dimensions: line.dimensions ?? null })
-        allLines.push({
-          journal_entry_id: entryId,
-          account_number: line.account_number,
-          account_id: accountIdMap.get(line.account_number) || null,
-          debit_amount: line.debit_amount,
-          credit_amount: line.credit_amount,
-          currency: 'SEK',
-          line_description: line.line_description,
-          sort_order: lineIndex,
-          dimensions: dims,
-        })
-      })
-
-      results.voucherNumberMapping.push({
-        sourceId: voucher.sourceId,
-        series: voucher.series,
-        targetNumber: assignedNumber,
-      })
-
-      results.ids.push(entryId)
-      // #VER vouchers re-tagged as opening_balance never need an underlag and
-      // aren't in NEEDS_DOC_SOURCE_TYPES, so keep them out of the exempt set.
-      if (voucher.sourceType === 'import') {
-        results.importTypedIds.push(entryId)
-      }
-      results.created++
-    }
-
-    // Insert all lines with retry
-    if (allLines.length > 0) {
-      let linesInserted = false
-      let lastLinesError: string | null = null
-
-      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        if (attempt > 0) {
-          batchWasRetried = true
-          const backoffMs = Math.pow(2, attempt - 1) * 1000
-          console.log(`[sie-import] Retrying batch ${batchNumber} lines (attempt ${attempt + 1}/${MAX_RETRIES + 1}) after ${backoffMs}ms`)
-          await new Promise(resolve => setTimeout(resolve, backoffMs))
-        }
-
-        const { error: linesError } = await supabase
-          .from('journal_entry_lines')
-          .insert(allLines)
-
-        if (!linesError) {
-          linesInserted = true
-          break
-        }
-
-        lastLinesError = linesError.message
-      }
-
-      if (linesInserted) {
-        // Track highest voucher number only after both headers AND lines succeed,
-        // to avoid counting orphaned entries with no lines as "used".
-        const batchHighest = currentVoucherNumber + batchStart + batch.length - 1
-        highestInsertedVoucher = Math.max(highestInsertedVoucher, batchHighest)
-
-        // Track movements ONLY for successfully inserted vouchers.
-        // This ensures the migration adjustment correctly compensates for
-        // any batches that failed completely.
-        for (let i = 0; i < batch.length; i++) {
-          const voucher = batch[i]
-          for (const line of voucher.lines) {
-            const net = line.debit_amount - line.credit_amount
-            results.movementsByAccount.set(
-              line.account_number,
-              (results.movementsByAccount.get(line.account_number) || 0) + net
-            )
-          }
-        }
-      } else {
-        failedBatches++
-        results.errors.push(
-          `Batch ${batchNumber} rader misslyckades efter ${MAX_RETRIES + 1} försök: ${lastLinesError}`
-        )
-      }
-    } else {
-      // No lines to insert: still count movements for vouchers with entries
-      for (let i = 0; i < batch.length; i++) {
-        const voucher = batch[i]
-        for (const line of voucher.lines) {
-          const net = line.debit_amount - line.credit_amount
-          results.movementsByAccount.set(
-            line.account_number,
-            (results.movementsByAccount.get(line.account_number) || 0) + net
-          )
-        }
-      }
-    }
-
-    // Count distinct batches that needed retries (not individual attempts)
-    if (batchWasRetried) {
-      retriedBatches++
-    }
-
-    // Small delay between batches to prevent Supabase/Cloudflare rate limiting
-    const isLastBatchInSeries = batchStart + BATCH_SIZE >= groupVouchers.length
-    const isLastSeries = seriesIndex === seriesGroups.size - 1
-    if (!isLastBatchInSeries || !isLastSeries) {
-      await new Promise(resolve => setTimeout(resolve, INTER_BATCH_DELAY_MS))
     }
   }
-
-    // Adjust voucher sequence after insertion for this series.
-    // Range was pre-reserved to `reservedHighest`. If some batches failed,
-    // release the unused portion to avoid burned numbers and gap-explanation friction.
-    if (highestInsertedVoucher < reservedHighest) {
-      const releaseTarget = highestInsertedVoucher >= currentVoucherNumber
-        ? highestInsertedVoucher       // partial success: set to actual highest
-        : currentVoucherNumber - 1     // total failure: roll back fully
-      await supabase.rpc('release_voucher_range', {
-        p_company_id: companyId,
-        p_fiscal_period_id: fiscalPeriodId,
-        p_series: series,
-        p_actual_last: releaseTarget,
-        p_reserved_highest: reservedHighest,
-      })
-    }
-
-    seriesIndex++
-  }
-
-  // Propagate batch retry stats
-  results.retriedBatches = retriedBatches
-  results.failedBatches = failedBatches
 
   return results
 }

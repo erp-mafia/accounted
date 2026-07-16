@@ -304,6 +304,53 @@ describe('commitPendingOperation: create_transaction', () => {
     expect(result.http_status).toBe(409)
     expect(result.error).toMatch(/already exists/)
   })
+
+  it('binds cash_account_id when ledger_account is given, creating the manual account', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // ensureManualCashAccount lookup miss
+    enqueue({ data: { id: 'ca-1935' }, error: null }) // ensureManualCashAccount insert
+    enqueue({ data: { id: 'tx-9' }, error: null }) // executor transactions insert
+    enqueue({ data: null, error: null }) // dispatcher's update
+
+    const op = makePendingOp({
+      operation_type: 'create_transaction',
+      params: {
+        date: '2026-05-01',
+        amount: -200,
+        description: 'WISE KORT ST',
+        currency: 'SEK',
+        ledger_account: '1935',
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ transaction_id: 'tx-9' })
+  })
+
+  it('rejects a non-19xx ledger_account with 400', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      operation_type: 'create_transaction',
+      params: {
+        date: '2026-05-01',
+        amount: -200,
+        description: 'WISE KORT ST',
+        ledger_account: '3001',
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toMatch(/19xx cash account/)
+  })
 })
 
 // ─── import_sie ─────────────────────────────────────────────────────

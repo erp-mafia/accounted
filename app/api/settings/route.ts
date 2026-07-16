@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { didTaxFieldsChange, regenerateTaxDeadlinesForUser } from '@/lib/tax/deadline-generator'
+import { didTaxFieldsChange, regenerateTaxDeadlinesForUser, shouldRegenerateTaxDeadlines } from '@/lib/tax/deadline-generator'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSettingsSchema } from '@/lib/api/schemas'
 
@@ -139,8 +139,27 @@ export const PUT = withRouteContext(
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 
-    // Check if tax-relevant fields changed and regenerate deadlines
-    if (oldSettings && didTaxFieldsChange(oldSettings, data)) {
+    // Regenerate tax deadlines when a tax-relevant field changed OR when the
+    // company has no system-generated deadlines yet. The latter is the common
+    // case: tax settings are filled at onboarding, so a later save with no
+    // tax-field change never triggered generation and the deadlines page stayed
+    // empty even though the settings were "filled in". Backfilling when the set
+    // is empty is safe: there is no existing progress/status to clobber.
+    const taxFieldsChanged = Boolean(oldSettings && didTaxFieldsChange(oldSettings, data))
+    let existingSystemDeadlineCount = 0
+    if (!taxFieldsChanged) {
+      const { count, error: countError } = await supabase
+        .from('deadlines')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .eq('source', 'system')
+      // Fail safe: on a count error, assume deadlines already exist so we do
+      // NOT delete+regenerate on a transient failure (regeneration would reset
+      // is_completed/status). A non-zero placeholder keeps the self-heal off.
+      existingSystemDeadlineCount = countError ? 1 : (count ?? 0)
+    }
+
+    if (shouldRegenerateTaxDeadlines(taxFieldsChanged, existingSystemDeadlineCount)) {
       try {
         await regenerateTaxDeadlinesForUser(supabase, companyId, {
           entity_type: data.entity_type,

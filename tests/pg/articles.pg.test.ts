@@ -114,6 +114,46 @@ describe('articles constraints + RLS', () => {
   })
 })
 
+describe('articles.currency', () => {
+  it('defaults to SEK and accepts a code from the currencies table', async () => {
+    const { userId, companyId } = await seedCompany()
+    const articleId = await insertArticle(companyId, userId)
+
+    const def = await getPool().query<{ currency: string }>(
+      `SELECT currency FROM public.articles WHERE id = $1`,
+      [articleId],
+    )
+    expect(def.rows[0].currency).toBe('SEK')
+
+    // EUR is seeded in the currencies table, so the FK accepts it.
+    await expect(
+      getPool().query(`UPDATE public.articles SET currency = 'EUR' WHERE id = $1`, [articleId]),
+    ).resolves.toBeDefined()
+  })
+
+  it('rejects a currency code missing from the currencies table (FK)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const id = randomUUID()
+    await expect(
+      getPool().query(
+        `INSERT INTO public.articles (id, company_id, user_id, name, currency)
+         VALUES ($1, $2, $3, 'X', 'ZZZ')`,
+        [id, companyId, userId],
+      ),
+    ).rejects.toThrow(/foreign key|currencies/i)
+  })
+})
+
+describe('currencies reference table', () => {
+  it('is readable by any authenticated user via RLS', async () => {
+    const reader = await insertAuthUser()
+    const seen = await withUserContext(reader, (client) =>
+      client.query<{ code: string }>(`SELECT code FROM public.currencies WHERE code = 'SEK'`),
+    )
+    expect(seen.rows).toHaveLength(1)
+  })
+})
+
 describe('articles triggers', () => {
   it('bumps updated_at on update', async () => {
     const { userId, companyId } = await seedCompany()

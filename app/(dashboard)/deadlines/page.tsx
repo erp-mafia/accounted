@@ -8,8 +8,9 @@ import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { DeadlineList } from '@/components/deadlines/DeadlineList'
 import { PageHeader } from '@/components/ui/page-header'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { AlertTriangle, ArrowRight, CalendarClock } from 'lucide-react'
+import { AlertTriangle, ArrowRight, CalendarClock, Loader2 } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { formatCurrency } from '@/lib/utils'
 import type { Deadline } from '@/types'
@@ -23,6 +24,7 @@ export default function DeadlinesPage() {
   const [customers, setCustomers] = useState<{ id: string; name: string }[]>([])
   const [overdueInvoices, setOverdueInvoices] = useState<{ count: number; total: number }>({ count: 0, total: 0 })
   const [isLoading, setIsLoading] = useState(true)
+  const [isGenerating, setIsGenerating] = useState(false)
   const { toast } = useToast()
 
   const fetchData = useCallback(async () => {
@@ -65,6 +67,42 @@ export default function DeadlinesPage() {
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  const handleGenerateSystemDeadlines = async () => {
+    setIsGenerating(true)
+    try {
+      const response = await fetch('/api/tax-deadlines/generate', { method: 'POST' })
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || t('generate_failed_description'))
+      }
+
+      if ((result.created ?? 0) === 0) {
+        // Nothing was generated: the tax settings are genuinely incomplete.
+        // Point the user to fill them in (the banner's settings link stays visible).
+        toast({
+          title: t('generate_none_title'),
+          description: t('generate_none_description'),
+        })
+        return
+      }
+
+      toast({
+        title: t('generate_success_title'),
+        description: t('generate_success_description', { count: result.created }),
+      })
+      fetchData()
+    } catch (error) {
+      toast({
+        title: t('generate_failed_title'),
+        description: error instanceof Error ? error.message : t('retry'),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsGenerating(false)
+    }
+  }
 
   const handleDeadlineCreate = async (
     data: Omit<Deadline, 'id' | 'user_id' | 'company_id' | 'created_at' | 'updated_at'>
@@ -236,20 +274,30 @@ export default function DeadlinesPage() {
       <PageHeader title={t('title')} />
 
       {!hasSystemDeadlines && (
-        <Link href="/settings/tax" className="group block">
-          <div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-3 transition-colors hover:bg-secondary/60">
-            <div className="flex items-center gap-3">
-              <CalendarClock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-              <p className="text-sm">
-                <span className="font-medium">{t('no_system_deadlines_title')}</span>
-                <span className="text-muted-foreground ml-2">
-                  {t('no_system_deadlines_description')}
-                </span>
-              </p>
-            </div>
-            <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:translate-x-0.5 transition-transform flex-shrink-0" />
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-lg border px-4 py-3">
+          <div className="flex items-center gap-3">
+            <CalendarClock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+            <p className="text-sm">
+              <span className="font-medium">{t('no_system_deadlines_title')}</span>
+              <span className="text-muted-foreground ml-1.5">
+                {t('no_system_deadlines_description')}
+              </span>
+            </p>
           </div>
-        </Link>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Button size="sm" onClick={handleGenerateSystemDeadlines} disabled={isGenerating}>
+              {isGenerating && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+              {t('generate_action')}
+            </Button>
+            <Link
+              href="/settings/tax"
+              className="group inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {t('generate_open_settings')}
+              <ArrowRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
+            </Link>
+          </div>
+        </div>
       )}
 
       {/* Overdue invoices alert */}

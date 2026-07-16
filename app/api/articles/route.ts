@@ -78,6 +78,7 @@ export const POST = withRouteContext(
         unit: body.unit ?? 'st',
         price_excl_vat: body.price_excl_vat,
         vat_rate: body.vat_rate ?? 25,
+        currency: body.currency ?? 'SEK',
         revenue_account: body.revenue_account ?? null,
         cost_price: body.cost_price ?? null,
         ean: body.ean ?? null,

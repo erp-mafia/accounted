@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import CorrectionPreview from '@/components/bookkeeping/CorrectionPreview'
+import { nextLineDescriptionForAccountChange } from '@/components/bookkeeping/correction-line-description'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { Plus, Trash2 } from 'lucide-react'
@@ -71,7 +72,25 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
   }
 
   const updateLine = (index: number, field: keyof CorrectionLine, value: string) => {
-    setLines((prev) => prev.map((l, i) => (i === index ? { ...l, [field]: value } : l)))
+    setLines((prev) =>
+      prev.map((l, i) => {
+        if (i !== index) return l
+        const next = { ...l, [field]: value }
+        // When the account changes, refresh the auto-filled description to the
+        // new account's name. Without this, a description carried over from the
+        // original entry (e.g. 2393 "Lån från närstående personer, långfristig
+        // del") stays stale on the newly chosen account (e.g. 2893, kortfristig).
+        if (field === 'account_number' && value) {
+          next.line_description = nextLineDescriptionForAccountChange(
+            l.line_description,
+            l.account_number,
+            value,
+            accounts,
+          )
+        }
+        return next
+      })
+    )
   }
 
   const addLine = () => {

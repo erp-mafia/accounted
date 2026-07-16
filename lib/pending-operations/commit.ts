@@ -26,6 +26,7 @@ import {
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
@@ -648,11 +649,24 @@ async function commitCreateTransaction(
   const amount = Number(params.amount)
   const description = (params.description as string) ?? ''
   const currency = ((params.currency as string) || 'SEK') as Currency
+  const ledgerAccount = (params.ledger_account as string) || null
   const bankConnectionId = (params.bank_connection_id as string) || null
   const externalId = (params.external_id as string) || null
 
   if (!date || !description.trim() || !Number.isFinite(amount)) {
     return { error: 'date, description, and amount are required', status: 400 }
+  }
+  if (ledgerAccount && !/^19\d{2}$/.test(ledgerAccount)) {
+    return { error: 'ledger_account must be a BAS 19xx cash account', status: 400 }
+  }
+
+  // Bind the row to a manual kassakonto when a ledger account is given, so
+  // reconciliation and voucher matching resolve the real account instead of
+  // falling back to 1930 (issue #1016). Find-or-create; the row's currency
+  // follows this transaction.
+  let cashAccountId: string | null = null
+  if (ledgerAccount) {
+    cashAccountId = await ensureManualCashAccount(supabase, companyId, ledgerAccount, currency)
   }
 
   const { data, error } = await supabase
@@ -661,6 +675,7 @@ async function commitCreateTransaction(
       user_id: userId,
       company_id: companyId,
       bank_connection_id: bankConnectionId,
+      cash_account_id: cashAccountId,
       external_id: externalId,
       date,
       description: description.trim(),

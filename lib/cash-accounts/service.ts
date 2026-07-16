@@ -487,6 +487,89 @@ export async function upsertFromPsd2(
 }
 
 /**
+ * Find (or create) a manual cash account for a BAS ledger slot, so transactions
+ * ingested outside the PSD2 flow (create_transactions / CSV) can carry a real
+ * cash_account_id instead of NULL. Without the link, reconciliation 404s on the
+ * account and the match dialog falls back to 1930 (issue #1016).
+ *
+ * Manual rows (source='manual', bank_connection_id=null) are already first-class:
+ * every company is seeded a manual 1930 the same way, and upsertFromPsd2 promotes
+ * a manual holder in place if a bank later claims the slot. So pre-creating one
+ * here does NOT race the PSD2 sync (the concern noted in lib/transactions/ingest.ts):
+ * the worst case is a later connection promoting this row, which is the intended flow.
+ *
+ * Keyed on the (company_id, ledger_account) UNIQUE constraint: a concurrent
+ * insert surfaces as 23505, which we treat as "someone else won the race" and
+ * re-read. The row's currency follows the first transaction that created it; a
+ * ledger account holds one currency by that same constraint.
+ */
+export async function ensureManualCashAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  ledgerAccount: string,
+  currency: string,
+  name?: string | null,
+): Promise<string> {
+  const existing = await supabase
+    .from('cash_accounts')
+    .select('id, currency')
+    .eq('company_id', companyId)
+    .eq('ledger_account', ledgerAccount)
+    .maybeSingle()
+  if (existing.error) {
+    throw new Error(`ensureManualCashAccount lookup failed: ${existing.error.message}`)
+  }
+  if (existing.data) {
+    const row = existing.data as { id: string; currency: string | null }
+    // (company_id, ledger_account) is UNIQUE, so a ledger holds exactly one
+    // currency. A different-currency transaction pointing at the same ledger is
+    // a real conflict (e.g. a SEK row landing on a ledger already claimed for
+    // USD): fail loudly instead of binding it to the wrong-currency account.
+    if (row.currency && row.currency.toUpperCase() !== currency.toUpperCase()) {
+      throw new Error(
+        `Cash account ${ledgerAccount} is denominated in ${row.currency}, not ${currency.toUpperCase()}`,
+      )
+    }
+    return row.id
+  }
+
+  const insert = await supabase
+    .from('cash_accounts')
+    .insert({
+      company_id: companyId,
+      ledger_account: ledgerAccount,
+      currency: currency.toUpperCase(),
+      name: name?.trim() || `Bankkonto ${currency.toUpperCase()}`,
+      enabled: true,
+      is_primary: false,
+      source: 'manual' as CashAccountSource,
+    })
+    .select('id')
+    .single()
+
+  if (insert.error) {
+    // Lost the (company_id, ledger_account) race: re-read the winner's row.
+    if (insert.error.code === '23505') {
+      const reread = await supabase
+        .from('cash_accounts')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('ledger_account', ledgerAccount)
+        .maybeSingle()
+      if (reread.data) return (reread.data as { id: string }).id
+    }
+    log.error('ensureManualCashAccount insert failed', {
+      companyId,
+      ledgerAccount,
+      error: insert.error.message,
+    })
+    throw new Error(`ensureManualCashAccount insert failed: ${insert.error.message}`)
+  }
+
+  return (insert.data as { id: string }).id
+}
+
+/**
  * Toggle a cash account's enabled flag. Used by the AccountPicker when a user
  * opts in or out of syncing a particular PSD2 account.
  */
