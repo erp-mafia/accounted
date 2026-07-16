@@ -78,18 +78,18 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/mailparser": "^3.4.6",
-    "@types/node": "^26",
+    "@types/node": "^20",
     "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/sharp": "^0.32.0",
     "@types/web-push": "^3.6.4",
     "dotenv": "^17.4.2",
-    "eslint": "^10",
+    "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "pg": "^8.22.0",
     "tailwindcss": "^4",
-    "typescript": "^7",
+    "typescript": "^5",
     "vitest": "^4.1.9"
   },
   "overrides": {
