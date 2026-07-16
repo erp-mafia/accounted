@@ -59,6 +59,42 @@ beforeEach(() => {
 })
 
 describe('commitPendingOperation: match_transaction_invoice settlement account resolution', () => {
+  it('rejects a credit note before creating a payment journal entry', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'tx-1',
+        company_id: 'company-1',
+        amount: 12500,
+        currency: 'SEK',
+        date: '2026-05-12',
+        invoice_id: null,
+        journal_entry_id: null,
+      },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: {
+        id: 'credit-1',
+        invoice_number: 'KR-F-2026001',
+        status: 'sent',
+        total: -12500,
+        credited_invoice_id: 'inv-1',
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'credit-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
+  })
+
   it('credits the payment JE to the transaction\'s own linked cash account, not a hardcoded 1930', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

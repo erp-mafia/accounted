@@ -453,6 +453,45 @@ describe('createCreditNoteJournalEntry: per-line VAT', () => {
     const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
     expect(totalDebit).toBe(totalCredit)
   })
+
+  it.each([
+    ['rot' as const, 3000, 9500],
+    ['rut' as const, 5000, 7500],
+  ])('reverses the %s receivable split across 1510 and 1513', async (deductionType, taxCredit, customerCredit) => {
+    const creditNote = makeInvoice({
+      invoice_number: 'KR-1002',
+      subtotal: -10000,
+      vat_amount: -2500,
+      total: -12500,
+      vat_treatment: 'standard_25',
+      items: [
+        makeItem({
+          quantity: -1,
+          unit_price: 10000,
+          line_total: -10000,
+          vat_rate: 25,
+          vat_amount: -2500,
+          deduction_type: deductionType,
+          dimensions: { '6': 'P001' },
+        }),
+      ],
+      default_dimensions: { '1': 'KS01' },
+    })
+
+    await createCreditNoteJournalEntry(null as never, 'company-1', 'user-1', creditNote)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(input.lines.find((line) => line.account_number === '1510')?.credit_amount)
+      .toBe(customerCredit)
+    const line1513 = input.lines.find((line) => line.account_number === '1513')
+    expect(line1513?.credit_amount).toBe(taxCredit)
+    expect(line1513?.debit_amount).toBe(0)
+    expect(line1513?.dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+
+    const totalDebit = input.lines.reduce((sum, line) => sum + line.debit_amount, 0)
+    const totalCredit = input.lines.reduce((sum, line) => sum + line.credit_amount, 0)
+    expect(totalDebit).toBe(totalCredit)
+  })
 })
 
 describe('createInvoiceCashEntry: per-line VAT', () => {

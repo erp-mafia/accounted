@@ -49,6 +49,28 @@ describe('settleInvoicePayment', () => {
     vi.mocked(createInvoiceCashEntry).mockResolvedValue({ id: 'je-2' } as never)
   })
 
+  it('rejects credit notes before creating a journal entry or updating state', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const result = await settleInvoicePayment(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      {
+        ...BASE_PARAMS,
+        invoice: payableInvoice({ credited_invoice_id: 'original-invoice-1' }),
+      },
+    )
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'INVOICE_PAID_NOT_PAYABLE',
+      details: { reason: 'credit_note' },
+    })
+    expect(vi.mocked(createInvoicePaymentJournalEntry)).not.toHaveBeenCalled()
+    expect(vi.mocked(createInvoiceCashEntry)).not.toHaveBeenCalled()
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
   it('books via the payment entry and forwards the settlement account', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [{ id: 'inv-1' }] }) // CAS update matched

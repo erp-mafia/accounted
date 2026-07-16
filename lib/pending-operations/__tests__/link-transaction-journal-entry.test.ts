@@ -253,6 +253,49 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
     })
   })
 
+  it('rejects a credit note before linking the transaction', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: 1000 }),
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: JE_UUID,
+        status: 'posted',
+        voucher_series: 'A',
+        voucher_number: 1,
+        entry_date: '2026-05-15',
+      },
+      error: null,
+    })
+    enqueue({
+      data: makeInvoice({
+        id: INV_UUID,
+        status: 'sent',
+        total: -1000,
+        remaining_amount: -1000,
+        credited_invoice_id: 'original-invoice-1',
+      }),
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const op = makePendingOp({
+      params: {
+        transaction_id: TX_UUID,
+        journal_entry_id: JE_UUID,
+        invoice_id: INV_UUID,
+      },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toBe('Credit notes cannot be recorded as paid.')
+  })
+
   it('returns 409 LINK_TX_INVOICE_RACE when optimistic lock loses', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

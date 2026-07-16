@@ -571,6 +571,47 @@ describe('POST :id/match-invoice', () => {
     expect((await res.json()).error.code).toBe('MATCH_INVOICE_TX_ALREADY_LINKED')
   })
 
+  it('rejects a credit note before creating a payment journal entry', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: {
+          data: {
+            id: TX_ID,
+            amount: 12500,
+            date: '2026-05-12',
+            currency: 'SEK',
+            invoice_id: null,
+          },
+          error: null,
+        },
+        invoices: {
+          data: {
+            id: INV_ID,
+            status: 'sent',
+            document_type: 'invoice',
+            total: -12500,
+            credited_invoice_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+          },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await matchInvoicePOST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INV_ID },
+      ),
+      txParams(TX_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('MATCH_INVOICE_CREDIT_NOTE')
+    expect(createInvPmtJE).not.toHaveBeenCalled()
+    expect(createInvCashJE).not.toHaveBeenCalled()
+  })
+
   // The v1 route threads resolveSettlementAccount(transaction.cash_account_id)
   // exactly like the dashboard route and the agent/MCP commit path; these
   // regression tests were missing here (flagged in triage on #987) even

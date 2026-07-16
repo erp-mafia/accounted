@@ -58,6 +58,15 @@ import {
   IdempotencyKeyReuseError,
 } from '@/lib/api/idempotency'
 import { toToolError, type NextActionHint } from './tool-result'
+import {
+  addCompanyToNextHint,
+  addCompanyToTopLevelNext,
+  assertMcpCompanyWriteAccess,
+  extractRequestedCompany,
+  isCompanyDependentTool,
+  projectToolInputSchema,
+  resolveMcpCompanyContext,
+} from './company-routing'
 import { findSupplierCandidates } from './supplier-candidates'
 import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
@@ -112,6 +121,7 @@ import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { getUserCompanies } from '@/lib/company/context'
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
 // which dispatches to this handler: no duplicate call needed here.
 import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType } from '@/types'
@@ -333,7 +343,7 @@ async function stagePendingOperation(
       message: `Dry run: would stage "${operationType}" (risk: ${riskLevel}). No changes made.`,
       preview: previewData,
       ...(periodStatus ? { period_status: periodStatus } : {}),
-      ...(next ? { next } : {}),
+      ...(next ? { next: addCompanyToNextHint(next, companyId) as NextActionHint } : {}),
     }
   }
 
@@ -358,7 +368,12 @@ async function stagePendingOperation(
           ? `Replayed cached response for idempotency_key "${options.idempotencyKey}": already staged as pending_operation ${cachedOpId}. No new side-effects. ${buildApprovalGuidance(cachedOpId, riskLevel)}`
           : `Replayed cached response for idempotency_key "${options.idempotencyKey}". No new side-effects.`,
         ...(cachedOpId
-          ? { approve: { tool: 'gnubok_approve_pending_operation', args: { operation_id: cachedOpId } } }
+          ? {
+              approve: {
+                tool: 'gnubok_approve_pending_operation',
+                args: { operation_id: cachedOpId, company_id: companyId },
+              },
+            }
           : {}),
         preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
         ...(periodStatus ? { period_status: periodStatus } : {}),
@@ -399,11 +414,11 @@ async function stagePendingOperation(
     message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}). ${buildApprovalGuidance(data.id, riskLevel)} The user can also approve at /pending in the ${branding} web app.`,
     approve: {
       tool: 'gnubok_approve_pending_operation',
-      args: { operation_id: data.id } as Record<string, unknown>,
+      args: { operation_id: data.id, company_id: companyId } as Record<string, unknown>,
     },
     preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
     ...(periodStatus ? { period_status: periodStatus } : {}),
-    ...(next ? { next } : {}),
+    ...(next ? { next: addCompanyToNextHint(next, companyId) as NextActionHint } : {}),
   } as const
 
   if (options.idempotencyKey && requestHash) {
@@ -1760,7 +1775,7 @@ export const tools: McpTool[] = [
             name: t.name,
             description: t.description,
             scope: requiredScope,
-            inputSchema: t.inputSchema,
+            inputSchema: projectToolInputSchema(t),
             ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
             annotations: t.annotations,
             ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
@@ -1775,6 +1790,109 @@ export const tools: McpTool[] = [
         count: projected.length,
         total_matched: totalMatched,
         detail,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_list_companies',
+    title: 'List Companies',
+    description: 'List every non-archived company this API-key user can access. Use company_id from this result on other tools; omit it there to use the API key default.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        companies: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              company_id: { type: 'string' },
+              name: { type: 'string' },
+              org_number: { type: ['string', 'null'] },
+              entity_type: { type: ['string', 'null'] },
+              role: { type: 'string', enum: ['owner', 'admin', 'member', 'viewer'] },
+              is_default: { type: 'boolean' },
+            },
+            required: ['company_id', 'name', 'org_number', 'entity_type', 'role', 'is_default'],
+          },
+        },
+        count: { type: 'number' },
+        default_company_id: { type: ['string', 'null'] },
+      },
+      required: ['companies', 'count', 'default_company_id'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(_args, defaultCompanyId, userId, supabase) {
+      type CompanyRow = {
+        id: string
+        name: string
+        org_number: string | null
+        entity_type: string | null
+        archived_at: string | null
+      }
+      type MembershipRow = {
+        company_id: string
+        role: 'owner' | 'admin' | 'member' | 'viewer'
+        companies: CompanyRow | CompanyRow[] | null
+      }
+
+      const memberships = (await getUserCompanies(supabase, userId)) as unknown as MembershipRow[]
+      const accessible = memberships.flatMap((membership) => {
+        const company = Array.isArray(membership.companies)
+          ? membership.companies[0]
+          : membership.companies
+        return company && company.archived_at === null ? [{ membership, company }] : []
+      })
+      const companyIds = accessible.map(({ company }) => company.id)
+      const displayNames = new Map<string, string>()
+
+      if (companyIds.length > 0) {
+        try {
+          const settings = await fetchAllRows<{ company_id: string; company_name: string | null }>(
+            ({ from, to }) =>
+              supabase
+                .from('company_settings')
+                .select('company_id, company_name')
+                .in('company_id', companyIds)
+                .order('company_id', { ascending: true })
+                .range(from, to),
+          )
+          for (const row of settings) {
+            if (row.company_name) displayNames.set(row.company_id, row.company_name)
+          }
+        } catch (error) {
+          log.warn('gnubok_list_companies display-name lookup failed', {
+            error: error instanceof Error ? error.message : 'unknown',
+          })
+        }
+      }
+
+      const companies = accessible.map(({ membership, company }) => ({
+        company_id: company.id,
+        name: displayNames.get(company.id) ?? company.name,
+        org_number: company.org_number,
+        entity_type: company.entity_type,
+        role: membership.role,
+        is_default: company.id === defaultCompanyId,
+      }))
+      const hasAccessibleDefault = companies.some((company) => company.is_default)
+
+      return {
+        companies,
+        count: companies.length,
+        default_company_id: hasAccessibleDefault ? defaultCompanyId : null,
       }
     },
   },
@@ -2245,10 +2363,10 @@ export const tools: McpTool[] = [
           type: 'object',
           additionalProperties: false,
           description:
-            'The single company every tool call in this session reads and writes. Confirm this is the entity the user means BEFORE any staged write: there is no per-call company switch; scope is fixed by the API key.',
+            'The company selected for this call. Confirm it is the entity the user means before staging a write. Pass company_id on later calls to keep working in a non-default company.',
           properties: {
             id: { type: 'string', description: 'Deprecated: read company_id instead.' },
-            company_id: { type: 'string', description: 'company_id this session is scoped to.' },
+            company_id: { type: 'string', description: 'company_id selected for this call.' },
             name: { type: ['string', 'null'] },
             org_number: { type: ['string', 'null'] },
             entity_type: { type: ['string', 'null'], description: 'e.g. "aktiebolag", "enskild_firma". Null if unset.' },
@@ -2493,10 +2611,10 @@ export const tools: McpTool[] = [
           .select('full_name')
           .eq('id', userId)
           .maybeSingle(),
-        // Company identity so the agent can confirm WHICH entity it operates on
-        // before any write. Scope is fixed by the API key: there is no per-call
-        // switch: so this is the session's "whoami for the company". Best-effort:
-        // a failed read still yields a company block with at least the id.
+        // Company identity so the agent can confirm which entity it operates on
+        // before any write. The dispatcher has already resolved and authorized
+        // the optional per-call company_id. A failed read still yields a company
+        // block with at least the id.
         supabase
           .from('companies')
           .select('name, org_number, entity_type')
@@ -12014,20 +12132,6 @@ export const tools: McpTool[] = [
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
       const assetIds = Array.isArray(args.asset_ids) ? (args.asset_ids as string[]) : undefined
 
-      // Mirror the HTTP route's `requireWrite: true` guard so a viewer-role
-      // member can't post depreciation through the MCP surface. RLS would
-      // reject the underlying INSERTs anyway, but failing fast here
-      // produces a much cleaner error than the cascaded RLS rejection.
-      const { data: membership } = await supabase
-        .from('company_members')
-        .select('role')
-        .eq('company_id', companyId)
-        .eq('user_id', userId)
-        .maybeSingle()
-      if (!membership || membership.role === 'viewer') {
-        throw new Error('Write permission required')
-      }
-
       const { data: period } = await supabase
         .from('fiscal_periods')
         .select('id, name, period_end, is_closed, locked_at, closing_entry_id')
@@ -12637,7 +12741,7 @@ function emitToolCallTelemetry(payload: {
   success: boolean
   isError: boolean
   errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'unknown_tool' | 'test_key_write_blocked' | null
+  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'unknown_tool' | 'test_key_write_blocked' | null
   errorMessage: string | null
   requestId: string | number | null
   userId: string
@@ -12965,6 +13069,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '',
             'Discovery:',
             '• tools/list returns the full schema for every tool. To narrow a large catalog, call gnubok_search_tools(query="…"): it ranks tools by relevance; pass detail="name"|"summary"|"full" to control payload size.',
+            `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId}); when selecting another company, repeat company_id on every company-data call, including approval.`,
+            '• MCP resources use the API key default company. For a selected non-default company, call gnubok_get_agent_briefing with company_id instead of relying on Accounted://company/current or other company-data resources.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
             '',
             'Common workflows:',
@@ -13022,7 +13128,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               name: t.name,
               ...(t.title ? { title: t.title } : {}),
               description: t.description,
-              inputSchema: t.inputSchema,
+              inputSchema: projectToolInputSchema(t),
               ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
               annotations: t.annotations,
               ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
@@ -13034,7 +13140,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
     case 'tools/call': {
       const toolName = (params as Record<string, unknown>)?.name as string
-      const toolArgs = ((params as Record<string, unknown>)?.arguments ?? {}) as Record<
+      const rawToolArgs = ((params as Record<string, unknown>)?.arguments ?? {}) as Record<
         string,
         unknown
       >
@@ -13093,12 +13199,55 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         )
       }
 
+      let toolArgs: Record<string, unknown>
+      let effectiveCompanyId = companyId
+      const companyRoutingStartedAt = Date.now()
+      try {
+        const extracted = extractRequestedCompany(rawToolArgs)
+        toolArgs = extracted.toolArgs
+
+        if (isCompanyDependentTool(toolName)) {
+          const companyContext = await resolveMcpCompanyContext({
+            supabase,
+            userId,
+            defaultCompanyId: companyId,
+            requestedCompanyId: extracted.requestedCompanyId,
+          })
+          assertMcpCompanyWriteAccess(companyContext, requiredScope)
+          effectiveCompanyId = companyContext.companyId
+        }
+      } catch (err) {
+        const structured = toToolError(err, { toolName })
+        emitToolCallTelemetry({
+          tool: toolName,
+          requiredScope: requiredScope ?? null,
+          actor,
+          latencyMs: Date.now() - companyRoutingStartedAt,
+          success: false,
+          isError: true,
+          errorCode: structured.error.code,
+          errorKind: 'company_access_denied',
+          errorMessage: structured.error.message_sv,
+          requestId: id ?? null,
+          userId,
+          // Keep denied attempts attributed to the key default. An arbitrary,
+          // unauthorized target must never create tenant telemetry there.
+          companyId,
+        })
+        return NextResponse.json(
+          jsonRpc(id ?? null, {
+            content: [{ type: 'text', text: JSON.stringify(structured, null, 2) }],
+            isError: true,
+          })
+        )
+      }
+
       // Enforce the capability paywall: the MCP/agent path is a paid chokepoint
       // just like the HTTP routes (send_invoice → email_send, the two SKV
       // submissions → skatteverket). Fail-closed; self-hosted short-circuits to
       // all-on inside hasCapability. Blocks before any pending op is staged.
       const requiredCapability = MCP_TOOL_CAPABILITY_MAP[toolName]
-      if (requiredCapability && !(await hasCapability(supabase, companyId, requiredCapability))) {
+      if (requiredCapability && !(await hasCapability(supabase, effectiveCompanyId, requiredCapability))) {
         const capError = { error: capabilityBlockedError(requiredCapability) }
         emitToolCallTelemetry({
           tool: toolName,
@@ -13112,7 +13261,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           errorMessage: capError.error.message_sv,
           requestId: id ?? null,
           userId,
-          companyId,
+          companyId: effectiveCompanyId,
         })
         return NextResponse.json(
           jsonRpc(id ?? null, {
@@ -13152,7 +13301,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             errorMessage: blocked.error.message_sv,
             requestId: id ?? null,
             userId,
-            companyId,
+            companyId: effectiveCompanyId,
           })
           return NextResponse.json(
             jsonRpc(id ?? null, {
@@ -13166,7 +13315,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // Detect if THIS call follows the previous call's `next` hint: must
       // run before execute() so we don't double-store on this call. Emits
       // mcp.next_hint_followed when the agent's behaviour matches the hint.
-      checkAndEmitNextHintFollowed(sessionId, toolName, actor, userId, companyId)
+      checkAndEmitNextHintFollowed(sessionId, toolName, actor, userId, effectiveCompanyId)
 
       const callStartedAt = Date.now()
       try {
@@ -13175,7 +13324,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         if (toolName === 'gnubok_search_tools') {
           (toolArgs as Record<string, unknown>).__keyScopes = keyScopes
         }
-        const result = await tool.execute(toolArgs, companyId, userId, supabase, actor)
+        const rawResult = await tool.execute(toolArgs, effectiveCompanyId, userId, supabase, actor)
+        const result = addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
         const latencyMs = Date.now() - callStartedAt
         const response: Record<string, unknown> = {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
@@ -13216,7 +13366,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           errorMessage: null,
           requestId: id ?? null,
           userId,
-          companyId,
+          companyId: effectiveCompanyId,
         })
         return NextResponse.json(jsonRpc(id ?? null, response))
       } catch (err) {
@@ -13237,7 +13387,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           errorMessage: structured.error.message_sv,
           requestId: id ?? null,
           userId,
-          companyId,
+          companyId: effectiveCompanyId,
         })
         return NextResponse.json(
           jsonRpc(id ?? null, {

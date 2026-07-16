@@ -23,7 +23,7 @@ Accounted implements double-entry bookkeeping compliant with Swedish accounting 
 ## Self-Hosting
 
 ```bash
-git clone https://github.com/erp-mafia/gnubok.git
+git clone https://github.com/erp-mafia/accounted.git
 cd Accounted
 ./setup.sh              # Prompts for Supabase credentials, generates .env
 docker compose up -d

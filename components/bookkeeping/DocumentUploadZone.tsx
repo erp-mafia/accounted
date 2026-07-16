@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Upload, FileText, ImageIcon, X, Loader2 } from 'lucide-react'
@@ -45,10 +46,13 @@ function isImageType(type: string): boolean {
  * returned by /api/documents. Falls back to message_en or null if the
  * shape is unexpected.
  */
-function extractErrorMessage(err: unknown): string | null {
+function extractErrorMessage(err: unknown, locale: string): string | null {
   if (typeof err === 'string') return err
   if (err && typeof err === 'object') {
     const e = err as { message?: unknown; message_en?: unknown; code?: unknown }
+    if (locale === 'en' && typeof e.message_en === 'string' && e.message_en.length > 0) {
+      return e.message_en
+    }
     if (typeof e.message === 'string' && e.message.length > 0) return e.message
     if (typeof e.message_en === 'string' && e.message_en.length > 0) return e.message_en
     if (typeof e.code === 'string') return e.code
@@ -64,6 +68,8 @@ export default function DocumentUploadZone({
   disabled = false,
   compact = false,
 }: DocumentUploadZoneProps) {
+  const t = useTranslations('document_upload')
+  const locale = useLocale()
   const [isDragging, setIsDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -91,13 +97,13 @@ export default function DocumentUploadZone({
           fileName: file.fileName,
         })
         const reason = res.status === 401 || res.status === 403
-          ? 'Din session har gått ut. Ladda om sidan och logga in igen.'
-          : `Servern svarade ${res.status}.`
+          ? t('session_expired')
+          : t('server_status', { status: res.status })
         return { ...file, status: 'error', error: reason }
       }
 
       if (!res.ok || result.error) {
-        const errMessage = extractErrorMessage(result.error) || `Uppladdning misslyckades (${res.status})`
+        const errMessage = extractErrorMessage(result.error, locale) || t('failed_status', { status: res.status })
         console.warn('[DocumentUploadZone] Upload error', {
           status: res.status,
           error: result.error,
@@ -112,9 +118,9 @@ export default function DocumentUploadZone({
         error: err,
         fileName: file.fileName,
       })
-      return { ...file, status: 'error', error: 'Uppladdning misslyckades: nätverksfel' }
+      return { ...file, status: 'error', error: t('network_error') }
     }
-  }, [journalEntryId])
+  }, [journalEntryId, locale, t])
 
   const handleFiles = useCallback(async (newFiles: File[]) => {
     const remaining = maxFiles - files.length
@@ -127,7 +133,7 @@ export default function DocumentUploadZone({
         validFiles.push({
           file,
           status: 'error',
-          error: 'Filtypen stöds inte',
+          error: t('unsupported_type'),
           fileName: file.name,
           fileSize: file.size,
           uploadKey: `upload-${++uploadCounter}`,
@@ -138,7 +144,7 @@ export default function DocumentUploadZone({
         validFiles.push({
           file,
           status: 'error',
-          error: 'Filen är för stor (max 10 MB)',
+          error: t('too_large'),
           fileName: file.name,
           fileSize: file.size,
           uploadKey: `upload-${++uploadCounter}`,
@@ -165,7 +171,7 @@ export default function DocumentUploadZone({
       )
       onFilesChange([...currentFiles])
     }
-  }, [files, maxFiles, onFilesChange, uploadFile])
+  }, [files, maxFiles, onFilesChange, t, uploadFile])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -230,11 +236,11 @@ export default function DocumentUploadZone({
           <Upload className={compact ? 'h-4 w-4 text-muted-foreground' : 'mx-auto h-8 w-8 text-muted-foreground'} />
           <div>
             <p className={compact ? 'text-sm text-muted-foreground' : 'text-sm font-medium'}>
-              {compact ? 'Dra och släpp eller klicka' : 'Dra och släpp filer här'}
+              {compact ? t('compact_prompt') : t('prompt')}
             </p>
             {!compact && (
               <p className="text-xs text-muted-foreground">
-                PDF, bilder (max 10 MB)
+                {t('format_hint')}
               </p>
             )}
           </div>
@@ -264,13 +270,13 @@ export default function DocumentUploadZone({
               )}
               {file.status === 'uploaded' && (
                 <Badge variant="success" className="text-xs px-1.5 py-0">
-                  Uppladdad
+                  {t('uploaded')}
                 </Badge>
               )}
               {file.status === 'error' && (
                 <>
                   <Badge variant="destructive" className="text-xs px-1.5 py-0">
-                    Fel
+                    {t('error')}
                   </Badge>
                   {file.error && (
                     <span className="text-xs text-destructive">{file.error}</span>
@@ -281,7 +287,7 @@ export default function DocumentUploadZone({
               <Button
                 variant="ghost"
                 size="sm"
-                aria-label="Ta bort fil"
+                aria-label={t('remove_file')}
                 className="h-6 w-6 p-0 shrink-0"
                 onClick={(e) => {
                   e.stopPropagation()
@@ -297,7 +303,7 @@ export default function DocumentUploadZone({
       )}
 
       {isUploading && (
-        <p className="text-xs text-muted-foreground">Laddar upp...</p>
+        <p className="text-xs text-muted-foreground">{t('uploading')}</p>
       )}
     </div>
   )

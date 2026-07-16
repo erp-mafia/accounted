@@ -8,6 +8,41 @@
 
 processing_activities:
 
+  - id: customer.private_identity
+    name: Personnummer för privatkund
+    purpose: >-
+      Identifiera en privatkund när företagets avtal, fakturering eller
+      kundadministration kräver en entydig identitet. Personnumret får endast
+      sparas på kundtypen privatkund och exponeras endast maskerat i API och UI.
+    lawful_basis: art_6_1_b
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - customer
+    data_categories:
+      - user.government_id
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor.
+    retention:
+      duration: customer_relationship_or_7y_if_accounting_record
+      basis: contract_and_bfl_7_kap
+      stored_in:
+        - customers.personal_number
+        - retained_invoice_documents_when_required
+    security_measures:
+      - aes_256_gcm_field_encryption
+      - masked_api_and_ui_output_last4_only
+      - write_role_required
+      - rls_company_scoped
+      - no_full_value_read_endpoint
+
   - id: agi.submit
     name: AGI inlämning till Skatteverket
     purpose: >-

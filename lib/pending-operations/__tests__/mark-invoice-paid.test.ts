@@ -67,6 +67,35 @@ beforeEach(() => {
 })
 
 describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () => {
+  it('rejects credit notes before creating a payment journal entry', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'credit-1',
+        invoice_number: 'KR-F-2026001',
+        status: 'sent',
+        total: -525,
+        remaining_amount: -525,
+        paid_amount: null,
+        credited_invoice_id: 'inv-1',
+        document_type: 'invoice',
+        journal_entry_id: 'je-credit',
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { invoice_id: 'credit-1', payment_date: '2026-03-30' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
+  })
+
   it('zeroes remaining_amount and emits invoice.paid on full payment (issue #825)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

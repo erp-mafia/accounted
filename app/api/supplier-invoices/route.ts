@@ -12,6 +12,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 ensureInitialized()
@@ -67,6 +68,42 @@ export const POST = withRouteContext(
     if (!validation.success) return validation.response
     const body = validation.data
     const paidPrivately = body.paid_with_private_funds === true
+
+    if (body.document_id) {
+      const { data: document, error: documentError } = await supabase
+        .from('document_attachments')
+        .select('id, journal_entry_id')
+        .eq('id', body.document_id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (documentError || !document || document.journal_entry_id) {
+        return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+          requestId,
+          details: { reason: 'document_id is missing, belongs to another company, or is already linked' },
+        })
+      }
+
+      const { data: existingDocumentUse, error: existingDocumentUseError } = await supabase
+        .from('supplier_invoices')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('document_id', body.document_id)
+        .limit(1)
+        .maybeSingle()
+
+      if (existingDocumentUseError) {
+        log.error('supplier invoice document usage lookup failed', existingDocumentUseError)
+        return errorResponse(existingDocumentUseError, log, { requestId })
+      }
+
+      if (existingDocumentUse) {
+        return errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+          requestId,
+          details: { reason: 'document_id is already used by a supplier invoice' },
+        })
+      }
+    }
 
     if (paidPrivately && body.reverse_charge) {
       // RC invoices come from registered businesses with formal invoices and
@@ -236,6 +273,7 @@ export const POST = withRouteContext(
         user_id: user.id,
         company_id: companyId,
         supplier_id: body.supplier_id,
+        document_id: body.document_id || null,
         arrival_number: arrivalNum,
         supplier_invoice_number: body.supplier_invoice_number,
         invoice_date: body.invoice_date,
@@ -498,6 +536,28 @@ export const POST = withRouteContext(
             reason: err instanceof Error ? err.message : 'unknown',
             step: 'registration_journal_entry',
           },
+        })
+      }
+    }
+
+    const primaryJournalEntryId = paymentJournalEntryId || registrationJournalEntryId
+    if (body.document_id && primaryJournalEntryId) {
+      try {
+        await linkToJournalEntry(
+          supabase,
+          companyId,
+          body.document_id,
+          primaryJournalEntryId,
+        )
+      } catch (err) {
+        log.warn('supplier invoice document could not be linked to journal entry', {
+          documentId: body.document_id,
+          journalEntryId: primaryJournalEntryId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        warnings.push({
+          code: 'DOCUMENT_LINK_FAILED',
+          message: 'Fakturan registrerades, men underlaget kunde inte kopplas till verifikationen.',
         })
       }
     }

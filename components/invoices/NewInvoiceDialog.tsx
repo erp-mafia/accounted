@@ -1,12 +1,23 @@
 'use client'
 
 import dynamic from 'next/dynamic'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Button } from '@/components/ui/button'
+import { createClient } from '@/lib/supabase/client'
+import { useCompany } from '@/contexts/CompanyContext'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import {
+  buildInvoiceCopyInitial,
+  canCopyInvoice,
+  type InvoiceCopyInitial,
+  type InvoiceCopySource,
+} from '@/lib/invoices/copy-invoice'
 
 // Deferred: the editor (and its framer-motion dependency) is a large chunk
-// that would otherwise ship with the invoice LIST bundle — it's only needed
+// that would otherwise ship with the invoice LIST bundle: it is only needed
 // once this dialog actually opens.
 const InvoiceEditor = dynamic(() => import('@/components/invoices/InvoiceEditor'), {
   ssr: false,
@@ -22,6 +33,7 @@ const InvoiceEditor = dynamic(() => import('@/components/invoices/InvoiceEditor'
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
+  copyFromId?: string | null
 }
 
 /**
@@ -35,8 +47,70 @@ interface Props {
  * shows the invoice-number preview: a static DialogTitle would duplicate or
  * contradict it.
  */
-export default function NewInvoiceDialog({ open, onOpenChange }: Props) {
+export default function NewInvoiceDialog({ open, onOpenChange, copyFromId = null }: Props) {
   const t = useTranslations('invoice_editor')
+  const { company } = useCompany()
+  const supabase = useMemo(() => createClient(), [])
+  const [copyLoad, setCopyLoad] = useState<{
+    sourceId: string | null
+    initial: InvoiceCopyInitial | null
+    failed: boolean
+  }>({ sourceId: null, initial: null, failed: false })
+
+  useEffect(() => {
+    if (!open || !copyFromId) return
+    if (!company?.id) return
+
+    let cancelled = false
+
+    const loadCopySource = async () => {
+      const { data, error } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('id', copyFromId)
+        .eq('company_id', company.id)
+        .single()
+
+      let items: Record<string, unknown>[] = []
+      if (!error && data) {
+        try {
+          items = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
+            supabase
+              .from('invoice_items')
+              .select('*')
+              .eq('invoice_id', copyFromId)
+              .eq('company_id', company.id)
+              .order('id', { ascending: true })
+              .range(from, to),
+          )
+        } catch {
+          if (!cancelled) setCopyLoad({ sourceId: copyFromId, initial: null, failed: true })
+          return
+        }
+      }
+
+        if (cancelled) return
+        const source = data ? { ...data, items } : null
+        if (error || !source || !canCopyInvoice(source)) {
+          setCopyLoad({ sourceId: copyFromId, initial: null, failed: true })
+          return
+        }
+        setCopyLoad({
+          sourceId: copyFromId,
+          initial: buildInvoiceCopyInitial(source as InvoiceCopySource),
+          failed: false,
+        })
+    }
+
+    void loadCopySource()
+
+    return () => {
+      cancelled = true
+    }
+  }, [company?.id, copyFromId, open, supabase])
+
+  const copyInitial = copyLoad.sourceId === copyFromId ? copyLoad.initial : null
+  const copyLoadFailed = copyLoad.sourceId === copyFromId && copyLoad.failed
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -50,8 +124,30 @@ export default function NewInvoiceDialog({ open, onOpenChange }: Props) {
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
-        <DialogTitle className="sr-only">{t('title_invoice')}</DialogTitle>
-        <InvoiceEditor mode="create" bare />
+        <DialogTitle className="sr-only">
+          {copyFromId ? t('title_copy') : t('title_invoice')}
+        </DialogTitle>
+        {copyFromId ? (
+          copyLoadFailed ? (
+            <div className="space-y-4 p-6 text-center">
+              <p className="font-medium">{t('copy_load_failed_title')}</p>
+              <p className="text-sm text-muted-foreground">{t('copy_load_failed_description')}</p>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                {t('close')}
+              </Button>
+            </div>
+          ) : copyInitial ? (
+            <InvoiceEditor key={copyFromId} mode="copy" initial={copyInitial} bare />
+          ) : (
+            <div className="space-y-4 p-6">
+              <Skeleton className="h-8 w-1/3" />
+              <Skeleton className="h-32 w-full" />
+              <Skeleton className="h-32 w-full" />
+            </div>
+          )
+        ) : (
+          <InvoiceEditor mode="create" bare />
+        )}
       </DialogContent>
     </Dialog>
   )

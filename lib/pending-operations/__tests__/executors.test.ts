@@ -143,6 +143,38 @@ describe('commitPendingOperation: unlock_period', () => {
   })
 })
 
+describe('commitPendingOperation: credit-note issuance guard', () => {
+  it('rejects mark_invoice_sent before the ordinary invoice executor can book it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeInvoice({
+        id: 'credit-1',
+        status: 'draft',
+        credited_invoice_id: 'invoice-1',
+      }),
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher's rejected update
+
+    const op = makePendingOp({
+      operation_type: 'mark_invoice_sent',
+      params: { invoice_id: 'credit-1' },
+    })
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      op,
+    )
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toContain('Credit notes must be issued')
+  })
+})
+
 // ─── post_annual_depreciation ───────────────────────────────────────
 
 describe('commitPendingOperation: post_annual_depreciation', () => {

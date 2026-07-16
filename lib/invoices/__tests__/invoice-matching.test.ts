@@ -184,6 +184,25 @@ describe('findMatchingInvoices', () => {
     expect(result[0].matchReason).toContain('OCR-referens')
   })
 
+  it('never suggests a credit note, even when its OCR reference matches', async () => {
+    const tx = makeTransaction({ amount: 12500, reference: 'KR-F-2024001' })
+    mockResult({
+      data: [
+        makeInvoice({
+          invoice_number: 'KR-F-2024001',
+          status: 'sent',
+          total: -12500,
+          credited_invoice_id: 'original-invoice-1',
+        }),
+      ],
+      error: null,
+    })
+
+    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+
+    expect(result).toEqual([])
+  })
+
   it('returns immediately on OCR match without further scoring', async () => {
     const tx = makeTransaction({ amount: 12500, reference: 'F-2024001' })
     mockResult({

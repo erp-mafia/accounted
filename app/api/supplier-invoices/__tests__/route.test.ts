@@ -39,6 +39,11 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
     mockCreateSupplierInvoicePrivatelyPaidEntry(...args),
 }))
 
+const mockLinkToJournalEntry = vi.fn()
+vi.mock('@/lib/core/documents/document-service', () => ({
+  linkToJournalEntry: (...args: unknown[]) => mockLinkToJournalEntry(...args),
+}))
+
 import { eventBus } from '@/lib/events'
 
 import { GET, POST } from '../route'
@@ -128,6 +133,7 @@ describe('GET /api/supplier-invoices', () => {
 
 const VALID_UUID = '550e8400-e29b-41d4-a716-446655440000'
 const VALID_UUID_2 = '550e8400-e29b-41d4-a716-446655440001'
+const DOCUMENT_UUID = '550e8400-e29b-41d4-a716-446655440002'
 
 describe('POST /api/supplier-invoices', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -219,6 +225,77 @@ describe('POST /api/supplier-invoices', () => {
     expect(body.data).toBeTruthy()
     expect(body.data.registration_journal_entry_id).toBe('je-1')
     expect(mockCreateSupplierInvoiceRegistrationEntry).toHaveBeenCalled()
+  })
+
+  it('stores an uploaded document and links it to the registration entry', async () => {
+    const supplier = makeSupplier({ id: VALID_UUID })
+    const createdInvoice = makeSupplierInvoice({ id: 'si-with-document', document_id: DOCUMENT_UUID })
+
+    enqueue({ data: { id: DOCUMENT_UUID, journal_entry_id: null }, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: supplier, error: null })
+    enqueue({ data: 6 })
+    enqueue({ data: createdInvoice, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+    mockCreateSupplierInvoiceRegistrationEntry.mockResolvedValue({ id: 'je-document' })
+    enqueue({ data: null, error: null })
+    mockLinkToJournalEntry.mockResolvedValue({ id: DOCUMENT_UUID })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        document_id: DOCUMENT_UUID,
+        supplier_invoice_number: 'LF-DOCUMENT',
+        invoice_date: '2024-06-01',
+        due_date: '2024-07-01',
+        items: [
+          { description: 'Service', quantity: 1, unit_price: 1000, account_number: '6200' },
+        ],
+      },
+    })
+
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{
+      data: { document_id: string; registration_journal_entry_id: string }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.document_id).toBe(DOCUMENT_UUID)
+    expect(body.data.registration_journal_entry_id).toBe('je-document')
+    expect(mockLinkToJournalEntry).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      DOCUMENT_UUID,
+      'je-document',
+    )
+  })
+
+  it('rejects a document that is missing or outside the active company', async () => {
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        document_id: DOCUMENT_UUID,
+        supplier_invoice_number: 'LF-INVALID-DOCUMENT',
+        invoice_date: '2024-06-01',
+        due_date: '2024-07-01',
+        items: [
+          { description: 'Service', quantity: 1, unit_price: 1000, account_number: '6200' },
+        ],
+      },
+    })
+
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+    expect(mockLinkToJournalEntry).not.toHaveBeenCalled()
   })
 
   it('emits supplier_invoice.registered event', async () => {

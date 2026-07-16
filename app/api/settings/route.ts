@@ -40,13 +40,25 @@ export const PUT = withRouteContext(
     // Fetch current settings to check for tax-relevant changes
     const { data: oldSettings } = await supabase
       .from('company_settings')
-      .select('entity_type, moms_period, f_skatt, vat_registered, vat_number, pays_salaries, fiscal_year_start_month, onboarding_complete, salary_vacation_year_basis')
+      .select('entity_type, moms_period, f_skatt, vat_registered, vat_number, pays_salaries, fiscal_year_start_month, onboarding_complete, salary_vacation_year_basis, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3')
       .eq('company_id', companyId)
       .single()
 
     const validation = await validateBody(request, UpdateSettingsSchema)
     if (!validation.success) return validation.response
     const body = validation.data
+
+    const reminderDays = [
+      body.reminder_days_level_1 ?? oldSettings?.reminder_days_level_1 ?? 15,
+      body.reminder_days_level_2 ?? oldSettings?.reminder_days_level_2 ?? 30,
+      body.reminder_days_level_3 ?? oldSettings?.reminder_days_level_3 ?? 45,
+    ]
+    if (!(reminderDays[0] < reminderDays[1] && reminderDays[1] < reminderDays[2])) {
+      return NextResponse.json(
+        { error: 'Påminnelsedagarna måste ligga i stigande ordning.' },
+        { status: 400 },
+      )
+    }
 
     // Lock org_number after onboarding is complete (legal identifier: changing it
     // would orphan vouchers, SIE history, and tax filings). company_name remains
@@ -121,6 +133,9 @@ export const PUT = withRouteContext(
       .single()
 
     if (error) {
+      if (error.code === 'PGRST116') {
+        return NextResponse.json({ error: 'Inställningarna hittades inte.' }, { status: 404 })
+      }
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 

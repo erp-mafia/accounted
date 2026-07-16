@@ -11,6 +11,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import { tools } from '../server'
+import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
+import { isTenantWriteScope } from '../company-routing'
 
 describe('MCP tool inputSchema strictness', () => {
   it('every tool inputSchema has additionalProperties: false at the top level', () => {
@@ -20,6 +22,23 @@ describe('MCP tool inputSchema strictness', () => {
         return !schema || schema.additionalProperties !== false
       })
       .map((t) => t.name)
+    expect(missing).toEqual([])
+  })
+
+  it('every tenant write tool has a scope that the central role guard can classify', () => {
+    const allowedNonTenantWrites = new Set([
+      'gnubok_audit_package',
+      'gnubok_feedback',
+    ])
+    const missing = tools
+      .filter(
+        (tool) =>
+          tool.annotations.readOnlyHint !== true &&
+          !isTenantWriteScope(TOOL_SCOPE_MAP[tool.name]) &&
+          !allowedNonTenantWrites.has(tool.name)
+      )
+      .map((tool) => tool.name)
+
     expect(missing).toEqual([])
   })
 })

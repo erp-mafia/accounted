@@ -4,6 +4,7 @@ import { UpdateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
 
 export const GET = withRouteContext(
   'customer.get',
@@ -37,7 +38,7 @@ export const GET = withRouteContext(
       .eq('company_id', companyId)
       .order('invoice_date', { ascending: false })
 
-    return NextResponse.json({ data: { ...data, invoices: invoices || [] } })
+    return NextResponse.json({ data: { ...maskCustomerRow(data), invoices: invoices || [] } })
   },
 )
 
@@ -55,6 +56,26 @@ export const PATCH = withRouteContext(
     if (!result.success) return result.response
     const body = result.data
 
+    const { data: existing, error: existingError } = await supabase
+      .from('customers')
+      .select('id, customer_type')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .single()
+
+    if (existingError || !existing) {
+      if (existingError?.code === 'PGRST116') {
+        return errorResponseFromCode('CUSTOMER_NOT_FOUND', opLog, { requestId })
+      }
+      opLog.error('customer lookup before update failed', existingError)
+      return errorResponseFromCode('CUSTOMER_UPDATE_FAILED', opLog, { requestId })
+    }
+
+    const effectiveType = body.customer_type ?? existing.customer_type
+    if (body.personal_number && effectiveType !== 'individual') {
+      return errorResponseFromCode('CUSTOMER_PERSONAL_NUMBER_NOT_ALLOWED', opLog, { requestId })
+    }
+
     const updateData: Record<string, unknown> = {}
     if (body.name !== undefined) updateData.name = body.name
     if (body.customer_type !== undefined) updateData.customer_type = body.customer_type
@@ -69,6 +90,11 @@ export const PATCH = withRouteContext(
     if (body.country !== undefined) updateData.country = body.country
     if (body.org_number !== undefined) updateData.org_number = body.org_number
     if (body.vat_number !== undefined) updateData.vat_number = body.vat_number
+    if (body.personal_number !== undefined) {
+      updateData.personal_number = encryptCustomerPersonalNumber(body.personal_number)
+    } else if (body.customer_type !== undefined && effectiveType !== 'individual') {
+      updateData.personal_number = null
+    }
     if (body.language !== undefined) updateData.language = body.language
     if (body.default_payment_terms !== undefined) updateData.default_payment_terms = body.default_payment_terms
     if (body.notes !== undefined) updateData.notes = body.notes
@@ -82,6 +108,9 @@ export const PATCH = withRouteContext(
       .single()
 
     if (error) {
+      if (error.code === 'PGRST116') {
+        return errorResponseFromCode('CUSTOMER_NOT_FOUND', opLog, { requestId })
+      }
       if (error.code === '23505') {
         return errorResponseFromCode('CUSTOMER_DUPLICATE_ORG_NUMBER', opLog, {
           requestId,
@@ -127,7 +156,7 @@ export const PATCH = withRouteContext(
       }
     }
 
-    return NextResponse.json({ data })
+    return NextResponse.json({ data: maskCustomerRow(data) })
   },
   { requireWrite: true },
 )

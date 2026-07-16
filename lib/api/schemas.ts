@@ -681,9 +681,34 @@ export const CreateCustomerSchema = z.object({
   language: z.enum(['sv', 'en']).optional(),
   default_payment_terms: z.number().int().positive().optional(),
   notes: z.string().optional(),
+}).superRefine((customer, ctx) => {
+  if (customer.personal_number && customer.customer_type !== 'individual') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['personal_number'],
+      message: 'Personal number is only allowed for individual customers',
+    })
+  }
 })
 
-export const UpdateCustomerSchema = CreateCustomerSchema.partial()
+export const UpdateCustomerSchema = z.object({
+  name: z.string().min(1, 'Customer name is required').optional(),
+  customer_type: CustomerTypeSchema.optional(),
+  customer_number: z.string().trim().max(32).nullable().optional(),
+  email: z.string().email('Invalid email address').optional(),
+  phone: z.string().optional(),
+  address_line1: z.string().optional(),
+  address_line2: z.string().optional(),
+  postal_code: z.string().optional(),
+  city: z.string().optional(),
+  country: z.string().optional(),
+  org_number: z.string().optional(),
+  vat_number: z.string().optional(),
+  personal_number: z.string().regex(/^(\d{6}|\d{8})[-+]?\d{4}$/, 'Invalid personal number').nullable().optional(),
+  language: z.enum(['sv', 'en']).optional(),
+  default_payment_terms: z.number().int().positive().optional(),
+  notes: z.string().optional(),
+})
 
 // ============================================================
 // Supplier schemas
@@ -786,6 +811,9 @@ export const CreateSupplierInvoiceItemSchema = z.object({
 
 export const CreateSupplierInvoiceSchema = z.object({
   supplier_id: uuid,
+  // Optional invoice PDF/image already stored in the WORM document archive.
+  // The route verifies company ownership and that the document is unused.
+  document_id: uuid.optional(),
   supplier_invoice_number: z.string().min(1, 'Supplier invoice number is required'),
   invoice_date: isoDate,
   due_date: isoDate,
@@ -1493,6 +1521,9 @@ export const UpdateSettingsSchema = z.object({
   invoice_footer_text: z.string().max(500).nullable().optional(),
   // Automation
   send_invoice_reminders: z.boolean().optional(),
+  reminder_days_level_1: z.number().int().min(1).max(365).optional(),
+  reminder_days_level_2: z.number().int().min(1).max(365).optional(),
+  reminder_days_level_3: z.number().int().min(1).max(365).optional(),
   // Reminder surcharges (dröjsmålsränta + lagstadgad påminnelseavgift)
   reminder_fee_enabled: z.boolean().optional(),
   reminder_fee_amount: z

@@ -34,6 +34,7 @@ export type LinkTransactionJournalEntryErrorCode =
   | 'LINK_TX_JE_NOT_POSTED'
   | 'LINK_TX_INVOICE_NOT_FOUND'
   | 'LINK_TX_INVOICE_NOT_OPEN'
+  | 'LINK_TX_INVOICE_CREDIT_NOTE'
   | 'LINK_TX_INVOICE_CURRENCY_MISMATCH'
   | 'LINK_TX_INVOICE_RACE'
   | 'MATCH_INVOICE_RECORD_PAYMENT_FAILED'
@@ -186,6 +187,7 @@ export async function linkTransactionToJournalEntry(
     | 'exchange_rate'
     | 'paid_at'
     | 'invoice_number'
+    | 'credited_invoice_id'
   > & { customer?: { name?: string } | null }
   let invoice: FetchedInvoice | null = null
   let newPaidAmount = 0
@@ -200,7 +202,7 @@ export async function linkTransactionToJournalEntry(
     const { data: invoiceRow, error: fetchInvError } = await supabase
       .from('invoices')
       .select(
-        'id, status, total, paid_amount, remaining_amount, currency, exchange_rate, paid_at, invoice_number, customer:customers(name)'
+        'id, status, total, paid_amount, remaining_amount, currency, exchange_rate, paid_at, invoice_number, credited_invoice_id, customer:customers(name)'
       )
       .eq('id', invoiceId)
       .eq('company_id', companyId)
@@ -208,6 +210,10 @@ export async function linkTransactionToJournalEntry(
 
     if (fetchInvError || !invoiceRow) {
       return { ok: false, code: 'LINK_TX_INVOICE_NOT_FOUND' }
+    }
+
+    if (invoiceRow.credited_invoice_id) {
+      return { ok: false, code: 'LINK_TX_INVOICE_CREDIT_NOTE' }
     }
 
     if (

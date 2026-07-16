@@ -81,6 +81,7 @@ export type SettleInvoicePaymentResult =
   | { ok: false; code: 'INVOICE_PAID_LINES_UNBALANCED'; details: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_PAID_NO_FISCAL_PERIOD'; details: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_PAID_BOOK_FAILED'; details: Record<string, unknown> }
+  | { ok: false; code: 'INVOICE_PAID_NOT_PAYABLE'; details: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_PAID_RACE' }
   | { ok: false; code: 'BOOKKEEPING_ERROR'; error: unknown }
   | { ok: false; code: 'UPDATE_FAILED'; error: unknown }
@@ -101,6 +102,14 @@ export async function settleInvoicePayment(
     customLines,
     settlementAccountNumber,
   } = params
+
+  if (invoice.credited_invoice_id) {
+    return {
+      ok: false,
+      code: 'INVOICE_PAID_NOT_PAYABLE',
+      details: { reason: 'credit_note' },
+    }
+  }
 
   const now = new Date().toISOString()
 

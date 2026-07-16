@@ -51,6 +51,12 @@ export function InvoicingSettingsContent() {
       invoice_default_days: parseInt(formData.get('invoice_default_days') as string) || 30,
       invoice_default_notes: (formData.get('invoice_default_notes') as string) || null,
       default_our_reference: (formData.get('default_our_reference') as string) || null,
+      reminder_days_level_1:
+        Number.parseInt(formData.get('reminder_days_level_1') as string) || 15,
+      reminder_days_level_2:
+        Number.parseInt(formData.get('reminder_days_level_2') as string) || 30,
+      reminder_days_level_3:
+        Number.parseInt(formData.get('reminder_days_level_3') as string) || 45,
     }
     return {
       updates,

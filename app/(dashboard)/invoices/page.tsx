@@ -87,7 +87,8 @@ export default function InvoicesPage() {
   // /invoices/new redirect) opens the same dialog, and the browser back
   // button closes it. No canWrite gate here: like the old /invoices/new page,
   // the editor itself disables submission for viewers.
-  const showNewInvoice = searchParams.has('new')
+  const copyFromId = searchParams.get('copy')
+  const showNewInvoice = searchParams.has('new') || copyFromId !== null
   const closeNewInvoice = () => router.replace('/invoices', { scroll: false })
   const openNewInvoice = () => router.push('/invoices?new=1', { scroll: false })
 
@@ -377,6 +378,7 @@ export default function InvoicesPage() {
 
       <NewInvoiceDialog
         open={showNewInvoice}
+        copyFromId={copyFromId}
         onOpenChange={(open) => {
           if (!open) closeNewInvoice()
         }}

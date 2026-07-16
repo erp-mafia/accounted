@@ -84,6 +84,88 @@ describe('PUT /api/settings', () => {
     expect(body.data.company_name).toBe('New Name')
   })
 
+  it('updates all three reminder thresholds', async () => {
+    enqueueMany([
+      {
+        data: {
+          entity_type: 'aktiebolag',
+          onboarding_complete: true,
+          reminder_days_level_1: 15,
+          reminder_days_level_2: 30,
+          reminder_days_level_3: 45,
+        },
+      },
+      {
+        data: {
+          id: 's1',
+          reminder_days_level_1: 7,
+          reminder_days_level_2: 21,
+          reminder_days_level_3: 35,
+        },
+      },
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: {
+        reminder_days_level_1: 7,
+        reminder_days_level_2: 21,
+        reminder_days_level_3: 35,
+      },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      data: { reminder_days_level_1: number; reminder_days_level_2: number; reminder_days_level_3: number }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({
+      reminder_days_level_1: 7,
+      reminder_days_level_2: 21,
+      reminder_days_level_3: 35,
+    })
+  })
+
+  it('returns 400 when reminder thresholds are not increasing', async () => {
+    enqueue({
+      data: {
+        reminder_days_level_1: 15,
+        reminder_days_level_2: 30,
+        reminder_days_level_3: 45,
+      },
+    })
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: {
+        reminder_days_level_1: 30,
+        reminder_days_level_2: 20,
+        reminder_days_level_3: 45,
+      },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns 404 when the settings row does not exist', async () => {
+    enqueueMany([
+      { data: { onboarding_complete: false } },
+      { data: null, error: { code: 'PGRST116', message: 'No rows returned' } },
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { reminder_days_level_1: 10 },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(404)
+  })
+
   it('blocks a vacation-year basis change while open balances exist', async () => {
     enqueueMany([
       { data: { salary_vacation_year_basis: 'calendar', onboarding_complete: true } }, // oldSettings

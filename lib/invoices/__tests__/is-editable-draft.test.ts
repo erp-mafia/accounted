@@ -29,4 +29,14 @@ describe('isEditableInvoiceDraft', () => {
       isEditableInvoiceDraft({ status: 'draft', journal_entry_id: null, is_self_billed: true }),
     ).toBe(false)
   })
+
+  it('blocks a credit-note draft because it must continue mirroring the original', () => {
+    expect(
+      isEditableInvoiceDraft({
+        status: 'draft',
+        journal_entry_id: null,
+        credited_invoice_id: 'invoice-1',
+      }),
+    ).toBe(false)
+  })
 })

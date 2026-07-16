@@ -428,6 +428,11 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan är inte i ett obetalt läge och kan inte matchas.',
     message_en: 'Invoice is not in an unpaid state.',
   },
+  MATCH_INVOICE_CREDIT_NOTE: {
+    httpStatus: 400,
+    message_sv: 'Kreditfakturor kan inte registreras som betalda.',
+    message_en: 'Credit notes cannot be recorded as paid.',
+  },
   MATCH_INVOICE_NOT_INVOICE_TYPE: {
     httpStatus: 400,
     message_sv: 'Endast fakturor kan matchas mot en transaktion. Proforma och följesedel saknar momsskyldighet.',
@@ -522,6 +527,11 @@ const LINK_TX_JE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Fakturan är inte i ett obetalt läge och kan inte kopplas.',
     message_en: 'Invoice is not in an unpaid state.',
+  },
+  LINK_TX_INVOICE_CREDIT_NOTE: {
+    httpStatus: 400,
+    message_sv: 'Kreditfakturor kan inte registreras som betalda.',
+    message_en: 'Credit notes cannot be recorded as paid.',
   },
   LINK_TX_INVOICE_RACE: {
     httpStatus: 409,
@@ -753,6 +763,48 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Endast skickade, betalda eller förfallna fakturor kan krediteras.',
     message_en: 'Only sent, paid, or overdue invoices can be credited.',
+  },
+  INVOICE_CREDIT_ISSUE_INCOMPLETE: {
+    httpStatus: 500,
+    message_sv:
+      'Kreditfakturan kunde inte utfärdas färdigt. Ingen e-post skickades. Försök igen.',
+    message_en:
+      'The credit note could not be issued completely. No email was sent. Please try again.',
+  },
+  INVOICE_CREDIT_REPAIR_REQUIRED: {
+    httpStatus: 500,
+    message_sv: 'Kreditfakturans verifikat skapades, men utfärdandet måste slutföras. Försök igen eller kontakta support.',
+    message_en: 'The credit-note voucher was created, but issuance must be completed. Retry or contact support.',
+  },
+  INVOICE_CREDIT_ALREADY_ISSUED: {
+    httpStatus: 409,
+    message_sv: 'Kreditfakturan har redan utfärdats.',
+    message_en: 'The credit note has already been issued.',
+  },
+  INVOICE_MARK_SENT_INVALID_STATUS: {
+    httpStatus: 400,
+    message_sv: 'Fakturan kan inte markeras som skickad i nuvarande status.',
+    message_en: 'The invoice cannot be marked as sent in its current status.',
+  },
+  INVOICE_MARK_SENT_STATUS_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Fakturans status kunde inte uppdateras.',
+    message_en: 'The invoice status could not be updated.',
+  },
+  INVOICE_MARK_SENT_RACE: {
+    httpStatus: 409,
+    message_sv: 'Fakturan ändrades av en annan begäran. Ladda om och försök igen.',
+    message_en: 'The invoice was changed by another request. Reload and retry.',
+  },
+  INVOICE_MARK_SENT_BOOK_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Fakturan kunde inte bokföras och ligger kvar som utkast.',
+    message_en: 'The invoice could not be posted and remains a draft.',
+  },
+  INVOICE_MARK_SENT_REPAIR_REQUIRED: {
+    httpStatus: 500,
+    message_sv: 'Verifikatet skapades, men kopplingen till fakturan måste återställas. Kontakta support.',
+    message_en: 'The voucher was created, but its invoice link must be repaired. Contact support.',
   },
   INVOICE_SEND_EMAIL_NOT_CONFIGURED: {
     httpStatus: 503,
@@ -1638,6 +1690,26 @@ const ARTICLE: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Artikeln kunde inte uppdateras.',
     message_en: 'Failed to update article.',
+  },
+  INVOICE_DELETE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Fakturan kunde inte tas bort eller makuleras.',
+    message_en: 'The invoice could not be deleted or cancelled.',
+  },
+  CUSTOMER_PERSONAL_NUMBER_NOT_ALLOWED: {
+    httpStatus: 400,
+    message_sv: 'Personnummer kan endast sparas för privatkunder.',
+    message_en: 'Personal numbers can only be stored for individual customers.',
+  },
+  ARTICLE_DELETE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Artikeln kunde inte tas bort.',
+    message_en: 'Failed to delete article.',
+  },
+  ARTICLE_IN_USE: {
+    httpStatus: 409,
+    message_sv: 'Artikeln har använts på en faktura och kan därför inte tas bort.',
+    message_en: 'The article has been used on an invoice and cannot be deleted.',
   },
   ARTICLE_REVENUE_ACCOUNT_INVALID: {
     httpStatus: 400,

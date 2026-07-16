@@ -18,13 +18,14 @@ vi.mock('@/lib/init', () => ({
 
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
+  getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
-import { DELETE } from '../route'
+import { DELETE, PATCH } from '../route'
 
 describe('DELETE /api/invoices/[id]', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -173,5 +174,55 @@ describe('DELETE /api/invoices/[id]', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(500)
+  })
+})
+
+describe('PATCH /api/invoices/[id]', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    mockSupabase.auth.getUser.mockResolvedValue({
+      data: { user: { id: 'user-1', email: 'test@test.se' } },
+    })
+  })
+
+  it('rejects editing a credit-note draft', async () => {
+    enqueue({
+      data: {
+        id: 'credit-1',
+        status: 'draft',
+        invoice_number: 'KR-F-2026001',
+        journal_entry_id: null,
+        is_self_billed: false,
+        credited_invoice_id: '11111111-1111-4111-8111-111111111111',
+      },
+      error: null,
+    })
+
+    const response = await PATCH(
+      createMockRequest('/api/invoices/credit-1', {
+        method: 'PATCH',
+        body: {
+          customer_id: '22222222-2222-4222-8222-222222222222',
+          invoice_date: '2026-07-14',
+          due_date: '2026-07-14',
+          currency: 'SEK',
+          items: [
+            {
+              description: 'Kredit',
+              quantity: 1,
+              unit: 'st',
+              unit_price: 100,
+            },
+          ],
+        },
+      }),
+      createMockRouteParams({ id: 'credit-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_UPDATE_NOT_DRAFT')
   })
 })

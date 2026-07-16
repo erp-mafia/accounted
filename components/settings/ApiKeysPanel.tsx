@@ -106,7 +106,7 @@ const SCOPE_GROUPS: ScopeGroup[] = [
   {
     domain: 'companies',
     labelKey: 'group_companies',
-    read: { scope: 'companies:read', labelKey: 'scope_companies_read', tools: 0 },
+    read: { scope: 'companies:read', labelKey: 'scope_companies_read', tools: 1 },
     write: null,
   },
   {

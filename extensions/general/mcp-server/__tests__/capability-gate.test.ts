@@ -34,6 +34,24 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       },
     },
   )
+  const membershipChain: unknown = new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        if (prop === 'then') {
+          return (resolve: (v: unknown) => void) =>
+            resolve({
+              data: {
+                company_id: '11111111-1111-4111-8111-111111111111',
+                role: 'owner',
+              },
+              error: null,
+            })
+        }
+        return () => membershipChain
+      },
+    }
+  )
   return {
     ...actual,
     extractBearerToken: vi.fn().mockReturnValue('test-token'),
@@ -48,7 +66,10 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       apiKeyId: 'key-1',
       apiKeyName: 'Test Key',
     }),
-    createServiceClientNoCookies: vi.fn(() => ({ from: () => chain, rpc: () => chain })),
+    createServiceClientNoCookies: vi.fn(() => ({
+      from: (table: string) => (table === 'company_members' ? membershipChain : chain),
+      rpc: () => chain,
+    })),
   }
 })
 

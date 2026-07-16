@@ -920,6 +920,9 @@ async function commitMarkInvoicePaid(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
+  if (invoice.credited_invoice_id) {
+    return { error: 'Kreditfakturor kan inte markeras som betalda.', status: 409 }
+  }
   if (invoice.status !== 'sent' && invoice.status !== 'overdue') {
     return { error: 'Invoice can only be marked as paid when status is "sent" or "overdue"', status: 409 }
   }
@@ -1158,6 +1161,12 @@ async function commitSendInvoice(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
+  if (invoice.credited_invoice_id) {
+    return {
+      error: 'Credit notes must be issued through the invoice send flow',
+      status: 409,
+    }
+  }
   // partially_paid/credited imply the invoice was already issued too: the
   // status flip below would regress them to 'sent' (PR #666 review, ASVS V2.3).
   if (['sent', 'paid', 'overdue', 'partially_paid', 'credited'].includes(invoice.status)) {
@@ -1327,6 +1336,12 @@ async function commitMarkInvoiceSent(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
+  if (invoice.credited_invoice_id) {
+    return {
+      error: 'Credit notes must be issued through the invoice send flow',
+      status: 409,
+    }
+  }
   if (invoice.status !== 'draft') return { error: 'Only draft invoices can be marked as sent', status: 409 }
 
   try {
@@ -1389,6 +1404,9 @@ async function commitMatchTransactionInvoice(
     .single()
 
   if (invError || !invoice) return { error: 'Invoice not found', status: 404 }
+  if (invoice.credited_invoice_id) {
+    return { error: 'Kreditfakturor kan inte registreras som betalda.', status: 409 }
+  }
   if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }

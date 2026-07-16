@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info, Pencil, Plus, CalendarClock } from 'lucide-react'
+import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info, Pencil, Plus, CalendarClock, Paperclip } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -22,6 +22,7 @@ import Link from 'next/link'
 import { AccountNumber } from '@/components/ui/account-number'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { formatAmount, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment, BASAccount } from '@/types'
@@ -783,6 +784,26 @@ export default function SupplierInvoiceDetailPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {invoice.document_id && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">{t('document_title')}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Paperclip className="h-4 w-4 shrink-0" />
+                <span>{t('document_attached')}</span>
+              </div>
+              <DocumentViewButton
+                documentId={invoice.document_id}
+                label={t('view_document')}
+              />
             </div>
           </CardContent>
         </Card>
