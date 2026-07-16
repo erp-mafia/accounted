@@ -22,9 +22,13 @@ vi.mock('@/lib/auth/require-write', () => ({
 vi.mock('@/lib/tax/deadline-generator', () => ({
   didTaxFieldsChange: vi.fn().mockReturnValue(false),
   regenerateTaxDeadlinesForUser: vi.fn().mockResolvedValue(undefined),
+  shouldRegenerateTaxDeadlines: vi.fn(
+    (changed: boolean, count: number) => changed || count === 0,
+  ),
 }))
 
 import { PUT } from '../route'
+import { regenerateTaxDeadlinesForUser } from '@/lib/tax/deadline-generator'
 
 describe('PUT /api/settings', () => {
   beforeEach(() => {
@@ -71,6 +75,7 @@ describe('PUT /api/settings', () => {
     enqueueMany([
       { data: { entity_type: 'enskild_firma', onboarding_complete: false } }, // fetch oldSettings
       { data: { id: 's1', company_name: 'New Name' } },                        // update ... returning
+      { data: null, count: 5 },                                                // deadlines count (has some -> no regen)
     ])
 
     const request = createMockRequest('/api/settings', {
@@ -103,6 +108,7 @@ describe('PUT /api/settings', () => {
           reminder_days_level_3: 35,
         },
       },
+      { data: null, count: 5 }, // deadlines count (has some -> no regen)
     ])
 
     const request = createMockRequest('/api/settings', {
@@ -124,6 +130,52 @@ describe('PUT /api/settings', () => {
       reminder_days_level_2: 21,
       reminder_days_level_3: 35,
     })
+  })
+
+  it('regenerates tax deadlines when the company has none yet (self-heal)', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } }, // oldSettings
+      {
+        data: {
+          id: 's1',
+          entity_type: 'aktiebolag',
+          moms_period: 'quarterly',
+          f_skatt: true,
+          vat_registered: true,
+          pays_salaries: true,
+          fiscal_year_start_month: 1,
+        },
+      }, // update
+      { data: null, count: 0 }, // no system deadlines -> self-heal generation
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { f_skatt: true },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(vi.mocked(regenerateTaxDeadlinesForUser)).toHaveBeenCalledOnce()
+  })
+
+  it('does not regenerate tax deadlines when the company already has some', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } }, // oldSettings
+      { data: { id: 's1', entity_type: 'aktiebolag' } },                   // update
+      { data: null, count: 12 },                                           // already has deadlines
+    ])
+
+    const request = createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { company_name: 'Unchanged Tax' },
+    })
+    const response = await PUT(request, { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(vi.mocked(regenerateTaxDeadlinesForUser)).not.toHaveBeenCalled()
   })
 
   it('returns 400 when reminder thresholds are not increasing', async () => {

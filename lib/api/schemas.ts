@@ -529,6 +529,11 @@ export const CreateArticleSchema = z.object({
   unit: z.string().min(1).max(32).optional(),
   price_excl_vat: nonNegativeAmount,
   vat_rate: vatRatePercent.optional(),
+  // Default price currency; omitted = SEK. Pre-fills a new invoice's currency.
+  // Constrained to the same CurrencySchema enum invoices use, which mirrors the
+  // seeded currencies reference table: an unknown code is a clean 400 here
+  // instead of a raw FK violation (23503) surfacing at insert time.
+  currency: CurrencySchema.optional(),
   // Optional BAS class-3 revenue-account override. Null/omitted = derive from
   // the invoice's VAT treatment (current behaviour).
   revenue_account: revenueAccount.nullable().optional(),

@@ -19,6 +19,13 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import type { BASAccount, CreateArticleInput } from '@/types'
 
+// A row from the currencies reference table (lib migration
+// 20260630110000_currencies_reference_table.sql).
+interface CurrencyOption {
+  code: string
+  name: string
+}
+
 // Unit list mirrors the invoice line editor (app/(dashboard)/invoices/new/page.tsx).
 const UNITS = ['st', 'tim', 'dag', 'månad', 'km', 'kg'] as const
 
@@ -52,6 +59,10 @@ export default function ArticleForm({
   // Momsregistrerad? A non-VAT-registered company never charges moms, so the
   // VAT field is hidden and the rate forced to 0: mirrors the invoice editor.
   const [vatRegistered, setVatRegistered] = useState(true)
+  // Supported currencies, fetched from the currencies reference table rather
+  // than hard-coded. Falls back to the article's own currency (or SEK) if the
+  // fetch fails so the Select is never empty.
+  const [currencies, setCurrencies] = useState<CurrencyOption[]>([])
 
   async function fetchRevenueAccounts() {
     try {
@@ -65,6 +76,24 @@ export default function ArticleForm({
 
   useEffect(() => {
     fetchRevenueAccounts()
+  }, [])
+
+  // Currency options come from the currencies reference table: one source of
+  // truth, no hard-coded list.
+  useEffect(() => {
+    let cancelled = false
+    supabase
+      .from('currencies')
+      .select('code, name')
+      .eq('active', true)
+      .order('sort_order', { ascending: true })
+      .then(({ data }) => {
+        if (!cancelled && data) setCurrencies(data as CurrencyOption[])
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -89,7 +118,8 @@ export default function ArticleForm({
   // edit never hides a value the user previously set.
   const [advancedOpen, setAdvancedOpen] = useState(
     Boolean(
-      initialData?.revenue_account ||
+      (initialData?.currency && initialData.currency !== 'SEK') ||
+        initialData?.revenue_account ||
         initialData?.cost_price != null ||
         initialData?.ean ||
         initialData?.housework_type ||
@@ -107,6 +137,9 @@ export default function ArticleForm({
         unit: z.string().min(1),
         price_excl_vat: z.number({ message: t('price_required') }).nonnegative(t('price_required')),
         vat_rate: z.union([z.literal(25), z.literal(12), z.literal(6), z.literal(0)]),
+        // ISO 4217 alpha-3; the authoritative allow-list is the currencies
+        // table (the DB FK rejects unknown codes).
+        currency: z.string().regex(/^[A-Z]{3}$/),
         revenue_account: z.string().optional(),
         cost_price: z.number().nonnegative().optional(),
         ean: z.string().optional(),
@@ -134,6 +167,7 @@ export default function ArticleForm({
       unit: initialData?.unit || 'st',
       price_excl_vat: initialData?.price_excl_vat ?? 0,
       vat_rate: (initialData?.vat_rate as FormData['vat_rate']) ?? 25,
+      currency: initialData?.currency ?? 'SEK',
       revenue_account: initialData?.revenue_account || '',
       cost_price: initialData?.cost_price ?? undefined,
       ean: initialData?.ean || '',
@@ -152,6 +186,7 @@ export default function ArticleForm({
       unit: data.unit,
       price_excl_vat: data.price_excl_vat,
       vat_rate: vatRegistered ? data.vat_rate : 0,
+      currency: data.currency,
       revenue_account: data.revenue_account || null,
       cost_price: data.cost_price ?? null,
       ean: data.ean || null,
@@ -315,6 +350,36 @@ export default function ArticleForm({
                 })}
               />
               <p className="text-xs text-muted-foreground">{t('cost_price_hint')}</p>
+            </div>
+
+            {/* Currency */}
+            <div className="space-y-2">
+              <Label>{t('currency_label')}</Label>
+              <Controller
+                name="currency"
+                control={control}
+                render={({ field }) => {
+                  // Always keep the current value selectable, even before the
+                  // fetch resolves or if it's since been deactivated.
+                  const codes = currencies.map((c) => c.code)
+                  const options = codes.includes(field.value)
+                    ? codes
+                    : [field.value, ...codes]
+                  return (
+                    <Select value={field.value} onValueChange={(v) => { if (v) field.onChange(v) }}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {options.map((c) => (
+                          <SelectItem key={c} value={c}>{c}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )
+                }}
+              />
+              <p className="text-xs text-muted-foreground">{t('currency_hint')}</p>
             </div>
 
             {/* EAN */}

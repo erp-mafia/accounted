@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { generateTaxDeadlinesForUser } from '../deadline-generator'
+import { generateTaxDeadlinesForUser, shouldRegenerateTaxDeadlines } from '../deadline-generator'
 import type { CompanySettingsForDeadlines } from '../deadline-config'
 
 const SETTINGS: CompanySettingsForDeadlines = {
@@ -110,5 +110,22 @@ describe('generateTaxDeadlinesForUser', () => {
 
     expect(calls).toContain('insert')
     expect(calls).not.toContain('delete')
+  })
+})
+
+describe('shouldRegenerateTaxDeadlines', () => {
+  it('regenerates when a tax-relevant field changed', () => {
+    expect(shouldRegenerateTaxDeadlines(true, 42)).toBe(true)
+  })
+
+  it('regenerates when the company has no system deadlines yet, even with no field change', () => {
+    // The reported bug: settings were filled at onboarding, so a later save with
+    // no tax-field change never generated deadlines and the page stayed empty.
+    expect(shouldRegenerateTaxDeadlines(false, 0)).toBe(true)
+  })
+
+  it('does not regenerate when nothing changed and deadlines already exist', () => {
+    // Avoid clobbering existing status/progress on unrelated settings saves.
+    expect(shouldRegenerateTaxDeadlines(false, 12)).toBe(false)
   })
 })

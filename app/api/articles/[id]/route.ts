@@ -70,8 +70,8 @@ export const PATCH = withRouteContext(
     const updateData: Record<string, unknown> = {}
     for (const key of [
       'name', 'name_en', 'type', 'unit', 'price_excl_vat', 'vat_rate',
-      'revenue_account', 'cost_price', 'ean', 'housework_type', 'notes',
-      'article_number', 'active',
+      'currency', 'revenue_account', 'cost_price', 'ean', 'housework_type',
+      'notes', 'article_number', 'active',
     ] as const) {
       if (body[key] !== undefined) updateData[key] = body[key]
     }

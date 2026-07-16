@@ -652,6 +652,9 @@ export interface Article {
   price_excl_vat: number
   /** Default line VAT rate as an integer percent: 25 | 12 | 6 | 0. */
   vat_rate: number
+  /** Default price currency (ISO 4217 code from the currencies table);
+   *  pre-fills the invoice currency when added. */
+  currency: string
   /** Optional BAS class-3 revenue account override. null = derive from VAT treatment. */
   revenue_account: string | null
   /** Margin/display only: never posted to the ledger. */
@@ -673,6 +676,7 @@ export interface CreateArticleInput {
   unit?: string
   price_excl_vat: number
   vat_rate?: number
+  currency?: string
   revenue_account?: string | null
   cost_price?: number | null
   ean?: string | null

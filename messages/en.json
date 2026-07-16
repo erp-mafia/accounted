@@ -511,7 +511,15 @@
     "retry": "Please try again.",
     "overdue_invoices": "{count} overdue invoices",
     "no_system_deadlines_title": "Automatic tax deadlines missing.",
-    "no_system_deadlines_description": "Deadlines for VAT, employer declarations and F-tax are generated from your company's tax settings — make sure they are filled in."
+    "no_system_deadlines_description": "Deadlines for VAT, employer declarations and F-tax are generated from your company's tax settings — make sure they are filled in.",
+    "generate_action": "Generate now",
+    "generate_open_settings": "Open tax settings",
+    "generate_success_title": "Tax deadlines created",
+    "generate_success_description": "{count} deadlines were created from your tax settings.",
+    "generate_none_title": "No deadlines created",
+    "generate_none_description": "No new deadlines to create. Check that your tax settings are filled in if you expected more.",
+    "generate_failed_title": "Could not create deadlines",
+    "generate_failed_description": "Tax deadlines could not be created right now."
   },
   "bureau": {
     "title": "Bureau",
@@ -4355,6 +4363,8 @@
     "revenue_account_hint": "Leave empty to derive the account automatically from the VAT rate.",
     "cost_price_label": "Cost price",
     "cost_price_hint": "Margin display only, never posted.",
+    "currency_label": "Currency",
+    "currency_hint": "Pre-fills a new invoice's currency when the article is added.",
     "ean_label": "EAN/barcode",
     "ean_placeholder": "e.g. 7350000000000",
     "housework_label": "ROT/RUT",

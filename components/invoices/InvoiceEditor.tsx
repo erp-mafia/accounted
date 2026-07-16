@@ -84,7 +84,7 @@ export type InvoiceEditorProps = (
 // Subset of Article fields the line picker needs to pre-fill a row.
 type ArticleOption = Pick<
   Article,
-  'id' | 'article_number' | 'name' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account'
+  'id' | 'article_number' | 'name' | 'unit' | 'price_excl_vat' | 'vat_rate' | 'revenue_account' | 'currency'
 >
 
 function RequiredMark() {
@@ -321,7 +321,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     watch,
     setValue,
     setError,
-    formState: { errors, isDirty },
+    getValues,
+    formState: { errors, isDirty, dirtyFields },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
     // Edit mode pre-fills from the existing draft (header + every line incl.
@@ -475,7 +476,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (!company?.id) return
     const { data } = await supabase
       .from('articles')
-      .select('id, article_number, name, unit, price_excl_vat, vat_rate, revenue_account')
+      .select('id, article_number, name, unit, price_excl_vat, vat_rate, revenue_account, currency')
       .eq('company_id', company.id)
       .eq('active', true)
       .order('name')
@@ -517,6 +518,27 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // The account override rides along regardless of rate; the engine ignores it
     // for reverse-charge/export and validates it against the chart of accounts.
     setValue(`items.${index}.revenue_account`, a.revenue_account ?? null, { shouldDirty: true })
+    // Pre-fill the invoice's (single) currency from the article ONLY on the
+    // first priced line, and only while the user hasn't chosen a currency
+    // themselves. Never flip an in-progress invoice's currency on a later pick:
+    // an invoice carries one currency for all its lines, so overwriting it would
+    // relabel existing line amounts (or the user's explicit choice) as another
+    // currency with no FX conversion, producing a legally wrong faktura and
+    // wrong VAT (ML 17 kap). The article's currency comes from the currencies
+    // reference table.
+    const currencyUserSet = Boolean(dirtyFields.currency)
+    const invoiceHasOtherContent = (watchItems ?? []).some(
+      (it, i) => i !== index && (Boolean(it?.article_id) || Number(it?.unit_price) > 0)
+    )
+    if (
+      a.currency &&
+      currencies.includes(a.currency as Currency) &&
+      a.currency !== getValues('currency') &&
+      !currencyUserSet &&
+      !invoiceHasOtherContent
+    ) {
+      setValue('currency', a.currency as Currency, { shouldDirty: true })
+    }
   }
 
   // "Spara som artikel": persist the current free-text line into the register and

@@ -511,7 +511,15 @@
     "retry": "Försök igen.",
     "overdue_invoices": "{count} förfallna fakturor",
     "no_system_deadlines_title": "Automatiska skattedeadlines saknas.",
-    "no_system_deadlines_description": "Deadlines för moms, arbetsgivardeklaration och F-skatt skapas från företagets skatteinställningar — kontrollera att de är ifyllda."
+    "no_system_deadlines_description": "Deadlines för moms, arbetsgivardeklaration och F-skatt skapas från företagets skatteinställningar — kontrollera att de är ifyllda.",
+    "generate_action": "Generera nu",
+    "generate_open_settings": "Öppna skatteinställningar",
+    "generate_success_title": "Skattedeadlines skapade",
+    "generate_success_description": "{count} deadlines skapades från dina skatteinställningar.",
+    "generate_none_title": "Inga deadlines skapades",
+    "generate_none_description": "Inga nya deadlines att skapa. Kontrollera att skatteinställningarna är ifyllda om du väntade dig fler.",
+    "generate_failed_title": "Kunde inte skapa deadlines",
+    "generate_failed_description": "Det gick inte att skapa skattedeadlines just nu."
   },
   "bureau": {
     "title": "Byrå",
@@ -4355,6 +4363,8 @@
     "revenue_account_hint": "Lämna tomt för att härleda kontot automatiskt utifrån momsen.",
     "cost_price_label": "Inköpspris",
     "cost_price_hint": "Endast för marginalberäkning, bokförs aldrig.",
+    "currency_label": "Valuta",
+    "currency_hint": "Förifyller en ny fakturas valuta när artikeln läggs till.",
     "ean_label": "EAN/streckkod",
     "ean_placeholder": "t.ex. 7350000000000",
     "housework_label": "ROT/RUT",

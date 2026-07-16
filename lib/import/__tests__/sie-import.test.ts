@@ -803,15 +803,12 @@ describe('importVouchers: per-voucher series preservation', () => {
   // voucher_series per inserted record. Uses a hand-rolled mock rather than
   // createQueuedMockSupabase because we need to inspect arguments, not just
   // return queued data.
-  function buildCapturingSupabase() {
+  function buildCapturingSupabase(options: { failImportRpc?: boolean } = {}) {
     const journalEntryInserts: Array<Record<string, unknown>> = []
     const journalEntryLineInserts: Array<Record<string, unknown>> = []
     const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = []
 
-    // Each `next_voucher_number` RPC call auto-increments per series, matching
-    // the DB function's ON CONFLICT behavior.
     const nextNumberBySeries = new Map<string, number>()
-
     let syntheticEntryId = 1
 
     const supabase = {
@@ -833,52 +830,56 @@ describe('importVouchers: per-voucher series preservation', () => {
           }
         }
 
-        if (table === 'journal_entries') {
-          return {
-            insert: (rows: Array<Record<string, unknown>>) => {
-              journalEntryInserts.push(...rows)
-              return {
-                select: () => ({
-                  then: (resolve: (v: { data: { id: string }[]; error: null }) => void) =>
-                    resolve({
-                      data: rows.map(() => ({ id: `entry-${syntheticEntryId++}` })),
-                      error: null,
-                    }),
-                }),
-              }
-            },
-          }
-        }
-
-        if (table === 'journal_entry_lines') {
-          return {
-            insert: (rows: Array<Record<string, unknown>>) => {
-              journalEntryLineInserts.push(...rows)
-              return Promise.resolve({ error: null })
-            },
-          }
-        }
-
         throw new Error(`Unexpected table: ${table}`)
       }),
 
       rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
         rpcCalls.push({ name, args })
-        if (name === 'next_voucher_number') {
-          const series = args.p_series as string
-          const current = nextNumberBySeries.get(series) ?? 0
-          const next = current + 1
-          nextNumberBySeries.set(series, next)
-          return { data: next, error: null }
-        }
-        if (name === 'reserve_voucher_range') {
-          const series = args.p_series as string
-          const highest = args.p_highest_used as number
-          nextNumberBySeries.set(series, highest)
-          return { data: null, error: null }
-        }
-        if (name === 'release_voucher_range') {
-          return { data: null, error: null }
+        if (name === 'import_sie_journal_entries') {
+          if (options.failImportRpc) {
+            return {
+              data: null,
+              error: { message: 'line insert failed' },
+            }
+          }
+
+          const entries = args.p_entries as Array<{
+            sourceId: string
+            series: string
+            sourceType: string
+            lines: Array<Record<string, unknown>>
+          }>
+          const inserted_entries = entries.map((entry) => {
+            const current = nextNumberBySeries.get(entry.series) ?? 0
+            const next = current + 1
+            nextNumberBySeries.set(entry.series, next)
+            const id = `entry-${syntheticEntryId++}`
+            journalEntryInserts.push({
+              ...entry,
+              id,
+              voucher_series: entry.series,
+              voucher_number: next,
+              source_type: entry.sourceType,
+              source_voucher_series: (entry as { sourceSeries?: string | null }).sourceSeries ?? null,
+              source_voucher_number: (entry as { sourceNumber?: number | null }).sourceNumber ?? null,
+            })
+            journalEntryLineInserts.push(...entry.lines.map((line) => ({ ...line, journal_entry_id: id })))
+            return {
+              id,
+              sourceId: entry.sourceId,
+              series: entry.series,
+              voucherNumber: next,
+              sourceType: entry.sourceType,
+            }
+          })
+          return {
+            data: {
+              inserted_entries,
+              skipped_duplicates: [],
+              validation_errors: [],
+            },
+            error: null,
+          }
         }
         throw new Error(`Unexpected RPC: ${name}`)
       }),
@@ -941,9 +942,9 @@ describe('importVouchers: per-voucher series preservation', () => {
     const seriesInInserts = journalEntryInserts.map((r) => r.voucher_series)
     expect(seriesInInserts).toEqual(['B', 'B', 'C', 'V'])
 
-    // Each series reserves its own voucher-number range independently
-    const reserveCalls = rpcCalls.filter((c) => c.name === 'reserve_voucher_range')
-    expect(reserveCalls.map((c) => c.args.p_series)).toEqual(['B', 'C', 'V'])
+    const importCalls = rpcCalls.filter((c) => c.name === 'import_sie_journal_entries')
+    expect(importCalls).toHaveLength(1)
+    expect((importCalls[0].args.p_entries as Array<{ series: string }>).map((e) => e.series)).toEqual(['B', 'B', 'C', 'V'])
   })
 
   it('falls back to defaultSeries when source voucher has empty series (SIE4I)', async () => {
@@ -1057,6 +1058,35 @@ describe('importVouchers: per-voucher series preservation', () => {
     expect(journalEntryInserts.map((r) => r.voucher_number)).toEqual([1, 2])
     expect(journalEntryInserts.map((r) => r.source_voucher_series)).toEqual(['A', 'A'])
     expect(journalEntryInserts.map((r) => r.source_voucher_number)).toEqual([1, 3])
+  })
+
+  it('does not report imported IDs or counts when the atomic RPC fails', async () => {
+    const { supabase, journalEntryInserts, journalEntryLineInserts } = buildCapturingSupabase({
+      failImportRpc: true,
+    })
+    const parsed = makeParsedFile({
+      vouchers: [
+        makeVoucher('A', 1),
+      ],
+    })
+
+    const result = await importVouchers(
+      supabase,
+      'company-1',
+      'user-1',
+      'period-1',
+      parsed,
+      baseMap,
+      'A',
+    )
+
+    expect(result.created).toBe(0)
+    expect(result.ids).toEqual([])
+    expect(result.importTypedIds).toEqual([])
+    expect(result.voucherNumberMapping).toEqual([])
+    expect(result.errors.join(' ')).toContain('line insert failed')
+    expect(journalEntryInserts).toEqual([])
+    expect(journalEntryLineInserts).toEqual([])
   })
 
   it('stores NULL source series/number when the source voucher has no series (SIE4I subsystem import)', async () => {
