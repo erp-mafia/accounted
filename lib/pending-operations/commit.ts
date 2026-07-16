@@ -47,6 +47,7 @@ import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
+import { findOrCreateManualCashAccount } from '@/lib/cash-accounts/service'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { parseSIEFile } from '@/lib/import/sie-parser'
 import { executeSIEImport, undoSIEImport } from '@/lib/import/sie-import'
@@ -650,9 +651,41 @@ async function commitCreateTransaction(
   const currency = ((params.currency as string) || 'SEK') as Currency
   const bankConnectionId = (params.bank_connection_id as string) || null
   const externalId = (params.external_id as string) || null
+  const ledgerAccount = (params.ledger_account as string) || null
 
   if (!date || !description.trim() || !Number.isFinite(amount)) {
     return { error: 'date, description, and amount are required', status: 400 }
+  }
+
+  // Commit-boundary re-validation (the staging tool enforces the same rule):
+  // a tampered pending_operations row must not inject a malformed account.
+  // Account numbers are strings, never arithmetic operands.
+  if (ledgerAccount !== null && !/^\d{4}$/.test(ledgerAccount)) {
+    return { error: 'ledger_account must be exactly 4 digits (e.g. "1935")', status: 400 }
+  }
+
+  // Bind the row to its kassakonto (issue #1016): resolve (creating if
+  // absent) the manual cash_accounts holder for the requested ledger account
+  // ONCE, then stamp its id on the inserted transaction. Without this,
+  // reconciliation has no cash account to iterate and MatchVoucherDialog's
+  // resolveAccount falls back to 1930. An absent param keeps the existing
+  // behavior: no cash account is created and cash_account_id stays null.
+  let cashAccountId: string | null = null
+  if (ledgerAccount) {
+    try {
+      const cashAccount = await findOrCreateManualCashAccount(
+        supabase,
+        companyId,
+        ledgerAccount,
+        currency,
+      )
+      cashAccountId = cashAccount.id
+    } catch (err) {
+      return {
+        error: err instanceof Error ? err.message : 'Failed to resolve cash account',
+        status: 500,
+      }
+    }
   }
 
   const { data, error } = await supabase
@@ -661,6 +694,7 @@ async function commitCreateTransaction(
       user_id: userId,
       company_id: companyId,
       bank_connection_id: bankConnectionId,
+      cash_account_id: cashAccountId,
       external_id: externalId,
       date,
       description: description.trim(),

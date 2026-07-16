@@ -54,6 +54,18 @@ vi.mock('@/lib/transactions/categorize-core', async () => {
   }
 })
 
+const mockFindOrCreateManualCashAccount = vi.fn()
+vi.mock('@/lib/cash-accounts/service', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/cash-accounts/service')>(
+    '@/lib/cash-accounts/service'
+  )
+  return {
+    ...actual,
+    findOrCreateManualCashAccount: (...args: unknown[]) =>
+      mockFindOrCreateManualCashAccount(...args),
+  }
+})
+
 import { commitPendingOperation } from '../commit'
 import { unlockPeriod } from '@/lib/core/bookkeeping/period-service'
 import { parseSIEFile } from '@/lib/import/sie-parser'
@@ -240,6 +252,47 @@ describe('commitPendingOperation: post_annual_depreciation', () => {
 
 // ─── create_transaction ─────────────────────────────────────────────
 
+/**
+ * Insert-payload capture mock for the create_transaction executor: the queued
+ * helper cannot observe insert arguments, and the cash_account_id binding
+ * (issue #1016) lives in that payload. pending_operations chains (CAS claim +
+ * finalize) resolve to a claimed row; transactions.insert is captured.
+ */
+function makeCreateTxSupabase(opts: { insert?: { data: unknown; error: unknown } } = {}) {
+  const transactionInserts: Array<Record<string, unknown>> = []
+
+  const makeResolvingChain = (result: unknown): unknown => {
+    const handler: ProxyHandler<object> = {
+      get(_target, prop) {
+        if (prop === 'then') {
+          return (resolve: (v: unknown) => void) => resolve(result)
+        }
+        return (..._args: unknown[]) => makeResolvingChain(result)
+      },
+    }
+    return new Proxy({}, handler)
+  }
+
+  const supabase = {
+    from: vi.fn((table: string) => {
+      if (table === 'transactions') {
+        return {
+          insert: vi.fn((payload: Record<string, unknown>) => {
+            transactionInserts.push(payload)
+            return makeResolvingChain(opts.insert ?? { data: { id: 'tx-42' }, error: null })
+          }),
+        }
+      }
+      // pending_operations: CAS claim needs a non-null row; the finalize
+      // update only destructures { error }.
+      return makeResolvingChain({ data: { id: 'op-1' }, error: null })
+    }),
+    rpc: vi.fn(() => makeResolvingChain({ data: null, error: null })),
+  }
+
+  return { supabase, transactionInserts }
+}
+
 describe('commitPendingOperation: create_transaction', () => {
   it('happy path: inserts a transactions row with import_source=mcp and returns the id', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -303,6 +356,100 @@ describe('commitPendingOperation: create_transaction', () => {
     expect(result.auto_rejected).toBe(true)
     expect(result.http_status).toBe(409)
     expect(result.error).toMatch(/already exists/)
+  })
+
+  it('binds cash_account_id via findOrCreateManualCashAccount when ledger_account is present', async () => {
+    mockFindOrCreateManualCashAccount.mockResolvedValueOnce({ id: 'ca-9', ledger_account: '1935' })
+    const { supabase, transactionInserts } = makeCreateTxSupabase()
+
+    const op = makePendingOp({
+      operation_type: 'create_transaction',
+      params: {
+        date: '2026-05-01',
+        amount: -500,
+        description: 'Wise top-up',
+        currency: 'SEK',
+        ledger_account: '1935',
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ transaction_id: 'tx-42' })
+    expect(mockFindOrCreateManualCashAccount).toHaveBeenCalledTimes(1)
+    expect(mockFindOrCreateManualCashAccount).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      '1935',
+      'SEK',
+    )
+    expect(transactionInserts).toHaveLength(1)
+    expect(transactionInserts[0]).toMatchObject({
+      cash_account_id: 'ca-9',
+      import_source: 'mcp',
+    })
+  })
+
+  it('leaves cash_account_id null and never touches cash_accounts when ledger_account is absent', async () => {
+    const { supabase, transactionInserts } = makeCreateTxSupabase()
+
+    const op = makePendingOp({
+      operation_type: 'create_transaction',
+      params: { date: '2026-05-01', amount: 100, description: 'legacy shape' },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(mockFindOrCreateManualCashAccount).not.toHaveBeenCalled()
+    expect(transactionInserts).toHaveLength(1)
+    expect(transactionInserts[0].cash_account_id).toBeNull()
+  })
+
+  it('rejects with 400 when a tampered ledger_account is not exactly 4 digits', async () => {
+    const { supabase, transactionInserts } = makeCreateTxSupabase()
+
+    const op = makePendingOp({
+      operation_type: 'create_transaction',
+      params: {
+        date: '2026-05-01',
+        amount: 100,
+        description: 'tampered',
+        ledger_account: '19x5',
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(mockFindOrCreateManualCashAccount).not.toHaveBeenCalled()
+    expect(transactionInserts).toHaveLength(0)
+  })
+
+  it('fails the commit (no unbound insert) when cash-account resolution throws', async () => {
+    mockFindOrCreateManualCashAccount.mockRejectedValueOnce(
+      new Error('cash_accounts create failed: boom'),
+    )
+    const { supabase, transactionInserts } = makeCreateTxSupabase()
+
+    const op = makePendingOp({
+      operation_type: 'create_transaction',
+      params: {
+        date: '2026-05-01',
+        amount: 100,
+        description: 'Wise top-up',
+        ledger_account: '1935',
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(500)
+    expect(result.error).toMatch(/cash_accounts create failed/)
+    expect(transactionInserts).toHaveLength(0)
   })
 })
 

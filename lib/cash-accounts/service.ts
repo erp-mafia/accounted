@@ -487,6 +487,81 @@ export async function upsertFromPsd2(
 }
 
 /**
+ * Find the cash_accounts row holding (company_id, ledger_account), creating a
+ * manual (source='manual', bank_connection_id=null) row when none exists.
+ *
+ * Used by the create_transaction pending-op executor (issue #1016) so
+ * manually ingested rows (MCP / CSV / Airtable) bind to a real kassakonto:
+ * reconciliation iterates per cash account and MatchVoucherDialog resolves
+ * the economic account through transactions.cash_account_id, so an unbound
+ * 193x feed degrades both.
+ *
+ * An existing holder row is returned AS-IS regardless of its source,
+ * connection binding, or currency: mutating it here could silently repoint a
+ * PSD2-backed account. The UNIQUE (company_id, ledger_account) constraint
+ * makes the create racy under concurrent commits: on conflict (23505) the
+ * winner's row is re-fetched and returned. Throws on unexpected DB errors so
+ * callers fail loudly instead of inserting an unbound transaction.
+ */
+export async function findOrCreateManualCashAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  ledgerAccount: string,
+  currency: string,
+): Promise<CashAccount> {
+  const fetchExisting = async (): Promise<CashAccount | null> => {
+    const { data, error } = await supabase
+      .from('cash_accounts')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('ledger_account', ledgerAccount)
+      .maybeSingle()
+    if (error) {
+      log.error('findOrCreateManualCashAccount lookup failed', {
+        companyId,
+        ledgerAccount,
+        error: error.message,
+      })
+      throw new Error(`cash_accounts lookup failed: ${error.message}`)
+    }
+    return (data as CashAccount | null) ?? null
+  }
+
+  const existing = await fetchExisting()
+  if (existing) return existing
+
+  const { data: created, error: insertError } = await supabase
+    .from('cash_accounts')
+    .insert({
+      company_id: companyId,
+      bank_connection_id: null,
+      ledger_account: ledgerAccount,
+      currency: currency.toUpperCase(),
+      source: 'manual' as CashAccountSource,
+      enabled: true,
+    })
+    .select('*')
+    .single()
+
+  if (insertError) {
+    if (insertError.code === '23505') {
+      // Lost the race: a concurrent commit created the holder between our
+      // lookup and insert. The winner's row is the binding target.
+      const winner = await fetchExisting()
+      if (winner) return winner
+    }
+    log.error('findOrCreateManualCashAccount insert failed', {
+      companyId,
+      ledgerAccount,
+      error: insertError.message,
+    })
+    throw new Error(`cash_accounts create failed: ${insertError.message}`)
+  }
+
+  return created as CashAccount
+}
+
+/**
  * Toggle a cash account's enabled flag. Used by the AccountPicker when a user
  * opts in or out of syncing a particular PSD2 account.
  */

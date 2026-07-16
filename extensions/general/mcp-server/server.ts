@@ -2833,6 +2833,7 @@ export const tools: McpTool[] = [
               currency: { type: 'string', description: 'ISO 4217 code. Default SEK.' },
               bank_connection_id: { type: 'string', description: 'Optional UUID of a bank_connections row to associate with.' },
               external_id: { type: 'string', description: 'Optional external reference (e.g., Airtable record ID). Shown in the preview; the DB enforces uniqueness per user, so the second commit of the same external_id will fail at approval.' },
+              ledger_account: { type: 'string', description: 'Optional 4-digit BAS account (e.g. "1935") this row belongs to. On approval the transaction is bound to that cash account (created as a manual kassakonto if missing) so reconciliation and voucher matching resolve it instead of falling back to 1930.' },
             },
             required: ['date', 'amount', 'description'],
           },
@@ -2864,6 +2865,7 @@ export const tools: McpTool[] = [
         const currency = ((item.currency as string) || 'SEK').toUpperCase()
         const bankConnectionId = (item.bank_connection_id as string) || null
         const externalId = (item.external_id as string) || null
+        const ledgerAccount = (item.ledger_account as string) || null
 
         if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
           throw new Error(`transactions[${i}].date must be in YYYY-MM-DD format.`)
@@ -2874,6 +2876,9 @@ export const tools: McpTool[] = [
         if (!description) {
           throw new Error(`transactions[${i}].description is required.`)
         }
+        if (ledgerAccount !== null && !/^\d{4}$/.test(ledgerAccount)) {
+          throw new Error(`transactions[${i}].ledger_account must be exactly 4 digits (e.g. "1935").`)
+        }
 
         const params = {
           date,
@@ -2882,6 +2887,7 @@ export const tools: McpTool[] = [
           currency,
           bank_connection_id: bankConnectionId,
           external_id: externalId,
+          ledger_account: ledgerAccount,
         }
 
         const sign = amount >= 0 ? '+' : ''

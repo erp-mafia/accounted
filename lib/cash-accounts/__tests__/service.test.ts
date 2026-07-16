@@ -14,6 +14,7 @@ import {
   findFreeLedgerAccount,
   allocatePsd2LedgerAccount,
   defaultLedgerForCurrency,
+  findOrCreateManualCashAccount,
   getRevokedConnectionIds,
   upsertFromPsd2,
 } from '../service'
@@ -554,5 +555,137 @@ describe('upsertFromPsd2', () => {
     await expect(
       upsertFromPsd2(makeUpsertSupabase(stub), 'c1', UPSERT_INPUT),
     ).rejects.toThrow(/duplicate key/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// findOrCreateManualCashAccount: manual-ingest binding target (issue #1016)
+// ---------------------------------------------------------------------------
+
+interface FindOrCreateStub {
+  /** Sequential results for the (company_id, ledger_account) lookup. */
+  lookups: Array<{ data: unknown; error?: { message: string } | null }>
+  insert?: { data?: unknown; error?: { message: string; code?: string } | null }
+}
+
+function makeFindOrCreateSupabase(stub: FindOrCreateStub) {
+  const inserts: Array<Record<string, unknown>> = []
+  let lookupCall = 0
+  const supabase = {
+    from: vi.fn(() => ({
+      select: vi.fn(() => {
+        const chain = {
+          eq: vi.fn(() => chain),
+          maybeSingle: vi.fn(() => {
+            const r = stub.lookups[Math.min(lookupCall, stub.lookups.length - 1)]
+            lookupCall++
+            return Promise.resolve({ data: r?.data ?? null, error: r?.error ?? null })
+          }),
+        }
+        return chain
+      }),
+      insert: vi.fn((payload: Record<string, unknown>) => {
+        inserts.push(payload)
+        return {
+          select: vi.fn(() => ({
+            single: vi.fn(() =>
+              Promise.resolve({
+                data: stub.insert?.data ?? null,
+                error: stub.insert?.error ?? null,
+              }),
+            ),
+          })),
+        }
+      }),
+    })),
+  } as unknown as SupabaseClient
+  return { supabase, inserts }
+}
+
+describe('findOrCreateManualCashAccount', () => {
+  it('returns the existing holder row as-is without inserting', async () => {
+    const holder = {
+      id: 'ca-existing',
+      ledger_account: '1935',
+      currency: 'EUR',
+      source: 'enable_banking',
+      bank_connection_id: 'conn-1',
+    }
+    const { supabase, inserts } = makeFindOrCreateSupabase({ lookups: [{ data: holder }] })
+
+    const row = await findOrCreateManualCashAccount(supabase, 'c1', '1935', 'SEK')
+
+    // The holder is returned untouched even when source/currency differ:
+    // mutating it could steal a PSD2-backed account.
+    expect(row).toBe(holder)
+    expect(inserts).toHaveLength(0)
+  })
+
+  it('creates a manual (null-connection) row when none exists', async () => {
+    const created = { id: 'ca-new', ledger_account: '1935', source: 'manual' }
+    const { supabase, inserts } = makeFindOrCreateSupabase({
+      lookups: [{ data: null }],
+      insert: { data: created },
+    })
+
+    const row = await findOrCreateManualCashAccount(supabase, 'c1', '1935', 'sek')
+
+    expect(row).toBe(created)
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0]).toEqual({
+      company_id: 'c1',
+      bank_connection_id: null,
+      ledger_account: '1935',
+      currency: 'SEK', // uppercased
+      source: 'manual',
+      enabled: true,
+    })
+  })
+
+  it('re-fetches and returns the winner on a unique-constraint race (23505)', async () => {
+    const winner = { id: 'ca-winner', ledger_account: '1935' }
+    const { supabase, inserts } = makeFindOrCreateSupabase({
+      // First lookup: empty. Second lookup (after conflict): the winner.
+      lookups: [{ data: null }, { data: winner }],
+      insert: { error: { message: 'duplicate key', code: '23505' } },
+    })
+
+    const row = await findOrCreateManualCashAccount(supabase, 'c1', '1935', 'SEK')
+
+    expect(row).toBe(winner)
+    expect(inserts).toHaveLength(1)
+  })
+
+  it('throws when the conflict re-fetch also comes back empty', async () => {
+    const { supabase } = makeFindOrCreateSupabase({
+      lookups: [{ data: null }, { data: null }],
+      insert: { error: { message: 'duplicate key', code: '23505' } },
+    })
+
+    await expect(
+      findOrCreateManualCashAccount(supabase, 'c1', '1935', 'SEK'),
+    ).rejects.toThrow(/cash_accounts create failed/)
+  })
+
+  it('throws on non-conflict insert errors', async () => {
+    const { supabase } = makeFindOrCreateSupabase({
+      lookups: [{ data: null }],
+      insert: { error: { message: 'currency check violation', code: '23514' } },
+    })
+
+    await expect(
+      findOrCreateManualCashAccount(supabase, 'c1', '1935', 'SEK'),
+    ).rejects.toThrow(/cash_accounts create failed: currency check violation/)
+  })
+
+  it('throws when the lookup itself fails', async () => {
+    const { supabase, inserts } = makeFindOrCreateSupabase({
+      lookups: [{ data: null, error: { message: 'boom' } }],
+    })
+
+    await expect(
+      findOrCreateManualCashAccount(supabase, 'c1', '1935', 'SEK'),
+    ).rejects.toThrow(/cash_accounts lookup failed: boom/)
+    expect(inserts).toHaveLength(0)
   })
 })

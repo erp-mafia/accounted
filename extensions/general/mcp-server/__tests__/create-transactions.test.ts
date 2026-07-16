@@ -106,4 +106,68 @@ describe('gnubok_create_transactions', () => {
       )
     ).rejects.toThrow(/description is required/)
   })
+
+  it('rejects items whose ledger_account is not exactly 4 digits', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      tool.execute(
+        {
+          transactions: [
+            { date: '2026-05-01', amount: 1, description: 'x', ledger_account: '19x5' },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never
+      )
+    ).rejects.toThrow(/ledger_account must be exactly 4 digits/)
+  })
+
+  it('threads ledger_account into the staged params (issue #1016)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // company_settings (period check)
+    enqueue({ data: null, error: null }) // fiscal_periods (period check)
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await tool.execute(
+      {
+        transactions: [
+          {
+            date: '2026-05-01',
+            amount: -500,
+            description: 'Wise top-up',
+            ledger_account: '1935',
+          },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as { staged_count: number; operations: Array<{ preview: Record<string, unknown> }> }
+
+    expect(result.staged_count).toBe(1)
+    // params ARE the preview, so the staged preview proves what the
+    // create_transaction pending op will carry to commitCreateTransaction.
+    expect(result.operations[0].preview).toMatchObject({ ledger_account: '1935' })
+  })
+
+  it('stages ledger_account as null when the hint is omitted (existing behavior)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null }) // company_settings (period check)
+    enqueue({ data: null, error: null }) // fiscal_periods (period check)
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await tool.execute(
+      {
+        transactions: [{ date: '2026-05-01', amount: 100, description: 'Inflow' }],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as { operations: Array<{ preview: Record<string, unknown> }> }
+
+    expect(result.operations[0].preview).toMatchObject({ ledger_account: null })
+  })
 })
