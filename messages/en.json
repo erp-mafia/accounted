@@ -276,6 +276,8 @@
     "callback_error_title": "The reset link did not work",
     "callback_error_body": "The link has expired or has already been used.",
     "request_new_reset_link": "Request a new reset link",
+    "callback_error_title_signup": "The confirmation link did not work",
+    "callback_error_body_signup": "The link may have expired, already been used, or been opened in a different browser than the one you signed up in. If you have already confirmed your email, sign in below; otherwise you can register again.",
     "bankid_no_account_greeting": "Hi {name}!",
     "bankid_no_account_body": "We did not find an account linked to your BankID. Sign in with email below and then link BankID in settings.",
     "bankid_no_account_create": "Or create a new account",

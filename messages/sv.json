@@ -276,6 +276,8 @@
     "callback_error_title": "Återställningslänken fungerade inte",
     "callback_error_body": "Länken har gått ut eller använts redan.",
     "request_new_reset_link": "Begär en ny återställningslänk",
+    "callback_error_title_signup": "Bekräftelselänken fungerade inte",
+    "callback_error_body_signup": "Länken kan ha upphört, redan använts, eller öppnats i en annan webbläsare än den du registrerade dig i. Har du redan bekräftat din e-post loggar du in nedan, annars kan du registrera dig igen.",
     "bankid_no_account_greeting": "Hej {name}!",
     "bankid_no_account_body": "Vi hittade inget konto kopplat till ditt BankID. Logga in med e-post nedan och koppla sedan BankID i inställningar.",
     "bankid_no_account_create": "Eller skapa ett nytt konto",
