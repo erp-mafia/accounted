@@ -15,6 +15,10 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
 import { Loader2, ArrowLeft, AlertTriangle, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
+import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import type { Invoice, InvoiceItem, Customer } from '@/types'
 
 interface InvoiceWithRelations extends Invoice {
@@ -24,6 +28,8 @@ interface InvoiceWithRelations extends Invoice {
 
 export default function CreateCreditNotePage({ params }: { params: Promise<{ id: string }> }) {
   const { canWrite } = useCanWrite()
+  const { isSandbox } = useCompany()
+  const canEmail = useCapability(CAPABILITY.email_send)
   const { id } = use(params)
   const router = useRouter()
   const { toast } = useToast()
@@ -35,6 +41,8 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [reason, setReason] = useState('')
   const [confirmText, setConfirmText] = useState('')
+  const [createdCreditNote, setCreatedCreditNote] = useState<InvoiceWithRelations | null>(null)
+  const [showSendPrompt, setShowSendPrompt] = useState(false)
 
   useEffect(() => {
     fetchInvoice()
@@ -114,14 +122,17 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
         throw new Error(data.error || t('create_failed_fallback'))
       }
 
-      const { data: creditNote } = await response.json()
+      const { data: creditNote } = await response.json() as { data: InvoiceWithRelations }
 
       toast({
         title: t('created_toast_title'),
-        description: t('created_toast_description', { number: creditNote.invoice_number }),
+        description: creditNote.invoice_number
+          ? t('created_toast_description', { number: creditNote.invoice_number })
+          : undefined,
       })
 
-      router.push(`/invoices/${creditNote.id}`)
+      setCreatedCreditNote(creditNote)
+      setShowSendPrompt(true)
     } catch (error) {
       toast({
         title: t('create_failed_title'),
@@ -146,9 +157,30 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
   }
 
   const customer = invoice.customer
+  const sendMode = getCreditNoteSendMode({
+    customerHasEmail: !!createdCreditNote?.customer.email,
+    isSandbox,
+    canEmail,
+  })
+
+  function handleSendPromptOpenChange(open: boolean) {
+    setShowSendPrompt(open)
+    if (!open && createdCreditNote) {
+      router.push(`/invoices/${createdCreditNote.id}`)
+    }
+  }
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
+      {createdCreditNote && (
+        <SendInvoiceDialog
+          open={showSendPrompt}
+          onOpenChange={handleSendPromptOpenChange}
+          invoice={createdCreditNote}
+          mode={sendMode}
+          onSuccess={() => undefined}
+        />
+      )}
       {/* Header */}
       <div className="flex items-center gap-4">
         <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label={t('back')}>

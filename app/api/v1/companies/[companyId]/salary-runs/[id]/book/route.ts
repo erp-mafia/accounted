@@ -34,6 +34,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
+import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
 
@@ -344,6 +345,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     } catch (err) {
       ctx.log.warn('salary_run.booked emit failed', err as Error)
+    }
+
+    // Vacation ledger sync (non-fatal: the ledger recomputes and self-heals
+    // on the next booking; a sync bug must never block a booking).
+    const ledgerSync = await syncVacationLedgerForEmployees(
+      ctx.supabase,
+      ctx.companyId!,
+      (employees as Array<{ employee_id: string }>).map((sre) => sre.employee_id),
+    )
+    if (!ledgerSync.ok) {
+      ctx.log.warn('vacation ledger sync failed after booking', { message: ledgerSync.message })
     }
 
     const bookedAt = (bookedRun as { booked_at: string }).booked_at

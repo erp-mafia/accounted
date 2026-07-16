@@ -2,19 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { buildVatSettlementProposal } from '../vat-settlement'
 
 // ============================================================
-// Mock: results routed by table + applied filters (the builder runs its two
-// ledger queries and the existing-entries lookup concurrently, so a
-// sequential result queue would be order-fragile).
+// Mock: fetchVatAccountTotals now goes through the
+// get_vat_declaration_totals RPC (aggregation + settlement-shape detection
+// in SQL, verified by tests/pg/vat-declaration-totals-rpc.pg.test.ts), so
+// the mock seeds the RPC payload directly: per-account totals as the SQL
+// GROUP BY returns them (already excluding settlement entries) plus the
+// shaped entries the RPC surfaces. The existing-entries lookup and the
+// fiscal-period resolution still go through from().
 // ============================================================
 
 interface MockData {
-  /**
-   * journal_entries rows for the entry-scope query (fetchEntryLines step 1).
-   * Shape-detection reads status/entry_date/source_type/voucher_* off these.
-   */
-  entries?: Array<Record<string, unknown>>
-  /** journal_entry_lines rows (fetchEntryLines step 2). */
-  lines?: Array<Record<string, unknown>>
+  /** Per-account totals as returned by the RPC (post settlement-exclusion). */
+  totals?: Array<{ account_number: string; debit: number; credit: number }>
+  /** Settlement-shaped entries surfaced by the RPC. */
+  shaped?: Array<Record<string, unknown>>
   /** Existing vat_settlement entries in the period. */
   existing?: Array<Record<string, unknown>>
   /** Error returned by the existing-settlement lookup. */
@@ -23,73 +24,59 @@ interface MockData {
   fiscalPeriod?: { period_start: string; period_end: string } | null
 }
 
-let neqCalls: Array<[string, unknown]>
+let rpcCalls: Array<{ fn: string; params: Record<string, unknown> }>
 
 function makeClient(data: MockData) {
-  neqCalls = []
+  rpcCalls = []
   return {
-    from: vi.fn().mockImplementation((table: string) => {
-      const eqCalls: Array<[string, unknown]> = []
+    rpc: vi.fn().mockImplementation(async (fn: string, params: Record<string, unknown>) => {
+      rpcCalls.push({ fn, params })
+      return {
+        data: {
+          totals: data.totals ?? [],
+          settlement_shaped_entries: data.shaped ?? [],
+          source_type_counts: {},
+        },
+        error: null,
+      }
+    }),
+    from: vi.fn().mockImplementation(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const b: Record<string, any> = {}
-      for (const m of ['select', 'in', 'gte', 'lte', 'order', 'range', 'limit']) {
+      for (const m of ['select', 'eq', 'neq', 'in', 'gte', 'lte', 'order', 'range', 'limit']) {
         b[m] = vi.fn().mockReturnValue(b)
       }
-      b.eq = vi.fn().mockImplementation((col: string, val: unknown) => {
-        eqCalls.push([col, val])
-        return b
-      })
-      b.neq = vi.fn().mockImplementation((col: string, val: unknown) => {
-        neqCalls.push([col, val])
-        return b
-      })
       b.maybeSingle = vi.fn().mockResolvedValue({ data: data.fiscalPeriod ?? null, error: null })
-      b.then = (resolve: (v: unknown) => void) => {
-        if (table === 'journal_entry_lines') return resolve({ data: data.lines ?? [], error: null })
-        // journal_entries serves two queries: the entry scope for the ledger
-        // totals (filters vat_settlement OUT via .neq) and the tagged
-        // existing-settlement lookup (filters it IN via .eq).
-        if (eqCalls.some(([col, val]) => col === 'source_type' && val === 'vat_settlement')) {
-          return resolve(
-            data.existingError
-              ? { data: null, error: data.existingError }
-              : { data: data.existing ?? [], error: null },
-          )
-        }
-        return resolve({ data: data.entries ?? [], error: null })
-      }
+      // The only awaited from() query left in the proposal builder is the
+      // tagged existing-settlement lookup.
+      b.then = (resolve: (v: unknown) => void) =>
+        resolve(
+          data.existingError
+            ? { data: null, error: data.existingError }
+            : { data: data.existing ?? [], error: null },
+        )
       return b
     }),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any
 }
 
-let lineId = 0
-function vatLine(account: string, debit: number, credit: number, entryId = 'e1') {
-  lineId += 1
-  return {
-    id: `l${lineId}`,
-    journal_entry_id: entryId,
-    account_number: account,
-    debit_amount: debit,
-    credit_amount: credit,
-  }
+function total(account_number: string, debit: number, credit: number) {
+  return { account_number, debit, credit }
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
-  lineId = 0
 })
 
 describe('buildVatSettlementProposal', () => {
   it('clears the 26xx accounts, books the filed whole-krona net on 2650 and the öre gap on 3740', async () => {
     const supabase = makeClient({
-      entries: [{ id: 'e1' }],
-      lines: [
-        vatLine('2611', 0, 2500.75),
-        vatLine('2641', 1000.5, 0),
+      totals: [
+        total('2611', 0, 2500.75),
+        total('2641', 1000.5, 0),
         // Revenue feeds ruta05 but is never part of the settlement entry.
-        vatLine('3001', 0, 10003.0),
+        total('3001', 0, 10003.0),
       ],
     })
 
@@ -123,16 +110,19 @@ describe('buildVatSettlementProposal', () => {
     expect(debits).toBeCloseTo(credits, 2)
 
     // The projection must ignore already-booked settlements, or booking once
-    // would change the next proposal.
-    expect(neqCalls).toContainEqual(['source_type', 'vat_settlement'])
+    // would change the next proposal: the RPC receives the settlement net
+    // accounts so it can shape-detect and exclude them.
+    expect(rpcCalls).toHaveLength(1)
+    expect(rpcCalls[0].fn).toBe('get_vat_declaration_totals')
+    expect(rpcCalls[0].params.p_net_accounts).toEqual(['2650', '1650'])
+    expect(rpcCalls[0].params.p_company_id).toBe('company-1')
   })
 
   it('books a refund period as a 1650 (Momsfordran) debit', async () => {
     const supabase = makeClient({
-      entries: [{ id: 'e1' }],
-      lines: [
-        vatLine('2611', 0, 100),
-        vatLine('2641', 400, 0),
+      totals: [
+        total('2611', 0, 100),
+        total('2641', 400, 0),
       ],
     })
 
@@ -152,9 +142,8 @@ describe('buildVatSettlementProposal', () => {
 
   it('clears an account sitting on the wrong side (credit-note-heavy period)', async () => {
     const supabase = makeClient({
-      entries: [{ id: 'e1' }],
       // Output VAT with a net DEBIT balance: credit notes exceeded sales.
-      lines: [vatLine('2611', 50, 0)],
+      totals: [total('2611', 50, 0)],
     })
 
     const proposal = await buildVatSettlementProposal(supabase, 'company-1', 'monthly', 2026, 2)
@@ -171,8 +160,7 @@ describe('buildVatSettlementProposal', () => {
 
   it('is empty when the period has no VAT-account activity (revenue alone does not settle)', async () => {
     const supabase = makeClient({
-      entries: [{ id: 'e1' }],
-      lines: [vatLine('3001', 0, 1000)],
+      totals: [total('3001', 0, 1000)],
     })
 
     const proposal = await buildVatSettlementProposal(supabase, 'company-1', 'quarterly', 2026, 2)
@@ -184,8 +172,7 @@ describe('buildVatSettlementProposal', () => {
 
   it('uses the räkenskapsår bounds for yearly VAT when a fiscal period is supplied', async () => {
     const supabase = makeClient({
-      entries: [{ id: 'e1' }],
-      lines: [vatLine('2611', 0, 100), vatLine('2641', 25, 0)],
+      totals: [total('2611', 0, 100), total('2641', 25, 0)],
       fiscalPeriod: { period_start: '2025-07-01', period_end: '2026-06-30' },
     })
 
@@ -205,8 +192,7 @@ describe('buildVatSettlementProposal', () => {
       voucher_series: 'M', voucher_number: 3,
     }]
     const supabase = makeClient({
-      entries: [{ id: 'e1' }],
-      lines: [vatLine('2611', 0, 100)],
+      totals: [total('2611', 0, 100)],
       existing,
     })
 
@@ -221,17 +207,14 @@ describe('buildVatSettlementProposal', () => {
       source_type: 'manual', voucher_series: 'A', voucher_number: 9,
     }
     const supabase = makeClient({
-      entries: [{ id: 'e1' }, manualSettlement],
-      lines: [
-        // Business activity on e1.
-        vatLine('2611', 0, 100),
-        vatLine('2641', 25, 0),
-        // Manual momsomföring on e2: clears 26xx to 2650 without the
-        // vat_settlement source_type (booked before #980 shipped).
-        vatLine('2611', 100, 0, 'e2'),
-        vatLine('2641', 0, 25, 'e2'),
-        vatLine('2650', 0, 75, 'e2'),
+      // The RPC already excluded the manual momsomföring from the totals
+      // (that exclusion is pg-tested); what reaches JS is the business
+      // activity plus the shaped entry to gate on.
+      totals: [
+        total('2611', 0, 100),
+        total('2641', 25, 0),
       ],
+      shaped: [manualSettlement],
     })
 
     const proposal = await buildVatSettlementProposal(supabase, 'company-1', 'quarterly', 2026, 1)
@@ -254,33 +237,25 @@ describe('buildVatSettlementProposal', () => {
 
   it('does not gate on a storno of a settlement (annullera must re-enable booking)', async () => {
     const supabase = makeClient({
-      entries: [
-        { id: 'e1' },
-        // A manual settlement that has been annulled...
+      // Settlement + storno cancel out of the totals inside the RPC; both
+      // still come back as shaped entries. Neither may gate: the reversed
+      // manual settlement has no balance effect and the storno is the
+      // cancellation itself.
+      totals: [total('2611', 0, 100)],
+      shaped: [
         {
           id: 'e2', status: 'reversed', entry_date: '2026-03-31',
           source_type: 'manual', voucher_series: 'A', voucher_number: 9,
         },
-        // ...and its storno reversal.
         {
           id: 'e3', status: 'posted', entry_date: '2026-03-31',
           source_type: 'storno', voucher_series: 'A', voucher_number: 10,
         },
       ],
-      lines: [
-        vatLine('2611', 0, 100),
-        vatLine('2611', 100, 0, 'e2'),
-        vatLine('2650', 0, 100, 'e2'),
-        vatLine('2611', 0, 100, 'e3'),
-        vatLine('2650', 100, 0, 'e3'),
-      ],
     })
 
     const proposal = await buildVatSettlementProposal(supabase, 'company-1', 'quarterly', 2026, 1)
 
-    // Settlement + storno are both excluded from the projection (they would
-    // otherwise double ruta 10), and neither gates: the period can be
-    // settled again.
     expect(proposal.existing_entries).toEqual([])
     expect(proposal.filed_net).toBe(100)
     expect(proposal.lines).toEqual([
@@ -294,20 +269,15 @@ describe('buildVatSettlementProposal', () => {
 
   it('ignores a plain VAT payment on 2650 (no declaration accounts touched)', async () => {
     const supabase = makeClient({
-      entries: [
-        { id: 'e1' },
-        {
-          id: 'e2', status: 'posted', entry_date: '2026-02-12',
-          source_type: 'bank_transaction', voucher_series: 'A', voucher_number: 7,
-        },
+      // Paying last period's VAT debt: 2650 against the bank account. The
+      // entry touches a settlement net account but no declaration account,
+      // so the RPC does NOT shape it: its 2650 total comes back as-is and
+      // must neither gate nor shift the rutor / clearing lines.
+      totals: [
+        total('2611', 0, 100),
+        total('2650', 75, 0),
       ],
-      lines: [
-        vatLine('2611', 0, 100),
-        // Paying last period's VAT debt: 2650 against the bank account.
-        // Touches a settlement net account but no declaration account, so it
-        // is NOT settlement-shaped: it must neither gate nor shift the rutor.
-        vatLine('2650', 75, 0, 'e2'),
-      ],
+      shaped: [],
     })
 
     const proposal = await buildVatSettlementProposal(supabase, 'company-1', 'quarterly', 2026, 1)
@@ -325,8 +295,7 @@ describe('buildVatSettlementProposal', () => {
 
   it('throws when the existing-settlement lookup fails (the UI gate depends on it)', async () => {
     const supabase = makeClient({
-      entries: [{ id: 'e1' }],
-      lines: [vatLine('2611', 0, 100)],
+      totals: [total('2611', 0, 100)],
       existingError: { message: 'boom' },
     })
 

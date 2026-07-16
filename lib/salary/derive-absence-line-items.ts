@@ -163,6 +163,16 @@ export interface DeriveInput {
   /** Parental leave days in the current pregnancy window (best-effort:
    *  defaults to calendar-year aggregate). */
   parentalDaysPregnancyYtd: number
+  /** Cutover state (payroll gap-closure 2.2): karens periods in the 12
+   *  months before cutover NOT represented by imported salary_absence_days
+   *  rows. Added to the högriskskydd window count so a mid-year switcher's
+   *  cap position carries over. The caller zeroes this once the lookback
+   *  window no longer overlaps pre-cutover time. */
+  karensPeriodsAdjustment?: number
+  /** Work-schedule daily-rate divisor (arbetsschema-lite). Defaults to the
+   *  legacy 21 (5-day week); part-time schedules pass
+   *  dailyDivisor(workdays_per_week) from lib/salary/work-schedule. */
+  dailyDivisor?: number
 }
 
 export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
@@ -209,9 +219,14 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     const lookbackOnlySegments = buildSjukloneperioder(
       input.lookbackSickDates.filter(d => d >= cutoff),
     )
-    let karensInWindow = lookbackOnlySegments.length
+    // Cutover adjustment: karens periods from the previous payroll system
+    // that were never imported as day rows. Over-suppression of karens is
+    // the softer error (consistent with the period-count reading above).
+    let karensInWindow = lookbackOnlySegments.length + (input.karensPeriodsAdjustment ?? 0)
 
-    const dailyRate = r(monthlySalary / 21)
+    // weeklyRate stays monthly x 12/52 by construction (schedule-independent);
+    // only the DAILY rate scales with the workday schedule.
+    const dailyRate = r(monthlySalary / (input.dailyDivisor ?? 21))
     const weeklyRate = r(monthlySalary * 12 / 52 * payrollConfig.sjuklonRate)
     const karensAmount = r(weeklyRate * payrollConfig.karensavdragFactor)
 
@@ -304,7 +319,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
   // ── VAB ────────────────────────────────────────────────────────────────
   const vabCount = vabDays.length
   if (vabCount > 0) {
-    const vab = calculateVabDeduction(monthlySalary, vabCount, input.vabDaysYtd)
+    const vab = calculateVabDeduction(monthlySalary, vabCount, input.vabDaysYtd, input.dailyDivisor)
     lineItems.push({
       item_type: 'vab',
       description: `VAB (${vabCount} dagar)`,
@@ -324,6 +339,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
       monthlySalary,
       parentalCount,
       input.parentalDaysPregnancyYtd,
+      input.dailyDivisor,
     )
     lineItems.push({
       item_type: 'parental_leave',
@@ -347,7 +363,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
   // the flag would double-count the amount in Step 4's gross_deduction sum.
   const unpaidLeaveCount = unpaidLeaveDays.length
   if (unpaidLeaveCount > 0) {
-    const dailyRate = r(monthlySalary / 21)
+    const dailyRate = r(monthlySalary / (input.dailyDivisor ?? 21))
     const deduction = r(dailyRate * unpaidLeaveCount)
     lineItems.push({
       item_type: 'unpaid_leave',
@@ -386,6 +402,10 @@ export async function loadAndDeriveAbsence(params: {
   payrollConfig: PayrollConfig
   periodStart: string
   periodEnd: string
+  /** See DeriveInput.karensPeriodsAdjustment. */
+  karensPeriodsAdjustment?: number
+  /** See DeriveInput.dailyDivisor. */
+  dailyDivisor?: number
 }): Promise<DeriveResult> {
   const { supabase, companyId, employeeId, periodStart, periodEnd } = params
 
@@ -440,5 +460,7 @@ export async function loadAndDeriveAbsence(params: {
     lookbackSickDates,
     vabDaysYtd,
     parentalDaysPregnancyYtd,
+    karensPeriodsAdjustment: params.karensPeriodsAdjustment,
+    dailyDivisor: params.dailyDivisor,
   })
 }

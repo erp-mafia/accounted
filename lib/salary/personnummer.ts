@@ -159,11 +159,18 @@ export function calculateAge(personnummer: string, atDate: string): number {
 }
 
 /**
- * Calculate age at the start of a given year.
- * Used for avgifter age tier determination.
+ * Age tier for "vid årets ingång fyllt X" rules (avgifter age tiers).
+ *
+ * Skatteverket applies these rules as BIRTH-YEAR ranges (the 2026
+ * ungdomsrabatt covers born 2003-2007; the 66/67+ reduction for 2026 covers
+ * born 1958 or earlier), which equals the age attained by December 31 of
+ * the PRIOR year. Birthday-inclusive age at January 1 (calculateAge
+ * semantics) misclassifies employees born exactly on January 1 in both
+ * directions: born 2008-01-01 would get the 2026 youth rate (Skatteverket's
+ * AGI validation rejects it) and born 2003-01-01 would be denied it.
  */
 export function calculateAgeAtYearStart(personnummer: string, year: number): number {
-  return calculateAge(personnummer, `${year}-01-01`)
+  return year - 1 - extractBirthDate(personnummer).year
 }
 
 /**

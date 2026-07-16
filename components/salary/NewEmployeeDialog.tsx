@@ -168,6 +168,8 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
       employment_start: form.get('employment_start') as string,
       employment_end: form.get('employment_end') as string || undefined,
       employment_degree: parseFloat(form.get('employment_degree') as string) || 100,
+      hours_per_week: parseFloat(form.get('hours_per_week') as string) || 40,
+      workdays_per_week: parseFloat(form.get('workdays_per_week') as string) || 5,
       salary_type: salaryType,
       monthly_salary: salaryType === 'monthly' ? (parseFloat(form.get('monthly_salary') as string) || undefined) : undefined,
       hourly_rate: salaryType === 'hourly' ? (parseFloat(form.get('hourly_rate') as string) || undefined) : undefined,
@@ -292,6 +294,12 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
             </Field>
             <Field label="Sysselsättningsgrad (%)" htmlFor="employment_degree">
               <Input id="employment_degree" name="employment_degree" type="number" defaultValue="100" min="1" max="100" />
+            </Field>
+            <Field label="Timmar per vecka" htmlFor="hours_per_week">
+              <Input id="hours_per_week" name="hours_per_week" type="number" defaultValue="40" min="1" max="80" step="0.5" />
+            </Field>
+            <Field label="Arbetsdagar per vecka" htmlFor="workdays_per_week">
+              <Input id="workdays_per_week" name="workdays_per_week" type="number" defaultValue="5" min="1" max="7" step="1" />
             </Field>
             <Field label="Löneform" htmlFor="salary_type" required>
               <Select value={salaryType} onValueChange={setSalaryType}>

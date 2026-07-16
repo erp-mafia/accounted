@@ -31,13 +31,33 @@ export const POST = withRouteContext(
 
     const { data: invoice, error: invoiceError } = await supabase
       .from('invoices')
-      .select('*, customer:customers(*), items:invoice_items(*)')
+      .select('*, customer:customers(*), items:invoice_items(*), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
       .eq('id', id)
       .eq('company_id', companyId)
       .single()
 
     if (invoiceError || !invoice) {
       return errorResponseFromCode('INVOICE_PAID_NOT_FOUND', opLog, { requestId })
+    }
+
+    if (invoice.credited_invoice_id) {
+      return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
+        requestId,
+        details: { reason: 'credit_note' },
+      })
+    }
+
+    const activeCreditNotes = ((invoice as { credit_notes?: Array<{
+      status: string
+      creation_complete?: boolean
+    }> }).credit_notes ?? []).filter(
+      (creditNote) => creditNote.status !== 'cancelled' && creditNote.creation_complete !== false,
+    )
+    if (activeCreditNotes.length > 0) {
+      return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
+        requestId,
+        details: { reason: 'active_credit_note' },
+      })
     }
 
     if (invoice.status !== 'sent' && invoice.status !== 'overdue') {

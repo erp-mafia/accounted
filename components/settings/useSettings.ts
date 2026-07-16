@@ -5,10 +5,9 @@ import {
   createElement,
   useCallback,
   useContext,
-  useEffect,
-  useState,
   type ReactNode,
 } from 'react'
+import useSWR from 'swr'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { CompanySettings } from '@/types'
@@ -36,48 +35,56 @@ export interface SettingsState {
  */
 export function useCompanySettings(): SettingsState {
   const { company } = useCompany()
-  const [settings, setSettings] = useState<CompanySettings | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState(false)
+  const companyId = company?.id ?? null
 
-  const fetchSettings = useCallback(async () => {
-    if (!company?.id) {
-      // No active company (the no-company escape hatch). Nothing to load; surface
-      // a settled empty state rather than a perpetual spinner.
-      setSettings(null)
-      setError(false)
-      setIsLoading(false)
-      return
-    }
+  // SWR-backed: every consumer of the same company's settings shares one
+  // cache entry, so concurrent mounts dedupe into a single request and
+  // back-navigation renders from cache (revalidating in the background)
+  // instead of re-showing a skeleton. Null key = no active company (the
+  // no-company escape hatch): a settled empty state, never a spinner.
+  const { data, error: swrError, isLoading, mutate } = useSWR(
+    companyId ? ['company_settings', companyId] : null,
+    async ([, id]: [string, string]) => {
+      const supabase = createClient()
+      // maybeSingle() so a missing row resolves to { data: null } instead of
+      // throwing PGRST116: a company created outside the onboarding flow may
+      // have no company_settings row yet, and that must not be treated as a
+      // hard error mid-query (it's surfaced as `error` below once settled).
+      const { data, error: queryError } = await supabase
+        .from('company_settings')
+        .select('*')
+        .eq('company_id', id)
+        .maybeSingle()
+      if (queryError) throw queryError
+      return data as CompanySettings | null
+    },
+  )
 
-    setIsLoading(true)
-    setError(false)
+  const updateSettings = useCallback(
+    (updates: Partial<CompanySettings>) => {
+      // Optimistic local patch only: callers persist through their own API
+      // routes. revalidate: false so the patch isn't immediately overwritten
+      // by a refetch racing the server-side write.
+      void mutate((prev) => (prev ? ({ ...prev, ...updates } as CompanySettings) : prev), {
+        revalidate: false,
+      })
+    },
+    [mutate],
+  )
 
-    const supabase = createClient()
-    // maybeSingle() so a missing row resolves to { data: null } instead of
-    // throwing PGRST116: a company created outside the onboarding flow may have
-    // no company_settings row yet, and that must not be treated as a hard error
-    // mid-query (it's surfaced as `error` below once the fetch settles).
-    const { data, error: queryError } = await supabase
-      .from('company_settings')
-      .select('*')
-      .eq('company_id', company.id)
-      .maybeSingle()
+  const refetch = useCallback(async () => {
+    await mutate()
+  }, [mutate])
 
-    setSettings(data)
-    setError(Boolean(queryError) || !data)
-    setIsLoading(false)
-  }, [company?.id])
-
-  useEffect(() => {
-    fetchSettings()
-  }, [fetchSettings])
-
-  const updateSettings = useCallback((updates: Partial<CompanySettings>) => {
-    setSettings((prev) => (prev ? ({ ...prev, ...updates } as CompanySettings) : prev))
-  }, [])
-
-  return { settings, isLoading, error, updateSettings, refetch: fetchSettings }
+  return {
+    settings: data ?? null,
+    isLoading: companyId ? isLoading : false,
+    // Same contract as before SWR: error means "settled without a row"
+    // (query failure or missing company_settings row), never mid-flight.
+    error: companyId ? !isLoading && (Boolean(swrError) || !data) : false,
+    updateSettings,
+    refetch,
+  }
 }
 
 const SettingsContext = createContext<SettingsState | null>(null)

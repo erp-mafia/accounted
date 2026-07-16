@@ -75,9 +75,12 @@ function matches(entry: Entry, q: string): boolean {
   return q.split(/\s+/).filter(Boolean).every(t => hay.includes(t))
 }
 
-export default function CommandPalette() {
+export default function CommandPalette({ initialOpen = false }: { initialOpen?: boolean } = {}) {
   const router = useRouter()
-  const [open, setOpen] = useState(false)
+  // initialOpen: LazyCommandPalette mounts this component on the first ⌘K,
+  // so the palette must come up already open rather than waiting for a
+  // second keypress.
+  const [open, setOpen] = useState(initialOpen)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)

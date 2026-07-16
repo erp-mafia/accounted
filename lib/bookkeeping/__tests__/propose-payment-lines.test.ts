@@ -211,6 +211,118 @@ describe('proposePaymentLines', () => {
   })
 })
 
+describe('proposePaymentLines: öresavrundning (3740)', () => {
+  it('accrual: rounded-up total → bank leg at "Att betala", 3740 credit carries the residual', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({
+        total: 1234.75,
+        subtotal: 987.8,
+        vat_amount: 246.95,
+        items: [makeItem({ line_total: 987.8, vat_amount: 246.95, unit_price: 987.8 })],
+      }),
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+      companyOreRounding: true,
+    })
+
+    expect(lines).toHaveLength(3)
+    expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '1235' })
+    expect(lines[1]).toMatchObject({ account_number: '1510', credit_amount: '1234.75' })
+    expect(lines[2]).toEqual({
+      account_number: '3740',
+      debit_amount: '',
+      credit_amount: '0.25',
+      line_description: 'Öresavrundning',
+    })
+  })
+
+  it('accrual: rounded-down total → 3740 debit', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({ total: 1234.25 }),
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+      companyOreRounding: true,
+    })
+
+    expect(lines).toHaveLength(3)
+    expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '1234' })
+    expect(lines[1]).toMatchObject({ account_number: '1510', credit_amount: '1234.25' })
+    expect(lines[2]).toMatchObject({ account_number: '3740', debit_amount: '0.25', credit_amount: '' })
+  })
+
+  it('cash: bank leg is the rounded amount and 3740 balances the exact revenue + VAT credits', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({
+        total: 1234.75,
+        subtotal: 987.8,
+        vat_amount: 246.95,
+        items: [makeItem({ line_total: 987.8, vat_amount: 246.95, unit_price: 987.8 })],
+      }),
+      accountingMethod: 'cash',
+      entityType: 'enskild_firma',
+      companyOreRounding: true,
+    })
+
+    expect(lines[0]).toMatchObject({ account_number: '1930', debit_amount: '1235' })
+    const last = lines[lines.length - 1]
+    expect(last).toMatchObject({ account_number: '3740', credit_amount: '0.25' })
+    const debit = lines.reduce((s, l) => s + (parseFloat(l.debit_amount) || 0), 0)
+    const credit = lines.reduce((s, l) => s + (parseFloat(l.credit_amount) || 0), 0)
+    expect(Math.round((debit - credit) * 100)).toBe(0)
+  })
+
+  it('company setting off and no invoice override → unchanged 2-line proposal', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({ total: 1234.75 }),
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+      companyOreRounding: false,
+    })
+
+    expect(lines).toHaveLength(2)
+    expect(lines[0].debit_amount).toBe('1234.75')
+  })
+
+  it('per-invoice override wins over the company setting', () => {
+    const lines = proposePaymentLines({
+      invoice: { ...makeInvoiceInput({ total: 1234.75 }), ore_rounding: true },
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+      companyOreRounding: false,
+    })
+
+    expect(lines).toHaveLength(3)
+    expect(lines[2].account_number).toBe('3740')
+  })
+
+  it('whole-krona total → no 3740 line even when rounding is on', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({ total: 12500 }),
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+      companyOreRounding: true,
+    })
+
+    expect(lines).toHaveLength(2)
+  })
+
+  it('non-SEK invoice → rounding never applies', () => {
+    const lines = proposePaymentLines({
+      invoice: makeInvoiceInput({
+        total: 1000.4,
+        total_sek: 10004,
+        currency: 'EUR',
+        exchange_rate: 10,
+      }),
+      accountingMethod: 'accrual',
+      entityType: 'enskild_firma',
+      companyOreRounding: true,
+    })
+
+    expect(lines.every((l) => l.account_number !== '3740')).toBe(true)
+  })
+})
+
 describe('proposePaymentLines: dimensions propagation (PR7)', () => {
   const bag = { '1': 'KS01', '6': 'P001' }
 

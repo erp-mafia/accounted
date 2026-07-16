@@ -135,7 +135,7 @@ export async function buildAgiUnderlag(
 
   if (declarationError || !declaration?.xml_content) {
     throw new Error(
-      'AGI-XML saknas. Generera AGI-filen från lönekörningen först (Lön → AGI → Generera).',
+      'AGI-XML saknas. Generera AGI-filen först: knappen "Lämna in till Skatteverket" på lönekörningen gör det automatiskt, eller klicka "Ladda ner AGI-fil".',
     )
   }
 

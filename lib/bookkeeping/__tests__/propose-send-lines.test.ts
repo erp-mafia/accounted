@@ -30,6 +30,7 @@ function makeInvoiceInput(overrides: Partial<{
   currency: string
   exchange_rate: number | null
   vat_treatment: VatTreatment
+  credited_invoice_id: string | null
   items: InvoiceItem[]
   default_dimensions: Record<string, string> | null
 }> = {}) {
@@ -75,6 +76,71 @@ describe('proposeSendLines', () => {
       credit_amount: '2500',
       line_description: 'Utgående moms 25%',
     })
+  })
+
+  it('credit note uses positive amounts on the reversed sides', () => {
+    const lines = proposeSendLines({
+      invoice: makeInvoiceInput({
+        invoice_number: 'KR-2025-001',
+        credited_invoice_id: 'invoice-1',
+        total: -12500,
+        subtotal: -10000,
+        vat_amount: -2500,
+        items: [
+          makeItem({ quantity: -1, line_total: -10000, vat_amount: -2500 }),
+        ],
+      }),
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines).toEqual([
+      {
+        account_number: '1510',
+        debit_amount: '',
+        credit_amount: '12500',
+        line_description: 'Kreditfaktura KR-2025-001',
+      },
+      {
+        account_number: '3001',
+        debit_amount: '10000',
+        credit_amount: '',
+        line_description: 'Kreditfaktura KR-2025-001',
+      },
+      {
+        account_number: '2611',
+        debit_amount: '2500',
+        credit_amount: '',
+        line_description: 'Moms kreditfaktura 25%',
+      },
+    ])
+  })
+
+  it('credit-note preview reverses the ROT receivable split', () => {
+    const lines = proposeSendLines({
+      invoice: makeInvoiceInput({
+        invoice_number: 'KR-2025-002',
+        credited_invoice_id: 'invoice-2',
+        total: -12500,
+        subtotal: -10000,
+        vat_amount: -2500,
+        items: [
+          makeItem({
+            quantity: -1,
+            line_total: -10000,
+            vat_amount: -2500,
+            deduction_type: 'rot',
+          }),
+        ],
+      }),
+      entityType: 'enskild_firma',
+    })
+
+    expect(lines.find((line) => line.account_number === '1510')?.credit_amount).toBe('9500')
+    expect(lines.find((line) => line.account_number === '1513')?.credit_amount).toBe('3000')
+    expect(lines.reduce((sum, line) => sum + (parseFloat(line.debit_amount) || 0), 0))
+      .toBe(12500)
+    expect(lines.reduce((sum, line) => sum + (parseFloat(line.credit_amount) || 0), 0))
+      .toBe(12500)
   })
 
   describe('dimensions propagation (PR7)', () => {

@@ -158,6 +158,8 @@ export const SCOPE_GROUPS = [
 
 /** Map MCP tool name → required scope. Tools omitted from this map are available to any authenticated key (e.g. discovery/search/skill loading). */
 export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
+  // Companies
+  gnubok_list_companies:                  'companies:read',
   // Transactions
   gnubok_list_uncategorized_transactions:     'transactions:read',
   gnubok_list_transactions_without_documents: 'transactions:read',
@@ -227,6 +229,17 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_create_salary_run:               'payroll:write',
   gnubok_calculate_salary_run:            'payroll:write',
   gnubok_generate_agi:                    'payroll:write',
+  // Payroll gap-closure: reads + staged writes (1.6-1.8, 2.4)
+  gnubok_get_employee:                    'payroll:read',
+  gnubok_get_payslip:                     'payroll:read',
+  gnubok_list_absence:                    'payroll:read',
+  gnubok_update_payslip_line:             'payroll:write',
+  gnubok_register_absence:                'payroll:write',
+  gnubok_create_employee:                 'payroll:write',
+  gnubok_update_employee:                 'payroll:write',
+  gnubok_set_employee_opening_balances:   'payroll:write',
+  gnubok_get_vacation_balance:            'payroll:read',
+  gnubok_close_vacation_year:             'payroll:write',
   // Bookkeeping write (Stream 1 Phase 1): high-risk, always staged
   gnubok_close_period:                    'bookkeeping:write',
   gnubok_lock_period:                     'bookkeeping:write',
@@ -283,6 +296,29 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_agi_status:                      'compliance:read',
   gnubok_vat_declaration_submit:          'skatteverket:write',
   gnubok_agi_submit:                      'skatteverket:write',
+
+  // ── Audit retrofit (agent-native audit P0: unmapped = default-allow) ──
+  // These tools shipped without a scope mapping, making them callable by ANY
+  // authenticated key. Mapping them is accept-the-break by decision
+  // (2026-07-13): keys that relied on the default-allow hole lose access
+  // until granted the proper scope. Release-note callout required for the
+  // four WRITES below.
+  gnubok_link_invoice_to_voucher:              'invoices:write',
+  gnubok_undo_sie_import:                      'bookkeeping:write',
+  gnubok_post_annual_depreciation:             'bookkeeping:write',
+  gnubok_import_rot_rut_beslut:                'invoices:write',
+  gnubok_list_verifikat_without_documents:     'transactions:read',
+  gnubok_find_voucher_candidates_for_invoice:  'invoices:read',
+  gnubok_propose_dispositioner:                'reports:read',
+  gnubok_propose_accruals:                     'reports:read',
+  gnubok_propose_annual_depreciation:          'reports:read',
+  gnubok_preview_arsredovisning:               'reports:read',
+  gnubok_preview_ef_declaration:               'reports:read',
+  // Deliberately UNSCOPED (available to any authenticated key):
+  // gnubok_search_tools, gnubok_list_skills, gnubok_load_skill,
+  // gnubok_feedback. Discovery + static skill bodies + feedback channel
+  // carry no per-company data; keeping them open is what lets an agent
+  // orient itself before its key's scopes are known.
 }
 
 export function validateScopes(scopes: unknown): ApiKeyScope[] | null {

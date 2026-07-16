@@ -74,7 +74,7 @@ jobs:
         # scan step above failed the run. Same category as docker-publish.yml so
         # the two analyses share one alert set instead of duplicating.
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
           category: trivy

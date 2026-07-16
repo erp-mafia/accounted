@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { cookies } from 'next/headers'
 import type { EntityType } from '@/types'
 
@@ -37,16 +38,38 @@ export async function getActiveCompanyId(
   supabase: SupabaseClient,
   userId: string
 ): Promise<string | null> {
-  // 1. user_preferences: authoritative
-  const { data: prefs } = await supabase
-    .from('user_preferences')
-    .select('active_company_id')
-    .eq('user_id', userId)
-    .maybeSingle()
+  // user_preferences (authoritative) + first membership, fetched in parallel:
+  // the fallback query result doubles as validation when the preferred
+  // company happens to be the first membership, which is the common
+  // single-company case. Most requests pay one round trip instead of two
+  // sequential ones. This runs on every withRouteContext API request and
+  // every dashboard layout render, so the sequential version was pure
+  // wall-clock cost. Mirrors resolveCompanyForMiddleware, minus the
+  // write-back (read paths shouldn't write).
+  const [{ data: prefs }, { data: firstCompany }] = await Promise.all([
+    supabase
+      .from('user_preferences')
+      .select('active_company_id')
+      .eq('user_id', userId)
+      .maybeSingle(),
+    supabase
+      .from('company_members')
+      .select('company_id, companies!inner(archived_at)')
+      .eq('user_id', userId)
+      .is('companies.archived_at', null)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+  ])
 
   if (prefs?.active_company_id) {
-    // Validate the preference still points to a non-archived company the
-    // user is a member of.
+    if (firstCompany && prefs.active_company_id === firstCompany.company_id) {
+      return firstCompany.company_id
+    }
+
+    // Preference points at a different company than the first membership:
+    // validate it still resolves to a non-archived company the user is a
+    // member of before trusting it.
     const { data: membership } = await supabase
       .from('company_members')
       .select('company_id, companies!inner(archived_at)')
@@ -58,16 +81,7 @@ export async function getActiveCompanyId(
     if (membership) return membership.company_id
   }
 
-  // 2. Fallback: first non-archived membership by created_at
-  const { data: firstCompany } = await supabase
-    .from('company_members')
-    .select('company_id, companies!inner(archived_at)')
-    .eq('user_id', userId)
-    .is('companies.archived_at', null)
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-
+  // Fallback: first non-archived membership by created_at (already fetched)
   return firstCompany?.company_id ?? null
 }
 
@@ -141,26 +155,27 @@ export async function getUserCompanies(
   supabase: SupabaseClient,
   userId: string
 ) {
-  const { data, error } = await supabase
-    .from('company_members')
-    .select(`
-      company_id,
-      role,
-      joined_at,
-      companies:company_id (
+  return fetchAllRows(({ from, to }) =>
+    supabase
+      .from('company_members')
+      .select(`
         id,
-        name,
-        org_number,
-        entity_type,
-        archived_at,
-        created_at
-      )
-    `)
-    .eq('user_id', userId)
-    .order('joined_at', { ascending: true })
-
-  if (error) throw error
-  return data ?? []
+        company_id,
+        role,
+        joined_at,
+        companies:company_id (
+          id,
+          name,
+          org_number,
+          entity_type,
+          archived_at,
+          created_at
+        )
+      `)
+      .eq('user_id', userId)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
 }
 
 /**

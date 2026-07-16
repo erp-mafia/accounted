@@ -681,9 +681,34 @@ export const CreateCustomerSchema = z.object({
   language: z.enum(['sv', 'en']).optional(),
   default_payment_terms: z.number().int().positive().optional(),
   notes: z.string().optional(),
+}).superRefine((customer, ctx) => {
+  if (customer.personal_number && customer.customer_type !== 'individual') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['personal_number'],
+      message: 'Personal number is only allowed for individual customers',
+    })
+  }
 })
 
-export const UpdateCustomerSchema = CreateCustomerSchema.partial()
+export const UpdateCustomerSchema = z.object({
+  name: z.string().min(1, 'Customer name is required').optional(),
+  customer_type: CustomerTypeSchema.optional(),
+  customer_number: z.string().trim().max(32).nullable().optional(),
+  email: z.string().email('Invalid email address').optional(),
+  phone: z.string().optional(),
+  address_line1: z.string().optional(),
+  address_line2: z.string().optional(),
+  postal_code: z.string().optional(),
+  city: z.string().optional(),
+  country: z.string().optional(),
+  org_number: z.string().optional(),
+  vat_number: z.string().optional(),
+  personal_number: z.string().regex(/^(\d{6}|\d{8})[-+]?\d{4}$/, 'Invalid personal number').nullable().optional(),
+  language: z.enum(['sv', 'en']).optional(),
+  default_payment_terms: z.number().int().positive().optional(),
+  notes: z.string().optional(),
+})
 
 // ============================================================
 // Supplier schemas
@@ -786,6 +811,9 @@ export const CreateSupplierInvoiceItemSchema = z.object({
 
 export const CreateSupplierInvoiceSchema = z.object({
   supplier_id: uuid,
+  // Optional invoice PDF/image already stored in the WORM document archive.
+  // The route verifies company ownership and that the document is unused.
+  document_id: uuid.optional(),
   supplier_invoice_number: z.string().min(1, 'Supplier invoice number is required'),
   invoice_date: isoDate,
   due_date: isoDate,
@@ -1493,6 +1521,9 @@ export const UpdateSettingsSchema = z.object({
   invoice_footer_text: z.string().max(500).nullable().optional(),
   // Automation
   send_invoice_reminders: z.boolean().optional(),
+  reminder_days_level_1: z.number().int().min(1).max(365).optional(),
+  reminder_days_level_2: z.number().int().min(1).max(365).optional(),
+  reminder_days_level_3: z.number().int().min(1).max(365).optional(),
   // Reminder surcharges (dröjsmålsränta + lagstadgad påminnelseavgift)
   reminder_fee_enabled: z.boolean().optional(),
   reminder_fee_amount: z
@@ -1521,6 +1552,10 @@ export const UpdateSettingsSchema = z.object({
     .enum(['swedbank', 'seb', 'handelsbanken', 'nordea', 'other'])
     .nullable()
     .optional(),
+  // Vacation year basis (payroll gap-closure 3.1): sammanfallande calendar
+  // year (default) or the statutory Apr 1 - Mar 31 split. The settings route
+  // blocks changing this while open vacation-ledger rows exist.
+  salary_vacation_year_basis: z.enum(['calendar', 'statutory_apr_mar']).optional(),
 }).refine(
   (data) => {
     // BFL 3 kap.: Enskild firma must have fiscal year starting January
@@ -1959,6 +1994,11 @@ const EmployeeSchemaBase = z.object({
   employment_start: isoDate,
   employment_end: isoDate.optional(),
   employment_degree: z.number().min(1).max(100).default(100),
+  // Arbetsschema-lite: weekly schedule driving the hourly/daily divisors
+  // (legacy 173/21 at the defaults). employment_degree keeps prorating base
+  // salary; these ONLY drive divisors.
+  hours_per_week: z.number().positive().max(80).default(40),
+  workdays_per_week: z.number().min(1).max(7).default(5),
   salary_type: SalaryTypeSchema.default('monthly'),
   monthly_salary: z.number().nonnegative().optional(),
   hourly_rate: z.number().nonnegative().optional(),
@@ -1980,6 +2020,14 @@ const EmployeeSchemaBase = z.object({
   vaxa_stod_eligible: z.boolean().default(false),
   vaxa_stod_start: isoDate.optional(),
   vaxa_stod_end: isoDate.optional(),
+  // Jämkning (Skatteverket beslut om ändrad beräkning av skatteavdrag):
+  // overrides the tax-table lookup with a fixed percentage for a bounded
+  // period. Fields have existed on the employees table since the salary
+  // module shipped; this exposes the write path (payroll gap-closure 1.5).
+  // Setting jamkning_percentage to null clears the beslut.
+  jamkning_percentage: z.number().min(0).max(100).nullable().optional(),
+  jamkning_valid_from: isoDate.nullable().optional(),
+  jamkning_valid_to: isoDate.nullable().optional(),
   // Dimensions PR8: bag applied to the employee's P&L cost lines when a
   // salary run is booked. {} clears (the UI always sends the field).
   default_dimensions: DimensionsBagSchema.optional(),
@@ -2046,6 +2094,32 @@ export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) =
     })
   }
 
+  // Jämkning: a percentage without a start date is meaningless (the engine
+  // gates on jamkning_valid_from <= payment_date). End date is optional
+  // (beslut often run until year-end implicitly).
+  if (
+    data.jamkning_percentage !== null &&
+    data.jamkning_percentage !== undefined &&
+    !data.jamkning_valid_from
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Jämkningens startdatum måste anges när jämkningsprocent sätts',
+      path: ['jamkning_valid_from'],
+    })
+  }
+  if (
+    data.jamkning_valid_from &&
+    data.jamkning_valid_to &&
+    data.jamkning_valid_to < data.jamkning_valid_from
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Jämkningens slutdatum måste vara efter startdatumet',
+      path: ['jamkning_valid_to'],
+    })
+  }
+
   // Bank details: validate clearing/kontonummer structure at entry so a typo is
   // caught here rather than at Bankgirot LB generation. Both empty is allowed.
   // Update path is validated in the PATCH route (only when the fields actually
@@ -2060,7 +2134,28 @@ export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) =
   }
 })
 
-export const UpdateEmployeeSchema = EmployeeSchemaBase.partial().superRefine((data, ctx) => {
+// PATCH base: the create-schema defaults are stripped first. Zod 4 applies
+// .default() even through .partial() (absent key -> default value), which
+// would (a) make sparse PATCH bodies fail the salary-type refinement below
+// (salary_type materializes as 'monthly' without monthly_salary present) and
+// (b) leak default values into routes that spread the parsed body into the
+// UPDATE (silently resetting e.g. is_sidoinkomst on unrelated edits).
+const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
+  employment_type: EmploymentTypeSchema,
+  employment_degree: z.number().min(1).max(100),
+  hours_per_week: z.number().positive().max(80),
+  workdays_per_week: z.number().min(1).max(7),
+  salary_type: SalaryTypeSchema,
+  tax_column: z.number().int().min(1).max(6),
+  is_sidoinkomst: z.boolean(),
+  f_skatt_status: FSkattStatusSchema,
+  vacation_rule: VacationRuleSchema,
+  vacation_days_per_year: z.number().int().min(25).max(40),
+  semestertillagg_rate: z.number().min(0).max(0.05),
+  vaxa_stod_eligible: z.boolean(),
+})
+
+export const UpdateEmployeeSchema = EmployeeSchemaPatchBase.partial().superRefine((data, ctx) => {
   // Only validate salary when salary_type is being changed in this update
   if (data.salary_type === 'monthly' && data.monthly_salary !== undefined && data.monthly_salary <= 0) {
     ctx.addIssue({
@@ -2125,6 +2220,23 @@ export const UpdateEmployeeSchema = EmployeeSchemaBase.partial().superRefine((da
       code: z.ZodIssueCode.custom,
       message: 'Växa-stödets slutdatum måste vara efter startdatumet',
       path: ['vaxa_stod_end'],
+    })
+  }
+
+  // Jämkning: same schema-visibility caveat as växa-stöd above. What the
+  // schema CAN see: a non-null percentage sent WITHOUT any start date in the
+  // same body is only valid if a start date already exists on the row: the
+  // route layer does the merged-state check. Within-body date ordering is
+  // checkable here.
+  if (
+    data.jamkning_valid_from &&
+    data.jamkning_valid_to &&
+    data.jamkning_valid_to < data.jamkning_valid_from
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Jämkningens slutdatum måste vara efter startdatumet',
+      path: ['jamkning_valid_to'],
     })
   }
 })
@@ -2247,6 +2359,88 @@ export const AbsenceRangeQuerySchema = z.object({
 }).refine((data) => data.from <= data.to, {
   message: '`from` måste vara före eller lika med `to`',
   path: ['from'],
+})
+
+// ── Employee opening balances (payroll cutover) ─────────────────────
+//
+// Per-employee state a mid-year switcher brings from the previous payroll
+// system: YTD accumulators, vacation balances (incl. sparade dagar by origin
+// year per the Semesterlagen 5-year rule), the opening semesterlöneskuld SEK
+// (feeds vacation-liability report only; the 2920/2940 balance arrived via
+// SIE), and the högriskskydd karens-count adjustment. See migration
+// 20260713101000.
+
+const openingBalancesShape = {
+  cutover_date: isoDate,
+  ytd_gross: z.number().min(0).default(0),
+  ytd_tax: z.number().min(0).default(0),
+  ytd_net: z.number().min(0).default(0),
+  vacation_paid_days_remaining: z.number().min(0).max(40).default(0),
+  vacation_saved_days_by_year: z
+    .record(z.string().regex(/^\d{4}$/, 'Nyckel måste vara ett fyrsiffrigt år'), z.number().min(0).max(40))
+    .default({}),
+  opening_semester_liability: z.number().min(0).default(0),
+  opening_semester_liability_avgifter: z.number().min(0).default(0),
+  karens_periods_adjustment: z.number().int().min(0).max(10).default(0),
+}
+
+const openingBalancesRefine = (
+  data: {
+    cutover_date: string
+    ytd_gross: number
+    ytd_tax: number
+    vacation_saved_days_by_year: Record<string, number>
+  },
+  ctx: z.RefinementCtx,
+) => {
+    if (!data.cutover_date.endsWith('-01')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'cutover_date måste vara den första dagen i en månad',
+        path: ['cutover_date'],
+      })
+    }
+    const cutoverYear = Number(data.cutover_date.slice(0, 4))
+    const currentYear = new Date().getFullYear()
+    if (cutoverYear < currentYear - 1 || cutoverYear > currentYear) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'cutover_date måste ligga i innevarande eller föregående år',
+        path: ['cutover_date'],
+      })
+    }
+    if (data.ytd_tax > data.ytd_gross) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'ytd_tax kan inte överstiga ytd_gross',
+        path: ['ytd_tax'],
+      })
+    }
+    // Sparade dagar: max 5 years back, never the cutover year itself.
+    for (const yearKey of Object.keys(data.vacation_saved_days_by_year)) {
+      const originYear = Number(yearKey)
+      if (originYear < cutoverYear - 5 || originYear > cutoverYear - 1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Sparade dagar för ${yearKey}: ursprungsåret måste ligga inom 5 år före cutover (${cutoverYear - 5}-${cutoverYear - 1})`,
+          path: ['vacation_saved_days_by_year', yearKey],
+        })
+      }
+    }
+}
+
+/** Body for the per-employee PUT (employee id comes from the path). */
+export const OpeningBalancesFieldsSchema = z
+  .object(openingBalancesShape)
+  .superRefine(openingBalancesRefine)
+
+/** One item in the bulk PUT (employee id inline). */
+export const OpeningBalancesItemSchema = z
+  .object({ employee_id: uuid, ...openingBalancesShape })
+  .superRefine(openingBalancesRefine)
+
+export const OpeningBalancesBulkSchema = z.object({
+  items: z.array(OpeningBalancesItemSchema).min(1).max(200),
 })
 
 // ── Worked-hours per-day records (hourly employees) ─────────────────

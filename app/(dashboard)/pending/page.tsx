@@ -714,20 +714,28 @@ export default function PendingOperationsPage() {
   // in-place) so server-side filtering, sorting, and computed fields stay in
   // sync with whatever the API route returned. The counts endpoint isn't
   // pushed by the same trigger, so we also refresh counts on every change.
+  // Trailing debounce: bulk actions emit one event per row, which previously
+  // stampeded 4 requests per event (list + 3 counts); the burst now collapses
+  // into a single refetch after the last event.
   useEffect(() => {
     const supabase = createClient()
+    let debounce: ReturnType<typeof setTimeout> | null = null
     const channel = supabase
       .channel('pending_operations:list')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'pending_operations' },
         () => {
-          fetchOperations()
-          fetchAllCounts()
+          if (debounce) clearTimeout(debounce)
+          debounce = setTimeout(() => {
+            fetchOperations()
+            fetchAllCounts()
+          }, 400)
         }
       )
       .subscribe()
     return () => {
+      if (debounce) clearTimeout(debounce)
       void supabase.removeChannel(channel)
     }
   }, [fetchOperations, fetchAllCounts])

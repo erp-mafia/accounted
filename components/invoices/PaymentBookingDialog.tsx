@@ -118,7 +118,7 @@ export default function PaymentBookingDialog({
         // Fetch company settings
         const { data: settings, error: settingsError } = await supabase
           .from('company_settings')
-          .select('accounting_method, entity_type')
+          .select('accounting_method, entity_type, ore_rounding')
           .eq('company_id', company.id)
           .maybeSingle()
 
@@ -153,9 +153,12 @@ export default function PaymentBookingDialog({
             vat_treatment: invoice.vat_treatment,
             items: invoice.items,
             default_dimensions: invoice.default_dimensions,
+            ore_rounding: invoice.ore_rounding,
           },
           accountingMethod,
           entityType,
+          companyOreRounding:
+            typeof settings?.ore_rounding === 'boolean' ? settings.ore_rounding : undefined,
         })
 
         setLines(proposed)

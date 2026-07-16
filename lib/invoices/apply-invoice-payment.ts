@@ -61,11 +61,18 @@ export function planInvoicePayment(
   const currentRemaining =
     invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
 
-  // A rounded-up whole-krona payment is not an overpayment: widen the reject
-  // band to one krona when absorbing öre; otherwise keep the strict half-öre
-  // float tolerance the three legacy callers rely on.
-  const overshootTolerance = absorbOre ? ORE_ROUNDING_SETTLEMENT_MAX : PAYMENT_OVERSHOOT_TOLERANCE
-  if (paymentAmountInInvoiceCurrency > currentRemaining + overshootTolerance) {
+  // A rounded-up whole-krona payment is not an overpayment: when absorbing öre,
+  // accept only an overshoot strictly inside the settlement band. The boundary
+  // must be >= : with a strict > guard an exact 1 kr overshoot passed the guard
+  // AND missed the |diff| < 1 absorb branch, falling through to record
+  // paid_amount = total + 1 kr with remaining clamped to 0 (silent over-credit).
+  // Without absorb, keep the strict half-öre float tolerance the legacy callers
+  // rely on.
+  const overshoot = roundOre(paymentAmountInInvoiceCurrency - currentRemaining)
+  const isOverpayment = absorbOre
+    ? overshoot >= ORE_ROUNDING_SETTLEMENT_MAX
+    : paymentAmountInInvoiceCurrency > currentRemaining + PAYMENT_OVERSHOOT_TOLERANCE
+  if (isOverpayment) {
     return {
       ok: false,
       code: 'MATCH_AMOUNT_EXCEEDS_REMAINING',
@@ -108,4 +115,48 @@ export function planInvoicePayment(
       oreSettled: false,
     },
   }
+}
+
+/** BAS öres- och kronutjämning: the only account that may carry an absorbed residual. */
+const ORE_ROUNDING_ACCOUNT = '3740'
+
+/**
+ * `planInvoicePayment` for caller-supplied booking lines (the mark-paid
+ * dialog and the v1 API), where the server does NOT build the verifikat.
+ *
+ * Absorbing an öre residual is only safe when the lines actually book it:
+ * in the server-built bank-match flow `buildInvoicePaymentClearingLines`
+ * guarantees 1510 is credited the full remaining and 3740 carries the exact
+ * residual, so plan and GL absorb together. Here the lines are caller-owned,
+ * so absorption is granted only when the net 3740 amount (debit − credit)
+ * equals the signed residual (remaining − payment). Otherwise fall back to
+ * the strict plan: a sub-krona short payment stays a real partial and a
+ * sub-krona overshoot is rejected, exactly as before absorption existed.
+ * Without this gate an invoice could flip to paid while the posted lines
+ * under-clear 1510, diverging the GL from the AR sub-ledger.
+ */
+export function planInvoicePaymentForLines(
+  invoice: InvoicePaymentTotals,
+  paymentAmountInInvoiceCurrency: number,
+  lines:
+    | Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    | undefined,
+  invoiceCurrency: string,
+): PlanInvoicePaymentResult {
+  const absorbEligible = !!lines && invoiceCurrency === 'SEK'
+  const payment = planInvoicePayment(invoice, paymentAmountInInvoiceCurrency, {
+    absorbOreRounding: absorbEligible,
+  })
+  if (!absorbEligible || !payment.ok || !payment.plan.oreSettled) return payment
+
+  const currentRemaining =
+    invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0)
+  const residual = roundOre(currentRemaining - paymentAmountInInvoiceCurrency)
+  const net3740 = roundOre(
+    lines!
+      .filter((l) => l.account_number === ORE_ROUNDING_ACCOUNT)
+      .reduce((s, l) => s + l.debit_amount - l.credit_amount, 0),
+  )
+  if (net3740 === residual) return payment
+  return planInvoicePayment(invoice, paymentAmountInInvoiceCurrency)
 }

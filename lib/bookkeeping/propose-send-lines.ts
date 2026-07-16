@@ -7,6 +7,8 @@
 import { resolveSekAmount } from './currency-utils'
 import { getRevenueAccount, getOutputVatAccount } from './invoice-entries'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
+import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
+import { roundOre } from '@/lib/money'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { EntityType, InvoiceItem, VatTreatment } from '@/types'
 
@@ -22,6 +24,7 @@ export interface ProposeSendLinesInput {
     currency: string
     exchange_rate?: number | null
     vat_treatment: VatTreatment
+    credited_invoice_id?: string | null
     items?: InvoiceItem[]
     /**
      * Dimensions PR7: the invoice's default bag, stamped on every proposed
@@ -47,11 +50,49 @@ function toFormAmount(n: number): string {
  */
 export function proposeSendLines(input: ProposeSendLinesInput): FormLine[] {
   const { invoice, entityType } = input
+  const proposedLines = invoice.credited_invoice_id
+    ? buildCreditNoteLines(invoice, entityType)
+    : buildSendLines(invoice, entityType)
   const lines: FormLine[] = stampProposalDimensions(
-    buildSendLines(invoice, entityType),
+    proposedLines,
     invoice.default_dimensions
   )
   return lines
+}
+
+function absoluteOptional(amount: number | null | undefined): number | null | undefined {
+  return amount == null ? amount : Math.abs(amount)
+}
+
+function buildCreditNoteLines(
+  invoice: ProposeSendLinesInput['invoice'],
+  entityType: EntityType,
+): FormLine[] {
+  const absoluteInvoice: ProposeSendLinesInput['invoice'] = {
+    ...invoice,
+    total: Math.abs(invoice.total),
+    total_sek: absoluteOptional(invoice.total_sek),
+    subtotal: Math.abs(invoice.subtotal),
+    subtotal_sek: absoluteOptional(invoice.subtotal_sek),
+    vat_amount: Math.abs(invoice.vat_amount),
+    vat_amount_sek: absoluteOptional(invoice.vat_amount_sek),
+    items: invoice.items?.map((item) => ({
+      ...item,
+      quantity: Math.abs(item.quantity),
+      line_total: Math.abs(item.line_total),
+      vat_amount: item.vat_amount == null ? item.vat_amount : Math.abs(item.vat_amount),
+    })),
+  }
+
+  return buildSendLines(absoluteInvoice, entityType).map((line) => ({
+    ...line,
+    debit_amount: line.credit_amount,
+    credit_amount: line.debit_amount,
+    line_description: line.line_description
+      .replace('Försäljning faktura', 'Kreditfaktura')
+      .replace('Utgående moms faktura', 'Moms kreditfaktura')
+      .replace('Utgående moms', 'Moms kreditfaktura'),
+  }))
 }
 
 function stampProposalDimensions(
@@ -164,19 +205,41 @@ function buildSendLines(
     }
   }
 
-  // Debit: 1510 Kundfordringar, balance guarantee
+  const deductionLines: FormLine[] = []
+  let deductionTotal = 0
+  for (const item of invoice.items ?? []) {
+    if (!item.deduction_type) continue
+    const deduction = computeDeduction({
+      unit_price: item.unit_price,
+      quantity: item.quantity,
+      deduction_type: item.deduction_type,
+    })
+    const amountSek = roundOre(toSek(deduction))
+    if (amountSek <= 0) continue
+    deductionTotal = roundOre(deductionTotal + amountSek)
+    deductionLines.push({
+      account_number: '1513',
+      debit_amount: toFormAmount(amountSek),
+      credit_amount: '',
+      line_description: `${item.deduction_type === 'rot' ? 'ROT' : 'RUT'}-avdrag faktura ${invoice.invoice_number ?? ''}`.trim(),
+    })
+  }
+
+  // Debit: 1510 customer portion plus 1513 Skatteverket portion.
   const totalCredits = creditLines.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
   const debitAmount = isForeign
     ? Math.round(totalCredits * 100) / 100
     : resolveSekAmount(invoice.total, invoice.total_sek, invoice.currency, invoice.exchange_rate)
+  const customerReceivable = roundOre(debitAmount - deductionTotal)
 
   lines.push({
     account_number: '1510',
-    debit_amount: toFormAmount(debitAmount),
+    debit_amount: toFormAmount(customerReceivable),
     credit_amount: '',
     line_description: desc,
   })
 
+  lines.push(...deductionLines)
   lines.push(...creditLines)
 
   return lines

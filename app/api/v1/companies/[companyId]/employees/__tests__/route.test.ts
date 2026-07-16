@@ -146,6 +146,9 @@ const SAMPLE_EMPLOYEE = {
   vaxa_stod_eligible: false,
   vaxa_stod_start: null,
   vaxa_stod_end: null,
+  jamkning_percentage: null,
+  jamkning_valid_from: null,
+  jamkning_valid_to: null,
   is_active: true,
   created_at: '2024-01-15T08:00:00Z',
   updated_at: '2024-01-15T08:00:00Z',
@@ -646,6 +649,159 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(body.error.details.field).toBe('personnummer')
+  })
+
+  it('sets work-schedule fields (arbetsschema-lite)', async () => {
+    const updated = { ...SAMPLE_EMPLOYEE, hours_per_week: 32, workdays_per_week: 4 }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: [{ data: SAMPLE_EMPLOYEE, error: null }, { data: updated, error: null }],
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ hours_per_week: 32, workdays_per_week: 4 }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.hours_per_week).toBe(32)
+    expect(body.data.workdays_per_week).toBe(4)
+  })
+
+  it('rejects an out-of-range work schedule', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ workdays_per_week: 9 }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it('sets jämkning fields (percentage + validity window)', async () => {
+    const updated = {
+      ...SAMPLE_EMPLOYEE,
+      jamkning_percentage: 15,
+      jamkning_valid_from: '2026-01-01',
+      jamkning_valid_to: '2026-12-31',
+    }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: [{ data: SAMPLE_EMPLOYEE, error: null }, { data: updated, error: null }],
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          jamkning_percentage: 15,
+          jamkning_valid_from: '2026-01-01',
+          jamkning_valid_to: '2026-12-31',
+        }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.jamkning_percentage).toBe(15)
+    expect(body.data.jamkning_valid_from).toBe('2026-01-01')
+  })
+
+  it('rejects a jämkning percentage without a start date (merged state)', async () => {
+    // Existing row has no jamkning_valid_from; sending only the percentage
+    // must fail the route-level merged-state check.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: SAMPLE_EMPLOYEE, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ jamkning_percentage: 15 }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('jamkning_valid_from')
+  })
+
+  it('rejects jamkning_valid_to before jamkning_valid_from', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: SAMPLE_EMPLOYEE, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          jamkning_percentage: 15,
+          jamkning_valid_from: '2026-06-01',
+          jamkning_valid_to: '2026-01-01',
+        }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('clears the jämkningsbeslut with an explicit null', async () => {
+    const withJamkning = {
+      ...SAMPLE_EMPLOYEE,
+      jamkning_percentage: 15,
+      jamkning_valid_from: '2026-01-01',
+      jamkning_valid_to: null,
+    }
+    const cleared = { ...SAMPLE_EMPLOYEE }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: [{ data: withJamkning, error: null }, { data: cleared, error: null }],
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ jamkning_percentage: null }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.jamkning_percentage).toBeNull()
   })
 
   it('returns a dry-run preview with masked personnummer', async () => {

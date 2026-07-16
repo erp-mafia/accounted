@@ -12,7 +12,7 @@ import type { McpResource } from './types'
 export const companyCurrentResource: McpResource = {
   uri: 'Accounted://company/current',
   name: 'Active Company',
-  description: 'Per-company working memory: identity, active fiscal period, lock dates, entity counts, voucher series state, recent activity, approaching Swedish filing deadlines. Read this first when starting work on a company.',
+  description: 'Working memory for the API key default company: identity, active fiscal period, lock dates, entity counts, voucher series state, recent activity, and filing deadlines. For another company, call gnubok_get_agent_briefing with company_id.',
   mimeType: 'application/json',
   read: async ({ supabase, companyId }) => {
     const today = new Date().toISOString().slice(0, 10)

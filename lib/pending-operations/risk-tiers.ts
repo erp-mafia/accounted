@@ -116,6 +116,27 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // staged.
   create_salary_run: 'medium',
   generate_agi: 'high',
+  // Payslip line edits are draft-run-only (BFL: once the run advances its
+  // numbers feed a verifikation) and re-editable until then, but they change
+  // a pay outcome: human review at medium, never silent.
+  update_payslip_line: 'medium',
+  // Absence rows drive sjuklön math and the statutory AGI Frånvarouppgift.
+  // Reversible via delete, but not audit-free: medium.
+  register_absence: 'medium',
+  // Employee master data carries PII (personnummer, encrypted at staging
+  // time: pending_operations.params never holds the plaintext) plus bank
+  // payment-routing fields: same BEC rationale as create_supplier.
+  create_employee: 'medium',
+  update_employee: 'medium',
+  // Cutover state for mid-year migrations (YTD, vacation balances, karens
+  // adjustment). Editable until the employee has a booked run; wrong values
+  // skew payslips and the vacation-liability report, so human review.
+  set_employee_opening_balances: 'medium',
+  // Semesterårsavslut: closes every employee's vacation year, rolls sparade
+  // dagar (5-year expiry -> forced payout), and may post a 2920/2940
+  // adjustment verifikation. Irreversible in practice (no reopen flow):
+  // never auto-committed.
+  vacation_year_close: 'high',
 
   // ── Multi-tx flows (PRs #603/#606/#608/#610) ───────────────────────
   // Allocate 1 bank tx across N customer or supplier invoices into one

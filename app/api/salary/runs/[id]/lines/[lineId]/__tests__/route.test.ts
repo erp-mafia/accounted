@@ -71,6 +71,9 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId]', () => {
     const { enqueueMany } = authed()
     enqueueMany([
       { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup
+      // The shared service verifies the line belongs to this run before
+      // writing (loadLineInRun join check).
+      { data: { id: 'line-1', amount: 50, salary_run_employee: { salary_run_id: 'run-1' } } },
       { data: { id: 'line-1', amount: 100 } }, // update returning
     ])
     const response = await PATCH(
@@ -119,6 +122,8 @@ describe('DELETE /api/salary/runs/[id]/lines/[lineId]', () => {
     const { enqueueMany } = authed()
     enqueueMany([
       { data: { id: 'run-1', status: 'draft' } }, // salary_runs lookup
+      // Run-membership verification added by the shared service.
+      { data: { id: 'line-1', amount: 50, salary_run_employee: { salary_run_id: 'run-1' } } },
       { data: null }, // delete (error null)
     ])
     const response = await DELETE(

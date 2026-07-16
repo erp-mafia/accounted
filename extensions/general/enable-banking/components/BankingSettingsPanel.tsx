@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { AlertTriangle, Loader2, Upload } from 'lucide-react'
+import { AlertTriangle, CheckCircle, Loader2, Upload } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
@@ -26,6 +27,13 @@ import type { StoredAccount } from '../types'
 export default function BankingSettingsPanel() {
   const { toast } = useToast()
   const supabase = createClient()
+  // The OAuth callback lands here with ?select_accounts=<id> once a bank is
+  // successfully connected. Read via useSearchParams (SSR/hydration-safe) so
+  // the first-load spinner can say "bank connected, fetching accounts"
+  // instead of an anonymous spinner. The param itself is consumed and
+  // stripped by the auto-open effect below.
+  const searchParams = useSearchParams()
+  const arrivedFromBankCallback = !!searchParams?.get('select_accounts')
 
   const { dialogProps, confirm } = useDestructiveConfirm()
   const { company } = useCompany()
@@ -365,6 +373,24 @@ export default function BankingSettingsPanel() {
   }
 
   if (isLoading) {
+    // Coming back from the bank's consent flow the connection already exists,
+    // so tell the user that instead of showing an anonymous spinner: this is
+    // the last silent gap between "approved at the bank" and the account
+    // picker opening.
+    if (arrivedFromBankCallback) {
+      return (
+        <div className="flex h-32 flex-col items-center justify-center gap-3">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <CheckCircle className="h-4 w-4 text-success" />
+            <span>Banken är ansluten</span>
+          </div>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>Hämtar dina konton…</span>
+          </div>
+        </div>
+      )
+    }
     return (
       <div className="flex items-center justify-center h-32">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />

@@ -238,18 +238,33 @@ export const enableBankingExtension: Extension = {
                   { status: 409 }
                 )
               }
+            }
 
-              // Clean up stale pending connections (older than threshold)
-              log.info('[enable-banking] Cleaning up stale pending connections', {
-                stale_id: recentPending.id,
-                age_ms: pendingAge,
+            // Sweep failed attempts that never became a live connection:
+            // stale 'pending' rows (abandoned redirects past the threshold)
+            // and 'error' rows left by earlier denied/failed connects.
+            // DELETE instead of marking 'error': a parked 'error' row renders
+            // forever as an "Åtgärd krävs" card, so a failed attempt followed
+            // by a successful retry showed up as two connections to the same
+            // bank. The session_id/accounts_data guards protect established
+            // connections (anything that ever completed the callback has
+            // accounts_data); never-activated rows have no dependents, and
+            // the transactions/cash_accounts FKs are ON DELETE SET NULL.
+            const { data: sweptRows } = await supabase
+              .from('bank_connections')
+              .delete()
+              .eq('company_id', companyId)
+              .eq('bank_name', resolvedAspspName)
+              .in('status', ['pending', 'error'])
+              .is('session_id', null)
+              .is('accounts_data', null)
+              .select('id')
+
+            if (sweptRows?.length) {
+              log.info('[enable-banking] Swept never-activated connection attempts', {
+                count: sweptRows.length,
+                bank: resolvedAspspName,
               })
-              await supabase
-                .from('bank_connections')
-                .update({ status: 'error', error_message: 'Superseded by new connection attempt', oauth_state: null })
-                .eq('company_id', companyId)
-                .eq('bank_name', resolvedAspspName)
-                .eq('status', 'pending')
             }
           }
 

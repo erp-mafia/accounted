@@ -190,6 +190,61 @@ describe('deriveAbsenceLineItems: sick', () => {
   })
 })
 
+describe('deriveAbsenceLineItems: cutover karensPeriodsAdjustment', () => {
+  it('suppresses karens when the adjustment alone reaches the cap', () => {
+    // Mid-year switcher with 10 karens periods in the previous system and no
+    // imported absence rows: the 11th period must be suppressed even though
+    // the lookback here is empty.
+    const result = deriveAbsenceLineItems(
+      baseInput({
+        periodDays: days([['2026-04-06', 'sick']]),
+        karensPeriodsAdjustment: 10,
+      }),
+    )
+    expect(result.lineItems.find(li => li.item_type === 'sick_karens')).toBeUndefined()
+    // Day 1 with suppressed karens is paid normal: no deduction lines at all.
+    expect(result.aggregated.sickDays).toBe(1)
+  })
+
+  it('combines the adjustment with real lookback segments', () => {
+    // 8 imported periods + adjustment 2 = 10: cap reached, karens suppressed.
+    const lookback: string[] = []
+    for (let i = 0; i < 8; i++) {
+      const month = ((4 - 1 + 12 - i - 1) % 12) + 1
+      const year = i < 3 ? 2026 : 2025
+      lookback.push(`${year}-${String(month).padStart(2, '0')}-01`)
+    }
+    const capped = deriveAbsenceLineItems(
+      baseInput({
+        periodDays: days([['2026-04-15', 'sick']]),
+        lookbackSickDates: lookback,
+        karensPeriodsAdjustment: 2,
+      }),
+    )
+    expect(capped.lineItems.find(li => li.item_type === 'sick_karens')).toBeUndefined()
+
+    // Adjustment 1 leaves the count at 9: karens still deducted.
+    const belowCap = deriveAbsenceLineItems(
+      baseInput({
+        periodDays: days([['2026-04-15', 'sick']]),
+        lookbackSickDates: lookback,
+        karensPeriodsAdjustment: 1,
+      }),
+    )
+    expect(belowCap.lineItems.find(li => li.item_type === 'sick_karens')).toBeDefined()
+  })
+
+  it('zero/absent adjustment changes nothing', () => {
+    const withZero = deriveAbsenceLineItems(
+      baseInput({ periodDays: days([['2026-04-06', 'sick']]), karensPeriodsAdjustment: 0 }),
+    )
+    const without = deriveAbsenceLineItems(
+      baseInput({ periodDays: days([['2026-04-06', 'sick']]) }),
+    )
+    expect(withZero.lineItems).toEqual(without.lineItems)
+  })
+})
+
 describe('deriveAbsenceLineItems: VAB', () => {
   it('emits VAB line item with deduction', () => {
     const result = deriveAbsenceLineItems(

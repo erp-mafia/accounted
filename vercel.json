@@ -1,4 +1,5 @@
 {
+  "regions": ["arn1"],
   "crons": [
     {
       "path": "/api/deadlines/status/cron",
@@ -50,7 +51,7 @@
     },
     {
       "path": "/api/extensions/skatteverket/agi/kvittenser/cron",
-      "schedule": "0 */2 * * *"
+      "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/extensions/skatteverket/vat/kvittenser/cron",

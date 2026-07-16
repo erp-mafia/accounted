@@ -8,6 +8,7 @@ import {
   computeInitialRunDate,
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
+import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type {
   RecurringInvoiceSchedule,
   RecurringInvoiceScheduleItem,
@@ -89,9 +90,16 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
     //    its next date rather than firing a stale one immediately.
     if (schedule.next_run_date < todayStockholm) {
       const rolledNext = computeInitialRunDate(stockholmToday, schedule.day_of_month)
+      // Surface the skip on the schedule: a day of failed runs (or a cron
+      // outage) would otherwise roll the month forward with no user-visible
+      // trace. The next successful run overwrites this, and a conscious
+      // reactivation clears it (PATCH route).
       const { error: rollError } = await supabase
         .from('recurring_invoice_schedules')
-        .update({ next_run_date: rolledNext })
+        .update({
+          next_run_date: rolledNext,
+          last_run_warning: `Ingen faktura skapades den ${schedule.next_run_date}. Nästa körning: ${rolledNext}. Använd "Skapa faktura nu" om månadens faktura fortfarande behövs.`,
+        })
         .eq('id', schedule.id)
         .eq('company_id', schedule.company_id)
       if (rollError) {
@@ -169,14 +177,31 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
 
     // 5. Spawn the invoice. If it throws after we claimed, release the claim
     //    (restore the prior last_run_at) so a later cron retries today rather
-    //    than treating the row as already run.
+    //    than treating the row as already run, and persist the failure as a
+    //    user-visible warning: a deterministic error (bad VAT rate, missing
+    //    items) fails every hourly retry and would otherwise skip the month
+    //    silently via the stale roll-forward above. A later successful run
+    //    overwrites the warning.
+    // Defence in depth (ASVS V2.3): the email chokepoint inside the schedule
+    // service enforces the sandbox rule on its own; the route additionally
+    // resolves it here and passes an explicit suppress flag, so the invariant
+    // does not hinge on a single check buried in a library function. The
+    // invoice is still generated as a draft (freeze-and-retain).
+    const suppressAutoSend = schedule.auto_send
+      ? await isSandboxCompany(supabase, schedule.company_id)
+      : false
+
     let result: Awaited<ReturnType<typeof executeRecurringSchedule>>
     try {
-      result = await executeRecurringSchedule(supabase, schedule, now)
+      result = await executeRecurringSchedule(supabase, schedule, now, { suppressAutoSend })
     } catch (err) {
+      const reason = (err instanceof Error ? err.message : String(err)).slice(0, 300)
       await supabase
         .from('recurring_invoice_schedules')
-        .update({ last_run_at: schedule.last_run_at })
+        .update({
+          last_run_at: schedule.last_run_at,
+          last_run_warning: `Körningen ${todayStockholm} misslyckades: ${reason}. Nytt försök görs automatiskt varje timme idag.`,
+        })
         .eq('id', schedule.id)
         .eq('company_id', schedule.company_id)
         .eq('last_run_at', claimTs)

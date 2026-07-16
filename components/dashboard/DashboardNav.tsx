@@ -61,6 +61,7 @@ import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
+import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType } from '@/types'
 
@@ -83,8 +84,6 @@ interface DashboardNavProps {
   // switched on. Drives visibility of the Kostnadsställen & projekt row:
   // same mechanism as paysSalaries: fetched by the dashboard layout.
   dimensionsEnabled?: boolean
-  uncategorizedTransactionCount?: number
-  pendingOperationsCount?: number
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
   // Signed-in user's full name + email: drives the bottom-left account
@@ -247,7 +246,7 @@ function accountInitial(name: string | null, email: string | null): string {
   return '?'
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, uncategorizedTransactionCount = 0, pendingOperationsCount = 0, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
@@ -261,17 +260,25 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [liveUncategorizedTransactionCount, setLiveUncategorizedTransactionCount] = useState(
-    uncategorizedTransactionCount,
-  )
-  const refreshInFlightRef = useRef(false)
-  const refreshQueuedRef = useRef(false)
+  // Badge counts load client-side after mount (and revalidate via the
+  // realtime subscriptions below). They used to arrive as server props, which
+  // put two head-count queries on the critical path of every dashboard
+  // navigation for numbers nobody needs before first paint.
+  const {
+    uncategorized: uncategorizedCount,
+    pendingOperations: pendingOpsCount,
+    refresh: refreshBadges,
+  } = useWorklistBadges(company?.id)
   // Trial countdown for the sidebar touchpoint. Computed in an effect (not
   // during render) so server and client markup agree at hydration; an hourly
-  // tick keeps a long-lived tab from showing yesterday's count.
+  // tick keeps a long-lived tab from showing yesterday's count. The sync
+  // setState is that hydration strategy, not derived-state-in-effect (the
+  // lint only started analyzing this component once the badge-refresh loop
+  // that made the compiler bail was removed).
   const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null)
   useEffect(() => {
     if (!trialEndsAt) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setTrialDaysLeft(null)
       return
     }
@@ -364,43 +371,17 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   useEffect(() => {
     if (!company?.id) return
 
-    let cancelled = false
-
-    const refreshUncategorizedCount = async () => {
-      if (!company?.id || cancelled) return
-      if (refreshInFlightRef.current) {
-        refreshQueuedRef.current = true
-        return
-      }
-
-      refreshInFlightRef.current = true
-      try {
-        do {
-          refreshQueuedRef.current = false
-          const { count, error } = await supabase
-            .from('transactions')
-            .select('id', { count: 'exact', head: true })
-            .eq('company_id', company.id)
-            .is('is_business', null)
-            .eq('is_ignored', false)
-
-          if (error) {
-            console.error('Failed to refresh uncategorized transaction count:', error)
-            break
-          }
-
-          setLiveUncategorizedTransactionCount(count ?? 0)
-        } while (refreshQueuedRef.current && !cancelled)
-      } finally {
-        refreshInFlightRef.current = false
-        refreshQueuedRef.current = false
-      }
+    // Realtime keeps the badges live; a trailing debounce collapses event
+    // bursts (bulk booking / bulk approvals emit one event per row) into a
+    // single SWR revalidation instead of a request stampede.
+    let debounce: ReturnType<typeof setTimeout> | null = null
+    const queueRefresh = () => {
+      if (debounce) clearTimeout(debounce)
+      debounce = setTimeout(() => void refreshBadges(), 400)
     }
 
-    void refreshUncategorizedCount()
-
     const channel = supabase
-      .channel(`dashboard-nav:transactions:${company.id}`)
+      .channel(`dashboard-nav:badges:${company.id}`)
       .on(
         'postgres_changes',
         {
@@ -409,17 +390,25 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           table: 'transactions',
           filter: `company_id=eq.${company.id}`,
         },
-        () => {
-          void refreshUncategorizedCount()
+        queueRefresh,
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'pending_operations',
+          filter: `company_id=eq.${company.id}`,
         },
+        queueRefresh,
       )
       .subscribe()
 
     return () => {
-      cancelled = true
+      if (debounce) clearTimeout(debounce)
       void supabase.removeChannel(channel)
     }
-  }, [company?.id, supabase])
+  }, [company?.id, supabase, refreshBadges])
 
   const hiddenNavHrefs = new Set(getBranding().hiddenNavHrefs)
 
@@ -607,10 +596,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                             const active = isActive(item.href)
                             const enabled = isItemEnabled(item.href) && !item.comingSoon
                             const badge =
-                              item.href === '/transactions' && liveUncategorizedTransactionCount > 0
-                                ? liveUncategorizedTransactionCount
-                                : item.href === '/pending' && pendingOperationsCount > 0
-                                  ? pendingOperationsCount
+                              item.href === '/transactions' && uncategorizedCount > 0
+                                ? uncategorizedCount
+                                : item.href === '/pending' && pendingOpsCount > 0
+                                  ? pendingOpsCount
                                   : null
                             const decorBadge = renderBadge(item, 'sidebar')
                             const content = (
@@ -820,8 +809,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           {mobileNavItems.map((item) => {
             const active = isActive(item.href)
             const enabled = isItemEnabled(item.href)
-            const badge = item.href === '/transactions' && liveUncategorizedTransactionCount > 0
-              ? liveUncategorizedTransactionCount
+            const badge = item.href === '/transactions' && uncategorizedCount > 0
+              ? uncategorizedCount
               : null
 
             const content = (
@@ -977,10 +966,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                       const Icon = item.icon
                       const active = isActive(item.href)
                       const enabled = isItemEnabled(item.href) && !item.comingSoon
-                      const badge = item.href === '/transactions' && liveUncategorizedTransactionCount > 0
-                        ? liveUncategorizedTransactionCount
-                        : item.href === '/pending' && pendingOperationsCount > 0
-                          ? pendingOperationsCount
+                      const badge = item.href === '/transactions' && uncategorizedCount > 0
+                        ? uncategorizedCount
+                        : item.href === '/pending' && pendingOpsCount > 0
+                          ? pendingOpsCount
                           : null
                       const decorBadge = renderBadge(item, 'mobile')
                       const content = (

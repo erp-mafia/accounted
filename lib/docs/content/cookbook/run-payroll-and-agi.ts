@@ -2,7 +2,7 @@ export const COOKBOOK_PAYROLL_AGI_MD = `# Cookbook: run payroll and generate the
 
 > Drive a Swedish salary run from draft to booked, then generate the arbetsgivardeklaration på individnivå (AGI) XML for manual submission to Skatteverket. Five-step lifecycle, every state transition idempotent and dry-runnable (generate-agi is idempotent but not dry-runnable).
 
-This is the operational companion to the [Salary-runs reference](/docs/api/reference/salary-runs). Most of the payroll lifecycle is API-callable, but one step is still dashboard-only: **attaching employees to a run** (the \`/salary-runs/{id}/employees\` v1 endpoint is forthcoming), so a run can't yet be populated end-to-end from the public API. Everything after that — calculate, approve, mark paid, book, generate AGI — is.
+This is the operational companion to the [Salary-runs reference](/docs/api/reference/salary-runs). The whole lifecycle is API-callable end-to-end: create the run, attach employees (\`POST /salary-runs/{id}/employees\`), add manual payslip lines if needed, calculate, approve, mark paid, book, generate AGI. Per-employee results are readable via \`GET /salary-runs/{id}/employees\` (list) and \`GET /salary-runs/{id}/employees/{employeeId}\` (payslip detail incl. line items and the step-by-step calculation breakdown); the rendered payslip PDF is at \`GET /salary-runs/{id}/payslips/{employeeId}/pdf\`.
 
 ## What you'll need
 
@@ -12,7 +12,7 @@ This is the operational companion to the [Salary-runs reference](/docs/api/refer
 
 ## 1. Create a salary run (draft)
 
-\`POST /salary-runs\` opens an **empty** run in \`draft\` status: it takes only the period + payment metadata (\`period_year\`, \`period_month\`, \`payment_date\`, optional \`voucher_series\` and \`notes\`). Employees are attached in a separate step (via the dashboard, or the forthcoming \`/salary-runs/{id}/employees\` surface) before you \`:calculate\`.
+\`POST /salary-runs\` opens an **empty** run in \`draft\` status: it takes only the period + payment metadata (\`period_year\`, \`period_month\`, \`payment_date\`, optional \`voucher_series\` and \`notes\`). Attach each employee with \`POST /salary-runs/{id}/employees\` (body \`{ "employee_id": "..." }\`, plus \`hours_worked\` for hourly staff) before you \`:calculate\`. The attach snapshots the employee's pay config onto the run and seeds the base salary line; one-off components (bonus, deduction, reimbursement) go through \`POST /salary-runs/{id}/employees/{employeeId}/lines\` while the run is still a draft. Line edits never recompute tax: always \`:calculate\` afterwards.
 
 \`\`\`bash
 curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary-runs" \\

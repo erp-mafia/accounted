@@ -1,0 +1,430 @@
+/**
+ * Staging tests for the payroll write MCP tools (payroll gap-closure 1.7):
+ * gnubok_update_payslip_line + gnubok_register_absence.
+ *
+ * Both STAGE a pending_operation (no direct writes); the executors in
+ * lib/pending-operations/commit.ts are covered separately in
+ * lib/pending-operations/__tests__/payroll-executors.test.ts.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createQueuedMockSupabase } from '@/tests/helpers'
+
+const mockPreviewClose = vi.fn()
+vi.mock('@/lib/salary/semesterberedning', () => ({
+  previewVacationYearClose: (...a: unknown[]) => mockPreviewClose(...a),
+  commitVacationYearClose: vi.fn(),
+}))
+
+import { tools } from '../server'
+import { decryptPersonnummer } from '@/lib/salary/personnummer'
+
+const updatePayslipLine = tools.find((t) => t.name === 'gnubok_update_payslip_line')!
+const registerAbsence = tools.find((t) => t.name === 'gnubok_register_absence')!
+const createEmployee = tools.find((t) => t.name === 'gnubok_create_employee')!
+const updateEmployee = tools.find((t) => t.name === 'gnubok_update_employee')!
+const setOpeningBalances = tools.find((t) => t.name === 'gnubok_set_employee_opening_balances')!
+const closeVacationYear = tools.find((t) => t.name === 'gnubok_close_vacation_year')!
+
+// Synthetic fixture personnummer (year 1900, zero suffix).
+const SAMPLE_PERSONNUMMER = '190001010000'
+
+/** Flexible per-table mock that also captures insert payloads, so tests can
+ * assert what stagePendingOperation persisted to pending_operations. */
+function makeCapturingSupabase(byTable: Record<string, { data?: unknown; error?: unknown } | Array<{ data?: unknown; error?: unknown }>>) {
+  const queues = new Map<string, Array<{ data?: unknown; error?: unknown }>>()
+  for (const [t, val] of Object.entries(byTable)) {
+    queues.set(t, Array.isArray(val) ? [...val] : [val])
+  }
+  const inserts: Record<string, unknown[]> = {}
+  const buildChain = (table: string): unknown => {
+    const handler: ProxyHandler<object> = {
+      get(_target, prop) {
+        if (prop === 'then') {
+          return (resolve: (v: unknown) => void) => {
+            const q = queues.get(table)
+            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
+            resolve({ count: null, ...next })
+          }
+        }
+        return (...callArgs: unknown[]) => {
+          if (prop === 'insert') {
+            ;(inserts[table] ??= []).push(callArgs[0])
+          }
+          return buildChain(table)
+        }
+      },
+    }
+    return new Proxy({}, handler)
+  }
+  return { inserts, from: vi.fn((table: string) => buildChain(table)) }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
+describe('gnubok_update_payslip_line', () => {
+  const LINE_ROW = {
+    id: 'line-1',
+    salary_run_employee_id: 'sre-1',
+    company_id: 'company-1',
+    item_type: 'bonus',
+    description: 'Kvartalsbonus',
+    quantity: null,
+    unit_price: null,
+    amount: 5000,
+    is_taxable: true,
+    is_avgift_basis: true,
+    is_vacation_basis: true,
+    is_gross_deduction: false,
+    is_net_deduction: false,
+    account_number: '7210',
+    sort_order: 0,
+    created_at: '',
+    updated_at: '',
+    salary_run_employee: { salary_run_id: 'run-1' },
+  }
+
+  it('stages with a merged preview and a recalculate next-hint', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'draft' } }) // service draft gate
+    enqueue({ data: LINE_ROW }) // service loadLineInRun (dry-run preflight)
+    enqueue({ data: { payment_date: '2026-03-25' } }) // run payment_date for period check
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await updatePayslipLine.execute(
+      { salary_run_id: 'run-1', salary_line_item_id: 'line-1', amount: 5500 },
+      'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+    )) as {
+      staged: boolean
+      risk_level: string
+      preview: Record<string, unknown>
+      next?: { tool: string }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.risk_level).toBe('medium')
+    expect(result.preview.new_amount).toBe(5500)
+    expect(result.preview.salary_line_item_id).toBe('line-1')
+    expect(result.next?.tool).toBe('gnubok_calculate_salary_run')
+  })
+
+  it('throws when the run has advanced past draft (preflight)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'booked' } })
+
+    await expect(
+      updatePayslipLine.execute(
+        { salary_run_id: 'run-1', salary_line_item_id: 'line-1', amount: 5500 },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/SALARY_RUN_LINE_NOT_DRAFT/)
+  })
+
+  it('rejects an empty patch', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      updatePayslipLine.execute(
+        { salary_run_id: 'run-1', salary_line_item_id: 'line-1' },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/At least one/)
+  })
+})
+
+describe('gnubok_register_absence', () => {
+  it('stages with day-count preview and dateForPeriodCheck', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'emp-1' } }) // service assertEmployee (dry-run preflight)
+    enqueue({ data: { first_name: 'Anna', last_name: 'Andersson' } }) // name for title/preview
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-2' }, error: null }) // pending_operations insert
+
+    const result = (await registerAbsence.execute(
+      { employee_id: 'emp-1', from: '2026-03-02', to: '2026-03-06', absence_type: 'sick' },
+      'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+    )) as {
+      staged: boolean
+      risk_level: string
+      preview: Record<string, unknown>
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.risk_level).toBe('medium')
+    // 2026-03-02 (Mon) .. 2026-03-06 (Fri) = 5 weekdays.
+    expect(result.preview.day_count).toBe(5)
+    expect(result.preview.employee_name).toBe('Anna Andersson')
+    expect((result.preview.dates_sample as string[])[0]).toBe('2026-03-02')
+  })
+
+  it('throws for a range beyond the cap', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'emp-1' } })
+
+    await expect(
+      registerAbsence.execute(
+        { employee_id: 'emp-1', from: '2026-01-01', to: '2026-12-31', absence_type: 'sick' },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/ABSENCE_RANGE_TOO_LARGE/)
+  })
+
+  it('throws for an unknown employee', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+
+    await expect(
+      registerAbsence.execute(
+        { employee_id: 'emp-x', from: '2026-03-02', to: '2026-03-06', absence_type: 'sick' },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/EMPLOYEE_NOT_FOUND/)
+  })
+})
+
+describe('gnubok_create_employee', () => {
+  const validArgs = {
+    first_name: 'Anna',
+    last_name: 'Andersson',
+    personnummer: SAMPLE_PERSONNUMMER,
+    employment_start: '2026-01-15',
+    salary_type: 'monthly',
+    monthly_salary: 35000,
+    tax_table_number: 33,
+    tax_municipality: 'Stockholm',
+  }
+
+  it('encrypts personnummer at staging: params never carry the plaintext', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      company_settings: { data: { entity_type: 'ab' } }, // entity-type preflight
+      fiscal_periods: { data: null },
+      pending_operations: { data: { id: 'op-3' }, error: null },
+    })
+
+    const result = (await createEmployee.execute(
+      validArgs, 'company-1', 'user-1', supabaseMock as never, { type: 'agent_chat' },
+    )) as { staged: boolean; risk_level: string; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.risk_level).toBe('medium')
+    expect(result.preview.personnummer_masked).toBe('19000101-XXXX')
+
+    // The staged params must carry the ENCRYPTED value + last4, never the
+    // raw personnummer: pending_operations is a persisted table.
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as {
+      params: Record<string, unknown>
+      title: string
+      preview_data: Record<string, unknown>
+    }
+    expect(inserted).toBeDefined()
+    expect(inserted.params.personnummer).toBeUndefined()
+    expect(inserted.params.personnummer_last4).toBe('0000')
+    expect(decryptPersonnummer(inserted.params.personnummer_encrypted as string)).toBe(SAMPLE_PERSONNUMMER)
+    expect(JSON.stringify(inserted.params)).not.toContain(SAMPLE_PERSONNUMMER)
+    expect(JSON.stringify(inserted.preview_data)).not.toContain(SAMPLE_PERSONNUMMER)
+    expect(inserted.title).not.toContain(SAMPLE_PERSONNUMMER)
+  })
+
+  it('rejects invalid input via CreateEmployeeSchema (missing salary)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      createEmployee.execute(
+        { ...validArgs, monthly_salary: undefined },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/Invalid employee/)
+  })
+
+  it('blocks EF owners on payroll (entity-type preflight)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { entity_type: 'ef' } }) // company_settings
+
+    await expect(
+      createEmployee.execute(
+        { ...validArgs, employment_type: 'company_owner' },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow()
+  })
+})
+
+describe('gnubok_update_employee', () => {
+  const EXISTING = {
+    id: 'emp-1',
+    first_name: 'Anna',
+    last_name: 'Andersson',
+    monthly_salary: 35000,
+    clearing_number: '6000',
+    bank_account_number: '12345678',
+  }
+
+  it('stages with a field-level changes preview and bank-change flag', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: EXISTING },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-4' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', monthly_salary: 38000, bank_account_number: '87654321' },
+      'company-1', 'user-1', supabaseMock as never, { type: 'agent_chat' },
+    )) as { staged: boolean; preview: { changes: Array<{ field: string; from: unknown; to: unknown }>; bank_details_changed: boolean } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.bank_details_changed).toBe(true)
+    const salaryChange = result.preview.changes.find((c) => c.field === 'monthly_salary')
+    expect(salaryChange).toEqual({ field: 'monthly_salary', from: 35000, to: 38000 })
+  })
+
+  it('rejects personnummer changes at the tool boundary', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', personnummer: '190001029999' },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/immutable/)
+  })
+
+  it('throws for an unknown employee', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-x', monthly_salary: 38000 },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/not found/i)
+  })
+})
+
+describe('gnubok_set_employee_opening_balances', () => {
+  const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  const CURRENT_YEAR = new Date().getFullYear()
+  const validItem = {
+    employee_id: EMPLOYEE_ID,
+    cutover_date: `${CURRENT_YEAR}-07-01`,
+    ytd_gross: 210000,
+    ytd_tax: 48000,
+    ytd_net: 162000,
+    vacation_paid_days_remaining: 12.5,
+    vacation_saved_days_by_year: { [`${CURRENT_YEAR - 1}`]: 5 },
+    opening_semester_liability: 42000,
+    opening_semester_liability_avgifter: 13196.4,
+    karens_periods_adjustment: 1,
+  }
+
+  it('stages after preflighting the whole batch (happy path)', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: {
+        data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
+      },
+      salary_run_employees: { data: [] },
+      pending_operations: { data: { id: 'op-5' }, error: null },
+    })
+
+    const result = (await setOpeningBalances.execute(
+      { items: [validItem] },
+      'company-1', 'user-1', supabaseMock as never, { type: 'agent_chat' },
+    )) as { staged: boolean; risk_level: string; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.risk_level).toBe('medium')
+    expect(result.preview.employee_count).toBe(1)
+    expect(result.preview.total_ytd_gross).toBe(210000)
+    // The write table is never touched at staging.
+    const inserted = supabaseMock.inserts.employee_opening_balances
+    expect(inserted).toBeUndefined()
+  })
+
+  it('throws with the per-item error list when locked', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: {
+        data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
+      },
+      salary_run_employees: {
+        data: [{ employee_id: EMPLOYEE_ID, salary_run: { id: 'run-1', status: 'booked' } }],
+      },
+    })
+
+    await expect(
+      setOpeningBalances.execute(
+        { items: [validItem] },
+        'company-1', 'user-1', supabaseMock as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/Locked by booked salary run/)
+  })
+
+  it('rejects invalid items via the shared Zod schema', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      setOpeningBalances.execute(
+        { items: [{ ...validItem, cutover_date: `${CURRENT_YEAR}-07-15` }] },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/Invalid opening balances/)
+  })
+})
+
+describe('gnubok_close_vacation_year', () => {
+  const SAMPLE_REPORT = {
+    vacation_year_start: '2025-01-01',
+    vacation_year_end: '2025-12-31',
+    next_year_start: '2026-01-01',
+    basis: 'calendar',
+    rows: [
+      {
+        employee_id: 'emp-1',
+        employee_name: 'Anna Andersson',
+        saveable_days: 5,
+        expiring_days: 2,
+      },
+    ],
+    sek: {
+      computed_liability: 18690.84,
+      computed_avgifter: 5872.66,
+      booked_2920: 10000,
+      booked_2940: 3142,
+      drift_2920: 8690.84,
+      drift_2940: 2730.66,
+      adjustment_needed: true,
+    },
+    adjustment_date: '2025-12-31',
+  }
+
+  it('stages HIGH risk with the review report in the preview', async () => {
+    mockPreviewClose.mockResolvedValue({ ok: true, data: SAMPLE_REPORT })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { salary_vacation_year_basis: 'calendar' } }) // basis lookup (year default)
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-6' }, error: null }) // pending_operations insert
+
+    const result = (await closeVacationYear.execute(
+      {}, 'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+    )) as { staged: boolean; risk_level: string; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.risk_level).toBe('high')
+    expect(result.preview.employee_count).toBe(1)
+    expect(result.preview.drift_2920).toBe(8690.84)
+    expect(result.preview.adjustment_needed).toBe(true)
+  })
+
+  it('fails staging when the preview refuses (already closed)', async () => {
+    mockPreviewClose.mockResolvedValue({ ok: false, code: 'VACATION_YEAR_ALREADY_CLOSED' })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { salary_vacation_year_basis: 'calendar' } })
+
+    await expect(
+      closeVacationYear.execute(
+        { vacation_year_start: '2025-01-01' },
+        'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
+      ),
+    ).rejects.toThrow(/VACATION_YEAR_ALREADY_CLOSED/)
+  })
+})

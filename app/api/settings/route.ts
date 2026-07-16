@@ -40,13 +40,25 @@ export const PUT = withRouteContext(
     // Fetch current settings to check for tax-relevant changes
     const { data: oldSettings } = await supabase
       .from('company_settings')
-      .select('entity_type, moms_period, f_skatt, vat_registered, vat_number, pays_salaries, fiscal_year_start_month, onboarding_complete')
+      .select('entity_type, moms_period, f_skatt, vat_registered, vat_number, pays_salaries, fiscal_year_start_month, onboarding_complete, salary_vacation_year_basis, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3')
       .eq('company_id', companyId)
       .single()
 
     const validation = await validateBody(request, UpdateSettingsSchema)
     if (!validation.success) return validation.response
     const body = validation.data
+
+    const reminderDays = [
+      body.reminder_days_level_1 ?? oldSettings?.reminder_days_level_1 ?? 15,
+      body.reminder_days_level_2 ?? oldSettings?.reminder_days_level_2 ?? 30,
+      body.reminder_days_level_3 ?? oldSettings?.reminder_days_level_3 ?? 45,
+    ]
+    if (!(reminderDays[0] < reminderDays[1] && reminderDays[1] < reminderDays[2])) {
+      return NextResponse.json(
+        { error: 'Påminnelsedagarna måste ligga i stigande ordning.' },
+        { status: 400 },
+      )
+    }
 
     // Lock org_number after onboarding is complete (legal identifier: changing it
     // would orphan vouchers, SIE history, and tax filings). company_name remains
@@ -63,6 +75,35 @@ export const PUT = withRouteContext(
         { error: 'Enskild firma måste använda kalenderår (BFL 3 kap.)' },
         { status: 400 }
       )
+    }
+
+    // Vacation year basis (payroll gap-closure 3.1): changing the boundary
+    // while OPEN vacation-ledger rows exist would orphan them (rows are keyed
+    // by vacation_year_start). Close the current year first.
+    if (
+      body.salary_vacation_year_basis !== undefined &&
+      body.salary_vacation_year_basis !==
+        (oldSettings as Record<string, unknown> | null)?.salary_vacation_year_basis
+    ) {
+      const { count: openRows, error: openRowsError } = await supabase
+        .from('employee_vacation_balances')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .eq('status', 'open')
+      // Fail closed: a failed check must not let the basis change through
+      // and orphan open vacation-ledger rows.
+      if (openRowsError) {
+        return NextResponse.json({ error: openRowsError.message }, { status: 500 })
+      }
+      if ((openRows ?? 0) > 0) {
+        return NextResponse.json(
+          {
+            error:
+              'Semesterårets basis kan inte ändras medan öppna semestersaldon finns. Stäng semesteråret först.',
+          },
+          { status: 400 },
+        )
+      }
     }
 
     // Validate: VAT-registered must have VAT number (ML 11 kap. 8§) and moms period (SFL 26 kap.)
@@ -92,6 +133,9 @@ export const PUT = withRouteContext(
       .single()
 
     if (error) {
+      if (error.code === 'PGRST116') {
+        return NextResponse.json({ error: 'Inställningarna hittades inte.' }, { status: 404 })
+      }
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
 

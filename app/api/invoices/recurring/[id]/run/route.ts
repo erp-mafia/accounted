@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { executeRecurringSchedule } from '@/lib/invoices/recurring-schedule-service'
+import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type { RecurringInvoiceSchedule, RecurringInvoiceScheduleItem } from '@/types'
 
 ensureInitialized()
@@ -46,8 +47,16 @@ export const POST = withRouteContext(
       items: RecurringInvoiceScheduleItem[]
     }
 
+    // Defence in depth (ASVS V2.3): mirror the cron route. The sandbox rule
+    // is enforced inside the service's email chokepoint too; resolving it at
+    // the route level as well means the invariant survives refactors of the
+    // service internals. Invoice creation is unaffected (freeze-and-retain).
+    const suppressAutoSend = typed.auto_send
+      ? await isSandboxCompany(supabase, companyId)
+      : false
+
     try {
-      const result = await executeRecurringSchedule(supabase, typed, new Date())
+      const result = await executeRecurringSchedule(supabase, typed, new Date(), { suppressAutoSend })
 
       // Record the run for the list view (generated count, last invoice,
       // warning) but leave next_run_date untouched: the monthly cadence runs

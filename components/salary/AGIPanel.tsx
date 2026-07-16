@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   AlertCircle,
   CheckCircle2,
+  Circle,
   Download,
   ExternalLink,
   Link2,
@@ -19,9 +20,11 @@ import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { useToast } from '@/components/ui/use-toast'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import type { AgiSubmissionState } from '@/lib/salary/agi-submission-state'
 
 interface AGIPanelProps {
   salaryRunId: string
@@ -32,6 +35,13 @@ interface AGIPanelProps {
   /** Already-cached run-level signals for showing what step we're at. */
   agiGeneratedAt?: string | null
   agiSubmittedAt?: string | null
+  /**
+   * Per-period submission record, owned by the parent (via useAgiSubmission)
+   * so the progress rail and hero can render the same state machine.
+   */
+  submission: AgiSubmissionState | null
+  /** Refetch the submission record after a state-changing action. */
+  onRefreshSubmission: () => void
   /** When true, write actions are hidden. */
   readOnly?: boolean
   /** Called after a state-changing action so parent can refresh. */
@@ -60,28 +70,6 @@ interface KontrollFinding {
   identifierare?: string
 }
 
-/**
- * Local submission state mirrored in extension_data under
- * `agi_submission_{period}`. Matches the `status` enum the index.ts handlers
- * write back. Strict superset of what the UI actually keys off.
- */
-interface SubmissionState {
-  status?:
-    | 'underlag_submitted'         // POST /underlag returned an inlamningId
-    | 'underlag_rejected'          // kontrollresultat surfaced stoppande fel
-    | 'awaiting_signing'           // skapaGranskningsunderlag returned a link
-    | 'signed'                     // kvittenser shows uuidKvittens for the period
-  signeringslank?: string
-  kvittensnummer?: string
-  signeradAv?: string
-  signeradTid?: string
-  inlamningId?: number
-  tillstand?: string
-  meddelande?: string
-  /** ISO timestamp the submission record was last written by the extension. */
-  updatedAt?: string
-}
-
 /** Subset of SkatteverketAGIKontrollresultat we use in the panel. */
 interface Kontrollresultat {
   status: 'PROCESSING' | 'DONE_SUCCESS' | 'DONE_FAILED' | 'DONE_REJECTED'
@@ -106,6 +94,36 @@ interface Kontrollresultat {
 
 const ENABLED_KEY = 'EXTENSION_DISABLED'
 
+/** One-click chain steps, in execution order. */
+const CHAIN_STEPS = ['generate', 'submit', 'kontroll', 'link'] as const
+type ChainStep = (typeof CHAIN_STEPS)[number]
+
+interface ChainProgress {
+  current: ChainStep
+  failed: boolean
+  done: boolean
+}
+
+/**
+ * Sentinel for chain aborts where the failing step already surfaced its
+ * error via setError/setKontroller: the catch block must not overwrite it.
+ */
+class ChainFailed extends Error {}
+
+/**
+ * Extract a human message from either the canonical { error: { message } }
+ * envelope (internal routes) or a plain { error: string } (extension routes).
+ */
+function errText(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null
+  const err = (data as { error?: unknown }).error
+  if (typeof err === 'string') return err
+  if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
+    return (err as { message: string }).message
+  }
+  return null
+}
+
 export function AGIPanel(props: AGIPanelProps) {
   const {
     salaryRunId,
@@ -113,21 +131,47 @@ export function AGIPanel(props: AGIPanelProps) {
     period,
     agiGeneratedAt,
     agiSubmittedAt,
+    submission,
+    onRefreshSubmission,
     readOnly,
     onChange,
   } = props
 
   const t = useTranslations('salary_agi')
+  const { toast } = useToast()
   const hasSkatteverket = useCapability(CAPABILITY.skatteverket)
 
   const [extensionDisabled, setExtensionDisabled] = useState(false)
   const [status, setStatus] = useState<ConnectionStatus | null>(null)
-  const [submission, setSubmission] = useState<SubmissionState | null>(null)
   const [kontroller, setKontroller] = useState<KontrollFinding[]>([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [chain, setChain] = useState<ChainProgress | null>(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+
+  // "2026-06" for user-facing copy; the period prop is compact YYYYMM.
+  const prettyPeriod = `${period.slice(0, 4)}-${period.slice(4)}`
+
+  // ── Derived filing state (needed by hooks, so derived before any return) ──
+  const subState = submission?.status
+  const awaitingSigning = subState === 'awaiting_signing'
+  const underlagSubmitted = subState === 'underlag_submitted'
+  const underlagRejected = subState === 'underlag_rejected'
+  const isSigned = subState === 'signed' || !!agiSubmittedAt
+  // The submission state is keyed by PERIOD; AGI generation is keyed by RUN.
+  // If the run's AGI was (re)generated AFTER this signing draft was created,
+  // the locked underlag at Skatteverket reflects superseded figures and must
+  // not be signed: surface a warning and steer the user to unlock + resubmit
+  // rather than presenting it as ready to sign (avoids filing stale amounts).
+  const draftUpdatedAt = submission?.updatedAt ? new Date(submission.updatedAt) : null
+  const draftIsStale =
+    awaitingSigning &&
+    !!agiGeneratedAt &&
+    !!draftUpdatedAt &&
+    !Number.isNaN(draftUpdatedAt.getTime()) &&
+    new Date(agiGeneratedAt).getTime() > draftUpdatedAt.getTime()
 
   const fetchStatus = useCallback(async () => {
     setLoading(true)
@@ -165,24 +209,9 @@ export function AGIPanel(props: AGIPanelProps) {
     }
   }, [])
 
-  const fetchSubmission = useCallback(async () => {
-    try {
-      const res = await fetch(
-        `/api/extensions/ext/skatteverket/agi/status?period=${period}`,
-      )
-      if (res.ok) {
-        const json = await res.json()
-        setSubmission(json.data ?? null)
-      }
-    } catch {
-      // ignore
-    }
-  }, [period])
-
   useEffect(() => {
     fetchStatus()
-    fetchSubmission()
-  }, [fetchStatus, fetchSubmission])
+  }, [fetchStatus])
 
   // Handle of the OAuth popup opened by handleConnect: used to verify the
   // sender identity of incoming postMessages.
@@ -231,6 +260,20 @@ export function AGIPanel(props: AGIPanelProps) {
     )
   }, [agiGeneratedAt])
 
+  // Loud success when the filing completes: a poll (live timers, tab refocus,
+  // or the parent's refresh) flips isSigned while the user is on the page.
+  // The ref starts null so an already-signed run doesn't toast on mount.
+  const prevSignedRef = useRef<boolean | null>(null)
+  useEffect(() => {
+    if (prevSignedRef.current === false && isSigned) {
+      toast({
+        title: t('toast_signed_title'),
+        description: t('toast_signed_description', { period: prettyPeriod }),
+      })
+    }
+    prevSignedRef.current = isSigned
+  }, [isSigned, toast, t, prettyPeriod])
+
   // Background kvittens-polling timers (see scheduleKvittensPolls below).
   // Held in a ref so the unmount-cleanup effect can cancel them if the
   // user leaves the page mid-signing.
@@ -263,7 +306,7 @@ export function AGIPanel(props: AGIPanelProps) {
       if (!res.ok) return false
       const json = await res.json()
       const signed = !!json.data?.kvittenser?.[0]?.uuidKvittens
-      await fetchSubmission()
+      onRefreshSubmission()
       if (signed) {
         // Replace any lingering "Granskningsunderlag klart…" / stale error
         // with an unambiguous confirmation. Mirrors handleCheckSubmitted.
@@ -275,7 +318,7 @@ export function AGIPanel(props: AGIPanelProps) {
     } catch {
       return false
     }
-  }, [arbetsgivare, period, fetchSubmission, onChange, t])
+  }, [arbetsgivare, period, onRefreshSubmission, onChange, t])
 
   /**
    * Background-poll /agi/kvittenser at 30s, 2 min, and 5 min after the user
@@ -348,13 +391,13 @@ export function AGIPanel(props: AGIPanelProps) {
       }
       setSuccess(t('disconnect_success'))
       await fetchStatus()
-      await fetchSubmission()
+      onRefreshSubmission()
     } catch (e) {
       setError(e instanceof Error ? e.message : t('disconnect_failed'))
     } finally {
       setActionLoading(null)
     }
-  }, [fetchStatus, fetchSubmission, t])
+  }, [fetchStatus, onRefreshSubmission, t])
 
   const handleConnect = () => {
     // Open the BankID OAuth flow in a centered popup. The callback page
@@ -418,9 +461,27 @@ export function AGIPanel(props: AGIPanelProps) {
   }
 
   /**
-   * Step 1: POST the stored XML underlag, then poll kontrollresultat until
-   * status flips out of PROCESSING. Skatteverket's spec says polling is
-   * usually instantaneous, but we cap at 8 attempts × 1s to be safe.
+   * The XML must exist in agi_declarations before anything can be submitted.
+   * The internal xml route both generates and persists it (and stamps
+   * agi_generated_at); the response body, the downloadable file itself, is
+   * discarded here: "Ladda ner AGI-fil" remains the way to get a copy.
+   */
+  async function ensureAgiGenerated(): Promise<boolean> {
+    if (agiGeneratedAt) return true
+    const res = await fetch(`/api/salary/runs/${salaryRunId}/agi/xml`)
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      setError(errText(data) || t('xml_generate_failed'))
+      return false
+    }
+    onChange?.() // parent refetches the run so agiGeneratedAt flips
+    return true
+  }
+
+  /**
+   * POST the stored XML underlag, then poll kontrollresultat until status
+   * flips out of PROCESSING. Skatteverket's spec says polling is usually
+   * instantaneous, but we cap at 8 attempts × 1s to be safe.
    *
    * On DONE_SUCCESS the underlag is auto-persisted by SKV: no /spara call.
    * Calling /spara when there are no errors returns 400 felkod 20
@@ -431,10 +492,154 @@ export function AGIPanel(props: AGIPanelProps) {
    *
    * On DONE_REJECTED we surface the validation findings; the user can still
    * choose to save (so they can fix it in Mina Sidor) or abort.
+   *
+   * Failures surface via setError/setKontroller and return false. Shared by
+   * the one-click chain and the advanced "Skicka in underlag" button;
+   * `onKontrollPhase` lets the chain advance its stepper when polling starts.
    */
+  async function runSubmitUnderlag(onKontrollPhase?: () => void): Promise<boolean> {
+    setKontroller([])
+    const submitRes = await fetch('/api/extensions/ext/skatteverket/agi/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ salaryRunId }),
+    })
+    const submitJson = await submitRes.json()
+    if (!submitRes.ok || submitJson.error) {
+      setError(submitJson.error || t('submit_failed_status', { status: submitRes.status }))
+      return false
+    }
+    const inlamningId = submitJson.data?.inlamningId as number | undefined
+    if (!inlamningId) {
+      setError(t('submit_missing_id'))
+      return false
+    }
+
+    // Poll kontrollresultat until DONE_*
+    onKontrollPhase?.()
+    let kr: Kontrollresultat | undefined
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const krRes = await fetch(
+        `/api/extensions/ext/skatteverket/agi/kontrollresultat?inlamningId=${inlamningId}`,
+      )
+      const krJson = await krRes.json()
+      if (!krRes.ok || krJson.error) {
+        setError(krJson.error || t('kontrollresultat_failed_status', { status: krRes.status }))
+        return false
+      }
+      kr = krJson.data as Kontrollresultat
+      if (kr.status !== 'PROCESSING') break
+      await new Promise(r => setTimeout(r, 1000))
+    }
+    if (!kr || kr.status === 'PROCESSING') {
+      setError(t('still_processing'))
+      return false
+    }
+
+    const findings = extractFindings(kr)
+    setKontroller(findings)
+
+    if (kr.status === 'DONE_SUCCESS') return true
+    if (kr.status === 'DONE_REJECTED') {
+      setError(t('underlag_rejected_error', { count: findings.filter(f => f.status === 'STOPP').length }))
+    } else {
+      setError(t('underlag_failed'))
+    }
+    return false
+  }
+
+  /**
+   * skapaGranskningsunderlag: returns the Mina Sidor deep-link the user opens
+   * to sign with BankID. Defaults to `lasPeriod=true` so the period is locked
+   * while the signing window is open. Returns the link on success ('' when
+   * the response carried none: the signing-link card renders it after the
+   * submission refresh) and null on failure (error already surfaced).
+   */
+  async function runCreateSigningLink(): Promise<string | null> {
+    const res = await fetch(
+      `/api/extensions/ext/skatteverket/agi/granskningsunderlag?arbetsgivare=${encodeURIComponent(arbetsgivare)}&period=${period}`,
+      { method: 'POST' },
+    )
+    const json = await res.json()
+    if (!res.ok || json.error) {
+      setError(json.error || t('signing_link_failed_status', { status: res.status }))
+      return null
+    }
+    if (json.data?.tillstand === 'INCORRECT_DATA') {
+      setError(t('incorrect_data_error', { message: json.data.meddelande || t('incorrect_data_fallback') }))
+      return null
+    }
+    // The user typically opens the link, signs in Mina Sidor, then returns
+    // later (or never). Auto-poll so we capture the kvittens (and stamp
+    // agi_submitted_at) without forcing the user to click "Hämta kvittens".
+    scheduleKvittensPolls()
+    return typeof json.data?.link === 'string' ? json.data.link : ''
+  }
+
+  /**
+   * One-click filing: generate (if missing) → POST underlag → poll kontroll →
+   * create signing link → hand over to BankID signing in Mina Sidor.
+   *
+   * The signing link opens in a tab we open synchronously at click time:
+   * window.open after the async chain would be popup-blocked. On failure the
+   * placeholder tab is closed and the error renders in the panel; if the
+   * popup was blocked outright, the signing-link card (rendered from the
+   * refreshed submission state) is the fallback path.
+   */
+  const handleSubmitChain = async () => {
+    setActionLoading('chain')
+    setError(null)
+    setSuccess(null)
+    let signingTab: Window | null = null
+    try {
+      signingTab = window.open('', '_blank')
+      if (signingTab) {
+        signingTab.document.title = t('chain_tab_title')
+        signingTab.document.body.textContent = t('chain_tab_body')
+      }
+    } catch {
+      signingTab = null
+    }
+    try {
+      setChain({ current: 'generate', failed: false, done: false })
+      if (!(await ensureAgiGenerated())) throw new ChainFailed()
+
+      setChain({ current: 'submit', failed: false, done: false })
+      const submitted = await runSubmitUnderlag(() =>
+        setChain({ current: 'kontroll', failed: false, done: false }),
+      )
+      if (!submitted) throw new ChainFailed()
+
+      setChain({ current: 'link', failed: false, done: false })
+      const link = await runCreateSigningLink()
+      if (link === null) throw new ChainFailed()
+
+      setChain({ current: 'link', failed: false, done: true })
+      setSuccess(t('chain_ready_to_sign'))
+      if (signingTab && link) {
+        signingTab.location.replace(link)
+        signingTab = null // handed over to Skatteverket: don't close it below
+      } else {
+        signingTab?.close()
+        signingTab = null
+      }
+      onRefreshSubmission()
+      onChange?.()
+    } catch (e) {
+      signingTab?.close()
+      setChain(prev => (prev ? { ...prev, failed: true } : prev))
+      if (!(e instanceof ChainFailed)) {
+        setError(e instanceof Error ? e.message : t('submit_failed'))
+      }
+      onRefreshSubmission()
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   // Always-free: generate + download the AGI XML so the user can file manually
   // in Skatteverket's e-service. AGI is a mandatory statutory filing, so this
-  // path must never be paywalled: only the direct API submission below is paid.
+  // path must never be paywalled: only the direct API submission is paid.
   const handleDownloadXml = async () => {
     setActionLoading('download')
     setError(null)
@@ -442,7 +647,7 @@ export function AGIPanel(props: AGIPanelProps) {
       const res = await fetch(`/api/salary/runs/${salaryRunId}/agi/xml`)
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        throw new Error(data.error || t('xml_generate_failed'))
+        throw new Error(errText(data) || t('xml_generate_failed'))
       }
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
@@ -461,60 +666,16 @@ export function AGIPanel(props: AGIPanelProps) {
     }
   }
 
+  /** Advanced/recovery variant: submit the underlag without continuing the chain. */
   const handleSubmit = async () => {
     setActionLoading('submit')
     setError(null)
     setSuccess(null)
-    setKontroller([])
     try {
-      const submitRes = await fetch('/api/extensions/ext/skatteverket/agi/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ salaryRunId }),
-      })
-      const submitJson = await submitRes.json()
-      if (!submitRes.ok || submitJson.error) {
-        setError(submitJson.error || t('submit_failed_status', { status: submitRes.status }))
-        return
-      }
-      const inlamningId = submitJson.data?.inlamningId as number | undefined
-      if (!inlamningId) {
-        setError(t('submit_missing_id'))
-        return
-      }
-
-      // Poll kontrollresultat until DONE_*
-      let kr: Kontrollresultat | undefined
-      for (let attempt = 0; attempt < 8; attempt++) {
-        const krRes = await fetch(
-          `/api/extensions/ext/skatteverket/agi/kontrollresultat?inlamningId=${inlamningId}`,
-        )
-        const krJson = await krRes.json()
-        if (!krRes.ok || krJson.error) {
-          setError(krJson.error || t('kontrollresultat_failed_status', { status: krRes.status }))
-          return
-        }
-        kr = krJson.data as Kontrollresultat
-        if (kr.status !== 'PROCESSING') break
-        await new Promise(r => setTimeout(r, 1000))
-      }
-      if (!kr || kr.status === 'PROCESSING') {
-        setError(t('still_processing'))
-        return
-      }
-
-      const findings = extractFindings(kr)
-      setKontroller(findings)
-
-      if (kr.status === 'DONE_SUCCESS') {
-        setSuccess(t('underlag_accepted'))
-      } else if (kr.status === 'DONE_REJECTED') {
-        setError(t('underlag_rejected_error', { count: findings.filter(f => f.status === 'STOPP').length }))
-      } else {
-        setError(t('underlag_failed'))
-      }
-
-      await fetchSubmission()
+      if (!(await ensureAgiGenerated())) return
+      const ok = await runSubmitUnderlag()
+      if (ok) setSuccess(t('underlag_accepted'))
+      onRefreshSubmission()
       onChange?.()
     } catch (e) {
       setError(e instanceof Error ? e.message : t('submit_failed'))
@@ -523,36 +684,15 @@ export function AGIPanel(props: AGIPanelProps) {
     }
   }
 
-  /**
-   * Step 2: skapaGranskningsunderlag: returns the Mina Sidor deep-link the
-   * user opens to sign with BankID. Defaults to `lasPeriod=true` so the
-   * period is locked while the signing window is open.
-   */
+  /** Advanced/recovery variant: create the signing link on its own. */
   const handleCreateSigningLink = async () => {
     setActionLoading('granskning')
     setError(null)
     setSuccess(null)
     try {
-      const res = await fetch(
-        `/api/extensions/ext/skatteverket/agi/granskningsunderlag?arbetsgivare=${encodeURIComponent(arbetsgivare)}&period=${period}`,
-        { method: 'POST' },
-      )
-      const json = await res.json()
-      if (!res.ok || json.error) {
-        setError(json.error || t('signing_link_failed_status', { status: res.status }))
-        return
-      }
-      if (json.data?.tillstand === 'INCORRECT_DATA') {
-        setError(t('incorrect_data_error', { message: json.data.meddelande || t('incorrect_data_fallback') }))
-      } else {
-        setSuccess(t('signing_link_ready'))
-        // The user typically opens the link, signs in Mina Sidor, then
-        // returns later (or never). Auto-poll so we capture the kvittens
-        // (and stamp agi_submitted_at) without forcing the user to come
-        // back and click "Hämta kvittens".
-        scheduleKvittensPolls()
-      }
-      await fetchSubmission()
+      const link = await runCreateSigningLink()
+      if (link !== null) setSuccess(t('signing_link_ready'))
+      onRefreshSubmission()
     } catch (e) {
       setError(e instanceof Error ? e.message : t('signing_link_failed'))
     } finally {
@@ -575,7 +715,7 @@ export function AGIPanel(props: AGIPanelProps) {
         return
       }
       setSuccess(t('unlock_success'))
-      await fetchSubmission()
+      onRefreshSubmission()
     } catch (e) {
       setError(e instanceof Error ? e.message : t('unlock_failed'))
     } finally {
@@ -584,7 +724,7 @@ export function AGIPanel(props: AGIPanelProps) {
   }
 
   /**
-   * Step 3 (post-signing): poll /agi/kvittenser to detect that the user has
+   * Post-signing recovery: poll /agi/kvittenser to detect that the user has
    * signed in Mina Sidor. Once a kvittens turns up, the index.ts handler
    * mirrors it onto agi_declarations and flips the local submission state
    * to 'signed'.
@@ -608,7 +748,7 @@ export function AGIPanel(props: AGIPanelProps) {
       } else {
         setSuccess(t('no_kvittens_yet'))
       }
-      await fetchSubmission()
+      onRefreshSubmission()
       onChange?.()
     } catch (e) {
       setError(e instanceof Error ? e.message : t('check_status_failed'))
@@ -673,29 +813,29 @@ export function AGIPanel(props: AGIPanelProps) {
     )
   }
 
-  const subState = submission?.status
-  const awaitingSigning = subState === 'awaiting_signing'
-  const underlagSubmitted = subState === 'underlag_submitted'
-  const underlagRejected = subState === 'underlag_rejected'
-  const isSigned = subState === 'signed' || !!agiSubmittedAt
-  // The submission state is keyed by PERIOD; AGI generation is keyed by RUN.
-  // If the run's AGI was (re)generated AFTER this signing draft was created,
-  // the locked underlag at Skatteverket reflects superseded figures and must
-  // not be signed: surface a warning and steer the user to unlock + resubmit
-  // rather than presenting it as ready to sign (avoids filing stale amounts).
-  const draftUpdatedAt = submission?.updatedAt ? new Date(submission.updatedAt) : null
-  const draftIsStale =
-    awaitingSigning &&
-    !!agiGeneratedAt &&
-    !!draftUpdatedAt &&
-    !Number.isNaN(draftUpdatedAt.getTime()) &&
-    new Date(agiGeneratedAt).getTime() > draftUpdatedAt.getTime()
   // Tokens issued before the agd scope was added to DEFAULT_SCOPES will
   // 403 with invalid_scope at submission time: surface that proactively
   // so the user reconnects before hitting the deadline rather than at it.
   const missingAgdScope =
     typeof status?.scope === 'string' &&
     !status.scope.split(/\s+/).filter(Boolean).includes('agd')
+
+  // Recovery states expose the advanced actions on their own: the stale-draft
+  // and error-report guidance below reference them by name.
+  const forcedAdvanced = draftIsStale || underlagRejected
+  const advancedOpen = showAdvanced || forcedAdvanced
+
+  const signedAtRaw = submission?.signeradTid ?? agiSubmittedAt ?? null
+  const signedAtText = signedAtRaw ? new Date(signedAtRaw).toLocaleString('sv-SE') : null
+
+  const chainStepState = (step: ChainStep): 'done' | 'running' | 'failed' | 'upcoming' => {
+    if (!chain) return 'upcoming'
+    const idx = CHAIN_STEPS.indexOf(step)
+    const currentIdx = CHAIN_STEPS.indexOf(chain.current)
+    if (idx < currentIdx || (idx === currentIdx && chain.done)) return 'done'
+    if (idx === currentIdx) return chain.failed ? 'failed' : 'running'
+    return 'upcoming'
+  }
 
   return (
     <Card>
@@ -727,6 +867,40 @@ export function AGIPanel(props: AGIPanelProps) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Filed: the terminal state deserves more than a gray status row.
+            Kvittensnummer + signature metadata come from the submission
+            record; a run stamped only via agi_submitted_at (e.g. cron
+            reconciliation with an evicted cache) still gets the card. */}
+        {isSigned && (
+          <div className="rounded-md border border-border bg-muted/30 p-4">
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" />
+              <div className="space-y-1">
+                <p className="text-sm font-medium">
+                  {t('success_card_title', { period: prettyPeriod })}
+                </p>
+                {submission?.kvittensnummer && (
+                  <p className="text-sm text-muted-foreground tabular-nums">
+                    {t('success_card_kvittens', { kvittens: submission.kvittensnummer })}
+                  </p>
+                )}
+                {(submission?.signeradAv || signedAtText) && (
+                  <p className="text-sm text-muted-foreground">
+                    {submission?.signeradAv
+                      ? signedAtText
+                        ? t('success_card_signed_by_at', {
+                            name: submission.signeradAv,
+                            date: signedAtText,
+                          })
+                        : t('success_card_signed_by', { name: submission.signeradAv })
+                      : t('success_card_signed_at', { date: signedAtText ?? '' })}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Expired-session banner: the token row exists (so status.connected
             is true) but the access token is past expiry and either has no
             refresh token or has burned through its 10-refresh budget. The
@@ -919,74 +1093,140 @@ export function AGIPanel(props: AGIPanelProps) {
         )}
 
         {!readOnly && !isSigned && (
-          <div className="flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleDownloadXml}
-              disabled={actionLoading === 'download'}
-              title={t('download_xml_title')}
-            >
-              {actionLoading === 'download' ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Download className="mr-1.5 h-3.5 w-3.5" />
+          <div className="space-y-3">
+            {/* Primary path: one click runs the whole filing chain. Hidden
+                while a signing draft is open at SKV (the period is locked,
+                so a resubmission would be refused): the signing-link card
+                above is the CTA then, and the stale-draft recovery goes
+                through the advanced actions per the guidance text. The
+                XML download stays free for manual filing regardless. */}
+            <div className="flex flex-wrap items-center gap-2">
+              {!awaitingSigning && (
+                <Button
+                  onClick={handleSubmitChain}
+                  disabled={actionLoading !== null || !hasSkatteverket}
+                >
+                  {actionLoading === 'chain' ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="mr-2 h-4 w-4" />
+                  )}
+                  {t('chain_button')}
+                </Button>
               )}
-              {t('download_xml_button')}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleSubmit}
-              disabled={actionLoading === 'submit' || !hasSkatteverket}
-            >
-              {actionLoading === 'submit' ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Send className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              {t('submit_button')}
-            </Button>
-            <Button
-              size="sm"
-              onClick={handleCreateSigningLink}
-              disabled={actionLoading === 'granskning' || !underlagSubmitted}
-            >
-              {actionLoading === 'granskning' ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Lock className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              {t('signing_link_button')}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={handleCheckSubmitted}
-              disabled={actionLoading === 'check'}
-            >
-              {actionLoading === 'check' ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Download className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              {t('check_kvittens_button')}
-            </Button>
-            {awaitingSigning && (
               <Button
                 size="sm"
-                variant="ghost"
-                onClick={handleUnlock}
-                disabled={actionLoading === 'unlock'}
+                variant="outline"
+                onClick={handleDownloadXml}
+                disabled={actionLoading === 'download'}
+                title={t('download_xml_title')}
               >
-                {actionLoading === 'unlock' ? (
+                {actionLoading === 'download' ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 ) : (
-                  <Unlock className="mr-1.5 h-3.5 w-3.5" />
+                  <Download className="mr-1.5 h-3.5 w-3.5" />
                 )}
-                {t('unlock_button')}
+                {t('download_xml_button')}
               </Button>
+            </div>
+
+            {chain && (
+              <ol className="space-y-1.5 rounded-md border border-border bg-muted/30 p-3">
+                {CHAIN_STEPS.map(step => {
+                  const state = chainStepState(step)
+                  return (
+                    <li key={step} className="flex items-center gap-2 text-xs">
+                      {state === 'done' ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
+                      ) : state === 'running' ? (
+                        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                      ) : state === 'failed' ? (
+                        <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+                      ) : (
+                        <Circle className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
+                      )}
+                      <span className={state === 'upcoming' ? 'text-muted-foreground' : ''}>
+                        {t(`chain_step_${step}`)}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ol>
             )}
+
+            {/* Recovery/expert actions: each is one step of the chain above,
+                for resuming after a partial failure. Auto-expanded when a
+                recovery state (stale draft, rejected underlag) references
+                them by name. */}
+            <div>
+              {!forcedAdvanced && (
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced(v => !v)}
+                  className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {advancedOpen ? t('advanced_hide') : t('advanced_show')}
+                </button>
+              )}
+              {advancedOpen && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleSubmit}
+                    disabled={actionLoading !== null || !hasSkatteverket}
+                  >
+                    {actionLoading === 'submit' ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Send className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    {t('submit_button')}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleCreateSigningLink}
+                    disabled={actionLoading !== null || !underlagSubmitted}
+                  >
+                    {actionLoading === 'granskning' ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Lock className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    {t('signing_link_button')}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleCheckSubmitted}
+                    disabled={actionLoading !== null}
+                  >
+                    {actionLoading === 'check' ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Download className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    {t('check_kvittens_button')}
+                  </Button>
+                  {awaitingSigning && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={handleUnlock}
+                      disabled={actionLoading !== null}
+                    >
+                      {actionLoading === 'unlock' ? (
+                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Unlock className="mr-1.5 h-3.5 w-3.5" />
+                      )}
+                      {t('unlock_button')}
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

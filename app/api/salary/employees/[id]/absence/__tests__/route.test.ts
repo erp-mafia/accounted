@@ -67,8 +67,7 @@ describe('POST /api/salary/employees/[id]/absence', () => {
 
   it('upserts an absence day (happy path)', async () => {
     enqueue({ data: { id: 'emp-1' } }) // loadEmployee
-    enqueue({ data: null }) // delete existing
-    enqueue({ data: { id: 'abs-1', absence_date: '2026-07-01', absence_type: 'sick', hours: 8 } }) // insert
+    enqueue({ data: { id: 'abs-1', absence_date: '2026-07-01', absence_type: 'sick', hours: 8 } }) // upsert
 
     const response = await POST(post({ absence_date: '2026-07-01', absence_type: 'sick', hours: 8 }), params)
     const { status, body } = await parseJsonResponse<{ data: { id: string } }>(response)

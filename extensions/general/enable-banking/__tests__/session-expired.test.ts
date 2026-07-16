@@ -107,6 +107,11 @@ function makeContext(connection: Record<string, unknown>, updateSpy: Mock, inser
   chain.gte = vi.fn(() => chain)
   chain.limit = vi.fn(() => chain)
   chain.order = vi.fn(() => chain)
+  // The fresh-connect path sweeps never-activated rows before inserting:
+  // .delete().eq(...).in(...).is(...).select('id') must chain through.
+  chain.delete = vi.fn(() => chain)
+  chain.in = vi.fn(() => chain)
+  chain.is = vi.fn(() => chain)
   chain.insert = vi.fn((payload: unknown) => {
     insertSpy?.(payload)
     return chain

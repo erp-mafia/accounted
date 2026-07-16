@@ -4,9 +4,11 @@ import { Hedvig_Letters_Serif } from "next/font/google";
 import Script from "next/script";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Toaster } from "@/components/ui/toaster";
 import { DeployReloadPrompt } from "@/components/system/DeployReloadPrompt";
 import { ThemeProvider } from "@/components/theme-provider";
+import { SWRProvider } from "@/components/providers/SWRProvider";
 import { RecaptLoader } from "@/components/RecaptLoader";
 import { RecaptHideWidget } from "@/components/RecaptHideWidget";
 import { ensureInitialized } from "@/lib/init";
@@ -85,12 +87,15 @@ export default async function RootLayout({
             enableSystem
             disableTransitionOnChange
           >
-            {children}
-            <Toaster />
-            <DeployReloadPrompt />
-            <RecaptHideWidget />
+            <SWRProvider>
+              {children}
+              <Toaster />
+              <DeployReloadPrompt />
+              <RecaptHideWidget />
+            </SWRProvider>
           </ThemeProvider>
         </NextIntlClientProvider>
+        <SpeedInsights />
         <Script src="/sw-register.js" strategy="afterInteractive" />
       </body>
     </html>

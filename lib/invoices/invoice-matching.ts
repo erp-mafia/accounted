@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Invoice, Transaction, Customer } from '@/types'
 
 export interface InvoiceMatch {
@@ -130,17 +131,19 @@ export async function findMatchingInvoices(
   }
 
   // Query unpaid invoices (sent or overdue) with customer info
-  const { data: invoices, error } = await supabase
-    .from('invoices')
-    .select(`
-      *,
-      customer:customers(*)
-    `)
-    .eq('company_id', companyId)
-    .in('status', ['sent', 'overdue', 'partially_paid'])
-    .order('due_date', { ascending: true })
-
-  if (error || !invoices) {
+  let invoices: Array<Invoice & { customer?: { name?: string | null } | null }>
+  try {
+    invoices = await fetchAllRows(({ from, to }) =>
+      supabase
+        .from('invoices')
+        .select('*, customer:customers(*), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
+        .eq('company_id', companyId)
+        .is('credited_invoice_id', null)
+        .in('status', ['sent', 'overdue', 'partially_paid'])
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch {
     // Failed to fetch invoices: return empty matches
     return []
   }
@@ -149,22 +152,36 @@ export async function findMatchingInvoices(
   // attached but whose status leaked (still 'sent'/'overdue'). Partially-paid
   // invoices can legitimately take more payments, so they pass through.
   // Without this, a status leak would double-book the receipt.
-  const fullCandidateIds = invoices
+  const payableInvoices = invoices.filter(
+    (invoice) => {
+      const creditNotes = (invoice as Invoice & {
+        credit_notes?: Array<{ status: string; creation_complete?: boolean }>
+      }).credit_notes ?? []
+      return !invoice.credited_invoice_id && !creditNotes.some(
+        (creditNote) => creditNote.status !== 'cancelled' && creditNote.creation_complete !== false,
+      )
+    },
+  )
+  const fullCandidateIds = payableInvoices
     .filter((inv) => inv.status === 'sent' || inv.status === 'overdue')
     .map((inv) => inv.id as string)
   const paidIds = new Set<string>()
   if (fullCandidateIds.length > 0) {
-    const { data: paymentRows } = await supabase
-      .from('invoice_payments')
-      .select('invoice_id')
-      .eq('company_id', companyId)
-      .in('invoice_id', fullCandidateIds)
-      .not('journal_entry_id', 'is', null)
-    for (const row of paymentRows ?? []) {
+    const paymentRows = await fetchAllRows<{ id: string; invoice_id: string }>(({ from, to }) =>
+      supabase
+        .from('invoice_payments')
+        .select('id, invoice_id')
+        .eq('company_id', companyId)
+        .in('invoice_id', fullCandidateIds)
+        .not('journal_entry_id', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    for (const row of paymentRows) {
       paidIds.add((row as { invoice_id: string }).invoice_id)
     }
   }
-  const filteredInvoices = invoices.filter((inv) => !paidIds.has(inv.id as string))
+  const filteredInvoices = payableInvoices.filter((inv) => !paidIds.has(inv.id as string))
   if (filteredInvoices.length === 0) {
     return []
   }

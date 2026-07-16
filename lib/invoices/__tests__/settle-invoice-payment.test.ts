@@ -19,6 +19,7 @@ import {
   createInvoicePaymentJournalEntry,
   createInvoiceCashEntry,
 } from '@/lib/bookkeeping/invoice-entries'
+import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { eventBus } from '@/lib/events'
@@ -46,6 +47,28 @@ describe('settleInvoicePayment', () => {
     eventBus.clear()
     vi.mocked(createInvoicePaymentJournalEntry).mockResolvedValue({ id: 'je-1' } as never)
     vi.mocked(createInvoiceCashEntry).mockResolvedValue({ id: 'je-2' } as never)
+  })
+
+  it('rejects credit notes before creating a journal entry or updating state', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const result = await settleInvoicePayment(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      {
+        ...BASE_PARAMS,
+        invoice: payableInvoice({ credited_invoice_id: 'original-invoice-1' }),
+      },
+    )
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'INVOICE_PAID_NOT_PAYABLE',
+      details: { reason: 'credit_note' },
+    })
+    expect(vi.mocked(createInvoicePaymentJournalEntry)).not.toHaveBeenCalled()
+    expect(vi.mocked(createInvoiceCashEntry)).not.toHaveBeenCalled()
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
   })
 
   it('books via the payment entry and forwards the settlement account', async () => {
@@ -98,6 +121,152 @@ describe('settleInvoicePayment', () => {
       '1686',
     )
     expect(vi.mocked(createInvoicePaymentJournalEntry)).not.toHaveBeenCalled()
+  })
+
+  it('absorbs a sub-krona öresavrundning overshoot on SEK custom lines', async () => {
+    vi.mocked(findFiscalPeriod).mockResolvedValue('fp-1')
+    vi.mocked(createJournalEntry).mockResolvedValue({ id: 'je-ore' } as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'inv-1' }] }) // CAS update matched
+
+    // Invoice total 1234.75, PDF "Att betala" 1235.00: the customer pays the
+    // rounded amount and the 3740 line carries the residual.
+    const invoice = payableInvoice({
+      total: 1234.75,
+      remaining_amount: 1234.75,
+      journal_entry_id: 'je-orig',
+    } as Partial<Invoice>)
+    const result = await settleInvoicePayment(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      {
+        ...BASE_PARAMS,
+        invoice,
+        paymentAmountInInvoiceCurrency: 1235,
+        customLines: [
+          { account_number: '1930', debit_amount: 1235, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 1234.75 },
+          { account_number: '3740', debit_amount: 0, credit_amount: 0.25 },
+        ],
+      },
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      newStatus: 'paid',
+      newPaidAmount: 1234.75,
+      newRemaining: 0,
+      journalEntryId: 'je-ore',
+    })
+  })
+
+  it('keeps a sub-krona short partial WITHOUT a 3740 line partially paid', async () => {
+    vi.mocked(findFiscalPeriod).mockResolvedValue('fp-1')
+    vi.mocked(createJournalEntry).mockResolvedValue({ id: 'je-partial' } as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'inv-1' }] }) // CAS update matched
+
+    // Deliberate partial: both legs lowered, no 3740. Absorbing here would
+    // flip the invoice to paid while 1510 keeps the 0.75 residual.
+    const invoice = payableInvoice({
+      total: 1234.75,
+      remaining_amount: 1234.75,
+      journal_entry_id: 'je-orig',
+    } as Partial<Invoice>)
+    const result = await settleInvoicePayment(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      {
+        ...BASE_PARAMS,
+        invoice,
+        paymentAmountInInvoiceCurrency: 1234,
+        customLines: [
+          { account_number: '1930', debit_amount: 1234, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 1234 },
+        ],
+      },
+    )
+
+    expect(result).toMatchObject({
+      ok: true,
+      newStatus: 'partially_paid',
+      newPaidAmount: 1234,
+      newRemaining: 0.75,
+    })
+  })
+
+  it('rejects a sub-krona custom-line overshoot WITHOUT a 3740 line', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const invoice = payableInvoice({
+      total: 1234.75,
+      remaining_amount: 1234.75,
+    } as Partial<Invoice>)
+    const result = await settleInvoicePayment(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      {
+        ...BASE_PARAMS,
+        invoice,
+        paymentAmountInInvoiceCurrency: 1235.25,
+        customLines: [
+          { account_number: '1930', debit_amount: 1235.25, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 1235.25 },
+        ],
+      },
+    )
+    expect(result).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
+  it('rejects a custom-line overshoot beyond the öre band', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const invoice = payableInvoice({
+      total: 1234.75,
+      remaining_amount: 1234.75,
+    } as Partial<Invoice>)
+    const result = await settleInvoicePayment(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      {
+        ...BASE_PARAMS,
+        invoice,
+        paymentAmountInInvoiceCurrency: 1236,
+        customLines: [
+          { account_number: '1930', debit_amount: 1236, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 1236 },
+        ],
+      },
+    )
+    expect(result).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
+  it('does not absorb öre overshoot for non-SEK invoices', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const invoice = payableInvoice({
+      total: 100,
+      remaining_amount: 100,
+      currency: 'EUR',
+    } as Partial<Invoice>)
+    const result = await settleInvoicePayment(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      {
+        ...BASE_PARAMS,
+        invoice,
+        paymentAmountInInvoiceCurrency: 100.25,
+        customLines: [
+          { account_number: '1930', debit_amount: 100.25, credit_amount: 0 },
+          { account_number: '1510', debit_amount: 0, credit_amount: 100.25 },
+        ],
+      },
+    )
+    expect(result).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING' })
   })
 
   it('rejects overpayment before creating any journal entry', async () => {

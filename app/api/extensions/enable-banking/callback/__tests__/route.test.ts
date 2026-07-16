@@ -50,7 +50,7 @@ function makeRequest(params: Record<string, string>) {
 
 function mockChain(result: { data?: unknown; error?: unknown }) {
   const chain: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'single', 'update', 'order', 'limit']) {
+  for (const m of ['select', 'eq', 'in', 'is', 'single', 'update', 'delete', 'order', 'limit']) {
     chain[m] = vi.fn().mockReturnValue(chain)
   }
   chain.single = vi.fn().mockResolvedValue({ data: result.data ?? null, error: result.error ?? null })
@@ -98,14 +98,17 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(location).toContain('bank_error=invalid_state')
   })
 
-  it('writes pending_selection and redirects to picker on success', async () => {
+  it('writes pending_selection and streams a finalizing page that redirects to the picker', async () => {
     const capturedUpdates: Record<string, unknown>[] = []
     let callIndex = 0
     mockFrom.mockImplementation(() => {
       callIndex++
       if (callIndex === 1) {
         // Find pending connection by oauth_state
-        return mockChain({ data: { id: 'conn-1', user_id: 'user-1', company_id: 'company-1' }, error: null })
+        return mockChain({
+          data: { id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'TestBank', status: 'pending' },
+          error: null,
+        })
       }
       // Update connection: capture the payload, then chain returns the
       // updated row via .select().single() for the audit event emission.
@@ -143,11 +146,27 @@ describe('GET /api/extensions/enable-banking/callback', () => {
 
     const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
 
-    expect(response.status).toBe(307)
-    const location = response.headers.get('location') || ''
-    expect(location).toContain('/settings/banking?')
-    expect(location).toContain('select_accounts=conn-1')
-    expect(location).not.toContain('bank_connected=true')
+    // Success streams an interim page (instant feedback during the session
+    // exchange) that ends with a client-side redirect to the account picker.
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('text/html')
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    const body = await response.text()
+    // Shell flushed with the bank name, then the redirect to the picker.
+    expect(body).toContain('TestBank')
+    expect(body).toContain('window.location.replace')
+    expect(body).toContain('select_accounts=conn-1')
+    expect(body).not.toContain('bank_error')
+
+    // ASVS V3.3: inline scripts are nonce-bound. The response-level CSP
+    // declares the nonce and BOTH chunks (shell watchdog + redirect) carry
+    // it; no un-nonced inline script may exist on this page.
+    const csp = response.headers.get('content-security-policy') ?? ''
+    const nonceMatch = /script-src 'nonce-([^']+)'/.exec(csp)
+    expect(nonceMatch).not.toBeNull()
+    const nonce = nonceMatch![1]
+    expect(body.split(`<script nonce="${nonce}">`).length - 1).toBe(2)
+    expect(body).not.toContain('<script>')
 
     // Verify the update payload: status=pending_selection, no last_synced_at,
     // and every account defaults to enabled=true so the picker can simply
@@ -185,7 +204,10 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     mockFrom.mockImplementation((table: string) => {
       callIndex++
       if (callIndex === 1) {
-        return mockChain({ data: { id: 'conn-1', user_id: 'user-1', company_id: 'company-1' }, error: null })
+        return mockChain({
+          data: { id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'TestBank', status: 'expired' },
+          error: null,
+        })
       }
       if (table === 'cash_accounts') {
         // Already mirrored on a previous connect — acc-1 was remapped to 1935
@@ -218,13 +240,86 @@ describe('GET /api/extensions/enable-banking/callback', () => {
 
     const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
 
-    expect(response.status).toBe(307)
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body).toContain('select_accounts=conn-1')
     // No allocation for an already-mirrored account; the upsert reuses 1935.
     expect(mockAllocate).not.toHaveBeenCalled()
     expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
     expect(
       (mockUpsertFromPsd2.mock.calls[0][2] as { ledger_account: string }).ledger_account,
     ).toBe('1935')
+  })
+
+  it('deletes the fresh row and streams an error redirect when the session exchange fails', async () => {
+    const deleteCalls: unknown[] = []
+    const updateCalls: unknown[] = []
+    mockFrom.mockImplementation(() => {
+      const chain = mockChain({
+        data: { id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'TestBank', status: 'pending' },
+        error: null,
+      })
+      chain.delete = vi.fn(() => {
+        deleteCalls.push('delete')
+        return chain
+      })
+      chain.update = vi.fn((payload: unknown) => {
+        updateCalls.push(payload)
+        return chain
+      })
+      return chain
+    })
+
+    mockCreateSession.mockRejectedValue(new Error('upstream timeout'))
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    // The streamed redirect carries the failure to the settings banner.
+    expect(body).toContain('window.location.replace')
+    expect(body).toContain('bank_error=')
+    expect(body).not.toContain('select_accounts=')
+
+    // A never-activated attempt is deleted, not parked as a zombie 'error'
+    // row that would render next to a successful retry as a duplicate.
+    expect(deleteCalls).toHaveLength(1)
+    expect(updateCalls).toHaveLength(0)
+  })
+
+  it('marks a reconnect row as error (not deleted) when the session exchange fails', async () => {
+    const deleteCalls: unknown[] = []
+    const updateCalls: Record<string, unknown>[] = []
+    mockFrom.mockImplementation(() => {
+      const chain = mockChain({
+        data: { id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'TestBank', status: 'expired' },
+        error: null,
+      })
+      chain.delete = vi.fn(() => {
+        deleteCalls.push('delete')
+        return chain
+      })
+      chain.update = vi.fn((payload: Record<string, unknown>) => {
+        updateCalls.push(payload)
+        return chain
+      })
+      return chain
+    })
+
+    mockCreateSession.mockRejectedValue(new Error('upstream timeout'))
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+
+    expect(response.status).toBe(200)
+    const body = await response.text()
+    expect(body).toContain('bank_error=')
+
+    // An established connection keeps its row (history, accounts) and gets
+    // the error surfaced on it instead.
+    expect(deleteCalls).toHaveLength(0)
+    expect(updateCalls).toHaveLength(1)
+    expect(updateCalls[0].status).toBe('error')
+    expect(updateCalls[0].oauth_state).toBeNull()
   })
 
   it('redirects with error when bank returns error param (no state)', async () => {
@@ -257,10 +352,75 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(mockFrom).toHaveBeenCalledWith('bank_connections')
   })
 
+  it('deletes a fresh pending row on bank denial instead of parking it in error', async () => {
+    const deleteCalls: unknown[] = []
+    const updateCalls: unknown[] = []
+    mockFrom.mockImplementation(() => {
+      const chain = mockChain({
+        data: { id: 'conn-1', user_id: 'user-1', bank_name: 'TestBank', psu_type: 'business', status: 'pending' },
+        error: null,
+      })
+      chain.delete = vi.fn(() => {
+        deleteCalls.push('delete')
+        return chain
+      })
+      chain.update = vi.fn((payload: unknown) => {
+        updateCalls.push(payload)
+        return chain
+      })
+      return chain
+    })
+
+    const response = await GET(makeRequest({
+      error: 'access_denied',
+      error_description: 'User cancelled',
+      state: 'pending-state',
+    }))
+
+    expect(response.status).toBe(307)
+    const location = response.headers.get('location') || ''
+    // URLSearchParams encodes spaces as '+', unlike the encodeURIComponent
+    // fallback used when no matching row exists.
+    expect(location).toContain('bank_error=User+cancelled')
+    expect(deleteCalls).toHaveLength(1)
+    expect(updateCalls).toHaveLength(0)
+  })
+
+  it('keeps a reconnect row on bank denial and marks it expired on session-expiry errors', async () => {
+    const deleteCalls: unknown[] = []
+    const updateCalls: Record<string, unknown>[] = []
+    mockFrom.mockImplementation(() => {
+      const chain = mockChain({
+        data: { id: 'conn-1', user_id: 'user-1', bank_name: 'TestBank', psu_type: 'business', status: 'expired' },
+        error: null,
+      })
+      chain.delete = vi.fn(() => {
+        deleteCalls.push('delete')
+        return chain
+      })
+      chain.update = vi.fn((payload: Record<string, unknown>) => {
+        updateCalls.push(payload)
+        return chain
+      })
+      return chain
+    })
+
+    const response = await GET(makeRequest({
+      error: 'server_error',
+      error_description: 'Session expired at ASPSP',
+      state: 'pending-state',
+    }))
+
+    expect(response.status).toBe(307)
+    expect(deleteCalls).toHaveLength(0)
+    expect(updateCalls).toHaveLength(1)
+    expect(updateCalls[0].status).toBe('expired')
+  })
+
   it('forwards bank_error_code and psu_type when the denied state matches a pending connection', async () => {
     mockFrom.mockImplementation(() =>
       mockChain({
-        data: { id: 'conn-1', user_id: 'user-1', bank_name: 'Handelsbanken', psu_type: 'business' },
+        data: { id: 'conn-1', user_id: 'user-1', bank_name: 'Handelsbanken', psu_type: 'business', status: 'pending' },
         error: null,
       })
     )

@@ -11,6 +11,7 @@ import { generateSalesVatLines } from './vat-entries'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
 import { computeDeduction } from '@/lib/invoices/rot-rut-rules'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -258,6 +259,7 @@ function generateRotRutLines(
   currency?: string | null,
   exchangeRate?: number | null,
   defaultDimensions?: LineDimensions,
+  side: 'debit' | 'credit' = 'debit',
 ): { lines: CreateJournalEntryLineInput[]; totalSek: number } {
   const lines: CreateJournalEntryLineInput[] = []
   const isForeign = currency != null && currency !== 'SEK'
@@ -276,8 +278,8 @@ function generateRotRutLines(
     if (!item.deduction_type) continue
     // Recompute server-side to defend against tampered client values.
     const amount = computeDeduction({
-      unit_price: item.unit_price,
-      quantity: item.quantity,
+      unit_price: side === 'credit' ? Math.abs(item.unit_price) : item.unit_price,
+      quantity: side === 'credit' ? Math.abs(item.quantity) : item.quantity,
       deduction_type: item.deduction_type,
     })
     if (amount <= 0) continue
@@ -287,9 +289,11 @@ function generateRotRutLines(
     const kind = item.deduction_type === 'rot' ? 'ROT' : 'RUT'
     lines.push({
       account_number: '1513',
-      debit_amount: amountSek,
-      credit_amount: 0,
-      line_description: `${kind}-avdrag faktura ${invoiceTagText}`,
+      debit_amount: side === 'debit' ? amountSek : 0,
+      credit_amount: side === 'credit' ? amountSek : 0,
+      line_description: side === 'credit'
+        ? `${kind}-avdrag kreditfaktura ${invoiceTagText}`
+        : `${kind}-avdrag faktura ${invoiceTagText}`,
       // Per-item line: carries the item's merged bag like its revenue line.
       dimensions: mergeDimensionBags(defaultDimensions, item.dimensions),
     })
@@ -648,15 +652,30 @@ export async function createCreditNoteJournalEntry(
 
   lines.push(...debitLines)
 
-  // Credit: Kundfordringar, balance guarantee: credit = sum of all debit lines
+  // ROT/RUT reverses the exact receivable split used by the original invoice:
+  // 1510 for the customer portion and 1513 for the Skatteverket portion.
+  const rotRut = creditNote.items && creditNote.items.length > 0
+    ? generateRotRutLines(
+        creditNote.items,
+        tag,
+        creditNote.currency,
+        creditNote.exchange_rate,
+        defaultDimensions,
+        'credit',
+      )
+    : { lines: [], totalSek: 0 }
+
+  // Credit: Kundfordringar, balance guarantee: 1510 + 1513 equals debits.
   const totalDebits = debitLines.reduce((sum, l) => sum + l.debit_amount, 0)
+  const customerReceivable = roundOre(totalDebits - rotRut.totalSek)
   lines.push({
     account_number: '1510',
     debit_amount: 0,
-    credit_amount: Math.round(totalDebits * 100) / 100,
+    credit_amount: customerReceivable,
     line_description: `Kreditfaktura ${tag}`,
     dimensions: defaultDimensions,
   })
+  lines.push(...rotRut.lines)
 
   const baseDescription = buildInvoiceDescription('Kreditfaktura', creditNote.invoice_number, customerName, creditNote.id)
   const input: CreateJournalEntryInput = {

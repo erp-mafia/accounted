@@ -24,6 +24,7 @@ import {
 } from '@/lib/salary/payment/bank-account'
 import type { Employee } from '@/types'
 import { EmployeeBenefitsPanel } from '@/components/salary/EmployeeBenefitsPanel'
+import { OpeningBalancesPanel } from '@/components/salary/OpeningBalancesPanel'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 
@@ -124,12 +125,18 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       employment_type: employmentType,
       employment_start: form.get('employment_start') as string || undefined,
       employment_end: form.get('employment_end') as string || undefined,
-      employment_degree: parseFloat(form.get('employment_degree') as string) || 100,
+      // Sparse patch: an empty/cleared field is OMITTED (undefined keys are
+      // dropped by JSON.stringify) so the server's patch schema leaves the
+      // column unchanged. Hardcoded fallbacks here would silently reset real
+      // DB values on submit.
+      employment_degree: parseFloat(form.get('employment_degree') as string) || undefined,
+      hours_per_week: parseFloat(form.get('hours_per_week') as string) || undefined,
+      workdays_per_week: parseFloat(form.get('workdays_per_week') as string) || undefined,
       salary_type: salaryType,
       f_skatt_status: tax?.f_skatt_status,
       is_sidoinkomst: tax?.is_sidoinkomst,
       tax_table_number: tax?.tax_table_number ?? undefined,
-      tax_column: tax?.tax_column ?? 1,
+      tax_column: tax?.tax_column ?? undefined,
       tax_municipality: tax?.tax_municipality || undefined,
       email: form.get('email') as string || undefined,
       phone: form.get('phone') as string || undefined,
@@ -139,7 +146,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       clearing_number: normalizeBankNumber(clearing) || undefined,
       bank_account_number: normalizeBankNumber(account) || undefined,
       vacation_rule: vacationRule,
-      vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || 25,
+      vacation_days_per_year: parseInt(form.get('vacation_days_per_year') as string) || undefined,
       // Always sent: {} clears the employee's default dimensions.
       default_dimensions: dimensions,
     }
@@ -290,6 +297,15 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <div className="space-y-2">
                 <Label htmlFor="employment_degree">{t('form_employment_degree')}</Label>
                 <Input id="employment_degree" name="employment_degree" type="number" defaultValue={employee.employment_degree} min="1" max="100" disabled={!canWrite} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="hours_per_week">{t('form_hours_per_week')}</Label>
+                <Input id="hours_per_week" name="hours_per_week" type="number" defaultValue={employee.hours_per_week ?? 40} min="1" max="80" step="0.5" disabled={!canWrite} />
+                <p className="text-xs text-muted-foreground">{t('form_work_schedule_hint')}</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="workdays_per_week">{t('form_workdays_per_week')}</Label>
+                <Input id="workdays_per_week" name="workdays_per_week" type="number" defaultValue={employee.workdays_per_week ?? 5} min="1" max="7" step="1" disabled={!canWrite} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="salary_type">{t('form_salary_type')}<RequiredMark /></Label>
@@ -452,6 +468,9 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
 
         {/* Benefits */}
         <EmployeeBenefitsPanel employeeId={id} canWrite={canWrite} />
+
+        {/* Ingående saldon (payroll cutover) */}
+        <OpeningBalancesPanel employeeId={id} canWrite={canWrite} />
 
         {canWrite && (
           <div className="flex justify-end gap-3">

@@ -1,6 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import type {
   VatDeclaration,
   VatDeclarationRutor,
@@ -264,6 +262,21 @@ export interface VatAccountTotals {
    * from `totals`; surfaced so the settlement proposal can warn and gate.
    */
   settlementShapedEntries: VatSettlementShapedEntry[]
+  /**
+   * Posted/reversed entry counts per source_type for the whole period,
+   * INCLUDING tagged vat_settlement entries (they never match the
+   * invoice/transaction buckets, and the metadata scan always counted them).
+   * Comes back in the same RPC round trip so the declaration metadata no
+   * longer needs its own paginated entry scan.
+   */
+  sourceTypeCounts: Record<string, number>
+}
+
+/** Wire shape of the get_vat_declaration_totals RPC jsonb payload. */
+interface VatTotalsRpcPayload {
+  totals: Array<{ account_number: string; debit: number; credit: number }>
+  settlement_shaped_entries: VatSettlementShapedEntry[]
+  source_type_counts: Record<string, number>
 }
 
 /**
@@ -296,56 +309,37 @@ export async function fetchVatAccountTotals(
   start: string,
   end: string
 ): Promise<VatAccountTotals> {
-  const lines = await fetchEntryLines<{
-    journal_entry_id: string
-    account_number: string
-    debit_amount: number
-    credit_amount: number
-    journal_entries?: VatSettlementShapedEntry
-  }>({
-    supabase,
-    entryColumns: 'id, status, entry_date, source_type, voucher_series, voucher_number',
-    lineColumns: 'account_number, debit_amount, credit_amount',
-    filterEntries: (q: EntryLinesQuery) =>
-      q
-        .eq('company_id', companyId)
-        .in('status', ['posted', 'reversed'])
-        .neq('source_type', 'vat_settlement')
-        .gte('entry_date', start)
-        .lte('entry_date', end),
-    filterLines: (q: EntryLinesQuery) =>
-      q.in('account_number', [...VAT_ACCOUNTS, ...VAT_SETTLEMENT_NET_ACCOUNTS]),
+  // Aggregation, settlement-shape detection, and source_type counts all
+  // happen in one SQL pass (get_vat_declaration_totals). The previous
+  // implementation paged every entry + line for the period through PostgREST
+  // and reduced in JS: dozens of round trips for a busy quarter. The account
+  // lists are parameters so ACCOUNT_RUTA stays the single source of truth.
+  const { data, error } = await supabase.rpc('get_vat_declaration_totals', {
+    p_company_id: companyId,
+    p_start: start,
+    p_end: end,
+    p_accounts: [...VAT_ACCOUNTS, ...VAT_SETTLEMENT_NET_ACCOUNTS],
+    p_ruta_accounts: VAT_ACCOUNTS,
+    p_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
   })
-
-  // Shape detection: an entry is a settlement when it touches both a
-  // declaration account and a settlement net account (2650/1650).
-  const declarationEntryIds = new Set<string>()
-  const netEntryIds = new Set<string>()
-  for (const line of lines) {
-    if (ACCOUNT_RUTA[line.account_number]) declarationEntryIds.add(line.journal_entry_id)
-    else if (VAT_SETTLEMENT_NET_ACCOUNTS.includes(line.account_number)) {
-      netEntryIds.add(line.journal_entry_id)
-    }
+  if (error) {
+    throw new Error(`get_vat_declaration_totals failed: ${error.message}`)
   }
 
-  const shapedById = new Map<string, VatSettlementShapedEntry>()
-  for (const line of lines) {
-    const id = line.journal_entry_id
-    if (!declarationEntryIds.has(id) || !netEntryIds.has(id)) continue
-    const entry = line.journal_entries
-    if (!entry || entry.source_type === 'opening_balance') continue
-    shapedById.set(id, entry)
-  }
-
+  const payload = (data ?? {}) as Partial<VatTotalsRpcPayload>
   const totals = new Map<string, { debit: number; credit: number }>()
-  for (const line of lines) {
-    if (shapedById.has(line.journal_entry_id)) continue
-    const t = totals.get(line.account_number) || { debit: 0, credit: 0 }
-    t.debit += Number(line.debit_amount) || 0
-    t.credit += Number(line.credit_amount) || 0
-    totals.set(line.account_number, t)
+  for (const row of payload.totals ?? []) {
+    totals.set(row.account_number, {
+      debit: Number(row.debit) || 0,
+      credit: Number(row.credit) || 0,
+    })
   }
-  return { totals, settlementShapedEntries: [...shapedById.values()] }
+
+  return {
+    totals,
+    settlementShapedEntries: payload.settlement_shaped_entries ?? [],
+    sourceTypeCounts: payload.source_type_counts ?? {},
+  }
 }
 
 /**
@@ -413,8 +407,9 @@ export async function calculateVatDeclaration(
     supabase, companyId, periodType, year, period, options.fiscalPeriodId
   )
 
-  // Fetch and aggregate posted VAT-account activity for the period
-  const { totals } = await fetchVatAccountTotals(supabase, companyId, start, end)
+  // Fetch and aggregate posted VAT-account activity for the period. The same
+  // RPC round trip carries the per-source_type entry counts for the metadata.
+  const { totals, sourceTypeCounts } = await fetchVatAccountTotals(supabase, companyId, start, end)
 
   // Map account balances to momsdeklaration boxes
   const rutor = rutorFromTotals(totals)
@@ -430,29 +425,17 @@ export async function calculateVatDeclaration(
     if (t) revenueByRate[rate] = round(t.credit - t.debit)
   }
 
-  // Count journal entries by source type for metadata.
-  // Paginated with a stable id order so the invoice/transaction counts don't
-  // silently truncate at 1000 entries for a busy VAT period.
-  const entryCounts = await fetchAllRows<{ id: string; source_type: string }>(({ from, to }) =>
-    supabase
-      .from('journal_entries')
-      .select('id, source_type')
-      .eq('company_id', companyId)
-      .in('status', ['posted', 'reversed'])
-      .gte('entry_date', start)
-      .lte('entry_date', end)
-      .order('id', { ascending: true })
-      .range(from, to)
-  , { dedupeBy: (e) => e.id })
-
+  // Entry counts by source type for metadata: aggregated by the RPC in the
+  // same round trip as the totals (SQL GROUP BY, so a busy VAT period can
+  // never truncate the counts).
   const invoiceSources = new Set([
     'invoice_created', 'invoice_paid', 'invoice_cash_payment', 'credit_note',
   ])
   let invoiceCount = 0
   let transactionCount = 0
-  for (const e of entryCounts) {
-    if (invoiceSources.has(e.source_type)) invoiceCount++
-    else if (e.source_type === 'bank_transaction') transactionCount++
+  for (const [sourceType, n] of Object.entries(sourceTypeCounts)) {
+    if (invoiceSources.has(sourceType)) invoiceCount += n
+    else if (sourceType === 'bank_transaction') transactionCount += n
   }
 
   return {

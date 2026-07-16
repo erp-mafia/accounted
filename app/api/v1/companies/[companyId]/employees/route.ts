@@ -416,6 +416,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         employment_start: body.employment_start,
         employment_end: body.employment_end ?? null,
         employment_degree: body.employment_degree,
+        hours_per_week: body.hours_per_week,
+        workdays_per_week: body.workdays_per_week,
         salary_type: body.salary_type,
         monthly_salary: body.monthly_salary ?? null,
         hourly_rate: body.hourly_rate ?? null,
@@ -437,6 +439,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         vaxa_stod_eligible: body.vaxa_stod_eligible,
         vaxa_stod_start: body.vaxa_stod_start ?? null,
         vaxa_stod_end: body.vaxa_stod_end ?? null,
+        jamkning_percentage: body.jamkning_percentage ?? null,
+        jamkning_valid_from: body.jamkning_valid_from ?? null,
+        jamkning_valid_to: body.jamkning_valid_to ?? null,
         // Dimensions PR8: bag for the employee's P&L cost lines at booking.
         default_dimensions: body.default_dimensions ?? {},
       })

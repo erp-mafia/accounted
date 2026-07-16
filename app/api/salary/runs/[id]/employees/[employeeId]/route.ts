@@ -4,6 +4,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { SalaryEmployeeOverrideSchema } from '@/lib/api/schemas'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
+import { removeEmployeeFromRun } from '@/lib/salary/run-employees'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 ensureInitialized()
 
@@ -189,27 +191,18 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string; employeeI
     const { id, employeeId } = await params
     const { supabase, companyId } = ctx
 
-    // Verify run is draft
-    const { data: run } = await supabase
-      .from('salary_runs')
-      .select('id, status')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single()
+    const result = await removeEmployeeFromRun(supabase, {
+      companyId,
+      salaryRunId: id,
+      employeeId,
+    })
 
-    if (!run) return NextResponse.json({ error: 'Lönekörning hittades inte' }, { status: 404 })
-    if (run.status !== 'draft') return NextResponse.json({ error: 'Kan bara redigera utkast' }, { status: 400 })
-
-    // Delete the salary_run_employee (cascades to salary_line_items via ON DELETE CASCADE)
-    const { error } = await supabase
-      .from('salary_run_employees')
-      .delete()
-      .eq('salary_run_id', id)
-      .eq('employee_id', employeeId)
-      .eq('company_id', companyId)
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      return NextResponse.json(
+        { error: entry?.message_sv ?? 'Något gick fel', code: result.code },
+        { status: entry?.httpStatus ?? 500 },
+      )
     }
 
     return NextResponse.json({ data: { deleted: true } })

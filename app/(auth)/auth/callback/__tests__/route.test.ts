@@ -57,7 +57,7 @@ describe('GET /auth/callback: recovery flow', () => {
     expect(exchangeCodeForSession).toHaveBeenCalledWith('xyz')
   })
 
-  it('redirects to /login?error=auth_error when the recovery OTP is expired or already consumed', async () => {
+  it('tags a failed recovery link with flow=recovery so the login page shows reset copy', async () => {
     verifyOtp.mockResolvedValue({ error: { message: 'Token has expired or is invalid' } })
 
     const request = new NextRequest(
@@ -66,6 +66,22 @@ describe('GET /auth/callback: recovery flow', () => {
     const response = await GET(request)
 
     expect(response.status).toBe(307)
-    expect(response.headers.get('location')).toBe('http://localhost:3000/login?error=auth_error')
+    expect(response.headers.get('location')).toBe(
+      'http://localhost:3000/login?error=auth_error&flow=recovery'
+    )
+  })
+
+  it('tags a failed signup confirmation (PKCE code, no type/next) with flow=signup', async () => {
+    exchangeCodeForSession.mockResolvedValue({
+      error: { message: 'code verifier missing' },
+    })
+
+    const request = new NextRequest('http://localhost:3000/auth/callback?code=xyz')
+    const response = await GET(request)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(
+      'http://localhost:3000/login?error=auth_error&flow=signup'
+    )
   })
 })

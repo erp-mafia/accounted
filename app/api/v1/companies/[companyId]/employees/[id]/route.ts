@@ -41,6 +41,10 @@ const EmployeeDetail = z.object({
   employment_start: z.string(),
   employment_end: z.string().nullable(),
   employment_degree: z.number(),
+  // Arbetsschema-lite: weekly schedule driving the salary engine's hourly
+  // (173 at 40h) and daily (21 at 5d) divisors.
+  hours_per_week: z.number(),
+  workdays_per_week: z.number(),
   salary_type: SalaryType,
   monthly_salary: z.number().nullable(),
   hourly_rate: z.number().nullable(),
@@ -62,6 +66,12 @@ const EmployeeDetail = z.object({
   vaxa_stod_eligible: z.boolean(),
   vaxa_stod_start: z.string().nullable(),
   vaxa_stod_end: z.string().nullable(),
+  // Jämkning (Skatteverket beslut om ändrad beräkning av skatteavdrag):
+  // fixed withholding percentage for a bounded period, overrides the
+  // tax-table lookup at calculation time (payroll gap-closure 1.5).
+  jamkning_percentage: z.number().nullable(),
+  jamkning_valid_from: z.string().nullable(),
+  jamkning_valid_to: z.string().nullable(),
   // Dimensions PR8: bag applied to the employee's P&L cost lines at booking.
   default_dimensions: z.record(z.string(), z.string()),
   is_active: z.boolean(),
@@ -70,7 +80,7 @@ const EmployeeDetail = z.object({
 })
 
 const EMPLOYEE_DETAIL_COLUMNS =
-  'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, semestertillagg_rate, email, phone, address_line1, postal_code, city, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, default_dimensions, is_active, created_at, updated_at'
+  'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, semestertillagg_rate, email, phone, address_line1, postal_code, city, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, default_dimensions, is_active, created_at, updated_at'
 
 /**
  * Shape returned by PATCH (success + dry-run preview) and by no-change PATCH.
@@ -344,6 +354,51 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
             'Startdatum för Växa-stöd måste anges när Växa-stöd är aktiverat. Skicka även `vaxa_stod_start` i samma PATCH.',
         },
       })
+    }
+
+    // Merged-state jämkning check (same pattern as växa-stöd): a non-null
+    // percentage needs a start date, but the schema can only see the body.
+    // Also validate merged date ordering when only one of the dates is
+    // updated. Setting jamkning_percentage to null clears the beslut and
+    // skips these checks. Only run when the PATCH touches a jamkning field:
+    // a legacy row with inconsistent jamkning_* state must not block
+    // unrelated updates (fixing it requires touching those very fields).
+    const jamkningTouched =
+      'jamkning_percentage' in updates ||
+      'jamkning_valid_from' in updates ||
+      'jamkning_valid_to' in updates
+    if (jamkningTouched) {
+      const mergedJamkningPct =
+        'jamkning_percentage' in updates
+          ? (updates.jamkning_percentage as number | null)
+          : ((existing as Record<string, unknown>).jamkning_percentage as number | null)
+      const mergedJamkningFrom =
+        'jamkning_valid_from' in updates
+          ? (updates.jamkning_valid_from as string | null)
+          : ((existing as Record<string, unknown>).jamkning_valid_from as string | null)
+      const mergedJamkningTo =
+        'jamkning_valid_to' in updates
+          ? (updates.jamkning_valid_to as string | null)
+          : ((existing as Record<string, unknown>).jamkning_valid_to as string | null)
+      if (mergedJamkningPct !== null && mergedJamkningPct !== undefined && !mergedJamkningFrom) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            field: 'jamkning_valid_from',
+            message:
+              'Jämkningens startdatum måste anges när jämkningsprocent sätts. Skicka även `jamkning_valid_from` i samma PATCH.',
+          },
+        })
+      }
+      if (mergedJamkningFrom && mergedJamkningTo && mergedJamkningTo < mergedJamkningFrom) {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            field: 'jamkning_valid_to',
+            message: 'Jämkningens slutdatum måste vara efter startdatumet.',
+          },
+        })
+      }
     }
 
     if (Object.keys(updates).length === 0) {

@@ -65,7 +65,11 @@ import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
 
 const IDEMPOTENCY_HEADER = 'Idempotency-Key'
 const DRY_RUN_HEADER = 'X-Dry-Run'
-const REQUIRES_IDEMPOTENCY = new Set(['POST', 'PATCH', 'DELETE'])
+// Every state-changing method. PUT is included even though most v1 writes are
+// POST/PATCH: the set drives THREE behaviors (test-key dry-run forcing,
+// idempotency replay, requireIdempotencyKey enforcement), and omitting PUT
+// would let test keys write through PUT routes for real.
+const REQUIRES_IDEMPOTENCY = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
 export interface ApiV1Context {
   /** Stable id for this HTTP request: appears in logs, error envelope, X-Request-Id. */

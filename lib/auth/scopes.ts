@@ -180,6 +180,30 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/salary-runs/:id/mark-paid': 'payroll:write',
   'POST /api/v1/companies/:companyId/salary-runs/:id/book': 'payroll:write',
   'POST /api/v1/companies/:companyId/salary-runs/:id/generate-agi': 'payroll:write',
+  // Payroll gap-closure 1.1: per-employee payslip reads. Personnummer is
+  // masked on all payslip-shaped responses (GDPR Art.5(1)(c)); the employee
+  // detail endpoint is the identity drill-in.
+  'GET /api/v1/companies/:companyId/salary-runs/:id/employees': 'payroll:read',
+  'GET /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId': 'payroll:read',
+  'GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/pdf': 'payroll:read',
+  // Payroll gap-closure 1.2: payslip line writes (draft runs only).
+  'POST /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId/lines': 'payroll:write',
+  'PATCH /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId': 'payroll:write',
+  'DELETE /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId': 'payroll:write',
+  // Payroll gap-closure 1.3: run roster attach/remove (draft runs only).
+  'POST /api/v1/companies/:companyId/salary-runs/:id/employees': 'payroll:write',
+  'DELETE /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId': 'payroll:write',
+  // Payroll gap-closure 1.4: absence (frånvaro) per-day register via ranges.
+  'GET /api/v1/companies/:companyId/employees/:id/absence': 'payroll:read',
+  'PUT /api/v1/companies/:companyId/employees/:id/absence': 'payroll:write',
+  'DELETE /api/v1/companies/:companyId/employees/:id/absence': 'payroll:write',
+  // Payroll gap-closure 2.3: cutover opening balances (mid-year migration).
+  'GET /api/v1/companies/:companyId/employees/:id/opening-balances': 'payroll:read',
+  'PUT /api/v1/companies/:companyId/employees/:id/opening-balances': 'payroll:write',
+  'PUT /api/v1/companies/:companyId/employees/opening-balances': 'payroll:write',
+  // Payroll gap-closure 3.4: vacation ledger + year close.
+  'GET /api/v1/companies/:companyId/employees/:id/vacation-balance': 'payroll:read',
+  'POST /api/v1/companies/:companyId/salary/vacation-year-close': 'payroll:write',
 
   // Dimensions (kostnadsställe/projekt): dimensions PR2. Reads ride
   // reports:read (registry data feeds report filters/pickers); value creation

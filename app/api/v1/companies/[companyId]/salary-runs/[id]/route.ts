@@ -65,7 +65,7 @@ registerEndpoint({
   useWhen:
     'You have a salary_run_id and need its current status: typically to decide which lifecycle verb to call next, or to display the run header in a UI.',
   doNotUseFor:
-    'Per-employee breakdown (Phase 5 PR-1 does not expose the per-employee endpoint on v1; use the internal /api/salary/runs/{id} for that today). Salary journal report: use GET /reports/salary-journal in Phase 5 PR-3.',
+    'Per-employee breakdown: use GET /salary-runs/{id}/employees (list) or /salary-runs/{id}/employees/{employeeId} (payslip detail). Salary journal report: use GET /reports/salary-journal.',
   pitfalls: [
     'salary_entry_id / avgifter_entry_id / vacation_entry_id are null until POST /book has run. They reference the journal_entries table.',
     'total_* fields are 0 until POST /calculate has run.',

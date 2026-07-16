@@ -6,6 +6,7 @@ import { ArrowLeftCircle, Eye, FileDown, Loader2, Send } from 'lucide-react'
 import { formatDateLong } from '@/lib/utils'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import type { AgiFilingState } from '@/lib/salary/agi-submission-state'
 import type { RunDetail } from './types'
 
 type StepState = 'done' | 'active' | 'upcoming'
@@ -16,6 +17,12 @@ interface RunProgressBarProps {
   // True when the run pays out nothing (nollkörning / fully net-deducted): the
   // pay step carries no "download the file" hint because there is no file.
   noPayout?: boolean
+  // Real filing state for the AGI step (deriveAgiFilingState): without it the
+  // rail only knows generated/submitted and mislabels "waiting for BankID
+  // signature" as "lämna in till Skatteverket".
+  agiState: AgiFilingState
+  // Shown on the AGI step once signed: the kvittens is the filing receipt.
+  agiKvittensnummer?: string | null
   canWrite: boolean
   actionLoading: string | null
   // The single "forward" step for the current status (Beräkna → Skicka till
@@ -43,7 +50,7 @@ const STATUS_RANK: Record<string, number> = {
 export function RunProgressBar(props: RunProgressBarProps) {
   const t = useTranslations('salary_run')
   const locale = useLocale()
-  const { run, isCalculated, noPayout, canWrite, actionLoading, primaryAction } = props
+  const { run, isCalculated, noPayout, canWrite, actionLoading, primaryAction, agiState, agiKvittensnummer } = props
   const rank = STATUS_RANK[run.status] ?? 0
   const busy = !!actionLoading
   const deliveries = run.payslip_deliveries_summary
@@ -116,14 +123,21 @@ export function RunProgressBar(props: RunProgressBarProps) {
     {
       key: 'agi',
       label: t('rail_agi'),
-      state: run.agi_submitted_at ? 'done' : run.status === 'booked' ? 'active' : 'upcoming',
-      detail: run.agi_submitted_at
-        ? t('rail_agi_submitted')
-        : run.agi_generated_at
-          ? t('rail_agi_generated')
-          : run.status === 'booked'
-            ? t('rail_agi_hint')
-            : undefined,
+      state: agiState === 'signed' ? 'done' : run.status === 'booked' ? 'active' : 'upcoming',
+      detail:
+        agiState === 'signed'
+          ? agiKvittensnummer
+            ? t('rail_agi_submitted_kvittens', { kvittens: agiKvittensnummer })
+            : t('rail_agi_submitted')
+          : agiState === 'awaiting_signing'
+            ? t('rail_agi_awaiting_signature')
+            : agiState === 'underlag_submitted'
+              ? t('rail_agi_underlag_submitted')
+              : agiState === 'generated'
+                ? t('rail_agi_generated')
+                : run.status === 'booked'
+                  ? t('rail_agi_hint')
+                  : undefined,
     },
   ]
 

@@ -42,7 +42,7 @@ import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/e
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
-import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment'
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 
@@ -285,7 +285,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const paymentAmountInInvoiceCurrency = customLines
       ? roundOre(paymentAmount / fxRate)
       : paymentAmount
-    const payment = planInvoicePayment(typed, paymentAmountInInvoiceCurrency)
+    // Custom-line SEK settlements absorb a sub-krona öresavrundning residual
+    // (rounded "Att betala" vs the stored öre total), but ONLY when the lines
+    // actually carry the residual on 3740: otherwise the strict plan applies
+    // (sub-krona partials stay partial, overshoot rejects), mirroring the
+    // dashboard mark-paid flow. The default path pays the exact remaining, so
+    // absorption is a no-op there.
+    const payment = planInvoicePaymentForLines(
+      typed,
+      paymentAmountInInvoiceCurrency,
+      customLines,
+      typed.currency ?? 'SEK',
+    )
     if (!payment.ok) {
       return v1ErrorResponseFromCode('MATCH_AMOUNT_EXCEEDS_REMAINING', ctx.log, {
         requestId: ctx.requestId,

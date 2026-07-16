@@ -92,6 +92,46 @@ export function InvoiceSettingsForm({ settings }: InvoiceSettingsFormProps) {
           {t('default_our_reference_help')}
         </p>
       </div>
+
+      <fieldset className="space-y-4 border-t border-border pt-4">
+        <legend className="text-sm font-medium">{t('reminder_days_heading')}</legend>
+        <p className="text-xs text-muted-foreground">{t('reminder_days_help')}</p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="reminder_days_level_1">{t('reminder_days_level_1')}</Label>
+            <Input
+              id="reminder_days_level_1"
+              name="reminder_days_level_1"
+              type="number"
+              min="1"
+              max="365"
+              defaultValue={settings.reminder_days_level_1 ?? 15}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="reminder_days_level_2">{t('reminder_days_level_2')}</Label>
+            <Input
+              id="reminder_days_level_2"
+              name="reminder_days_level_2"
+              type="number"
+              min="1"
+              max="365"
+              defaultValue={settings.reminder_days_level_2 ?? 30}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="reminder_days_level_3">{t('reminder_days_level_3')}</Label>
+            <Input
+              id="reminder_days_level_3"
+              name="reminder_days_level_3"
+              type="number"
+              min="1"
+              max="365"
+              defaultValue={settings.reminder_days_level_3 ?? 45}
+            />
+          </div>
+        </div>
+      </fieldset>
     </section>
   )
 }

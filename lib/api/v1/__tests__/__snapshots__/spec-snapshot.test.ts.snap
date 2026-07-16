@@ -1,13 +1,16 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `107`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `123`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
   "DELETE /api/v1/companies/:companyId/customers/:id",
   "DELETE /api/v1/companies/:companyId/dimensions/:id/values/:valueId",
   "DELETE /api/v1/companies/:companyId/employees/:id",
+  "DELETE /api/v1/companies/:companyId/employees/:id/absence",
   "DELETE /api/v1/companies/:companyId/salary-runs/:id",
+  "DELETE /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId",
+  "DELETE /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
   "DELETE /api/v1/companies/:companyId/suppliers/:id",
   "DELETE /api/v1/companies/:companyId/webhooks/:id",
   "GET /api/v1/companies",
@@ -20,6 +23,9 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/documents/:id/download",
   "GET /api/v1/companies/:companyId/employees",
   "GET /api/v1/companies/:companyId/employees/:id",
+  "GET /api/v1/companies/:companyId/employees/:id/absence",
+  "GET /api/v1/companies/:companyId/employees/:id/opening-balances",
+  "GET /api/v1/companies/:companyId/employees/:id/vacation-balance",
   "GET /api/v1/companies/:companyId/fiscal-periods",
   "GET /api/v1/companies/:companyId/invoices",
   "GET /api/v1/companies/:companyId/invoices/:id",
@@ -43,6 +49,9 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/reports/vat-declaration",
   "GET /api/v1/companies/:companyId/salary-runs",
   "GET /api/v1/companies/:companyId/salary-runs/:id",
+  "GET /api/v1/companies/:companyId/salary-runs/:id/employees",
+  "GET /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId",
+  "GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/pdf",
   "GET /api/v1/companies/:companyId/supplier-invoices",
   "GET /api/v1/companies/:companyId/supplier-invoices/:id",
   "GET /api/v1/companies/:companyId/suppliers",
@@ -59,6 +68,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "PATCH /api/v1/companies/:companyId/employees/:id",
   "PATCH /api/v1/companies/:companyId/invoices/:id",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id",
+  "PATCH /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
   "PATCH /api/v1/companies/:companyId/supplier-invoices/:id",
   "PATCH /api/v1/companies/:companyId/suppliers/:id",
   "PATCH /api/v1/companies/:companyId/webhooks/:id",
@@ -92,8 +102,11 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/salary-runs/:id/approve",
   "POST /api/v1/companies/:companyId/salary-runs/:id/book",
   "POST /api/v1/companies/:companyId/salary-runs/:id/calculate",
+  "POST /api/v1/companies/:companyId/salary-runs/:id/employees",
+  "POST /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId/lines",
   "POST /api/v1/companies/:companyId/salary-runs/:id/generate-agi",
   "POST /api/v1/companies/:companyId/salary-runs/:id/mark-paid",
+  "POST /api/v1/companies/:companyId/salary/vacation-year-close",
   "POST /api/v1/companies/:companyId/supplier-invoices",
   "POST /api/v1/companies/:companyId/supplier-invoices/:id/approve",
   "POST /api/v1/companies/:companyId/supplier-invoices/:id/credit",
@@ -111,6 +124,9 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/webhooks/:id/rotate-secret",
   "POST /api/v1/companies/:companyId/webhooks/:id/test",
   "POST /api/v1/webhook-deliveries/:id/retry",
+  "PUT /api/v1/companies/:companyId/employees/:id/absence",
+  "PUT /api/v1/companies/:companyId/employees/:id/opening-balances",
+  "PUT /api/v1/companies/:companyId/employees/opening-balances",
 ]
 `;
 

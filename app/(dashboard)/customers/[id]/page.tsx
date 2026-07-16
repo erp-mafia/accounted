@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
 import CustomerForm from '@/components/customers/CustomerForm'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
@@ -275,7 +276,7 @@ export default function CustomerDetailPage({
           </CardContent>
         </Card>
 
-        {/* Business details */}
+        {/* Customer details */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">{t('section_business')}</CardTitle>
@@ -287,10 +288,18 @@ export default function CustomerDetailPage({
                 {customer.customer_number}
               </div>
             )}
-            {customer.org_number && (
+            {customer.customer_type !== 'individual' && customer.org_number && (
               <div className="text-sm">
                 <span className="text-muted-foreground">{t('label_org_number')} </span>
                 {customer.org_number}
+              </div>
+            )}
+            {customer.customer_type === 'individual' && (customer.personal_number || customer.org_number) && (
+              <div className="text-sm">
+                <span className="text-muted-foreground">{t('label_personal_number')} </span>
+                <span className="tabular-nums">
+                  {maskCustomerPersonalNumber(customer.personal_number || customer.org_number)}
+                </span>
               </div>
             )}
             {customer.vat_number && (
@@ -306,7 +315,7 @@ export default function CustomerDetailPage({
               <span className="text-muted-foreground">{t('label_payment_terms')} </span>
               {t('payment_terms_value', { days: customer.default_payment_terms || 30 })}
             </div>
-            {!customer.customer_number && !customer.org_number && !customer.vat_number && (
+            {!customer.customer_number && !customer.org_number && !customer.personal_number && !customer.vat_number && (
               <p className="text-sm text-muted-foreground">{t('no_business_info')}</p>
             )}
           </CardContent>
@@ -409,6 +418,7 @@ export default function CustomerDetailPage({
               country: customer.country || undefined,
               org_number: customer.org_number || undefined,
               vat_number: customer.vat_number || undefined,
+              personal_number: customer.personal_number || undefined,
               default_payment_terms: customer.default_payment_terms || undefined,
               notes: customer.notes || undefined,
             }}

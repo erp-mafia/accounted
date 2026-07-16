@@ -822,6 +822,14 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'salary_run_employees', file: 'salary_run_employees.json', orderBy: 'created_at' },
   { name: 'salary_line_items', file: 'salary_line_items.json', orderBy: 'created_at' },
   { name: 'salary_absence_days', file: 'salary_absence_days.json' },
+  // Cutover state (payroll gap-closure 2.1): part of the payroll underlag a
+  // switching company brings; belongs in the archive like the run data it
+  // seeds.
+  { name: 'employee_opening_balances', file: 'employee_opening_balances.json' },
+  // Vacation ledger + year closures (payroll gap-closure 3.1). The closure
+  // report is the underlag for the drift-adjustment verifikation (BFL 7 kap).
+  { name: 'employee_vacation_balances', file: 'employee_vacation_balances.json' },
+  { name: 'vacation_year_closures', file: 'vacation_year_closures.json' },
   { name: 'salary_worked_days', file: 'salary_worked_days.json' },
   { name: 'salary_payslip_links', file: 'salary_payslip_links.json' },
   { name: 'shift_premium_rules', file: 'shift_premium_rules.json' },

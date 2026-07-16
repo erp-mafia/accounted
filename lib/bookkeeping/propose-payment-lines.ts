@@ -7,6 +7,7 @@
 import { resolveSekAmount } from './currency-utils'
 import { getRevenueAccount, getOutputVatAccount } from './invoice-entries'
 import { getVatTreatmentForRate } from '@/lib/invoices/vat-rules'
+import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { EntityType, InvoiceItem, VatTreatment } from '@/types'
 
@@ -23,6 +24,8 @@ export interface ProposePaymentLinesInput {
     exchange_rate?: number | null
     vat_treatment: VatTreatment
     items?: InvoiceItem[]
+    /** Per-invoice öresavrundning override; null = inherit the company setting. */
+    ore_rounding?: boolean | null
     /**
      * Dimensions PR7: the invoice's default bag. Stamped on every proposed
      * line: the payment dialog always submits its (editable) lines, so the
@@ -36,6 +39,13 @@ export interface ProposePaymentLinesInput {
   entityType: EntityType
   paymentAccount?: string
   exchangeRateDifference?: number
+  /**
+   * company_settings.ore_rounding. Combined with the per-invoice override via
+   * getDisplayTotal (SEK only, default-on) to decide whether the proposal
+   * expects the customer to pay the rounded "Att betala" from the PDF: then
+   * the bank leg is the rounded amount and 3740 carries the residual.
+   */
+  companyOreRounding?: boolean
 }
 
 function toFormAmount(n: number): string {
@@ -73,9 +83,19 @@ export function proposePaymentLines(input: ProposePaymentLinesInput): FormLine[]
   const paymentAccount = input.paymentAccount || '1930'
   const desc = invoice.invoice_number ? `Betalning faktura ${invoice.invoice_number}` : 'Betalning faktura'
 
+  // Öresavrundning: when it applies (SEK, enabled, non-integer total) the
+  // customer pays the rounded "Att betala" from the PDF, not the stored öre
+  // total. Propose the bank leg at the rounded amount and let 3740 carry the
+  // residual, so the default booking matches what actually hits the bank.
+  // getDisplayTotal returns delta 0 whenever rounding does not apply.
+  const roundingDelta = getDisplayTotal(
+    { total: invoice.total, currency: invoice.currency, ore_rounding: invoice.ore_rounding },
+    input.companyOreRounding === undefined ? undefined : { ore_rounding: input.companyOreRounding },
+  ).roundingDelta
+
   const lines = accountingMethod === 'accrual'
-    ? proposeAccrualLines(invoice, paymentAccount, desc, exchangeRateDifference)
-    : proposeCashLines(invoice, paymentAccount, desc, entityType)
+    ? proposeAccrualLines(invoice, paymentAccount, desc, exchangeRateDifference, roundingDelta)
+    : proposeCashLines(invoice, paymentAccount, desc, entityType, roundingDelta)
 
   // Dimensions PR7: re-propagate the invoice default onto every proposed leg
   // (matches createInvoicePaymentJournalEntry/createInvoiceCashEntry).
@@ -86,11 +106,26 @@ export function proposePaymentLines(input: ProposePaymentLinesInput): FormLine[]
   return lines
 }
 
+/**
+ * The 3740 (öres- och kronutjämning) residual line. Customer paid over the
+ * stored total (rounded up) → credit (vinst); under (rounded down) → debit
+ * (förlust). Same polarity as buildInvoicePaymentClearingLines.
+ */
+function oreRoundingLine(roundingDelta: number): FormLine {
+  return {
+    account_number: '3740',
+    debit_amount: roundingDelta < 0 ? toFormAmount(Math.abs(roundingDelta)) : '',
+    credit_amount: roundingDelta > 0 ? toFormAmount(roundingDelta) : '',
+    line_description: 'Öresavrundning',
+  }
+}
+
 function proposeAccrualLines(
   invoice: ProposePaymentLinesInput['invoice'],
   paymentAccount: string,
   desc: string,
-  exchangeRateDifference?: number
+  exchangeRateDifference?: number,
+  roundingDelta = 0
 ): FormLine[] {
   const bookedSekAmount = resolveSekAmount(
     invoice.total,
@@ -136,7 +171,7 @@ function proposeAccrualLines(
     const amount = Math.round(bookedSekAmount * 100) / 100
     lines.push({
       account_number: paymentAccount,
-      debit_amount: toFormAmount(amount),
+      debit_amount: toFormAmount(amount + roundingDelta),
       credit_amount: '',
       line_description: desc,
     })
@@ -146,6 +181,9 @@ function proposeAccrualLines(
       credit_amount: toFormAmount(amount),
       line_description: desc,
     })
+    if (roundingDelta !== 0) {
+      lines.push(oreRoundingLine(roundingDelta))
+    }
   }
 
   return lines
@@ -155,7 +193,8 @@ function proposeCashLines(
   invoice: ProposePaymentLinesInput['invoice'],
   paymentAccount: string,
   desc: string,
-  entityType: EntityType
+  entityType: EntityType,
+  roundingDelta = 0
 ): FormLine[] {
   const lines: FormLine[] = []
   const isForeign = invoice.currency !== 'SEK'
@@ -264,12 +303,16 @@ function proposeCashLines(
 
   lines.push({
     account_number: paymentAccount,
-    debit_amount: toFormAmount(debitAmount),
+    debit_amount: toFormAmount(debitAmount + roundingDelta),
     credit_amount: '',
     line_description: desc,
   })
 
   lines.push(...creditLines)
+
+  if (roundingDelta !== 0) {
+    lines.push(oreRoundingLine(roundingDelta))
+  }
 
   return lines
 }

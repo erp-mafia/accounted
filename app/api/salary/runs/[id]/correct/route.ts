@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse, EntryAlreadyReversedError } from '@/lib/bookkeeping/errors'
 import { revokeLinksForRun } from '@/lib/salary/payslips/links'
+import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 
 ensureInitialized()
 
@@ -26,7 +27,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.run.correct',
   async (_request, ctx, { params }) => {
     const { id } = await params
-    const { user, supabase, companyId } = ctx
+    const { user, supabase, companyId, log } = ctx
 
     // Load the original booked run
     const { data: originalRun, error: runError } = await supabase
@@ -154,6 +155,18 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           })
         }
       }
+    }
+
+    // Vacation ledger sync: the original run flipped to 'corrected', so its
+    // vacation_days_taken drop out of the recomputed taken_days. Non-fatal:
+    // the ledger self-heals when the correction run books.
+    const ledgerSync = await syncVacationLedgerForEmployees(
+      supabase,
+      companyId,
+      (originalEmployees || []).map((sre) => sre.employee_id as string),
+    )
+    if (!ledgerSync.ok) {
+      log.warn('vacation ledger sync failed after correction', { message: ledgerSync.message })
     }
 
     return NextResponse.json({

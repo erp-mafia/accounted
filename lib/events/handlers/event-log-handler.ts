@@ -26,6 +26,7 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'period.locked',
   'period.year_closed',
   'customer.created',
+  'article.deleted',
   'supplier.created',
   'receipt.matched',
   'receipt.confirmed',
@@ -97,6 +98,9 @@ function extractEntityId(payload: Record<string, unknown>): string | null {
   }
   if (typeof payload.invoiceId === 'string') {
     return payload.invoiceId
+  }
+  if (typeof payload.articleId === 'string') {
+    return payload.articleId
   }
 
   // For journal_entry.corrected: use the corrected entry's ID

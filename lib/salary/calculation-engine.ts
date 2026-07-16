@@ -34,6 +34,11 @@ export interface SalaryCalculationInput {
   vacationRule: 'procentregeln' | 'sammaloneregeln' | 'none' | 'semesterersattning'
   vacationDaysPerYear: number
   semestertillaggRate: number
+  /** Work-schedule daily-rate divisor (arbetsschema-lite). Defaults to the
+   *  legacy 21 (5-day week); callers with a part-time schedule pass
+   *  dailyDivisor(workdays_per_week) from lib/salary/work-schedule. Used by
+   *  the sammalöneregeln day valuation. */
+  dailyDivisor?: number
 
   /** Växa-stöd */
   vaxaStodEligible: boolean
@@ -546,7 +551,7 @@ export function calculateSalary(
     // since the base salary is expensed monthly regardless of vacation.
     // Use baseSalary (degree-adjusted): a 50% part-timer's tillägg should be
     // half a full-timer's, not the same.
-    const dailyRate = r(baseSalary / 21)
+    const dailyRate = r(baseSalary / (input.dailyDivisor ?? 21))
     const tillagg = r(dailyRate * input.semestertillaggRate * input.vacationDaysPerYear)
     vacationAccrual = tillagg
     steps.push({
@@ -674,6 +679,8 @@ export function calculateAvgifterRate(
   // eligible at year start (18-22) become 19-23 during the year. We test the
   // year-start age, not the during-year age. Skatteverket's AGI validator
   // rejects 23-year-olds at year start as not eligible.
+  // calculateAgeAtYearStart is birth-year based (2026: born 2003-2007), so
+  // January 1 birthdays land in the correct Skatteverket cohort.
   // Active period: 1 April 2026 - 30 September 2027.
   if (config.avgifterYouthRate !== null && ageAtYearStart >= 18 && ageAtYearStart <= 22) {
     const [, monthStr] = input.paymentDate.split('-')
@@ -720,10 +727,12 @@ export function calculateKarensavdrag(monthlySalary: number, config: PayrollConf
 export function calculateSjuklon(
   monthlySalary: number,
   sickDays: number,
-  config: PayrollConfig
+  config: PayrollConfig,
+  // Arbetsschema-lite: legacy 21 unless the employee's schedule differs.
+  dailyDivisor: number = 21
 ): { karensavdrag: number; sjuklon: number; totalDeduction: number; steps: CalculationStep[] } {
   const steps: CalculationStep[] = []
-  const dailyRate = r(monthlySalary / 21)
+  const dailyRate = r(monthlySalary / dailyDivisor)
 
   // Karensavdrag
   const karensavdrag = calculateKarensavdrag(monthlySalary, config)
@@ -766,6 +775,8 @@ export function calculateVacationAccrual(params: {
   vacationDaysPerYear: number
   semestertillaggRate: number
   vacationBasis: number
+  /** Arbetsschema-lite daily-rate divisor; legacy 21 when omitted. */
+  dailyDivisor?: number
 }): { accrual: number; steps: CalculationStep[] } {
   const steps: CalculationStep[] = []
 
@@ -803,7 +814,7 @@ export function calculateVacationAccrual(params: {
     // Sammalöneregeln: tillägg per vacation day. Use vacationBasis as the
     // degree-adjusted reference: callers must pass the part-time-adjusted
     // monthly amount, never the raw full-time monthlySalary.
-    const dailyRate = r(params.vacationBasis / 21)
+    const dailyRate = r(params.vacationBasis / (params.dailyDivisor ?? 21))
     const accrual = r(dailyRate * params.semestertillaggRate * params.vacationDaysPerYear)
     steps.push({
       label: `Semesteravsättning (sammalöneregeln ${fmtPct(params.semestertillaggRate)})`,

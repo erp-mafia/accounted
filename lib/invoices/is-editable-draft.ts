@@ -4,7 +4,9 @@
  * entry is created when the invoice is sent (mark-sent / send) or, for
  * kontantmetoden, at payment; once one exists, BFL immutability applies and the
  * invoice must be corrected with a credit note instead. A self-billed invoice we
- * received is the counterparty's document: never editable here.
+ * received is the counterparty's document: never editable here. Credit-note
+ * drafts mirror an issued invoice and must not be changed into a different
+ * correction after creation.
  *
  * This is the single source of truth for that predicate. The PATCH route
  * (app/api/invoices/[id]/route.ts) enforces it server-side; the detail and edit
@@ -15,6 +17,12 @@ export function isEditableInvoiceDraft(invoice: {
   status: string
   journal_entry_id?: string | null
   is_self_billed?: boolean | null
+  credited_invoice_id?: string | null
 }): boolean {
-  return invoice.status === 'draft' && !invoice.journal_entry_id && !invoice.is_self_billed
+  return (
+    invoice.status === 'draft' &&
+    !invoice.journal_entry_id &&
+    !invoice.is_self_billed &&
+    !invoice.credited_invoice_id
+  )
 }

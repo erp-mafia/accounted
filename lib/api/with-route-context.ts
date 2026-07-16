@@ -102,7 +102,9 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
     let errLog = log
 
     try {
+      const authStart = Date.now()
       const auth = await requireAuth()
+      const authMs = Date.now() - authStart
       if (auth.error) {
         log.warn('auth failed', { status: auth.error.status })
         // Pass through requireAuth's response unchanged for backwards-compat
@@ -119,11 +121,13 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       errLog = userLog
 
       let companyId: string | null = null
+      const companyStart = Date.now()
       try {
         companyId = await getActiveCompanyId(supabase, user.id)
       } catch (err) {
         userLog.error('failed to resolve active company', err as Error)
       }
+      const companyMs = Date.now() - companyStart
 
       if (!companyId) {
         return errorResponseFromCode('COMPANY_CONTEXT_MISSING', userLog, { requestId })
@@ -152,15 +156,30 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       }
       errLog = ctx.log
 
+      const handlerStart = Date.now()
       const response = await handler(request, ctx, params)
+      const handlerMs = Date.now() - handlerStart
 
       if (response instanceof Response && !response.headers.get('X-Request-Id')) {
         response.headers.set('X-Request-Id', requestId)
+      }
+      // Per-phase breakdown, visible in browser devtools (Timing tab) and in
+      // the op-completed log: separates the wrapper's own overhead (auth
+      // round trip + company resolution) from the handler's real work, so
+      // latency regressions can be attributed without guessing.
+      if (response instanceof Response && !response.headers.get('Server-Timing')) {
+        response.headers.set(
+          'Server-Timing',
+          `auth;dur=${authMs}, company;dur=${companyMs}, handler;dur=${handlerMs}`,
+        )
       }
 
       ctx.log.info('op completed', {
         durationMs: Date.now() - start,
         status: response.status,
+        authMs,
+        companyMs,
+        handlerMs,
       })
       return response
     } catch (err) {

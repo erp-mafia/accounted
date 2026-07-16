@@ -17,6 +17,8 @@ import {
 import { AlertTriangle, Download, Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useAgiSubmission } from '@/lib/hooks/use-agi-submission'
+import { deriveAgiFilingState } from '@/lib/salary/agi-submission-state'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { AGIPanel } from '@/components/salary/AGIPanel'
 import { PaymentFilePanel } from '@/components/salary/PaymentFilePanel'
@@ -54,6 +56,16 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     tax_payment_file_generated_at: string | null
     tax_paid_at: string | null
   } | null>(null)
+
+  // Skatteverket's per-period AGI submission record: drives the AGI step on
+  // the progress rail and the panel's state machine (underlag submitted /
+  // awaiting BankID signature / signed). Only booked runs can file AGI, so
+  // the fetch is skipped (null period) for everything else.
+  const { submission: agiSubmission, refresh: refreshAgiSubmission } = useAgiSubmission(
+    run && run.status === 'booked'
+      ? `${run.period_year}${String(run.period_month).padStart(2, '0')}`
+      : null,
+  )
 
   async function loadRun() {
     const res = await fetch(`/api/salary/runs/${id}`)
@@ -494,6 +506,10 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // hidden - mirrors the pain.001 / BG-LB generators, which emit no rows here.
   const noPayout = isCalculated && Math.round((run.total_net ?? 0) * 100) === 0
 
+  // Real AGI filing state: run-row timestamps + the extension's submission
+  // record. Falls back gracefully when the extension is unavailable.
+  const agiState = deriveAgiFilingState(run, agiSubmission)
+
   // Advancing a draft to review. For a nollkörning confirm first: an empty
   // declaration is filed to Skatteverket, which should be deliberate.
   function handleToReview() {
@@ -536,6 +552,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         run={run}
         isCalculated={isCalculated}
         noPayout={noPayout}
+        agiState={agiState}
+        agiKvittensnummer={agiSubmission?.kvittensnummer ?? null}
         canWrite={canWrite}
         actionLoading={actionLoading}
         primaryAction={primaryAction}
@@ -623,6 +641,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             period={`${run.period_year}${String(run.period_month).padStart(2, '0')}`}
             agiGeneratedAt={run.agi_generated_at}
             agiSubmittedAt={run.agi_submitted_at}
+            submission={agiSubmission}
+            onRefreshSubmission={refreshAgiSubmission}
             readOnly={!canWrite}
             onChange={loadRun}
           />

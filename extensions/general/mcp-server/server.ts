@@ -58,7 +58,17 @@ import {
   IdempotencyKeyReuseError,
 } from '@/lib/api/idempotency'
 import { toToolError, type NextActionHint } from './tool-result'
+import {
+  addCompanyToNextHint,
+  addCompanyToTopLevelNext,
+  assertMcpCompanyWriteAccess,
+  extractRequestedCompany,
+  isCompanyDependentTool,
+  projectToolInputSchema,
+  resolveMcpCompanyContext,
+} from './company-routing'
 import { findSupplierCandidates } from './supplier-candidates'
+import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
@@ -111,6 +121,7 @@ import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { getUserCompanies } from '@/lib/company/context'
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
 // which dispatches to this handler: no duplicate call needed here.
 import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType } from '@/types'
@@ -291,6 +302,12 @@ async function stagePendingOperation(
   period_status?: PeriodStatusForDate
   next?: NextActionHint
 }> {
+  // PII chokepoint (ISO 27001 A.8.11): no staged payload may persist a
+  // plaintext personnummer. Enforced here so every current and future
+  // staging tool inherits the rule, not just the ones that remembered it.
+  assertNoPlaintextPersonnummer(params, 'params')
+  assertNoPlaintextPersonnummer(previewData, 'preview_data')
+
   const riskLevel = getRiskLevel(operationType)
   const branding = getBranding().appName.toLowerCase()
 
@@ -326,7 +343,7 @@ async function stagePendingOperation(
       message: `Dry run: would stage "${operationType}" (risk: ${riskLevel}). No changes made.`,
       preview: previewData,
       ...(periodStatus ? { period_status: periodStatus } : {}),
-      ...(next ? { next } : {}),
+      ...(next ? { next: addCompanyToNextHint(next, companyId) as NextActionHint } : {}),
     }
   }
 
@@ -351,7 +368,12 @@ async function stagePendingOperation(
           ? `Replayed cached response for idempotency_key "${options.idempotencyKey}": already staged as pending_operation ${cachedOpId}. No new side-effects. ${buildApprovalGuidance(cachedOpId, riskLevel)}`
           : `Replayed cached response for idempotency_key "${options.idempotencyKey}". No new side-effects.`,
         ...(cachedOpId
-          ? { approve: { tool: 'gnubok_approve_pending_operation', args: { operation_id: cachedOpId } } }
+          ? {
+              approve: {
+                tool: 'gnubok_approve_pending_operation',
+                args: { operation_id: cachedOpId, company_id: companyId },
+              },
+            }
           : {}),
         preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
         ...(periodStatus ? { period_status: periodStatus } : {}),
@@ -392,11 +414,11 @@ async function stagePendingOperation(
     message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}). ${buildApprovalGuidance(data.id, riskLevel)} The user can also approve at /pending in the ${branding} web app.`,
     approve: {
       tool: 'gnubok_approve_pending_operation',
-      args: { operation_id: data.id } as Record<string, unknown>,
+      args: { operation_id: data.id, company_id: companyId } as Record<string, unknown>,
     },
     preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
     ...(periodStatus ? { period_status: periodStatus } : {}),
-    ...(next ? { next } : {}),
+    ...(next ? { next: addCompanyToNextHint(next, companyId) as NextActionHint } : {}),
   } as const
 
   if (options.idempotencyKey && requestHash) {
@@ -1753,7 +1775,7 @@ export const tools: McpTool[] = [
             name: t.name,
             description: t.description,
             scope: requiredScope,
-            inputSchema: t.inputSchema,
+            inputSchema: projectToolInputSchema(t),
             ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
             annotations: t.annotations,
             ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
@@ -1768,6 +1790,109 @@ export const tools: McpTool[] = [
         count: projected.length,
         total_matched: totalMatched,
         detail,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_list_companies',
+    title: 'List Companies',
+    description: 'List every non-archived company this API-key user can access. Use company_id from this result on other tools; omit it there to use the API key default.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        companies: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              company_id: { type: 'string' },
+              name: { type: 'string' },
+              org_number: { type: ['string', 'null'] },
+              entity_type: { type: ['string', 'null'] },
+              role: { type: 'string', enum: ['owner', 'admin', 'member', 'viewer'] },
+              is_default: { type: 'boolean' },
+            },
+            required: ['company_id', 'name', 'org_number', 'entity_type', 'role', 'is_default'],
+          },
+        },
+        count: { type: 'number' },
+        default_company_id: { type: ['string', 'null'] },
+      },
+      required: ['companies', 'count', 'default_company_id'],
+    },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(_args, defaultCompanyId, userId, supabase) {
+      type CompanyRow = {
+        id: string
+        name: string
+        org_number: string | null
+        entity_type: string | null
+        archived_at: string | null
+      }
+      type MembershipRow = {
+        company_id: string
+        role: 'owner' | 'admin' | 'member' | 'viewer'
+        companies: CompanyRow | CompanyRow[] | null
+      }
+
+      const memberships = (await getUserCompanies(supabase, userId)) as unknown as MembershipRow[]
+      const accessible = memberships.flatMap((membership) => {
+        const company = Array.isArray(membership.companies)
+          ? membership.companies[0]
+          : membership.companies
+        return company && company.archived_at === null ? [{ membership, company }] : []
+      })
+      const companyIds = accessible.map(({ company }) => company.id)
+      const displayNames = new Map<string, string>()
+
+      if (companyIds.length > 0) {
+        try {
+          const settings = await fetchAllRows<{ company_id: string; company_name: string | null }>(
+            ({ from, to }) =>
+              supabase
+                .from('company_settings')
+                .select('company_id, company_name')
+                .in('company_id', companyIds)
+                .order('company_id', { ascending: true })
+                .range(from, to),
+          )
+          for (const row of settings) {
+            if (row.company_name) displayNames.set(row.company_id, row.company_name)
+          }
+        } catch (error) {
+          log.warn('gnubok_list_companies display-name lookup failed', {
+            error: error instanceof Error ? error.message : 'unknown',
+          })
+        }
+      }
+
+      const companies = accessible.map(({ membership, company }) => ({
+        company_id: company.id,
+        name: displayNames.get(company.id) ?? company.name,
+        org_number: company.org_number,
+        entity_type: company.entity_type,
+        role: membership.role,
+        is_default: company.id === defaultCompanyId,
+      }))
+      const hasAccessibleDefault = companies.some((company) => company.is_default)
+
+      return {
+        companies,
+        count: companies.length,
+        default_company_id: hasAccessibleDefault ? defaultCompanyId : null,
       }
     },
   },
@@ -2238,10 +2363,10 @@ export const tools: McpTool[] = [
           type: 'object',
           additionalProperties: false,
           description:
-            'The single company every tool call in this session reads and writes. Confirm this is the entity the user means BEFORE any staged write: there is no per-call company switch; scope is fixed by the API key.',
+            'The company selected for this call. Confirm it is the entity the user means before staging a write. Pass company_id on later calls to keep working in a non-default company.',
           properties: {
             id: { type: 'string', description: 'Deprecated: read company_id instead.' },
-            company_id: { type: 'string', description: 'company_id this session is scoped to.' },
+            company_id: { type: 'string', description: 'company_id selected for this call.' },
             name: { type: ['string', 'null'] },
             org_number: { type: ['string', 'null'] },
             entity_type: { type: ['string', 'null'], description: 'e.g. "aktiebolag", "enskild_firma". Null if unset.' },
@@ -2486,10 +2611,10 @@ export const tools: McpTool[] = [
           .select('full_name')
           .eq('id', userId)
           .maybeSingle(),
-        // Company identity so the agent can confirm WHICH entity it operates on
-        // before any write. Scope is fixed by the API key: there is no per-call
-        // switch: so this is the session's "whoami for the company". Best-effort:
-        // a failed read still yields a company block with at least the id.
+        // Company identity so the agent can confirm which entity it operates on
+        // before any write. The dispatcher has already resolved and authorized
+        // the optional per-call company_id. A failed read still yields a company
+        // block with at least the id.
         supabase
           .from('companies')
           .select('name, org_number, entity_type')
@@ -9041,6 +9166,787 @@ export const tools: McpTool[] = [
       }
     },
   },
+  {
+    name: 'gnubok_get_employee',
+    title: 'Get Employee',
+    description: 'Get one employee\'s full payroll config: salary, tax table/column, jamkning, F-skatt, vacation rule, vaxa-stod, bank details, dimensions. Personnummer masked. Use after gnubok_list_employees to drill into one employee before payroll work.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        employee_id: { type: 'string', description: 'UUID of the employee' },
+      },
+      required: ['employee_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        employee_id: { type: 'string' },
+        first_name: { type: 'string' },
+        last_name: { type: 'string' },
+        personnummer_masked: { type: 'string' },
+        employment: { type: 'object', description: 'Type, start/end, degree' },
+        pay: { type: 'object', description: 'Salary type + amounts' },
+        tax: { type: 'object', description: 'Table, column, municipality, jamkning, F-skatt, sidoinkomst' },
+        vacation: { type: 'object', description: 'Rule, days per year, saved days, tillagg rate' },
+        vaxa_stod: { type: 'object', description: 'Eligibility window' },
+        bank: { type: 'object', description: 'Clearing + account (payment routing)' },
+        default_dimensions: { type: 'object' },
+        is_active: { type: 'boolean' },
+      },
+      required: ['employee_id', 'first_name', 'last_name', 'personnummer_masked', 'is_active'],
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase) {
+      const employeeId = args.employee_id as string
+      if (!employeeId) throw new Error('employee_id is required')
+      const { data: e, error } = await supabase
+        .from('employees')
+        .select(
+          'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, f_skatt_verified_at, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, vacation_days_saved, semestertillagg_rate, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, default_dimensions, is_active',
+        )
+        .eq('id', employeeId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (error) throw new Error(`Database error: ${error.message}`)
+      if (!e) throw new Error('Employee not found')
+      // LLM context is a leak surface: personnummer is ALWAYS masked on MCP,
+      // there is no full-value drill-in on this surface.
+      return {
+        employee_id: e.id,
+        first_name: e.first_name,
+        last_name: e.last_name,
+        personnummer_masked: maskPersonnummer(decryptPersonnummer(e.personnummer as string)),
+        employment: {
+          employment_type: e.employment_type,
+          employment_start: e.employment_start,
+          employment_end: e.employment_end,
+          employment_degree: e.employment_degree,
+          hours_per_week: e.hours_per_week,
+          workdays_per_week: e.workdays_per_week,
+        },
+        pay: {
+          salary_type: e.salary_type,
+          monthly_salary: e.monthly_salary,
+          hourly_rate: e.hourly_rate,
+        },
+        tax: {
+          tax_table_number: e.tax_table_number,
+          tax_column: e.tax_column,
+          tax_municipality: e.tax_municipality,
+          is_sidoinkomst: e.is_sidoinkomst,
+          f_skatt_status: e.f_skatt_status,
+          f_skatt_verified_at: e.f_skatt_verified_at,
+          jamkning_percentage: e.jamkning_percentage,
+          jamkning_valid_from: e.jamkning_valid_from,
+          jamkning_valid_to: e.jamkning_valid_to,
+        },
+        vacation: {
+          vacation_rule: e.vacation_rule,
+          vacation_days_per_year: e.vacation_days_per_year,
+          vacation_days_saved: e.vacation_days_saved,
+          semestertillagg_rate: e.semestertillagg_rate,
+        },
+        vaxa_stod: {
+          eligible: e.vaxa_stod_eligible,
+          start: e.vaxa_stod_start,
+          end: e.vaxa_stod_end,
+        },
+        bank: {
+          clearing_number: e.clearing_number,
+          bank_account_number: e.bank_account_number,
+        },
+        default_dimensions: e.default_dimensions ?? {},
+        is_active: e.is_active,
+      }
+    },
+  },
+  {
+    name: 'gnubok_get_payslip',
+    title: 'Get Payslip (Lönebesked)',
+    description: 'Get one employee\'s payslip in a salary run: gross, tax, avgifter, net, every line item and the step-by-step calculation breakdown. Personnummer masked. Use after gnubok_get_salary_run to verify how one employee\'s pay was computed.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        salary_run_id: { type: 'string', description: 'UUID of the salary run' },
+        employee_id: { type: 'string', description: 'UUID of the employee' },
+      },
+      required: ['salary_run_id', 'employee_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        salary_run_employee_id: { type: 'string' },
+        salary_run_id: { type: 'string' },
+        employee_id: { type: 'string' },
+        employee_name: { type: 'string' },
+        personnummer_masked: { type: 'string' },
+        amounts: { type: 'object', description: 'Gross, taxable, tax, net, avgifter, vacation accrual, YTD' },
+        overrides: { type: 'object', description: 'Manual tax/avgifter overrides + reason (effective = override ?? calculated)' },
+        absence_days: { type: 'object', description: 'Sick/vab/parental/vacation day counts' },
+        line_items: { type: 'array', items: { type: 'object' }, description: 'Each with salary_line_item_id' },
+        calculation_breakdown: { type: 'object', description: 'Step-by-step engine breakdown; null until calculated' },
+      },
+      required: ['salary_run_employee_id', 'salary_run_id', 'employee_id', 'employee_name', 'personnummer_masked', 'amounts', 'line_items'],
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase) {
+      const salaryRunId = args.salary_run_id as string
+      const employeeId = args.employee_id as string
+      if (!salaryRunId || !employeeId) throw new Error('salary_run_id and employee_id are required')
+      const { data: sre, error } = await supabase
+        .from('salary_run_employees')
+        .select(
+          '*, employee:employees(first_name, last_name, personnummer), line_items:salary_line_items(id, item_type, description, quantity, unit_price, amount, is_taxable, is_avgift_basis, is_vacation_basis, is_gross_deduction, is_net_deduction, account_number, sort_order)',
+        )
+        .eq('salary_run_id', salaryRunId)
+        .eq('employee_id', employeeId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (error) throw new Error(`Database error: ${error.message}`)
+      if (!sre) throw new Error('Employee not found in this salary run')
+      const emp = sre.employee as { first_name: string; last_name: string; personnummer: string } | null
+      const lineItems = ((sre.line_items ?? []) as Array<Record<string, unknown>>)
+        .slice()
+        .sort((a, b) => ((a.sort_order as number) ?? 0) - ((b.sort_order as number) ?? 0))
+        .map(({ id, ...rest }) => ({ salary_line_item_id: id, ...rest }))
+      return {
+        salary_run_employee_id: sre.id,
+        salary_run_id: salaryRunId,
+        employee_id: employeeId,
+        employee_name: emp ? `${emp.first_name} ${emp.last_name}` : '',
+        personnummer_masked: emp ? maskPersonnummer(decryptPersonnummer(emp.personnummer)) : '',
+        amounts: {
+          gross_salary: sre.gross_salary,
+          gross_deductions: sre.gross_deductions,
+          benefit_values: sre.benefit_values,
+          taxable_income: sre.taxable_income,
+          tax_withheld: sre.tax_withheld,
+          net_deductions: sre.net_deductions,
+          net_salary: sre.net_salary,
+          avgifter_rate: sre.avgifter_rate,
+          avgifter_basis: sre.avgifter_basis,
+          avgifter_amount: sre.avgifter_amount,
+          avgifter_category: sre.avgifter_category,
+          vacation_accrual: sre.vacation_accrual,
+          vacation_accrual_avgifter: sre.vacation_accrual_avgifter,
+          ytd_gross: sre.ytd_gross,
+          ytd_tax: sre.ytd_tax,
+          ytd_net: sre.ytd_net,
+        },
+        overrides: {
+          tax_withheld_override: sre.tax_withheld_override,
+          avgifter_amount_override: sre.avgifter_amount_override,
+          avgifter_basis_override: sre.avgifter_basis_override,
+          override_reason: sre.override_reason,
+        },
+        absence_days: {
+          sick_days: sre.sick_days,
+          vab_days: sre.vab_days,
+          parental_days: sre.parental_days,
+          vacation_days_taken: sre.vacation_days_taken,
+        },
+        line_items: lineItems,
+        calculation_breakdown: sre.calculation_breakdown ?? null,
+      }
+    },
+  },
+  {
+    name: 'gnubok_list_absence',
+    title: 'List Absence (Frånvaro)',
+    description: 'List an employee\'s registered absence days (sick, vab, parental, ...) in a date range, max 92 days. These per-day rows drive karensavdrag and sjuklön at calculation time. Use before gnubok_register_absence to see what is already registered.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        employee_id: { type: 'string', description: 'UUID of the employee' },
+        from: { type: 'string', description: 'Range start (YYYY-MM-DD, inclusive)' },
+        to: { type: 'string', description: 'Range end (YYYY-MM-DD, inclusive, max 92 days)' },
+        absence_type: {
+          type: 'string',
+          enum: ['sick', 'vab', 'parental', 'pregnancy', 'care_relative', 'study', 'unpaid_leave', 'other_leave'],
+          description: 'Optional filter',
+        },
+      },
+      required: ['employee_id', 'from', 'to'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        absence_days: { type: 'array', items: { type: 'object' }, description: 'Each with salary_absence_day_id' },
+        count: { type: 'number' },
+      },
+      required: ['absence_days', 'count'],
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase) {
+      const { employee_id, from, to, absence_type } = args as {
+        employee_id: string; from: string; to: string; absence_type?: string
+      }
+      if (!employee_id || !from || !to) throw new Error('employee_id, from and to are required')
+      const { listAbsenceDays } = await import('@/lib/salary/absence')
+      const result = await listAbsenceDays(supabase, {
+        companyId,
+        employeeId: employee_id,
+        from,
+        to,
+        absenceType: absence_type,
+      })
+      if (!result.ok) throw new Error(result.code === 'EMPLOYEE_NOT_FOUND' ? 'Employee not found' : `Failed to list absence: ${result.code}`)
+      const days = result.data.map(({ id, ...rest }) => ({ salary_absence_day_id: id, ...rest }))
+      return { absence_days: days, count: days.length }
+    },
+  },
+  {
+    name: 'gnubok_update_payslip_line',
+    title: 'Update Payslip Line',
+    description: 'Stage an edit to one payslip line (amount, description, quantity, unit price) in a DRAFT salary run. Commit via gnubok_approve_pending_operation, then re-run gnubok_calculate_salary_run: line edits never recompute tax by themselves.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        salary_run_id: { type: 'string', description: 'UUID of the salary run (must be draft)' },
+        salary_line_item_id: { type: 'string', description: 'UUID of the payslip line to edit' },
+        amount: { type: 'number', description: 'New amount (SEK)' },
+        description: { type: 'string', description: 'New line description' },
+        quantity: { type: 'number', description: 'New quantity' },
+        unit_price: { type: 'number', description: 'New unit price (SEK)' },
+      },
+      required: ['salary_run_id', 'salary_line_item_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const { salary_run_id, salary_line_item_id, amount, description, quantity, unit_price } = args as {
+        salary_run_id: string; salary_line_item_id: string
+        amount?: number; description?: string; quantity?: number; unit_price?: number
+      }
+      if (!salary_run_id || !salary_line_item_id) {
+        throw new Error('salary_run_id and salary_line_item_id are required')
+      }
+      const patch: Record<string, unknown> = {}
+      if (amount !== undefined) patch.amount = amount
+      if (description !== undefined) patch.description = description
+      if (quantity !== undefined) patch.quantity = quantity
+      if (unit_price !== undefined) patch.unit_price = unit_price
+      if (Object.keys(patch).length === 0) {
+        throw new Error('At least one of amount, description, quantity, unit_price is required')
+      }
+
+      // Preflight via the shared service in dry-run: verifies draft status and
+      // that the line belongs to this run, and yields the merged row for the
+      // preview. No writes here: the commit path re-runs the service for real.
+      const { updatePayslipLine } = await import('@/lib/salary/payslip-lines')
+      const preflight = await updatePayslipLine(supabase, {
+        companyId,
+        salaryRunId: salary_run_id,
+        lineId: salary_line_item_id,
+        patch: patch as never,
+        dryRun: true,
+      })
+      if (!preflight.ok) {
+        throw new Error(`Cannot update payslip line: ${preflight.code}`)
+      }
+      const merged = preflight.data
+
+      const { data: run } = await supabase
+        .from('salary_runs')
+        .select('payment_date')
+        .eq('id', salary_run_id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'update_payslip_line',
+        `Uppdatera lönebeskedsrad: ${merged.description}`,
+        { salary_run_id, salary_line_item_id, patch },
+        {
+          salary_run_id,
+          salary_line_item_id,
+          item_type: merged.item_type,
+          description: merged.description,
+          new_amount: merged.amount,
+          changes: patch,
+        },
+        actor,
+        {
+          description: 'After approval, recalculate the run so tax and totals reflect the edit.',
+          tool: 'gnubok_calculate_salary_run',
+        },
+        run?.payment_date ? { dateForPeriodCheck: run.payment_date as string } : {},
+      )
+    },
+  },
+  {
+    name: 'gnubok_register_absence',
+    title: 'Register Absence (Frånvaro)',
+    description: 'Stage absence registration (sick, vab, parental, ...) for an employee over a date range, max 92 days, weekends skipped unless included. Commit via gnubok_approve_pending_operation; recalculate any open salary run afterwards.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        employee_id: { type: 'string', description: 'UUID of the employee' },
+        from: { type: 'string', description: 'Range start (YYYY-MM-DD, inclusive)' },
+        to: { type: 'string', description: 'Range end (YYYY-MM-DD, inclusive; single day = same as from)' },
+        absence_type: {
+          type: 'string',
+          enum: ['sick', 'vab', 'parental', 'pregnancy', 'care_relative', 'study', 'unpaid_leave', 'other_leave'],
+          description: 'Absence type',
+        },
+        hours_per_day: { type: 'number', description: 'Hours per day (default 8; use e.g. 4 for half days)' },
+        notes: { type: 'string', description: 'Optional note' },
+        include_weekends: { type: 'boolean', description: 'Also register Saturday/Sunday (default false)' },
+      },
+      required: ['employee_id', 'from', 'to', 'absence_type'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const { employee_id, from, to, absence_type, hours_per_day, notes, include_weekends } = args as {
+        employee_id: string; from: string; to: string; absence_type: string
+        hours_per_day?: number; notes?: string; include_weekends?: boolean
+      }
+      if (!employee_id || !from || !to || !absence_type) {
+        throw new Error('employee_id, from, to and absence_type are required')
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+        throw new Error('from and to must be YYYY-MM-DD')
+      }
+
+      // Preflight in dry-run: verifies the employee and expands the range so
+      // the approver sees exactly which days would be written.
+      const { upsertAbsenceRange } = await import('@/lib/salary/absence')
+      const preflight = await upsertAbsenceRange(supabase, {
+        companyId,
+        employeeId: employee_id,
+        from,
+        to,
+        absenceType: absence_type,
+        hoursPerDay: hours_per_day,
+        notes: notes ?? null,
+        includeWeekends: include_weekends,
+        dryRun: true,
+      })
+      if (!preflight.ok) {
+        throw new Error(`Cannot register absence: ${preflight.code}`)
+      }
+
+      const { data: emp } = await supabase
+        .from('employees')
+        .select('first_name, last_name')
+        .eq('id', employee_id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      const employeeName = emp ? `${emp.first_name} ${emp.last_name}` : employee_id
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'register_absence',
+        `Registrera frånvaro: ${employeeName}, ${absence_type} ${from}${to !== from ? ` till ${to}` : ''}`,
+        { employee_id, from, to, absence_type, hours_per_day: hours_per_day ?? 8, notes: notes ?? null, include_weekends: include_weekends ?? false },
+        {
+          employee_id,
+          employee_name: employeeName,
+          absence_type,
+          from,
+          to,
+          day_count: preflight.data.count,
+          hours_per_day: hours_per_day ?? 8,
+          dates_sample: preflight.data.days.slice(0, 10).map((d) => (d as { absence_date: string }).absence_date),
+        },
+        actor,
+        {
+          description: 'If a draft salary run covers this period, recalculate it so sjuklön/karensavdrag lines update.',
+          tool: 'gnubok_calculate_salary_run',
+        },
+        { dateForPeriodCheck: from },
+      )
+    },
+  },
+  {
+    name: 'gnubok_create_employee',
+    title: 'Create Employee',
+    description: 'Stage creation of a new employee: salary, tax table, bank details, vacation rule. Personnummer is encrypted at staging and never stored in plaintext. Commit via gnubok_approve_pending_operation; then attach to a salary run.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        first_name: { type: 'string' },
+        last_name: { type: 'string' },
+        personnummer: { type: 'string', description: '12 digits (YYYYMMDDNNNN). Encrypted at staging.' },
+        employment_type: { type: 'string', enum: ['employee', 'company_owner', 'board_member'] },
+        employment_start: { type: 'string' },
+        employment_end: { type: 'string' },
+        employment_degree: { type: 'number', description: '1-100 (default 100)' },
+        hours_per_week: { type: 'number', description: 'Schedule hours/week (default 40; drives hourly divisor)' },
+        workdays_per_week: { type: 'number', description: 'Schedule days/week (default 5; drives daily divisor)' },
+        salary_type: { type: 'string', enum: ['monthly', 'hourly'] },
+        monthly_salary: { type: 'number' },
+        hourly_rate: { type: 'number' },
+        tax_table_number: { type: 'number', description: '29-42; required for A-skatt non-sidoinkomst' },
+        tax_column: { type: 'number' },
+        tax_municipality: { type: 'string' },
+        is_sidoinkomst: { type: 'boolean' },
+        f_skatt_status: { type: 'string', enum: ['a_skatt', 'f_skatt', 'fa_skatt', 'not_verified'] },
+        clearing_number: { type: 'string' },
+        bank_account_number: { type: 'string' },
+        vacation_rule: { type: 'string', enum: ['procentregeln', 'sammaloneregeln', 'semesterersattning', 'none'] },
+        vacation_days_per_year: { type: 'number' },
+        email: { type: 'string' },
+        phone: { type: 'string' },
+        vaxa_stod_eligible: { type: 'boolean' },
+        vaxa_stod_start: { type: 'string' },
+        vaxa_stod_end: { type: 'string' },
+        jamkning_percentage: { type: 'number' },
+        jamkning_valid_from: { type: 'string' },
+        jamkning_valid_to: { type: 'string' },
+      },
+      required: ['first_name', 'last_name', 'personnummer', 'employment_start'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const { CreateEmployeeSchema } = await import('@/lib/api/schemas')
+      const parsed = CreateEmployeeSchema.safeParse(args)
+      if (!parsed.success) {
+        const first = parsed.error.issues[0]
+        throw new Error(`Invalid employee: ${first ? `${first.path.join('.')}: ${first.message}` : 'validation failed'}`)
+      }
+      const body = parsed.data
+
+      // Preflight the EF-owner rule so staging fails early with a clean error.
+      const { getCompanyEntityType } = await import('@/lib/company/context')
+      const { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } = await import('@/lib/salary/employment-rules')
+      const entityType = await getCompanyEntityType(supabase, companyId)
+      if (!isEmploymentTypeAllowedForEntity(entityType, body.employment_type)) {
+        throw new Error(EF_OWNER_EMPLOYMENT_ERROR)
+      }
+
+      // PII rule: encrypt AT STAGING TIME. pending_operations.params never
+      // holds the plaintext personnummer; previews and titles carry the
+      // masked form only.
+      const { encryptPersonnummer, extractLast4 } = await import('@/lib/salary/personnummer')
+      const { personnummer, ...fields } = body
+      const params: Record<string, unknown> = {
+        ...fields,
+        personnummer_encrypted: encryptPersonnummer(personnummer),
+        personnummer_last4: extractLast4(personnummer),
+      }
+      const masked = maskPersonnummer(personnummer)
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'create_employee',
+        `Skapa anställd: ${body.first_name} ${body.last_name}`,
+        params,
+        {
+          first_name: body.first_name,
+          last_name: body.last_name,
+          personnummer_masked: masked,
+          employment_type: body.employment_type,
+          employment_start: body.employment_start,
+          salary_type: body.salary_type,
+          monthly_salary: body.monthly_salary ?? null,
+          hourly_rate: body.hourly_rate ?? null,
+          tax_table_number: body.tax_table_number ?? null,
+          bank_details_provided: !!(body.clearing_number && body.bank_account_number),
+        },
+        actor,
+        {
+          description: 'After approval, attach the employee to a salary run.',
+          tool: 'gnubok_create_salary_run',
+        },
+      )
+    },
+  },
+  {
+    name: 'gnubok_update_employee',
+    title: 'Update Employee',
+    description: 'Stage an update to an employee\'s payroll config: salary, tax, bank details, vacation rule, jamkning, vaxa-stod. Personnummer cannot be changed. Call gnubok_get_employee first to see current values; commit via gnubok_approve_pending_operation.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        employee_id: { type: 'string', description: 'UUID of the employee' },
+        first_name: { type: 'string' },
+        last_name: { type: 'string' },
+        employment_type: { type: 'string', enum: ['employee', 'company_owner', 'board_member'] },
+        employment_start: { type: 'string' },
+        employment_end: { type: 'string' },
+        employment_degree: { type: 'number' },
+        hours_per_week: { type: 'number' },
+        workdays_per_week: { type: 'number' },
+        salary_type: { type: 'string', enum: ['monthly', 'hourly'] },
+        monthly_salary: { type: 'number' },
+        hourly_rate: { type: 'number' },
+        tax_table_number: { type: 'number' },
+        tax_column: { type: 'number' },
+        tax_municipality: { type: 'string' },
+        is_sidoinkomst: { type: 'boolean' },
+        f_skatt_status: { type: 'string', enum: ['a_skatt', 'f_skatt', 'fa_skatt', 'not_verified'] },
+        clearing_number: { type: 'string' },
+        bank_account_number: { type: 'string' },
+        vacation_rule: { type: 'string', enum: ['procentregeln', 'sammaloneregeln', 'semesterersattning', 'none'] },
+        vacation_days_per_year: { type: 'number' },
+        email: { type: 'string' },
+        phone: { type: 'string' },
+        is_active: { type: 'boolean', description: 'false soft-deactivates (BFL retention keeps the row)' },
+        vaxa_stod_eligible: { type: 'boolean' },
+        vaxa_stod_start: { type: 'string' },
+        vaxa_stod_end: { type: 'string' },
+        jamkning_percentage: { type: ['number', 'null'], description: 'null clears the beslut' },
+        jamkning_valid_from: { type: ['string', 'null'] },
+        jamkning_valid_to: { type: ['string', 'null'] },
+      },
+      required: ['employee_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const { employee_id, ...rest } = args as { employee_id: string } & Record<string, unknown>
+      if (!employee_id) throw new Error('employee_id is required')
+      if ('personnummer' in rest) {
+        throw new Error('personnummer cannot be changed: identity is immutable post-create')
+      }
+
+      const patch: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(rest)) {
+        if (value !== undefined) patch[key] = value
+      }
+      if (Object.keys(patch).length === 0) {
+        throw new Error('At least one field to update is required')
+      }
+
+      const { data: existing, error } = await supabase
+        .from('employees')
+        .select('*')
+        .eq('id', employee_id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (error) throw new Error(`Database error: ${error.message}`)
+      if (!existing) throw new Error('Employee not found')
+
+      const changes = Object.entries(patch).map(([field, to]) => ({
+        field,
+        from: (existing as Record<string, unknown>)[field] ?? null,
+        to,
+      }))
+      const bankChanged = changes.some((c) => c.field === 'clearing_number' || c.field === 'bank_account_number')
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'update_employee',
+        `Uppdatera anställd: ${existing.first_name} ${existing.last_name}`,
+        { employee_id, patch },
+        {
+          employee_id,
+          employee_name: `${existing.first_name} ${existing.last_name}`,
+          changes,
+          // Bank routing changes are the BEC/fraud surface: surface them
+          // prominently so the approver cannot miss a rerouted payment.
+          bank_details_changed: bankChanged,
+        },
+        actor,
+      )
+    },
+  },
+  {
+    name: 'gnubok_set_employee_opening_balances',
+    title: 'Set Employee Opening Balances (Cutover)',
+    description: 'Stage payroll cutover state for one or more employees migrating mid-year: YTD gross/tax/net, vacation days remaining, sparade dagar by origin year, opening semesterlöneskuld SEK, karens adjustment. Locked once the employee has a booked run.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        items: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 200,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              employee_id: { type: 'string', description: 'UUID of the employee' },
+              cutover_date: { type: 'string', description: 'First day of the first Accounted-run month (YYYY-MM-01)' },
+              ytd_gross: { type: 'number' },
+              ytd_tax: { type: 'number' },
+              ytd_net: { type: 'number' },
+              vacation_paid_days_remaining: { type: 'number' },
+              vacation_saved_days_by_year: { type: 'object', description: 'Origin year -> days, e.g. {"2025": 5}' },
+              opening_semester_liability: { type: 'number', description: 'SEK on 2920 (report-only; booked via SIE)' },
+              opening_semester_liability_avgifter: { type: 'number', description: 'SEK on 2940' },
+              karens_periods_adjustment: { type: 'number', description: 'Karens periods last 12 months not imported as absence rows (0-10)' },
+            },
+            required: ['employee_id', 'cutover_date'],
+          },
+        },
+      },
+      required: ['items'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const { OpeningBalancesBulkSchema } = await import('@/lib/api/schemas')
+      const parsed = OpeningBalancesBulkSchema.safeParse(args)
+      if (!parsed.success) {
+        const first = parsed.error.issues[0]
+        throw new Error(`Invalid opening balances: ${first ? `${first.path.join('.')}: ${first.message}` : 'validation failed'}`)
+      }
+
+      // Preflight via the shared service in dry-run: employee existence,
+      // employment_start ordering, lock state. Fails staging early with the
+      // full per-item error list.
+      const { setOpeningBalancesBulk } = await import('@/lib/salary/opening-balances')
+      const preflight = await setOpeningBalancesBulk(supabase, {
+        companyId,
+        userId,
+        items: parsed.data.items,
+        dryRun: true,
+      })
+      if (!preflight.ok) {
+        const itemSummary = preflight.itemErrors
+          ?.map((e) => `${e.employee_id}: ${e.message}`)
+          .join('; ')
+        throw new Error(`Cannot set opening balances: ${itemSummary ?? preflight.code}`)
+      }
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'set_employee_opening_balances',
+        `Ingående lönesaldon: ${parsed.data.items.length} anställd(a)`,
+        { items: parsed.data.items },
+        {
+          employee_count: parsed.data.items.length,
+          cutover_dates: [...new Set(parsed.data.items.map((i) => i.cutover_date))],
+          total_ytd_gross: parsed.data.items.reduce((s, i) => s + (i.ytd_gross || 0), 0),
+          total_opening_liability: parsed.data.items.reduce(
+            (s, i) => s + (i.opening_semester_liability || 0),
+            0,
+          ),
+        },
+        actor,
+        {
+          description: 'After approval, import pre-cutover absence history if needed, then create the first salary run.',
+          tool: 'gnubok_create_salary_run',
+        },
+      )
+    },
+  },
+  {
+    name: 'gnubok_get_vacation_balance',
+    title: 'Get Vacation Balance (Semestersaldo)',
+    description: 'Get one employee\'s current vacation balance: entitled/taken/remaining days, sparade dagar per origin year (5-year rule), forced payouts, and an estimated semesterlöneskuld in SEK. Ledger seeds on first booking. Use before gnubok_close_vacation_year.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        employee_id: { type: 'string', description: 'UUID of the employee' },
+      },
+      required: ['employee_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        employee_vacation_balance_id: { type: 'string' },
+        employee_id: { type: 'string' },
+        vacation_year_start: { type: 'string' },
+        entitled_days: { type: 'number' },
+        accrued_days: { type: 'number' },
+        taken_days: { type: 'number' },
+        remaining_days: { type: 'number' },
+        saved_days: { type: 'object', description: 'Origin year -> days' },
+        forced_payout_days: { type: 'number' },
+      },
+      required: ['employee_vacation_balance_id', 'employee_id', 'vacation_year_start', 'entitled_days', 'taken_days', 'remaining_days'],
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase) {
+      const employeeId = args.employee_id as string
+      if (!employeeId) throw new Error('employee_id is required')
+      const { data: balance, error } = await supabase
+        .from('employee_vacation_balances')
+        .select('id, employee_id, vacation_year_start, entitled_days, accrued_days, taken_days, saved_days, forced_payout_days')
+        .eq('company_id', companyId)
+        .eq('employee_id', employeeId)
+        .eq('status', 'open')
+        .order('vacation_year_start', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (error) throw new Error(`Database error: ${error.message}`)
+      if (!balance) throw new Error('No vacation balance exists for the employee yet (the ledger seeds on first booking)')
+      const { id, ...rest } = balance as { id: string } & Record<string, unknown>
+      const entitled = (rest.entitled_days as number) ?? 0
+      const taken = (rest.taken_days as number) ?? 0
+      return {
+        employee_vacation_balance_id: id,
+        ...rest,
+        remaining_days: roundOre(entitled - taken),
+      }
+    },
+  },
+  {
+    name: 'gnubok_close_vacation_year',
+    title: 'Close Vacation Year (Semesterårsavslut)',
+    description: 'Stage the vacation year close: rolls balances into the next year (min-20 floor, 5-year expiry to forced payout) and books a 2920/2940 drift adjustment when needed. High risk: review the preview report, then commit via gnubok_approve_pending_operation.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        vacation_year_start: { type: 'string', description: 'YYYY-MM-DD; defaults to the most recently ended vacation year' },
+        book_adjustment: { type: 'boolean', description: 'Book the 2920/2940 drift verifikat (default true)' },
+      },
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const { previewVacationYearClose } = await import('@/lib/salary/semesterberedning')
+      const { getVacationYearBasis } = await import('@/lib/salary/vacation-ledger')
+      const { getClosableYearStart } = await import('@/lib/salary/vacation-year')
+
+      let yearStart = args.vacation_year_start as string | undefined
+      if (!yearStart) {
+        const basis = await getVacationYearBasis(supabase, companyId)
+        yearStart = getClosableYearStart(new Date().toISOString().slice(0, 10), basis)
+      }
+      const bookAdjustment = args.book_adjustment !== false
+
+      // Preflight: the full review report. Staging fails early on
+      // not-ended / already-closed years, and the approver sees the exact
+      // day transitions + SEK drift that will commit.
+      const preview = await previewVacationYearClose(supabase, companyId, yearStart)
+      if (!preview.ok) {
+        throw new Error(`Cannot close vacation year: ${preview.code}`)
+      }
+      const report = preview.data
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'vacation_year_close',
+        `Semesterårsavslut ${yearStart.slice(0, 4)} (${report.rows.length} anställda)`,
+        { vacation_year_start: yearStart, book_adjustment: bookAdjustment },
+        {
+          vacation_year_start: yearStart,
+          vacation_year_end: report.vacation_year_end,
+          employee_count: report.rows.length,
+          total_saveable_days: report.rows.reduce((s, r) => s + r.saveable_days, 0),
+          total_expiring_days: report.rows.reduce((s, r) => s + r.expiring_days, 0),
+          computed_liability: report.sek.computed_liability,
+          computed_avgifter: report.sek.computed_avgifter,
+          booked_2920: report.sek.booked_2920,
+          booked_2940: report.sek.booked_2940,
+          drift_2920: report.sek.drift_2920,
+          drift_2940: report.sek.drift_2940,
+          adjustment_needed: report.sek.adjustment_needed,
+        },
+        actor,
+        {
+          description: 'After approval, pay out any forced-payout days as semesterersättning in the next salary run.',
+          tool: 'gnubok_create_salary_run',
+        },
+        { dateForPeriodCheck: report.adjustment_date },
+      )
+    },
+  },
 
   // ── Stream 1 Phase 1: Bookkeeping write (high-risk, always staged) ──
 
@@ -11218,20 +12124,6 @@ export const tools: McpTool[] = [
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
       const assetIds = Array.isArray(args.asset_ids) ? (args.asset_ids as string[]) : undefined
 
-      // Mirror the HTTP route's `requireWrite: true` guard so a viewer-role
-      // member can't post depreciation through the MCP surface. RLS would
-      // reject the underlying INSERTs anyway, but failing fast here
-      // produces a much cleaner error than the cascaded RLS rejection.
-      const { data: membership } = await supabase
-        .from('company_members')
-        .select('role')
-        .eq('company_id', companyId)
-        .eq('user_id', userId)
-        .maybeSingle()
-      if (!membership || membership.role === 'viewer') {
-        throw new Error('Write permission required')
-      }
-
       const { data: period } = await supabase
         .from('fiscal_periods')
         .select('id, name, period_end, is_closed, locked_at, closing_entry_id')
@@ -11841,7 +12733,7 @@ function emitToolCallTelemetry(payload: {
   success: boolean
   isError: boolean
   errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'unknown_tool' | 'test_key_write_blocked' | null
+  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'unknown_tool' | 'test_key_write_blocked' | null
   errorMessage: string | null
   requestId: string | number | null
   userId: string
@@ -12169,6 +13061,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '',
             'Discovery:',
             '• tools/list returns the full schema for every tool. To narrow a large catalog, call gnubok_search_tools(query="…"): it ranks tools by relevance; pass detail="name"|"summary"|"full" to control payload size.',
+            `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId}); when selecting another company, repeat company_id on every company-data call, including approval.`,
+            '• MCP resources use the API key default company. For a selected non-default company, call gnubok_get_agent_briefing with company_id instead of relying on Accounted://company/current or other company-data resources.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
             '',
             'Common workflows:',
@@ -12226,7 +13120,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               name: t.name,
               ...(t.title ? { title: t.title } : {}),
               description: t.description,
-              inputSchema: t.inputSchema,
+              inputSchema: projectToolInputSchema(t),
               ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
               annotations: t.annotations,
               ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
@@ -12238,7 +13132,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
     case 'tools/call': {
       const toolName = (params as Record<string, unknown>)?.name as string
-      const toolArgs = ((params as Record<string, unknown>)?.arguments ?? {}) as Record<
+      const rawToolArgs = ((params as Record<string, unknown>)?.arguments ?? {}) as Record<
         string,
         unknown
       >
@@ -12297,12 +13191,55 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         )
       }
 
+      let toolArgs: Record<string, unknown>
+      let effectiveCompanyId = companyId
+      const companyRoutingStartedAt = Date.now()
+      try {
+        const extracted = extractRequestedCompany(rawToolArgs)
+        toolArgs = extracted.toolArgs
+
+        if (isCompanyDependentTool(toolName)) {
+          const companyContext = await resolveMcpCompanyContext({
+            supabase,
+            userId,
+            defaultCompanyId: companyId,
+            requestedCompanyId: extracted.requestedCompanyId,
+          })
+          assertMcpCompanyWriteAccess(companyContext, requiredScope)
+          effectiveCompanyId = companyContext.companyId
+        }
+      } catch (err) {
+        const structured = toToolError(err, { toolName })
+        emitToolCallTelemetry({
+          tool: toolName,
+          requiredScope: requiredScope ?? null,
+          actor,
+          latencyMs: Date.now() - companyRoutingStartedAt,
+          success: false,
+          isError: true,
+          errorCode: structured.error.code,
+          errorKind: 'company_access_denied',
+          errorMessage: structured.error.message_sv,
+          requestId: id ?? null,
+          userId,
+          // Keep denied attempts attributed to the key default. An arbitrary,
+          // unauthorized target must never create tenant telemetry there.
+          companyId,
+        })
+        return NextResponse.json(
+          jsonRpc(id ?? null, {
+            content: [{ type: 'text', text: JSON.stringify(structured, null, 2) }],
+            isError: true,
+          })
+        )
+      }
+
       // Enforce the capability paywall: the MCP/agent path is a paid chokepoint
       // just like the HTTP routes (send_invoice → email_send, the two SKV
       // submissions → skatteverket). Fail-closed; self-hosted short-circuits to
       // all-on inside hasCapability. Blocks before any pending op is staged.
       const requiredCapability = MCP_TOOL_CAPABILITY_MAP[toolName]
-      if (requiredCapability && !(await hasCapability(supabase, companyId, requiredCapability))) {
+      if (requiredCapability && !(await hasCapability(supabase, effectiveCompanyId, requiredCapability))) {
         const capError = { error: capabilityBlockedError(requiredCapability) }
         emitToolCallTelemetry({
           tool: toolName,
@@ -12316,7 +13253,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           errorMessage: capError.error.message_sv,
           requestId: id ?? null,
           userId,
-          companyId,
+          companyId: effectiveCompanyId,
         })
         return NextResponse.json(
           jsonRpc(id ?? null, {
@@ -12356,7 +13293,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             errorMessage: blocked.error.message_sv,
             requestId: id ?? null,
             userId,
-            companyId,
+            companyId: effectiveCompanyId,
           })
           return NextResponse.json(
             jsonRpc(id ?? null, {
@@ -12370,7 +13307,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // Detect if THIS call follows the previous call's `next` hint: must
       // run before execute() so we don't double-store on this call. Emits
       // mcp.next_hint_followed when the agent's behaviour matches the hint.
-      checkAndEmitNextHintFollowed(sessionId, toolName, actor, userId, companyId)
+      checkAndEmitNextHintFollowed(sessionId, toolName, actor, userId, effectiveCompanyId)
 
       const callStartedAt = Date.now()
       try {
@@ -12379,7 +13316,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         if (toolName === 'gnubok_search_tools') {
           (toolArgs as Record<string, unknown>).__keyScopes = keyScopes
         }
-        const result = await tool.execute(toolArgs, companyId, userId, supabase, actor)
+        const rawResult = await tool.execute(toolArgs, effectiveCompanyId, userId, supabase, actor)
+        const result = addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
         const latencyMs = Date.now() - callStartedAt
         const response: Record<string, unknown> = {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
@@ -12420,7 +13358,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           errorMessage: null,
           requestId: id ?? null,
           userId,
-          companyId,
+          companyId: effectiveCompanyId,
         })
         return NextResponse.json(jsonRpc(id ?? null, response))
       } catch (err) {
@@ -12441,7 +13379,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           errorMessage: structured.error.message_sv,
           requestId: id ?? null,
           userId,
-          companyId,
+          companyId: effectiveCompanyId,
         })
         return NextResponse.json(
           jsonRpc(id ?? null, {

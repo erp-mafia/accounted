@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
+import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { eventBus } from '@/lib/events'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -73,6 +74,17 @@ export const POST = withRouteContext(
         type: 'salary_run.booked',
         payload: { salaryRunId: id, entryIds: [], userId: user.id, companyId: companyId! },
       })
+
+      // Vacation ledger sync (non-fatal: the ledger recomputes and self-heals
+      // on the next booking; a sync bug must never block a booking).
+      const nollSync = await syncVacationLedgerForEmployees(
+        supabase,
+        companyId!,
+        roster.map((sre) => sre.employee_id),
+      )
+      if (!nollSync.ok) {
+        opLog.warn('vacation ledger sync failed after nollkörning booking', { message: nollSync.message })
+      }
 
       opLog.info('salary run booked as nollkörning (no journal entries)', { salaryRunId: id })
 
@@ -153,6 +165,16 @@ export const POST = withRouteContext(
         type: 'salary_run.booked',
         payload: { salaryRunId: id, entryIds, userId: user.id, companyId: companyId! },
       })
+
+      // Vacation ledger sync (non-fatal, see the nollkörning branch).
+      const ledgerSync = await syncVacationLedgerForEmployees(
+        supabase,
+        companyId!,
+        roster.map((sre) => sre.employee_id),
+      )
+      if (!ledgerSync.ok) {
+        opLog.warn('vacation ledger sync failed after booking', { message: ledgerSync.message })
+      }
 
       return NextResponse.json({ data: bookedRun })
     } catch (err) {

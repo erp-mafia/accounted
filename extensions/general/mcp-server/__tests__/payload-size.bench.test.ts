@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { tools, deriveToolMeta } from '../server'
+import { projectToolInputSchema } from '../company-routing'
 
 describe('tools/list payload size guard', () => {
   it('keeps the projected tools/list payload under the context-budget ceiling', () => {
@@ -12,7 +13,7 @@ describe('tools/list payload size guard', () => {
         name: t.name,
         ...(t.title ? { title: t.title } : {}),
         description: t.description,
-        inputSchema: t.inputSchema,
+        inputSchema: projectToolInputSchema(t),
         ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
         annotations: t.annotations,
         ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
@@ -20,7 +21,7 @@ describe('tools/list payload size guard', () => {
     })
     const payload = JSON.stringify({ tools: projection })
     const approxTokens = Math.round(payload.length / 4)
-    // Ceiling progression: 20K → 25K → 30K → 31K → 31.5K → 32K → 36K.
+    // Ceiling progression: 20K to 25K to 30K to 31K to 31.5K to 32K to 36K.
     //   * 20K → 25K when item 8 of the agent-native API plan landed
     //     (additionalProperties: false on all inputSchemas + period_status in the
     //     staged operation envelope).
@@ -97,9 +98,27 @@ describe('tools/list payload size guard', () => {
     //     already-minimal ~24-token description. Headroom before the change was
     //     under 10 tokens, so even this smallest possible addition crossed;
     //     other descriptions are at their trimmed floor per the entries above.
+    //   * 45.5K → 50K with the payroll gap-closure (8 tools): 3 reads
+    //     (gnubok_get_employee, gnubok_get_payslip, gnubok_list_absence) + 5
+    //     staged writes (update_payslip_line, register_absence,
+    //     create_employee, update_employee, set_employee_opening_balances).
+    //     create/update_employee carry the full employee-config inputSchema
+    //     (~27 properties each: the whole point is agent-driveable payroll
+    //     onboarding), and every staged write inlines STAGED_OPERATION_SCHEMA
+    //     + _meta. Property descriptions trimmed to enum-only where the name
+    //     is self-evident; the remainder is wire contract, not prose.
+    //   * 50K → 51K with the vacation workflow (gap-closure Phase 3):
+    //     gnubok_get_vacation_balance (ledger read) + gnubok_close_vacation_year
+    //     (staged HIGH semesterårsavslut with STAGED_OPERATION_SCHEMA + _meta).
+    //     Fortnox gap category E closed; both schemas already minimal.
+    //   * 51K to 54K for stateless multi-company MCP routing. Every
+    //     company-dependent tool must expose the optional company_id input so
+    //     the client can target another authorized company without shared
+    //     mutable connection state. The repeated property is intentionally
+    //     minimal; gnubok_list_companies and initialize instructions explain it.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(45_500)
+    expect(approxTokens).toBeLessThan(54_000)
   })
 })

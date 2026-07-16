@@ -6,17 +6,22 @@ vi.mock('next/headers', () => ({
   cookies: vi.fn(async () => ({ set: mockCookieSet })),
 }))
 
-import { setActiveCompany, CompanyContextError, getCompanyDisplayName } from '../context'
+import { setActiveCompany, CompanyContextError, getCompanyDisplayName, getActiveCompanyId } from '../context'
 
 type CapturedCall = { table: string; method: string; args: unknown[] }
+
+type TerminalResult = { data?: unknown; error?: unknown }
 
 /**
  * Chainable Supabase mock (same approach as actions.test.ts): a chain method
  * terminates with `results[table][method]` when seeded, otherwise keeps
  * chaining. setActiveCompany ends both its queries on `.single()`, on
  * different tables, so seeding `single` per table drives each branch.
+ * A terminal seeded as an ARRAY is consumed in call order, for functions
+ * that query the same table twice (getActiveCompanyId's fallback fetch +
+ * preference validation both end on company_members.maybeSingle()).
  */
-function buildSupabase(results: Record<string, Record<string, { data?: unknown; error?: unknown }>>) {
+function buildSupabase(results: Record<string, Record<string, TerminalResult | TerminalResult[]>>) {
   const calls: CapturedCall[] = []
 
   function makeChain(table: string) {
@@ -25,7 +30,8 @@ function buildSupabase(results: Record<string, Record<string, { data?: unknown; 
     for (const m of methods) {
       chain[m] = (...args: unknown[]) => {
         calls.push({ table, method: m, args })
-        const terminal = results[table]?.[m]
+        const seeded = results[table]?.[m]
+        const terminal = Array.isArray(seeded) ? seeded.shift() : seeded
         if (terminal) {
           return Promise.resolve({ data: terminal.data ?? null, error: terminal.error ?? null })
         }
@@ -107,6 +113,75 @@ describe('setActiveCompany', () => {
       'company-2',
       expect.objectContaining({ httpOnly: true, path: '/' }),
     )
+  })
+})
+
+describe('getActiveCompanyId', () => {
+  it('resolves the preferred company with ONE company_members query when it is the first membership', async () => {
+    const { supabase, calls } = buildSupabase({
+      user_preferences: { maybeSingle: { data: { active_company_id: 'company-1' } } },
+      company_members: { maybeSingle: { data: { company_id: 'company-1' } } },
+    })
+
+    const id = await getActiveCompanyId(supabase as never, 'user-1')
+
+    expect(id).toBe('company-1')
+    // The parallel fallback fetch doubles as validation in the common
+    // single-company case: no second, sequential round trip.
+    const memberQueries = calls.filter((c) => c.table === 'company_members' && c.method === 'maybeSingle')
+    expect(memberQueries).toHaveLength(1)
+  })
+
+  it('validates a preference that differs from the first membership', async () => {
+    const { supabase, calls } = buildSupabase({
+      user_preferences: { maybeSingle: { data: { active_company_id: 'company-2' } } },
+      company_members: {
+        maybeSingle: [
+          { data: { company_id: 'company-1' } }, // first membership (parallel fetch)
+          { data: { company_id: 'company-2' } }, // validation of the preference
+        ],
+      },
+    })
+
+    const id = await getActiveCompanyId(supabase as never, 'user-1')
+
+    expect(id).toBe('company-2')
+    const memberQueries = calls.filter((c) => c.table === 'company_members' && c.method === 'maybeSingle')
+    expect(memberQueries).toHaveLength(2)
+  })
+
+  it('falls back to the first membership when the preference is stale', async () => {
+    const { supabase } = buildSupabase({
+      user_preferences: { maybeSingle: { data: { active_company_id: 'company-archived' } } },
+      company_members: {
+        maybeSingle: [
+          { data: { company_id: 'company-1' } }, // first membership
+          { data: null }, // validation: preference archived / membership gone
+        ],
+      },
+    })
+
+    expect(await getActiveCompanyId(supabase as never, 'user-1')).toBe('company-1')
+  })
+
+  it('falls back to the first membership when there is no preference row', async () => {
+    const { supabase, calls } = buildSupabase({
+      user_preferences: { maybeSingle: { data: null } },
+      company_members: { maybeSingle: { data: { company_id: 'company-1' } } },
+    })
+
+    expect(await getActiveCompanyId(supabase as never, 'user-1')).toBe('company-1')
+    const memberQueries = calls.filter((c) => c.table === 'company_members' && c.method === 'maybeSingle')
+    expect(memberQueries).toHaveLength(1)
+  })
+
+  it('returns null when the user has no non-archived memberships', async () => {
+    const { supabase } = buildSupabase({
+      user_preferences: { maybeSingle: { data: null } },
+      company_members: { maybeSingle: { data: null } },
+    })
+
+    expect(await getActiveCompanyId(supabase as never, 'user-1')).toBeNull()
   })
 })
 

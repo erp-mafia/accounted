@@ -355,10 +355,34 @@ export function generateReminderEmailSubject(data: ReminderEmailData): string {
 /**
  * Get the number of days after due date for each reminder level
  */
-export function getReminderDaysConfig(): Record<1 | 2 | 3, number> {
-  return {
+export type ReminderDaysConfig = Record<1 | 2 | 3, number>
+
+type ReminderDaysSettings = Partial<
+  Pick<
+    CompanySettings,
+    'reminder_days_level_1' | 'reminder_days_level_2' | 'reminder_days_level_3'
+  >
+>
+
+export function getReminderDaysConfig(
+  settings?: ReminderDaysSettings | null,
+): ReminderDaysConfig {
+  const defaults: ReminderDaysConfig = {
     1: REMINDER_CONFIG[1].daysAfterDue,
     2: REMINDER_CONFIG[2].daysAfterDue,
-    3: REMINDER_CONFIG[3].daysAfterDue
+    3: REMINDER_CONFIG[3].daysAfterDue,
   }
+
+  const configured: ReminderDaysConfig = {
+    1: settings?.reminder_days_level_1 ?? defaults[1],
+    2: settings?.reminder_days_level_2 ?? defaults[2],
+    3: settings?.reminder_days_level_3 ?? defaults[3],
+  }
+
+  const valid =
+    Object.values(configured).every((days) => Number.isInteger(days) && days >= 1 && days <= 365)
+    && configured[1] < configured[2]
+    && configured[2] < configured[3]
+
+  return valid ? configured : defaults
 }

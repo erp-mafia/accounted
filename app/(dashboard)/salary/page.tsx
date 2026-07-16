@@ -15,6 +15,9 @@ import { ArrowRight, CalendarClock, CheckCircle2, HandCoins, Loader2, Plus, User
 import { PageHeader } from '@/components/ui/page-header'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { VacationBalanceCard } from '@/components/salary/VacationBalanceCard'
+import { useAgiSubmission } from '@/lib/hooks/use-agi-submission'
+import { deriveAgiFilingState } from '@/lib/salary/agi-submission-state'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -65,50 +68,52 @@ export default function SalaryPage() {
   const tp = useTranslations('salary_payments')
 
   const load = useCallback(async () => {
-    const [runsRes, empRes, settingsRes] = await Promise.all([
-      fetch('/api/salary/runs'),
-      fetch('/api/salary/employees'),
-      fetch('/api/settings'),
+    // Everything loads in parallel; the tax-payment fetch is the only
+    // dependent request and chains directly off the runs response instead of
+    // waiting for the whole batch. Was three sequential legs (batch → tax
+    // payment → SKV status), now the longest chain is runs → tax payment.
+    const runsPromise: Promise<SalaryRun[]> = fetch('/api/salary/runs')
+      .then(async res => (res.ok ? (await res.json()).data || [] : []))
+      .catch(() => [])
+
+    // Latest booked run drives the "skatt att betala" card. Resolves to
+    // undefined ("leave state unchanged") when there is no booked run or the
+    // fetch fails, mirroring the old sequential behavior on reloads.
+    const taxPaymentPromise: Promise<TaxPaymentState | null | undefined> = runsPromise
+      .then(async loadedRuns => {
+        const latestBooked = loadedRuns.find(r => r.status === 'booked')
+        if (!latestBooked) return undefined
+        const period = `${latestBooked.period_year}-${String(latestBooked.period_month).padStart(2, '0')}`
+        const txRes = await fetch(`/api/skatteverket/tax-payments/${period}`)
+        if (!txRes.ok) return undefined
+        return (await txRes.json()).data ?? null
+      })
+      .catch(() => undefined)
+
+    const [loadedRuns, taxPaymentData, empRes, settingsRes, skvStatus] = await Promise.all([
+      runsPromise,
+      taxPaymentPromise,
+      fetch('/api/salary/employees').catch(() => null),
+      fetch('/api/settings').catch(() => null),
+      // Connection health for the tax card hint. Only needs_reconsent counts:
+      // the routine short-lived token expiry is normal and must not nag. Any
+      // failure (extension disabled → 503, network) silently means no hint.
+      fetch('/api/extensions/ext/skatteverket/status')
+        .then(res => (res.ok ? res.json() : null))
+        .catch(() => null),
     ])
 
-    let loadedRuns: SalaryRun[] = []
-    if (runsRes.ok) {
-      const { data } = await runsRes.json()
-      loadedRuns = data || []
-      setRuns(loadedRuns)
-    }
-    if (empRes.ok) {
+    setRuns(loadedRuns)
+    if (taxPaymentData !== undefined) setTaxPayment(taxPaymentData)
+    if (empRes?.ok) {
       const { data } = await empRes.json()
       setEmployees(data || [])
     }
-    if (settingsRes.ok) {
+    if (settingsRes?.ok) {
       const { data } = await settingsRes.json()
       if (typeof data?.salary_pay_day === 'number') setPayDay(data.salary_pay_day)
     }
-
-    // Latest booked run drives the "skatt att betala" card.
-    const latestBooked = loadedRuns.find(r => r.status === 'booked')
-    if (latestBooked) {
-      const period = `${latestBooked.period_year}-${String(latestBooked.period_month).padStart(2, '0')}`
-      const txRes = await fetch(`/api/skatteverket/tax-payments/${period}`)
-      if (txRes.ok) {
-        const tx = await txRes.json()
-        setTaxPayment(tx.data)
-      }
-    }
-
-    // Connection health for the tax card hint. Only needs_reconsent counts:
-    // the routine short-lived token expiry is normal and must not nag. Any
-    // failure (extension disabled → 503, network) silently means no hint.
-    try {
-      const statusRes = await fetch('/api/extensions/ext/skatteverket/status')
-      if (statusRes.ok) {
-        const status = await statusRes.json()
-        setSkvNeedsReconsent(status?.needsReconsent === true)
-      }
-    } catch {
-      // Extension unavailable: no hint.
-    }
+    if (skvStatus) setSkvNeedsReconsent(skvStatus.needsReconsent === true)
 
     setLoading(false)
   }, [])
@@ -150,6 +155,16 @@ export default function SalaryPage() {
       .maybeSingle()
       .then(({ data }) => setAgiDeadline(data ?? null))
   }, [company])
+
+  // The active run's AGI submission record: lets the hero distinguish
+  // "lämna in till Skatteverket" from "väntar på din BankID-signatur".
+  // Only fetched while a booked run is still unfiled; null otherwise.
+  const activeRun = runs.find(r => r.status !== 'corrected')
+  const { submission: agiSubmission } = useAgiSubmission(
+    activeRun && activeRun.status === 'booked' && !activeRun.agi_submitted_at
+      ? `${activeRun.period_year}${String(activeRun.period_month).padStart(2, '0')}`
+      : null,
+  )
 
   // One-click run creation: the API seeds all active employees, calculates,
   // and resolves period/pay-date/series defaults from settings.
@@ -244,7 +259,8 @@ export default function SalaryPage() {
   }
 
   // ── Hero state machine (first match wins) ────────────────────────────────
-  const activeRun = runs.find(r => r.status !== 'corrected')
+  // activeRun is derived above the loading return (the AGI submission hook
+  // needs it before any early return).
   const latestBooked = runs.find(r => r.status === 'booked')
   const periodOf = (r: SalaryRun) => `${r.period_year}-${String(r.period_month).padStart(2, '0')}`
 
@@ -315,6 +331,19 @@ export default function SalaryPage() {
       }
     }
     if (activeRun && activeRun.status === 'booked' && !activeRun.agi_submitted_at) {
+      // The underlag may already be at Skatteverket waiting for a BankID
+      // signature: telling the user to "lämna in" something they already
+      // submitted reads as a broken flow. Follow the real filing state.
+      const agiState = deriveAgiFilingState(activeRun, agiSubmission)
+      if (agiState === 'awaiting_signing' || agiState === 'underlag_submitted') {
+        return {
+          kind: 'cta',
+          title: t('hero_agi_signing_title', { period: periodOf(activeRun) }),
+          description: t('hero_agi_signing_description'),
+          label: t('hero_agi_signing_action'),
+          runId: activeRun.id,
+        }
+      }
       return {
         kind: 'cta',
         title: t('hero_agi_title', { period: periodOf(activeRun) }),
@@ -409,7 +438,7 @@ export default function SalaryPage() {
       )}
 
       {/* Attention cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
@@ -504,6 +533,9 @@ export default function SalaryPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* Semester (vacation ledger + year close): payroll gap-closure 3.5 */}
+        <VacationBalanceCard canWrite={canWrite} />
       </div>
 
       {/* History */}

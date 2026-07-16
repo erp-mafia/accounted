@@ -82,7 +82,7 @@ export const POST = withRouteContext(
 
     const { data: invoice, error: fetchInvError } = await supabase
       .from('invoices')
-      .select('*, customer:customers(*), items:invoice_items(*)')
+      .select('*, customer:customers(*), items:invoice_items(*), credit_notes:invoices!credited_invoice_id(id, status, creation_complete)')
       .eq('id', invoice_id)
       .eq('company_id', companyId)
       .single()
@@ -101,6 +101,23 @@ export const POST = withRouteContext(
       return errorResponseFromCode('MATCH_INVOICE_NOT_INVOICE_TYPE', txLog, {
         requestId,
         details: { documentType: docType },
+      })
+    }
+
+    if (invoice.credited_invoice_id) {
+      return errorResponseFromCode('MATCH_INVOICE_CREDIT_NOTE', txLog, { requestId })
+    }
+
+    const activeCreditNotes = ((invoice as { credit_notes?: Array<{
+      status: string
+      creation_complete?: boolean
+    }> }).credit_notes ?? []).filter(
+      (creditNote) => creditNote.status !== 'cancelled' && creditNote.creation_complete !== false,
+    )
+    if (activeCreditNotes.length > 0) {
+      return errorResponseFromCode('MATCH_INVOICE_CREDIT_NOTE', txLog, {
+        requestId,
+        details: { reason: 'active_credit_note' },
       })
     }
 

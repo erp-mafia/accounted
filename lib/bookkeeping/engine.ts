@@ -865,6 +865,48 @@ export async function reverseEntry(
     log.error('failed to unlink transactions from reversed entry', unlinkError, { entryId })
   }
 
+  // Same hazard one table over: a period whose opening_balance_entry_id still
+  // points at the entry we just reversed. getOpeningBalances() reads the linked
+  // entry's lines directly with no status filter, so the Balansrapport would go
+  // on showing a cancelled IB, and year-end refuses to run while the link is
+  // non-null ("Next fiscal period already has opening balance entry posted;
+  // reverse it before re-running year-end"): advice the storno itself could
+  // never satisfy, leaving no in-app way out. Clearing the link falls
+  // getOpeningBalances through to the duplicate-safe
+  // compute_prior_opening_balances RPC, and lets year-end re-book the IB.
+  //
+  // Two statements, not one: enforce_opening_balance_immutability rejects any
+  // UPDATE that changes opening_balance_entry_id while OLD.opening_balances_set
+  // is still true, so the flag must fall first (same order, and same reason, as
+  // the replace_period_opening_balance_link RPC). Both are scoped to this
+  // entryId, so a period already pointing elsewhere is untouched and callers
+  // that storno an old IB then relink a fresh one (opening-balance/correct)
+  // still win: they relink after this returns.
+  if (original.source_type === 'opening_balance') {
+    const { error: obFlagError } = await supabase
+      .from('fiscal_periods')
+      .update({ opening_balances_set: false })
+      .eq('company_id', companyId)
+      .eq('opening_balance_entry_id', entryId)
+
+    if (obFlagError) {
+      log.error('failed to clear opening_balances_set on reversed IB period', obFlagError, {
+        entryId,
+      })
+    } else {
+      const { error: obUnlinkError } = await supabase
+        .from('fiscal_periods')
+        .update({ opening_balance_entry_id: null })
+        .eq('company_id', companyId)
+        .eq('opening_balance_entry_id', entryId)
+      if (obUnlinkError) {
+        log.error('failed to unlink reversed opening balance entry from period', obUnlinkError, {
+          entryId,
+        })
+      }
+    }
+  }
+
   // If this was a payment entry, sync the linked invoice/supplier-invoice status.
   // Helper is shared with the DELETE journal entry route so both code paths leave
   // the invoice in a consistent state (BFL 5 kap 5§ requires GL reversal; this

@@ -98,4 +98,63 @@ describe('engine.pg: triggers & RPCs that mocks cannot catch', () => {
     )
     expect(seq.rows[0]!.user_id).toBe(userId)
   })
+
+  // reverseEntry() clears the period's IB link when it stornos an
+  // opening_balance entry. enforce_opening_balance_immutability dictates the
+  // shape of that write, and only a real Postgres can prove the ordering: a
+  // mocked client accepts the single-statement version that the trigger
+  // rejects, which is how a "fixed" storno can still leave the period pinned
+  // to a cancelled IB (blocking year-end forever).
+  it('enforce_opening_balance_immutability forces a two-step IB unlink', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+
+    const ibEntryId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      status: 'posted',
+      voucherNumber: 1,
+    })
+
+    // Linking is legal: the trigger only guards the pointer once it is set.
+    await getPool().query(
+      `UPDATE public.fiscal_periods
+          SET opening_balance_entry_id = $2::uuid, opening_balances_set = true
+        WHERE id = $1::uuid`,
+      [fiscalPeriodId, ibEntryId],
+    )
+
+    // Clearing both columns at once still reads OLD.opening_balances_set =
+    // true, so the trigger rejects it. This is the write reverseEntry must
+    // never emit.
+    await expect(
+      getPool().query(
+        `UPDATE public.fiscal_periods
+            SET opening_balance_entry_id = NULL, opening_balances_set = false
+          WHERE id = $1::uuid`,
+        [fiscalPeriodId],
+      ),
+    ).rejects.toThrow(/opening balances are immutable once set/i)
+
+    // Flag first, pointer second: the order reverseEntry uses.
+    await getPool().query(
+      `UPDATE public.fiscal_periods SET opening_balances_set = false WHERE id = $1::uuid`,
+      [fiscalPeriodId],
+    )
+    await getPool().query(
+      `UPDATE public.fiscal_periods SET opening_balance_entry_id = NULL WHERE id = $1::uuid`,
+      [fiscalPeriodId],
+    )
+
+    const period = await getPool().query<{
+      opening_balance_entry_id: string | null
+      opening_balances_set: boolean
+    }>(
+      `SELECT opening_balance_entry_id, opening_balances_set
+         FROM public.fiscal_periods WHERE id = $1::uuid`,
+      [fiscalPeriodId],
+    )
+    expect(period.rows[0]!.opening_balance_entry_id).toBeNull()
+    expect(period.rows[0]!.opening_balances_set).toBe(false)
+  })
 })

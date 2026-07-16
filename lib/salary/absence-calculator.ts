@@ -36,16 +36,19 @@ export function calculateSjuklon(
   monthlySalary: number,
   sickDays: number,
   config: PayrollConfig,
-  isAterinsjuknande: boolean = false
+  isAterinsjuknande: boolean = false,
+  // Arbetsschema-lite: legacy 21 (5-day week) unless the employee's schedule
+  // says otherwise (dailyDivisor(workdays_per_week) from work-schedule.ts).
+  dailyDivisor: number = 21
 ): SjuklonResult {
   const steps: AbsenceStep[] = []
   const r = (x: number) => Math.round(x * 100) / 100
 
-  // Daily rate = monthly / 21 working days
-  const dailyRate = r(monthlySalary / 21)
+  // Daily rate = monthly / workdays-per-month divisor
+  const dailyRate = r(monthlySalary / dailyDivisor)
   steps.push({
     label: 'Dagslön',
-    formula: 'monthly_salary / 21',
+    formula: `monthly_salary / ${dailyDivisor}`,
     input: { monthly_salary: monthlySalary },
     output: dailyRate,
   })
@@ -119,10 +122,11 @@ export function calculateSjuklon(
 export function calculateVabDeduction(
   monthlySalary: number,
   vabDays: number,
-  totalVabDaysThisYear: number = 0
+  totalVabDaysThisYear: number = 0,
+  dailyDivisor: number = 21
 ): { deduction: number; semesterGrundande: boolean; steps: AbsenceStep[] } {
   const r = (x: number) => Math.round(x * 100) / 100
-  const dailyRate = r(monthlySalary / 21)
+  const dailyRate = r(monthlySalary / dailyDivisor)
   const deduction = r(dailyRate * vabDays)
   const semesterGrundande = totalVabDaysThisYear + vabDays <= 120
 
@@ -145,10 +149,11 @@ export function calculateVabDeduction(
 export function calculateParentalLeaveDeduction(
   monthlySalary: number,
   parentalDays: number,
-  totalParentalDaysThisPregnancy: number = 0
+  totalParentalDaysThisPregnancy: number = 0,
+  dailyDivisor: number = 21
 ): { deduction: number; semesterGrundande: boolean; steps: AbsenceStep[] } {
   const r = (x: number) => Math.round(x * 100) / 100
-  const dailyRate = r(monthlySalary / 21)
+  const dailyRate = r(monthlySalary / dailyDivisor)
   const deduction = r(dailyRate * parentalDays)
   const semesterGrundande = totalParentalDaysThisPregnancy + parentalDays <= 120
 
