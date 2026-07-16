@@ -48,6 +48,7 @@ export default function InvoicePicker({ transaction, onSelect, isProcessing }: I
         .select('*, customer:customers(*)')
         .eq('company_id', companyId)
         .eq('document_type', 'invoice')
+        .is('credited_invoice_id', null)
         .in('status', ['sent', 'overdue', 'partially_paid'])
         .gt('remaining_amount', 0)
         .order('invoice_date', { ascending: false })

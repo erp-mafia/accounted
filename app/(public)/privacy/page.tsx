@@ -45,6 +45,7 @@ export default function PrivacyPolicyPage() {
             <ul>
               <li><strong>Kontouppgifter:</strong> E-postadress (för inloggning)</li>
               <li><strong>Företagsuppgifter:</strong> Företagsnamn, organisationsnummer, adress, kontaktuppgifter</li>
+              <li><strong>Kundidentitet:</strong> Personnummer för privatkunder när det behövs för avtal eller fakturering</li>
               <li><strong>Bokföringsdata:</strong> Verifikationer, fakturor, kvitton, transaktioner, kontoplaner</li>
               <li><strong>Bankdata:</strong> Kontosaldon och transaktioner (via PSD2-koppling)</li>
               <li><strong>Dokument:</strong> Uppladdade kvitton, fakturor och andra bokföringsunderlag</li>
@@ -202,6 +203,10 @@ export default function PrivacyPolicyPage() {
               <li>
                 <strong>Kontouppgifter:</strong> Så länge kontot är aktivt, plus 30 dagar efter
                 begäran om radering (för att hantera pågående bokföringsplikter).
+              </li>
+              <li>
+                <strong>Kundidentitet:</strong> Under kundrelationen, eller i sju år när uppgiften
+                ingår i räkenskapsinformation som måste bevaras.
               </li>
               <li>
                 <strong>Tekniska loggar:</strong> Maximalt 90 dagar.

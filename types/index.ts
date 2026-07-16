@@ -313,6 +313,9 @@ export interface CompanySettings {
 
   // Automation
   send_invoice_reminders: boolean
+  reminder_days_level_1: number
+  reminder_days_level_2: number
+  reminder_days_level_3: number
 
   // Reminder surcharges (dröjsmålsränta + lagstadgad påminnelseavgift)
   reminder_fee_enabled: boolean
@@ -1157,7 +1160,7 @@ export interface CreateCustomerInput {
   country?: string
   org_number?: string
   vat_number?: string
-  personal_number?: string
+  personal_number?: string | null
   language?: 'sv' | 'en'
   default_payment_terms?: number
   notes?: string

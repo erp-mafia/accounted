@@ -750,3 +750,122 @@ describe('reverseEntry: bank transaction unlink', () => {
     expect(txFilters).toMatchObject({ company_id: 'company-1', journal_entry_id: 'entry-1' })
   })
 })
+
+describe('reverseEntry: opening balance unlink', () => {
+  // Reversing a period's IB verifikat must also drop the period's pointer to
+  // it. getOpeningBalances() reads the linked entry's lines with no status
+  // filter, so a still-linked cancelled IB keeps showing in the Balansrapport,
+  // and year-end refuses to run while the pointer is non-null: the storno its
+  // own error message asks for could never satisfy it. See engine.pg.test.ts
+  // for why the flag must fall before the pointer.
+  function buildSupabase(sourceType: string) {
+    const original = {
+      id: 'entry-1',
+      company_id: 'company-1',
+      status: 'posted',
+      fiscal_period_id: 'period-1',
+      voucher_series: 'A',
+      voucher_number: 1,
+      entry_date: '2026-01-01',
+      description: 'Ingående balanser från SIE-import',
+      source_type: sourceType,
+      source_id: null,
+      lines: [
+        { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+        { account_number: '2350', debit_amount: 0, credit_amount: 1000 },
+      ],
+    }
+    const reversal = { id: 'reversal-1', reverses_id: 'entry-1', source_type: 'storno' }
+
+    let jeCall = 0
+    const jeResults = [
+      { data: original, error: null },
+      { data: reversal, error: null },
+      { data: null, error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+      { data: { ...reversal, lines: [] }, error: null },
+    ]
+    function jeBuilder() {
+      const b: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'update', 'insert']) {
+        b[m] = vi.fn().mockReturnValue(b)
+      }
+      b.single = vi.fn().mockImplementation(async () => jeResults[jeCall++])
+      b.then = (resolve: (v: unknown) => void) => resolve(jeResults[jeCall++])
+      return b
+    }
+
+    const fpUpdates: unknown[] = []
+    const fpFilters: Record<string, unknown>[] = []
+
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 2, error: null }),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'journal_entries') return jeBuilder()
+        if (table === 'chart_of_accounts') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) =>
+            resolve({
+              data: [
+                { id: 'acc-1930', account_number: '1930' },
+                { id: 'acc-2350', account_number: '2350' },
+              ],
+              error: null,
+            })
+          return b
+        }
+        if (table === 'journal_entry_lines') {
+          return { insert: vi.fn().mockResolvedValue({ error: null }) }
+        }
+        if (table === 'fiscal_periods') {
+          const b: Record<string, unknown> = {}
+          const filters: Record<string, unknown> = {}
+          b.update = vi.fn().mockImplementation((payload: unknown) => {
+            fpUpdates.push(payload)
+            fpFilters.push(filters)
+            return b
+          })
+          b.eq = vi.fn().mockImplementation((col: string, val: unknown) => {
+            filters[col] = val
+            return b
+          })
+          b.then = (resolve: (v: unknown) => void) => resolve({ error: null })
+          return b
+        }
+        if (table === 'transactions') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['update', 'eq']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) => resolve({ error: null })
+          return b
+        }
+        return createMockChain()
+      }),
+    }
+
+    return { supabase, fpUpdates, fpFilters }
+  }
+
+  it('clears the period IB link, flag before pointer, for an opening_balance entry', async () => {
+    const { supabase, fpUpdates, fpFilters } = buildSupabase('opening_balance')
+
+    const result = await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(result.id).toBe('reversal-1')
+    // Order matters: enforce_opening_balance_immutability rejects the pointer
+    // write while opening_balances_set is still true.
+    expect(fpUpdates).toEqual([{ opening_balances_set: false }, { opening_balance_entry_id: null }])
+    // Scoped to this entry, so a period pointing elsewhere is untouched.
+    for (const f of fpFilters) {
+      expect(f).toMatchObject({ company_id: 'company-1', opening_balance_entry_id: 'entry-1' })
+    }
+  })
+
+  it('leaves fiscal_periods untouched for a non-opening_balance entry', async () => {
+    const { supabase, fpUpdates } = buildSupabase('manual')
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(fpUpdates).toEqual([])
+  })
+})

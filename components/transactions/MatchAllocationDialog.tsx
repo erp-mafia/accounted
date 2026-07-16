@@ -112,6 +112,7 @@ export default function MatchAllocationDialog({
             .select('*, customer:customers(id, name)')
             .eq('company_id', companyId)
             .eq('document_type', 'invoice')
+            .is('credited_invoice_id', null)
             .in('status', ['sent', 'overdue', 'partially_paid'])
             .gt('remaining_amount', 0)
             .order('due_date', { ascending: true })

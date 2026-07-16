@@ -1,11 +1,13 @@
 /**
  * Tests for GET/PATCH/DELETE /api/articles/[id] (artikelregister).
  *
- * DELETE soft-deactivates (active = false) rather than hard-deleting, so the
- * article and its number survive for history. PATCH is a sparse update.
+ * DELETE permanently removes only articles that have never been used on an
+ * invoice line. PATCH is a sparse update.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, createMockRouteParams, parseJsonResponse } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
@@ -97,13 +99,69 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
     expect(body.error.code).toBe('ARTICLE_REVENUE_ACCOUNT_INVALID')
   })
 
-  it('DELETE soft-deactivates and returns success', async () => {
-    enqueue({ data: { id: 'a1', active: false } })
+  it('DELETE returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
 
-    const response = await DELETE(createMockRequest('/api/articles/a1', { method: 'DELETE' }), createMockRouteParams({ id: 'a1' }))
+    const response = await DELETE(
+      createMockRequest('/api/articles/a1', { method: 'DELETE' }),
+      createMockRouteParams({ id: 'a1' }),
+    )
+
+    expect(response.status).toBe(401)
+  })
+
+  it('DELETE returns 404 when the article is not found', async () => {
+    enqueue({ data: null, error: { code: 'PGRST116', message: 'not found' } })
+
+    const response = await DELETE(
+      createMockRequest('/api/articles/a1', { method: 'DELETE' }),
+      createMockRouteParams({ id: 'a1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('ARTICLE_NOT_FOUND')
+  })
+
+  it('DELETE rejects an article used on an invoice line', async () => {
+    enqueue({ data: { id: 'a1' }, error: null })
+    enqueue({ data: null, error: null, count: 1 })
+
+    const response = await DELETE(
+      createMockRequest('/api/articles/a1', { method: 'DELETE' }),
+      createMockRouteParams({ id: 'a1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('ARTICLE_IN_USE')
+    expect(supabase.from).toHaveBeenCalledTimes(2)
+  })
+
+  it('DELETE permanently removes an unused article', async () => {
+    enqueue({ data: { id: 'a1' }, error: null })
+    enqueue({ data: null, error: null, count: 0 })
+    enqueue({ data: null, error: null, count: 1 })
+
+    const emitSpy = vi.spyOn(eventBus, 'emit')
+    const response = await DELETE(
+      createMockRequest('/api/articles/a1', { method: 'DELETE' }),
+      createMockRouteParams({ id: 'a1' }),
+    )
     const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
 
     expect(status).toBe(200)
     expect(body.success).toBe(true)
+    expect(supabase.from).toHaveBeenNthCalledWith(1, 'articles')
+    expect(supabase.from).toHaveBeenNthCalledWith(2, 'invoice_items')
+    expect(supabase.from).toHaveBeenNthCalledWith(3, 'articles')
+    expect(emitSpy).toHaveBeenCalledWith({
+      type: 'article.deleted',
+      payload: { articleId: 'a1', companyId: 'company-1', userId: 'user-1' },
+    })
   })
 })

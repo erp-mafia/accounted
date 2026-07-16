@@ -55,6 +55,19 @@ describe('gnubok_search_tools', () => {
     const tool = result.tools[0]
     expect(tool).toHaveProperty('inputSchema')
     expect(tool).toHaveProperty('outputSchema')
+    expect(
+      (tool.inputSchema as { properties: Record<string, unknown> }).properties
+    ).toHaveProperty('company_id')
+  })
+
+  it('does not add company_id to company-independent discovery tools', async () => {
+    const result = await call({ detail: 'full', query: 'search tools', limit: 5 })
+    const tool = result.tools.find((candidate) => candidate.name === 'gnubok_search_tools')
+
+    expect(tool).toBeDefined()
+    expect(
+      (tool!.inputSchema as { properties: Record<string, unknown> }).properties
+    ).not.toHaveProperty('company_id')
   })
 
   it('filters by query keyword', async () => {

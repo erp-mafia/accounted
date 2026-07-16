@@ -158,6 +158,8 @@ export const SCOPE_GROUPS = [
 
 /** Map MCP tool name → required scope. Tools omitted from this map are available to any authenticated key (e.g. discovery/search/skill loading). */
 export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
+  // Companies
+  gnubok_list_companies:                  'companies:read',
   // Transactions
   gnubok_list_uncategorized_transactions:     'transactions:read',
   gnubok_list_transactions_without_documents: 'transactions:read',

@@ -52,6 +52,17 @@ vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
     mockCreateInvoiceJournalEntry(...args),
 }))
 
+const mockIssueCreditNote = vi.fn()
+vi.mock('@/lib/invoices/issue-credit-note', () => ({
+  issueCreditNote: (...args: unknown[]) => mockIssueCreditNote(...args),
+  creditNoteNeedsJournalEntry: (method: string, original: { status: string; journal_entry_id?: string | null; paid_at?: string | null; paid_amount?: number | null }) =>
+    method === 'accrual' ||
+    !!original.journal_entry_id ||
+    original.status === 'paid' ||
+    !!original.paid_at ||
+    Math.abs(original.paid_amount ?? 0) > 0,
+}))
+
 const mockUploadDocument = vi.fn()
 vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: (...args: unknown[]) => mockUploadDocument(...args),
@@ -94,18 +105,66 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
     mockRenderToBuffer.mockResolvedValue(Buffer.from('fake-pdf'))
     mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    mockIssueCreditNote.mockResolvedValue({
+      complete: true,
+      journalEntryId: 'credit-je-1',
+      journalEntryRequired: true,
+      failures: [],
+    })
+  })
+
+  it('returns 401 when not authenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(401)
+  })
+
+  it('returns 404 when the invoice does not exist', async () => {
+    enqueue({ data: null, error: { message: 'not found' } })
+
+    const request = createMockRequest('/api/invoices/missing/mark-sent', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'missing' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(404)
+  })
+
+  it('returns 400 when the invoice is not a draft', async () => {
+    enqueue({ data: makeInvoice({ id: 'inv-1', status: 'sent' }), error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
   })
 
   it('archives the rendered PDF as underlag linked to the journal entry', async () => {
     enqueue({ data: invoice, error: null }) // fetch invoice
-    enqueue({ data: null, error: null }) // status update
     enqueue({ data: company, error: null }) // settings
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // status update
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-7' })
     enqueue({ data: null, error: null }) // update invoice with journal_entry_id
 
     const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
-    const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string | null }>(response)
+    const { status, body } = await parseJsonResponse<{
+      success: boolean
+      journal_entry_id: string | null
+      partial?: boolean
+      partial_failures?: Array<{ step: string }>
+    }>(response)
 
     expect(status).toBe(200)
     expect(body.success).toBe(true)
@@ -128,37 +187,25 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     )
   })
 
-  it('archives the PDF even when journal entry creation fails (non-blocking)', async () => {
+  it('restores the draft and fails closed when journal entry creation fails', async () => {
     enqueue({ data: invoice, error: null })
-    enqueue({ data: null, error: null })
     enqueue({ data: company, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
     mockCreateInvoiceJournalEntry.mockRejectedValue(new Error('Period locked'))
 
     const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
-    const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string | null }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
-    expect(body.journal_entry_id).toBeNull()
-
-    expect(mockUploadDocument).toHaveBeenCalledTimes(1)
-    expect(mockUploadDocument).toHaveBeenCalledWith(
-      expect.anything(),
-      'user-1',
-      'company-1',
-      expect.objectContaining({ name: 'faktura-F-2026010.pdf' }),
-      expect.objectContaining({
-        upload_source: 'system',
-        journal_entry_id: undefined,
-      })
-    )
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('INVOICE_MARK_SENT_BOOK_FAILED')
+    expect(mockUploadDocument).not.toHaveBeenCalled()
   })
 
   it('still returns 200 when PDF archival itself fails', async () => {
     enqueue({ data: invoice, error: null })
-    enqueue({ data: null, error: null })
     enqueue({ data: company, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-8' })
     enqueue({ data: null, error: null })
 
@@ -183,8 +230,8 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     })
 
     enqueue({ data: proforma, error: null })
-    enqueue({ data: null, error: null })
     enqueue({ data: company, error: null })
+    enqueue({ data: [{ id: 'inv-2' }], error: null })
 
     const request = createMockRequest('/api/invoices/inv-2/mark-sent', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-2' }))
@@ -196,10 +243,10 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     expect(mockRenderToBuffer).not.toHaveBeenCalled()
   })
 
-  it('uses kreditfaktura filename when archiving a credit note', async () => {
+  it('issues the credit note and uses a credit-note filename when archiving it', async () => {
     const creditNote = makeInvoice({
       id: 'inv-3',
-      invoice_number: 'F-2026011',
+      invoice_number: 'KR-F-2026010',
       status: 'draft',
       credited_invoice_id: 'inv-1',
       customer,
@@ -207,31 +254,132 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     })
 
     enqueue({ data: creditNote, error: null })
-    enqueue({ data: null, error: null })
     enqueue({ data: company, error: null })
-    mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-9' })
-    enqueue({ data: null, error: null })
-    // Lookup of the original invoice's number for the credit note PDF
-    enqueue({ data: { invoice_number: 'F-2026010' }, error: null })
+    const original = {
+      id: 'inv-1',
+      invoice_number: 'F-2026010',
+      status: 'sent',
+      journal_entry_id: 'original-je-1',
+      paid_at: null,
+      paid_amount: null,
+      total: 12500,
+    }
+    enqueue({ data: original, error: null })
+    enqueue({ data: [{ id: 'inv-3' }], error: null })
 
     const request = createMockRequest('/api/invoices/inv-3/mark-sent', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'inv-3' }))
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
+    expect(mockIssueCreditNote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        creditNote: expect.objectContaining({ id: 'inv-3' }),
+        originalInvoice: original,
+        accountingMethod: 'accrual',
+      }),
+    )
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
     expect(mockUploadDocument).toHaveBeenCalledWith(
       expect.anything(),
       'user-1',
       'company-1',
-      expect.objectContaining({ name: 'kreditfaktura-F-2026011.pdf' }),
+      expect.objectContaining({ name: 'kreditfaktura-KR-F-2026010.pdf' }),
       expect.anything()
     )
   })
 
+  it('fails closed and restores the draft when credit-note booking cannot start', async () => {
+    const creditNote = makeInvoice({
+      id: 'credit-1',
+      invoice_number: 'KR-F-2026010',
+      status: 'draft',
+      credited_invoice_id: 'inv-1',
+      customer,
+      items: invoice.items,
+    })
+    enqueue({ data: creditNote, error: null })
+    enqueue({ data: company, error: null })
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2026010',
+        status: 'sent',
+        journal_entry_id: 'original-je-1',
+        paid_at: null,
+        paid_amount: null,
+        total: 12500,
+      },
+      error: null,
+    })
+    enqueue({ data: [{ id: 'credit-1' }], error: null })
+    mockIssueCreditNote.mockResolvedValue({
+      complete: false,
+      journalEntryId: null,
+      journalEntryRequired: true,
+      failures: [{ step: 'journal_entry', reason: 'Perioden är låst' }],
+    })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/invoices/credit-1/mark-sent', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'credit-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(500)
+    expect(mockUploadDocument).not.toHaveBeenCalled()
+  })
+
+  it('repairs a sent credit note without running the draft status transition again', async () => {
+    const creditNote = makeInvoice({
+      id: 'credit-1',
+      invoice_number: 'KR-F-2026010',
+      status: 'sent',
+      credited_invoice_id: 'inv-1',
+      journal_entry_id: null,
+      customer,
+      items: invoice.items,
+    })
+    enqueue({ data: creditNote, error: null })
+    enqueue({ data: company, error: null })
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2026010',
+        status: 'sent',
+        journal_entry_id: 'original-je-1',
+        paid_at: null,
+        paid_amount: null,
+        total: 12500,
+      },
+      error: null,
+    })
+
+    const request = createMockRequest('/api/invoices/credit-1/mark-sent', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'credit-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockIssueCreditNote).toHaveBeenCalledOnce()
+  })
+
+  it('returns 409 when another request already marked the draft as sent', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(409)
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+    expect(mockUploadDocument).not.toHaveBeenCalled()
+  })
+
   it('renders the archived PDF as if already sent (no UTKAST banner)', async () => {
     enqueue({ data: invoice, error: null }) // fetch invoice (status: 'draft')
-    enqueue({ data: null, error: null }) // status update
     enqueue({ data: company, error: null }) // settings
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // status update
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-99' })
     enqueue({ data: null, error: null }) // update invoice with journal_entry_id
 

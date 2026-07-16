@@ -25,7 +25,7 @@ import { formatCurrency } from '@/lib/utils'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import { Loader2, Plus, Trash2, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock, Tags } from 'lucide-react'
+import { Loader2, Plus, Trash2, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock, Tags, Copy } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -60,6 +60,7 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
+import type { InvoiceCopyInitial } from '@/lib/invoices/copy-invoice'
 import type { Customer, Currency, CreateInvoiceInput, CreateCustomerInput, InvoiceDocumentType, Article, Invoice, InvoiceItem, BASAccount } from '@/types'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
@@ -77,6 +78,7 @@ export type InvoiceForEdit = Invoice & { items: InvoiceItem[] }
 export type InvoiceEditorProps = (
   | { mode?: 'create' }
   | { mode: 'edit'; initial: InvoiceForEdit }
+  | { mode: 'copy'; initial: InvoiceCopyInitial }
 ) & { bare?: boolean }
 
 // Subset of Article fields the line picker needs to pre-fill a row.
@@ -106,7 +108,10 @@ function compactDims(dims: Record<string, string>): string {
 export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'create' }) {
   // Edit mode pre-fills the form from an existing draft and saves via PATCH.
   const isEditMode = props.mode === 'edit'
+  const isCopyMode = props.mode === 'copy'
   const initial = props.mode === 'edit' ? props.initial : null
+  const copyInitial = props.mode === 'copy' ? props.initial : null
+  const initialOreRounding = initial?.ore_rounding ?? copyInitial?.ore_rounding
   const bare = props.bare === true
   const router = useRouter()
   const { toast } = useToast()
@@ -271,7 +276,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Öresavrundning is display-only. In edit mode the draft's stored flag wins;
   // otherwise it defaults to the company-wide setting (loaded below).
   const [oreRounding, setOreRounding] = useState<boolean>(
-    typeof initial?.ore_rounding === 'boolean' ? initial.ore_rounding : true,
+    typeof initialOreRounding === 'boolean' ? initialOreRounding : true,
   )
   const [vatRegistered, setVatRegistered] = useState<boolean>(true)
   const [numberPreview, setNumberPreview] = useState<string | null>(null)
@@ -291,7 +296,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // open/close bookkeeping as accountOverrideRows).
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
   const [defaultDims, setDefaultDims] = useState<Record<string, string>>(
-    initial?.default_dimensions ?? {},
+    initial?.default_dimensions ?? copyInitial?.default_dimensions ?? {},
   )
   const [dimensionOverrideRows, setDimensionOverrideRows] = useState<Set<number>>(new Set())
   // True only when the user had zero invoices when this page loaded. The
@@ -362,6 +367,26 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             dimensions: hasDimensionValues(item.dimensions) ? item.dimensions ?? null : null,
           })),
         }
+      : copyInitial
+        ? {
+            customer_id: copyInitial.customer_id,
+            invoice_date: '',
+            due_date: '',
+            delivery_date: '',
+            currency: copyInitial.currency,
+            document_type: 'invoice' as InvoiceDocumentType,
+            your_reference: '',
+            our_reference: copyInitial.our_reference,
+            notes: copyInitial.notes,
+            payment_link_url: '',
+            payment_link_auto: true,
+            external_invoice_number: '',
+            self_billing_agreement_ref: '',
+            received_date: '',
+            deduction_personnummer: '',
+            deduction_housing_designation: '',
+            items: copyInitial.items,
+          }
       : {
           customer_id: '',
           invoice_date: '',
@@ -542,11 +567,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       .single()
     if (data?.invoice_default_notes) {
       setDefaultNotes(data.invoice_default_notes)
-      setValue('notes', data.invoice_default_notes)
+      if (!isEditMode && !isCopyMode) {
+        setValue('notes', data.invoice_default_notes)
+      }
     }
     // Pre-fill "Vår referens" from the company default: only when creating a
     // fresh invoice, so an edited draft's own reference is never overwritten.
-    if (!isEditMode && data?.default_our_reference) {
+    if (!isEditMode && !isCopyMode && data?.default_our_reference) {
       setValue('our_reference', data.default_our_reference)
     }
     setHasBankDetails(
@@ -557,7 +584,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
     // An explicit per-invoice flag (edit mode) wins; only fall back to the
     // company-wide setting when creating or when the draft never set one.
-    if (typeof data?.ore_rounding === 'boolean' && (!isEditMode || initial?.ore_rounding == null)) {
+    if (typeof data?.ore_rounding === 'boolean' && initialOreRounding == null) {
       setOreRounding(data.ore_rounding)
     }
     setLogoUrl(data?.logo_url ?? null)
@@ -1266,6 +1293,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
   const titleText = isEditMode
     ? t('title_edit')
+    : isCopyMode
+    ? t('title_copy')
     : isSelfBilled
     ? ts('title')
     : watchDocumentType === 'proforma'
@@ -1275,6 +1304,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       : t('title_invoice')
   const subtitleText = isEditMode
     ? t('subtitle_edit')
+    : isCopyMode
+    ? t('subtitle_copy')
     : isSelfBilled
     ? ts('subtitle')
     : watchDocumentType === 'proforma'
@@ -1314,7 +1345,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         />
       </div>
 
-      {!isEditMode && (
+      {isCopyMode && copyInitial && (
+        <div className="flex items-start gap-3 rounded-lg border border-border/60 bg-muted/30 px-4 py-3 text-sm">
+          <Copy className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <p className="text-muted-foreground">
+            {t('copy_notice', { number: copyInitial.source_invoice_number })}
+          </p>
+        </div>
+      )}
+
+      {!isEditMode && !isCopyMode && (
         <Tabs value={mode} onValueChange={(v) => setMode(v as 'invoice' | 'self_billed')}>
           <TabsList>
             <TabsTrigger value="invoice">{t('mode_invoice')}</TabsTrigger>

@@ -52,6 +52,23 @@ describe('getJournalEntryUnderlagReferences', () => {
     expect(refs).toEqual([{ type: 'supplier_invoice', id: 'si-1', number: 'LF-001' }])
   })
 
+  it('surfaces the retained PDF through a supplier payment reference', async () => {
+    const refs = await run([
+      { data: [] }, // 1. invoices direct
+      { data: [] }, // 2. invoice_payments
+      { data: [] }, // 4. supplier registration
+      { data: [{ id: 'si-1', supplier_invoice_number: 'LF-001', document_id: 'doc-1' }] }, // 5. supplier payment
+      { data: [{ supplier_invoice_id: 'si-1' }] }, // 6. supplier_invoice_payments
+    ])
+
+    expect(refs).toEqual([{
+      type: 'supplier_invoice',
+      id: 'si-1',
+      number: 'LF-001',
+      document_id: 'doc-1',
+    }])
+  })
+
   it('returns nothing when no invoice is linked (warning legitimately stays)', async () => {
     const refs = await run([
       { data: [] }, // 1. invoices direct

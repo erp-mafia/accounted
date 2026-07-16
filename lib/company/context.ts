@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { cookies } from 'next/headers'
 import type { EntityType } from '@/types'
 
@@ -154,26 +155,27 @@ export async function getUserCompanies(
   supabase: SupabaseClient,
   userId: string
 ) {
-  const { data, error } = await supabase
-    .from('company_members')
-    .select(`
-      company_id,
-      role,
-      joined_at,
-      companies:company_id (
+  return fetchAllRows(({ from, to }) =>
+    supabase
+      .from('company_members')
+      .select(`
         id,
-        name,
-        org_number,
-        entity_type,
-        archived_at,
-        created_at
-      )
-    `)
-    .eq('user_id', userId)
-    .order('joined_at', { ascending: true })
-
-  if (error) throw error
-  return data ?? []
+        company_id,
+        role,
+        joined_at,
+        companies:company_id (
+          id,
+          name,
+          org_number,
+          entity_type,
+          archived_at,
+          created_at
+        )
+      `)
+      .eq('user_id', userId)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
 }
 
 /**

@@ -50,7 +50,7 @@ export default function CustomerForm({
     vat_number: z.string().optional(),
     personal_number: z
       .string()
-      .regex(/^(\d{6}|\d{8})[-+]?\d{4}$/, t('personal_number_invalid'))
+      .regex(/^(?:(\d{6}|\d{8})[-+]?\d{4}|\*{8}-\d{4})$/, t('personal_number_invalid'))
       .optional()
       .or(z.literal('')),
     language: z.enum(['sv', 'en']).optional(),
@@ -133,11 +133,15 @@ export default function CustomerForm({
   }
 
   const onFormSubmit = (data: FormData) => {
-    onSubmit({
+    const payload: CreateCustomerInput = {
       ...data,
       email: data.email || undefined,
-      personal_number: data.personal_number || undefined,
-    })
+      personal_number: data.personal_number || null,
+    }
+    if (data.personal_number?.startsWith('*') && data.personal_number === initialData?.personal_number) {
+      delete payload.personal_number
+    }
+    onSubmit(payload)
   }
 
   return (

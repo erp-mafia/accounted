@@ -180,6 +180,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         details: { documentType: docType },
       })
     }
+    if (invoice.credited_invoice_id) {
+      return v1ErrorResponseFromCode('MATCH_INVOICE_CREDIT_NOTE', txLog, {
+        requestId: ctx.requestId,
+      })
+    }
     if (
       invoice.status !== 'sent' &&
       invoice.status !== 'overdue' &&

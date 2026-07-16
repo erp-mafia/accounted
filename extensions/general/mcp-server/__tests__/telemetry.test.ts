@@ -22,7 +22,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     extractBearerToken: vi.fn().mockReturnValue('test-token'),
     validateApiKey: vi.fn().mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: '11111111-1111-4111-8111-111111111111',
       // Only reports:read: enough to call gnubok_get_trial_balance, NOT enough
       // to call gnubok_create_invoice (invoices:write). Drives the scope-denied test.
       scopes: ['reports:read'],
@@ -35,6 +35,24 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     // filter has data to work against.
     createServiceClientNoCookies: vi.fn(() => ({
       from: vi.fn((table: string) => {
+        if (table === 'company_members') {
+          return {
+            select: vi.fn(() => {
+              const chain: Record<string, ReturnType<typeof vi.fn>> = {
+                eq: vi.fn(() => chain),
+                is: vi.fn(() => chain),
+                maybeSingle: vi.fn().mockResolvedValue({
+                  data: {
+                    company_id: '11111111-1111-4111-8111-111111111111',
+                    role: 'owner',
+                  },
+                  error: null,
+                }),
+              }
+              return chain
+            }),
+          }
+        }
         if (table === 'company_settings') {
           return {
             select: vi.fn(() => ({
@@ -191,7 +209,7 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.actorId).toBe('key-1')
     expect(event.actorLabel).toBe('Test Key')
     expect(event.userId).toBe('user-1')
-    expect(event.companyId).toBe('company-1')
+    expect(event.companyId).toBe('11111111-1111-4111-8111-111111111111')
     expect(event.requestId).toBe(1)
     // Real wall-clock: non-negative number
     expect(typeof event.latencyMs).toBe('number')
@@ -393,7 +411,7 @@ describe('mcp.tools_list_called telemetry', () => {
     expect(event.toolCount).toBeLessThan(100)
     expect(event.actorType).toBe('api_key')
     expect(event.userId).toBe('user-1')
-    expect(event.companyId).toBe('company-1')
+    expect(event.companyId).toBe('11111111-1111-4111-8111-111111111111')
     expect(typeof event.latencyMs).toBe('number')
     expect(event.latencyMs).toBeGreaterThanOrEqual(0)
   })
@@ -496,7 +514,7 @@ describe('mcp.skill_loaded telemetry', () => {
     expect(event.actorType).toBe('api_key')
     expect(event.actorId).toBe('key-1')
     expect(event.userId).toBe('user-1')
-    expect(event.companyId).toBe('company-1')
+    expect(event.companyId).toBe('11111111-1111-4111-8111-111111111111')
 
     // The pre-existing workflow-funnel event still fires for workflow tier.
     const wf = await workflowStartedPromise

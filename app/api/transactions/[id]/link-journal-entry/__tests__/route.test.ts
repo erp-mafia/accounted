@@ -309,6 +309,43 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     expect(body.error.code).toBe('LINK_TX_INVOICE_NOT_OPEN')
   })
 
+  it('returns 400 before linking when supplied invoice is a credit note', async () => {
+    enqueue({
+      data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: 1000 }),
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: JE_UUID,
+        status: 'posted',
+        voucher_series: 'A',
+        voucher_number: 1,
+        entry_date: '2026-05-15',
+      },
+      error: null,
+    })
+    enqueue({
+      data: makeInvoice({
+        id: INV_UUID,
+        status: 'sent',
+        total: -1000,
+        remaining_amount: -1000,
+        credited_invoice_id: 'original-invoice-1',
+      }),
+      error: null,
+    })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
+      method: 'POST',
+      body: { journal_entry_id: JE_UUID, invoice_id: INV_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('LINK_TX_INVOICE_CREDIT_NOTE')
+  })
+
   it('returns 409 LINK_TX_INVOICE_RACE when optimistic lock loses and rolls back the tx link', async () => {
     enqueue({
       data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: 1000, date: '2026-05-15' }),

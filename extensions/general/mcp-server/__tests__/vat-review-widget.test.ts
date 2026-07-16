@@ -19,7 +19,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
     extractBearerToken: vi.fn().mockReturnValue('test-token'),
     validateApiKey: vi.fn().mockResolvedValue({
       userId: 'user-1',
-      companyId: 'company-1',
+      companyId: '11111111-1111-4111-8111-111111111111',
       scopes: ['reports:read'],
     }),
     // Fully-chainable, awaitable proxy resolving to empty data: satisfies both
@@ -38,7 +38,27 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
             },
           },
         )
-      return { from: () => makeChain() }
+      const membershipChain: unknown = new Proxy(
+        {},
+        {
+          get(_t, prop) {
+            if (prop === 'then') {
+              return (resolve: (v: unknown) => void) =>
+                resolve({
+                  data: {
+                    company_id: '11111111-1111-4111-8111-111111111111',
+                    role: 'owner',
+                  },
+                  error: null,
+                })
+            }
+            return () => membershipChain
+          },
+        }
+      )
+      return {
+        from: (table: string) => (table === 'company_members' ? membershipChain : makeChain()),
+      }
     }),
   }
 })

@@ -15,6 +15,9 @@ import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
+import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
+import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
+import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
 import {
   Loader2,
   ArrowLeft,
@@ -33,8 +36,11 @@ import {
   Lock,
   CalendarClock,
   Pencil,
+  Copy,
 } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
 import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
@@ -77,6 +83,8 @@ interface InvoiceWithRelations extends Invoice {
 
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { canWrite } = useCanWrite()
+  const { isSandbox } = useCompany()
+  const canEmail = useCapability(CAPABILITY.email_send)
   const { id } = use(params)
   const router = useRouter()
   const { toast } = useToast()
@@ -116,6 +124,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [nextNumberPreview, setNextNumberPreview] = useState<string | null>(null)
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [vatRegistered, setVatRegistered] = useState<boolean>(true)
+  const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
+  const [reminderDays, setReminderDays] = useState<[number, number, number]>([15, 30, 45])
 
   const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
   const reminderLevelLabel = (level: 1 | 2 | 3): string => t(`reminder_level_${level}`)
@@ -210,21 +220,23 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         data.company_id
           ? supabase
               .from('company_settings')
-              .select('ore_rounding, vat_registered')
+              .select('ore_rounding, vat_registered, accounting_method, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3')
               .eq('company_id', data.company_id)
               .maybeSingle()
           : Promise.resolve(null),
-        data.status === 'credited'
+        !data.credited_invoice_id &&
+        ['sent', 'paid', 'overdue', 'credited'].includes(data.status)
           ? supabase
               .from('invoices')
-              .select('id, invoice_number')
+              .select('id, invoice_number, status')
               .eq('credited_invoice_id', id)
-              .single()
+              .neq('status', 'cancelled')
+              .maybeSingle()
           : Promise.resolve(null),
         data.credited_invoice_id
           ? supabase
               .from('invoices')
-              .select('id, invoice_number')
+              .select('id, invoice_number, status, journal_entry_id, paid_at, paid_amount, total')
               .eq('id', data.credited_invoice_id)
               .single()
           : Promise.resolve(null),
@@ -243,10 +255,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       if (typeof settings?.vat_registered === 'boolean') {
         setVatRegistered(settings.vat_registered)
       }
+      setAccountingMethod(settings?.accounting_method === 'cash' ? 'cash' : 'accrual')
+      setReminderDays([
+        settings?.reminder_days_level_1 ?? 15,
+        settings?.reminder_days_level_2 ?? 30,
+        settings?.reminder_days_level_3 ?? 45,
+      ])
     }
-    if (creditNoteRes?.data) {
-      setCreditNote(creditNoteRes.data as Invoice)
-    }
+    setCreditNote(creditNoteRes?.data ? (creditNoteRes.data as Invoice) : null)
     if (originalRes?.data) {
       setOriginalInvoice(originalRes.data as Invoice)
     }
@@ -466,7 +482,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       // Unnumbered drafts are hard deleted ("Ta bort"); numbered drafts are
       // makulerade and keep their number in the series.
       toast(
-        invoice.invoice_number
+        invoice.invoice_number && !invoice.credited_invoice_id
           ? {
               title: t('cancelled_toast_title'),
               description: t('cancelled_with_number', { number: invoice.invoice_number }),
@@ -477,7 +493,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             }
       )
 
-      router.push('/invoices')
+      router.push(
+        invoice.credited_invoice_id
+          ? `/invoices/${invoice.credited_invoice_id}`
+          : '/invoices',
+      )
     } catch (error) {
       toast({
         title: t('cancel_failed_title'),
@@ -509,6 +529,26 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const isProforma = docType === 'proforma'
   const isDeliveryNote = docType === 'delivery_note'
   const isRealInvoice = docType === 'invoice'
+  const isCreditNote = !!invoice.credited_invoice_id
+  const booksOnIssue = isCreditNote
+    ? !!originalInvoice && creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
+    : accountingMethod === 'accrual'
+  const preferredSendMode = getCreditNoteSendMode({
+    customerHasEmail,
+    isSandbox,
+    canEmail,
+  })
+  const creditNoteNeedsRepair =
+    isCreditNote &&
+    invoice.status === 'sent' &&
+    !!originalInvoice &&
+    (
+      originalInvoice.status !== 'credited' ||
+      (
+        creditNoteNeedsJournalEntry(accountingMethod, originalInvoice) &&
+        !invoice.journal_entry_id
+      )
+    )
   // An unnumbered draft is one saved via "Spara som utkast" that hasn't been
   // finalized: no F-number yet, so it can still be reviewed-and-created or
   // hard-deleted. Once finalized it gets a number and behaves like any draft.
@@ -525,6 +565,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // in place (header + lines) via /invoices/{id}/edit. Sent/paid invoices are
   // immutable (BFL); they are corrected with a credit note instead.
   const isEditableDraft = isEditableInvoiceDraft(invoice)
+  const isCopyable = canCopyInvoice(invoice)
   const hasAccruedItems = invoice.items.some(itemHasAccrual)
   return (
     <div className="space-y-8">
@@ -600,14 +641,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           )}
           {invoice.status === 'draft' && !isDeliveryNote && invoice.invoice_number && (
-            customerHasEmail ? (
+            preferredSendMode === 'email' ? (
               <Button
                 onClick={() => openSendDialog('email')}
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <Mail className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t('send_via_email')}
+                {t(booksOnIssue ? 'send_via_email_and_book' : 'send_via_email')}
               </Button>
             ) : (
               <Button
@@ -617,9 +658,28 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? <Send className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t('mark_sent_manually')}
+                {t(booksOnIssue ? 'mark_sent_and_book' : 'mark_as_sent')}
               </Button>
             )
+          )}
+          {isCopyable && canWrite && (
+            <Link href={`/invoices?copy=${invoice.id}`}>
+              <Button variant="outline">
+                <Copy className="mr-2 h-4 w-4" />
+                {t('copy_invoice')}
+              </Button>
+            </Link>
+          )}
+          {creditNoteNeedsRepair && (
+            <Button
+              variant="secondary"
+              onClick={() => openSendDialog('manual')}
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {canWrite ? <AlertTriangle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('complete_credit_bookkeeping')}
+            </Button>
           )}
           {isDeliveryNote && invoice.status === 'draft' && (
             <Button
@@ -632,7 +692,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('mark_as_sent')}
             </Button>
           )}
-          {(invoice.status === 'sent' || invoice.status === 'overdue') && isRealInvoice && (
+          {(invoice.status === 'sent' || invoice.status === 'overdue') && isRealInvoice && !isCreditNote && (
             <Button
               onClick={() => setShowPaymentDialog(true)}
               disabled={isUpdating || !canWrite}
@@ -1079,7 +1139,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 </CardTitle>
                 {reminders.length === 0 && (
                   <CardDescription>
-                    {t('reminders_description')}
+                    {t('reminders_description', {
+                      day1: reminderDays[0],
+                      day2: reminderDays[1],
+                      day3: reminderDays[2],
+                    })}
                   </CardDescription>
                 )}
               </CardHeader>
@@ -1135,19 +1199,26 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
 
           {/* Credit note reference (if this invoice was credited) */}
-          {invoice.status === 'credited' && creditNote && (
-            <Card className="border-warning/50">
+          {creditNote && (
+            <Card className={creditNote.status === 'draft' ? undefined : 'border-warning/50'}>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-warning">
+                <CardTitle className={cn(
+                  'flex items-center gap-2',
+                  creditNote.status !== 'draft' && 'text-warning',
+                )}>
                   <ReceiptText className="h-5 w-5" />
-                  {t('credited_card_title')}
+                  {creditNote.status === 'draft'
+                    ? t('credit_draft_card_title')
+                    : t('credited_card_title')}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <Link href={`/invoices/${creditNote.id}`}>
                   <Button variant="outline" size="sm" className="w-full">
                     <ExternalLink className="mr-2 h-4 w-4" />
-                    {t('see_credit_note', { number: creditNote.invoice_number ?? '' })}
+                    {creditNote.status === 'draft'
+                      ? t('open_credit_draft', { number: creditNote.invoice_number ?? '' })
+                      : t('see_credit_note', { number: creditNote.invoice_number ?? '' })}
                   </Button>
                 </Link>
               </CardContent>
@@ -1201,7 +1272,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
 
           {/* Status actions */}
-          {invoice.status !== 'cancelled' && invoice.status !== 'credited' && !invoice.credited_invoice_id && (
+          {invoice.status !== 'cancelled' && invoice.status !== 'credited' && (!invoice.credited_invoice_id || invoice.status === 'draft') && (
             <Card>
               <CardHeader>
                 <CardTitle>{t('actions_card_title')}</CardTitle>
@@ -1239,7 +1310,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       {/* When the customer has an email the header offers "Send via
                           email" as the primary; keep the manual-mark-sent path here
                           as the secondary alternative (it is not in the header). */}
-                      {!isDeliveryNote && customerHasEmail && (
+                      {!isDeliveryNote && preferredSendMode === 'email' && (
                         <>
                           <Button
                             variant="ghost"
@@ -1247,7 +1318,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                             onClick={() => openSendDialog('manual')}
                           >
                             <Send className="mr-2 h-4 w-4" />
-                            {t('mark_sent_manually')}
+                            {t(booksOnIssue ? 'mark_sent_and_book' : 'mark_as_sent')}
                           </Button>
                           <p className="text-[11px] text-muted-foreground/60 px-1 -mt-1">
                             {t('send_manual_hint_with_email')}
@@ -1261,12 +1332,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         disabled={isDeleting}
                       >
                         <Trash2 className="mr-2 h-4 w-4" />
-                        {t('delete_draft')}
+                        {t(isCreditNote ? 'remove_credit_draft' : 'delete_draft')}
                       </Button>
                     </>
                   )
                 )}
-                {((invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'paid') && isRealInvoice) && (
+                {((invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'paid') && isRealInvoice && !creditNote) && (
                   <Link href={`/invoices/${invoice.id}/credit`} className="block">
                     <Button variant="outline" className="w-full">
                       <ReceiptText className="mr-2 h-4 w-4" />
@@ -1280,15 +1351,23 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </div>
       </div>
 
-      {/* Remove/cancel confirmation. A numbered draft is makulerad (status flips
-          to 'cancelled', number retained for a gap-free series); an unnumbered
-          draft is hard deleted since it never entered the number series. */}
+      {/* Remove/cancel confirmation. An unissued credit-note draft and an
+          unnumbered invoice draft are hard deleted; other numbered drafts are
+          retained as cancelled to preserve their number series. */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{invoice.invoice_number ? t('delete_dialog_title') : t('remove_dialog_title')}</DialogTitle>
+            <DialogTitle>
+              {isCreditNote
+                ? t('remove_credit_dialog_title')
+                : invoice.invoice_number
+                  ? t('delete_dialog_title')
+                  : t('remove_dialog_title')}
+            </DialogTitle>
             <DialogDescription>
-              {invoice.invoice_number ? (
+              {isCreditNote ? (
+                t('remove_credit_dialog_desc')
+              ) : invoice.invoice_number ? (
                 <>
                   {t('delete_dialog_desc_with_number_1')}
                   <strong>{t('delete_dialog_status_makulerad')}</strong>
@@ -1310,7 +1389,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
             <Button variant="destructive" onClick={deleteInvoice} disabled={isDeleting}>
               {isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {invoice.invoice_number ? t('delete_dialog_confirm') : t('remove_dialog_confirm')}
+              {isCreditNote
+                ? t('remove_credit_dialog_confirm')
+                : invoice.invoice_number
+                  ? t('delete_dialog_confirm')
+                  : t('remove_dialog_confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -111,10 +111,9 @@ export const PATCH = withRouteContext(
   { requireWrite: true },
 )
 
-// DELETE soft-deactivates (active = false) rather than hard-deleting. Articles
-// are master data referenced by historical invoice lines via a (frozen) copy;
-// keeping the row preserves the register's audit trail and the article number.
-// Re-activate by PATCHing { active: true }.
+// Articles are master data, while invoice lines hold frozen copies of the
+// accounting values. An article may therefore be deleted only while no invoice
+// line references it. The preflight also covers draft invoices.
 export const DELETE = withRouteContext(
   'article.delete',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
@@ -122,28 +121,66 @@ export const DELETE = withRouteContext(
     const { user, supabase, companyId, log, requestId } = ctx
     const opLog = log.child({ articleId: id })
 
-    const { data, error } = await supabase
+    const { error: articleError } = await supabase
       .from('articles')
-      .update({ active: false })
+      .select('id')
       .eq('id', id)
       .eq('company_id', companyId)
-      .select()
       .single()
 
-    if (error) {
-      if (error.code === 'PGRST116') {
+    if (articleError) {
+      if (articleError.code === 'PGRST116') {
         return errorResponseFromCode('ARTICLE_NOT_FOUND', opLog, { requestId })
       }
-      opLog.error('article deactivate failed', error)
-      return errorResponseFromCode('ARTICLE_UPDATE_FAILED', opLog, {
+      opLog.error('article lookup before delete failed', articleError)
+      return errorResponseFromCode('ARTICLE_DELETE_FAILED', opLog, {
         requestId,
-        details: { reason: error.message },
+        details: { reason: articleError.message },
       })
     }
 
+    const { count: usageCount, error: usageError } = await supabase
+      .from('invoice_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('article_id', id)
+      .eq('company_id', companyId)
+
+    if (usageError) {
+      opLog.error('article usage check failed', usageError)
+      return errorResponseFromCode('ARTICLE_DELETE_FAILED', opLog, {
+        requestId,
+        details: { reason: usageError.message },
+      })
+    }
+
+    if ((usageCount ?? 0) > 0) {
+      return errorResponseFromCode('ARTICLE_IN_USE', opLog, { requestId })
+    }
+
+    const { error: deleteError, count: deletedCount } = await supabase
+      .from('articles')
+      .delete({ count: 'exact' })
+      .eq('id', id)
+      .eq('company_id', companyId)
+
+    if (deleteError) {
+      if (deleteError.code === '23503') {
+        return errorResponseFromCode('ARTICLE_IN_USE', opLog, { requestId })
+      }
+      opLog.error('article delete failed', deleteError)
+      return errorResponseFromCode('ARTICLE_DELETE_FAILED', opLog, {
+        requestId,
+        details: { reason: deleteError.message },
+      })
+    }
+
+    if (deletedCount === 0) {
+      return errorResponseFromCode('ARTICLE_NOT_FOUND', opLog, { requestId })
+    }
+
     await eventBus.emit({
-      type: 'article.updated',
-      payload: { article: data as Article, companyId: companyId!, userId: user.id },
+      type: 'article.deleted',
+      payload: { articleId: id, companyId, userId: user.id },
     })
 
     return NextResponse.json({ success: true })

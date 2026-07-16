@@ -102,7 +102,6 @@ function ArticlesPageInner() {
       .from('articles')
       .select('*')
       .eq('company_id', company.id)
-      .eq('active', true)
       .order('name', { ascending: true })
 
     if (error) {

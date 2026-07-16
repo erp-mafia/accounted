@@ -41,12 +41,6 @@ vi.mock('@/lib/currency/riksbanken', () => ({
   convertToSEK: vi.fn(),
 }))
 
-const mockCreateCreditNoteJournalEntry = vi.fn()
-vi.mock('@/lib/bookkeeping/invoice-entries', () => ({
-  createCreditNoteJournalEntry: (...args: unknown[]) =>
-    mockCreateCreditNoteJournalEntry(...args),
-}))
-
 import { GET, POST } from '../route'
 
 describe('GET /api/invoices', () => {
@@ -419,7 +413,7 @@ describe('POST /api/invoices (create credit note)', () => {
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREDIT_NOT_SENT')
   })
 
-  it('creates credit note with negated amounts and emits event', async () => {
+  it('creates a credit note draft without booking or crediting the original', async () => {
     const items = [
       {
         id: 'item-1',
@@ -449,25 +443,21 @@ describe('POST /api/invoices (create credit note)', () => {
       subtotal: -10000,
       vat_amount: -2500,
       total: -12500,
-      status: 'sent',
+      status: 'draft',
     })
 
     // Fetch original invoice
     enqueue({ data: original, error: null })
+    // No existing credit-note draft
+    enqueue({ data: null, error: null })
     // Insert credit note
     enqueue({ data: creditNote, error: null })
     // Insert credit note items
     enqueue({ data: null, error: null })
-    // Update original status to 'credited'
+    // Mark creation complete
     enqueue({ data: null, error: null })
     // Fetch complete credit note
     enqueue({ data: { ...creditNote, items: [] }, error: null })
-    // Fetch company settings for entity type
-    enqueue({ data: { entity_type: 'enskild_firma' }, error: null })
-
-    mockCreateCreditNoteJournalEntry.mockResolvedValue({ id: 'je-1' })
-    // Update credit note with journal_entry_id
-    enqueue({ data: null, error: null })
 
     const emitSpy = vi.spyOn(eventBus, 'emit')
 
@@ -476,13 +466,35 @@ describe('POST /api/invoices (create credit note)', () => {
       body: { credited_invoice_id: VALID_UUID },
     })
     const response = await POST(request)
-    const { status, body } = await parseJsonResponse<{ data: unknown }>(response)
+    const { status, body } = await parseJsonResponse<{ data: { status: string } }>(response)
 
     expect(status).toBe(200)
-    expect(body.data).toBeTruthy()
-    expect(emitSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'credit_note.created' })
-    )
+    expect(body.data.status).toBe('draft')
+    expect(emitSpy).not.toHaveBeenCalled()
+    expect(mockSupabase.from).toHaveBeenCalledTimes(6)
+  })
+
+  it('returns an existing credit-note draft instead of creating a duplicate', async () => {
+    const original = makeInvoice({ id: VALID_UUID, status: 'sent' })
+    const existing = makeInvoice({
+      id: 'credit-existing',
+      invoice_number: 'KR-F-2024001',
+      status: 'draft',
+      credited_invoice_id: VALID_UUID,
+    })
+    enqueue({ data: original, error: null })
+    enqueue({ data: existing, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: { credited_invoice_id: VALID_UUID },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ data: { id: string } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.id).toBe('credit-existing')
+    expect(mockSupabase.from).toHaveBeenCalledTimes(2)
   })
 
   it('rolls back credit note when items insertion fails', async () => {
@@ -508,6 +520,7 @@ describe('POST /api/invoices (create credit note)', () => {
     const creditNote = makeInvoice({ id: 'cn-1' })
 
     enqueue({ data: original, error: null })
+    enqueue({ data: null, error: null })
     enqueue({ data: creditNote, error: null })
     // Items fail
     enqueue({ data: null, error: { message: 'Items insert failed' } })

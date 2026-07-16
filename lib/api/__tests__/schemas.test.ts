@@ -1410,6 +1410,24 @@ describe('UpdateSettingsSchema', () => {
     })
   })
 
+  describe('reminder day thresholds', () => {
+    it('accepts integer thresholds from 1 through 365', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        reminder_days_level_1: 7,
+        reminder_days_level_2: 21,
+        reminder_days_level_3: 365,
+      })
+
+      expect(result.success).toBe(true)
+    })
+
+    it.each([0, 366, 1.5])('rejects invalid threshold %s', (days) => {
+      const result = UpdateSettingsSchema.safeParse({ reminder_days_level_1: days })
+
+      expect(result.success).toBe(false)
+    })
+  })
+
   describe('invoice_email_texts', () => {
     it('accepts a valid nested partial', () => {
       const result = UpdateSettingsSchema.safeParse({
