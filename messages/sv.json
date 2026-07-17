@@ -1780,6 +1780,8 @@
     "pays_salaries_help": "Styr lönemodulen i menyn. Att betala ut lön kräver arbetsgivarregistrering hos Skatteverket.",
     "employer_registered_label": "Registrerad som arbetsgivare",
     "employer_registered_help": "Registrerade arbetsgivare ska lämna arbetsgivardeklaration varje månad, även månader utan löneutbetalning (nolldeklaration). Styr AGI-deadlines.",
+    "eu_trade_suggestion_title": "Bokföringen innehåller EU-försäljning",
+    "eu_trade_suggestion_help": "Det finns bokförda EU-försäljningar (konto 3108, 3308 eller 3107) de senaste 15 månaderna, men EU-handel eller periodisk sammanställning är inte aktiverad nedan. Periodisk sammanställning ska lämnas varje månad eller kvartal vid försäljning till företag i andra EU-länder; förseningsavgiften är 1 250 kr per rapport.",
     "employer_seasonal_label": "Säsongsregistrerad arbetsgivare",
     "employer_seasonal_help": "Lämnar arbetsgivardeklaration bara för månader med löneutbetalning, samt för december om ingen lön betalats under året.",
     "preliminary_tax_heading": "Preliminärskatt",

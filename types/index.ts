@@ -2174,8 +2174,8 @@ export type TaxDeadlineType =
   | 'inkomstdeklaration_ef'
   | 'inkomstdeklaration_ab'
   | 'arsredovisning'
+  | 'arsstamma'
   | 'periodisk_sammanstallning'
-  | 'bokslut'
 
 // Deadline status workflow
 export type DeadlineStatus =
@@ -2352,8 +2352,8 @@ export const TAX_DEADLINE_TYPE_LABELS: Record<TaxDeadlineType, string> = {
   inkomstdeklaration_ef: 'Inkomstdeklaration EF',
   inkomstdeklaration_ab: 'Inkomstdeklaration AB',
   arsredovisning: 'Årsredovisning',
-  periodisk_sammanstallning: 'Periodisk sammanställning',
-  bokslut: 'Bokslut'
+  arsstamma: 'Årsstämma',
+  periodisk_sammanstallning: 'Periodisk sammanställning'
 }
 
 // ============================================================

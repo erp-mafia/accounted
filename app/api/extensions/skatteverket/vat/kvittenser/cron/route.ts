@@ -192,20 +192,30 @@ export async function GET(request: Request) {
       // carries the picker params (written by the one-click chain; states
       // persisted by the older step-by-step routes lack them).
       if (state.periodType && state.year && state.period) {
-        const taxPeriod =
-          state.periodType === 'monthly'
-            ? `${state.year}-${String(state.period).padStart(2, '0')}`
-            : state.periodType === 'quarterly'
-              ? `${state.year}-Q${state.period}`
-              : null
+        let taxPeriod: string | null = null
+        let deadlineTypes: ('moms_monthly' | 'moms_quarterly' | 'moms_yearly')[] = [
+          'moms_monthly',
+          'moms_quarterly',
+        ]
+        if (state.periodType === 'monthly') {
+          taxPeriod = `${state.year}-${String(state.period).padStart(2, '0')}`
+        } else if (state.periodType === 'quarterly') {
+          taxPeriod = `${state.year}-Q${state.period}`
+        } else if (state.periodType === 'yearly') {
+          // moms_yearly rows carry the generator's fiscal-year label:
+          // `YYYY` for calendar FYs, `YYYY-1/YYYY` for broken ones.
+          const { data: fySettings } = await supabase
+            .from('company_settings')
+            .select('fiscal_year_start_month')
+            .eq('company_id', companyId)
+            .maybeSingle()
+          const startMonth = fySettings?.fiscal_year_start_month ?? 1
+          const yearNum = Number(state.year)
+          taxPeriod = startMonth === 1 ? `${yearNum}` : `${yearNum - 1}/${yearNum}`
+          deadlineTypes = ['moms_yearly']
+        }
         if (taxPeriod) {
-          await completeTaxDeadline(
-            supabase,
-            companyId,
-            ['moms_monthly', 'moms_quarterly'],
-            taxPeriod,
-            'confirmed'
-          )
+          await completeTaxDeadline(supabase, companyId, deadlineTypes, taxPeriod, 'confirmed')
         }
       }
 

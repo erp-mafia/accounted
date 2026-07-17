@@ -441,28 +441,42 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     },
   },
 
-  // Bokslut (AB) - 31 mars for calendar year
+  // Årsstämma (AB): within 6 months of FY end per ABL 7 kap. 10 §. Replaces
+  // the former non-statutory 'bokslut' milestone (3 months had no legal
+  // basis). The stämma gates the årsredovisning chain: the AR is presented
+  // and adopted there, and the Bolagsverket filing (arsredovisning row,
+  // 7 months) requires the adopted AR.
   {
-    type: 'bokslut',
-    titleTemplate: 'Bokslut räkenskapsår {periodLabel}',
-    description: 'Bokslut för aktiebolag',
+    type: 'arsstamma',
+    titleTemplate: 'Årsstämma räkenskapsår {periodLabel}',
+    description: 'Årsstämma för aktiebolag (senast sex månader efter räkenskapsårets utgång)',
     condition: (s) => s.entity_type === 'aktiebolag',
     priority: 'important',
     linkedReportType: null,
     generateDates: (year, settings) => {
-      // For calendar year, December 31 is fiscal year end, deadline March 31
-      if (settings.fiscal_year_start_month === 1) {
-        return [
-          { day: 31, month: 2, year, period: `${year - 1}`, periodLabel: `${year - 1}` }, // March
-        ]
+      // FY end month (1-indexed)
+      const fyEndMonth = settings.fiscal_year_start_month === 1 ? 12 : settings.fiscal_year_start_month - 1
+
+      // Last day of (FY end month + 6). Swedish fiscal years always end on
+      // the last day of a calendar month (BFL 3 kap.), so this equals the
+      // statutory six-month limit.
+      const results: DeadlineInstance[] = []
+      for (const endYr of [year - 1, year]) {
+        const dlMonth0 = ((fyEndMonth - 1) + 6) % 12
+        const dlYear = (fyEndMonth - 1) + 6 >= 12 ? endYr + 1 : endYr
+        if (dlYear === year) {
+          const lastDay = new Date(dlYear, dlMonth0 + 1, 0).getDate()
+          const periodLabel = fyEndMonth === 12 ? `${endYr}` : `${endYr - 1}/${endYr}`
+          results.push({
+            day: lastDay,
+            month: dlMonth0,
+            year: dlYear,
+            period: periodLabel,
+            periodLabel,
+          })
+        }
       }
-      // For non-calendar fiscal years, 3 months after year end
-      const fiscalYearEnd = settings.fiscal_year_start_month - 1
-      const deadlineMonth = (fiscalYearEnd + 3) % 12
-      const deadlineYear = deadlineMonth < fiscalYearEnd ? year + 1 : year
-      return [
-        { day: 31, month: deadlineMonth, year: deadlineYear, period: `${year - 1}/${year}`, periodLabel: `${year - 1}/${year}` },
-      ]
+      return results
     },
   },
 ]

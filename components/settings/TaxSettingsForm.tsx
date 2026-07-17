@@ -10,9 +10,11 @@ import type { CompanySettings } from '@/types'
 
 interface TaxSettingsFormProps {
   settings: CompanySettings
+  /** Ledger-derived signal: EU sales postings exist (3108/3308/3107). */
+  euSalesDetected?: boolean
 }
 
-export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
+export function TaxSettingsForm({ settings, euSalesDetected = false }: TaxSettingsFormProps) {
   const t = useTranslations('settings_tax_form')
   const [vatRegistered, setVatRegistered] = useState(settings.vat_registered ?? false)
   const [fSkatt, setFSkatt] = useState(settings.f_skatt ?? true)
@@ -95,6 +97,15 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
               </p>
             </div>
           </div>
+
+          {euSalesDetected && vatRegistered && (!hasEuTrade || !psEnabled) && (
+            <div className="rounded-lg border border-border p-4">
+              <p className="text-sm">{t('eu_trade_suggestion_title')}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t('eu_trade_suggestion_help')}
+              </p>
+            </div>
+          )}
 
           {vatRegistered && (
             <div className="space-y-4 pl-7">

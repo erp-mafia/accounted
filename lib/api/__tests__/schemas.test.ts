@@ -248,11 +248,13 @@ describe('Enum schemas', () => {
     const types = [
       'moms_monthly', 'moms_quarterly', 'moms_yearly', 'f_skatt',
       'arbetsgivardeklaration', 'inkomstdeklaration_ef', 'inkomstdeklaration_ab',
-      'arsredovisning', 'periodisk_sammanstallning', 'bokslut',
+      'arsredovisning', 'arsstamma', 'periodisk_sammanstallning',
     ]
     for (const t of types) {
       expect(TaxDeadlineTypeSchema.safeParse(t).success).toBe(true)
     }
+    // Retired: replaced by the statutory arsstamma deadline (ABL 7:10).
+    expect(TaxDeadlineTypeSchema.safeParse('bokslut').success).toBe(false)
   })
 
   it('NormalBalanceSchema and MappingRuleTypeSchema', () => {

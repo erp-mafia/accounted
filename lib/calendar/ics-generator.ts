@@ -182,8 +182,8 @@ function getSwedishTaxTypeLabel(type: string): string {
     inkomstdeklaration_ef: 'Inkomstdeklaration EF',
     inkomstdeklaration_ab: 'Inkomstdeklaration AB',
     arsredovisning: 'Årsredovisning',
+    arsstamma: 'Årsstämma',
     periodisk_sammanstallning: 'Periodisk sammanställning',
-    bokslut: 'Bokslut',
   }
   return labels[type] || type
 }

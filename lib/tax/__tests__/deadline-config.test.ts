@@ -296,6 +296,38 @@ describe('inkomstdeklaration_ab: digital filing deadlines', () => {
   })
 })
 
+describe('arsstamma: 6 months after FY end (ABL 7:10)', () => {
+  const config = getConfig('arsstamma')
+
+  it('applies only to aktiebolag', () => {
+    expect(config.condition(makeSettings())).toBe(true)
+    expect(config.condition(makeSettings({ entity_type: 'enskild_firma' }))).toBe(false)
+  })
+
+  it('FY end Dec (calendar year) → Jun 30 next year', () => {
+    const dates = config.generateDates(2026, makeSettings({ fiscal_year_start_month: 1 }))
+    expect(dates.length).toBe(1)
+    expect(dates[0]).toMatchObject({ day: 30, month: 5, year: 2026, period: '2025' })
+  })
+
+  it('FY end Apr → Oct 31 same year, broken-FY period label', () => {
+    const dates = config.generateDates(2026, makeSettings({ fiscal_year_start_month: 5 }))
+    expect(dates.length).toBe(1)
+    expect(dates[0]).toMatchObject({ day: 31, month: 9, year: 2026, period: '2025/2026' })
+  })
+
+  it('uses the last day of the deadline month (handles Feb)', () => {
+    // FY end Aug 2026 → +6 months = Feb 2027
+    const dates = config.generateDates(2027, makeSettings({ fiscal_year_start_month: 9 }))
+    expect(dates.length).toBe(1)
+    expect(dates[0]).toMatchObject({ day: 28, month: 1, year: 2027 })
+  })
+
+  it('no bokslut deadline type exists anymore', () => {
+    expect(TAX_DEADLINE_CONFIGS.find((c) => (c.type as string) === 'bokslut')).toBeUndefined()
+  })
+})
+
 describe('arsredovisning: 7 months after FY end (ÅRL 8:3)', () => {
   const config = getConfig('arsredovisning')
 

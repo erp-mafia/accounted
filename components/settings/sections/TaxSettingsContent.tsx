@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { TaxSettingsForm } from '@/components/settings/TaxSettingsForm'
@@ -21,6 +21,25 @@ export function TaxSettingsContent() {
   const { toast } = useToast()
 
   const hasSkatteverketExtension = ENABLED_EXTENSION_IDS.has('skatteverket')
+
+  // Derived EU-sales signal: postings on 3108/3308/3107 imply a periodisk
+  // sammanställning obligation the opt-in flags may not reflect. Suggestion
+  // only; the user confirms via the ordinary checkboxes.
+  const [euSalesDetected, setEuSalesDetected] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/settings/eu-trade-signal')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!cancelled && json?.data?.has_eu_sales) setEuSalesDetected(true)
+      })
+      .catch(() => {
+        // Best-effort signal: a failed fetch just hides the suggestion.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Skatteverket OAuth callback: the connect flow returns to /settings/tax with
   // a status query param (returnTo set in SkatteverketConnectPanel).
@@ -108,7 +127,7 @@ export function TaxSettingsContent() {
       {showSkatteverket && <SkatteverketConnectPanel />}
 
       <SettingsFormWrapper onSave={handleSave} className="space-y-0">
-        <TaxSettingsForm settings={settings} />
+        <TaxSettingsForm settings={settings} euSalesDetected={euSalesDetected} />
       </SettingsFormWrapper>
     </div>
   )

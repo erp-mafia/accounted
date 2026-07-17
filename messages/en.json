@@ -1780,6 +1780,8 @@
     "pays_salaries_help": "Controls the salary module in the menu. Paying out salary requires employer registration with Skatteverket.",
     "employer_registered_label": "Registered as employer",
     "employer_registered_help": "Registered employers must file an employer declaration (AGI) every month, including months without salary payments (nil declaration). Controls AGI deadlines.",
+    "eu_trade_suggestion_title": "Your bookkeeping contains EU sales",
+    "eu_trade_suggestion_help": "There are booked EU sales (accounts 3108, 3308 or 3107) in the last 15 months, but EU trade or the EU sales list is not enabled below. The EU sales list (periodisk sammanställning) must be filed monthly or quarterly when selling to businesses in other EU countries; the late fee is 1,250 kr per report.",
     "employer_seasonal_label": "Seasonal employer (säsongsregistrerad)",
     "employer_seasonal_help": "Files the employer declaration only for months with salary payments, plus December if no salary was paid during the year.",
     "preliminary_tax_heading": "Preliminary tax",
