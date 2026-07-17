@@ -55,6 +55,9 @@ import type {
 } from '@/types'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
 import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
+import { WorkspaceDraftsSection } from '@/components/workspace/WorkspaceDraftsSection'
+import { SandboxDemotePanel } from '@/components/workspace/SandboxDemotePanel'
+import type { WorkspaceListResult } from '@/lib/workspace/types'
 
 // Short human label (i18n key in the "pending" namespace) for each staged
 // operation_type. Keep in sync with OPERATION_RISK_TIERS in
@@ -645,6 +648,7 @@ export default function PendingOperationsPage() {
     committed: null,
     rejected: null,
   })
+  const [workspace, setWorkspace] = useState<WorkspaceListResult | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [selectedOp, setSelectedOp] = useState<PendingOperation | null>(null)
   const [showCommitDialog, setShowCommitDialog] = useState(false)
@@ -700,6 +704,16 @@ export default function PendingOperationsPage() {
     }
   }, [])
 
+  const fetchWorkspace = useCallback(async () => {
+    try {
+      const res = await fetch('/api/workspace/items')
+      const json = await res.json()
+      if (res.ok) setWorkspace(json.data ?? null)
+    } catch {
+      // Non-fatal — drafts section stays empty
+    }
+  }, [])
+
   useEffect(() => {
     fetchOperations()
   }, [fetchOperations])
@@ -707,6 +721,10 @@ export default function PendingOperationsPage() {
   useEffect(() => {
     fetchAllCounts()
   }, [fetchAllCounts])
+
+  useEffect(() => {
+    fetchWorkspace()
+  }, [fetchWorkspace])
 
   // Realtime subscription: refetch when ANY pending_operations row changes for
   // this company. RLS scopes the channel automatically: we don't see other
@@ -730,6 +748,7 @@ export default function PendingOperationsPage() {
           debounce = setTimeout(() => {
             fetchOperations()
             fetchAllCounts()
+            fetchWorkspace()
           }, 400)
         }
       )
@@ -738,7 +757,7 @@ export default function PendingOperationsPage() {
       if (debounce) clearTimeout(debounce)
       void supabase.removeChannel(channel)
     }
-  }, [fetchOperations, fetchAllCounts])
+  }, [fetchOperations, fetchAllCounts, fetchWorkspace])
 
   // Clear selection when filters/tab change
   useEffect(() => {
@@ -757,6 +776,7 @@ export default function PendingOperationsPage() {
       setSelectedOp(null)
       fetchOperations()
       fetchAllCounts()
+      fetchWorkspace()
     } catch (err) {
       toast({
         title: 'Misslyckades',
@@ -803,6 +823,7 @@ export default function PendingOperationsPage() {
       setSelectedIds(new Set())
       fetchOperations()
       fetchAllCounts()
+      fetchWorkspace()
     } catch (err) {
       toast({
         title: 'Misslyckades',
@@ -844,6 +865,7 @@ export default function PendingOperationsPage() {
       setRejectOp(null)
       fetchOperations()
       fetchAllCounts()
+      fetchWorkspace()
     } catch (err) {
       toast({
         title: 'Kunde inte avvisa',
@@ -957,6 +979,42 @@ export default function PendingOperationsPage() {
         title={t('title')}
         description={t('subtitle')}
       />
+
+      <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+        {t('banner_not_posted')}
+      </div>
+
+      {workspace && workspace.staleCount > 0 && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-300/60 bg-amber-50/50 dark:bg-amber-950/20 px-4 py-3 text-sm">
+          <AlertTriangle className="h-4 w-4 text-amber-700 dark:text-amber-400 shrink-0 mt-0.5" />
+          <p>{t('stale_banner', { count: workspace.staleCount })}</p>
+        </div>
+      )}
+
+      {workspace?.isSandbox && (
+        <SandboxDemotePanel
+          onDone={() => {
+            fetchWorkspace()
+            fetchOperations()
+            fetchAllCounts()
+          }}
+        />
+      )}
+
+      {activeTab === 'pending' && (
+        <WorkspaceDraftsSection
+          drafts={(workspace?.items ?? []).filter((i) => i.kind === 'journal_draft')}
+          onPosted={() => {
+            fetchWorkspace()
+            fetchOperations()
+            fetchAllCounts()
+          }}
+        />
+      )}
+
+      {activeTab === 'pending' && (
+        <h2 className="text-sm font-medium tracking-tight">{t('section_proposals')}</h2>
+      )}
 
       {conversationFilter && (
         <div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2 text-sm">

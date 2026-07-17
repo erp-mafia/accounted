@@ -27,9 +27,10 @@ import {
 } from '@/lib/bookkeeping/invoice-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
-import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { bookViaGateway } from '@/lib/workspace/posting-gateway'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
@@ -3059,7 +3060,7 @@ async function commitCreateVoucher(
   }
 
   try {
-    const entry = await createJournalEntry(
+    const entry = await bookViaGateway(
       supabase,
       companyId,
       userId,
@@ -3077,7 +3078,8 @@ async function commitCreateVoucher(
       // passes 'api_key'/'agent' so agent-relayed acknowledgments are
       // distinguishable in the immutable layer. The DB CHECK constraint
       // rejects anything else (migrations 20260420120001, 20260618120001).
-      opts.commitMethod ?? 'user_accept'
+      // Under workspace_first this creates a draft; Fastställ posts later.
+      { commitMethod: opts.commitMethod ?? 'user_accept' },
     )
 
     // Optional inbox linking: set when gnubok_create_voucher is called with

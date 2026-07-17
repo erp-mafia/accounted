@@ -47,6 +47,10 @@ export function BookkeepingSettingsContent() {
     // a stale flag the user set in a mode where it had no effect.
     const deferInvoiceBooking =
       accountingMethod === 'accrual' && formData.get('defer_invoice_booking') === 'true'
+    const postingMode =
+      (formData.get('posting_mode') as string) === 'workspace_first'
+        ? 'workspace_first'
+        : 'direct'
 
     const updates: Record<string, unknown> = {
       bookkeeping_locked_through: lockedThrough,
@@ -54,6 +58,7 @@ export function BookkeepingSettingsContent() {
       accounting_method: accountingMethod,
       default_voucher_series: defaultVoucherSeries,
       defer_invoice_booking: deferInvoiceBooking,
+      posting_mode: postingMode,
     }
 
     // Write-through: the booking engine resolves the series from the
@@ -131,6 +136,21 @@ export function BookkeepingSettingsContent() {
             </select>
             <p className="text-xs text-muted-foreground">
               {t('defer_booking_help')}
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="posting_mode">{t('posting_mode_label')}</Label>
+            <select
+              id="posting_mode"
+              name="posting_mode"
+              defaultValue={settings.posting_mode || 'direct'}
+              className="flex h-10 w-full max-w-xs rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+            >
+              <option value="direct">{t('posting_mode_direct')}</option>
+              <option value="workspace_first">{t('posting_mode_workspace_first')}</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              {t('posting_mode_help')}
             </p>
           </div>
         </section>

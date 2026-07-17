@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createDraftEntry, createJournalEntry } from '@/lib/bookkeeping/engine'
+import { bookViaGateway } from '@/lib/workspace/posting-gateway'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -199,9 +199,9 @@ export const POST = withRouteContext(
   const asDraft = searchParams.get('as_draft') === 'true'
 
   try {
-    const entry = asDraft
-      ? await createDraftEntry(supabase, companyId, user.id, body)
-      : await createJournalEntry(supabase, companyId, user.id, body)
+    const entry = await bookViaGateway(supabase, companyId, user.id, body, {
+      forceDraft: asDraft,
+    })
     return NextResponse.json({ data: entry })
   } catch (err) {
     const typed = bookkeepingErrorResponse(err)

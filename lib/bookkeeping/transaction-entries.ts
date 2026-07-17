@@ -1,4 +1,5 @@
-import { createJournalEntry, findFiscalPeriod } from './engine'
+import { findFiscalPeriod } from './engine'
+import { bookViaGateway } from '@/lib/workspace/posting-gateway'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { extractNetAmount, extractVatAmount } from './vat-entries'
@@ -295,7 +296,7 @@ export async function createTransactionJournalEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return bookViaGateway(supabase, companyId, userId, input)
 }
 
 /**

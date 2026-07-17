@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { bookViaGateway } from '@/lib/workspace/posting-gateway'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
 import { BookTransactionSchema } from '@/lib/api/schemas'
@@ -124,10 +124,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       dupLog.warn('booking-time duplicate detection failed (continuing)', err as Error)
     }
 
-    // Create journal entry via the engine
+    // Create journal entry via gateway (workspace_first → draft until Fastställ)
     let journalEntry
     try {
-      journalEntry = await createJournalEntry(supabase, companyId, user.id, {
+      journalEntry = await bookViaGateway(supabase, companyId, user.id, {
         fiscal_period_id,
         entry_date,
         description,

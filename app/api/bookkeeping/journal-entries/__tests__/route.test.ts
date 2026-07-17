@@ -30,6 +30,10 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
 }))
 
+vi.mock('@/lib/workspace/posting-gateway', () => ({
+  bookViaGateway: (...args: unknown[]) => mockCreateJournalEntry(...args),
+}))
+
 import { GET, POST } from '../route'
 
 describe('GET /api/bookkeeping/journal-entries', () => {
@@ -232,7 +236,13 @@ describe('POST /api/bookkeeping/journal-entries', () => {
 
     expect(status).toBe(200)
     expect(body.data).toEqual(entry)
-    expect(mockCreateJournalEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', input)
+    expect(mockCreateJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      input,
+      { forceDraft: false },
+    )
   })
 
   it('returns 400 when engine throws', async () => {

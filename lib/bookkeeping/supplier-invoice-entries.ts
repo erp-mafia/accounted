@@ -1,4 +1,5 @@
-import { createJournalEntry, findFiscalPeriod } from './engine'
+import { findFiscalPeriod } from './engine'
+import { bookViaGateway } from '@/lib/workspace/posting-gateway'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import { resolveBookingAccount } from './accruals/account-suggestions'
 import {
@@ -210,7 +211,7 @@ export async function createSupplierInvoiceRegistrationEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return bookViaGateway(supabase, companyId, userId, input)
 }
 
 /**
@@ -319,7 +320,7 @@ export async function createSupplierInvoicePaymentEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return bookViaGateway(supabase, companyId, userId, input)
 }
 
 /**
@@ -486,7 +487,7 @@ export async function createSupplierInvoiceCashEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return bookViaGateway(supabase, companyId, userId, input)
 }
 
 /**
@@ -578,7 +579,7 @@ export async function createSupplierInvoicePrivatelyPaidEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return bookViaGateway(supabase, companyId, userId, input)
 }
 
 /**
@@ -731,7 +732,7 @@ export async function createSupplierCreditNoteEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return bookViaGateway(supabase, companyId, userId, input)
 }
 
 /**

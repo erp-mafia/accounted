@@ -93,6 +93,21 @@ CRON_SECRET=<generate with: openssl rand -hex 32>
 
 `NEXT_PUBLIC_APP_URL` must match your public-facing URL. It is used in invoice reminder emails, calendar feed links, and PSD2 callbacks. If left as a placeholder, links will be broken.
 
+### Ledger mode (optional hybrid publish)
+
+Self-host defaults to `OMBRA_LEDGER_MODE=local` (your Supabase is the general ledger; Ombra is not responsible for it).
+
+To use a **local workshop** and publish sealed year archives to hosted Ombra as the canonical ledger:
+
+```bash
+OMBRA_LEDGER_MODE=hybrid
+OMBRA_HOSTED_BOOKS_URL=https://books.ombra-apt.com
+OMBRA_HOSTED_API_KEY=gnubok_sk_...
+OMBRA_HOSTED_COMPANY_ID=<hosted-company-uuid>
+```
+
+Then use **Settings → Bookkeeping → Publicera år till Ombra**. Publish runs a pre-check (open drafts, BFL timing, OBX chain) and uploads a sealed OBX year-seal. There is no live journal replication. See `docs/ombra/obx-trust.md` and ADR 013.
+
 ## 5. Start the Application
 
 ```bash

@@ -36,6 +36,10 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
 }))
 
+vi.mock('@/lib/workspace/posting-gateway', () => ({
+  bookViaGateway: (...args: unknown[]) => mockCreateJournalEntry(...args),
+}))
+
 // Booking-time duplicate guard: mocked so route tests exercise the WIRING
 // (warn / force / mismatch); the detection query itself is unit-tested in
 // lib/transactions/__tests__/booking-duplicate-detection.test.ts.

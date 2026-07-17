@@ -61,7 +61,7 @@ const PAGE_ENTRIES: Entry[] = [
   { id: 'rapport-kundreskontra', label: 'Visa rapport: Kundreskontra', icon: Users, href: '/reports/kundreskontra', keywords: 'rapport kundreskontra ar kundfordringar' },
   { id: 'rapport-bankavstamning', label: 'Bankavstämning', hint: 'Stäm av bank mot bokföring', icon: ArrowLeftRight, href: '/reports/bank-reconciliation', keywords: 'avstämning stäm av bank matcha banktransaktioner reconcile reconciliation 1930' },
   { id: 'importera', label: 'Importera', icon: Upload, href: '/import' },
-  { id: 'granskning', label: 'Granskning', icon: ClipboardCheck, href: '/pending', keywords: 'pending review' },
+  { id: 'att-bokfora', label: 'Att bokföra', icon: ClipboardCheck, href: '/pending', keywords: 'pending review granskning bokföra utkast' },
   { id: 'löner', label: 'Löner', icon: HandCoins, href: '/salary' },
   { id: 'anställda', label: 'Anställda', icon: Users, href: '/salary/employees' },
   { id: 'dokumentinkorg', label: 'Dokumentinkorg', icon: Inbox, href: '/e/general/invoice-inbox' },

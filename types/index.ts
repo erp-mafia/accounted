@@ -355,6 +355,12 @@ export interface CompanySettings {
   // Sandbox
   is_sandbox: boolean
 
+  /**
+   * direct = book posts immediately (legacy default).
+   * workspace_first = user booking lands as draft until Fastställ on Att bokföra.
+   */
+  posting_mode: 'direct' | 'workspace_first'
+
   // Timestamps
   created_at: string
   updated_at: string
