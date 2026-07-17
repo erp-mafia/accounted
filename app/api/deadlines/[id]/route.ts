@@ -119,14 +119,22 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
 
     if (existing.source === 'system') {
-      const { error: dismissError } = await supabase
+      const { data: dismissedRows, error: dismissError } = await supabase
         .from('deadlines')
         .update({ dismissed_at: new Date().toISOString() })
         .eq('id', id)
         .eq('company_id', companyId)
+        .eq('source', 'system')
+        .select('id')
 
       if (dismissError) {
         return NextResponse.json({ error: dismissError.message }, { status: 500 })
+      }
+      // The row can vanish between lookup and update (generator cleanup
+      // during a concurrent regeneration); report 404 rather than a
+      // phantom success that persisted nothing.
+      if (!dismissedRows || dismissedRows.length === 0) {
+        return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
       }
       return NextResponse.json({ success: true, dismissed: true })
     }
