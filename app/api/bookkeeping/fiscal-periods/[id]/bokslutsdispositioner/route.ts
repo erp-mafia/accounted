@@ -10,6 +10,8 @@ import {
 } from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
 import { calculateSarskildLoneskatt } from '@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator'
 import {
+  getPeriodiseringsfondCohortAccount,
+  getSchablonintaktRate,
   listExistingPeriodiseringsfonder,
   proposeAvsattning,
   proposeAteforing,
@@ -24,32 +26,26 @@ import type { ProposedDisposition } from '@/lib/bokslut/types'
 import type { JournalEntry } from '@/types'
 
 /**
- * Default schablonintäkt rate on periodiseringsfond (IL 30 kap 6a §).
- * Statslåneräntan 30 november föregående år + 1 procentenhet, lägst 0.5 %.
+ * The schablonintäkt rate (IL 30 kap 6a §) defaults per fiscal year via
+ * getSchablonintaktRate (statslåneräntan 30 nov året före det kalenderår
+ * beskattningsåret går ut, lägst 0.5 %). Caller can override per request
+ * via `schablonintaktRate` in the POST body; a future Riksbanken
+ * integration will fetch the rate automatically.
  *
- *   - inkomstår 2025: SLR 2024-11-30 = 1.96 % → 2.96 % (rounded to 3 %)
- *   - inkomstår 2026: SLR 2025-11-30 = 2.55 % → 3.55 %
- *
- * The default below is the FY2026 rate since that is the year customers are
- * currently closing. Caller can override per request via `schablonintaktRate`
- * in the POST body; a future Riksbanken integration will fetch the rate by
- * the fiscal year automatically.
- */
-const DEFAULT_SCHABLONINTAKT_RATE = 0.0355
-
-/**
  * Canonical bokslut order. Each calculator re-reads the trial balance to
  * derive its base, so earlier items must post before later items see their
- * effect: återföring → överavskrivningar → avsättning → SLP → bolagsskatt.
- * The POST handler enforces this order regardless of how the client sends
- * its items array, so the avsättning 25 % cap can never be evaluated
- * against a stale (pre-återföring) net result.
+ * effect: återföring → överavskrivningar → SLP → avsättning → bolagsskatt.
+ * SLP posts before avsättning because it is deductible: the 25 % avsättning
+ * cap applies to the result AFTER the SLP cost (IL 30 kap 5 §). The POST
+ * handler enforces this order regardless of how the client sends its items
+ * array, so the avsättning cap can never be evaluated against a stale
+ * (pre-återföring, pre-SLP) net result.
  */
 const DISPOSITION_ORDER: Record<string, number> = {
   periodiseringsfond_ateforing: 0,
   overavskrivningar: 1,
-  periodiseringsfond_avsattning: 2,
-  sarskild_loneskatt: 3,
+  sarskild_loneskatt: 2,
+  periodiseringsfond_avsattning: 3,
   bolagsskatt: 4,
   // K3 only: posts last because it depends on the closing 21xx balance,
   // which only stabilises once avsättning / återföring have been applied.
@@ -112,7 +108,7 @@ const ItemSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('periodiseringsfond_ateforing'),
     returns: z.record(z.string(), z.number().nonnegative()).default({}),
-    schablonintaktRate: z.number().min(0).max(0.2).default(DEFAULT_SCHABLONINTAKT_RATE),
+    schablonintaktRate: z.number().min(0).max(0.2).optional(),
   }),
   z.object({
     kind: z.literal('overavskrivningar'),
@@ -224,14 +220,19 @@ async function computeProposal(
         fiscalPeriodId,
       )
       return calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
-        resultBeforeTaxOverride: incomeStatement.net_result + dispositionsEffect,
+        resultBeforeTaxOverride: incomeStatement.net_result + dispositionsEffect.total,
         manualAdjustments: item.manualAdjustments,
       })
     }
-    case 'sarskild_loneskatt':
+    case 'sarskild_loneskatt': {
+      // Already posted in this period (resumed run / duplicate POST): the
+      // calculator is not posted-aware and would book the full SLP again.
+      const posted = await sumPostedYearEndDispositions(supabase, companyId, fiscalPeriodId)
+      if (posted.slpPortion !== 0) return null
       return calculateSarskildLoneskatt(supabase, companyId, fiscalPeriodId, {
         manualAdjustment: item.manualAdjustment,
       })
+    }
     case 'periodiseringsfond_avsattning': {
       // Re-derive the cap base from current state so the user can't sneak in
       // a higher desiredAmount than 25 % of actual skattemässigt resultat.
@@ -242,22 +243,55 @@ async function computeProposal(
       )
       const { data: periodRow } = await supabase
         .from('fiscal_periods')
-        .select('period_end')
+        .select('period_start, period_end')
         .eq('id', fiscalPeriodId)
         .eq('company_id', companyId)
         .single()
-      const periodEnd = periodRow?.period_end ?? `${fiscalYear}-12-31`
-      const existing = await listExistingPeriodiseringsfonder(supabase, companyId, periodEnd)
-      const schablonintaktRate = item.schablonintaktRate ?? DEFAULT_SCHABLONINTAKT_RATE
+      if (!periodRow) return null
+      const existing = await listExistingPeriodiseringsfonder(
+        supabase,
+        companyId,
+        periodRow.period_end,
+        periodRow.period_start,
+      )
+      const schablonintaktRate = item.schablonintaktRate ?? getSchablonintaktRate(fiscalYear)
+      // Schablonintäkt applies to the fond balance at the START of the tax
+      // year (IL 30 kap 6a §): opening balances, regardless of what has
+      // been avsatt or återfört during the period.
       const schablonintakt = existing.reduce(
-        (sum, f) => sum + f.balance * schablonintaktRate,
+        (sum, f) => sum + Math.max(0, f.opening_balance) * schablonintaktRate,
         0,
       )
-      const base = incomeStatement.net_result + Math.round(schablonintakt)
+      // A previous avsättning in this bokslut consumes 25 %-cap headroom:
+      // without this, re-running the flow books the fond twice. Measured as
+      // the current cohort ACCOUNT's growth during the period so a
+      // prior-year fond sharing the account (shortened brutet räkenskapsår,
+      // decade wrap) does not consume this year's headroom.
+      const currentCohort = existing.find(
+        (f) => f.account_number === getPeriodiseringsfondCohortAccount(fiscalYear),
+      )
+      const alreadyProvisioned = currentCohort
+        ? Math.max(0, currentCohort.balance - Math.max(0, currentCohort.opening_balance))
+        : 0
+      // Dispositions posted earlier in this batch (återföring, över-
+      // avskrivningar, SLP: all sorted before avsättning) are year_end-typed
+      // and thus invisible in net_result, yet they move the cap base. Add
+      // their signed effect back, then add back any posted avsättning itself
+      // (the cap applies to the result BEFORE avsättning; headroom is
+      // handled via alreadyProvisioned).
+      const postedEffect = await sumPostedYearEndDispositions(
+        supabase,
+        companyId,
+        fiscalPeriodId,
+      )
+      const base =
+        incomeStatement.net_result + postedEffect.total + alreadyProvisioned
+        + Math.round(schablonintakt)
       return proposeAvsattning({
         skattemassigtResultatBeforeAvsattning: base,
         desiredAmount: item.desiredAmount,
         fiscalYear,
+        alreadyProvisioned,
       })
     }
     case 'periodiseringsfond_ateforing': {
@@ -265,7 +299,7 @@ async function computeProposal(
       // than is on the books.
       const { data: period } = await supabase
         .from('fiscal_periods')
-        .select('period_end')
+        .select('period_start, period_end')
         .eq('id', fiscalPeriodId)
         .eq('company_id', companyId)
         .single()
@@ -274,10 +308,11 @@ async function computeProposal(
         supabase,
         companyId,
         period.period_end,
+        period.period_start,
       )
       const result = proposeAteforing(existing, {
         returns: item.returns,
-        schablonintaktRate: item.schablonintaktRate,
+        schablonintaktRate: item.schablonintaktRate ?? getSchablonintaktRate(fiscalYear),
       })
       // Combine multiple cohort reversals into a single voucher with multiple
       // lines so we don't blow up voucher numbering, but each fond is its own

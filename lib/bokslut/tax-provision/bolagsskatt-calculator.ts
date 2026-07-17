@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import type { ProposedDisposition } from '../types'
 
@@ -49,6 +50,16 @@ export interface BolagsskattComputation {
   taxAmount: number
 }
 
+export interface PostedDispositionsEffect {
+  /** Signed P&L effect of every effective posted disposition (class 88 +
+   *  7533): avsättning lowers it, återföring raises it. */
+  total: number
+  /** The 7533 (särskild löneskatt) portion of `total`. Callers use it to
+   *  detect an already-posted SLP so it is neither re-proposed nor
+   *  double-counted on a resumed bokslut run. Negative when SLP is posted. */
+  slpPortion: number
+}
+
 /**
  * Sum the P&L effect of bokslutsdispositioner already posted in this period.
  *
@@ -59,15 +70,21 @@ export interface BolagsskattComputation {
  * (bokslutsdispositioner) plus 7533 (SLP); tax (89xx) and the closing entry
  * (8999/2099) are intentionally left out.
  *
- * Returns a signed SEK amount: avsättning (8811 debit) lowers it, återföring
- * (8819 credit) raises it. Used by the commit path, where bolagsskatt is
- * computed AFTER the other dispositions are posted.
+ * A corrected year_end entry is counted through its replacement: the
+ * original is status='reversed' (skipped here) and the income statement
+ * excludes both it and its storno/correction chain, so the posted
+ * correction entry (source_type='correction', correction_of_id → the
+ * original) is the effective disposition and must be summed. Depth-1 chains
+ * only: corrections of corrections of year_end entries are not followed.
+ *
+ * Used by the commit path, where bolagsskatt is computed AFTER the other
+ * dispositions are posted, and by the preview builder for resumed runs.
  */
 export async function sumPostedYearEndDispositions(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-): Promise<number> {
+): Promise<PostedDispositionsEffect> {
   type Row = {
     account_number: string
     debit_amount: number | string | null
@@ -87,18 +104,57 @@ export async function sumPostedYearEndDispositions(
           .eq('source_type', 'year_end'),
       attachEntriesAs: null,
     })
+
+    // Replacements of corrected year_end entries (see docstring). Only
+    // reversed originals can be correction targets, so the id list is empty
+    // in the common case and the extra fetch is skipped.
+    const reversedYearEndIds = (
+      await fetchAllRows<{ id: string }>(({ from, to }) =>
+        supabase
+          .from('journal_entries')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('fiscal_period_id', fiscalPeriodId)
+          .eq('source_type', 'year_end')
+          .eq('status', 'reversed')
+          .order('id', { ascending: true })
+          .range(from, to)
+      )
+    ).map((r) => r.id)
+
+    if (reversedYearEndIds.length > 0) {
+      const corrections = await fetchEntryLines<Row>({
+        supabase,
+        lineColumns: 'account_number, debit_amount, credit_amount',
+        filterEntries: (q: EntryLinesQuery) =>
+          q
+            .eq('company_id', companyId)
+            .eq('fiscal_period_id', fiscalPeriodId)
+            .eq('status', 'posted')
+            .eq('source_type', 'correction')
+            .in('correction_of_id', reversedYearEndIds),
+        attachEntriesAs: null,
+      })
+      data = data.concat(corrections)
+    }
   } catch (err) {
     throw new Error(
       `Failed to read posted dispositions: ${err instanceof Error ? err.message : String(err)}`,
     )
   }
   let effect = 0
+  let slp = 0
   for (const row of data) {
     const acc = row.account_number
     if (!(acc.startsWith('88') || acc === '7533')) continue
-    effect += (Number(row.credit_amount) || 0) - (Number(row.debit_amount) || 0)
+    const delta = (Number(row.credit_amount) || 0) - (Number(row.debit_amount) || 0)
+    effect += delta
+    if (acc === '7533') slp += delta
   }
-  return Math.round(effect * 100) / 100
+  return {
+    total: Math.round(effect * 100) / 100,
+    slpPortion: Math.round(slp * 100) / 100,
+  }
 }
 
 /**

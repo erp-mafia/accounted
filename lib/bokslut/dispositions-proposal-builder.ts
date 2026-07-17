@@ -1,7 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
-import { calculateBolagsskatt } from './tax-provision/bolagsskatt-calculator'
+import {
+  calculateBolagsskatt,
+  sumPostedYearEndDispositions,
+} from './tax-provision/bolagsskatt-calculator'
 import { calculateSarskildLoneskatt } from './tax-provision/sarskild-loneskatt-calculator'
 import {
   computeLatentTax,
@@ -10,14 +13,14 @@ import {
   proposeLatentTaxChange,
 } from './tax-provision/latent-tax-calculator'
 import {
+  getPeriodiseringsfondCohortAccount,
+  getSchablonintaktRate,
   listExistingPeriodiseringsfonder,
   proposeAvsattning,
   proposeAteforing,
 } from './reserves/periodiseringsfond-service'
 import type { DispositionsProposal, ProposedDisposition } from './types'
 import type { AccountingFramework } from '@/types'
-
-const DEFAULT_SCHABLONINTAKT_RATE = 0.0355
 
 /**
  * Shared core of the GET /bokslutsdispositioner endpoint, lifted out so the
@@ -84,23 +87,64 @@ export async function buildDispositionsProposal(
 
   const proposals: ProposedDisposition[] = []
 
-  const existingFonder = await listExistingPeriodiseringsfonder(supabase, companyId, period.period_end)
+  // Dispositions already POSTED in this period (a partially completed
+  // bokslut run) are excluded from resultBeforeTax like all year_end
+  // entries, but they do affect the taxable base: their signed P&L effect
+  // is folded into every base below so a re-visit previews the same
+  // amounts the commit path books.
+  const postedEffect = await sumPostedYearEndDispositions(
+    supabase,
+    companyId,
+    fiscalPeriodId,
+  )
+
+  const existingFonder = await listExistingPeriodiseringsfonder(
+    supabase,
+    companyId,
+    period.period_end,
+    period.period_start,
+  )
   const ateforing = proposeAteforing(existingFonder, {
-    schablonintaktRate: DEFAULT_SCHABLONINTAKT_RATE,
+    schablonintaktRate: getSchablonintaktRate(fiscalYear),
   })
   proposals.push(...ateforing.proposals)
+  const ateforingTotal = ateforing.proposals.reduce((sum, p) => sum + p.amount, 0)
 
+  // SLP already posted in this period (resumed run): don't re-propose it
+  // (that would book it twice) and don't subtract it twice below (its
+  // effect is already inside postedEffect.total).
+  const slp =
+    postedEffect.slpPortion !== 0
+      ? null
+      : await calculateSarskildLoneskatt(supabase, companyId, fiscalPeriodId)
+
+  // An avsättning already booked in this bokslut eats into the 25 % cap;
+  // without this, revisiting the page after committing re-proposes the full
+  // avsättning and lets the user book it twice. Measured as the current
+  // cohort ACCOUNT's growth during the period (closing minus opening), so a
+  // prior-year fond that happens to share the account (shortened brutet
+  // räkenskapsår, decade wrap) does not consume this year's headroom.
+  const currentCohort = existingFonder.find(
+    (f) => f.account_number === getPeriodiseringsfondCohortAccount(fiscalYear),
+  )
+  const alreadyProvisioned = currentCohort
+    ? Math.max(0, currentCohort.balance - Math.max(0, currentCohort.opening_balance))
+    : 0
+
+  // Cap base = skattemässigt resultat före avsättning: ledger result plus
+  // posted dispositions (with any posted avsättning added back: its
+  // headroom effect is alreadyProvisioned, not a base reduction), plus
+  // proposed återföringar and schablonintäkt, minus deductible SLP.
   const taxableBeforeAvsattning =
-    resultBeforeTax +
-    ateforing.proposals.reduce((sum, p) => sum + p.amount, 0) +
-    ateforing.schablonintaktAmount
+    resultBeforeTax + postedEffect.total + alreadyProvisioned + ateforingTotal
+    + ateforing.schablonintaktAmount - (slp?.amount ?? 0)
   const avsattning = proposeAvsattning({
     skattemassigtResultatBeforeAvsattning: taxableBeforeAvsattning,
     fiscalYear,
+    alreadyProvisioned,
   })
   if (avsattning) proposals.push(avsattning)
 
-  const slp = await calculateSarskildLoneskatt(supabase, companyId, fiscalPeriodId)
   if (slp) proposals.push(slp)
 
   // Bolagsskatt must be computed on the result AFTER the dispositions above.
@@ -112,9 +156,9 @@ export async function buildDispositionsProposal(
   //   − SLP        (7533, kostnad)
   // Without this, the previewed tax ignores the avsättning (tax too high) and
   // diverges from what the sequential commit books and from ÅR/INK2.
-  const ateforingTotal = ateforing.proposals.reduce((sum, p) => sum + p.amount, 0)
   const resultAfterDispositions =
-    resultBeforeTax + ateforingTotal - (avsattning?.amount ?? 0) - (slp?.amount ?? 0)
+    resultBeforeTax + postedEffect.total + ateforingTotal
+    - (avsattning?.amount ?? 0) - (slp?.amount ?? 0)
 
   const bolagsskatt = await calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
     resultBeforeTaxOverride: resultAfterDispositions,

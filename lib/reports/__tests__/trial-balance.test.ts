@@ -11,7 +11,7 @@ let mockResults: Record<string, MockResult[]>
 
 function makeBuilder(tableName: string) {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'lt', 'lte', 'gte', 'neq', 'order', 'range']) {
+  for (const m of ['select', 'eq', 'in', 'lt', 'lte', 'gte', 'neq', 'or', 'order', 'range']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   const consume = (): MockResult => {
@@ -537,6 +537,90 @@ describe('generateTrialBalance', () => {
     expect(acc3001.closing_credit).toBe(2500)
 
     expect(result.isBalanced).toBe(true)
+  })
+
+  // ── excludeYearEndClosing symmetry ───────────────────────────────
+  // A reversed year_end entry keeps status='reversed' and stays in the
+  // ledger; its storno carries source_type='storno'. Excluding on
+  // source_type alone drops the original but keeps the counter-entry,
+  // inflating the P&L by exactly the reversed amount. The filter must also
+  // exclude entries chained to year_end entries via reverses_id /
+  // correction_of_id.
+
+  it('excludes stornos and corrections chained to year_end entries', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: { period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: null },
+          error: null,
+        },
+      ],
+      journal_entries: [
+        // 1st: the year_end entry-id fetch added for chain exclusion
+        { data: [{ id: 'ye-1' }, { id: 'ye-2' }], error: null },
+        // 2nd: the entries step of the period-lines fetch
+        { data: [{ id: 'entry-1' }], error: null },
+      ],
+      journal_entry_lines: [
+        {
+          data: [
+            { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
+            { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+          ],
+          error: null,
+        },
+      ],
+      chart_of_accounts: [{ data: [], error: null }],
+    }
+
+    await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      excludeYearEndClosing: true,
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const builders = supabase.from.mock.results.map((r: { value: any }) => r.value)
+    const orCalls = builders.flatMap(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (b: any) => (b.or ? b.or.mock.calls.map((c: unknown[]) => c[0]) : []),
+    )
+    expect(orCalls).toContain('reverses_id.is.null,reverses_id.not.in.(ye-1,ye-2)')
+    expect(orCalls).toContain('correction_of_id.is.null,correction_of_id.not.in.(ye-1,ye-2)')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const neqCalls = builders.flatMap((b: any) => (b.neq ? b.neq.mock.calls : []))
+    expect(neqCalls).toContainEqual(['source_type', 'year_end'])
+  })
+
+  it('skips the chain filters when the company has no year_end entries', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: { period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: null },
+          error: null,
+        },
+      ],
+      journal_entries: [
+        // year_end id fetch: none exist
+        { data: [], error: null },
+        { data: [{ id: 'entry-1' }], error: null },
+      ],
+      journal_entry_lines: [{ data: [], error: null }],
+      chart_of_accounts: [{ data: [], error: null }],
+    }
+
+    await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      excludeYearEndClosing: true,
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const builders = supabase.from.mock.results.map((r: { value: any }) => r.value)
+    const orCalls = builders.flatMap(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (b: any) => (b.or ? b.or.mock.calls : []),
+    )
+    expect(orCalls).toHaveLength(0)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const neqCalls = builders.flatMap((b: any) => (b.neq ? b.neq.mock.calls : []))
+    expect(neqCalls).toContainEqual(['source_type', 'year_end'])
   })
 
   it('returns empty period activity when the range matches no lines', async () => {
