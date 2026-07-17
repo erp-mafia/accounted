@@ -16,6 +16,10 @@ export interface CompanySettingsForDeadlines {
   preliminary_tax_monthly: number | null
   vat_registered: boolean
   pays_salaries: boolean
+  // null = never attested; the generator falls back to pays_salaries so
+  // rows saved before the registration flag existed keep their deadlines.
+  employer_registered: boolean | null
+  employer_seasonal: boolean
   fiscal_year_start_month: number // 1-12
   vat_taxable_base_over_40m: boolean
   vat_has_eu_trade: boolean
@@ -211,8 +215,14 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     },
   },
 
-  // Arbetsgivardeklaration (monthly, any employer with employees: AB or EF)
-  // Per Skatteförfarandelagen: every employer paying salary must file AGI monthly.
+  // Arbetsgivardeklaration (monthly). A REGISTERED employer must file AGI
+  // every month, including nil months (SFL 26 kap. 3 §): the gate is
+  // registration, not whether salaries were paid, with pays_salaries as a
+  // fallback for settings saved before the registration flag existed.
+  // Säsongsregistrerade employers file only for months with payments plus a
+  // December nil declaration when nothing was paid all year, so they get
+  // only the December-period row; payment months are handled by the salary
+  // flow itself.
   // The filing day is keyed to the VAT taxable base, not a separate employer
   // measure (SFL 26 kap.): above SEK 40M the whole skattedeklaration (AGI and
   // VAT) is due the 26th of the following month; otherwise the 12th (17th in
@@ -221,14 +231,15 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
   {
     type: 'arbetsgivardeklaration',
     titleTemplate: 'Arbetsgivardeklaration {periodLabel}',
-    description: 'Arbetsgivardeklaration för arbetsgivare med anställda',
-    condition: (s) => s.pays_salaries,
+    description: 'Arbetsgivardeklaration för registrerade arbetsgivare',
+    condition: (s) => s.employer_registered ?? s.pays_salaries,
     priority: 'important',
     linkedReportType: null,
     generateDates: (year, settings) => {
       const storforetag = settings.vat_registered && settings.vat_taxable_base_over_40m
       const instances: DeadlineInstance[] = []
       for (let month = 0; month < 12; month++) {
+        if (settings.employer_seasonal && month !== 11) continue
         const deadlineMonth = (month + 1) % 12
         const deadlineYear = month === 11 ? year + 1 : year
         const day = storforetag
@@ -255,7 +266,8 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     type: 'skatteinbetalning',
     titleTemplate: 'Betala skatt och arbetsgivaravgifter {periodLabel}',
     description: 'Inbetalning av avdragen skatt och arbetsgivaravgifter för företag med beskattningsunderlag över 40 miljoner kronor',
-    condition: (s) => s.pays_salaries && s.vat_registered && s.vat_taxable_base_over_40m,
+    condition: (s) =>
+      (s.employer_registered ?? s.pays_salaries) && s.vat_registered && s.vat_taxable_base_over_40m,
     priority: 'important',
     linkedReportType: null,
     generateDates: (year) => {

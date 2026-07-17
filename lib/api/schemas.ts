@@ -1467,6 +1467,8 @@ export const UpdateSettingsSchema = z.object({
   tax_contact_email: z.string().email().nullable().optional().or(z.literal('')),
   fiscal_year_start_month: z.number().int().min(1).max(12).optional(),
   preliminary_tax_monthly: z.number().nullable().optional(),
+  employer_registered: z.boolean().nullable().optional(),
+  employer_seasonal: z.boolean().optional(),
   bank_name: z.string().max(100, 'Banknamn får vara max 100 tecken').optional(),
   clearing_number: z.string().regex(/^\d{4,5}$/, 'Clearingnummer måste vara 4-5 siffror').optional().or(z.literal('')),
   account_number: z.string().regex(/^\d{6,12}$/, 'Kontonummer måste vara 6-12 siffror').optional().or(z.literal('')),

@@ -25,6 +25,8 @@ export const TAX_RELEVANT_FIELDS = [
   'preliminary_tax_monthly',
   'vat_registered',
   'pays_salaries',
+  'employer_registered',
+  'employer_seasonal',
   'fiscal_year_start_month',
   'vat_taxable_base_over_40m',
   'vat_has_eu_trade',
@@ -35,7 +37,7 @@ export const TAX_RELEVANT_FIELDS = [
 ] as const
 
 export const DEADLINE_SETTINGS_SELECT =
-  'company_id, entity_type, moms_period, f_skatt, preliminary_tax_monthly, vat_registered, pays_salaries, fiscal_year_start_month, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method' as const
+  'company_id, entity_type, moms_period, f_skatt, preliminary_tax_monthly, vat_registered, pays_salaries, employer_registered, employer_seasonal, fiscal_year_start_month, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method' as const
 
 /**
  * Check if any tax-relevant fields changed
@@ -70,6 +72,8 @@ export function toDeadlineSettings(
     preliminary_tax_monthly: settings.preliminary_tax_monthly ?? null,
     vat_registered: settings.vat_registered ?? false,
     pays_salaries: settings.pays_salaries ?? false,
+    employer_registered: settings.employer_registered ?? null,
+    employer_seasonal: settings.employer_seasonal ?? false,
     fiscal_year_start_month: settings.fiscal_year_start_month ?? 1,
     vat_taxable_base_over_40m: settings.vat_taxable_base_over_40m ?? false,
     vat_has_eu_trade: settings.vat_has_eu_trade ?? false,

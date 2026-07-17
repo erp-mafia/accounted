@@ -1777,7 +1777,11 @@
     "month_nov": "November",
     "month_dec": "December",
     "pays_salaries_label": "Betalar löner",
-    "pays_salaries_help": "Påverkar vilka skattedeadlines som visas (arbetsgivardeklaration m.m.).",
+    "pays_salaries_help": "Styr lönemodulen i menyn. Att betala ut lön kräver arbetsgivarregistrering hos Skatteverket.",
+    "employer_registered_label": "Registrerad som arbetsgivare",
+    "employer_registered_help": "Registrerade arbetsgivare ska lämna arbetsgivardeklaration varje månad, även månader utan löneutbetalning (nolldeklaration). Styr AGI-deadlines.",
+    "employer_seasonal_label": "Säsongsregistrerad arbetsgivare",
+    "employer_seasonal_help": "Lämnar arbetsgivardeklaration bara för månader med löneutbetalning, samt för december om ingen lön betalats under året.",
     "preliminary_tax_heading": "Preliminärskatt",
     "preliminary_tax_monthly_label": "Månatlig preliminärskatt (F-skatt)",
     "preliminary_tax_monthly_help": "Månadsbelopp enligt Skatteverkets beslut om debiterad preliminärskatt. Betalningspåminnelser skapas bara när ett belopp är angivet. Lämna tomt om ingen preliminärskatt är debiterad."

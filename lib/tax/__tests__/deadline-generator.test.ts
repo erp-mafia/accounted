@@ -15,6 +15,8 @@ const SETTINGS: CompanySettingsForDeadlines = {
   preliminary_tax_monthly: 5000,
   vat_registered: true,
   pays_salaries: true,
+  employer_registered: null,
+  employer_seasonal: false,
   fiscal_year_start_month: 1,
   vat_taxable_base_over_40m: false,
   vat_has_eu_trade: false,

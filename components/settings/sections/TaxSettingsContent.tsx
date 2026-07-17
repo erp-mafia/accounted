@@ -48,6 +48,7 @@ export function TaxSettingsContent() {
   function handleSave(formData: FormData) {
     const vatRegistered = formData.get('vat_registered') === 'true'
     const paysSalaries = formData.get('pays_salaries') === 'true'
+    const employerRegistered = formData.get('employer_registered') === 'true'
 
     const updates: Record<string, unknown> = {
       f_skatt: formData.get('f_skatt') === 'true',
@@ -80,6 +81,10 @@ export function TaxSettingsContent() {
       tax_contact_email: (formData.get('tax_contact_email') as string) || null,
       fiscal_year_start_month: parseInt(formData.get('fiscal_year_start_month') as string) || 1,
       pays_salaries: paysSalaries,
+      employer_registered: employerRegistered,
+      // The seasonal checkbox is unmounted when not registered; absence
+      // means false rather than "keep stored value".
+      employer_seasonal: employerRegistered && formData.get('employer_seasonal') === 'true',
       preliminary_tax_monthly: parseFloat(formData.get('preliminary_tax_monthly') as string) || null,
     }
     return {

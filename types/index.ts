@@ -222,6 +222,9 @@ export interface CompanySettings {
 
   // Tax registration
   pays_salaries: boolean
+  // null = never attested; deadline generation falls back to pays_salaries.
+  employer_registered?: boolean | null
+  employer_seasonal?: boolean
   f_skatt: boolean
   vat_registered: boolean
   vat_number: string | null

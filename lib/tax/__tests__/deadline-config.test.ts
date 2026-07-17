@@ -14,6 +14,8 @@ function makeSettings(overrides: Partial<CompanySettingsForDeadlines> = {}): Com
     preliminary_tax_monthly: 5000,
     vat_registered: true,
     pays_salaries: false,
+    employer_registered: null,
+    employer_seasonal: false,
     fiscal_year_start_month: 1,
     vat_taxable_base_over_40m: false,
     vat_has_eu_trade: false,
@@ -102,6 +104,27 @@ describe('monthly tax and employer deadlines', () => {
     expect(dates[7].day).toBe(12)
   })
 
+  it('gates AGI on employer registration with pays_salaries as legacy fallback', () => {
+    const config = getConfig('arbetsgivardeklaration')
+    // Never attested: fall back to pays_salaries.
+    expect(config.condition(makeSettings({ pays_salaries: true }))).toBe(true)
+    expect(config.condition(makeSettings({ pays_salaries: false }))).toBe(false)
+    // Attested registration wins over pays_salaries in both directions: a
+    // registered employer must file monthly even with zero salaries.
+    expect(config.condition(makeSettings({ employer_registered: true }))).toBe(true)
+    expect(config.condition(makeSettings({ employer_registered: false, pays_salaries: true }))).toBe(false)
+  })
+
+  it('generates only the December-period AGI row for seasonal employers', () => {
+    const dates = getConfig('arbetsgivardeklaration').generateDates(2026, makeSettings({
+      employer_registered: true,
+      employer_seasonal: true,
+    }))
+    expect(dates).toHaveLength(1)
+    // December period, declared 17 January the following year.
+    expect(dates[0]).toMatchObject({ day: 17, month: 0, year: 2027, period: '2026-12' })
+  })
+
   it('uses the 26th for AGI when the VAT taxable base is above SEK 40 million', () => {
     const dates = getConfig('arbetsgivardeklaration').generateDates(2026, makeSettings({
       pays_salaries: true,
@@ -137,6 +160,16 @@ describe('storföretag tax payment deadline', () => {
       pays_salaries: true,
       vat_taxable_base_over_40m: true,
     }))).toBe(true)
+    // Same registration gate as AGI: attested registration wins.
+    expect(config.condition(makeSettings({
+      employer_registered: true,
+      vat_taxable_base_over_40m: true,
+    }))).toBe(true)
+    expect(config.condition(makeSettings({
+      employer_registered: false,
+      pays_salaries: true,
+      vat_taxable_base_over_40m: true,
+    }))).toBe(false)
   })
 
   it('is due the 12th of the following month, the 17th in January', () => {

@@ -17,6 +17,12 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
   const [vatRegistered, setVatRegistered] = useState(settings.vat_registered ?? false)
   const [fSkatt, setFSkatt] = useState(settings.f_skatt ?? true)
   const [paysSalaries, setPaysSalaries] = useState(settings.pays_salaries ?? false)
+  // Fall back to pays_salaries for rows saved before the registration flag
+  // existed; saving attests the shown value.
+  const [employerRegistered, setEmployerRegistered] = useState(
+    settings.employer_registered ?? settings.pays_salaries ?? false,
+  )
+  const [employerSeasonal, setEmployerSeasonal] = useState(settings.employer_seasonal ?? false)
   const [momsPeriod, setMomsPeriod] = useState(settings.moms_period || '')
   const [vatTaxableBaseOver40m, setVatTaxableBaseOver40m] = useState(
     settings.vat_taxable_base_over_40m ?? false,
@@ -340,7 +346,12 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
           <Checkbox
             id="pays_salaries"
             checked={paysSalaries}
-            onCheckedChange={(v) => setPaysSalaries(v === true)}
+            onCheckedChange={(v) => {
+              const checked = v === true
+              setPaysSalaries(checked)
+              // Paying out salary obliges employer registration (SFL 7 kap. 1 §).
+              if (checked) setEmployerRegistered(true)
+            }}
           />
           <input type="hidden" name="pays_salaries" value={paysSalaries ? 'true' : 'false'} />
           <div className="space-y-1">
@@ -350,6 +361,54 @@ export function TaxSettingsForm({ settings }: TaxSettingsFormProps) {
             </p>
           </div>
         </div>
+
+        <div className="flex items-start space-x-3">
+          <Checkbox
+            id="employer_registered"
+            checked={employerRegistered}
+            onCheckedChange={(v) => {
+              const checked = v === true
+              setEmployerRegistered(checked)
+              if (!checked) setEmployerSeasonal(false)
+            }}
+          />
+          <input
+            type="hidden"
+            name="employer_registered"
+            value={employerRegistered ? 'true' : 'false'}
+          />
+          <div className="space-y-1">
+            <Label htmlFor="employer_registered" className="cursor-pointer">
+              {t('employer_registered_label')}
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              {t('employer_registered_help')}
+            </p>
+          </div>
+        </div>
+
+        {employerRegistered && (
+          <div className="flex items-start space-x-3 pl-7">
+            <Checkbox
+              id="employer_seasonal"
+              checked={employerSeasonal}
+              onCheckedChange={(v) => setEmployerSeasonal(v === true)}
+            />
+            <input
+              type="hidden"
+              name="employer_seasonal"
+              value={employerSeasonal ? 'true' : 'false'}
+            />
+            <div className="space-y-1">
+              <Label htmlFor="employer_seasonal" className="cursor-pointer">
+                {t('employer_seasonal_label')}
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {t('employer_seasonal_help')}
+              </p>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Preliminary tax */}
