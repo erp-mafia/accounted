@@ -13,6 +13,7 @@ export interface CompanySettingsForDeadlines {
   entity_type: EntityType
   moms_period: MomsPeriod | null
   f_skatt: boolean
+  preliminary_tax_monthly: number | null
   vat_registered: boolean
   pays_salaries: boolean
   fiscal_year_start_month: number // 1-12
@@ -178,19 +179,28 @@ export const TAX_DEADLINE_CONFIGS: TaxDeadlineConfig[] = [
     generateDates: (year, settings) => generateAnnualVatDates(year, settings),
   },
 
-  // F-skatt (monthly)
+  // Debiterad preliminärskatt (monthly payment). Gated on the debited amount,
+  // NOT on F-skatt approval: approval is a status with no recurring duty, and
+  // Skatteverket debits nothing below 2 400 kr/år (SFL 55 kap. 2 §). The
+  // monthly payment obligation exists only while an amount > 0 is debited
+  // (SFL 62 kap. 4-5 §§).
   {
     type: 'f_skatt',
-    titleTemplate: 'F-skatt {periodLabel}',
-    description: 'Inbetalning av preliminär skatt',
-    condition: (s) => s.f_skatt,
+    titleTemplate: 'Betala preliminärskatt {periodLabel}',
+    description: 'Inbetalning av debiterad preliminärskatt',
+    condition: (s) => (s.preliminary_tax_monthly ?? 0) > 0,
     priority: 'important',
     linkedReportType: null,
-    generateDates: (year) => {
+    generateDates: (year, settings) => {
+      // Small-company förfallodagar are the 12th, with the 17th in January
+      // and August; storföretag (VAT taxable base over SEK 40M) keep the
+      // 12th in August, January-only 17th (62 kap. 3-4 §§ SFL and
+      // Skatteverket's published storföretag calendar).
+      const storforetag = settings.vat_registered && settings.vat_taxable_base_over_40m
       const instances: DeadlineInstance[] = []
       for (let month = 0; month < 12; month++) {
         instances.push({
-          day: month === 0 || month === 7 ? 17 : 12,
+          day: month === 0 || (month === 7 && !storforetag) ? 17 : 12,
           month,
           year,
           period: `${year}-${String(month + 1).padStart(2, '0')}`,

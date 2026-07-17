@@ -11,6 +11,7 @@ function makeSettings(overrides: Partial<CompanySettingsForDeadlines> = {}): Com
     entity_type: 'aktiebolag',
     moms_period: 'quarterly',
     f_skatt: true,
+    preliminary_tax_monthly: 5000,
     vat_registered: true,
     pays_salaries: false,
     fiscal_year_start_month: 1,
@@ -75,11 +76,30 @@ describe('VAT filing deadlines', () => {
 })
 
 describe('monthly tax and employer deadlines', () => {
-  it('uses the 12th for F-tax except January and August', () => {
+  it('generates preliminary tax deadlines only when an amount is debited', () => {
+    const config = getConfig('f_skatt')
+    // F-skatt approval alone carries no payment obligation.
+    expect(config.condition(makeSettings({ preliminary_tax_monthly: null }))).toBe(false)
+    expect(config.condition(makeSettings({ preliminary_tax_monthly: 0 }))).toBe(false)
+    expect(config.condition(makeSettings({ preliminary_tax_monthly: 2500 }))).toBe(true)
+    // The debited amount governs even without F-skatt approval (SA-skatt).
+    expect(config.condition(makeSettings({ f_skatt: false, preliminary_tax_monthly: 2500 }))).toBe(true)
+  })
+
+  it('uses the 12th for preliminary tax except January and August', () => {
     const dates = getConfig('f_skatt').generateDates(2026, makeSettings())
     expect(dates[0].day).toBe(17)
     expect(dates[1].day).toBe(12)
     expect(dates[7].day).toBe(17)
+  })
+
+  it('keeps the 12th in August for storföretag preliminary tax (January-only 17th)', () => {
+    const dates = getConfig('f_skatt').generateDates(2026, makeSettings({
+      moms_period: 'monthly',
+      vat_taxable_base_over_40m: true,
+    }))
+    expect(dates[0].day).toBe(17)
+    expect(dates[7].day).toBe(12)
   })
 
   it('uses the 26th for AGI when the VAT taxable base is above SEK 40 million', () => {

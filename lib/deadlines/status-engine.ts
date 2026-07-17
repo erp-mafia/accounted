@@ -84,6 +84,7 @@ export async function updateDeadlineStatuses(
     })
     .lt('due_date', todayStr)
     .eq('is_completed', false)
+    .is('dismissed_at', null)
     .in('status', ['upcoming', 'action_needed'])
     .select('id')
 
@@ -105,6 +106,7 @@ export async function updateDeadlineStatuses(
     .lte('due_date', thresholdStr)
     .eq('status', 'upcoming')
     .eq('is_completed', false)
+    .is('dismissed_at', null)
     .select('id')
 
   if (actionNeededError) {
@@ -186,6 +188,7 @@ export async function getDeadlinesNeedingAttention(
     .select('id, title, due_date, tax_deadline_type, status')
     .eq('company_id', companyId)
     .eq('is_completed', false)
+    .is('dismissed_at', null)
     .in('status', ['action_needed', 'overdue'])
     .order('due_date', { ascending: true })
 

@@ -1780,7 +1780,7 @@
     "pays_salaries_help": "Affects which tax deadlines are shown (employer declarations, etc.).",
     "preliminary_tax_heading": "Preliminary tax",
     "preliminary_tax_monthly_label": "Monthly preliminary tax (F-skatt)",
-    "preliminary_tax_monthly_help": "Amount in SEK paid each month."
+    "preliminary_tax_monthly_help": "Monthly amount per Skatteverket's debited preliminary tax decision. Payment reminders are only created when an amount is set. Leave empty if no preliminary tax is debited."
   },
   "settings_backup_download": {
     "create_backup_title": "Create backup",

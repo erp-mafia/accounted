@@ -2215,6 +2215,9 @@ export interface Deadline {
   reminder_offsets: number[] | null
   status: DeadlineStatus
   status_changed_at: string
+  // Durable opt-out for system deadlines: hidden everywhere, never
+  // recreated by the generator or the backfill cron.
+  dismissed_at: string | null
   linked_report_type: string | null
   linked_report_period: Record<string, unknown> | null
 
@@ -2340,7 +2343,7 @@ export const TAX_DEADLINE_TYPE_LABELS: Record<TaxDeadlineType, string> = {
   moms_monthly: 'Momsdeklaration (månad)',
   moms_quarterly: 'Momsdeklaration (kvartal)',
   moms_yearly: 'Momsdeklaration (år)',
-  f_skatt: 'F-skatt',
+  f_skatt: 'Preliminärskatt (F-skatt)',
   arbetsgivardeklaration: 'Arbetsgivardeklaration',
   skatteinbetalning: 'Skatteinbetalning (storföretag)',
   inkomstdeklaration_ef: 'Inkomstdeklaration EF',

@@ -22,6 +22,7 @@ export const TAX_RELEVANT_FIELDS = [
   'entity_type',
   'moms_period',
   'f_skatt',
+  'preliminary_tax_monthly',
   'vat_registered',
   'pays_salaries',
   'fiscal_year_start_month',
@@ -34,7 +35,7 @@ export const TAX_RELEVANT_FIELDS = [
 ] as const
 
 export const DEADLINE_SETTINGS_SELECT =
-  'company_id, entity_type, moms_period, f_skatt, vat_registered, pays_salaries, fiscal_year_start_month, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method' as const
+  'company_id, entity_type, moms_period, f_skatt, preliminary_tax_monthly, vat_registered, pays_salaries, fiscal_year_start_month, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method' as const
 
 /**
  * Check if any tax-relevant fields changed
@@ -66,6 +67,7 @@ export function toDeadlineSettings(
     entity_type: settings.entity_type,
     moms_period: settings.moms_period ?? null,
     f_skatt: settings.f_skatt ?? true,
+    preliminary_tax_monthly: settings.preliminary_tax_monthly ?? null,
     vat_registered: settings.vat_registered ?? false,
     pays_salaries: settings.pays_salaries ?? false,
     fiscal_year_start_month: settings.fiscal_year_start_month ?? 1,
@@ -129,28 +131,29 @@ export async function generateTaxDeadlinesForUser(
   const todayIso = formatDateISO(today)
   const endDate = `${Math.max(...years) + 1}-12-31`
 
-  // Completed deadlines represent real filing progress. Preserve them and do
-  // not create a second pending row for the same obligation. The window starts
-  // a year before the earliest generated year, NOT today: a completed row can
-  // carry a superseded due date that already passed while the current
-  // statutory date is still ahead, and filtering on today would resurrect a
-  // pending row for an obligation the user already filed.
+  // Completed deadlines represent real filing progress and dismissed
+  // deadlines represent an explicit opt-out; preserve both and do not create
+  // a second pending row for the same obligation. The window starts a year
+  // before the earliest generated year, NOT today: a completed row can carry
+  // a superseded due date that already passed while the current statutory
+  // date is still ahead, and filtering on today would resurrect a pending
+  // row for an obligation the user already filed.
   const completedFloor = `${Math.min(...years) - 1}-01-01`
-  const { data: completedRows, error: completedRowsError } = await supabase
+  const { data: preservedRows, error: preservedRowsError } = await supabase
     .from('deadlines')
     .select('tax_deadline_type, tax_period')
     .eq('company_id', companyId)
     .eq('source', 'system')
-    .eq('is_completed', true)
+    .or('is_completed.eq.true,dismissed_at.not.is.null')
     .gte('due_date', completedFloor)
 
-  if (completedRowsError) {
-    log.error('Error fetching completed deadlines:', completedRowsError)
-    throw completedRowsError
+  if (preservedRowsError) {
+    log.error('Error fetching completed/dismissed deadlines:', preservedRowsError)
+    throw preservedRowsError
   }
 
   const completedKeys = new Set(
-    (completedRows ?? []).map(
+    (preservedRows ?? []).map(
       (row: { tax_deadline_type: string | null; tax_period: string | null }) =>
         `${row.tax_deadline_type}:${row.tax_period}`,
     ),
@@ -259,13 +262,16 @@ export async function generateTaxDeadlinesForUser(
   }
 
   // Delete the superseded system-generated deadlines for these years,
-  // excluding the rows just inserted.
+  // excluding the rows just inserted. Dismissed rows survive: deleting one
+  // would erase the opt-out and let the next regeneration recreate the
+  // obligation as a fresh pending row.
   let deleteQuery = supabase
     .from('deadlines')
     .delete()
     .eq('company_id', companyId)
     .eq('source', 'system')
     .eq('is_completed', false)
+    .is('dismissed_at', null)
     .gte('due_date', todayIso)
     .lte('due_date', endDate)
 
@@ -345,6 +351,7 @@ interface UpcomingDeadlineCompanyRow {
   tax_period: string | null
   due_date: string | null
   is_completed: boolean | null
+  dismissed_at: string | null
 }
 
 // The due date is part of the identity: rows created by older schedule logic
@@ -358,11 +365,11 @@ function deadlineIdentity(
   return `${type}:${period}:${dueDate}`
 }
 
-// Completed rows use the looser type:period identity (no due date): a filed
-// obligation is satisfied even when its stored date comes from a superseded
-// schedule, and the generator never replaces completed rows, so flagging them
-// by date would make the repair loop re-run for the same company every day
-// without ever converging.
+// Completed and dismissed rows use the looser type:period identity (no due
+// date): a filed or opted-out obligation is satisfied even when its stored
+// date comes from a superseded schedule, and the generator never replaces
+// either kind, so flagging them by date would make the repair loop re-run
+// for the same company every day without ever converging.
 function completedIdentity(type: string | null, period: string | null): string {
   return `${type}:${period}`
 }
@@ -410,7 +417,7 @@ export function findSettingsMissingUpcomingDeadlines(
     keys.add(deadlineIdentity(row.tax_deadline_type, row.tax_period, row.due_date))
     actualKeysByCompany.set(row.company_id, keys)
 
-    if (row.is_completed) {
+    if (row.is_completed || row.dismissed_at) {
       const completed = completedKeysByCompany.get(row.company_id) ?? new Set<string>()
       completed.add(completedIdentity(row.tax_deadline_type, row.tax_period))
       completedKeysByCompany.set(row.company_id, completed)
@@ -501,7 +508,7 @@ export async function backfillMissingTaxDeadlines(
     fetchAllRows<UpcomingDeadlineCompanyRow>(({ from, to }) =>
       supabase
         .from('deadlines')
-        .select('id, company_id, tax_deadline_type, tax_period, due_date, is_completed')
+        .select('id, company_id, tax_deadline_type, tax_period, due_date, is_completed, dismissed_at')
         .eq('source', 'system')
         .eq('deadline_type', 'tax')
         .gte('due_date', pastFloor)

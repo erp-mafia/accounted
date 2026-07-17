@@ -87,7 +87,7 @@ export default async function DashboardPage() {
       .gte('journal_entry.entry_date', startOfYearStr),
     supabase.from('invoices').select('total, total_sek, vat_amount, vat_amount_sek, status, ore_rounding').eq('company_id', companyId).in('status', ['sent', 'overdue']).is('credited_invoice_id', null),
     supabase.from('bank_connections').select('id, accounts_data, status, consent_expires, bank_name').eq('company_id', companyId).eq('status', 'active'),
-    supabase.from('deadlines').select('*, customer:customers(id, name)').eq('company_id', companyId).eq('is_completed', false)
+    supabase.from('deadlines').select('*, customer:customers(id, name)').eq('company_id', companyId).eq('is_completed', false).is('dismissed_at', null)
       .or(`due_date.lt.${today},due_date.lte.${nextWeek}`).order('due_date', { ascending: true }),
     supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'completed'),
     supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId).is('journal_entry_id', null).eq('is_ignored', false).is('is_business', null).lt('date', new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]),

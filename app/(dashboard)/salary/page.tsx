@@ -149,6 +149,7 @@ export default function SalaryPage() {
       .eq('company_id', company.id)
       .eq('tax_deadline_type', 'arbetsgivardeklaration')
       .eq('is_completed', false)
+      .is('dismissed_at', null)
       .gte('due_date', today)
       .order('due_date')
       .limit(1)

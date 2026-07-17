@@ -225,6 +225,7 @@ export async function countDeadlinesNeedingAction(
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('is_completed', false)
+    .is('dismissed_at', null)
     .in('status', ['action_needed', 'overdue'])
   if (error) return logAndZero('deadline_action', companyId, error)
   return count ?? 0

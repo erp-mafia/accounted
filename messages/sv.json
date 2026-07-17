@@ -1780,7 +1780,7 @@
     "pays_salaries_help": "Påverkar vilka skattedeadlines som visas (arbetsgivardeklaration m.m.).",
     "preliminary_tax_heading": "Preliminärskatt",
     "preliminary_tax_monthly_label": "Månatlig preliminärskatt (F-skatt)",
-    "preliminary_tax_monthly_help": "Belopp i SEK som betalas varje månad."
+    "preliminary_tax_monthly_help": "Månadsbelopp enligt Skatteverkets beslut om debiterad preliminärskatt. Betalningspåminnelser skapas bara när ett belopp är angivet. Lämna tomt om ingen preliminärskatt är debiterad."
   },
   "settings_backup_download": {
     "create_backup_title": "Skapa backup",

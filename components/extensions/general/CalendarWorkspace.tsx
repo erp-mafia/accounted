@@ -29,6 +29,7 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
       const { data: deadlinesData, error: deadlinesError } = await supabase
         .from('deadlines')
         .select('*, customer:customers(name)')
+        .is('dismissed_at', null)
         .order('due_date', { ascending: true })
 
       if (deadlinesError) throw deadlinesError

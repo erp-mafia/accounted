@@ -176,7 +176,7 @@ function getSwedishTaxTypeLabel(type: string): string {
     moms_monthly: 'Momsdeklaration (månad)',
     moms_quarterly: 'Momsdeklaration (kvartal)',
     moms_yearly: 'Momsdeklaration (år)',
-    f_skatt: 'F-skatt',
+    f_skatt: 'Preliminärskatt (F-skatt)',
     arbetsgivardeklaration: 'Arbetsgivardeklaration',
     skatteinbetalning: 'Skatteinbetalning (storföretag)',
     inkomstdeklaration_ef: 'Inkomstdeklaration EF',
