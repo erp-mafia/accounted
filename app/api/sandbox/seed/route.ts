@@ -637,11 +637,14 @@ export async function POST(request: Request) {
         {
           user_id: userId,
           company_id: companyId,
-          title: 'Momsdeklaration Q1 2026',
+          title: `Momsdeklaration Q1 ${currentYear}`,
           due_date: toDateStr(momsDeadline),
           deadline_type: 'tax',
           priority: 'important',
-          tax_deadline_type: 'moms',
+          // Current generator types: the bare 'moms'/'inkomstdeklaration'
+          // types were retired and seeding them recreates legacy rows the
+          // cleanup migration removed.
+          tax_deadline_type: 'moms_quarterly',
           tax_period: `${currentYear}-Q1`,
           source: 'system',
           status: 'upcoming',
@@ -650,11 +653,12 @@ export async function POST(request: Request) {
         {
           user_id: userId,
           company_id: companyId,
-          title: 'Inkomstdeklaration 2025',
+          title: `Inkomstdeklaration ${currentYear - 1}`,
           due_date: `${currentYear}-05-02`,
           deadline_type: 'tax',
           priority: 'critical',
-          tax_deadline_type: 'inkomstdeklaration',
+          // Sandbox companies are enskild firma (see p_entity_type above).
+          tax_deadline_type: 'inkomstdeklaration_ef',
           tax_period: `${currentYear - 1}`,
           source: 'system',
           status: 'upcoming',

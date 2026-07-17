@@ -97,19 +97,18 @@ export async function GET(
   const startStr = startDate.toISOString().split('T')[0]
   const endStr = endDate.toISOString().split('T')[0]
 
-  // Fetch relevant data based on feed options
+  // Fetch relevant data based on feed options. Deadlines are always
+  // fetched: include_tax_deadlines only hides SYSTEM rows (the generator
+  // filters by source), while user-created deadlines always appear.
   const [deadlinesResult, invoicesResult] = await Promise.all([
-    // Deadlines
-    feed.include_tax_deadlines
-      ? supabase
-          .from('deadlines')
-          .select('*')
-          .eq('company_id', feed.company_id)
-          .is('dismissed_at', null)
-          .gte('due_date', startStr)
-          .lte('due_date', endStr)
-          .order('due_date')
-      : { data: [] },
+    supabase
+      .from('deadlines')
+      .select('*')
+      .eq('company_id', feed.company_id)
+      .is('dismissed_at', null)
+      .gte('due_date', startStr)
+      .lte('due_date', endStr)
+      .order('due_date'),
 
     // Invoices
     feed.include_invoices

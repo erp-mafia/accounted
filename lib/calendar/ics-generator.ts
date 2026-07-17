@@ -144,14 +144,19 @@ export function generateCalendarFeed(
 ): Promise<string> {
   const events: EventAttributes[] = []
 
-  if (options.includeTaxDeadlines) {
-    const taxDeadlines = data.deadlines.filter((d) => d.deadline_type === 'tax')
-    events.push(...generateDeadlineEvents(taxDeadlines))
+  // The include_tax_deadlines flag governs SYSTEM-generated deadlines only:
+  // the user's own manual deadlines always appear in the feed. The previous
+  // nesting hid every deadline, including user-created ones, when the flag
+  // was off.
+  const visibleDeadlines = options.includeTaxDeadlines
+    ? data.deadlines
+    : data.deadlines.filter((d) => d.source !== 'system')
 
-    // Include non-tax deadlines too
-    const otherDeadlines = data.deadlines.filter((d) => d.deadline_type !== 'tax')
-    events.push(...generateDeadlineEvents(otherDeadlines))
-  }
+  const taxDeadlines = visibleDeadlines.filter((d) => d.deadline_type === 'tax')
+  events.push(...generateDeadlineEvents(taxDeadlines))
+
+  const otherDeadlines = visibleDeadlines.filter((d) => d.deadline_type !== 'tax')
+  events.push(...generateDeadlineEvents(otherDeadlines))
 
   if (options.includeInvoices) {
     events.push(...generateInvoiceEvents(data.invoices))
