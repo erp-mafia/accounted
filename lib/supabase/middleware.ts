@@ -174,7 +174,11 @@ export async function updateSession(request: NextRequest) {
   // Resolve the active company at most once per request: both the MFA
   // enrollment gate and the company-context block below need it, and the
   // resolution costs DB round trips.
-  let resolvedCompany: { companyId: string | null; locale: string | null } | null = null
+  let resolvedCompany: {
+    companyId: string | null
+    locale: string | null
+    degraded: boolean
+  } | null = null
   const resolveCompanyOnce = async () =>
     (resolvedCompany ??= await resolveCompanyForMiddleware(supabase, user.id, request))
 
@@ -206,11 +210,12 @@ export async function updateSession(request: NextRequest) {
 
   // Company context resolution
   const cookieCompanyId = request.cookies.get('gnubok-company-id')?.value
-  const { companyId, locale: dbLocale } = await resolveCompanyOnce()
+  const { companyId, locale: dbLocale, degraded } = await resolveCompanyOnce()
 
   // If the cookie pointed at a company we can no longer resolve (e.g.
-  // archived), clear it so the browser stops sending it.
-  if (cookieCompanyId && cookieCompanyId !== companyId) {
+  // archived), clear it so the browser stops sending it. Never on degraded
+  // resolution: a transient query failure must not wipe a valid cookie.
+  if (!degraded && cookieCompanyId && cookieCompanyId !== companyId) {
     supabaseResponse.cookies.set('gnubok-company-id', '', { path: '/', maxAge: 0 })
   }
 
@@ -219,7 +224,7 @@ export async function updateSession(request: NextRequest) {
   // without forcing every RSC render to query the database itself.
   const cookieLocale = request.cookies.get(LOCALE_COOKIE)?.value
   const effectiveLocale = isLocale(dbLocale) ? dbLocale : DEFAULT_LOCALE
-  if (cookieLocale !== effectiveLocale) {
+  if (!degraded && cookieLocale !== effectiveLocale) {
     supabaseResponse.cookies.set(LOCALE_COOKIE, effectiveLocale, {
       path: '/',
       sameSite: 'lax',
@@ -243,6 +248,15 @@ export async function updateSession(request: NextRequest) {
   // routes to pass through.
   if (!companyId) {
     if (isNoCompanyAllowed) {
+      return supabaseResponse
+    }
+
+    // Degraded resolution (a query FAILED, as opposed to returning no rows)
+    // means the user's companies are unknown, not absent. Fail open: pass
+    // the request through and let the layout's own resolution retry or
+    // surface an error. Redirecting here showed fully onboarded users the
+    // onboarding wizard again on a transient failure (issue #1053).
+    if (degraded) {
       return supabaseResponse
     }
 
@@ -299,13 +313,13 @@ async function resolveCompanyForMiddleware(
   supabase: ReturnType<typeof createServerClient>,
   userId: string,
   _request: NextRequest
-): Promise<{ companyId: string | null; locale: string | null }> {
+): Promise<{ companyId: string | null; locale: string | null; degraded: boolean }> {
   // 1. user_preferences (authoritative) + first membership, fetched in
   // parallel: the fallback query result doubles as validation when the
   // preferred company happens to be the first membership, which is the
   // common single-company case, so most requests pay one round trip
   // instead of two sequential ones.
-  const [{ data: prefs }, { data: firstCompany }] = await Promise.all([
+  const [prefsRes, firstRes] = await Promise.all([
     supabase
       .from('user_preferences')
       .select('active_company_id, locale')
@@ -321,14 +335,28 @@ async function resolveCompanyForMiddleware(
       .maybeSingle(),
   ])
 
+  const prefs = prefsRes.data
+  const firstCompany = firstRes.data
   const locale = (prefs?.locale as string | undefined) ?? null
+
+  // A FAILED query (as opposed to one returning no rows) means the user's
+  // companies are unknown right now, not absent: flag it so the caller
+  // fails open instead of redirecting to onboarding or clearing cookies
+  // (issue #1053). Middleware cannot throw usefully, hence a flag.
+  if (prefsRes.error || firstRes.error) {
+    console.error(
+      '[middleware] company resolution query failed',
+      prefsRes.error ?? firstRes.error
+    )
+    return { companyId: null, locale, degraded: true }
+  }
 
   if (prefs?.active_company_id) {
     if (prefs.active_company_id === firstCompany?.company_id) {
-      return { companyId: firstCompany.company_id, locale }
+      return { companyId: firstCompany.company_id, locale, degraded: false }
     }
 
-    const { data: membership } = await supabase
+    const { data: membership, error: membershipError } = await supabase
       .from('company_members')
       .select('company_id, companies!inner(archived_at)')
       .eq('company_id', prefs.active_company_id)
@@ -336,11 +364,18 @@ async function resolveCompanyForMiddleware(
       .is('companies.archived_at', null)
       .maybeSingle()
 
-    if (membership) return { companyId: membership.company_id, locale }
+    // A failed validation must not silently switch the user onto their
+    // first membership (wrong company for consultants): degrade instead.
+    if (membershipError) {
+      console.error('[middleware] company preference validation failed', membershipError)
+      return { companyId: null, locale, degraded: true }
+    }
+
+    if (membership) return { companyId: membership.company_id, locale, degraded: false }
   }
 
   // 2. Fallback: first non-archived membership (already fetched above)
-  if (!firstCompany) return { companyId: null, locale }
+  if (!firstCompany) return { companyId: null, locale, degraded: false }
 
   // Write the fallback back to user_preferences so future RLS lookups
   // see the same active company without needing this fallback scan.
@@ -358,5 +393,5 @@ async function resolveCompanyForMiddleware(
     console.error('[middleware] active company write-back failed', writeBackError)
   }
 
-  return { companyId: firstCompany.company_id, locale }
+  return { companyId: firstCompany.company_id, locale, degraded: false }
 }

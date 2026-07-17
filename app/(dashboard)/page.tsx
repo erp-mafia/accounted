@@ -29,16 +29,20 @@ export default async function DashboardPage() {
   const rawCompanyId = cookieStore.get('gnubok-company-id')?.value
     ?? await getActiveCompanyId(supabase, user.id)
 
-  // Validate the cookie/preference points to a company the user can access
+  // Validate the cookie/preference points to a company the user can access.
+  // Only a positive "no membership row" clears it: a FAILED query means the
+  // membership is unknown, and treating that as absent bounced onboarded
+  // users to the wizard on transient failures (issue #1053). RLS still
+  // guards every downstream query if the cookie is stale.
   let companyId = rawCompanyId
   if (companyId) {
-    const { data: membership } = await supabase
+    const { data: membership, error: membershipError } = await supabase
       .from('company_members')
       .select('company_id')
       .eq('company_id', companyId)
       .eq('user_id', user.id)
       .maybeSingle()
-    if (!membership) companyId = null
+    if (!membership && !membershipError) companyId = null
   }
 
   if (!companyId) {
@@ -54,7 +58,7 @@ export default async function DashboardPage() {
 
   // Fetch all data in parallel
   const [
-    { data: settings },
+    settingsRes,
     { count: customerCount },
     { count: invoiceCount },
     { count: receiptCount },
@@ -71,7 +75,7 @@ export default async function DashboardPage() {
     worklist,
     suggestedMatches,
   ] = await Promise.all([
-    supabase.from('company_settings').select('*').eq('company_id', companyId).single(),
+    supabase.from('company_settings').select('*').eq('company_id', companyId).maybeSingle(),
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('receipts').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -99,6 +103,15 @@ export default async function DashboardPage() {
     getWorklistCounts(supabase, companyId),
     listSuggestedMatches(supabase, companyId, 5),
   ])
+
+  // A FAILED settings read must not masquerade as "onboarding not done":
+  // that sent fully onboarded users back to the wizard on a transient query
+  // failure (issue #1053). Throw to the error boundary (retryable) and only
+  // redirect on a genuinely incomplete or missing settings row.
+  const { data: settings, error: settingsError } = settingsRes
+  if (settingsError) {
+    throw new Error(`company_settings fetch failed: ${settingsError.message}`)
+  }
 
   // If onboarding is not complete, redirect to onboarding
   if (!settings?.onboarding_complete) {

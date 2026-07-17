@@ -31,6 +31,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { PageHeader } from '@/components/ui/page-header'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { formatCurrency } from '@/lib/utils'
+import { compareArticles } from '@/lib/articles/sort'
 import Link from 'next/link'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -76,9 +77,10 @@ function ArticlesPageInner() {
 
   const sortParam = searchParams.get('sort')
   const dirParam = searchParams.get('dir')
+  // Default to the user's own article numbering (numeric-aware), issue #1053.
   const sortColumn: SortColumn = (SORTABLE_COLUMNS as ReadonlyArray<string>).includes(sortParam ?? '')
     ? (sortParam as SortColumn)
-    : 'name'
+    : 'article_number'
   const sortDir: SortDir = dirParam === 'desc' ? 'desc' : 'asc'
 
   const updateSort = useCallback(
@@ -193,7 +195,7 @@ function ArticlesPageInner() {
           cmp = compareStrings(a.name || '', b.name || '')
           break
         case 'article_number':
-          cmp = compareStrings(a.article_number || '', b.article_number || '')
+          cmp = compareArticles(a, b)
           break
         case 'type':
           cmp = compareStrings(a.type || '', b.type || '')

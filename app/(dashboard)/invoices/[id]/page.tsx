@@ -12,7 +12,7 @@ import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
-import { invoiceDisplayNumber } from '@/lib/invoices/display'
+import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
@@ -820,7 +820,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   numeric columns; a blank one renders as a spacer. */}
               <div className="hidden sm:block space-y-4">
                 {invoice.items.map((item) =>
-                  item.line_type === 'text' ? (
+                  isTextLikeLine(item) ? (
                     <div key={item.id} className="grid grid-cols-12 gap-4 text-sm">
                       <div className="col-span-12 text-muted-foreground">{item.description || ' '}</div>
                     </div>
@@ -857,7 +857,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {/* Items, mobile cards */}
               <div className="sm:hidden space-y-2">
                 {invoice.items.map((item) =>
-                  item.line_type === 'text' ? (
+                  isTextLikeLine(item) ? (
                     <p key={item.id} className="text-sm text-muted-foreground px-1">{item.description || ' '}</p>
                   ) : (
                     <div key={item.id} className="border rounded-lg p-3 text-sm space-y-1.5">

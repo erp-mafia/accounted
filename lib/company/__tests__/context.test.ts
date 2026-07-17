@@ -183,6 +183,52 @@ describe('getActiveCompanyId', () => {
 
     expect(await getActiveCompanyId(supabase as never, 'user-1')).toBeNull()
   })
+
+  // A failed query must throw, never read as "no companies": callers redirect
+  // the null state to the onboarding wizard, and a transient failure was
+  // enough to show onboarding to a fully onboarded user (issue #1053).
+  it('throws resolution_failed when the preferences query fails', async () => {
+    const { supabase } = buildSupabase({
+      user_preferences: { maybeSingle: { data: null, error: { message: 'fetch failed' } } },
+      company_members: { maybeSingle: { data: { company_id: 'company-1' } } },
+    })
+
+    const err = await getActiveCompanyId(supabase as never, 'user-1').catch((e) => e)
+
+    expect(err).toBeInstanceOf(CompanyContextError)
+    expect(err.code).toBe('resolution_failed')
+  })
+
+  it('throws resolution_failed when the membership query fails', async () => {
+    const { supabase } = buildSupabase({
+      user_preferences: { maybeSingle: { data: null } },
+      company_members: { maybeSingle: { data: null, error: { message: 'timeout' } } },
+    })
+
+    const err = await getActiveCompanyId(supabase as never, 'user-1').catch((e) => e)
+
+    expect(err).toBeInstanceOf(CompanyContextError)
+    expect(err.code).toBe('resolution_failed')
+  })
+
+  it('throws instead of silently switching company when preference validation fails', async () => {
+    const { supabase } = buildSupabase({
+      user_preferences: { maybeSingle: { data: { active_company_id: 'company-2' } } },
+      company_members: {
+        maybeSingle: [
+          { data: { company_id: 'company-1' } }, // first membership (parallel fetch)
+          { data: null, error: { message: 'connection reset' } }, // validation FAILS
+        ],
+      },
+    })
+
+    const err = await getActiveCompanyId(supabase as never, 'user-1').catch((e) => e)
+
+    // Falling back to company-1 here would silently flip a consultant onto
+    // the wrong company's books.
+    expect(err).toBeInstanceOf(CompanyContextError)
+    expect(err.code).toBe('resolution_failed')
+  })
 })
 
 describe('getCompanyDisplayName', () => {

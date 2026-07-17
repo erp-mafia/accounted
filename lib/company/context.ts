@@ -8,12 +8,14 @@ const COMPANY_COOKIE = 'gnubok-company-id'
 /**
  * Thrown by setActiveCompany so callers can tell a permissions problem
  * ('not_member') apart from a failed/unverified database write
- * ('persist_failed') and surface the right message to the user.
+ * ('persist_failed'), and by getActiveCompanyId when a resolution query
+ * fails ('resolution_failed': the active company is unknown right now,
+ * which is NOT the same as the user having no companies).
  */
 export class CompanyContextError extends Error {
   constructor(
     message: string,
-    readonly code: 'not_member' | 'persist_failed'
+    readonly code: 'not_member' | 'persist_failed' | 'resolution_failed'
   ) {
     super(message)
     this.name = 'CompanyContextError'
@@ -32,7 +34,10 @@ export class CompanyContextError extends Error {
  * Having Next.js and RLS both read from `user_preferences` keeps them
  * perfectly in sync.
  *
- * Returns null if the user has no non-archived companies.
+ * Returns null only when the user positively has no non-archived companies.
+ * Throws CompanyContextError('resolution_failed') when a query fails: a
+ * transient failure must never read as "no companies", because callers
+ * redirect that state to the onboarding wizard (issue #1053).
  */
 export async function getActiveCompanyId(
   supabase: SupabaseClient,
@@ -46,7 +51,7 @@ export async function getActiveCompanyId(
   // every dashboard layout render, so the sequential version was pure
   // wall-clock cost. Mirrors resolveCompanyForMiddleware, minus the
   // write-back (read paths shouldn't write).
-  const [{ data: prefs }, { data: firstCompany }] = await Promise.all([
+  const [prefsRes, firstRes] = await Promise.all([
     supabase
       .from('user_preferences')
       .select('active_company_id')
@@ -62,6 +67,17 @@ export async function getActiveCompanyId(
       .maybeSingle(),
   ])
 
+  const resolutionError = prefsRes.error ?? firstRes.error
+  if (resolutionError) {
+    throw new CompanyContextError(
+      `Active company resolution failed: ${resolutionError.message}`,
+      'resolution_failed'
+    )
+  }
+
+  const prefs = prefsRes.data
+  const firstCompany = firstRes.data
+
   if (prefs?.active_company_id) {
     if (firstCompany && prefs.active_company_id === firstCompany.company_id) {
       return firstCompany.company_id
@@ -70,13 +86,22 @@ export async function getActiveCompanyId(
     // Preference points at a different company than the first membership:
     // validate it still resolves to a non-archived company the user is a
     // member of before trusting it.
-    const { data: membership } = await supabase
+    const { data: membership, error: membershipError } = await supabase
       .from('company_members')
       .select('company_id, companies!inner(archived_at)')
       .eq('company_id', prefs.active_company_id)
       .eq('user_id', userId)
       .is('companies.archived_at', null)
       .maybeSingle()
+
+    // Falling back to the first membership on a FAILED validation would
+    // silently switch a multi-company user's active company: fail loudly.
+    if (membershipError) {
+      throw new CompanyContextError(
+        `Active company validation failed: ${membershipError.message}`,
+        'resolution_failed'
+      )
+    }
 
     if (membership) return membership.company_id
   }
