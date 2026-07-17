@@ -131,7 +131,7 @@ describe('DELETE /api/deadlines/[id]', () => {
     // the route must soft-dismiss so the opt-out is durable.
     auth(createCapturingSupabase([
       { data: { id: 'deadline-1', source: 'system' } },
-      { data: null },
+      { data: [{ id: 'deadline-1' }] },
     ]))
     const { status, body } = await parseJsonResponse<{ success: boolean; dismissed?: boolean }>(
       await DELETE(createMockRequest('/x', { method: 'DELETE' }), idParams)
@@ -139,5 +139,18 @@ describe('DELETE /api/deadlines/[id]', () => {
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(body.dismissed).toBe(true)
+  })
+
+  it('returns 404 when the system row vanished before the dismissal landed', async () => {
+    // Concurrent regeneration can delete the row between lookup and update;
+    // a phantom "dismissed" success would persist nothing.
+    auth(createCapturingSupabase([
+      { data: { id: 'deadline-1', source: 'system' } },
+      { data: [] },
+    ]))
+    const { status } = await parseJsonResponse(
+      await DELETE(createMockRequest('/x', { method: 'DELETE' }), idParams)
+    )
+    expect(status).toBe(404)
   })
 })
