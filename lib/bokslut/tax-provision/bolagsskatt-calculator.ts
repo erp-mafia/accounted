@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { roundOre } from '@/lib/money'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import type { ProposedDisposition } from '../types'
 
@@ -152,8 +153,8 @@ export async function sumPostedYearEndDispositions(
     if (acc === '7533') slp += delta
   }
   return {
-    total: Math.round(effect * 100) / 100,
-    slpPortion: Math.round(slp * 100) / 100,
+    total: roundOre(effect),
+    slpPortion: roundOre(slp),
   }
 }
 

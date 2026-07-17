@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { roundOre } from '@/lib/money'
 import type { ProposedDisposition } from '../types'
 
 /** Maximum periodiseringsfond avsättning for aktiebolag: 25 % of skattemässigt
@@ -233,8 +234,8 @@ export async function listExistingPeriodiseringsfonder(
     fonder.push({
       account_number: accountNumber,
       cohort_year: cohortYear,
-      balance: Math.round(closing * 100) / 100,
-      opening_balance: Math.round(opening * 100) / 100,
+      balance: roundOre(closing),
+      opening_balance: roundOre(opening),
       must_return_this_year: cohortYear + PFOND_MAX_HOLD_YEARS <= closingYear,
     })
   }
