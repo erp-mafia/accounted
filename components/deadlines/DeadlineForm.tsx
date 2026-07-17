@@ -119,6 +119,7 @@ export function DeadlineForm({
         status_changed_at: new Date().toISOString(),
         linked_report_type: null,
         linked_report_period: null,
+        dismissed_at: null,
       })
     } finally {
       setIsLoading(false)
