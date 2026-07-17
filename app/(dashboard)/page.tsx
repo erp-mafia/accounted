@@ -29,16 +29,20 @@ export default async function DashboardPage() {
   const rawCompanyId = cookieStore.get('gnubok-company-id')?.value
     ?? await getActiveCompanyId(supabase, user.id)
 
-  // Validate the cookie/preference points to a company the user can access
+  // Validate the cookie/preference points to a company the user can access.
+  // Only a positive "no membership row" clears it: a FAILED query means the
+  // membership is unknown, and treating that as absent bounced onboarded
+  // users to the wizard on transient failures (issue #1053). RLS still
+  // guards every downstream query if the cookie is stale.
   let companyId = rawCompanyId
   if (companyId) {
-    const { data: membership } = await supabase
+    const { data: membership, error: membershipError } = await supabase
       .from('company_members')
       .select('company_id')
       .eq('company_id', companyId)
       .eq('user_id', user.id)
       .maybeSingle()
-    if (!membership) companyId = null
+    if (!membership && !membershipError) companyId = null
   }
 
   if (!companyId) {
@@ -54,7 +58,7 @@ export default async function DashboardPage() {
 
   // Fetch all data in parallel
   const [
-    { data: settings },
+    settingsRes,
     { count: customerCount },
     { count: invoiceCount },
     { count: receiptCount },
@@ -71,7 +75,7 @@ export default async function DashboardPage() {
     worklist,
     suggestedMatches,
   ] = await Promise.all([
-    supabase.from('company_settings').select('*').eq('company_id', companyId).single(),
+    supabase.from('company_settings').select('*').eq('company_id', companyId).maybeSingle(),
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('receipts').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -83,7 +87,7 @@ export default async function DashboardPage() {
       .gte('journal_entry.entry_date', startOfYearStr),
     supabase.from('invoices').select('total, total_sek, vat_amount, vat_amount_sek, status, ore_rounding').eq('company_id', companyId).in('status', ['sent', 'overdue']).is('credited_invoice_id', null),
     supabase.from('bank_connections').select('id, accounts_data, status, consent_expires, bank_name').eq('company_id', companyId).eq('status', 'active'),
-    supabase.from('deadlines').select('*, customer:customers(id, name)').eq('company_id', companyId).eq('is_completed', false)
+    supabase.from('deadlines').select('*, customer:customers(id, name)').eq('company_id', companyId).eq('is_completed', false).is('dismissed_at', null)
       .or(`due_date.lt.${today},due_date.lte.${nextWeek}`).order('due_date', { ascending: true }),
     supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'completed'),
     supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId).is('journal_entry_id', null).eq('is_ignored', false).is('is_business', null).lt('date', new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]),
@@ -99,6 +103,15 @@ export default async function DashboardPage() {
     getWorklistCounts(supabase, companyId),
     listSuggestedMatches(supabase, companyId, 5),
   ])
+
+  // A FAILED settings read must not masquerade as "onboarding not done":
+  // that sent fully onboarded users back to the wizard on a transient query
+  // failure (issue #1053). Throw to the error boundary (retryable) and only
+  // redirect on a genuinely incomplete or missing settings row.
+  const { data: settings, error: settingsError } = settingsRes
+  if (settingsError) {
+    throw new Error(`company_settings fetch failed: ${settingsError.message}`)
+  }
 
   // If onboarding is not complete, redirect to onboarding
   if (!settings?.onboarding_complete) {

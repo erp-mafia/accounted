@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { isTextLikeLine } from '@/lib/invoices/display'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { Customer, Currency } from '@/types'
 
@@ -73,10 +74,11 @@ export function InvoiceReviewContent({
     non_eu_business: t('customer_type_non_eu_business'),
   }
 
-  // Calculate per-rate VAT breakdown (free-text rows carry no amounts).
+  // Calculate per-rate VAT breakdown (free-text and amount-less rows carry
+  // no amounts and must not seed an empty rate group).
   const vatByRate = new Map<number, number>()
   for (const item of items) {
-    if (item.line_type === 'text') continue
+    if (isTextLikeLine(item)) continue
     const rate = item.vat_rate ?? 0
     const lineTotal = item.quantity * item.unit_price
     const lineVat = Math.round(lineTotal * rate / 100 * 100) / 100
@@ -131,7 +133,7 @@ export function InvoiceReviewContent({
           </thead>
           <tbody>
             {items.map((item, index) =>
-              item.line_type === 'text' ? (
+              isTextLikeLine(item) ? (
                 <tr key={index} className="border-b last:border-0">
                   <td className="py-2 text-muted-foreground" colSpan={showVatColumn ? 6 : 5}>
                     {item.description || ' '}
@@ -170,7 +172,7 @@ export function InvoiceReviewContent({
       </div>
       <div className="sm:hidden space-y-2">
         {items.map((item, index) =>
-          item.line_type === 'text' ? (
+          isTextLikeLine(item) ? (
             <p key={index} className="text-sm text-muted-foreground px-1">{item.description || ' '}</p>
           ) : (
             <div key={index} className="border rounded-lg p-3 text-sm space-y-1.5">

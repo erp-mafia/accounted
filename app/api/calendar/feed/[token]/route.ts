@@ -105,6 +105,7 @@ export async function GET(
           .from('deadlines')
           .select('*')
           .eq('company_id', feed.company_id)
+          .is('dismissed_at', null)
           .gte('due_date', startStr)
           .lte('due_date', endStr)
           .order('due_date')

@@ -31,7 +31,6 @@ import {
 } from './xml-generator'
 import type { AGIEmployeeData, AGICompanyData, AGITotals } from './xml-generator'
 import { eventBus } from '@/lib/events'
-import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import type { Logger } from '@/lib/logger'
 
 // Strict runtime validation of the joined salary_run_employees row. Without
@@ -659,17 +658,13 @@ export async function generateAgiDeclaration(
     opLog.warn('agi.generated emit failed', err as Error)
   }
 
-  // 11. Auto-complete the arbetsgivardeklaration deadline for this period
-  //     (Skatteförfarandelagen: AGI generation satisfies the filing
-  //     obligation).
-  const period = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
-  await completeTaxDeadline(
-    supabase,
-    companyId,
-    ['arbetsgivardeklaration'],
-    period,
-    'submitted'
-  )
+  // NOTE: generating the XML deliberately does NOT complete the
+  // arbetsgivardeklaration deadline. SFL 26 kap. deems the obligation
+  // satisfied only when the declaration has come in to Skatteverket; the
+  // Skatteverket extension confirms the deadline on kvittens receipt
+  // (agi-kvittens-reconcile), and manual filers tick it off themselves.
+  // Completing here made a generated-but-never-filed AGI silently sail
+  // past its statutory date.
 
   opLog.info('AGI declaration generated', {
     requestId,

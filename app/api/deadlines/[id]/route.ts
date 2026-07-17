@@ -90,13 +90,54 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
 
 /**
  * DELETE /api/deadlines/[id]
- * Delete a deadline
+ * Delete a user deadline, or durably dismiss a system-generated one.
+ *
+ * System rows are soft-dismissed instead of hard-deleted: the nightly
+ * backfill cron treats a missing upcoming system row as a repair case and
+ * recreates it within 24 hours, so a hard delete silently undoes itself.
+ * A dismissed row stays in the table (hidden from every surface) and
+ * satisfies the generator and backfill the same way a completed row does.
  */
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   'deadline.delete',
   async (_request, ctx, { params }) => {
     const { id } = await params
     const { supabase, companyId } = ctx
+
+    const { data: existing, error: fetchError } = await supabase
+      .from('deadlines')
+      .select('id, source')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+
+    if (fetchError) {
+      return NextResponse.json({ error: fetchError.message }, { status: 500 })
+    }
+    if (!existing) {
+      return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
+    }
+
+    if (existing.source === 'system') {
+      const { data: dismissedRows, error: dismissError } = await supabase
+        .from('deadlines')
+        .update({ dismissed_at: new Date().toISOString() })
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .eq('source', 'system')
+        .select('id')
+
+      if (dismissError) {
+        return NextResponse.json({ error: dismissError.message }, { status: 500 })
+      }
+      // The row can vanish between lookup and update (generator cleanup
+      // during a concurrent regeneration); report 404 rather than a
+      // phantom success that persisted nothing.
+      if (!dismissedRows || dismissedRows.length === 0) {
+        return NextResponse.json({ error: 'Deadline not found' }, { status: 404 })
+      }
+      return NextResponse.json({ success: true, dismissed: true })
+    }
 
     const { error, count } = await supabase
       .from('deadlines')

@@ -125,6 +125,11 @@ export const PUT = withRouteContext(
     if (body.vat_has_eu_trade === false) {
       body.periodisk_sammanstallning_enabled = false
     }
+    // Seasonal registration is a mode of being a registered employer; an
+    // unregistered company cannot be sasongsregistrerad.
+    if (body.employer_registered === false) {
+      body.employer_seasonal = false
+    }
 
     // Validate: VAT-registered must have VAT number (ML 11 kap. 8§) and moms period (SFL 26 kap.)
     const effectiveVatRegistered = body.vat_registered ?? oldSettings?.vat_registered

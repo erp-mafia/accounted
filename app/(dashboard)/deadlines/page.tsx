@@ -46,6 +46,7 @@ export default function DeadlinesPage() {
             .from('deadlines')
             .select('*, customer:customers(name)')
             .eq('company_id', companyId)
+            .is('dismissed_at', null)
             .order('due_date', { ascending: true })
             .order('id', { ascending: true })
             .range(from, to),

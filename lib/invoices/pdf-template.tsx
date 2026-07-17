@@ -10,6 +10,7 @@ import {
 import type { Invoice, InvoiceItem, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { getAmountToPay } from '@/lib/invoices/rounding'
+import { isTextLikeLine } from '@/lib/invoices/display'
 
 type PdfLang = 'sv' | 'en'
 
@@ -657,7 +658,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
   // Free-text / blank rows carry no amounts: exclude them from every VAT
   // calculation. They still render as their own row in the line-items table.
-  const billableItems = items.filter((item) => item.line_type !== 'text')
+  // Amount-less product rows count as text too (isTextLikeLine), so they
+  // neither print zeros nor seed an empty per-rate VAT group.
+  const billableItems = items.filter((item) => !isTextLikeLine(item))
 
   // Check if items have mixed VAT rates
   const hasPerLineVat = billableItems.some((item) => item.vat_rate !== undefined && item.vat_rate !== null)
@@ -857,7 +860,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
 
             {/* Table rows */}
             {items.map((item, index) =>
-              item.line_type === 'text' ? (
+              isTextLikeLine(item) ? (
                 // Free-text / blank row: description spans the full width, no
                 // numeric columns. An empty description renders as a spacer.
                 <View key={index} style={styles.tableRow}>

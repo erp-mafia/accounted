@@ -1777,10 +1777,14 @@
     "month_nov": "November",
     "month_dec": "December",
     "pays_salaries_label": "Pays salaries",
-    "pays_salaries_help": "Affects which tax deadlines are shown (employer declarations, etc.).",
+    "pays_salaries_help": "Controls the salary module in the menu. Paying out salary requires employer registration with Skatteverket.",
+    "employer_registered_label": "Registered as employer",
+    "employer_registered_help": "Registered employers must file an employer declaration (AGI) every month, including months without salary payments (nil declaration). Controls AGI deadlines.",
+    "employer_seasonal_label": "Seasonal employer (säsongsregistrerad)",
+    "employer_seasonal_help": "Files the employer declaration only for months with salary payments, plus December if no salary was paid during the year.",
     "preliminary_tax_heading": "Preliminary tax",
     "preliminary_tax_monthly_label": "Monthly preliminary tax (F-skatt)",
-    "preliminary_tax_monthly_help": "Amount in SEK paid each month."
+    "preliminary_tax_monthly_help": "Monthly amount per Skatteverket's debited preliminary tax decision. Payment reminders are only created when an amount is set. Leave empty if no preliminary tax is debited."
   },
   "settings_backup_download": {
     "create_backup_title": "Create backup",

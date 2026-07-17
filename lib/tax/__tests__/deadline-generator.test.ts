@@ -12,8 +12,11 @@ const SETTINGS: CompanySettingsForDeadlines = {
   entity_type: 'aktiebolag',
   moms_period: 'monthly',
   f_skatt: true,
+  preliminary_tax_monthly: 5000,
   vat_registered: true,
   pays_salaries: true,
+  employer_registered: null,
+  employer_seasonal: false,
   fiscal_year_start_month: 1,
   vat_taxable_base_over_40m: false,
   vat_has_eu_trade: false,
@@ -59,6 +62,8 @@ function makeRecordingSupabase(opts: {
       return chain
     })
     chain.eq = vi.fn(self)
+    chain.or = vi.fn(self)
+    chain.is = vi.fn(self)
     chain.gte = vi.fn(self)
     chain.lte = vi.fn(self)
     chain.not = vi.fn((...args: unknown[]) => {
@@ -156,7 +161,12 @@ describe('findSettingsMissingUpcomingDeadlines', () => {
   const fromDate = new Date(2030, 0, 1)
   const years = [2030]
 
-  function rowsFor(companyId: string, keys: Set<string>, isCompleted = false) {
+  function rowsFor(
+    companyId: string,
+    keys: Set<string>,
+    isCompleted = false,
+    dismissedAt: string | null = null,
+  ) {
     return Array.from(keys, (key, index) => {
       const [taxDeadlineType, taxPeriod, dueDate] = key.split(':')
       return {
@@ -166,6 +176,7 @@ describe('findSettingsMissingUpcomingDeadlines', () => {
         tax_period: taxPeriod,
         due_date: dueDate,
         is_completed: isCompleted,
+        dismissed_at: dismissedAt,
       }
     })
   }
@@ -233,6 +244,26 @@ describe('findSettingsMissingUpcomingDeadlines', () => {
     expect(findSettingsMissingUpcomingDeadlines(
       settings,
       completedStaleRows,
+      years,
+      fromDate,
+    )).toEqual([])
+  })
+
+  it('treats a dismissed obligation as satisfied even with a superseded due date', () => {
+    // A dismissed row is an explicit opt-out. The generator never replaces
+    // dismissed rows, so flagging one by date would resurrect the obligation
+    // the user opted out of on every cron run.
+    const settings = [{ company_id: 'company-1', ...SETTINGS }]
+    const dismissedStaleRows = rowsFor(
+      'company-1',
+      getExpectedUpcomingDeadlineKeys(SETTINGS, years, fromDate),
+      false,
+      '2029-06-01T00:00:00Z',
+    ).map((row) => ({ ...row, due_date: '2029-01-15' }))
+
+    expect(findSettingsMissingUpcomingDeadlines(
+      settings,
+      dismissedStaleRows,
       years,
       fromDate,
     )).toEqual([])

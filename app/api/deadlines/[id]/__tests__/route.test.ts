@@ -105,19 +105,52 @@ describe('DELETE /api/deadlines/[id]', () => {
   })
 
   it('returns 404 instead of phantom success when no row matches', async () => {
-    auth(createCapturingSupabase([{ count: 0 }]))
+    // First result: the source lookup finds nothing.
+    auth(createCapturingSupabase([{ data: null }]))
     const { status } = await parseJsonResponse(
       await DELETE(createMockRequest('/x', { method: 'DELETE' }), idParams)
     )
     expect(status).toBe(404)
   })
 
-  it('deletes the deadline', async () => {
-    auth(createCapturingSupabase([{ count: 1 }]))
-    const { status, body } = await parseJsonResponse<{ success: boolean }>(
+  it('hard-deletes a user-created deadline', async () => {
+    auth(createCapturingSupabase([
+      { data: { id: 'deadline-1', source: 'user' } },
+      { count: 1 },
+    ]))
+    const { status, body } = await parseJsonResponse<{ success: boolean; dismissed?: boolean }>(
       await DELETE(createMockRequest('/x', { method: 'DELETE' }), idParams)
     )
     expect(status).toBe(200)
     expect(body.success).toBe(true)
+    expect(body.dismissed).toBeUndefined()
+  })
+
+  it('dismisses a system deadline instead of deleting it', async () => {
+    // A hard-deleted system row is recreated by the nightly backfill cron;
+    // the route must soft-dismiss so the opt-out is durable.
+    auth(createCapturingSupabase([
+      { data: { id: 'deadline-1', source: 'system' } },
+      { data: [{ id: 'deadline-1' }] },
+    ]))
+    const { status, body } = await parseJsonResponse<{ success: boolean; dismissed?: boolean }>(
+      await DELETE(createMockRequest('/x', { method: 'DELETE' }), idParams)
+    )
+    expect(status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(body.dismissed).toBe(true)
+  })
+
+  it('returns 404 when the system row vanished before the dismissal landed', async () => {
+    // Concurrent regeneration can delete the row between lookup and update;
+    // a phantom "dismissed" success would persist nothing.
+    auth(createCapturingSupabase([
+      { data: { id: 'deadline-1', source: 'system' } },
+      { data: [] },
+    ]))
+    const { status } = await parseJsonResponse(
+      await DELETE(createMockRequest('/x', { method: 'DELETE' }), idParams)
+    )
+    expect(status).toBe(404)
   })
 })

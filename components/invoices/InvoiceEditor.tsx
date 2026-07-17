@@ -23,6 +23,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
+import { sortArticles } from '@/lib/articles/sort'
 import { getAmountToPay } from '@/lib/invoices/rounding'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { Loader2, Plus, Trash2, ArrowLeft, Send, Eye, Landmark, Lock, AlertTriangle, MoreVertical, CalendarClock, Tags, Copy } from 'lucide-react'
@@ -479,8 +480,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       .select('id, article_number, name, unit, price_excl_vat, vat_rate, revenue_account, currency')
       .eq('company_id', company.id)
       .eq('active', true)
-      .order('name')
-    setArticles((data ?? []) as ArticleOption[])
+    // Numeric-aware order by article number ('2' before '10', unnumbered last):
+    // the picker should follow the user's own numbering, not the alphabet.
+    setArticles(sortArticles((data ?? []) as ArticleOption[]))
   }
 
   async function fetchRevenueAccounts() {
@@ -566,7 +568,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         throw new Error(getErrorMessage(result, { context: 'article', statusCode: response.status }))
       }
       const created = result.data as ArticleOption
-      setArticles((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'sv')))
+      setArticles((prev) => sortArticles([...prev, created]))
       setValue(`items.${index}.article_id`, created.id, { shouldDirty: true })
       toast({ title: t('article_saved_title'), description: created.name })
     } catch (error) {
@@ -956,7 +958,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         title: ts('created_title'),
         description: ts('created_description', { number: data.external_invoice_number ?? '' }),
       })
-      router.push(`/invoices/${result.data.id}`)
+      router.replace(`/invoices/${result.data.id}`)
     } catch (error) {
       toast({
         title: ts('create_failed_title'),
@@ -1033,7 +1035,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (selectedCustomer?.email && createdInvoiceId && hasEmailSend) {
       setShowSendPrompt(true)
     } else if (createdInvoiceId) {
-      router.push(`/invoices/${createdInvoiceId}`)
+      router.replace(`/invoices/${createdInvoiceId}`)
     }
   }
 
@@ -1103,7 +1105,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       } else if (selectedCustomer?.email && hasEmailSend) {
         setShowSendPrompt(true)
       } else {
-        router.push(`/invoices/${result.data.id}`)
+        router.replace(`/invoices/${result.data.id}`)
       }
     } catch (error) {
       toast({
@@ -1162,7 +1164,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         title: t('toast_draft_saved_title'),
         description: t('toast_draft_saved_description'),
       })
-      router.push(`/invoices/${result.data.id}`)
+      // replace (here and in every post-save navigation): the editor page must
+      // drop out of history, or the detail page's back arrow reopens a fresh
+      // editor instead of returning to the list (issue #1053).
+      router.replace(`/invoices/${result.data.id}`)
     } catch (error) {
       toast({
         title: t('save_draft_failed_title'),
@@ -1220,7 +1225,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         title: t('toast_draft_updated_title'),
         description: t('toast_draft_updated_description'),
       })
-      router.push(`/invoices/${initial.id}`)
+      router.replace(`/invoices/${initial.id}`)
     } catch (error) {
       toast({
         title: t('update_failed_title'),
@@ -1259,7 +1264,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     } finally {
       setIsSending(false)
       setShowSendPrompt(false)
-      router.push(`/invoices/${createdInvoiceId}`)
+      router.replace(`/invoices/${createdInvoiceId}`)
     }
   }
 
@@ -2504,7 +2509,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       <Dialog open={showSendPrompt} onOpenChange={(open) => {
         if (!open && createdInvoiceId) {
           setShowSendPrompt(false)
-          router.push(`/invoices/${createdInvoiceId}`)
+          router.replace(`/invoices/${createdInvoiceId}`)
         }
       }}>
         <DialogContent>
@@ -2519,7 +2524,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               variant="outline"
               onClick={() => {
                 setShowSendPrompt(false)
-                if (createdInvoiceId) router.push(`/invoices/${createdInvoiceId}`)
+                if (createdInvoiceId) router.replace(`/invoices/${createdInvoiceId}`)
               }}
               disabled={isSending}
             >

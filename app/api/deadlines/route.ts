@@ -22,11 +22,13 @@ export const GET = withRouteContext('deadline.list', async (request, ctx) => {
   const from = searchParams.get('from')
   const to = searchParams.get('to')
 
-  // Build query
+  // Build query. Dismissed system deadlines are an explicit opt-out and
+  // never listed.
   let query = supabase
     .from('deadlines')
     .select('*, customer:customers(id, name)')
     .eq('company_id', companyId)
+    .is('dismissed_at', null)
 
   // Apply filters
   if (status === 'pending') {
