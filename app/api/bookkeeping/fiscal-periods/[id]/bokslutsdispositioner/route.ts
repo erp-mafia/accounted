@@ -143,7 +143,7 @@ export const POST = withRouteContext(
     try {
       const { data: period, error: periodError } = await supabase
         .from('fiscal_periods')
-        .select('id, name, period_end, is_closed, locked_at, closing_entry_id')
+        .select('id, name, period_start, period_end, opening_balance_entry_id, is_closed, locked_at, closing_entry_id')
         .eq('id', id)
         .eq('company_id', companyId)
         .single()
@@ -173,7 +173,7 @@ export const POST = withRouteContext(
       // produces correct amounts on top of what's already there. A future
       // RPC-level wrapper (Phase 5+) will make this atomic.
       for (const item of sortedItems) {
-        const proposal = await computeProposal(item, supabase, companyId, id, fiscalYear)
+        const proposal = await computeProposal(item, supabase, companyId, period, fiscalYear)
         if (!proposal) continue
 
         const entry = await createJournalEntry(supabase, companyId, user.id, {
@@ -198,13 +198,24 @@ export const POST = withRouteContext(
 
 type PostItem = z.infer<typeof ItemSchema>
 
+/** The period row the POST handler already validated. Passed through so the
+ *  per-item computations never re-fetch it: a transient DB failure on a
+ *  re-fetch must fail the request, not silently skip a disposition. */
+interface ValidatedPeriod {
+  id: string
+  period_start: string
+  period_end: string
+  opening_balance_entry_id: string | null
+}
+
 async function computeProposal(
   item: PostItem,
   supabase: Parameters<typeof calculateBolagsskatt>[0],
   companyId: string,
-  fiscalPeriodId: string,
+  period: ValidatedPeriod,
   fiscalYear: number,
 ): Promise<ProposedDisposition | null> {
+  const fiscalPeriodId = period.id
   switch (item.kind) {
     case 'bolagsskatt': {
       // Dispositioner are booked as source_type='year_end', which the income
@@ -241,18 +252,12 @@ async function computeProposal(
         companyId,
         fiscalPeriodId,
       )
-      const { data: periodRow } = await supabase
-        .from('fiscal_periods')
-        .select('period_start, period_end')
-        .eq('id', fiscalPeriodId)
-        .eq('company_id', companyId)
-        .single()
-      if (!periodRow) return null
       const existing = await listExistingPeriodiseringsfonder(
         supabase,
         companyId,
-        periodRow.period_end,
-        periodRow.period_start,
+        period.period_end,
+        period.period_start,
+        period.opening_balance_entry_id,
       )
       const schablonintaktRate = item.schablonintaktRate ?? getSchablonintaktRate(fiscalYear)
       // Schablonintäkt applies to the fond balance at the START of the tax
@@ -297,18 +302,12 @@ async function computeProposal(
     case 'periodiseringsfond_ateforing': {
       // Recompute existing fonder server-side so the user can't return more
       // than is on the books.
-      const { data: period } = await supabase
-        .from('fiscal_periods')
-        .select('period_start, period_end')
-        .eq('id', fiscalPeriodId)
-        .eq('company_id', companyId)
-        .single()
-      if (!period) return null
       const existing = await listExistingPeriodiseringsfonder(
         supabase,
         companyId,
         period.period_end,
         period.period_start,
+        period.opening_balance_entry_id,
       )
       const result = proposeAteforing(existing, {
         returns: item.returns,

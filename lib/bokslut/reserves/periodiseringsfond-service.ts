@@ -25,12 +25,23 @@ const SCHABLONINTAKT_RATE_BY_CLOSING_YEAR: Record<number, number> = {
   2026: 0.0255, // SLR 2025-11-30 = 2.55 %
 }
 
-/** Latest known rate: used as fallback for years missing from the table
- *  (update the table when Riksbanken publishes the new SLR). */
-const SCHABLONINTAKT_RATE_FALLBACK = 0.0255
-
+/**
+ * Fail closed for unmapped years: a statutory rate must never be guessed.
+ * The table is an annual maintenance item (Riksbanken publishes the SLR on
+ * 30 November); a missing year surfaces loudly here instead of silently
+ * producing a wrong INK2S 4.6a adjustment. POST callers can still override
+ * the rate per request while the table update lands.
+ */
 export function getSchablonintaktRate(fiscalYear: number): number {
-  return SCHABLONINTAKT_RATE_BY_CLOSING_YEAR[fiscalYear] ?? SCHABLONINTAKT_RATE_FALLBACK
+  const rate = SCHABLONINTAKT_RATE_BY_CLOSING_YEAR[fiscalYear]
+  if (rate === undefined) {
+    throw new Error(
+      `Schablonintäkt rate for fiscal year ${fiscalYear} is not configured. `
+      + 'Add the SLR (30 Nov of the preceding year, floor 0.5 %) to '
+      + 'SCHABLONINTAKT_RATE_BY_CLOSING_YEAR in periodiseringsfond-service.ts.',
+    )
+  }
+  return rate
 }
 
 /**
@@ -159,21 +170,33 @@ export function proposeAvsattning(input: PfondAvsattningInput): ProposedDisposit
  * BOTH balances are zero are dropped; a fond fully återförd during the
  * period is kept (closing 0, opening > 0) so its schablonintäkt survives.
  *
- * Uses the trial-balance pattern: sum debit/credit on each 21xx account from
- * inception through the closing date. Result is positive when the credit
- * balance exceeds debits (the normal state of a liability account).
+ * When the period has an opening-balance entry (created by year-end closing
+ * of the previous period, dated at period_start), that entry ALREADY carries
+ * the accumulated 21xx balances: opening = the OB entry's lines, closing =
+ * OB + current-period activity, and pre-period entries are ignored (counting
+ * them alongside the OB entry would double every carried fond). Without an
+ * OB entry (first fiscal year, plain SIE history) the balances fall back to
+ * the full history sum, split at period_start.
  */
 export async function listExistingPeriodiseringsfonder(
   supabase: SupabaseClient,
   companyId: string,
   closingDate: string,
   periodStart: string,
+  openingBalanceEntryId?: string | null,
 ): Promise<ExistingFond[]> {
   const closingYear = parseInt(closingDate.slice(0, 4), 10)
   if (Number.isNaN(closingYear)) {
     throw new Error(`Invalid closing date: ${closingDate}`)
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(periodStart)) {
+  // Full validity parse: '2025-02-31' passes a shape regex but would silently
+  // misclassify every entry in the opening/closing split below.
+  const periodStartParsed = new Date(`${periodStart}T00:00:00Z`)
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(periodStart)
+    || Number.isNaN(periodStartParsed.getTime())
+    || periodStartParsed.toISOString().slice(0, 10) !== periodStart
+  ) {
     throw new Error(`Invalid period start: ${periodStart}`)
   }
 
@@ -187,6 +210,7 @@ export async function listExistingPeriodiseringsfonder(
     account_number: string
     debit_amount: number | string | null
     credit_amount: number | string | null
+    journal_entry_id?: string
     journal_entries?: { entry_date?: string }
   }
   let data: Row[]
@@ -217,11 +241,23 @@ export async function listExistingPeriodiseringsfonder(
   for (const row of data) {
     const delta =
       (Number(row.credit_amount) || 0) - (Number(row.debit_amount) || 0)
-    const rec = byAccount.get(row.account_number) ?? { closing: 0, opening: 0 }
-    rec.closing += delta
     const entryDate = row.journal_entries?.entry_date
-    if (typeof entryDate === 'string' && entryDate < periodStart) {
-      rec.opening += delta
+    const rec = byAccount.get(row.account_number) ?? { closing: 0, opening: 0 }
+    if (openingBalanceEntryId) {
+      if (row.journal_entry_id === openingBalanceEntryId) {
+        // The OB entry IS the carried balance: opening and closing both.
+        rec.opening += delta
+        rec.closing += delta
+      } else if (typeof entryDate === 'string' && entryDate >= periodStart) {
+        // Current-period activity on top of the carried balance.
+        rec.closing += delta
+      }
+      // Pre-period entries: ignored, their net effect is inside the OB entry.
+    } else {
+      rec.closing += delta
+      if (typeof entryDate === 'string' && entryDate < periodStart) {
+        rec.opening += delta
+      }
     }
     byAccount.set(row.account_number, rec)
   }

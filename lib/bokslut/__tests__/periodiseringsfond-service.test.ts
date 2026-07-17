@@ -35,8 +35,8 @@ describe('getSchablonintaktRate', () => {
     expect(getSchablonintaktRate(2026)).toBe(0.0255)
   })
 
-  it('falls back to the latest known rate for unknown years', () => {
-    expect(getSchablonintaktRate(2030)).toBe(0.0255)
+  it('fails closed for unmapped years: a statutory rate is never guessed', () => {
+    expect(() => getSchablonintaktRate(2030)).toThrow(/not configured/)
   })
 })
 
@@ -434,6 +434,53 @@ describe('listExistingPeriodiseringsfonder', () => {
         must_return_this_year: false, // 2025 + 6 = 2031 > 2026
       },
     ])
+  })
+
+  it('does not double-count a fond carried via an opening-balance entry', async () => {
+    // Year-end closing of the previous period books an OB entry (dated at
+    // period_start) that carries the accumulated 21xx balances. Summing the
+    // OB entry together with the pre-period history would double the fond.
+    mockFetchEntryLines.mockResolvedValue([
+      // Prior-period avsättning: already carried inside the OB entry
+      {
+        account_number: '2124', debit_amount: 0, credit_amount: 60_000,
+        journal_entry_id: 'prior-1',
+        journal_entries: { entry_date: '2024-12-31' },
+      },
+      // The OB entry itself, dated exactly at period_start
+      {
+        account_number: '2124', debit_amount: 0, credit_amount: 60_000,
+        journal_entry_id: 'ob-1',
+        journal_entries: { entry_date: '2025-01-01' },
+      },
+      // Current-period partial återföring
+      {
+        account_number: '2124', debit_amount: 10_000, credit_amount: 0,
+        journal_entry_id: 'cur-1',
+        journal_entries: { entry_date: '2025-12-31' },
+      },
+    ])
+
+    const result = await listExistingPeriodiseringsfonder(
+      supabase, 'company-1', '2025-12-31', '2025-01-01', 'ob-1',
+    )
+
+    expect(result).toEqual([
+      {
+        account_number: '2124',
+        cohort_year: 2024,
+        balance: 50_000,        // 60_000 carried - 10_000 returned, NOT 110_000
+        opening_balance: 60_000, // the OB entry, despite being dated at period_start
+        must_return_this_year: false,
+      },
+    ])
+  })
+
+  it('rejects a well-shaped but impossible period start date', async () => {
+    await expect(
+      listExistingPeriodiseringsfonder(supabase, 'company-1', '2025-12-31', '2025-02-31'),
+    ).rejects.toThrow('Invalid period start: 2025-02-31')
+    expect(mockFetchEntryLines).not.toHaveBeenCalled()
   })
 
   it('keeps a fond fully återförd during the period (closing 0, opening > 0)', async () => {

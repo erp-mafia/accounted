@@ -35,7 +35,7 @@ export async function buildDispositionsProposal(
 ): Promise<DispositionsProposal> {
   const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')
-    .select('id, name, period_start, period_end')
+    .select('id, name, period_start, period_end, opening_balance_entry_id')
     .eq('id', fiscalPeriodId)
     .eq('company_id', companyId)
     .single()
@@ -103,6 +103,7 @@ export async function buildDispositionsProposal(
     companyId,
     period.period_end,
     period.period_start,
+    period.opening_balance_entry_id,
   )
   const ateforing = proposeAteforing(existingFonder, {
     schablonintaktRate: getSchablonintaktRate(fiscalYear),

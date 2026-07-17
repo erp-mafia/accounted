@@ -108,14 +108,17 @@ export async function sumPostedYearEndDispositions(
 
     // Replacements of corrected year_end entries (see docstring). Only
     // reversed originals can be correction targets, so the id list is empty
-    // in the common case and the extra fetch is skipped.
+    // in the common case and the extra fetch is skipped. Targets are looked
+    // up COMPANY-WIDE (a current-period correction can point at a
+    // prior-period year_end entry when that period is locked) while the
+    // correction entries themselves stay scoped to this period, matching the
+    // trial balance's company-wide chain exclusion.
     const reversedYearEndIds = (
       await fetchAllRows<{ id: string }>(({ from, to }) =>
         supabase
           .from('journal_entries')
           .select('id')
           .eq('company_id', companyId)
-          .eq('fiscal_period_id', fiscalPeriodId)
           .eq('source_type', 'year_end')
           .eq('status', 'reversed')
           .order('id', { ascending: true })
