@@ -282,7 +282,9 @@ export default function InvoicesPage() {
               !invoice.is_self_billed
             const statusLabelKey = isUnsentInvoice ? 'status_unsent' : status.labelKey
             const statusVariant: InvoiceStatusVariant | 'outline' = isUnsentInvoice ? 'outline' : status.variant
-            const relativeTime = invoice.due_date ? getRelativeTimeLabel(invoice.due_date, invoice.status) : null
+            // Credit notes are never payable (invoices_credit_note_not_paid),
+            // so a due-date countdown ("X dagar försenad") is meaningless for them.
+            const relativeTime = invoice.due_date && !isCreditNote ? getRelativeTimeLabel(invoice.due_date, invoice.status) : null
             const displayedTotal = getDisplayTotal(
               { total: Number(invoice.total), currency: invoice.currency, ore_rounding: invoice.ore_rounding },
               { ore_rounding: oreRounding },
