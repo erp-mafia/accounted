@@ -9,10 +9,14 @@
  * service (storage + document_attachments), linked to the journal entry.
  *
  * Guarantees:
- *  - Idempotent: a receipt already archived for this company (same content,
- *    keyed on company_id + sha256) is skipped, so re-runs don't duplicate.
- *    This matters because a receipt linked to a posted verifikat becomes
- *    räkenskapsinformation and is undeletable (BFL 7 kap 2§ / WORM triggers).
+ *  - Idempotent: a receipt already archived for this verifikat (same content
+ *    AND same journal entry, keyed on company_id + sha256 + journal_entry_id)
+ *    is skipped, so re-runs don't duplicate. The pair matters: the same file
+ *    content can legitimately back several verifikat (one arrende contract
+ *    attached to each year's arrende verifikat), so content alone must not
+ *    dedup across vouchers. This matters because a receipt linked to a posted
+ *    verifikat becomes räkenskapsinformation and is undeletable
+ *    (BFL 7 kap 2§ / WORM triggers).
  *  - Best-effort: a per-receipt failure is counted and logged, never thrown,
  *    so one bad download can't abort the sweep.
  *
@@ -34,6 +38,7 @@ import {
 import {
   uploadDocument,
   computeSHA256,
+  detectFileMagic,
   ALLOWED_DOCUMENT_TYPES,
 } from '@/lib/core/documents/document-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -56,7 +61,7 @@ export interface ImportDocumentsResult {
   scanned: number
   /** Receipts newly archived and linked to their verifikat. */
   linked: number
-  /** Receipts already archived for this company (sha256 match): re-run skip. */
+  /** Receipts already archived for this verifikat (sha256 + journal entry match): re-run skip. */
   skipped: number
   /** Uploads whose Bokio voucher number resolved to no gnubok verifikat. */
   unmatched: number
@@ -142,7 +147,7 @@ export async function importProviderDocuments(
   const client = new BokioClient()
 
   // ── Bulk reads (one round of paged requests each, no per-item N+1) ──
-  const [uploads, voucherIndex, periods, vouchers, existingHashes] = await Promise.all([
+  const [uploads, voucherIndex, periods, vouchers, existingAttachments] = await Promise.all([
     fetchBokioUploads(client, accessToken, providerCompanyId),
     fetchBokioVoucherIndex(client, accessToken, providerCompanyId),
     // A stable `.order('id')` is required: fetchAllRows pages with `.range()`,
@@ -167,10 +172,10 @@ export async function importProviderDocuments(
         .order('id', { ascending: true })
         .range(from, to),
     ),
-    fetchAllRows<{ sha256_hash: string }>(({ from, to }) =>
+    fetchAllRows<{ sha256_hash: string; journal_entry_id: string | null }>(({ from, to }) =>
       supabase
         .from('document_attachments')
-        .select('sha256_hash')
+        .select('sha256_hash, journal_entry_id')
         .eq('company_id', companyId)
         .order('id', { ascending: true })
         .range(from, to),
@@ -187,8 +192,15 @@ export async function importProviderDocuments(
     )
   }
 
-  // Content hashes already archived for this company → idempotent skip set.
-  const seenHashes = new Set(existingHashes.map((r) => r.sha256_hash))
+  // (content, verifikat) pairs already archived → idempotent skip set. Keyed
+  // on hash + journal entry, NOT hash alone: the same content may back
+  // several verifikat and each deserves its own attachment.
+  const attachmentKey = (sha256: string, journalEntryId: string) => `${sha256}|${journalEntryId}`
+  const seenAttachments = new Set(
+    existingAttachments
+      .filter((r) => r.journal_entry_id != null)
+      .map((r) => attachmentKey(r.sha256_hash, r.journal_entry_id as string)),
+  )
 
   // Every upload that carries a journalEntryId is a receipt we're responsible
   // for. Keep them all in scope (don't pre-filter on a resolvable voucher ref)
@@ -240,28 +252,33 @@ export async function importProviderDocuments(
       )
 
       const sha256 = await computeSHA256(bytes)
-      if (seenHashes.has(sha256)) {
+      if (seenAttachments.has(attachmentKey(sha256, journalEntryId))) {
         result.skipped++
         continue
       }
 
-      // Take the declared type from the upload's contentType (the download is
-      // octet-stream). If it isn't an allowed type, store without a declared
-      // type so uploadDocument skips magic validation rather than rejecting.
-      const declaredType =
-        upload.contentType && ALLOWED_DOCUMENT_TYPES.includes(upload.contentType)
+      // Trust the bytes over Bokio's metadata: the uploads list occasionally
+      // declares the wrong contentType (a JPEG stored as image/png), which
+      // would fail magic validation. Sniff the real format first and fall
+      // back to the declared type only when no signature is recognised; if
+      // neither yields an allowed type, store without a declared type so
+      // uploadDocument skips magic validation rather than rejecting.
+      const sniffedType = detectFileMagic(new Uint8Array(bytes))
+      const effectiveType =
+        sniffedType ??
+        (upload.contentType && ALLOWED_DOCUMENT_TYPES.includes(upload.contentType)
           ? upload.contentType
-          : undefined
+          : undefined)
 
       await uploadDocument(
         supabase,
         userId,
         companyId,
-        { name: fileNameFor(upload, ref, upload.contentType), buffer: bytes, type: declaredType },
+        { name: fileNameFor(upload, ref, effectiveType ?? upload.contentType), buffer: bytes, type: effectiveType },
         { upload_source: 'api', journal_entry_id: journalEntryId },
       )
 
-      seenHashes.add(sha256)
+      seenAttachments.add(attachmentKey(sha256, journalEntryId))
       result.linked++
     } catch (err) {
       result.failed++

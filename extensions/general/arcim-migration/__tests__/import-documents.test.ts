@@ -8,7 +8,7 @@ import {
   downloadBokioUpload,
   type BokioVoucherRef,
 } from '@/lib/providers/bokio/attachments'
-import { uploadDocument, computeSHA256 } from '@/lib/core/documents/document-service'
+import { uploadDocument, computeSHA256, detectFileMagic } from '@/lib/core/documents/document-service'
 import { importProviderDocuments } from '../lib/import-documents'
 
 // The Bokio client is constructed but never called directly (the attachments
@@ -23,6 +23,7 @@ vi.mock('@/lib/providers/bokio/attachments', () => ({
 vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: vi.fn(),
   computeSHA256: vi.fn(),
+  detectFileMagic: vi.fn(),
   ALLOWED_DOCUMENT_TYPES: ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'],
 }))
 
@@ -32,6 +33,7 @@ const mockFetchVoucherIndex = vi.mocked(fetchBokioVoucherIndex)
 const mockDownload = vi.mocked(downloadBokioUpload)
 const mockUpload = vi.mocked(uploadDocument)
 const mockSha256 = vi.mocked(computeSHA256)
+const mockDetectMagic = vi.mocked(detectFileMagic)
 
 const COMPANY = 'company-1'
 const USER = 'user-1'
@@ -65,6 +67,8 @@ beforeEach(() => {
   } as never)
   // Default: sha256 derived from the bytes so dedup is deterministic.
   mockSha256.mockImplementation(async (buf: ArrayBuffer) => 'sha-' + Buffer.from(buf).toString('utf8'))
+  // Default: no recognisable signature, so the declared contentType is used.
+  mockDetectMagic.mockReturnValue(null)
   mockUpload.mockResolvedValue({ id: 'doc-1' } as never)
 })
 
@@ -76,14 +80,16 @@ const GNUBOK_VOUCHERS = [
 ]
 const UPLOAD = { id: 'up-1', description: 'Kvitto', contentType: 'application/pdf', journalEntryId: 'bokio-je-1' }
 
-function wireBokio(opts: { existingHashes?: { sha256_hash: string }[] } = {}) {
+function wireBokio(
+  opts: { existingAttachments?: { sha256_hash: string; journal_entry_id: string | null }[] } = {},
+) {
   mockFetchUploads.mockResolvedValue([UPLOAD] as never)
   mockFetchVoucherIndex.mockResolvedValue(new Map([['bokio-je-1', VOUCHER_REF]]))
   mockDownload.mockResolvedValue({ bytes: bytesOf('PDFBYTES'), contentType: 'application/octet-stream' })
   return rangeMockSupabase({
     fiscal_periods: PERIODS,
     journal_entries: GNUBOK_VOUCHERS,
-    document_attachments: opts.existingHashes ?? [],
+    document_attachments: opts.existingAttachments ?? [],
   })
 }
 
@@ -102,13 +108,26 @@ describe('importProviderDocuments', () => {
     expect(metadata).toEqual({ upload_source: 'api', journal_entry_id: 'je-1' })
   })
 
-  it('skips a receipt already archived for the company (sha256 idempotency)', async () => {
-    const supabase = wireBokio({ existingHashes: [{ sha256_hash: 'sha-PDFBYTES' }] })
+  it('skips a receipt already archived on the same verifikat (sha256 + journal entry idempotency)', async () => {
+    const supabase = wireBokio({
+      existingAttachments: [{ sha256_hash: 'sha-PDFBYTES', journal_entry_id: 'je-1' }],
+    })
 
     const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
 
     expect(result).toMatchObject({ scanned: 1, linked: 0, skipped: 1 })
     expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  it('still archives content already attached to a DIFFERENT verifikat (same contract, several vouchers)', async () => {
+    const supabase = wireBokio({
+      existingAttachments: [{ sha256_hash: 'sha-PDFBYTES', journal_entry_id: 'je-other' }],
+    })
+
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+    expect(result).toMatchObject({ scanned: 1, linked: 1, skipped: 0 })
+    expect(mockUpload).toHaveBeenCalledTimes(1)
   })
 
   it('counts a receipt as unmatched when no gnubok verifikat resolves', async () => {
@@ -201,5 +220,46 @@ describe('importProviderDocuments', () => {
 
     expect(result).toMatchObject({ scanned: 2, linked: 1, failed: 1 })
     expect(mockUpload).toHaveBeenCalledTimes(1)
+  })
+
+  it('archives identical content onto each of several verifikat within one run', async () => {
+    const upload2 = { id: 'up-2', description: 'Kontrakt', contentType: 'application/pdf', journalEntryId: 'bokio-je-2' }
+    const supabase = rangeMockSupabase({
+      fiscal_periods: PERIODS,
+      journal_entries: [
+        { id: 'je-1', fiscal_period_id: 'fp-2021', source_voucher_series: 'V', source_voucher_number: 33 },
+        { id: 'je-2', fiscal_period_id: 'fp-2021', source_voucher_series: 'V', source_voucher_number: 34 },
+      ],
+      document_attachments: [],
+    })
+    mockFetchUploads.mockResolvedValue([UPLOAD, upload2] as never)
+    mockFetchVoucherIndex.mockResolvedValue(
+      new Map<string, BokioVoucherRef>([
+        ['bokio-je-1', VOUCHER_REF],
+        ['bokio-je-2', { series: 'V', number: 34, date: '2021-04-01' }],
+      ]),
+    )
+    // Both uploads are the same file content (one arrende contract, two vouchers).
+    mockDownload.mockResolvedValue({ bytes: bytesOf('PDFBYTES'), contentType: 'application/octet-stream' })
+
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+    expect(result).toMatchObject({ scanned: 2, linked: 2, skipped: 0 })
+    expect(mockUpload).toHaveBeenCalledTimes(2)
+    const targets = mockUpload.mock.calls.map((c) => (c[4] as { journal_entry_id: string }).journal_entry_id)
+    expect(targets).toEqual(['je-1', 'je-2'])
+  })
+
+  it('trusts sniffed magic bytes over a wrong declared contentType', async () => {
+    const supabase = wireBokio()
+    // Bokio's uploads list says PNG but the actual bytes are a JPEG.
+    mockFetchUploads.mockResolvedValue([{ ...UPLOAD, contentType: 'image/png' }] as never)
+    mockDetectMagic.mockReturnValue('image/jpeg')
+
+    const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+    expect(result).toMatchObject({ scanned: 1, linked: 1, failed: 0 })
+    const [, , , file] = mockUpload.mock.calls[0]
+    expect(file).toMatchObject({ name: 'Kvitto.jpg', type: 'image/jpeg' })
   })
 })

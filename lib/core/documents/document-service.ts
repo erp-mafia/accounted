@@ -63,7 +63,7 @@ export function validateDocumentFile(file: { size: number; type?: string }): str
  * placeholder or summary instead of the real binary file: those uploads
  * succeed at the storage layer but the bytes are unreadable as a PDF/image.
  */
-function detectFileMagic(bytes: Uint8Array): string | null {
+export function detectFileMagic(bytes: Uint8Array): string | null {
   if (bytes.length < 4) return null
   // PDF: %PDF- anywhere in the first 1024 bytes. ISO 32000 readers accept a
   // preamble before the header (Acrobat scans the first 1 KB), and real-world
