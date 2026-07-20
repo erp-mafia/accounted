@@ -1125,7 +1125,7 @@ export default function PendingOperationsPage() {
                 size="sm"
                 variant="outline"
                 className="h-8 px-3 text-xs"
-                disabled={selectedCount === 0 || isRejecting}
+                disabled={selectedCount === 0 || isRejecting || isBulkCommitting}
                 onClick={() => openRejectDialog('bulk')}
               >
                 {selectedCount > 0
@@ -1135,7 +1135,7 @@ export default function PendingOperationsPage() {
               <Button
                 size="sm"
                 className="h-8 px-3 text-xs"
-                disabled={selectedCount === 0 || isBulkCommitting}
+                disabled={selectedCount === 0 || isBulkCommitting || isRejecting}
                 onClick={() => setShowBulkDialog(true)}
               >
                 {selectedCount > 0
