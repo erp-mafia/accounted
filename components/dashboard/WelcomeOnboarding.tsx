@@ -19,6 +19,22 @@ import Step1EntityType from '@/components/onboarding/Step1EntityType'
 import Step2CompanyDetails from '@/components/onboarding/Step2CompanyDetails'
 import Step3TaxRegistration from '@/components/onboarding/Step3TaxRegistration'
 import Step4VatAccounting from '@/components/onboarding/Step4VatAccounting'
+import {
+  ILLUSTRATIONS,
+  illustrationSrc,
+  type IllustrationName,
+} from '@/components/onboarding/onboarding-illustrations'
+
+// One halftone instrument per step, ghosted in white ink on the dark card
+// header. The tools get more computational as the steps get more fiscal:
+// pencil (choose form) -> notebook (company details) -> adding machine
+// (tax registration) -> calculator (VAT & method).
+const STEP_ART: { name: IllustrationName; className: string }[] = [
+  { name: 'pencil', className: 'w-28 -rotate-12 right-5 -bottom-6' },
+  { name: 'notebook', className: 'w-28 rotate-3 right-4 -bottom-3' },
+  { name: 'key-adding-machine', className: 'w-32 -rotate-3 right-2 -bottom-10' },
+  { name: 'calculator', className: 'w-28 rotate-3 right-4 -bottom-8' },
+]
 
 type TFn = (key: string, values?: Record<string, string | number>) => string
 
@@ -289,6 +305,29 @@ export default function WelcomeOnboarding({
                   background: 'radial-gradient(ellipse at 30% -20%, rgba(255,255,255,0.04) 0%, transparent 50%)',
                 }}
               />
+              {/* Step instrument, ghosted in white ink. Keyed by step so it
+                  crossfades together with the form below. */}
+              {(() => {
+                const art = STEP_ART[currentStep - 1]
+                const dims = ILLUSTRATIONS[art.name]
+                return (
+                  <div
+                    key={`art-${currentStep}`}
+                    className={cn('absolute animate-fade-in', art.className)}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={illustrationSrc(art.name)}
+                      width={dims.w}
+                      height={dims.h}
+                      alt=""
+                      loading="eager"
+                      decoding="async"
+                      className="block h-auto w-full opacity-30 [filter:grayscale(1)_invert(1)]"
+                    />
+                  </div>
+                )
+              })()}
             </div>
 
             <div className="relative z-10">
