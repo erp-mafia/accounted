@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
 import { SettingsShell } from '@/components/settings/SettingsShell'
+import { ActiveCompanyBadge } from '@/components/settings/ActiveCompanyBadge'
 
 const TAB_TO_ROUTE: Record<string, string> = {
   company: '/settings/company',
@@ -36,7 +37,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
 
   return (
     <div className="space-y-8">
-      <PageHeader title={t('aria_label')} />
+      <PageHeader title={t('aria_label')} action={<ActiveCompanyBadge />} />
       <SettingsShell variant="page">{children}</SettingsShell>
     </div>
   )

@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { SETTINGS_SECTIONS } from './sections'
 import { SettingsShell } from './SettingsShell'
+import { ActiveCompanyBadge } from './ActiveCompanyBadge'
 
 /**
  * The settings popup. Rendered only by the intercepting route
@@ -52,10 +53,13 @@ export function SettingsModal({ sectionId }: { sectionId?: string }) {
       <DialogContent
         className="flex h-[100dvh] max-h-[100dvh] max-w-none flex-col gap-0 overflow-hidden rounded-none p-0 md:h-auto md:max-h-[85dvh] md:max-w-4xl md:rounded-lg"
       >
-        <div className="flex shrink-0 items-center border-b border-border px-6 py-4">
+        <div className="flex shrink-0 items-center gap-3 border-b border-border px-6 py-4">
           <DialogTitle className="font-display text-lg tracking-tight">
             {t('title')}
           </DialogTitle>
+          {/* The modal covers the sidebar's CompanySwitcher, so the active
+              company must stay visible here (mr-6 clears the close button). */}
+          <ActiveCompanyBadge className="ml-auto mr-6" />
         </div>
         <DialogDescription className="sr-only">{t('description')}</DialogDescription>
         <SettingsShell variant="modal" activeSection={resolved} />

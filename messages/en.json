@@ -1,5 +1,6 @@
 {
   "common": {
+    "active_company": "Active company",
     "update_available": "A new version is available.",
     "reload": "Reload",
     "save": "Save",
@@ -71,7 +72,7 @@
     "bureau": "Bureau",
     "kpi": "KPIs",
     "invoice_inbox": "Documents",
-    "invoices": "Invoices",
+    "invoices": "Customer invoices",
     "sales_orders": "Orders",
     "customers": "Customers",
     "articles": "Articles",
@@ -3490,6 +3491,7 @@
   "journal_list": {
     "mode_vouchers": "Vouchers",
     "mode_drafts": "Drafts",
+    "density_compact": "Compact view",
     "show_correction_chain": "Show storno & corrected entries",
     "loading": "Loading journal entries...",
     "empty_title": "No journal entries",
@@ -4683,7 +4685,7 @@
     "validation_min_one_row": "At least one row is required"
   },
   "invoices": {
-    "title": "Invoices",
+    "title": "Customer invoices",
     "recurring": "Recurring",
     "new_invoice": "New invoice",
     "new_self_billed": "Self-billing",

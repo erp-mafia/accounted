@@ -32,7 +32,7 @@ import {
   STORAGE_KEY_PREFIX as FISCAL_YEAR_STORAGE_KEY_PREFIX,
   ALL_YEARS_VALUE as FISCAL_YEAR_ALL_VALUE,
 } from '@/components/common/FiscalYearSelector'
-import { ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Paperclip, AlertTriangle, CircleSlash, Loader2, BookOpen, X, Copy, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Paperclip, AlertTriangle, CircleSlash, Loader2, BookOpen, X, Copy, Lock, Search, SlidersHorizontal, RotateCcw, Rows3 } from 'lucide-react'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -66,6 +66,10 @@ type SortBy = 'date_desc' | 'date_asc' | 'voucher_asc' | 'voucher_desc'
 // convention used by FiscalYearSelector ('Accounted:fiscal-year:<companyId>').
 const SORT_STORAGE_KEY_PREFIX = 'Accounted:journal-sort:'
 const SORT_VALUES = new Set<SortBy>(['date_desc', 'date_asc', 'voucher_asc', 'voucher_desc'])
+
+// Compact row density (support feedback: "kompakt visning av verifikat").
+// Persisted per company, mirroring the sort key convention.
+const DENSITY_STORAGE_KEY_PREFIX = 'Accounted:journal-density:'
 
 // Page-size selector. Persisted per company, mirroring the sort key convention.
 // 'all' fetches everything in the current scope (capped server-side at MAX_LIMIT);
@@ -124,6 +128,7 @@ export default function JournalEntryList() {
   const [draftCount, setDraftCount] = useState(0)
   const [pageSizeChoice, setPageSizeChoice] = useState<PageSizeChoice>('20')
   const [pageSizeHydrated, setPageSizeHydrated] = useState(false)
+  const [compact, setCompact] = useState(false)
   const showingAll = pageSizeChoice === 'all'
   const pageSize = showingAll ? ALL_PAGE_SIZE : Number(pageSizeChoice)
 
@@ -229,6 +234,28 @@ export default function JournalEntryList() {
     }
     setSortHydrated(true)
   }, [company?.id])
+
+  // Restore the persisted row density (per company). Purely visual, so it
+  // doesn't gate the first fetch; the effect-read avoids an SSR mismatch.
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem(DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default'))
+      setCompact(stored === 'compact')
+    }
+  }, [company?.id])
+
+  const toggleDensity = () => {
+    setCompact((prev) => {
+      const next = !prev
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(
+          DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default'),
+          next ? 'compact' : 'comfortable',
+        )
+      }
+      return next
+    })
+  }
 
   // Restore the persisted page-size choice (per company). Same hydration pattern
   // as the sort order, read in an effect to avoid an SSR mismatch, and gate the
@@ -876,6 +903,19 @@ export default function JournalEntryList() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        {/* Row density: comfortable vs compact, persisted per company. A toggle
+            (aria-pressed) rather than two modes buried in the filter dialog. */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={toggleDensity}
+          aria-pressed={compact}
+          aria-label={t('density_compact')}
+          title={t('density_compact')}
+          className={`h-8 w-8 shrink-0 p-0 ${compact ? 'bg-secondary text-foreground' : 'text-muted-foreground'}`}
+        >
+          <Rows3 className="h-3.5 w-3.5" />
+        </Button>
         {/* Active fiscal-year scope as a direct one-click picker, pushed to the
             right of the control bar, keeps the räkenskapsår visible per BFL and
             changeable in one click. Distinct from Filtrera (which now holds only
@@ -1003,6 +1043,7 @@ export default function JournalEntryList() {
               key={entry.id}
               selected={selectedIds.has(entry.id)}
               expanded={isExpanded}
+              rowClassName={compact ? 'py-1' : undefined}
               onClick={() => toggleExpand(entry.id)}
               leading={
                 selectable ? (

@@ -1,5 +1,6 @@
 {
   "common": {
+    "active_company": "Aktivt företag",
     "update_available": "En ny version finns tillgänglig.",
     "reload": "Ladda om",
     "save": "Spara",
@@ -71,7 +72,7 @@
     "bureau": "Byrå",
     "kpi": "Nyckeltal",
     "invoice_inbox": "Underlag",
-    "invoices": "Fakturor",
+    "invoices": "Kundfakturor",
     "sales_orders": "Order",
     "customers": "Kunder",
     "articles": "Artiklar",
@@ -3490,6 +3491,7 @@
   "journal_list": {
     "mode_vouchers": "Verifikat",
     "mode_drafts": "Utkast",
+    "density_compact": "Kompakt visning",
     "show_correction_chain": "Visa storno- och rättade poster",
     "loading": "Laddar verifikationer...",
     "empty_title": "Inga verifikationer",
@@ -4683,7 +4685,7 @@
     "validation_min_one_row": "Minst en rad krävs"
   },
   "invoices": {
-    "title": "Fakturor",
+    "title": "Kundfakturor",
     "recurring": "Återkommande",
     "new_invoice": "Ny faktura",
     "new_self_billed": "Självfaktura",

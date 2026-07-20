@@ -48,6 +48,7 @@ const ACTION_ENTRIES: Entry[] = [
 const PAGE_ENTRIES: Entry[] = [
   { id: 'kunder', label: 'Kunder', icon: Users, href: '/customers' },
   { id: 'leverantörer', label: 'Leverantörer', icon: Building2, href: '/suppliers' },
+  { id: 'kundfakturor', label: 'Kundfakturor', icon: ReceiptText, href: '/invoices', keywords: 'fakturor fakturering invoices kundfaktura' },
   { id: 'leverantörsfakturor', label: 'Leverantörsfakturor', icon: Wallet, href: '/supplier-invoices' },
   { id: 'bokföring', label: 'Bokföring', icon: BookOpen, href: '/bookkeeping', keywords: 'verifikat journal ledger' },
   { id: 'kontoplan', label: 'Kontoplan', icon: ListTree, href: '/chart-of-accounts', keywords: 'kontoplan konton bas chart of accounts konto' },
