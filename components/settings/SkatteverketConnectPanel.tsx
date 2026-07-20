@@ -75,6 +75,7 @@ function SkatteverketPersonalConnectionCard() {
   const SCOPE_LABELS: Record<string, string> = {
     momsdeklaration: t('scope_momsdeklaration'),
     inkforetag: t('scope_inkforetag'),
+    ska: t('scope_ska'),
     skahmst: t('scope_skahmst'),
     skattekonto: t('scope_skattekonto'),
     agd: t('scope_agd'),
@@ -361,7 +362,9 @@ function SkatteverketPersonalConnectionCard() {
               </Badge>
             ))}
           </div>
-          {!scopes.includes('skahmst') && !scopes.includes('skattekonto') && (
+          {/* `ska` is the scope the interactive skattekonto API enforces;
+              skahmst (bulk E-transport service) does not substitute for it. */}
+          {!scopes.includes('ska') && (
             <p className="mt-3 text-sm text-foreground">
               {t('missing_skattekonto')}
             </p>
@@ -381,11 +384,10 @@ function SkatteverketPersonalConnectionCard() {
         )}
 
         <div className="flex gap-2 pt-2">
-          {/* The skattekonto read scope is named `skahmst` in the live grants;
-              accept the older `skattekonto` name too (mirrors the missing-scope
-              notice above). Checking only `skattekonto` kept this button
-              permanently visible on healthy connections. */}
-          {(status.expired || status.needsReconsent || !status.canRefresh || !(scopes.includes('skahmst') || scopes.includes('skattekonto')) || !scopes.includes('agd')) && (
+          {/* `ska` gates the interactive skattekonto API (saldo +
+              transaktioner); a grant without it cannot sync, so offer the
+              reconnect even while the token is otherwise healthy. */}
+          {(status.expired || status.needsReconsent || !status.canRefresh || !scopes.includes('ska') || !scopes.includes('agd')) && (
             <Button
               onClick={startConnect}
               disabled={status.disabled || !hasSkatteverket || connecting}
