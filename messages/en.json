@@ -373,6 +373,12 @@
     "language_description": "Choose the language for the interface. Invoices and reports always stay in Swedish.",
     "language_saved": "Language updated",
     "language_save_failed": "Could not save language preference",
+    "install_app_title": "Install as an app",
+    "install_app_description": "Use Accounted in its own window with its own icon in the Dock or taskbar.",
+    "install_app_button": "Install",
+    "install_app_hint_ios": "Open the share menu in Safari and choose \"Add to Home Screen\" to install Accounted as an app.",
+    "install_app_hint_safari": "In Safari, choose File and then \"Add to Dock\" to install Accounted as an app.",
+    "install_app_hint_generic": "Install Accounted as an app via the install icon in your browser's address bar (Chrome and Edge).",
     "legal_title": "Privacy & agreements",
     "legal_privacy": "Privacy policy",
     "legal_dpa": "Data Processing Agreement (DPA)"
