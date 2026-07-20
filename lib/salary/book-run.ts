@@ -52,6 +52,9 @@ const ROSTER_SELECT =
 
 type RosterRow = Record<string, unknown> & {
   employee_id: string
+  net_salary: number
+  tax_withheld: number
+  tax_withheld_override: number | null
   employee: {
     first_name: string
     last_name: string
@@ -323,10 +326,7 @@ export async function advanceAndBookSalaryRun(
           `${name}: F-skatt ej verifierad: 30% skatteavdrag och fulla avgifter tillämpas (f-skatt.md)`,
         )
       }
-      if (
-        effectiveNetPayout(sre as { net_salary: number; tax_withheld: number; tax_withheld_override?: number | null }) > 0 &&
-        (!emp.clearing_number || !emp.bank_account_number)
-      ) {
+      if (effectiveNetPayout(sre) > 0 && (!emp.clearing_number || !emp.bank_account_number)) {
         warnings.push(`${name}: Bankuppgifter saknas (clearingnummer och/eller kontonummer)`)
       }
       if (!emp.email) {
