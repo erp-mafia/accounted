@@ -33,7 +33,10 @@ export interface ResultAppropriationPlan {
  *
  * Returns null when:
  *  - the company is not an aktiebolag (enskild firma books to 2010, no 2099),
- *  - the period already has a result_appropriation entry (idempotency), or
+ *  - the period already has a POSTED result_appropriation entry (idempotency;
+ *    a reversed one has been stornoed, no longer moves any balance, and must
+ *    not block re-planning: the year-end undo flow reverses the omföring and
+ *    the subsequent re-run has to be able to post a fresh one), or
  *  - 2099 carries no balance (within ORE_TOLERANCE).
  *
  * Shared by generateResultAppropriation (which posts the plan) and the
@@ -55,14 +58,17 @@ export async function planResultAppropriation(
   const entityType = settings?.entity_type ?? 'aktiebolag'
   if (entityType !== 'aktiebolag') return null
 
-  // Idempotency: never plan a second omföring for a period that already has one.
+  // Idempotency: never plan a second omföring for a period that already has a
+  // LIVE one. Deliberately posted-only: a reversed omföring is storno-cancelled
+  // (net zero effect on 2099), so it must not block the re-run after an
+  // administrative year-end undo (scripts/undo-year-end-closing.ts).
   const { data: existing } = await supabase
     .from('journal_entries')
     .select('id')
     .eq('company_id', companyId)
     .eq('fiscal_period_id', periodId)
     .eq('source_type', 'result_appropriation')
-    .in('status', ['posted', 'reversed'])
+    .eq('status', 'posted')
     .limit(1)
     .maybeSingle()
   if (existing) return null
