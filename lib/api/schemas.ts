@@ -1868,6 +1868,16 @@ export const PendingOperationsBulkSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100),
 })
 
+// Bulk reject: same id list plus the optional category/reason pair from the
+// single reject route. When provided they are applied to every rejected row.
+export const PendingOperationsBulkRejectSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(100),
+  rejection_category: z
+    .enum(['wrong_category', 'wrong_amount', 'duplicate', 'wrong_period', 'other'])
+    .optional(),
+  rejection_reason: z.string().max(2000).optional(),
+})
+
 // ============================================================
 // Audit trail schemas
 // ============================================================

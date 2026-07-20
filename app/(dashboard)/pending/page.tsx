@@ -666,7 +666,8 @@ export default function PendingOperationsPage() {
   const [isBulkCommitting, setIsBulkCommitting] = useState(false)
   // Reject dialog state: separate from the generic destructive-confirm so we
   // can ask for a category + free-text reason that feeds back to the agent.
-  const [rejectOp, setRejectOp] = useState<PendingOperation | null>(null)
+  // 'bulk' targets the current checkbox selection instead of a single op.
+  const [rejectTarget, setRejectTarget] = useState<PendingOperation | 'bulk' | null>(null)
   const [rejectCategory, setRejectCategory] = useState<PendingOperationRejectionCategory | ''>('')
   const [rejectReason, setRejectReason] = useState('')
   const [isRejecting, setIsRejecting] = useState(false)
@@ -828,35 +829,63 @@ export default function PendingOperationsPage() {
     setIsBulkCommitting(false)
   }
 
-  function openRejectDialog(op: PendingOperation) {
-    setRejectOp(op)
+  function openRejectDialog(target: PendingOperation | 'bulk') {
+    setRejectTarget(target)
     setRejectCategory('')
     setRejectReason('')
   }
 
   async function handleReject() {
-    if (!rejectOp) return
+    if (!rejectTarget) return
     setIsRejecting(true)
     try {
-      const body =
-        rejectCategory || rejectReason.trim()
-          ? {
-              ...(rejectCategory ? { rejection_category: rejectCategory } : {}),
-              ...(rejectReason.trim() ? { rejection_reason: rejectReason.trim() } : {}),
-            }
-          : undefined
-      const res = await fetch(`/api/pending-operations/${rejectOp.id}/reject`, {
-        method: 'POST',
-        ...(body
-          ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-          : {}),
-      })
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}))
-        throw new Error(getErrorMessage(json, { statusCode: res.status }))
+      const feedback = {
+        ...(rejectCategory ? { rejection_category: rejectCategory } : {}),
+        ...(rejectReason.trim() ? { rejection_reason: rejectReason.trim() } : {}),
       }
-      toast({ title: 'Avvisad', description: rejectOp.title })
-      setRejectOp(null)
+
+      if (rejectTarget === 'bulk') {
+        const res = await fetch('/api/pending-operations/bulk-reject', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: Array.from(selectedIds), ...feedback }),
+        })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
+
+        const summary = json.data?.summary as
+          | { rejected: number; skipped: number; failed: number }
+          | undefined
+        if (summary) {
+          const parts: string[] = []
+          if (summary.rejected > 0) parts.push(`${summary.rejected} avvisade`)
+          if (summary.skipped > 0) parts.push(`${summary.skipped} hoppades över`)
+          if (summary.failed > 0) parts.push(`${summary.failed} misslyckades`)
+          toast({
+            title: summary.failed > 0 ? 'Klart med fel' : 'Avvisade',
+            description: parts.join(', '),
+            variant: summary.failed > 0 ? 'destructive' : 'default',
+          })
+        } else {
+          toast({ title: 'Avvisade' })
+        }
+        setSelectedIds(new Set())
+      } else {
+        const hasFeedback = Object.keys(feedback).length > 0
+        const res = await fetch(`/api/pending-operations/${rejectTarget.id}/reject`, {
+          method: 'POST',
+          ...(hasFeedback
+            ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(feedback) }
+            : {}),
+        })
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}))
+          throw new Error(getErrorMessage(json, { statusCode: res.status }))
+        }
+        toast({ title: 'Avvisad', description: rejectTarget.title })
+      }
+
+      setRejectTarget(null)
       fetchOperations()
       fetchAllCounts()
     } catch (err) {
@@ -1094,6 +1123,17 @@ export default function PendingOperationsPage() {
               )}
               <Button
                 size="sm"
+                variant="outline"
+                className="h-8 px-3 text-xs"
+                disabled={selectedCount === 0 || isRejecting}
+                onClick={() => openRejectDialog('bulk')}
+              >
+                {selectedCount > 0
+                  ? t('reject_selected', { count: selectedCount })
+                  : t('reject_selected_none')}
+              </Button>
+              <Button
+                size="sm"
                 className="h-8 px-3 text-xs"
                 disabled={selectedCount === 0 || isBulkCommitting}
                 onClick={() => setShowBulkDialog(true)}
@@ -1302,13 +1342,20 @@ export default function PendingOperationsPage() {
       </ConfirmationDialog>
 
       {/* Reject dialog: category + free-text reason. Both optional so the user
-          can still reject quickly without filling anything in. */}
-      <Dialog open={rejectOp != null} onOpenChange={(open) => { if (!open) setRejectOp(null) }}>
+          can still reject quickly without filling anything in. Doubles as the
+          bulk-reject confirmation; the feedback then applies to every selected op. */}
+      <Dialog open={rejectTarget != null} onOpenChange={(open) => { if (!open) setRejectTarget(null) }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Avvisa operation</DialogTitle>
+            <DialogTitle>
+              {rejectTarget === 'bulk'
+                ? t('reject_bulk_title', { count: selectedCount })
+                : 'Avvisa operation'}
+            </DialogTitle>
             <DialogDescription>
-              {rejectOp?.title}
+              {rejectTarget === 'bulk'
+                ? t('reject_bulk_description')
+                : rejectTarget?.title}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -1348,11 +1395,17 @@ export default function PendingOperationsPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRejectOp(null)} disabled={isRejecting}>
+            <Button variant="outline" onClick={() => setRejectTarget(null)} disabled={isRejecting}>
               Avbryt
             </Button>
             <Button variant="destructive" onClick={handleReject} disabled={isRejecting}>
-              {isRejecting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Avvisa'}
+              {isRejecting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : rejectTarget === 'bulk' ? (
+                t('reject_count', { count: selectedCount })
+              ) : (
+                'Avvisa'
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
