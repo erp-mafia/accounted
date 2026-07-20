@@ -11,6 +11,7 @@ import { Sun, Moon, Monitor, LogOut, Languages, ExternalLink } from 'lucide-reac
 import { useTheme } from 'next-themes'
 import { createClient } from '@/lib/supabase/client'
 import { SecuritySettings } from '@/components/settings/SecuritySettings'
+import { InstallAppSection } from '@/components/settings/InstallAppSection'
 import { CalendarFeedSettings } from '@/components/settings/CalendarFeedSettings'
 import { AccountDangerZone } from '@/components/settings/AccountDangerZone'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -204,6 +205,9 @@ export function AccountSettingsContent() {
           ))}
         </div>
       </section>
+
+      {/* Install as app: renders nothing when already running installed */}
+      <InstallAppSection />
 
       {/* Security */}
       <div className="border-t border-border pt-8">

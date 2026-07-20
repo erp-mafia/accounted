@@ -373,6 +373,12 @@
     "language_description": "Välj språket för gränssnittet. Fakturor och rapporter förblir alltid på svenska.",
     "language_saved": "Språket har uppdaterats",
     "language_save_failed": "Kunde inte spara språkinställningen",
+    "install_app_title": "Installera som app",
+    "install_app_description": "Använd Accounted i ett eget fönster med egen ikon i Dock eller aktivitetsfältet.",
+    "install_app_button": "Installera",
+    "install_app_hint_ios": "Öppna delningsmenyn i Safari och välj \"Lägg till på hemskärmen\" för att installera Accounted som app.",
+    "install_app_hint_safari": "Välj Arkiv och sedan \"Lägg till i Dock\" i Safari för att installera Accounted som app.",
+    "install_app_hint_generic": "Installera Accounted som app via installationsikonen i webbläsarens adressfält (Chrome och Edge).",
     "legal_title": "Sekretess och avtal",
     "legal_privacy": "Integritetspolicy",
     "legal_dpa": "Personuppgiftsbiträdesavtal (DPA)"
