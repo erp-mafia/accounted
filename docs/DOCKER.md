@@ -160,7 +160,7 @@ docker compose pull
 docker compose up -d
 ```
 
-The cron sidecar is a small Alpine image built locally: it rebuilds automatically on `up --build` if you re-download `docker/cron.Dockerfile`. Base-image digests (node, alpine, caddy) are pinned in source; [Dependabot](.github/dependabot.yml) opens PRs weekly when upstream ships security updates.
+The cron sidecar is a small Alpine image built locally: it rebuilds automatically on `up --build` if you re-download `docker/cron.Dockerfile`. Base-image digests (node, alpine, caddy) are pinned in source and bumped manually when upstream ships security updates.
 
 ---
 

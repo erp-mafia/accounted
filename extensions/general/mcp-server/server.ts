@@ -10969,17 +10969,20 @@ export const tools: McpTool[] = [
       // Reshape error strings into structured blockers so the agent (and any
       // dashboard) can render and act on each one independently. The lib
       // returns flat strings; we tag each with a `kind` heuristic for routing.
+      // validateYearEndReadiness emits Swedish messages (the bokslut wizard
+      // renders them verbatim); English alternates are kept as fallback so
+      // classification never regresses if an older message slips through.
       const blockers = validation.errors.map((message) => {
         let kind: string = 'other'
-        if (/draft journal entries/i.test(message)) kind = 'draft_entries'
-        else if (/voucher gap/i.test(message)) kind = 'unexplained_voucher_gap'
-        else if (/Sequence counter integrity/i.test(message)) kind = 'sequence_mismatch'
-        else if (/Trial balance is not balanced/i.test(message)) kind = 'trial_balance_unbalanced'
-        else if (/already closed/i.test(message)) kind = 'period_already_closed'
-        else if (/has not yet ended/i.test(message)) kind = 'period_not_ended'
-        else if (/closing entry already exists/i.test(message)) kind = 'closing_entry_exists'
-        else if (/continuity check failed/i.test(message)) kind = 'opening_balance_continuity'
-        else if (/Fiscal period not found/i.test(message)) kind = 'period_not_found'
+        if (/draft journal entries|utkast måste bokföras/i.test(message)) kind = 'draft_entries'
+        else if (/voucher gap|verifikationsnummerglapp/i.test(message)) kind = 'unexplained_voucher_gap'
+        else if (/Sequence counter integrity|Nummerserien i serie/i.test(message)) kind = 'sequence_mismatch'
+        else if (/Trial balance is not balanced|Råbalansen balanserar inte/i.test(message)) kind = 'trial_balance_unbalanced'
+        else if (/already closed|redan stängd/i.test(message)) kind = 'period_already_closed'
+        else if (/has not yet ended|slutdatumet har inte passerat/i.test(message)) kind = 'period_not_ended'
+        else if (/closing entry already exists|Bokslutsverifikation finns redan/i.test(message)) kind = 'closing_entry_exists'
+        else if (/continuity check failed|IB\/UB-kontinuiteten/i.test(message)) kind = 'opening_balance_continuity'
+        else if (/Fiscal period not found|Räkenskapsperioden hittades inte/i.test(message)) kind = 'period_not_found'
         return { kind, severity: 'high' as const, message }
       })
 

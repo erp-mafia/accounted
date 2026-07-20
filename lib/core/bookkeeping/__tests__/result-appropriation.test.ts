@@ -127,6 +127,32 @@ describe('generateResultAppropriation', () => {
     expect(getOpeningBalances).not.toHaveBeenCalled()
   })
 
+  it('idempotency filter is posted-only: a reversed omföring must not block re-planning', async () => {
+    // After an administrative year-end undo, the period's omföring is
+    // status='reversed' (storno-cancelled, net zero on 2099). The re-run has
+    // to be able to post a fresh one, so the existence query must filter on
+    // status='posted' and NOT use an .in(['posted','reversed']) filter.
+    results = [AB, NO_EXISTING, PERIOD]
+    mockOpeningBalance([{ account_number: '2099', debit: 0, credit: 470621.21 }])
+
+    const builders: Array<Record<string, ReturnType<typeof vi.fn>>> = []
+    const client = {
+      from: vi.fn().mockImplementation(() => {
+        const b = makeBuilder() as Record<string, ReturnType<typeof vi.fn>>
+        builders.push(b)
+        return b
+      }),
+    }
+
+    const entry = await generateResultAppropriation(client as never, 'c1', 'u1', 'p1')
+
+    expect(entry).toEqual(FAKE_ENTRY)
+    // Builder 1 is the journal_entries existence query (builder 0 = settings).
+    const existenceQuery = builders[1]
+    expect(existenceQuery.eq).toHaveBeenCalledWith('status', 'posted')
+    expect(existenceQuery.in).not.toHaveBeenCalled()
+  })
+
   it('returns null when 2099 carries no IB balance', async () => {
     results = [AB, NO_EXISTING, PERIOD]
     mockOpeningBalance([{ account_number: '1930', debit: 5000, credit: 0 }])

@@ -22,8 +22,23 @@ const DEFAULT_OAUTH_BASE_URL = 'https://peroauth2.test.skatteverket.se/oauth2/v1
 // description PDF, Tjänstebeskrivning Arbetsgivardeklaration inlämning v1.7,
 // section 4.1.2.2: the 403 "Felaktigt access scope" example shows
 // `"description": "The required scope agd has been requested for that access token."`
-// The other tokens match the path segments of their respective APIs.
-const DEFAULT_SCOPES = 'momsdeklaration inkforetag skahmst skattekonto agd'
+// The other tokens match the path segments of their respective APIs,
+// EXCEPT skattekonto. The scope names there, learned the hard way:
+//   - `ska`       = the interactive skattekonto REST API (saldo +
+//                   transaktioner). Requested since the extension's first
+//                   commit; removed 2026-05-10 by a "remove unused scopes"
+//                   cleanup (#431 series), which instantly broke skattekonto
+//                   sync for every token issued after that hour: the API
+//                   answers 403 "The required scopes are not authorized"
+//                   without it. Re-added 2026-07-20. Do not "clean up" again.
+//   - `skahmst`   = a DIFFERENT bulk service (Skattekonto Hämta huvudmäns
+//                   saldo och transaktioner, file via E-transport for
+//                   juridiska läsombud; see dev_docs/skatteverket/skahmst).
+//                   Not what the sync uses, but harmless to request.
+//   - `skattekonto` is NOT a real SKV scope name: SKV silently drops it
+//                   from every grant. Kept only so a future SKV rename in
+//                   our favor costs nothing.
+const DEFAULT_SCOPES = 'momsdeklaration inkforetag skahmst skattekonto ska agd'
 
 function getOAuthBaseUrl(): string {
   return process.env.SKATTEVERKET_OAUTH_BASE_URL || DEFAULT_OAUTH_BASE_URL
