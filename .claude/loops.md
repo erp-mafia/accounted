@@ -2,8 +2,8 @@
 
 Proactive loops that scan the codebase and our external systems (GitHub, Vercel), then
 **propose** fixes and file well-formed tickets. This file is the shared contract every loop obeys.
-Skills under `.claude/skills/loop-*` implement the loops; cloud routines and local `/loop` invocations
-run them on a schedule.
+Skills under `.claude/skills/loop-*` implement the loops; local `/loop` invocations and session-local
+crons run them on a schedule. **Cloud routines are retired (2026-07-20): all loops are LOCAL.**
 
 > These are **proactive loops**: triggered by a schedule, no human in real time, each item exits when
 > its goal is met. Quality comes from the *system around the loop* (verification skills, clean
@@ -58,14 +58,17 @@ comment what was tried. Never retry the same failing action in a cycle.
 
 | # | Loop | Skill | Where | Cadence (default) | Per-run cap |
 |---|---|---|---|---|---|
-| 1 | PR + CI triage | `loop-pr-ci-triage` | **Cloud** `trig_01J2nG7eB9gsdAb9YSGBVwa8` | `0 7,11,15 * * *` UTC | ≤5 PRs |
-| 2 | Vercel errors → tickets | `loop-vercel-errors` | **Local** (Vercel MCP); cloud needs `VERCEL_TOKEN`. Trigger `trig_014CmE3gTJ7ErnvL2trPYymu` **disabled** | on-demand / `/loop` | ≤8 issues, ≤2 PRs |
-| 3 | Issue triage + easy-fix | `loop-issue-triage` | **Cloud** `trig_017hB94ieGVwreJqHpGRDVoM` | `0 7,15 * * *` UTC | triage all; ≤2 PRs |
+| 1 | PR + CI triage | `loop-pr-ci-triage` | **Local** (session cron / `/loop`) | ~3x/day while a session is open | ≤5 PRs |
+| 2 | Vercel errors → tickets | `loop-vercel-errors` | **Local** (Vercel MCP) | daily / on-demand | ≤8 issues, ≤2 PRs |
+| 3 | Issue triage + easy-fix | `loop-issue-triage` | **Local** (session cron / `/loop`) | ~2x/day while a session is open | triage all; ≤2 PRs |
 | 4 | UI/UX + design scan | `loop-design-scan` | **Local** (`/loop`) | on-demand | ≤1 area, ≤6 findings |
 
-Loops 1 & 3 are cloud routines (only need `gh`). Loop 2 (Vercel errors) is **local**: the Vercel MCP is
-only available locally, and there's no error-aggregation service (Sentry is not used). Loop 4 is
-**local**: it needs `npm run dev` + Chrome to render/screenshot the UI.
+**All loops are local.** Cloud routines were retired 2026-07-20: the three claude.ai triggers
+(`trig_01J2nG7eB9gsdAb9YSGBVwa8`, `trig_014CmE3gTJ7ErnvL2trPYymu`, `trig_017hB94ieGVwreJqHpGRDVoM`)
+ran for 19 days as silent no-ops (no `GH_TOKEN` in the cloud env, issue #993) and the founder chose
+to disable them rather than provision. Do not re-enable or re-create them. Loop 2 additionally needs
+the Vercel MCP (local-only; Sentry is not used). Loop 4 needs `npm run dev` + Chrome.
+The `loop-ignite` skill audits and (re)schedules the local cadence each session.
 
 ---
 
@@ -77,25 +80,20 @@ grep → build if config/types changed. Plus: never violate an
 
 ---
 
-## Cloud-environment requirements (verify these: they are the usual failure points)
+## Why not cloud (historical, kept so nobody re-litigates it)
 
-Cloud routines run in a **fresh session** in the anthropic_cloud env (`env_01R1K99XTZCEptnQ7k955qfN`),
-cloning `main`. For them to work:
-
-1. **`gh` must be authenticated in the cloud env.** Each routine's preflight stops and reports
-   *"environment not provisioned"* if not. Verify via the completion notification of the first fire.
-2. **Cloud routines cannot reach interactively-authenticated MCPs** (Vercel/Supabase plugins are not in
-   the routine tool allowlist). Loops rely on `gh` (via Bash) + HTTP APIs.
-3. **The Vercel-errors loop runs locally** (Vercel MCP). Sentry is **not** used in this codebase: the
-   `SENTRY_*` names in `.env.local`/CLAUDE.md are leftovers. To run this loop in the cloud instead, set a
-   `VERCEL_TOKEN` secret on the env and accept that Vercel runtime-log retention is short (recent window
-   only). `GH_TOKEN` is the one secret loops 1 & 3 actually require (private-repo access;
-   OAuth-only integration does not work for private repos, anthropics/claude-code#64130).
+Cloud routines were tried 2026-07-01 and retired 2026-07-20. The blockers, should anyone revisit:
+the anthropic_cloud env needs a `GH_TOKEN` fine-grained PAT for private-repo access (OAuth-only
+integration does not work, anthropics/claude-code#64130), cannot reach interactively-authenticated
+MCPs (Vercel/Supabase plugins), and Sentry is **not** used in this codebase (the `SENTRY_*` names in
+`.env.local` are leftovers). Reviving cloud means: set `GH_TOKEN` in the routine editor's cloud env,
+re-enable the triggers, and verify the first fire leaves a real GitHub trace. Until someone does all
+of that deliberately, treat cloud as retired: see issue #993 for the full history.
 
 ---
 
 ## Operating the loops
-- **List / pause / retune:** `/schedule` (or the trigger MCP tools; `update_trigger` for a new cron).
+- **Audit / (re)ignite each session:** `/loop-ignite` (audits evidence, schedules session-local crons).
 - **Run on-demand:** `/loop-pr-ci-triage`, `/loop-issue-triage`, `/loop-vercel-errors`,
   `/loop-design-scan <area>`. Wrap in `/loop <interval>` to repeat locally; `/goal` for a hard exit.
 - **Cost:** route mechanical steps to cheaper models; reserve judgment for the strong model. `/usage`.

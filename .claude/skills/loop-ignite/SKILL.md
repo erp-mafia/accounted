@@ -1,33 +1,35 @@
 ---
 name: loop-ignite
-description: Verify the agentic loops are actually running and ignite any that are not. Use at the start of any session, or whenever the user manually asks to "check the pr comments" / check logs / triage issues, which signals a loop is not firing. The loops exist (dev_docs/loops.md); the historical failure mode is that nobody initiates them.
+description: Verify the agentic loops are actually running and ignite any that are not. Use at the start of any session, or whenever the user manually asks to "check the pr comments" / check logs / triage issues, which signals a loop is not firing. The loops are LOCAL-only since 2026-07-20 (cloud routines retired); the historical failure mode is that nobody initiates them.
 ---
 
 # loop-ignite
 
 **Goal:** the user never has to type "check the pr comments" again. That prompt was typed 323 times
-between 2026-04 and 2026-07; the loops that replace it were built 2026-07-01 and never initiated.
-This skill closes that gap.
+between 2026-04 and 2026-07; the loops that replace it were built 2026-07-01.
+This skill closes the initiation gap.
+
+**Cloud routines are RETIRED (founder decision 2026-07-20).** The three claude.ai triggers
+(trig_01J2nG7eB9gsdAb9YSGBVwa8, trig_014CmE3gTJ7ErnvL2trPYymu, trig_017hB94ieGVwreJqHpGRDVoM)
+fired daily for 19 days as silent no-ops (no GH_TOKEN in the cloud env, issue #993) and were
+deliberately disabled instead of provisioned. Do NOT re-enable or re-create them; ignore them in
+audits. All loops run locally now.
 
 ## When invoked
 
 1. **Audit what is live.**
-   - Cloud routines: list scheduled triggers (`/schedule` or the list-triggers MCP tool). Expected per
-     `dev_docs/loops.md`: PR+CI triage `0 7,11,15 * * *` UTC, Vercel errors `0 6 * * *` UTC,
-     issue triage `0 7,15 * * *` UTC.
-   - Local fallback: `CronList` for local scheduled jobs.
+   - Local schedule: `CronList` for session-local jobs invoking `/loop-*` skills.
    - Evidence of firing: recent `loop/*` branches, PR comments by the loop, `loop:needs-human` labels
      (`gh pr list`, `gh issue list --label loop:needs-human`).
 2. **Report a one-screen status table**: loop, expected cadence, last observed run, verdict (LIVE / DEAD / NEVER RAN).
-3. **Ignite what is dead.** For each non-live loop, in order of preference (idempotent: re-list
-   triggers first and enable/repair an existing one before creating; never create a duplicate):
-   - Re-create/enable its cloud routine trigger.
-   - If cloud is unavailable, schedule a local fallback (`CronCreate` invoking the matching
-     `/loop-*` skill) and say clearly that it only runs while this machine is awake.
-   - If neither is possible, run the loop skill once now AND file the blocker as a GitHub issue so
-     the gap is visible instead of silent.
-4. **Switch-on check (mandatory):** after igniting, verify the trigger exists by listing it again.
-   End with either "ALL LOOPS LIVE" or "NOT SWITCHED ON YET: <loop> - <what remains, who flips it>".
+3. **Ignite what is dead.** For each non-live loop:
+   - Run the loop skill once NOW (`/loop-pr-ci-triage`, `/loop-issue-triage`, `/loop-vercel-errors`)
+     so the backlog is cleared this session.
+   - Then schedule a session-local cadence (`CronCreate` invoking the matching `/loop-*` skill) and
+     say clearly that it only runs while this session is alive (7-day auto-expiry).
+   - If a loop cannot run at all, file the blocker as a GitHub issue so the gap is visible instead of silent.
+4. **Switch-on check (mandatory):** after igniting, verify via `CronList` that the jobs exist.
+   End with either "ALL LOOPS LIVE (session-local)" or "NOT SWITCHED ON YET: <loop> - <what remains, who flips it>".
 
 ## If the user manually types a loop-shaped request
 
