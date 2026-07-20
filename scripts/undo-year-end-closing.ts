@@ -47,9 +47,10 @@
  *   # Dry run (read-only) against the env in .env.local
  *   npx tsx scripts/undo-year-end-closing.ts --company-id <uuid> --period-id <uuid>
  *
- *   # Apply, attributing to a specific user
+ *   # Apply, attributing to a specific user. --confirm-url must restate the
+ *   # target Supabase URL so the operator confirms WHICH environment mutates.
  *   npx tsx scripts/undo-year-end-closing.ts --company-id <uuid> --period-id <uuid> \
- *     --user-id <uuid> --commit
+ *     --user-id <uuid> --commit --confirm-url https://<project>.supabase.co
  *
  *   # Against another environment (e.g. production)
  *   npx tsx scripts/undo-year-end-closing.ts --env-file .env.prod.local ...
@@ -73,6 +74,7 @@ const COMPANY_ID = arg('company-id')
 const PERIOD_ID = arg('period-id')
 const USER_ID_ARG = arg('user-id')
 const COMMIT = process.argv.includes('--commit')
+const CONFIRM_URL = arg('confirm-url')
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL
 const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -88,7 +90,20 @@ if (!serviceKey.startsWith('eyJ') && !serviceKey.startsWith('sb_secret_')) {
   process.exit(1)
 }
 if (!COMPANY_ID || !PERIOD_ID) {
-  console.error('Usage: --company-id <uuid> --period-id <uuid> [--user-id <uuid>] [--env-file <path>] [--commit]')
+  console.error(
+    'Usage: --company-id <uuid> --period-id <uuid> [--user-id <uuid>] [--env-file <path>] [--commit --confirm-url <supabase-url>]'
+  )
+  process.exit(1)
+}
+// A prefix check on the key cannot catch a right-looking key from the WRONG
+// environment (e.g. a staging env file against prod). For mutations, the
+// operator must restate the target URL so an accidental env swap fails loud.
+if (COMMIT && CONFIRM_URL !== url) {
+  console.error(
+    `--commit requires --confirm-url to exactly match the target Supabase URL.\n` +
+      `  target:      ${url}\n` +
+      `  confirm-url: ${CONFIRM_URL ?? '(missing)'}`
+  )
   process.exit(1)
 }
 
@@ -343,7 +358,7 @@ async function main() {
   // Audit trail AFTER the mutations so the row describes what actually
   // happened (BFNAR 2013:2 kap. 8 behandlingshistorik). The automatic
   // write_audit_log trigger also recorded each UPDATE individually.
-  const { error: auditError } = await supabase.from('audit_log').insert({
+  const auditRow = {
     user_id: userId,
     company_id: COMPANY_ID,
     action: 'UPDATE',
@@ -360,13 +375,25 @@ async function main() {
       closing_entry_id: period.closing_entry_id,
     },
     new_state: { is_closed: false, closed_at: null, locked_at: null, closing_entry_id: null },
-  })
+  }
+  // BFNAR 2013:2 kap. 8: the behandlingshistorik row is part of the undo.
+  // The mutations cannot be rolled back from here (each already committed via
+  // PostgREST), so retry the insert before giving up.
+  let auditError: { message: string } | null = null
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const { error } = await supabase.from('audit_log').insert(auditRow)
+    auditError = error
+    if (!auditError) break
+    console.warn(`  audit_log insert attempt ${attempt}/3 failed: ${auditError.message}`)
+  }
   if (auditError) {
-    // BFNAR 2013:2 kap. 8: the behandlingshistorik row is part of the undo.
-    // The mutations above have already been applied; exit non-zero so the
-    // operator investigates and re-runs (the script is resumable) instead of
-    // treating the undo as complete without its audit record.
-    fail(`audit_log insert failed after mutations were applied: ${auditError.message}`)
+    fail(
+      `audit_log insert failed after 3 attempts: ${auditError.message}\n` +
+        'The period state itself is valid (all mutations completed), but the undo is NOT ' +
+        'complete until the behandlingshistorik row exists (BFNAR 2013:2 kap. 8). ' +
+        'Insert the audit_log row manually (see auditRow in this script for the exact ' +
+        'content) before treating the undo as done.'
+    )
   }
 
   // ── Verify ─────────────────────────────────────────────────────

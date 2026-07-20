@@ -55,7 +55,8 @@ export function ExecuteStep({ periodName, isRunning, error, bolagsskattMissing, 
               <AlertTriangle className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
               <p>
                 Ingen bolagsskatt är bokförd trots att året visar vinst. Om det inte är avsiktligt
-                (t.ex. underskottsavdrag), gå tillbaka och boka skatten i dispositionssteget innan
+                (t.ex. underskottsavdrag, periodiseringsfond eller överavskrivningar som nollar det
+                skattemässiga resultatet), gå tillbaka och boka skatten i dispositionssteget innan
                 du verkställer.
               </p>
             </div>

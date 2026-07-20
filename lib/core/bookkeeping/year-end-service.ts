@@ -418,6 +418,10 @@ export async function previewYearEndClosing(
   // is a warning, not a blocker: zero tax is legitimate when underskotts-
   // avdrag zeroes the taxable result. 8999 is excluded: it is the manual
   // result-closing account, not a tax account.
+  // Scanning resultAccountSummary is equivalent to a full 89xx trial-balance
+  // scan: it is built from every class 3-8 account with a non-zero closing
+  // balance, regardless of voucher series, so a booked tax entry cannot be
+  // missed by this check.
   const hasTaxAccount = resultAccountSummary.some(
     (a) => a.account_number.startsWith('89') && a.account_number !== '8999'
   )
