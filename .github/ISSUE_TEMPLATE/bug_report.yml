@@ -1,0 +1,56 @@
+name: Bug report
+description: Report something that is broken or behaving incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug.
+
+        **Do not report security vulnerabilities here.** Use our [security policy](https://github.com/erp-mafia/accounted/security/policy) instead.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Hosted (app.gnubok.se)
+        - Self-hosted (Docker)
+        - Local development
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Browser and OS
+      placeholder: "e.g. Chrome 138 on macOS 15"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots
+      description: |
+        Paste any error messages or attach screenshots.
+        Remember to redact personal data, organization numbers, and financial details before posting.

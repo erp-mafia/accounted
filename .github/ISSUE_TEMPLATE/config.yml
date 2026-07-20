@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://docs.gnubok.se
+    about: User guides and API reference.
+  - name: Security vulnerability
+    url: https://github.com/erp-mafia/accounted/security/policy
+    about: Report security issues privately, never in a public issue.

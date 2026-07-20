@@ -1,6 +1,8 @@
 # Contributing to Accounted
 
-Thank you for your interest in contributing to gnubok. This guide covers the development workflow, coding standards, and submission process.
+Thank you for your interest in contributing to Accounted. This guide covers the development workflow, coding standards, and submission process.
+
+Everyone interacting in the project is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Getting Started
 
@@ -62,7 +64,7 @@ If you forget, you can amend: `git commit --amend -s`.
 
 ## Extension Development
 
-See `CLAUDE.md` for the full extension architecture. Quick start:
+See [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/EXTENSIONS.md](docs/EXTENSIONS.md) for the full extension architecture. Quick start:
 
 ```bash
 npx tsx scripts/create-extension.ts --name my-ext --sector general --category operations --description "..."
