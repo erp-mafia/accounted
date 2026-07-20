@@ -123,9 +123,15 @@ describe('tools/list payload size guard', () => {
     //     each inlining STAGED_OPERATION_SCHEMA + _meta + company_id routing.
     //     Descriptions and property prose trimmed first; the remainder is
     //     wire contract.
+    //   * 56K → 57K with payroll e2e parity: staged gnubok_book_salary_run
+    //     (advances the run through godkänd/utbetald and posts the lön
+    //     verifikat: closes the "booking happens in the web UI" gap) +
+    //     gnubok_delete_absence (inverse of register_absence), both inlining
+    //     STAGED_OPERATION_SCHEMA + _meta + company_id routing. Descriptions
+    //     trimmed to the floor first; the remainder is wire contract.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(56_000)
+    expect(approxTokens).toBeLessThan(57_000)
   })
 })

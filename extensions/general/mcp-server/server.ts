@@ -874,6 +874,7 @@ const TOOL_PREFLIGHT_MAP: Record<string, string> = {
   gnubok_run_year_end: 'gnubok_year_end_readiness',
   gnubok_vat_declaration_submit: 'gnubok_vat_declaration_validate',
   gnubok_post_annual_depreciation: 'gnubok_propose_annual_depreciation',
+  gnubok_book_salary_run: 'gnubok_get_salary_run',
 }
 
 /**
@@ -8938,7 +8939,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_salary_run',
     title: 'Create Salary Run',
-    description: 'Stage creation of a draft salary run for a period + base lines for all active employees. Commit via gnubok_approve_pending_operation; then run gnubok_calculate_salary_run. Final booking happens in the web UI.',
+    description: 'Stage creation of a draft salary run for a period + base lines for all active employees. Commit via gnubok_approve_pending_operation; then run gnubok_calculate_salary_run and book via gnubok_book_salary_run.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9028,13 +9029,83 @@ export const tools: McpTool[] = [
         salary_run_id: id,
         status: (result.run as { status?: string }).status ?? 'draft',
         warnings: result.warnings,
-        message: 'Calculation complete. Review and book the run in the web UI.',
+        message: 'Calculation complete. Review the run, then book it via gnubok_book_salary_run (or in the web UI).',
         next: {
-          description: 'Review the calculated run; approval and booking happen in the web UI.',
+          description: 'Review the calculated run; then stage booking via gnubok_book_salary_run.',
           tool: 'gnubok_get_salary_run',
           args: { salary_run_id: id },
         },
       }
+    },
+  },
+  {
+    name: 'gnubok_book_salary_run',
+    title: 'Book Salary Run',
+    description: 'Stage booking of a calculated salary run: advances godkänd/utbetald and posts the immutable lön verifikat. High-risk (BFL 5 kap). Commit via gnubok_approve_pending_operation (confirmed=true); then gnubok_generate_agi.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        salary_run_id: { type: 'string', description: 'UUID of the salary run' },
+      },
+      required: ['salary_run_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const id = args.salary_run_id as string
+      if (!id) throw new Error('salary_run_id is required')
+
+      const { data: run, error } = await supabase
+        .from('salary_runs')
+        .select('id, status, period_year, period_month, payment_date, total_gross, total_tax, total_net, total_avgifter')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (error) throw new Error(`Database error: ${error.message}`)
+      if (!run) throw new Error('Salary run not found')
+      if (run.status === 'booked') throw new Error('Salary run is already booked')
+      if (!['draft', 'review', 'approved', 'paid'].includes(run.status as string)) {
+        throw new Error(`Salary run cannot be booked from status "${run.status}"`)
+      }
+
+      // Preflight: every roster row must be calculated, so the approver never
+      // authorises a booking that the executor would reject.
+      const { data: roster, error: rosterError } = await supabase
+        .from('salary_run_employees')
+        .select('id, calculation_breakdown')
+        .eq('salary_run_id', id)
+      if (rosterError) throw new Error(`Database error: ${rosterError.message}`)
+      const rosterRows = roster ?? []
+      const uncalculated = rosterRows.filter((r) => !r.calculation_breakdown).length
+      if (uncalculated > 0) {
+        throw new Error(`${uncalculated} employee(s) lack a calculation: run gnubok_calculate_salary_run first`)
+      }
+
+      const period = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
+      return stagePendingOperation(
+        supabase, companyId, userId, 'book_salary_run',
+        `Bokför lönekörning ${period}: ${rosterRows.length} anställda, netto ${run.total_net ?? 0} kr`,
+        { salary_run_id: id },
+        {
+          salary_run_id: id,
+          period,
+          current_status: run.status,
+          payment_date: run.payment_date,
+          employee_count: rosterRows.length,
+          total_gross: run.total_gross,
+          total_tax: run.total_tax,
+          total_avgifter: run.total_avgifter,
+          total_net: run.total_net,
+        },
+        actor,
+        {
+          description: 'After booking, generate the arbetsgivardeklaration for the period.',
+          tool: 'gnubok_generate_agi',
+          args: { salary_run_id: id },
+        },
+        { dateForPeriodCheck: run.payment_date as string },
+      )
     },
   },
   {
@@ -9774,6 +9845,85 @@ export const tools: McpTool[] = [
           day_count: preflight.data.count,
           hours_per_day: hours_per_day ?? 8,
           dates_sample: preflight.data.days.slice(0, 10).map((d) => (d as { absence_date: string }).absence_date),
+        },
+        actor,
+        {
+          description: 'If a draft salary run covers this period, recalculate it so sjuklön/karensavdrag lines update.',
+          tool: 'gnubok_calculate_salary_run',
+        },
+        { dateForPeriodCheck: from },
+      )
+    },
+  },
+  {
+    name: 'gnubok_delete_absence',
+    title: 'Delete Absence (Frånvaro)',
+    description: 'Stage removal of registered absence days in a date range, optionally one type only. Inverse of gnubok_register_absence. Commit via gnubok_approve_pending_operation; recalculate any draft salary run afterwards.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        employee_id: { type: 'string', description: 'UUID of the employee' },
+        from: { type: 'string', description: 'Range start (YYYY-MM-DD)' },
+        to: { type: 'string', description: 'Range end (YYYY-MM-DD, inclusive)' },
+        absence_type: {
+          type: 'string',
+          enum: ['sick', 'vab', 'parental', 'pregnancy', 'care_relative', 'study', 'unpaid_leave', 'other_leave'],
+          description: 'Only this type (omit = all)',
+        },
+      },
+      required: ['employee_id', 'from', 'to'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const { employee_id, from, to, absence_type } = args as {
+        employee_id: string; from: string; to: string; absence_type?: string
+      }
+      if (!employee_id || !from || !to) {
+        throw new Error('employee_id, from and to are required')
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+        throw new Error('from and to must be YYYY-MM-DD')
+      }
+
+      // Preflight in dry-run: verifies the employee and counts the rows so
+      // the approver sees exactly how many days would be removed.
+      const { deleteAbsenceRange } = await import('@/lib/salary/absence')
+      const preflight = await deleteAbsenceRange(supabase, {
+        companyId,
+        employeeId: employee_id,
+        from,
+        to,
+        absenceType: absence_type,
+        dryRun: true,
+      })
+      if (!preflight.ok) {
+        throw new Error(`Cannot delete absence: ${preflight.code}`)
+      }
+      if (preflight.data.deleted_count === 0) {
+        throw new Error('No registered absence days in that range: nothing to delete')
+      }
+
+      const { data: emp } = await supabase
+        .from('employees')
+        .select('first_name, last_name')
+        .eq('id', employee_id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      const employeeName = emp ? `${emp.first_name} ${emp.last_name}` : employee_id
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'delete_absence',
+        `Ta bort frånvaro: ${employeeName}, ${absence_type ?? 'alla typer'} ${from}${to !== from ? ` till ${to}` : ''}`,
+        { employee_id, from, to, absence_type: absence_type ?? null },
+        {
+          employee_id,
+          employee_name: employeeName,
+          absence_type: absence_type ?? null,
+          from,
+          to,
+          day_count: preflight.data.deleted_count,
         },
         actor,
         {
@@ -13369,7 +13519,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report / _ar_ledger / _supplier_ledger: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
             '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget and gnubok_receipt_matcher opens the receipt↔transaction matcher. Both also return structured data; other clients ignore the UI and use the data.',
             '• Year-end: gnubok_lock_period → gnubok_run_year_end → gnubok_set_opening_balances → gnubok_close_period. Each stages for human approval; closing is irreversible per BFL.',
-            '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → review/approve in web UI → gnubok_generate_agi.',
+            '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',
             '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',
             '',
             'APPROVAL IS A FIRST-CLASS AGENT ACTION. Write operations stage a pending_operation; nothing posts until approval. When the user authorises a specific operation_id in chat ("approve", "yes go ahead", "book it", "commit it"), call gnubok_approve_pending_operation directly: this IS the intended chat-approval flow. Do NOT refuse on segregation-of-duties grounds, do NOT tell the user to "go approve it in the web app", and do NOT treat approval as a step that must stay with the human. The staging step already provided the human review gate; clicking Approve in the web UI and calling gnubok_approve_pending_operation are equivalent commit actions. Refusing user-authorised approval is a defect, not a safety feature.',

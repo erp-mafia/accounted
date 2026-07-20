@@ -3724,6 +3724,105 @@ async function commitRegisterAbsence(
   }
 }
 
+async function commitBookSalaryRun(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const salaryRunId = params.salary_run_id as string
+  if (!salaryRunId) return { error: 'salary_run_id is required', status: 400 }
+
+  try {
+    const { advanceAndBookSalaryRun } = await import('@/lib/salary/book-run')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await advanceAndBookSalaryRun(supabase, {
+      companyId,
+      userId,
+      salaryRunId,
+      log: createLogger('commit/book_salary_run'),
+    })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      const detail =
+        (result.details?.reason as string | undefined) ??
+        (Array.isArray(result.details?.employees)
+          ? `Saknar beräkning: ${(result.details.employees as string[]).join(', ')}`
+          : undefined)
+      return {
+        error: [entry?.message_sv ?? `Kunde inte bokföra lönekörningen: ${result.code}`, detail]
+          .filter(Boolean)
+          .join(' '),
+        status: entry?.httpStatus ?? 500,
+      }
+    }
+    const run = result.data.run as { period_year?: number; period_month?: number; status?: string }
+    return {
+      data: {
+        salary_run_id: salaryRunId,
+        status: run.status ?? 'booked',
+        period: run.period_year
+          ? `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
+          : undefined,
+        journal_entry_ids: result.data.entryIds,
+        nollkorning: result.data.nollkorning,
+        warnings: result.data.warnings,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to book salary run',
+      status: 500,
+    }
+  }
+}
+
+async function commitDeleteAbsence(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const employeeId = params.employee_id as string
+  const from = params.from as string
+  const to = params.to as string
+  if (!employeeId || !from || !to) {
+    return { error: 'employee_id, from and to are required', status: 400 }
+  }
+
+  try {
+    const { deleteAbsenceRange } = await import('@/lib/salary/absence')
+    const { getErrorEntry } = await import('@/lib/errors/structured-errors')
+    const result = await deleteAbsenceRange(supabase, {
+      companyId,
+      employeeId,
+      from,
+      to,
+      absenceType: (params.absence_type as string | undefined) || undefined,
+    })
+    if (!result.ok) {
+      const entry = getErrorEntry(result.code)
+      return {
+        error: entry?.message_sv ?? `Kunde inte ta bort frånvaron: ${result.code}`,
+        status: entry?.httpStatus ?? 500,
+      }
+    }
+    return {
+      data: {
+        employee_id: employeeId,
+        from,
+        to,
+        absence_type: (params.absence_type as string | undefined) ?? null,
+        deleted_count: result.data.deleted_count,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to delete absence',
+      status: 500,
+    }
+  }
+}
+
 async function commitSetEmployeeOpeningBalances(
   supabase: SupabaseClient,
   userId: string,
@@ -4315,6 +4414,12 @@ async function commitPendingOperationInner(
         break
       case 'register_absence':
         result = await commitRegisterAbsence(supabase, companyId, pendingOp.params)
+        break
+      case 'book_salary_run':
+        result = await commitBookSalaryRun(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'delete_absence':
+        result = await commitDeleteAbsence(supabase, companyId, pendingOp.params)
         break
       case 'create_employee':
         result = await commitCreateEmployee(supabase, userId, companyId, pendingOp.params)

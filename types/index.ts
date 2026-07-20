@@ -2048,6 +2048,12 @@ export type PendingOperationType =
   | 'create_employee'
   | 'update_employee'
   | 'set_employee_opening_balances'
+  // Payroll e2e parity with the v1 REST surface: book a calculated run
+  // (walks review → approved → paid → booked; the staged approval is the
+  // authorization act) and remove registered absence days. Employee
+  // archiving needs no own op: update_employee with is_active=false.
+  | 'book_salary_run'
+  | 'delete_absence'
   // Semesterårsavslut: rolls vacation balances into the next year and may
   // post a 2920/2940 drift-adjustment verifikation (Phase 3).
   | 'vacation_year_close'

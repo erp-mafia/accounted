@@ -2100,6 +2100,11 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Lönekörningen måste vara markerad som betald för bokföring.',
     message_en: 'Salary run must be marked paid before booking.',
   },
+  SALARY_RUN_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Lönekörningen är redan bokförd.',
+    message_en: 'Salary run is already booked.',
+  },
   SALARY_PAYSLIPS_SEND_INVALID_STATUS: {
     httpStatus: 400,
     message_sv: 'Lönespecifikationer kan bara skickas efter godkännande.',

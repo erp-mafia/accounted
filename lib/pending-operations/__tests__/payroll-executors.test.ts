@@ -23,6 +23,12 @@ vi.mock('@/lib/salary/semesterberedning', () => ({
   commitVacationYearClose: (...a: unknown[]) => mockCloseYear(...a),
 }))
 
+const mockAdvanceAndBook = vi.fn()
+vi.mock('@/lib/salary/book-run', () => ({
+  advanceAndBookSalaryRun: (...a: unknown[]) => mockAdvanceAndBook(...a),
+  bookPaidSalaryRun: vi.fn(),
+}))
+
 import { commitPendingOperation } from '../commit'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
@@ -177,6 +183,101 @@ describe('commitPendingOperation: register_absence', () => {
     // day's hours and re-stage) rather than marking it transiently failed.
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
+  })
+})
+
+describe('commitPendingOperation: book_salary_run', () => {
+  it('books through the shared advance-walk service (happy path)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize
+
+    mockAdvanceAndBook.mockResolvedValue({
+      ok: true,
+      data: {
+        run: { period_year: 2026, period_month: 6, status: 'booked' },
+        entryIds: ['je-1', 'je-2'],
+        nollkorning: false,
+        warnings: ['Anna Svensson: E-post saknas, lönebesked kan inte skickas'],
+      },
+    })
+
+    const op = makePendingOp({
+      operation_type: 'book_salary_run',
+      risk_level: 'high',
+      params: { salary_run_id: 'run-1' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      salary_run_id: 'run-1',
+      status: 'booked',
+      period: '2026-06',
+      journal_entry_ids: ['je-1', 'je-2'],
+    })
+    expect(mockAdvanceAndBook).toHaveBeenCalledWith(
+      supabase,
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1', salaryRunId: 'run-1' }),
+    )
+  })
+
+  it('rejects cleanly when the run was already booked between staging and approval', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    mockAdvanceAndBook.mockResolvedValue({ ok: false, code: 'SALARY_RUN_ALREADY_BOOKED' })
+
+    const op = makePendingOp({
+      operation_type: 'book_salary_run',
+      risk_level: 'high',
+      params: { salary_run_id: 'run-1' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toMatch(/redan bokförd/)
+  })
+})
+
+describe('commitPendingOperation: delete_absence', () => {
+  it('deletes the range through the shared service (happy path)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'emp-1' } }) // service assertEmployee
+    enqueue({ data: null, count: 3 }) // delete with count
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'delete_absence',
+      params: { employee_id: 'emp-1', from: '2026-03-02', to: '2026-03-06', absence_type: 'sick' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      employee_id: 'emp-1',
+      absence_type: 'sick',
+      deleted_count: 3,
+    })
+  })
+
+  it('fails cleanly for an unknown employee', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null }) // assertEmployee misses
+    enqueue({ data: null, error: null }) // finalize (failed)
+
+    const op = makePendingOp({
+      operation_type: 'delete_absence',
+      params: { employee_id: 'emp-x', from: '2026-03-02', to: '2026-03-06' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).not.toBe('committed')
+    expect(result.error).toBeDefined()
   })
 })
 

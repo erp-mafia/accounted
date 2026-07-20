@@ -20,6 +20,8 @@ import { decryptPersonnummer } from '@/lib/salary/personnummer'
 
 const updatePayslipLine = tools.find((t) => t.name === 'gnubok_update_payslip_line')!
 const registerAbsence = tools.find((t) => t.name === 'gnubok_register_absence')!
+const bookSalaryRun = tools.find((t) => t.name === 'gnubok_book_salary_run')!
+const deleteAbsence = tools.find((t) => t.name === 'gnubok_delete_absence')!
 const createEmployee = tools.find((t) => t.name === 'gnubok_create_employee')!
 const updateEmployee = tools.find((t) => t.name === 'gnubok_update_employee')!
 const setOpeningBalances = tools.find((t) => t.name === 'gnubok_set_employee_opening_balances')!
@@ -182,6 +184,101 @@ describe('gnubok_register_absence', () => {
         'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
       ),
     ).rejects.toThrow(/EMPLOYEE_NOT_FOUND/)
+  })
+})
+
+describe('gnubok_book_salary_run', () => {
+  const RUN_ROW = {
+    id: 'run-1',
+    status: 'review',
+    period_year: 2026,
+    period_month: 6,
+    payment_date: '2026-06-25',
+    total_gross: 30000,
+    total_tax: 7000,
+    total_net: 23000,
+    total_avgifter: 9426,
+  }
+
+  it('stages high-risk with a totals preview', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW }) // salary_runs lookup
+    enqueue({ data: [{ id: 'sre-1', calculation_breakdown: { steps: [] } }] }) // roster preflight
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await bookSalaryRun.execute(
+      { salary_run_id: 'run-1' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; risk_level: string; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.risk_level).toBe('high')
+    expect(result.preview.period).toBe('2026-06')
+    expect(result.preview.employee_count).toBe(1)
+    expect(result.preview.total_net).toBe(23000)
+    expect(result.preview.current_status).toBe('review')
+  })
+
+  it('throws for an already-booked run', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...RUN_ROW, status: 'booked' } })
+
+    await expect(
+      bookSalaryRun.execute(
+        { salary_run_id: 'run-1' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/already booked/)
+  })
+
+  it('throws when the roster has uncalculated employees', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW })
+    enqueue({ data: [{ id: 'sre-1', calculation_breakdown: null }] })
+
+    await expect(
+      bookSalaryRun.execute(
+        { salary_run_id: 'run-1' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/lack a calculation/)
+  })
+})
+
+describe('gnubok_delete_absence', () => {
+  it('stages with a deleted-day-count preview', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'emp-1' } }) // service assertEmployee (dry-run preflight)
+    enqueue({ data: null, count: 3 }) // dry-run count query
+    enqueue({ data: { first_name: 'Anna', last_name: 'Andersson' } }) // name for title/preview
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-2' }, error: null }) // pending_operations insert
+
+    const result = (await deleteAbsence.execute(
+      { employee_id: 'emp-1', from: '2026-03-02', to: '2026-03-06', absence_type: 'sick' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; risk_level: string; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.risk_level).toBe('medium')
+    expect(result.preview.day_count).toBe(3)
+    expect(result.preview.employee_name).toBe('Anna Andersson')
+  })
+
+  it('throws when the range contains nothing to delete', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'emp-1' } })
+    enqueue({ data: null, count: 0 })
+
+    await expect(
+      deleteAbsence.execute(
+        { employee_id: 'emp-1', from: '2026-03-02', to: '2026-03-06' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/nothing to delete/)
   })
 })
 

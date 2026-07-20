@@ -233,6 +233,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_salary_journal:              'payroll:read',
   gnubok_create_salary_run:               'payroll:write',
   gnubok_calculate_salary_run:            'payroll:write',
+  gnubok_book_salary_run:                 'payroll:write',
   gnubok_generate_agi:                    'payroll:write',
   // Payroll gap-closure: reads + staged writes (1.6-1.8, 2.4)
   gnubok_get_employee:                    'payroll:read',
@@ -240,6 +241,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_absence:                    'payroll:read',
   gnubok_update_payslip_line:             'payroll:write',
   gnubok_register_absence:                'payroll:write',
+  gnubok_delete_absence:                  'payroll:write',
   gnubok_create_employee:                 'payroll:write',
   gnubok_update_employee:                 'payroll:write',
   gnubok_set_employee_opening_balances:   'payroll:write',

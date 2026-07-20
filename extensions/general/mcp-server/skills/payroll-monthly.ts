@@ -66,9 +66,9 @@ Errors at this stage usually mean missing tax-table data: fall back to \`getDefa
 
 \`gnubok_get_salary_journal({ year })\`: annual rollup for sanity check.
 
-### Step 6: Approve & book (web UI)
+### Step 6: Approve & book
 
-The user marks the run \`approved\` → \`paid\` → \`booked\` in the web UI. Booking creates the JE:
+\`gnubok_book_salary_run({ salary_run_id })\` stages the booking (high-risk: commit needs \`confirmed=true\` on approval). On commit it walks the run \`review\` → \`approved\` → \`paid\` → \`booked\`; the staged approval is the authorization act. Alternatively the user clicks through the same statuses in the web UI. Booking creates the JE:
 
 - Debit **7210** (lön tjänstemän) or **7010** (lön arbetare): bruttolön
 - Debit **7510** (sociala avgifter): \`avgift_base × applicable_rate\`: **per employee**, using the rate from Step 4 (default 31.42 %, or a reduced rate when applicable: 10.21 % for 66+, växa-stöd, etc.)
@@ -105,6 +105,7 @@ Returns \`{ message, period, employee_count, download_url }\`. The XML conforms 
 - \`gnubok_create_salary_run\`: stage new monthly run
 - \`gnubok_calculate_salary_run\`: compute tax + avgifter + accrual
 - \`gnubok_get_salary_run\`: review breakdown
+- \`gnubok_book_salary_run\`: stage booking (statuses + verifikat)
 - \`gnubok_get_salary_journal\`: annual rollup
 - \`gnubok_generate_agi\`: produce AGI XML for filing
 `

@@ -144,6 +144,13 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // adjustment). Editable until the employee has a booked run; wrong values
   // skew payslips and the vacation-liability report, so human review.
   set_employee_opening_balances: 'medium',
+  // Booking a salary run posts 2-4 immutable verifikationer via the engine
+  // (net, tax, avgifter, vacation accrual) and advances the run through
+  // approved/paid on the way. Same irreversible tier as create_voucher.
+  book_salary_run: 'high',
+  // Deleting absence days is the inverse of register_absence and changes
+  // sjuklön/karens math for any draft run covering the range: same tier.
+  delete_absence: 'medium',
   // Semesterårsavslut: closes every employee's vacation year, rolls sparade
   // dagar (5-year expiry -> forced payout), and may post a 2920/2940
   // adjustment verifikation. Irreversible in practice (no reopen flow):
