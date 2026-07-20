@@ -245,16 +245,14 @@ export default function JournalEntryList() {
   }, [company?.id])
 
   const toggleDensity = () => {
-    setCompact((prev) => {
-      const next = !prev
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(
-          DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default'),
-          next ? 'compact' : 'comfortable',
-        )
-      }
-      return next
-    })
+    const next = !compact
+    setCompact(next)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(
+        DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default'),
+        next ? 'compact' : 'comfortable',
+      )
+    }
   }
 
   // Restore the persisted page-size choice (per company). Same hydration pattern

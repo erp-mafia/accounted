@@ -25,7 +25,7 @@ export function ActiveCompanyBadge({ className }: { className?: string }) {
         'max-w-full min-w-0 gap-1.5 font-normal text-muted-foreground',
         className,
       )}
-      title={t('active_company')}
+      title={`${t('active_company')}: ${company.name}`}
     >
       <Building2 className="h-3 w-3 shrink-0" aria-hidden="true" />
       <span className="sr-only">{t('active_company')}: </span>
