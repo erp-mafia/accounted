@@ -128,7 +128,8 @@
     "logout_sandbox": "Exit sandbox",
     "trial_days_left": "Trial: {days, plural, =1 {1 day} other {# days}} left",
     "ext_tic": "Company profile",
-    "ext_invoice_inbox": "Document inbox"
+    "ext_invoice_inbox": "Document inbox",
+    "close_run": "Month-end close"
   },
   "agentKnowledge": {
     "load_error_title": "Couldn't load the knowledge profile",
@@ -5547,5 +5548,41 @@
     "preset_reports_description": "Reports are generated automatically once you have enough data. Start by creating invoices or importing transactions.",
     "preset_reports_action": "Create invoice",
     "preset_reports_secondary": "Import transactions"
+  },
+  "close_run": {
+    "title": "Month-end close",
+    "prev_month": "Previous month",
+    "next_month": "Next month",
+    "ready": "The month is ready to lock",
+    "not_ready": "{count, plural, one {# item blocks} other {# items block}} the lock",
+    "already_locked": "The month is locked (through {date})",
+    "difference": "Difference {amount} kr",
+    "checks": {
+      "unbooked_transactions": "Unbooked transactions",
+      "unattested_supplier_invoices": "Supplier invoices awaiting approval",
+      "bank_unreconciled": "Bank reconciliation",
+      "draft_entries": "Draft journal entries",
+      "missing_receipts_high_value": "Missing documents (amounts over 4,000 kr)"
+    },
+    "status": {
+      "pass": "Done",
+      "blocker": "Blocking",
+      "warning": "Warning",
+      "unknown": "Could not be verified"
+    },
+    "run_title": "Run",
+    "op_status": {
+      "pending": "Awaiting approval",
+      "committed": "Committed",
+      "rejected": "Rejected",
+      "expired": "Expired"
+    },
+    "lock_action": "Lock the month",
+    "lock_hint": "Lock the books through {date}. The lock is approved in Review.",
+    "lock_hint_blocked": "The lock through {date} can be staged, but blocking items must be resolved before approval.",
+    "staged_toast": "The lock is staged and awaiting approval",
+    "staged_notice": "The lock is awaiting approval in Review.",
+    "view_pending": "Open Review",
+    "stage_failed": "The lock could not be staged"
   }
 }

@@ -128,7 +128,8 @@
     "logout_sandbox": "Avsluta sandbox",
     "trial_days_left": "Provperiod: {days, plural, =1 {1 dag} other {# dagar}} kvar",
     "ext_tic": "Företagsprofil",
-    "ext_invoice_inbox": "Dokumentinkorg"
+    "ext_invoice_inbox": "Dokumentinkorg",
+    "close_run": "Månadsavslut"
   },
   "agentKnowledge": {
     "load_error_title": "Kunde inte läsa in kunskapsprofilen",
@@ -5547,5 +5548,41 @@
     "preset_reports_description": "Rapporter genereras automatiskt när du har tillräckligt med data. Börja med att skapa fakturor eller importera transaktioner.",
     "preset_reports_action": "Skapa faktura",
     "preset_reports_secondary": "Importera transaktioner"
+  },
+  "close_run": {
+    "title": "Månadsavslut",
+    "prev_month": "Föregående månad",
+    "next_month": "Nästa månad",
+    "ready": "Månaden är klar att låsas",
+    "not_ready": "{count, plural, one {# punkt blockerar} other {# punkter blockerar}} låsningen",
+    "already_locked": "Månaden är låst (t.o.m. {date})",
+    "difference": "Differens {amount} kr",
+    "checks": {
+      "unbooked_transactions": "Obokförda transaktioner",
+      "unattested_supplier_invoices": "Leverantörsfakturor att attestera",
+      "bank_unreconciled": "Bankavstämning",
+      "draft_entries": "Utkast till verifikat",
+      "missing_receipts_high_value": "Underlag saknas (belopp över 4 000 kr)"
+    },
+    "status": {
+      "pass": "Klar",
+      "blocker": "Blockerar",
+      "warning": "Varning",
+      "unknown": "Kunde inte kontrolleras"
+    },
+    "run_title": "Körning",
+    "op_status": {
+      "pending": "Väntar på godkännande",
+      "committed": "Genomförd",
+      "rejected": "Avvisad",
+      "expired": "Utgången"
+    },
+    "lock_action": "Lås månaden",
+    "lock_hint": "Lås bokföringen t.o.m. {date}. Låsningen godkänns i Granskning.",
+    "lock_hint_blocked": "Låsning t.o.m. {date} kan förberedas, men blockerande punkter måste åtgärdas innan godkännande.",
+    "staged_toast": "Låsningen är förberedd och väntar på godkännande",
+    "staged_notice": "Låsningen väntar på godkännande i Granskning.",
+    "view_pending": "Öppna Granskning",
+    "stage_failed": "Låsningen kunde inte förberedas"
   }
 }

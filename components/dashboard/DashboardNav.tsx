@@ -38,6 +38,7 @@ import {
   Percent,
   Landmark,
   CalendarClock,
+  CalendarCheck,
   CalendarRange,
   FileCheck,
   FileSpreadsheet,
@@ -118,6 +119,7 @@ type NavLabelKey =
   | 'vat_declaration'
   | 'skattekonto'
   | 'deadlines'
+  | 'close_run'
   | 'periodiseringar'
   | 'year_end'
   | 'annual_report'
@@ -182,6 +184,7 @@ const navItems: NavItem[] = [
   { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'arbeta', requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'] },
   { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'arbeta' },
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
+  { href: '/bookkeeping/close', labelKey: 'close_run', icon: CalendarCheck, group: 'arbeta' },
   { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
   { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
@@ -339,7 +342,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
       return (
         pathname.startsWith('/bookkeeping') &&
         !pathname.startsWith('/bookkeeping/year-end') &&
-        !pathname.startsWith('/bookkeeping/periodiseringar')
+        !pathname.startsWith('/bookkeeping/periodiseringar') &&
+        !pathname.startsWith('/bookkeeping/close')
       )
     }
     if (href === '/bookkeeping/year-end') {

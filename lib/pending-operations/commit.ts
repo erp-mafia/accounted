@@ -1808,6 +1808,72 @@ async function commitUnlockPeriod(
   }
 }
 
+/**
+ * Month-end close run terminal step: advance the company-wide bookkeeping
+ * lock date. Advance-only (retreating the lock is an unlock and stays a
+ * deliberate manual settings action), and the unbooked-transactions hard
+ * gate re-runs at COMMIT time: the ledger may have changed between staging
+ * and approval, and "verified at stage time" must never lock a month that
+ * has since grown unbooked rows (same gate as period-service lockPeriod).
+ */
+async function commitSetBookkeepingLockedThrough(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const lockedThrough = params.locked_through as string
+  if (!lockedThrough || !/^\d{4}-\d{2}-\d{2}$/.test(lockedThrough)) {
+    return { error: 'locked_through krävs (YYYY-MM-DD)', status: 400 }
+  }
+
+  const { data: settings, error: settingsError } = await supabase
+    .from('company_settings')
+    .select('bookkeeping_locked_through')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (settingsError) return { error: settingsError.message, status: 400 }
+
+  const current = (settings?.bookkeeping_locked_through as string | null) ?? null
+  if (current && lockedThrough <= current) {
+    return {
+      error: `Bokföringen är redan låst t.o.m. ${current}. Låsdatumet kan bara flyttas framåt.`,
+      status: 400,
+    }
+  }
+
+  // Hard gate (canonical unbooked predicate, is_business IS NULL, not bare
+  // journal_entry_id): nothing unbooked may remain in the range being locked.
+  let unbookedQuery = supabase
+    .from('transactions')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .lte('date', lockedThrough)
+    .is('is_business', null)
+    .eq('is_ignored', false)
+  if (current) unbookedQuery = unbookedQuery.gt('date', current)
+  const { count: unbookedCount, error: unbookedError } = await unbookedQuery
+  if (unbookedError) return { error: unbookedError.message, status: 400 }
+  if ((unbookedCount ?? 0) > 0) {
+    return {
+      error: `${unbookedCount} obokförda transaktioner i perioden. Bokför eller ignorera dem innan månaden låses.`,
+      status: 400,
+    }
+  }
+
+  const { data: persisted, error: updateError } = await supabase
+    .from('company_settings')
+    .update({ bookkeeping_locked_through: lockedThrough })
+    .eq('company_id', companyId)
+    .select('bookkeeping_locked_through')
+    .maybeSingle()
+  if (updateError) return { error: updateError.message, status: 400 }
+  if (persisted?.bookkeeping_locked_through !== lockedThrough) {
+    return { error: 'Låsdatumet kunde inte sparas.', status: 400 }
+  }
+
+  return { data: { locked_through: lockedThrough, previous: current } }
+}
+
 async function commitUncategorizeTransaction(
   supabase: SupabaseClient,
   userId: string,
@@ -4249,6 +4315,9 @@ async function commitPendingOperationInner(
         break
       case 'unlock_period':
         result = await commitUnlockPeriod(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'set_bookkeeping_locked_through':
+        result = await commitSetBookkeepingLockedThrough(supabase, companyId, pendingOp.params)
         break
       case 'uncategorize_transaction':
         result = await commitUncategorizeTransaction(supabase, userId, companyId, pendingOp.params)

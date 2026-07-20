@@ -2795,3 +2795,8 @@ export const DimensionTaggingApplySchema = z.object({
   dimensions: DimensionsBagSchema,
   reason: z.string().trim().min(3).max(500),
 })
+
+// Month-end close run (lib/close-run): stage the month lock for approval.
+export const CloseRunLockSchema = z.object({
+  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'month must be YYYY-MM'),
+})

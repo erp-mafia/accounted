@@ -89,6 +89,9 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   close_period: 'high',
   lock_period: 'high',
   unlock_period: 'high',
+  // Month-end close run: advancing bookkeeping_locked_through is the
+  // period-lock family (freezes posting for the month) — never bulk-approved.
+  set_bookkeeping_locked_through: 'high',
   set_opening_balances: 'high',
   run_year_end: 'high',
   run_currency_revaluation: 'high',
