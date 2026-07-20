@@ -23,8 +23,8 @@ The journal entry lifecycle is draft, then commit:
 
 1. `createDraftEntry()` creates an uncommitted entry that can still change.
 2. `commitEntry()` posts it. The voucher number is assigned atomically by the
-   `commit_journal_entry` database RPC so that numbering stays strictly
-   sequential per series, as Swedish law requires.
+   `commit_journal_entry` database RPC, which keeps numbering sequential per
+   series. Swedish law requires an unbroken, explainable voucher sequence.
 3. `createJournalEntry()` does both steps in one call.
 
 Two invariants hold for every entry:
@@ -34,14 +34,17 @@ Two invariants hold for every entry:
   with reversal entries (storno): `reverseEntry()` cancels a voucher and
   `correctEntry()` replaces it (`lib/core/bookkeeping/storno-service.ts`).
 
-If a voucher number gap ever occurs, it must be explained and the explanation
-is stored (`voucher_gap_explanations`), following BFNAR 2013:2.
+If a gap still occurs in a voucher series (for example around imported
+history), it must be documented, and the explanation is stored
+(`voucher_gap_explanations`), following BFNAR 2013:2.
 
 ## Legal enforcement lives in the database
 
 The rules above are not conventions; they are enforced by PostgreSQL triggers:
 
-- Committed journal entries are immutable (no UPDATE or DELETE).
+- Committed journal entries cannot be edited or deleted. The only change the
+  triggers permit is the controlled status transition used by the storno flow
+  (marking an entry as reversed).
 - Writes to closed or locked accounting periods are rejected, as are writes
   behind a company-wide lock date.
 - Documents linked to posted entries cannot be deleted; Swedish law requires
