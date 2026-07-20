@@ -130,7 +130,7 @@ describe('buildBokslutReadinessReport', () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(
       baseValidation({
         ready: false,
-        errors: ['3 draft journal entries must be posted or deleted before closing'],
+        errors: ['3 utkast måste bokföras eller raderas innan bokslut'],
         draftCount: 3,
       }),
     )

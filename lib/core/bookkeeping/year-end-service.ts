@@ -45,10 +45,14 @@ export async function validateYearEndReadiness(
     .eq('company_id', companyId)
     .single()
 
+  // The error/warning strings below are Swedish: they render verbatim in the
+  // bokslut wizard (a "stays Swedish" surface per .claude/rules/i18n.md).
+  // The MCP year_end_readiness tool classifies them by regex; keep
+  // extensions/general/mcp-server/server.ts in sync when changing wording.
   if (fetchError || !period) {
     return {
       ready: false,
-      errors: ['Fiscal period not found'],
+      errors: ['Räkenskapsperioden hittades inte'],
       warnings: [],
       draftCount: 0,
       voucherGaps: [],
@@ -61,17 +65,17 @@ export async function validateYearEndReadiness(
   // Check: period must have ended (BFNAR 2017:3 / ÅRL 2:1)
   const today = new Date().toISOString().split('T')[0]
   if (period.period_end > today) {
-    errors.push('Cannot close a fiscal period that has not yet ended')
+    errors.push('Perioden kan inte stängas: slutdatumet har inte passerat ännu')
   }
 
   // Check: period not already closed
   if (period.is_closed) {
-    errors.push('Period is already closed')
+    errors.push('Perioden är redan stängd')
   }
 
   // Check: closing entry doesn't already exist
   if (period.closing_entry_id) {
-    errors.push('Year-end closing entry already exists for this period')
+    errors.push('Bokslutsverifikation finns redan för perioden')
   }
 
   // Check: no draft entries
@@ -84,11 +88,11 @@ export async function validateYearEndReadiness(
 
   const drafts = draftCount ?? 0
   if (drafts > 0) {
-    errors.push(`${drafts} draft journal entries must be posted or deleted before closing`)
+    errors.push(`${drafts} utkast måste bokföras eller raderas innan bokslut`)
   }
 
   // Check: voucher continuity across all series
-  let voucherGaps: VoucherGap[] = []
+  const voucherGaps: VoucherGap[] = []
   const { data: seriesRows } = await supabase
     .from('voucher_sequences')
     .select('voucher_series')
@@ -116,7 +120,7 @@ export async function validateYearEndReadiness(
   }
 
   // Check gap explanations: unexplained gaps block year-end (BFNAR 2013:2 punkt 5.8)
-  let unexplainedGaps: VoucherGap[] = []
+  const unexplainedGaps: VoucherGap[] = []
   if (voucherGaps.length > 0) {
     const { data: explanations } = await supabase
       .from('voucher_gap_explanations')
@@ -135,12 +139,12 @@ export async function validateYearEndReadiness(
       const key = `${gap.series}:${gap.gap_start}:${gap.gap_end}`
       if (explanationSet.has(key)) {
         warnings.push(
-          `Voucher gap in series ${gap.series} (${gap.gap_start}-${gap.gap_end}): documented`
+          `Verifikationsnummerglapp i serie ${gap.series} (${gap.gap_start}-${gap.gap_end}): dokumenterat`
         )
       } else {
         unexplainedGaps.push(gap)
         errors.push(
-          `Unexplained voucher gap in series ${gap.series}: ${gap.gap_start}-${gap.gap_end}`
+          `Oförklarat verifikationsnummerglapp i serie ${gap.series}: ${gap.gap_start}-${gap.gap_end}`
         )
       }
     }
@@ -181,11 +185,11 @@ export async function validateYearEndReadiness(
 
         if (sequenceCounter < actualMax) {
           errors.push(
-            `Sequence counter integrity error in series ${row.voucher_series}: counter=${sequenceCounter} but max voucher=${actualMax}`
+            `Nummerserien i serie ${row.voucher_series} stämmer inte: räknaren står på ${sequenceCounter} men högsta verifikationsnummer är ${actualMax}`
           )
         } else {
           warnings.push(
-            `Sequence counter ahead of actual entries in series ${row.voucher_series}: counter=${sequenceCounter}, max voucher=${actualMax}`
+            `Nummerräknaren ligger före bokförda verifikationer i serie ${row.voucher_series}: räknare=${sequenceCounter}, högsta verifikationsnummer=${actualMax}`
           )
         }
       }
@@ -198,7 +202,7 @@ export async function validateYearEndReadiness(
 
   if (!trialBalanceBalanced) {
     errors.push(
-      `Trial balance is not balanced: debit=${trialBalance.totalDebit}, credit=${trialBalance.totalCredit}`
+      `Råbalansen balanserar inte: debet=${trialBalance.totalDebit}, kredit=${trialBalance.totalCredit}`
     )
   }
 
@@ -211,7 +215,7 @@ export async function validateYearEndReadiness(
     .eq('status', 'posted')
 
   if ((entryCount ?? 0) === 0) {
-    warnings.push('No posted journal entries in this period')
+    warnings.push('Inga bokförda verifikationer i perioden')
   }
 
   // Check: foreign currency items exist but haven't been revalued
@@ -243,14 +247,14 @@ export async function validateYearEndReadiness(
 
     if (((fxReceivables ?? 0) + (fxPayables ?? 0)) > 0) {
       warnings.push(
-        'Open foreign currency items exist but have not been revalued (ÅRL 4:13)'
+        'Öppna poster i utländsk valuta har inte omvärderats (ÅRL 4:13)'
       )
     }
   }
 
   // Check: continuity_verified flag from prior year-end
   if (period.continuity_verified === false) {
-    errors.push('Opening balance continuity check failed for this period: resolve discrepancies before closing')
+    errors.push('IB/UB-kontinuiteten stämmer inte för perioden: åtgärda avvikelserna innan bokslut')
   }
 
   // Check: next period state. A pre-existing next period (from SIE import,
@@ -266,9 +270,9 @@ export async function validateYearEndReadiness(
   const nextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
   if (nextPeriod) {
     if (nextPeriod.opening_balance_entry_id) {
-      errors.push('Next fiscal period already has opening balances posted')
+      errors.push('Nästa räkenskapsperiod har redan ingående balanser bokförda')
     } else {
-      warnings.push('Next fiscal period already exists: opening balances will be booked into it')
+      warnings.push('Nästa räkenskapsperiod finns redan: ingående balanser bokförs i den')
     }
   }
 
@@ -408,6 +412,18 @@ export async function previewYearEndClosing(
     }
   }
 
+  // Advisory check: an AB closing a profit year should normally have booked
+  // bolagsskatt (Dr 8910 / Cr 2512) in the dispositions step. If no 89xx tax
+  // account is among the accounts being closed, the profit is untaxed. This
+  // is a warning, not a blocker: zero tax is legitimate when underskotts-
+  // avdrag zeroes the taxable result. 8999 is excluded: it is the manual
+  // result-closing account, not a tax account.
+  const hasTaxAccount = resultAccountSummary.some(
+    (a) => a.account_number.startsWith('89') && a.account_number !== '8999'
+  )
+  const bolagsskattMissing =
+    closingAccount === '2099' && netResult > ORE_TOLERANCE && !hasTaxAccount
+
   return {
     netResult,
     closingAccount,
@@ -415,6 +431,7 @@ export async function previewYearEndClosing(
     closingLines,
     resultAccountSummary,
     currencyRevaluation,
+    bolagsskattMissing,
   }
 }
 
@@ -442,7 +459,7 @@ export async function executeYearEndClosing(
   // 1. Validate readiness
   const validation = await validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId)
   if (!validation.ready) {
-    throw new Error(`Year-end closing not ready: ${validation.errors.join('; ')}`)
+    throw new Error(`Bokslutet kan inte verkställas: ${validation.errors.join('; ')}`)
   }
 
   // Fetch the period for dates

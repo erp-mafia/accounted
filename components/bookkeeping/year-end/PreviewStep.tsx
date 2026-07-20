@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, AlertTriangle } from 'lucide-react'
 import {
   Table,
   TableBody,
@@ -72,6 +72,27 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
           </div>
         </CardContent>
       </Card>
+
+      {preview.bolagsskattMissing && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-warning-foreground" />
+              Ingen bolagsskatt är bokförd
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-sm">
+              Året visar vinst men ingen skatt på årets resultat (konto 8910) finns bland de konton
+              som stängs. Gå tillbaka till dispositionssteget och boka bolagsskatten innan du
+              verkställer, om inte skattemässigt resultat är noll (t.ex. genom underskottsavdrag).
+            </p>
+            <Button variant="outline" size="sm" onClick={onBack}>
+              Till dispositionssteget
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {preview.currencyRevaluation && preview.currencyRevaluation.items.length > 0 && (
         <Card>

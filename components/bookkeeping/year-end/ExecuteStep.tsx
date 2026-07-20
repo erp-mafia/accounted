@@ -4,12 +4,14 @@ import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
-import { Lock, Loader2 } from 'lucide-react'
+import { Lock, Loader2, AlertTriangle } from 'lucide-react'
 
 interface ExecuteStepProps {
   periodName: string
   isRunning: boolean
   error: string | null
+  /** Advisory: AB closing a profit year with no bolagsskatt booked. */
+  bolagsskattMissing?: boolean
   onBack: () => void
   onExecute: () => Promise<void>
 }
@@ -20,7 +22,7 @@ interface ExecuteStepProps {
  * no further entries can be posted to it and the closing transaction is
  * immutable.
  */
-export function ExecuteStep({ periodName, isRunning, error, onBack, onExecute }: ExecuteStepProps) {
+export function ExecuteStep({ periodName, isRunning, error, bolagsskattMissing, onBack, onExecute }: ExecuteStepProps) {
   const [confirmOpen, setConfirmOpen] = useState(false)
 
   return (
@@ -48,6 +50,16 @@ export function ExecuteStep({ periodName, isRunning, error, onBack, onExecute }:
             Det här går inte att ångra. Om du behöver göra rättelser efter bokslutet använder du
             stornering eller bokar i den nya perioden.
           </p>
+          {bolagsskattMissing && (
+            <div className="rounded-md border border-border p-3 text-sm flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
+              <p>
+                Ingen bolagsskatt är bokförd trots att året visar vinst. Om det inte är avsiktligt
+                (t.ex. underskottsavdrag), gå tillbaka och boka skatten i dispositionssteget innan
+                du verkställer.
+              </p>
+            </div>
+          )}
           {error && (
             <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
               {error}

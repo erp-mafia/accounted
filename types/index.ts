@@ -3062,6 +3062,12 @@ export interface YearEndPreview {
   closingLines: CreateJournalEntryLineInput[]
   resultAccountSummary: { account_number: string; account_name: string; amount: number }[]
   currencyRevaluation: CurrencyRevaluationPreview | null
+  /**
+   * True when an aktiebolag is about to close a profit year with no tax
+   * account (89xx except 8999) among the accounts being closed. Advisory
+   * only, never a blocker: zero tax is legitimate with underskottsavdrag.
+   */
+  bolagsskattMissing: boolean
 }
 
 export interface YearEndResult {

@@ -86,18 +86,37 @@ export default function YearEndPage() {
           return
         }
         const { data } = (await res.json()) as { data: FiscalPeriod[] }
+        const all = data ?? []
         const today = new Date().toISOString().split('T')[0]
-        const eligible = (data ?? []).filter(
+        const eligible = all.filter(
           (p) => !p.is_closed && !p.closing_entry_id && p.period_end <= today,
         )
         // Oldest first: accountants close in order.
         eligible.sort((a, b) => a.period_start.localeCompare(b.period_start))
         if (cancelled) return
-        setPeriods(eligible)
-        setHasAnyPeriods((data ?? []).length > 0)
-        if (!selectedPeriodId && eligible.length > 0) {
+        setHasAnyPeriods(all.length > 0)
+
+        // The URL ?period= param may point anywhere: at an ineligible period
+        // (e.g. a year that has not ended) or, after a company switch, at a
+        // period that does not exist in this company at all. An unknown id is
+        // reset to the first eligible period; a known-but-ineligible one is
+        // kept selectable in the dropdown so the user can navigate away from
+        // it instead of being stuck (the readiness step explains why it
+        // cannot be closed).
+        let options = eligible
+        if (selectedPeriodId) {
+          const known = all.find((p) => p.id === selectedPeriodId)
+          if (!known) {
+            setSelectedPeriodId(eligible.length > 0 ? eligible[0].id : null)
+          } else if (!eligible.some((p) => p.id === selectedPeriodId)) {
+            options = [...eligible, known].sort((a, b) =>
+              a.period_start.localeCompare(b.period_start),
+            )
+          }
+        } else if (eligible.length > 0) {
           setSelectedPeriodId(eligible[0].id)
         }
+        setPeriods(options)
       } catch {
         if (!cancelled) setPeriodsError('Kunde inte hämta perioder')
       }
@@ -256,7 +275,7 @@ export default function YearEndPage() {
         )
       )}
 
-      {showWizard && periods && periods.length > 1 && step !== 'result' && (
+      {showWizard && periods && periods.length > 0 && step !== 'result' && (
         <Card>
           <CardContent className="p-4 flex items-center gap-4">
             <label className="text-sm font-medium shrink-0">Period</label>
@@ -349,6 +368,7 @@ export default function YearEndPage() {
           periodName={report.period.name}
           isRunning={executing}
           error={executeError}
+          bolagsskattMissing={preview?.bolagsskattMissing ?? false}
           onBack={() => setStep('preview')}
           onExecute={executeYearEnd}
         />

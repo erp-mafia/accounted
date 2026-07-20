@@ -72,12 +72,14 @@ describe('gnubok_year_end_readiness: execute', () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue({
       ready: false,
       errors: [
-        '3 draft journal entries must be posted or deleted before closing',
-        'Unexplained voucher gap in series A: 5-7',
-        'Trial balance is not balanced: debit=100, credit=200',
+        // Current Swedish wording from validateYearEndReadiness…
+        '3 utkast måste bokföras eller raderas innan bokslut',
+        'Oförklarat verifikationsnummerglapp i serie A: 5-7',
+        'Råbalansen balanserar inte: debet=100, kredit=200',
+        // …and one legacy English string to prove the fallback still maps.
         'Sequence counter integrity error in series A: counter=3 but max voucher=5',
       ],
-      warnings: ['No posted journal entries in this period'],
+      warnings: ['Inga bokförda verifikationer i perioden'],
       draftCount: 3,
       voucherGaps: [{ series: 'A', gap_start: 5, gap_end: 7 }],
       unexplainedGaps: [{ series: 'A', gap_start: 5, gap_end: 7 }],
