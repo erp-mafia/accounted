@@ -37,9 +37,7 @@ export default async function OnboardingLayout({
     <div className="min-h-screen bg-background flex items-center justify-center">
       <OnboardingBackdrop />
 
-      {/* data-onboarding-panel: the backdrop's drifting clouds treat this
-          column as an obstacle and bounce off it. */}
-      <div data-onboarding-panel className="relative z-10 w-full max-w-lg px-5">
+      <div className="relative z-10 w-full max-w-lg px-5">
         {children}
       </div>
 
