@@ -46,10 +46,12 @@ BEGIN
         ON storno.reverses_id = je.id
        AND storno.source_type = 'storno'
        AND storno.status = 'posted'
+       AND storno.company_id = OLD.company_id
       WHERE je.id = OLD.closing_entry_id
+        AND je.company_id = OLD.company_id
         AND je.status = 'reversed'
     ) THEN
-      RAISE EXCEPTION 'Cannot modify closing_entry_id on period "%" — year-end closing is immutable',
+      RAISE EXCEPTION 'Cannot modify closing_entry_id on period "%": year-end closing is immutable',
         OLD.name;
     END IF;
 

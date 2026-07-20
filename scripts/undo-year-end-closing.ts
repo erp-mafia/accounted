@@ -81,6 +81,12 @@ if (!url || !serviceKey) {
   console.error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY')
   process.exit(1)
 }
+if (!serviceKey.startsWith('eyJ') && !serviceKey.startsWith('sb_secret_')) {
+  console.error(
+    'SUPABASE_SERVICE_ROLE_KEY does not look like a service-role key (expected a JWT or sb_secret_ prefix); check the env file'
+  )
+  process.exit(1)
+}
 if (!COMPANY_ID || !PERIOD_ID) {
   console.error('Usage: --company-id <uuid> --period-id <uuid> [--user-id <uuid>] [--env-file <path>] [--commit]')
   process.exit(1)
@@ -132,13 +138,15 @@ async function main() {
     .from('arsredovisning_submissions')
     .select('id', { count: 'exact', head: true })
     .eq('company_id', COMPANY_ID)
-  if ((submissions ?? 0) > 0) fail('an årsredovisning submission exists: refuse to reopen')
+    .eq('fiscal_period_id', PERIOD_ID)
+  if ((submissions ?? 0) > 0) fail('an årsredovisning submission exists for this period: refuse to reopen')
 
   const { count: signatureRequests } = await supabase
     .from('arsredovisning_signature_requests')
     .select('id', { count: 'exact', head: true })
     .eq('company_id', COMPANY_ID)
-  if ((signatureRequests ?? 0) > 0) fail('an årsredovisning signature request exists: refuse to reopen')
+    .eq('fiscal_period_id', PERIOD_ID)
+  if ((signatureRequests ?? 0) > 0) fail('an årsredovisning signature request exists for this period: refuse to reopen')
 
   const { data: settings } = await supabase
     .from('company_settings')
@@ -353,24 +361,33 @@ async function main() {
     },
     new_state: { is_closed: false, closed_at: null, locked_at: null, closing_entry_id: null },
   })
-  if (auditError) console.warn(`  warning: audit_log insert failed: ${auditError.message}`)
+  if (auditError) {
+    // BFNAR 2013:2 kap. 8: the behandlingshistorik row is part of the undo.
+    // The mutations above have already been applied; exit non-zero so the
+    // operator investigates and re-runs (the script is resumable) instead of
+    // treating the undo as complete without its audit record.
+    fail(`audit_log insert failed after mutations were applied: ${auditError.message}`)
+  }
 
   // ── Verify ─────────────────────────────────────────────────────
   const { data: closingAfter } = await supabase
     .from('journal_entries')
     .select('status')
     .eq('id', closingEntry.id)
+    .eq('company_id', COMPANY_ID)
     .single()
   const { data: periodAfter } = await supabase
     .from('fiscal_periods')
     .select('is_closed, locked_at, closing_entry_id')
     .eq('id', PERIOD_ID)
+    .eq('company_id', COMPANY_ID)
     .single()
   const { data: nextAfter } = nextPeriod
     ? await supabase
         .from('fiscal_periods')
         .select('opening_balance_entry_id, opening_balances_set, continuity_verified')
         .eq('id', nextPeriod.id)
+        .eq('company_id', COMPANY_ID)
         .single()
     : { data: null }
 
