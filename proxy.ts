@@ -18,6 +18,6 @@ export const config = {
      * (AAL2) gate on cookie-authenticated API calls (updateSession short-
      * circuits API routes after that check: see lib/supabase/middleware.ts).
      */
-    '/((?!_next/static|_next/image|favicon.ico|\\.well-known|sw\\.js|sw-register\\.js|manifest\\.json|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|json)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|\\.well-known|sw\\.js|sw-register\\.js|manifest\\.json|manifest\\.webmanifest|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|json)$).*)',
   ],
 }
