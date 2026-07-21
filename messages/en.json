@@ -850,7 +850,21 @@
     "mismatch_title": "Passwords don't match",
     "mismatch_description": "Make sure you entered the same password in both fields.",
     "save_failed_title": "Could not save password",
-    "save_failed_description": "Please try again."
+    "save_failed_description": "Please try again.",
+    "confirm_subtitle": "Confirm to continue to the password reset.",
+    "confirm_button": "Continue",
+    "confirm_verifying": "Verifying...",
+    "confirm_hint": "For security, the link is only used when you click the button.",
+    "code_subtitle": "Enter your email and the one-time code from the email.",
+    "email_label": "Email address",
+    "code_label": "One-time code",
+    "code_placeholder": "6-digit code",
+    "code_button": "Verify code",
+    "code_verifying": "Verifying...",
+    "code_hint": "The code is in the password reset email. If no email arrived, request a new reset from the login page.",
+    "verify_failed_title": "Verification failed",
+    "link_invalid_description": "The link is invalid or has already been used. Enter the one-time code from the email instead, or request a new reset.",
+    "code_invalid_description": "The code is invalid or has expired. Check the code or request a new reset from the login page."
   },
   "customer_detail": {
     "back": "Back to customers",

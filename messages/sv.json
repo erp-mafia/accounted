@@ -850,7 +850,21 @@
     "mismatch_title": "Lösenorden matchar inte",
     "mismatch_description": "Kontrollera att du skrev samma lösenord i båda fälten.",
     "save_failed_title": "Kunde inte spara lösenordet",
-    "save_failed_description": "Försök igen."
+    "save_failed_description": "Försök igen.",
+    "confirm_subtitle": "Bekräfta för att fortsätta till lösenordsåterställningen.",
+    "confirm_button": "Fortsätt",
+    "confirm_verifying": "Verifierar...",
+    "confirm_hint": "Av säkerhetsskäl används länken först när du klickar på knappen.",
+    "code_subtitle": "Ange din e-post och engångskoden från mailet.",
+    "email_label": "E-postadress",
+    "code_label": "Engångskod",
+    "code_placeholder": "6-siffrig kod",
+    "code_button": "Verifiera kod",
+    "code_verifying": "Verifierar...",
+    "code_hint": "Koden finns i mailet om lösenordsåterställning. Hittar du inget mail kan du begära en ny återställning från inloggningssidan.",
+    "verify_failed_title": "Verifieringen misslyckades",
+    "link_invalid_description": "Länken är ogiltig eller har redan använts. Ange engångskoden från mailet i stället, eller begär en ny återställning.",
+    "code_invalid_description": "Koden är ogiltig eller har gått ut. Kontrollera koden eller begär en ny återställning från inloggningssidan."
   },
   "customer_detail": {
     "back": "Tillbaka till kunder",
