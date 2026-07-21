@@ -423,6 +423,25 @@ export const skatteverketExtension: Extension = {
           )
         }
 
+        // Defense in depth for the service-role write below: the stored
+        // user must still be a member of the company that initiated the
+        // flow (membership can be revoked between /authorize and this
+        // callback, and RLS no longer backstops the write). Checked before
+        // the exchange so a rejected flow does not burn the one-shot
+        // authorization code. (#1091)
+        const { data: membership } = await db
+          .from('company_members')
+          .select('user_id')
+          .eq('company_id', companyId)
+          .eq('user_id', userId)
+          .maybeSingle()
+        if (!membership) {
+          return respondWithError(
+            'Behörighet saknas för företaget',
+            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Behörighet saknas för företaget')}`,
+          )
+        }
+
         const redirectUri = (await readSetting('oauth_redirect_uri')) ||
           `${getSkvOauthBaseUrl()}/api/extensions/ext/skatteverket/callback`
 
@@ -481,6 +500,20 @@ export const skatteverketExtension: Extension = {
           return respondWithSuccess(successPath)
         } catch (err) {
           console.error('[skatteverket] Token exchange failed:', err)
+          // The ephemeral flow rows must not outlive the flow: oauth_user_id
+          // in particular holds a user identity and serves no purpose once
+          // the exchange has failed (#1090). Best-effort: a cleanup failure
+          // must not mask the exchange error shown to the user.
+          try {
+            await db
+              .from('extension_data')
+              .delete()
+              .eq('company_id', companyId)
+              .eq('extension_id', 'skatteverket')
+              .in('key', ['oauth_state', 'oauth_user_id', 'oauth_return_to', 'oauth_code_verifier'])
+          } catch (cleanupErr) {
+            log.error('oauth state cleanup after failed exchange failed', cleanupErr, { companyId })
+          }
           // BankID auth codes expire after 5 minutes. Surface timeouts distinctly
           // so the user retries quickly instead of exhausting the code window.
           const message = err instanceof TimeoutError

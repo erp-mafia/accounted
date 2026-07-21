@@ -55,7 +55,10 @@ const STATE = 'state-1'
  * whichever key the chain last filtered on, and the post-exchange cleanup
  * delete resolves via .in().
  */
-function makeServiceSupabase(overrides: Record<string, string | null> = {}) {
+function makeServiceSupabase(
+  overrides: Record<string, string | null> = {},
+  options: { isMember?: boolean } = {},
+) {
   const values: Record<string, string | null> = {
     oauth_state: STATE,
     oauth_user_id: 'user-1',
@@ -64,8 +67,10 @@ function makeServiceSupabase(overrides: Record<string, string | null> = {}) {
     oauth_return_to: '/settings/tax',
     ...overrides,
   }
+  const isMember = options.isMember ?? true
   const gte = vi.fn()
-  const from = vi.fn(() => {
+  const inCalls: string[][] = []
+  const from = vi.fn((table: string) => {
     let key: string | null = null
     const chain: any = {
       select: vi.fn(() => chain),
@@ -75,10 +80,18 @@ function makeServiceSupabase(overrides: Record<string, string | null> = {}) {
         return chain
       }),
       gte: gte.mockImplementation(() => chain),
-      in: vi.fn(() => Promise.resolve({ error: null })),
-      maybeSingle: vi.fn(async () => ({
-        data: key !== null && values[key] != null ? { value: values[key] } : null,
-      })),
+      in: vi.fn((_col: string, keys: string[]) => {
+        inCalls.push(keys)
+        return Promise.resolve({ error: null })
+      }),
+      maybeSingle: vi.fn(async () => {
+        if (table === 'company_members') {
+          return { data: isMember ? { user_id: values.oauth_user_id ?? 'user-1' } : null }
+        }
+        return {
+          data: key !== null && values[key] != null ? { value: values[key] } : null,
+        }
+      }),
       then: (resolve: any, reject: any) => {
         const rows =
           values.oauth_state != null
@@ -89,7 +102,7 @@ function makeServiceSupabase(overrides: Record<string, string | null> = {}) {
     }
     return chain
   })
-  return { from, gte }
+  return { from, gte, inCalls }
 }
 
 /** Cookie-bound client: only consulted by the legacy session fallback. */
@@ -249,5 +262,39 @@ describe('skatteverket OAuth callback', () => {
     const html = await response.text()
     expect(html).toContain('skatteverket-oauth-error')
     expect(mockRefresh).not.toHaveBeenCalled()
+  })
+
+  it('cleans up the ephemeral state rows (incl. oauth_user_id) when the exchange fails', async () => {
+    const service = makeServiceSupabase()
+    mockCreateServiceClient.mockReturnValue(service as any)
+    mockExchange.mockRejectedValueOnce(new Error('exchange boom'))
+
+    await callbackRoute().handler(callbackRequest(`code=abc&state=${STATE}`))
+
+    // The failure path must delete the same ephemeral keys the success
+    // path does: oauth_user_id holds a user identity and must not be
+    // retained past the flow. (#1090)
+    expect(service.inCalls).toHaveLength(1)
+    expect(service.inCalls[0]).toEqual(
+      expect.arrayContaining(['oauth_state', 'oauth_user_id', 'oauth_code_verifier']),
+    )
+  })
+
+  it('rejects the flow when the stored user is no longer a member of the company', async () => {
+    mockCreateServiceClient.mockReturnValue(
+      makeServiceSupabase({}, { isMember: false }) as any,
+    )
+
+    const response = await callbackRoute().handler(
+      callbackRequest(`code=abc&state=${STATE}`),
+    )
+
+    expect(response.status).toBe(200)
+    const html = await response.text()
+    expect(html).toContain('skatteverket-oauth-error')
+    // Rejected before the exchange so the one-shot code is not burned,
+    // and no token write is attempted. (#1091)
+    expect(mockExchange).not.toHaveBeenCalled()
+    expect(mockStoreTokens).not.toHaveBeenCalled()
   })
 })
