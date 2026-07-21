@@ -27,13 +27,13 @@ vi.mock('../lib/post-connect-refresh', () => ({
   runPostConnectRefresh: vi.fn(),
 }))
 
-vi.mock('@/lib/company/context', () => ({
-  requireCompanyId: vi.fn().mockResolvedValue('company-1'),
+const { mockCreateClient, mockCreateServiceClient } = vi.hoisted(() => ({
+  mockCreateClient: vi.fn(),
+  mockCreateServiceClient: vi.fn(),
 }))
-
-const { mockCreateClient } = vi.hoisted(() => ({ mockCreateClient: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({
   createClient: mockCreateClient,
+  createServiceClient: mockCreateServiceClient,
 }))
 
 import { after } from 'next/server'
@@ -49,13 +49,16 @@ const mockRefresh = vi.mocked(runPostConnectRefresh)
 const STATE = 'state-1'
 
 /**
- * Supabase mock covering the callback's extension_data reads (keyed lookups
- * for oauth_state / oauth_redirect_uri / oauth_code_verifier /
- * oauth_return_to) and the post-exchange cleanup delete.
+ * Service-client mock covering the callback's extension_data access:
+ * awaiting the query chain directly returns the oauth_state row listing
+ * (the company resolution), .maybeSingle() returns the per-key setting for
+ * whichever key the chain last filtered on, and the post-exchange cleanup
+ * delete resolves via .in().
  */
-function makeSupabase(overrides: Record<string, string | null> = {}) {
+function makeServiceSupabase(overrides: Record<string, string | null> = {}) {
   const values: Record<string, string | null> = {
     oauth_state: STATE,
+    oauth_user_id: 'user-1',
     oauth_redirect_uri: 'https://app.example/api/extensions/ext/skatteverket/callback',
     oauth_code_verifier: 'verifier-1',
     oauth_return_to: '/settings/tax',
@@ -63,9 +66,6 @@ function makeSupabase(overrides: Record<string, string | null> = {}) {
   }
   const from = vi.fn(() => {
     let key: string | null = null
-    const result = () => ({
-      data: key !== null && values[key] != null ? { value: values[key] } : null,
-    })
     const chain: any = {
       select: vi.fn(() => chain),
       delete: vi.fn(() => chain),
@@ -74,16 +74,28 @@ function makeSupabase(overrides: Record<string, string | null> = {}) {
         return chain
       }),
       in: vi.fn(() => Promise.resolve({ error: null })),
-      single: vi.fn(async () => result()),
-      maybeSingle: vi.fn(async () => result()),
+      maybeSingle: vi.fn(async () => ({
+        data: key !== null && values[key] != null ? { value: values[key] } : null,
+      })),
+      then: (resolve: any, reject: any) => {
+        const rows =
+          values.oauth_state != null
+            ? [{ company_id: 'company-1', value: values.oauth_state }]
+            : []
+        return Promise.resolve({ data: rows }).then(resolve, reject)
+      },
     }
     return chain
   })
+  return { from }
+}
+
+/** Cookie-bound client: only consulted by the legacy session fallback. */
+function makeCookieClient(userId: string | null) {
   return {
     auth: {
-      getUser: vi.fn(async () => ({ data: { user: { id: 'user-1' } } })),
+      getUser: vi.fn(async () => ({ data: { user: userId ? { id: userId } : null } })),
     },
-    from,
   }
 }
 
@@ -105,7 +117,11 @@ function callbackRequest(params: string) {
 describe('skatteverket OAuth callback', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockCreateClient.mockResolvedValue(makeSupabase() as any)
+    mockCreateServiceClient.mockReturnValue(makeServiceSupabase() as any)
+    // No session cookies by default: the callback is served on the pinned
+    // OAuth host (app.gnubok.se), where the user-facing app's session does
+    // not exist. Every happy-path test doubles as a cookie-free proof.
+    mockCreateClient.mockResolvedValue(makeCookieClient(null) as any)
     mockExchange.mockResolvedValue({
       access_token: 'at',
       refresh_token: 'rt',
@@ -144,6 +160,9 @@ describe('skatteverket OAuth callback', () => {
       expect.objectContaining({ access_token: 'at' }),
       'company-1',
     )
+    // The stored oauth_user_id resolved the user; the cookie-bound client
+    // must never be needed on the modern path.
+    expect(mockCreateClient).not.toHaveBeenCalled()
     // The refresh was started eagerly and handed to after() so it survives
     // past the response; it must not gate the response itself.
     expect(refreshStarted).toBe(true)
@@ -162,6 +181,43 @@ describe('skatteverket OAuth callback', () => {
 
     expect(response.status).toBe(200)
     expect(await response.text()).toContain('skatteverket-oauth-success')
+  })
+
+  it('falls back to the session cookie for flows started before oauth_user_id shipped', async () => {
+    mockCreateServiceClient.mockReturnValue(
+      makeServiceSupabase({ oauth_user_id: null }) as any,
+    )
+    mockCreateClient.mockResolvedValue(makeCookieClient('legacy-user') as any)
+    mockRefresh.mockResolvedValue({ synced: true, reconciled: 0 })
+
+    const response = await callbackRoute().handler(
+      callbackRequest(`code=abc&state=${STATE}`),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('skatteverket-oauth-success')
+    expect(mockStoreTokens).toHaveBeenCalledWith(
+      expect.anything(),
+      'legacy-user',
+      expect.objectContaining({ access_token: 'at' }),
+      'company-1',
+    )
+  })
+
+  it('returns the error page when neither a stored user id nor a session exists', async () => {
+    mockCreateServiceClient.mockReturnValue(
+      makeServiceSupabase({ oauth_user_id: null }) as any,
+    )
+
+    const response = await callbackRoute().handler(
+      callbackRequest(`code=abc&state=${STATE}`),
+    )
+
+    expect(response.status).toBe(200)
+    const html = await response.text()
+    expect(html).toContain('skatteverket-oauth-error')
+    expect(mockExchange).not.toHaveBeenCalled()
+    expect(mockRefresh).not.toHaveBeenCalled()
   })
 
   it('returns the error page on a state (CSRF) mismatch without exchanging the code', async () => {

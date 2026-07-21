@@ -1,12 +1,18 @@
 import { NextResponse } from 'next/server'
 import { PUBLIC_OAUTH_METADATA_SCOPES } from '@/lib/auth/api-keys'
+import { resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
 
 /**
  * RFC 8414: OAuth 2.0 Authorization Server Metadata.
  * Tells MCP clients where the authorize/token endpoints are.
+ *
+ * The issuer reflects the (allowlisted) request host: clients that
+ * connected via the legacy app.gnubok.se domain must keep seeing a
+ * self-consistent issuer there, or their issuer validation breaks on
+ * re-auth after the app.accounted.se cutover.
  */
-export async function GET() {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+export async function GET(request: Request) {
+  const appUrl = resolveDiscoveryBaseUrl(request)
 
   return NextResponse.json({
     issuer: appUrl,

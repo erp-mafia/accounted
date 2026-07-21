@@ -23,6 +23,7 @@ import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { useToast } from '@/components/ui/use-toast'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useCapability } from '@/contexts/CompanyContext'
+import { isAllowedSkvPopupOrigin } from '@/lib/skatteverket/popup-origin'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { AgiSubmissionState } from '@/lib/salary/agi-submission-state'
 
@@ -244,7 +245,9 @@ export function AGIPanel(props: AGIPanelProps) {
   // "expired" / not-connected to "Ansluten" without a full page reload.
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
-      if (event.origin !== window.location.origin) return
+      // The popup runs on the pinned SKV OAuth host, which differs from the
+      // app origin after the app.accounted.se cutover.
+      if (!isAllowedSkvPopupOrigin(event.origin, window.location.origin)) return
       // Source-identity check: only the popup this component opened can
       // trigger the handler; a window reference cannot be forged by other
       // same-origin scripts.

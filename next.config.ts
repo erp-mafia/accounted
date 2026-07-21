@@ -68,6 +68,7 @@ const nextConfig: NextConfig = {
     optimizePackageImports: ['recharts', 'date-fns', 'framer-motion'],
   },
   async redirects() {
+    const appUrlForRedirect = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/$/, '')
     return [
       {
         source: '/nyckeltal',
@@ -93,6 +94,28 @@ const nextConfig: NextConfig = {
         destination: 'https://docs.gnubok.se/llms-full.txt',
         permanent: true,
       },
+      // Dual-domain cutover (2026-07): the user-facing app moves to
+      // app.accounted.se; app.gnubok.se stays alive for machine traffic
+      // (MCP connectors, API keys, the Skatteverket OAuth callback,
+      // webhooks, crons). Only browser page traffic is forwarded: /api and
+      // /.well-known must keep answering on the legacy host, and /_next is
+      // excluded so already-open tabs keep loading assets until their next
+      // navigation. The redirect arms itself only once NEXT_PUBLIC_APP_URL
+      // points somewhere other than the legacy host, so merging this is
+      // inert and the actual cutover is the env flip + redeploy. Kept
+      // non-permanent until the cutover has soaked.
+      ...(appUrlForRedirect &&
+      appUrlForRedirect.startsWith('https://') &&
+      !appUrlForRedirect.includes('app.gnubok.se')
+        ? [
+            {
+              source: '/:path((?!api/|\\.well-known/|_next/).*)',
+              has: [{ type: 'host' as const, value: 'app.gnubok.se' }],
+              destination: `${appUrlForRedirect}/:path`,
+              permanent: false,
+            },
+          ]
+        : []),
     ]
   },
   async headers() {

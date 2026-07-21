@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { useCapability } from '@/contexts/CompanyContext'
+import { isAllowedSkvPopupOrigin } from '@/lib/skatteverket/popup-origin'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { CheckCircle2, ExternalLink, ShieldOff, FlaskConical, ShieldAlert } from 'lucide-react'
@@ -130,7 +131,9 @@ function SkatteverketPersonalConnectionCard() {
   // the settings page never navigates and we just re-fetch the status.
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
-      if (event.origin !== window.location.origin) return
+      // The popup runs on the pinned SKV OAuth host, which differs from the
+      // app origin after the app.accounted.se cutover.
+      if (!isAllowedSkvPopupOrigin(event.origin, window.location.origin)) return
       // Source-identity check: only the popup this component opened can
       // trigger the handler; a window reference cannot be forged by other
       // same-origin scripts.

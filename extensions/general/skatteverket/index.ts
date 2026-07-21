@@ -187,6 +187,22 @@ async function requireAgiWriteRole(ctx: ExtensionContext): Promise<NextResponse 
   return null
 }
 
+/**
+ * Base URL for the OAuth redirect_uri registered with Skatteverket in
+ * Utvecklarportalen. Registration changes there are slow, so after the
+ * user-facing app moved to app.accounted.se the redirect_uri stays pinned
+ * to the legacy domain via NEXT_PUBLIC_SKV_OAUTH_BASE_URL (hosted value:
+ * https://app.gnubok.se). Self-hosted deployments leave it unset and the
+ * regular app URL is used.
+ */
+function getSkvOauthBaseUrl(): string {
+  return (
+    process.env.NEXT_PUBLIC_SKV_OAUTH_BASE_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    'http://localhost:3000'
+  )
+}
+
 export const skatteverketExtension: Extension = {
   id: 'skatteverket',
   name: 'Skatteverket Integration',
@@ -212,8 +228,7 @@ export const skatteverketExtension: Extension = {
         if (blocked) return blocked
 
         const state = crypto.randomUUID()
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-        const redirectUri = `${appUrl}/api/extensions/ext/skatteverket/callback`
+        const redirectUri = `${getSkvOauthBaseUrl()}/api/extensions/ext/skatteverket/callback`
 
         // Optional: where to send the user after the BankID round-trip.
         // Allowlisted to internal in-app paths to avoid open-redirect abuse.
@@ -229,8 +244,12 @@ export const skatteverketExtension: Extension = {
         // tokens unless PKCE is present, so we always send it.
         const pkce = generatePkcePair()
 
-        // Store state for CSRF validation in callback
+        // Store state for CSRF validation in callback. The user id is stored
+        // alongside it because the callback runs on the OAuth host (see
+        // getSkvOauthBaseUrl), where the browser carries no session cookies
+        // once the user-facing app lives on its own domain.
         await ctx.settings.set('oauth_state', state)
+        await ctx.settings.set('oauth_user_id', ctx.userId)
         await ctx.settings.set('oauth_redirect_uri', redirectUri)
         await ctx.settings.set('oauth_code_verifier', pkce.verifier)
         if (returnTo) await ctx.settings.set('oauth_return_to', returnTo)
@@ -336,85 +355,68 @@ export const skatteverketExtension: Extension = {
           )
         }
 
-        // Exchange code FIRST: 5-minute expiry, do this before anything else
-        const { createClient } = await import('@/lib/supabase/server')
-        const { requireCompanyId } = await import('@/lib/company/context')
-        const supabase = await createClient()
+        // This callback is served on the OAuth host (see getSkvOauthBaseUrl),
+        // where the browser has no session cookies once the user-facing app
+        // lives on its own domain. The flow is resolved entirely from the
+        // state token: /authorize stored state, user id, redirect_uri and
+        // PKCE verifier keyed on company_id, and the state value is an
+        // unguessable single-use UUID, so the bare lookup by value doubles
+        // as the CSRF check.
+        const { createClient, createServiceClient } = await import('@/lib/supabase/server')
+        const db = createServiceClient()
 
-        // Verify user session (browser should still have cookies)
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
-          // Login redirects always go to a full page: popups can't render the
-          // login form usefully, so this is the one path that keeps a hard
-          // redirect even from inside the popup.
-          return NextResponse.redirect(
-            `${appUrl}/login?redirect=${encodeURIComponent('/reports?tab=vat-declaration')}`
-          )
-        }
-
-        // Resolve the active company: state/redirect_uri were stored keyed on company_id
-        // by ctx.settings.set() in the /authorize handler.
-        let companyId: string
-        try {
-          companyId = await requireCompanyId(supabase, user.id)
-        } catch {
-          return respondWithError(
-            'Inget företag valt',
-            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Inget företag valt')}`,
-          )
-        }
-
-        // Validate CSRF state
-        const { data: settingsData } = await supabase
+        const { data: stateRows } = await db
           .from('extension_data')
-          .select('value')
-          .eq('company_id', companyId)
+          .select('company_id, value')
           .eq('extension_id', 'skatteverket')
           .eq('key', 'oauth_state')
-          .single()
 
-        if (!settingsData || settingsData.value !== state) {
+        const stateMatch = (stateRows ?? []).find((row) => row.value === state)
+        if (!stateMatch) {
           return respondWithError(
             'Ogiltig state-parameter (CSRF)',
             `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Ogiltig state-parameter (CSRF)')}`,
           )
         }
+        const companyId = stateMatch.company_id as string
 
-        // Get the stored redirect URI
-        const { data: redirectData } = await supabase
-          .from('extension_data')
-          .select('value')
-          .eq('company_id', companyId)
-          .eq('extension_id', 'skatteverket')
-          .eq('key', 'oauth_redirect_uri')
-          .single()
+        const readSetting = async (key: string): Promise<string | null> => {
+          const { data } = await db
+            .from('extension_data')
+            .select('value')
+            .eq('company_id', companyId)
+            .eq('extension_id', 'skatteverket')
+            .eq('key', key)
+            .maybeSingle()
+          return (data?.value as string | null) ?? null
+        }
 
-        const redirectUri = redirectData?.value ||
-          `${appUrl}/api/extensions/ext/skatteverket/callback`
+        // Flows that started before oauth_user_id shipped ran on the same
+        // domain as the app and still carry session cookies; fall back to
+        // those so in-flight connects survive the deploy boundary.
+        let userId = await readSetting('oauth_user_id')
+        if (!userId) {
+          const cookieClient = await createClient()
+          const { data: { user } } = await cookieClient.auth.getUser()
+          userId = user?.id ?? null
+        }
+        if (!userId) {
+          return respondWithError(
+            'Sessionen har gått ut. Stäng fliken och försök ansluta igen.',
+            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Sessionen har gått ut')}`,
+          )
+        }
+
+        const redirectUri = (await readSetting('oauth_redirect_uri')) ||
+          `${getSkvOauthBaseUrl()}/api/extensions/ext/skatteverket/callback`
 
         // Retrieve the PKCE verifier stored in /authorize. Optional only for
         // backward compatibility with in-flight flows that started before the
         // PKCE rollout: once those drain, this can be made required.
-        const { data: verifierData } = await supabase
-          .from('extension_data')
-          .select('value')
-          .eq('company_id', companyId)
-          .eq('extension_id', 'skatteverket')
-          .eq('key', 'oauth_code_verifier')
-          .maybeSingle()
-
-        const codeVerifier = (verifierData?.value as string | null) || undefined
+        const codeVerifier = (await readSetting('oauth_code_verifier')) || undefined
 
         // Optional in-app destination set by /authorize?return_to=...
-        const { data: returnToData } = await supabase
-          .from('extension_data')
-          .select('value')
-          .eq('company_id', companyId)
-          .eq('extension_id', 'skatteverket')
-          .eq('key', 'oauth_return_to')
-          .maybeSingle()
-
-        const returnTo = (returnToData?.value as string | null) || null
+        const returnTo = await readSetting('oauth_return_to')
         const successPath = returnTo
           ? `${returnTo}${returnTo.includes('?') ? '&' : '?'}skv_connected=true`
           : `/reports?tab=vat-declaration&skv_connected=true`
@@ -425,15 +427,15 @@ export const skatteverketExtension: Extension = {
 
         try {
           const tokens = await exchangeCodeForTokens(code, redirectUri, codeVerifier)
-          await storeTokens(supabase, user.id, tokens, companyId)
+          await storeTokens(db, userId, tokens, companyId)
 
-          // Clean up CSRF state + the one-shot return_to + PKCE verifier.
-          await supabase
+          // Clean up CSRF state + the one-shot user id/return_to/PKCE verifier.
+          await db
             .from('extension_data')
             .delete()
             .eq('company_id', companyId)
             .eq('extension_id', 'skatteverket')
-            .in('key', ['oauth_state', 'oauth_return_to', 'oauth_code_verifier'])
+            .in('key', ['oauth_state', 'oauth_user_id', 'oauth_return_to', 'oauth_code_verifier'])
 
           // Refresh Skatteverket-derived data AFTER the response is sent.
           // Right-after-consent is still the one reliable window for a
@@ -448,10 +450,10 @@ export const skatteverketExtension: Extension = {
           // alive until the refresh settles; the connect panels do a delayed
           // status refetch to pick up the synced data. Best-effort: a
           // refresh failure must never fail the connect that just succeeded.
-          const refreshPromise = runPostConnectRefresh(supabase, user.id, companyId)
+          const refreshPromise = runPostConnectRefresh(db, userId, companyId)
             .then(() => undefined)
             .catch((refreshErr) => {
-              log.error('post-connect refresh failed', refreshErr, { companyId, userId: user.id })
+              log.error('post-connect refresh failed', refreshErr, { companyId, userId })
             })
           try {
             after(() => refreshPromise)
