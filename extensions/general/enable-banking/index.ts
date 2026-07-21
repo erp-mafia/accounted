@@ -268,7 +268,17 @@ export const enableBankingExtension: Extension = {
             }
           }
 
-          const redirectUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/extensions/enable-banking/callback`
+          // OAuth host pin, same pattern as the Skatteverket extension: the
+          // redirect URL must be one Enable Banking has approved for the
+          // application, and approval of new URLs takes days. Hosted pins
+          // this to the legacy app.gnubok.se domain (already approved);
+          // the callback is state-resolved and exits to an absolute
+          // NEXT_PUBLIC_APP_URL link, so it is cross-domain safe.
+          // Self-hosted leaves the pin unset and uses the app URL.
+          const oauthBaseUrl =
+            process.env.NEXT_PUBLIC_ENABLE_BANKING_OAUTH_BASE_URL ||
+            process.env.NEXT_PUBLIC_APP_URL
+          const redirectUrl = `${oauthBaseUrl}/api/extensions/enable-banking/callback`
 
           // Generate cryptographic state token for CSRF protection
           const oauthState = crypto.randomUUID()
