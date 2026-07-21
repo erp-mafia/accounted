@@ -365,11 +365,27 @@ export const skatteverketExtension: Extension = {
         const { createClient, createServiceClient } = await import('@/lib/supabase/server')
         const db = createServiceClient()
 
-        const { data: stateRows } = await db
+        // States are single-use and short-lived: the recency bound both
+        // caps how long a leaked/phished authorize URL stays completable
+        // (the row expires ten minutes after /authorize refreshed it) and
+        // keeps the row set far below PostgREST's silent 1000-row cap.
+        // value is jsonb, so equality is matched in JS rather than in the
+        // PostgREST filter, where JSON serialization rules would apply.
+        const stateCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+        const { data: stateRows, error: stateError } = await db
           .from('extension_data')
           .select('company_id, value')
           .eq('extension_id', 'skatteverket')
           .eq('key', 'oauth_state')
+          .gte('updated_at', stateCutoff)
+
+        if (stateError) {
+          log.error('oauth state lookup failed', stateError)
+          return respondWithError(
+            'Ett tekniskt fel uppstod. Försök igen.',
+            `/reports?tab=vat-declaration&skv_error=${encodeURIComponent('Ett tekniskt fel uppstod')}`,
+          )
+        }
 
         const stateMatch = (stateRows ?? []).find((row) => row.value === state)
         if (!stateMatch) {

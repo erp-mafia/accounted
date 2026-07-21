@@ -48,7 +48,10 @@ export function resolveDiscoveryBaseUrl(request: Request): string {
 
   if (host === canonicalHost) return canonical
   if (LEGACY_DISCOVERY_HOSTS.has(host)) return `https://${host}`
-  if (host.startsWith('localhost') || host.startsWith('127.0.0.1')) {
+  // Exact hostname match: a prefix check would reflect spoofed hosts like
+  // localhost.evil.example into the discovery documents.
+  const hostname = host.replace(/:\d+$/, '')
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
     return `http://${host}`
   }
   return canonical

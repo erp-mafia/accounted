@@ -64,6 +64,7 @@ function makeServiceSupabase(overrides: Record<string, string | null> = {}) {
     oauth_return_to: '/settings/tax',
     ...overrides,
   }
+  const gte = vi.fn()
   const from = vi.fn(() => {
     let key: string | null = null
     const chain: any = {
@@ -73,6 +74,7 @@ function makeServiceSupabase(overrides: Record<string, string | null> = {}) {
         if (col === 'key') key = val
         return chain
       }),
+      gte: gte.mockImplementation(() => chain),
       in: vi.fn(() => Promise.resolve({ error: null })),
       maybeSingle: vi.fn(async () => ({
         data: key !== null && values[key] != null ? { value: values[key] } : null,
@@ -87,7 +89,7 @@ function makeServiceSupabase(overrides: Record<string, string | null> = {}) {
     }
     return chain
   })
-  return { from }
+  return { from, gte }
 }
 
 /** Cookie-bound client: only consulted by the legacy session fallback. */
@@ -163,6 +165,10 @@ describe('skatteverket OAuth callback', () => {
     // The stored oauth_user_id resolved the user; the cookie-bound client
     // must never be needed on the modern path.
     expect(mockCreateClient).not.toHaveBeenCalled()
+    // The state lookup must be recency-bounded: an old state row (leaked or
+    // phished authorize URL) must not stay completable indefinitely.
+    const service = mockCreateServiceClient.mock.results[0]!.value
+    expect(service.gte).toHaveBeenCalledWith('updated_at', expect.any(String))
     // The refresh was started eagerly and handed to after() so it survives
     // past the response; it must not gate the response itself.
     expect(refreshStarted).toBe(true)

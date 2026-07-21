@@ -43,6 +43,12 @@ describe('resolveDiscoveryBaseUrl', () => {
     )
   })
 
+  it('does not reflect hosts that merely start with localhost or 127.0.0.1', () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', CANONICAL)
+    expect(resolveDiscoveryBaseUrl(requestWithHost('localhost.evil.example'))).toBe(CANONICAL)
+    expect(resolveDiscoveryBaseUrl(requestWithHost('127.0.0.1.evil.example'))).toBe(CANONICAL)
+  })
+
   it('is case-insensitive on the host comparison', () => {
     vi.stubEnv('NEXT_PUBLIC_APP_URL', CANONICAL)
     expect(resolveDiscoveryBaseUrl(requestWithHost('App.Gnubok.SE'))).toBe(
