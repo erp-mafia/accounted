@@ -54,8 +54,8 @@ const warningPatterns: {
     warning: {
       category: 'Representation',
       warningLevel: 'warning',
-      message: 'Måltider kan vara avdragsgilla som representation med max 300 kr per person (exkl. moms). Momsen är inte avdragsgill sedan 2017.',
-      legalBasis: 'IL 16 kap 2§, ML 8:9',
+      message: 'Måltider kan vara avdragsgilla som representation. Inkomstskatteavdraget togs bort 2017, men momsen är avdragsgill på upp till 300 kr/person (exkl. moms) enligt ML 13 kap 24-25 §§.',
+      legalBasis: 'IL 16 kap 2 §, ML 13 kap 24-25 §§',
     },
   },
   {
