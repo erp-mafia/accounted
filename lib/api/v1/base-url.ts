@@ -34,6 +34,71 @@ export function getCanonicalBaseUrl(): string {
  */
 const LEGACY_DISCOVERY_HOSTS = new Set(['app.gnubok.se'])
 
+/**
+ * Guards LEGACY_DISCOVERY_HOSTS against drifting from the registered OAuth
+ * configuration (issue #1093). Two invariants, checked both ways:
+ *
+ * (a) When `NEXT_PUBLIC_SKV_OAUTH_BASE_URL` (the redirect_uri host
+ *     registered with Skatteverket in Utvecklarportalen) is set, its host
+ *     must be reflectable by discovery: either the canonical app host or a
+ *     member of LEGACY_DISCOVERY_HOSTS. Otherwise MCP clients that
+ *     re-authenticate through the pinned host receive an issuer that does
+ *     not match, and AGI/moms staging fails silently.
+ *
+ * (b) Every member of LEGACY_DISCOVERY_HOSTS must be accounted for by the
+ *     known registered configuration: the SKV OAuth pin host or the
+ *     canonical app host. An orphan entry means someone added or kept a
+ *     host that nothing registered actually uses.
+ *
+ * Returns human-readable violations; an empty array means the allowlist and
+ * the registered configuration agree. Called only from
+ * `__tests__/legacy-discovery-hosts.test.ts` (which pins the production
+ * registration), so drift is caught in CI instead of during a production
+ * re-auth near a filing deadline. No runtime behavior depends on it.
+ */
+export function validateLegacyDiscoveryHosts(): string[] {
+  const violations: string[] = []
+
+  let canonicalHost: string | null = null
+  try {
+    canonicalHost = new URL(getCanonicalBaseUrl()).host.toLowerCase()
+  } catch {
+    violations.push(
+      `NEXT_PUBLIC_APP_URL is not a parseable URL: "${process.env.NEXT_PUBLIC_APP_URL}"`,
+    )
+  }
+
+  const skvBase = process.env.NEXT_PUBLIC_SKV_OAUTH_BASE_URL?.trim()
+  let skvHost: string | null = null
+  if (skvBase) {
+    try {
+      skvHost = new URL(skvBase).host.toLowerCase()
+    } catch {
+      violations.push(`NEXT_PUBLIC_SKV_OAUTH_BASE_URL is not a parseable URL: "${skvBase}"`)
+    }
+  }
+
+  if (skvHost && skvHost !== canonicalHost && !LEGACY_DISCOVERY_HOSTS.has(skvHost)) {
+    violations.push(
+      `NEXT_PUBLIC_SKV_OAUTH_BASE_URL host "${skvHost}" is neither the canonical host ` +
+        `("${canonicalHost}") nor in LEGACY_DISCOVERY_HOSTS; discovery would hand ` +
+        `re-authenticating clients a mismatched issuer`,
+    )
+  }
+
+  for (const legacyHost of LEGACY_DISCOVERY_HOSTS) {
+    if (legacyHost !== canonicalHost && legacyHost !== skvHost) {
+      violations.push(
+        `LEGACY_DISCOVERY_HOSTS entry "${legacyHost}" matches neither the canonical host ` +
+          `("${canonicalHost}") nor the NEXT_PUBLIC_SKV_OAUTH_BASE_URL host ` +
+          `("${skvHost ?? 'unset'}"); it is orphaned from the registered configuration`,
+      )
+    }
+  }
+
+  return violations
+}
+
 export function resolveDiscoveryBaseUrl(request: Request): string {
   const canonical = getCanonicalBaseUrl()
   const host = request.headers.get('host')?.trim().toLowerCase()
