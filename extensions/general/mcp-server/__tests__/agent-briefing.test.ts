@@ -4,6 +4,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { tools } from '../server'
+import { RECOMMENDED_WORKFLOW_LOADOUTS, assertRecommendedLoadoutsValid } from '../recommended-tools'
+import { workflowSkills } from '../skills'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -450,5 +452,86 @@ describe('gnubok_get_agent_briefing tool', () => {
       { type: 'api_key' }
     )) as { dimensions?: { enabled: boolean } }
     expect(result.dimensions?.enabled).toBe(false)
+  })
+})
+
+describe('recommended_tools workflow loadouts (issue #1098)', () => {
+  it('every tool name in every loadout exists in the actual tool registry (drift guard)', () => {
+    const known = new Set(tools.map((t) => t.name))
+    for (const loadout of RECOMMENDED_WORKFLOW_LOADOUTS) {
+      const unknown = loadout.tools.filter((name) => !known.has(name))
+      expect(unknown, `workflow "${loadout.workflow}" references unknown tools`).toEqual([])
+    }
+  })
+
+  it('every loadout skill slug exists in the workflow-skill registry', () => {
+    const slugs = new Set(workflowSkills.map((s) => s.slug))
+    for (const loadout of RECOMMENDED_WORKFLOW_LOADOUTS) {
+      expect(slugs.has(loadout.skill), `workflow "${loadout.workflow}" skill "${loadout.skill}"`).toBe(true)
+    }
+  })
+
+  it('workflow keys are unique, stable snake_case, and loadouts are non-empty with a description', () => {
+    const keys = RECOMMENDED_WORKFLOW_LOADOUTS.map((w) => w.workflow)
+    expect(new Set(keys).size).toBe(keys.length)
+    for (const loadout of RECOMMENDED_WORKFLOW_LOADOUTS) {
+      expect(loadout.workflow).toMatch(/^[a-z][a-z0-9_]*$/)
+      expect(loadout.description.length).toBeGreaterThan(0)
+      expect(loadout.tools.length).toBeGreaterThan(0)
+      // No duplicate tool names within a single loadout.
+      expect(new Set(loadout.tools).size).toBe(loadout.tools.length)
+    }
+  })
+
+  it('assertRecommendedLoadoutsValid throws on a tool name missing from the registry', () => {
+    const known = new Set(tools.map((t) => t.name))
+    known.delete('gnubok_categorize_transaction')
+    expect(() => assertRecommendedLoadoutsValid(known)).toThrow(
+      /categorize_month.*unknown tool "gnubok_categorize_transaction"/
+    )
+  })
+
+  it('assertRecommendedLoadoutsValid passes against the real registry (mirrors the module-init guard)', () => {
+    expect(() => assertRecommendedLoadoutsValid(new Set(tools.map((t) => t.name)))).not.toThrow()
+  })
+
+  it('the briefing returns recommended_tools with the expected shape, even for an empty company', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    const supabase = mockSupabase({ profile: null })
+    const result = (await tool.execute(
+      {},
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as {
+      recommended_tools: Array<{ workflow: string; description: string; skill: string; tools: string[] }>
+    }
+    expect(Array.isArray(result.recommended_tools)).toBe(true)
+    expect(result.recommended_tools.length).toBe(RECOMMENDED_WORKFLOW_LOADOUTS.length)
+    for (const entry of result.recommended_tools) {
+      expect(typeof entry.workflow).toBe('string')
+      expect(typeof entry.description).toBe('string')
+      expect(typeof entry.skill).toBe('string')
+      expect(Array.isArray(entry.tools)).toBe(true)
+      expect(entry.tools.every((n) => typeof n === 'string')).toBe(true)
+    }
+    // The static list is returned verbatim, in registry order.
+    expect(result.recommended_tools.map((w) => w.workflow)).toEqual(
+      RECOMMENDED_WORKFLOW_LOADOUTS.map((w) => w.workflow)
+    )
+  })
+
+  it('the briefing outputSchema declares recommended_tools as required', () => {
+    const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    const output = tool.outputSchema as { properties: Record<string, unknown>; required: string[] }
+    expect(output.properties.recommended_tools).toBeDefined()
+    expect(output.required).toContain('recommended_tools')
+  })
+
+  it('the briefing description advertises the loadout and the one-call batch-load pattern', () => {
+    const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    expect(tool.description).toContain('recommended_tools')
+    expect(tool.description).toContain('ToolSearch')
   })
 })

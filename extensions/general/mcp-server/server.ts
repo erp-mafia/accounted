@@ -36,6 +36,7 @@ import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
 import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import type { SkillTier } from './skills'
+import { RECOMMENDED_WORKFLOW_LOADOUTS, assertRecommendedLoadoutsValid } from './recommended-tools'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { normalizeVatRateToDecimal } from '@/lib/vat/supplier-invoice-line-checks'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
@@ -2534,7 +2535,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_agent_briefing',
     title: 'Get Agent Briefing',
-    description: 'Bootstrap this company\'s accountant context in one call: user_name, profile_summary, loaded atoms (metadata only, gnubok_load_skill for bodies), top-30 active memories, dimensions snapshot (when registered). Call once at session start.',
+    description: 'Bootstrap this company\'s accountant context in one call: user_name, profile_summary, atoms (gnubok_load_skill for bodies), top-30 memories, dimensions, and recommended_tools: per-workflow loadouts to batch-load in one ToolSearch select:a,b,c call. Call once at session start.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -2708,8 +2709,28 @@ export const tools: McpTool[] = [
           },
           required: ['resource_uri', 'window_from', 'posted_entries_window', 'top_counterparty_patterns', 'top_supplier_patterns'],
         },
+        recommended_tools: {
+          type: 'array',
+          description:
+            'Per-workflow tool loadouts, ordered by call sequence. Deferred-loading harnesses batch-load a whole cluster in one call (ToolSearch select:a,b,c). Static; validated against the registry.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              workflow: { type: 'string', description: 'Stable workflow key.' },
+              description: { type: 'string' },
+              skill: { type: 'string', description: 'Slug for gnubok_load_skill (full playbook).' },
+              tools: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Exact tool names, ordered.',
+              },
+            },
+            required: ['workflow', 'description', 'skill', 'tools'],
+          },
+        },
       },
-      required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory'],
+      required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
     },
     annotations: {
       readOnlyHint: true,
@@ -2979,6 +3000,15 @@ export const tools: McpTool[] = [
         })),
         ...(dimensionsBlock ? { dimensions: dimensionsBlock } : {}),
         ...(ledgerDigest ? { ledger_context: ledgerDigest } : {}),
+        // Static per-workflow loadouts (issue #1098): lets a deferred-loading
+        // harness batch-load a whole workflow cluster in one call. Validated
+        // against the tool registry at module init (assertRecommendedLoadoutsValid).
+        recommended_tools: RECOMMENDED_WORKFLOW_LOADOUTS.map((w) => ({
+          workflow: w.workflow,
+          description: w.description,
+          skill: w.skill,
+          tools: [...w.tools],
+        })),
       }
     },
   },
@@ -13571,6 +13601,13 @@ export const tools: McpTool[] = [
   },
 ]
 
+// Drift guard for the gnubok_get_agent_briefing recommended_tools loadouts:
+// every referenced tool must exist in the registry above and every referenced
+// skill must be a real workflow skill. Runs at module init so a rename or
+// removal fails the build (and every test importing this module) instead of
+// shipping a briefing that recommends phantom tools.
+assertRecommendedLoadoutsValid(new Set(tools.map((t) => t.name)))
+
 // ── MCP Protocol Handler ─────────────────────────────────────
 
 const SERVER_INFO = {
@@ -13954,6 +13991,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '',
             'Discovery:',
             '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size.',
+            '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster.',
             `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId}); when selecting another company, repeat company_id on every company-data call, including approval.`,
             '• MCP resources use the API key default company. For a selected non-default company, call gnubok_get_agent_briefing with company_id instead of relying on Accounted://company/current or other company-data resources.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',

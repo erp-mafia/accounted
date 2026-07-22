@@ -129,9 +129,16 @@ describe('tools/list payload size guard', () => {
     //     gnubok_delete_absence (inverse of register_absence), both inlining
     //     STAGED_OPERATION_SCHEMA + _meta + company_id routing. Descriptions
     //     trimmed to the floor first; the remainder is wire contract.
+    //   * 57K → 57.5K with recommended_tools on gnubok_get_agent_briefing
+    //     (#1098): the per-workflow tool-loadout array in the outputSchema
+    //     (~175 tokens) lets deferred-loading harnesses batch-load a whole
+    //     workflow cluster in one ToolSearch select call instead of 4-6
+    //     discovery round-trips. Schema prose trimmed to the floor first;
+    //     headroom before the change was ~15 tokens, and the remainder is
+    //     the wire contract agents read the loadout through.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(57_000)
+    expect(approxTokens).toBeLessThan(57_500)
   })
 })
