@@ -4708,11 +4708,17 @@ async function commitPendingOperationInner(
 
   if (finalizeError) {
     // The executor's side-effects already committed (and are immutable); only
-    // the terminal status write failed. Without surfacing this, the row would
-    // sit in 'committing' indefinitely: the expire sweep only targets
-    // 'pending' ops, so nothing would ever reconcile it. Log loudly with the
-    // ids needed to finalize manually; the response still reports success
-    // because the actual work is done.
+    // the terminal status write failed. Log loudly with the ids needed to
+    // finalize manually; the response still reports success because the
+    // actual work is done.
+    //
+    // Runbook (#843): rows left in 'committing' by this failure are picked up
+    // by the daily recovery sweep in
+    // lib/pending-operations/recover-stuck-committing.ts (runs from the
+    // expire cron, threshold 15 min). Grep logs for 'pending_op_recovery' to
+    // see per-row outcomes: 'committed' when posted side-effects were
+    // verified, 'rejected' when no trace was detectable (nothing re-executes
+    // either way).
     log.error('failed to finalize pending_operation to committed (left in committing)', finalizeError, {
       pendingOperationId: pendingOp.id,
       operationType: pendingOp.operation_type,

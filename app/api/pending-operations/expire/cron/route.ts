@@ -2,12 +2,20 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
+import { recoverStuckCommittingOperations } from '@/lib/pending-operations/recover-stuck-committing'
 
 /**
  * GET /api/pending-operations/expire/cron, daily 02:30 UTC.
  *
- * Auto-rejects staged operations that have sat at status='pending' for more
- * than 30 days. AI agents stage operations for human review; when the chat
+ * Two sweeps per run:
+ *
+ * 1. Expiry: auto-rejects staged operations that have sat at status='pending'
+ *    for more than 30 days.
+ * 2. Recovery (#843): drives rows stuck in status='committing' beyond the
+ *    safe threshold to a terminal status; see
+ *    lib/pending-operations/recover-stuck-committing.ts for the semantics.
+ *
+ * AI agents stage operations for human review; when the chat
  * session is abandoned the proposal would otherwise linger in the worklist
  * forever, asking the user to Godkänn/Avvisa something whose context they no
  * longer remember. A 30-day-old proposal has lost its context regardless of
@@ -58,5 +66,18 @@ export const GET = withCronContext('cron.pending_operations_expire', async (_req
     cutoff: cutoff.toISOString(),
   })
 
-  return NextResponse.json({ success: true, expired, cutoff: cutoff.toISOString() })
+  // Recovery sweep for rows stuck in 'committing' (#843). Isolated so a
+  // recovery failure never masks a successful expiry pass: the expiry update
+  // above has already been applied at this point.
+  let recovery: Record<string, unknown>
+  try {
+    recovery = { ...(await recoverStuckCommittingOperations(supabase, { log: ctx.log })) }
+  } catch (err) {
+    // Detail goes to the structured log only; the response carries a static
+    // marker so an operator sees the run partially failed.
+    ctx.log.error('pending_op_recovery sweep failed', err as Error)
+    recovery = { error: 'recovery_sweep_failed' }
+  }
+
+  return NextResponse.json({ success: true, expired, cutoff: cutoff.toISOString(), recovery })
 })
