@@ -13168,7 +13168,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        status: { type: 'string', enum: ['pending', 'committing', 'committed', 'rejected'], description: 'Default: pending' },
+        status: { type: 'string', enum: ['pending', 'committing', 'committed', 'rejected', 'failed_partial'], description: 'Default: pending' },
         risk_level: { type: 'string', enum: ['low', 'medium', 'high'] },
         operation_type: { type: 'string', description: 'Filter to a single operation_type (e.g. "create_invoice")' },
         limit: { type: 'number', minimum: 1, maximum: 200, description: 'Default 50' },
@@ -13408,8 +13408,12 @@ export const tools: McpTool[] = [
         throw new Error(
           op.status === 'rejected'
             ? 'Operation already rejected.'
-            : `Operation already ${op.status}: approved explicitly (likely via the pending UI), ` +
-              'not auto-committed. Reverse or correct the resulting verifikat instead.',
+            : op.status === 'failed_partial'
+              ? 'Operation already resolved as failed_partial: it failed after posting an ' +
+                'irreversible voucher. See result_data.posted_ids for what was posted and ' +
+                'correct it with a storno if needed.'
+              : `Operation already ${op.status}: approved explicitly (likely via the pending UI), ` +
+                'not auto-committed. Reverse or correct the resulting verifikat instead.',
         )
       }
 

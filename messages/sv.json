@@ -505,7 +505,9 @@
     "origin_api": "Föreslaget via API-integration",
     "origin_cron": "Skapat av automatiskt jobb",
     "badge_auto_expired": "Utgick automatiskt",
-    "auto_expired_detail": "Utgick automatiskt efter 30 dagar utan åtgärd. Inget bokfördes."
+    "auto_expired_detail": "Utgick automatiskt efter 30 dagar utan åtgärd. Inget bokfördes.",
+    "badge_failed_partial": "Delvis genomförd",
+    "failed_partial_detail": "Åtgärden avbröts efter att en oåterkallelig bokföring redan hade skett. Det som bokfördes står kvar och kan behöva rättas manuellt."
   },
   "deadlines": {
     "title": "Deadlines",

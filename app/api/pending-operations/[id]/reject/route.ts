@@ -70,9 +70,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           ? 'Operation already rejected.'
           : op.status === 'expired'
             ? 'Operation already expired and can no longer be rejected.'
-            : `Operation already ${op.status}: it was approved explicitly (most likely via the ` +
-              'Att göra / pending UI in parallel), not auto-committed. It can no longer be rejected; ' +
-              'reverse or correct the resulting verifikat instead.'
+            : op.status === 'failed_partial'
+              ? 'Operation already resolved as failed_partial: it failed after posting an ' +
+                'irreversible voucher. It can no longer be rejected; see result_data.posted_ids ' +
+                'for what was posted and correct it with a storno if needed.'
+              : `Operation already ${op.status}: it was approved explicitly (most likely via the ` +
+                'Att göra / pending UI in parallel), not auto-committed. It can no longer be rejected; ' +
+                'reverse or correct the resulting verifikat instead.'
       return NextResponse.json(
         { error: explained, status: op.status },
         { status: 409 }

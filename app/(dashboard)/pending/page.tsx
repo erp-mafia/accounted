@@ -275,6 +275,19 @@ function isAutoExpired(op: PendingOperation): boolean {
   return op.status === 'rejected' && rd?.auto_rejected === true && rd?.reason === 'expired'
 }
 
+/**
+ * failed_partial rows (issue #842): the executor posted an irreversible
+ * voucher/credit note and then failed a later step. The dispatcher persisted
+ * the ids of what WAS posted in result_data.posted_ids; render them so the
+ * reviewer can locate the orphaned entity.
+ */
+function failedPartialPostedIds(op: PendingOperation): string | null {
+  const rd = op.result_data as { posted_ids?: Record<string, string> } | null
+  const entries = Object.entries(rd?.posted_ids ?? {})
+  if (entries.length === 0) return null
+  return entries.map(([key, value]) => `${key}: ${value}`).join(', ')
+}
+
 function formatRelativeTime(dateStr: string): string {
   const now = new Date()
   const date = new Date(dateStr)
@@ -1253,6 +1266,11 @@ export default function PendingOperationsPage() {
                       {t('badge_auto_expired')}
                     </Badge>
                   )}
+                  {op.status === 'failed_partial' && (
+                    <Badge variant="warning" className="ml-1 h-4 px-1.5 py-0 text-[10px]">
+                      {t('badge_failed_partial')}
+                    </Badge>
+                  )}
                 </DataListMeta>
                 {showHighRiskWarning && (
                   <p className="mt-1 flex items-start gap-1 text-xs text-destructive">
@@ -1271,6 +1289,14 @@ export default function PendingOperationsPage() {
                 {isAutoExpired(op) && (
                   <p className="mt-1 text-xs text-muted-foreground">
                     {t('auto_expired_detail')}
+                  </p>
+                )}
+                {op.status === 'failed_partial' && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {t('failed_partial_detail')}
+                    {failedPartialPostedIds(op) && (
+                      <span className="font-mono"> ({failedPartialPostedIds(op)})</span>
+                    )}
                   </p>
                 )}
               </DataListRow>

@@ -21,6 +21,7 @@ const STATUS_LABELS_SV: Record<string, string> = {
   committing: 'godkänns just nu',
   committed: 'godkänd',
   rejected: 'avvisad',
+  failed_partial: 'delvis genomförd',
 }
 
 export const POST = withRouteContext(

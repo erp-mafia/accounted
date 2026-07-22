@@ -505,7 +505,9 @@
     "origin_api": "Suggested via API integration",
     "origin_cron": "Created by a scheduled job",
     "badge_auto_expired": "Expired automatically",
-    "auto_expired_detail": "Expired automatically after 30 days without action. Nothing was booked."
+    "auto_expired_detail": "Expired automatically after 30 days without action. Nothing was booked.",
+    "badge_failed_partial": "Partially completed",
+    "failed_partial_detail": "The action was interrupted after an irreversible posting had already been made. What was posted remains and may need manual correction."
   },
   "deadlines": {
     "title": "Deadlines",

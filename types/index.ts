@@ -2092,7 +2092,11 @@ export type PendingOperationType =
   // Semesterårsavslut: rolls vacation balances into the next year and may
   // post a 2920/2940 drift-adjustment verifikation (Phase 3).
   | 'vacation_year_close'
-export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected'
+// 'failed_partial' (issue #842, DB CHECK widened in 20260722134114): terminal
+// state for ops whose executor posted an irreversible side-effect (voucher,
+// credit note) and then failed a later step. Not re-committable, not pending
+// work; result_data.posted_ids carries the ids of what WAS posted.
+export type PendingOperationStatus = 'pending' | 'committing' | 'committed' | 'rejected' | 'failed_partial'
 
 // 'agent_chat' = the in-app AI chat (DB CHECK widened in migration
 // 20260519090000_actor_type_agent_chat).

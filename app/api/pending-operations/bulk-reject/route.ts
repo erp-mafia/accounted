@@ -16,6 +16,7 @@ const STATUS_LABELS_SV: Record<string, string> = {
   committed: 'godkänd',
   rejected: 'avvisad',
   expired: 'utgången',
+  failed_partial: 'delvis genomförd',
 }
 
 /**

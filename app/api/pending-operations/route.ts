@@ -23,11 +23,19 @@ export const GET = withRouteContext(
     // newer rejections and the "Utgick automatiskt" context would never be seen.
     const orderColumn = status === 'pending' ? 'created_at' : 'resolved_at'
 
+    // 'failed_partial' rows (issue #842: op failed AFTER posting an
+    // irreversible voucher) surface inside the Avvisade tab rather than a
+    // fourth tab: they are resolved-with-failure and must stay visible to the
+    // operator, but a dedicated tab for a rare state would bury it. A direct
+    // ?status=failed_partial query still returns only those rows.
+    const statusesFor = (candidate: string): string[] =>
+      candidate === 'rejected' ? ['rejected', 'failed_partial'] : [candidate]
+
     const listPromise = supabase
       .from('pending_operations')
       .select('*', { count: 'exact' })
       .eq('company_id', companyId)
-      .eq('status', status)
+      .in('status', statusesFor(status))
       .order(orderColumn, { ascending: false, nullsFirst: false })
       .range(offset, offset + limit - 1)
 
@@ -45,7 +53,7 @@ export const GET = withRouteContext(
           .from('pending_operations')
           .select('id', { count: 'exact', head: true })
           .eq('company_id', companyId)
-          .eq('status', candidate),
+          .in('status', statusesFor(candidate)),
       ),
     ])
 
@@ -55,7 +63,7 @@ export const GET = withRouteContext(
       return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
     }
 
-    const counts: Partial<Record<(typeof statuses)[number], number>> = {
+    const counts: Partial<Record<(typeof statuses)[number] | 'failed_partial', number>> = {
       [status]: count ?? 0,
     }
     otherStatuses.forEach((candidate, index) => {
