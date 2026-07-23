@@ -4559,6 +4559,11 @@
     "create_synka": "Sync bank now",
     "create_synka_desc": "Fetches new transactions from your bank",
     "create_synka_desc_last": "Last synced {age}",
+    "source_all_label": "All sources",
+    "source_bank_label": "Bank",
+    "source_bank_other": "Other bank items",
+    "source_skatteverket_label": "Skattekonto",
+    "source_account_fallback": "Account",
     "mode_all": "All",
     "footer_to_handle": "{count, plural, =0 {Nothing to handle} =1 {1 to handle} other {# to handle}}"
   },

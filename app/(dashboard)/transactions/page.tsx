@@ -26,7 +26,7 @@ import {
 import { ChevronDown, EyeOff, Layers, Search, ShieldAlert, Trash2, X } from 'lucide-react'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
-import { ContextPicker } from '@/components/common/ContextPicker'
+import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
 import { AttnLine } from '@/components/ui/attn-line'
 import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
@@ -55,7 +55,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary } from '@/types'
+import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary, CashAccount } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
@@ -104,10 +104,24 @@ const TemplatePicker = dynamic(() => import('@/components/transactions/TemplateP
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
 
+// Source filter for the merged inbox (concept scene 10 account chooser):
+// everything, one cash account ('acct:<id>'), bank rows not yet tied to a
+// registered cash account ('bank:other'), all bank rows ('bank': the fallback
+// split when no cash accounts are registered), or the skattekonto side.
+type SourceFilter = 'all' | 'bank' | 'bank:other' | 'skatteverket' | `acct:${string}`
+
 const SOURCE_FILTER_STORAGE_KEY = 'Accounted:transaction-source-filter:v1'
 
+// Validates a persisted value. Stale acct:<id> entries (account removed or
+// disabled) are caught later by the sourceItems stale-filter guard.
 function isSourceFilter(value: string | null): value is SourceFilter {
-  return value === 'all' || value === 'bank' || value === 'skatteverket'
+  return (
+    value === 'all' ||
+    value === 'bank' ||
+    value === 'bank:other' ||
+    value === 'skatteverket' ||
+    (value?.startsWith('acct:') ?? false)
+  )
 }
 
 function buildInvoiceMap(rows: InvoiceWithCustomer[] | null): Record<string, InvoiceWithCustomer> {
@@ -316,7 +330,8 @@ export default function TransactionsPage() {
   // ever visit the settings panel where the reconnect prompt lives.
   const [skvNeedsReconnect, setSkvNeedsReconnect] = useState(false)
 
-  // One browser-wide source filter shared by the inbox and history views.
+  // One browser-wide source filter, persisted (#1105) so the choice
+  // survives reloads. Defaults to 'all'.
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
 
   useEffect(() => {
@@ -337,6 +352,12 @@ export default function TransactionsPage() {
       // localStorage may be unavailable. The in-memory filter still works.
     }
   }, [])
+  // Registered cash accounts (cash_accounts): the account chooser's rows,
+  // with PSD2 balances when the bank reports them.
+  const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
+  // Cached skattekonto saldo (from the skatteverket extension); null when the
+  // extension is disabled, disconnected, or has no snapshot yet.
+  const [skvSaldo, setSkvSaldo] = useState<number | null>(null)
 
   const { toast } = useToast()
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
@@ -395,6 +416,13 @@ export default function TransactionsPage() {
     if (sourceFilter !== 'skatteverket') {
       for (const tx of uncategorizedTransactions) {
         if (
+          sourceFilter.startsWith('acct:') &&
+          tx.cash_account_id !== sourceFilter.slice('acct:'.length)
+        ) {
+          continue
+        }
+        if (sourceFilter === 'bank:other' && tx.cash_account_id != null) continue
+        if (
           query &&
           !tx.description?.toLowerCase().includes(query) &&
           !tx.date.includes(query) &&
@@ -405,7 +433,7 @@ export default function TransactionsPage() {
         items.push({ source: 'bank', date: tx.date, data: tx })
       }
     }
-    if (sourceFilter !== 'bank') {
+    if (sourceFilter === 'all' || sourceFilter === 'skatteverket') {
       // Inbox only shows SKV rows that need action (no verifikat yet).
       for (const r of skvRows) {
         if (r.journal_entry_id) continue
@@ -428,6 +456,63 @@ export default function TransactionsPage() {
       return 0
     })
   }, [exitingIds, searchTerm, skvRows, sourceFilter, uncategorizedTransactions])
+
+  // Account chooser (concept scene 10): the source picker doubles as a
+  // balance readout. The total sums only SEK ledgers (mixing currencies into
+  // one figure would be a lie) plus the skattekonto saldo when known; null
+  // hides the annotation entirely.
+  const totalSourceBalance = useMemo(() => {
+    const sekBalances = cashAccounts.filter((a) => a.currency === 'SEK' && a.balance != null)
+    if (sekBalances.length === 0 && skvSaldo == null) return null
+    return sekBalances.reduce((sum, a) => sum + (a.balance ?? 0), 0) + (skvSaldo ?? 0)
+  }, [cashAccounts, skvSaldo])
+
+  const hasUnassignedBankRows = useMemo(
+    () => uncategorizedTransactions.some((tx) => tx.cash_account_id == null),
+    [uncategorizedTransactions],
+  )
+
+  const sourceItems = useMemo<ContextPickerItem[]>(() => {
+    const showSkvSource = skvRows.length > 0 || skvSaldo != null
+    const items: ContextPickerItem[] = [
+      {
+        id: 'all',
+        label: t('source_all_label'),
+        annotation: totalSourceBalance != null ? formatCurrency(totalSourceBalance) : undefined,
+      },
+    ]
+    for (const account of cashAccounts) {
+      items.push({
+        id: `acct:${account.id}`,
+        label: `${account.name || t('source_account_fallback')} ${account.ledger_account}`,
+        annotation:
+          account.balance != null ? formatCurrency(account.balance, account.currency) : undefined,
+      })
+    }
+    if (cashAccounts.length === 0 && showSkvSource) {
+      // No registered cash accounts yet: keep the plain bank/skattekonto split.
+      items.push({ id: 'bank', label: t('source_bank_label') })
+    } else if (cashAccounts.length > 0 && hasUnassignedBankRows) {
+      items.push({ id: 'bank:other', label: t('source_bank_other') })
+    }
+    if (showSkvSource) {
+      items.push({
+        id: 'skatteverket',
+        label: t('source_skatteverket_label'),
+        annotation: skvSaldo != null ? formatCurrency(skvSaldo) : undefined,
+      })
+    }
+    return items
+  }, [cashAccounts, hasUnassignedBankRows, skvRows.length, skvSaldo, t, totalSourceBalance])
+
+  // A narrowed filter can go stale (account disabled, skv rows drained,
+  // "övriga" bucket emptied): fall back to everything rather than filtering
+  // the inbox down to an invisible source.
+  useEffect(() => {
+    if (sourceFilter === 'all') return
+    if (!sourceItems.some((item) => item.id === sourceFilter)) setSourceFilter('all')
+  }, [sourceFilter, sourceItems])
+
   const transactionsWithMatches = useMemo(
     () => transactions.filter(
       (transaction) =>
@@ -438,6 +523,25 @@ export default function TransactionsPage() {
   )
 
   const PAGE_SIZE = 200
+
+  // Account chooser rows: the registered, enabled cash accounts. One fetch
+  // per company; balances refresh with the page (bank sync triggers a
+  // router.refresh via the sync toast flow).
+  useEffect(() => {
+    if (!companyId) return
+    let cancelled = false
+    fetch('/api/cash-accounts?enabled_only=true')
+      .then((res) => (res.ok ? res.json() : { data: [] }))
+      .then((json: { data?: CashAccount[] }) => {
+        if (!cancelled) setCashAccounts(json.data ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setCashAccounts([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companyId])
 
   const loadSkvRows = useCallback(async () => {
     // Connection health, fetched alongside the rows: any failure (extension
@@ -465,6 +569,23 @@ export default function TransactionsPage() {
         )
       } catch {
         setSkvNeedsReconnect(false)
+      }
+    })()
+    // Cached saldo snapshot for the account chooser's Skattekonto row.
+    // Any failure just drops the annotation.
+    void (async () => {
+      try {
+        const res = await fetch('/api/extensions/ext/skatteverket/skattekonto/saldo')
+        if (!res.ok) {
+          setSkvSaldo(null)
+          return
+        }
+        const json = (await res.json()) as { data?: { saldoSkatteverket?: number } | null }
+        setSkvSaldo(
+          typeof json.data?.saldoSkatteverket === 'number' ? json.data.saldoSkatteverket : null,
+        )
+      } catch {
+        setSkvSaldo(null)
       }
     })()
     try {
@@ -2218,26 +2339,20 @@ export default function TransactionsPage() {
             {isBatchMode ? t('action_select_multi_end') : t('action_select_multi_start')}
           </Button>
         )}
-        {/* Source picker (convention 8): the one context chip, far right.
-            Merges the old in-list source dropdown; shown once Skatteverket
-            rows exist alongside bank rows. */}
-        {mode === 'inbox' && skvUnmatched.length > 0 && (
+        {/* Account chooser (convention 8): the one context chip, far right.
+            Per-cash-account rows with balances (concept scene 10); hidden
+            only when there is nothing beyond "Alla källor" to choose. */}
+        {mode === 'inbox' && sourceItems.length > 1 && (
           <div className="ml-auto">
             <ContextPicker
               value={sourceFilter}
-              onChange={(id) => setSourceFilter(id as typeof sourceFilter)}
-              triggerLabel={
-                sourceFilter === 'all'
-                  ? t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })
-                  : sourceFilter === 'bank'
-                    ? t('source_bank', { count: uncategorizedTransactions.length })
-                    : t('source_skatteverket', { count: skvUnmatched.length })
-              }
-              items={[
-                { id: 'all', label: t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length }) },
-                { id: 'bank', label: t('source_bank', { count: uncategorizedTransactions.length }) },
-                { id: 'skatteverket', label: t('source_skatteverket', { count: skvUnmatched.length }) },
-              ]}
+              onChange={(id) => handleSourceFilterChange(id as SourceFilter)}
+              triggerLabel={(() => {
+                const active =
+                  sourceItems.find((item) => item.id === sourceFilter) ?? sourceItems[0]
+                return active.annotation ? `${active.label} · ${active.annotation}` : active.label
+              })()}
+              items={sourceItems}
             />
           </div>
         )}
