@@ -307,6 +307,66 @@ body {
   }
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * Enter/exit animation utilities (animate-in / animate-out vocabulary).
+ * The codebase uses the shadcn/tailwindcss-animate classes but no animate
+ * plugin was ever installed, so Tailwind v4 silently dropped them all:
+ * every popover, dialog and slide-over appeared instantly. These implement
+ * the exact subset in use, plugin-free. The duration and ease utilities
+ * compose via Tailwind v4's --tw-duration and --tw-ease variables; the
+ * global prefers-reduced-motion block collapses them like everything else.
+ * ───────────────────────────────────────────────────────────────────────── */
+@keyframes accEnter {
+  from {
+    opacity: var(--tw-enter-opacity, 1);
+    transform: translate3d(var(--tw-enter-translate-x, 0), var(--tw-enter-translate-y, 0), 0)
+      scale3d(var(--tw-enter-scale, 1), var(--tw-enter-scale, 1), 1);
+  }
+}
+@keyframes accExit {
+  to {
+    opacity: var(--tw-exit-opacity, 1);
+    transform: translate3d(var(--tw-exit-translate-x, 0), var(--tw-exit-translate-y, 0), 0)
+      scale3d(var(--tw-exit-scale, 1), var(--tw-exit-scale, 1), 1);
+  }
+}
+@utility animate-in {
+  animation-name: accEnter;
+  animation-duration: var(--tw-duration, 150ms);
+  animation-timing-function: var(--tw-ease, cubic-bezier(0.32, 0.72, 0, 1));
+  animation-fill-mode: both;
+}
+@utility animate-out {
+  animation-name: accExit;
+  animation-duration: var(--tw-duration, 150ms);
+  animation-timing-function: var(--tw-ease, cubic-bezier(0.32, 0.72, 0, 1));
+  animation-fill-mode: both;
+}
+@utility fade-in { --tw-enter-opacity: 0; }
+@utility fade-in-0 { --tw-enter-opacity: 0; }
+@utility fade-out { --tw-exit-opacity: 0; }
+@utility fade-out-0 { --tw-exit-opacity: 0; }
+@utility zoom-in-95 { --tw-enter-scale: 0.95; }
+@utility zoom-out-95 { --tw-exit-scale: 0.95; }
+@utility slide-in-from-top { --tw-enter-translate-y: -100%; }
+@utility slide-in-from-top-1 { --tw-enter-translate-y: -0.25rem; }
+@utility slide-in-from-top-2 { --tw-enter-translate-y: -0.5rem; }
+@utility slide-in-from-top-full { --tw-enter-translate-y: -100%; }
+@utility slide-in-from-bottom { --tw-enter-translate-y: 100%; }
+@utility slide-in-from-bottom-1 { --tw-enter-translate-y: 0.25rem; }
+@utility slide-in-from-bottom-2 { --tw-enter-translate-y: 0.5rem; }
+@utility slide-in-from-left { --tw-enter-translate-x: -100%; }
+@utility slide-in-from-left-1 { --tw-enter-translate-x: -0.25rem; }
+@utility slide-in-from-left-2 { --tw-enter-translate-x: -0.5rem; }
+@utility slide-in-from-right { --tw-enter-translate-x: 100%; }
+@utility slide-in-from-right-2 { --tw-enter-translate-x: 0.5rem; }
+@utility slide-in-from-right-full { --tw-enter-translate-x: 100%; }
+@utility slide-out-to-top { --tw-exit-translate-y: -100%; }
+@utility slide-out-to-bottom { --tw-exit-translate-y: 100%; }
+@utility slide-out-to-left { --tw-exit-translate-x: -100%; }
+@utility slide-out-to-right { --tw-exit-translate-x: 100%; }
+@utility slide-out-to-right-full { --tw-exit-translate-x: 100%; }
+
 /* Staggered entrance animation */
 .stagger-enter > * {
   animation: slideUp var(--duration-slow) var(--ease-out) both;
@@ -366,10 +426,16 @@ body {
 }
 
 @supports (scrollbar-color: auto) {
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: transparent transparent;
-    transition: scrollbar-color 300ms ease-out;
+  /* Layered: the universal transition must not beat Tailwind's layered
+     transition-* utilities (unlayered rules win over layers regardless of
+     specificity: this silently killed every width/margin/color transition
+     in the app). scrollbar-color still animates via the base default. */
+  @layer base {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: transparent transparent;
+      transition: scrollbar-color 300ms ease-out;
+    }
   }
   .is-scrolling {
     scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
