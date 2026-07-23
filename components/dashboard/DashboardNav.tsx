@@ -722,12 +722,20 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
           {/* Nav items in their own scroll container so the user block
               below stays sticky (concept PR 2). */}
-          <div className="flex-1 min-h-0 overflow-y-auto pt-1 pb-2">
-            {collapsed ? (
-              /* The rail/full swap remounts, so each side slides+fades in
-                 while the aside width animates: one smooth movement. */
+          <div className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden pt-1 pb-2">
+            {/* Both states stay mounted and crossfade past each other while
+                the aside width animates: no DOM swap, one continuous motion.
+                The inactive layer is absolute (no layout), faded, nudged
+                sideways and inert. */}
               <nav
-                className="flex flex-col items-center gap-px px-2 animate-in fade-in slide-in-from-right-2 duration-200"
+                aria-hidden={!collapsed}
+                inert={!collapsed ? true : undefined}
+                className={cn(
+                  'flex w-16 flex-col items-center gap-px px-2 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+                  collapsed
+                    ? 'opacity-100 translate-x-0'
+                    : 'pointer-events-none absolute inset-x-0 top-1 opacity-0 -translate-x-3',
+                )}
                 aria-label={tNav('main_navigation')}
               >
                 {railItems.map((item) => renderRailItem(item))}
@@ -757,9 +765,15 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   )
                 })}
               </nav>
-            ) : (
             <nav
-              className="px-3 animate-in fade-in slide-in-from-left-2 duration-200"
+              aria-hidden={collapsed}
+              inert={collapsed ? true : undefined}
+              className={cn(
+                'w-[248px] px-3 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+                collapsed
+                  ? 'pointer-events-none absolute inset-x-0 top-1 opacity-0 translate-x-3'
+                  : 'opacity-100 translate-x-0',
+              )}
               aria-label={tNav('main_navigation')}
             >
               {/* Top section: flat, no header. Hem, Assistent. */}
@@ -838,7 +852,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   </div>
                 ))}
             </nav>
-            )}
           </div>
 
           {/* Trial countdown touchpoint: the paywall is a lifecycle flow, not
