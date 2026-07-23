@@ -123,13 +123,17 @@ describe('PUT /api/settings', () => {
       method: 'PUT',
       body: { aktiekapital: null, antal_aktier: null },
     }), { params: Promise.resolve({}) })
-    expect((await parseJsonResponse(clearResponse)).status).toBe(200)
+    const cleared = await parseJsonResponse<{ data: Record<string, unknown> }>(clearResponse)
+    expect(cleared.status).toBe(200)
+    expect(cleared.body.data.aktiekapital).toBeNull()
+    expect(cleared.body.data.antal_aktier).toBeNull()
   })
 
   it('rejects non-positive aktiekapital and fractional antal_aktier', async () => {
     for (const body of [
       { aktiekapital: 0 },
       { aktiekapital: -25000 },
+      { aktiekapital: 25000.5 },
       { antal_aktier: 0 },
       { antal_aktier: 500.5 },
     ]) {

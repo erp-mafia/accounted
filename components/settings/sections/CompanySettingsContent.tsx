@@ -24,8 +24,11 @@ export function CompanySettingsContent() {
   function handleSave(formData: FormData) {
     // Empty string clears the value (schema accepts null, not '').
     const numberOrNull = (name: string) => {
-      const raw = (formData.get(name) as string).trim()
-      return raw === '' ? null : Number(raw)
+      const raw = String(formData.get(name) ?? '').trim()
+      if (raw === '') return null
+      const parsed = Number(raw)
+      // NaN would serialize to null in JSON and silently clear the value.
+      return Number.isFinite(parsed) ? parsed : null
     }
     const updates: Record<string, unknown> = {
       ...(formData.has('company_name') && { company_name: formData.get('company_name') as string }),

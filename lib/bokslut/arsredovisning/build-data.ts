@@ -535,17 +535,19 @@ async function buildK2Noter(
     const aktiekapital = ak?.aktiekapital ?? null
     const antalAktier = ak?.antal_aktier ?? null
     // Kvotvärde is defined (ABL 1 kap 6 §) as aktiekapital / antal aktier;
-    // deriving it here keeps the filed note internally consistent.
-    const kvotvarde = aktiekapital && antalAktier ? roundOre(aktiekapital / antalAktier) : null
-    if (aktiekapital || antalAktier) {
-      const parts: string[] = []
-      if (aktiekapital) parts.push(`Aktiekapital: ${aktiekapital.toLocaleString('sv-SE')} kr.`)
-      if (antalAktier) parts.push(`Antal aktier: ${antalAktier.toLocaleString('sv-SE')}.`)
-      if (kvotvarde) parts.push(`Kvotvärde per aktie: ${kvotvarde.toLocaleString('sv-SE')} kr.`)
+    // deriving it here keeps the filed note internally consistent. ÅRL
+    // 5 kap 14 § requires BOTH the registered amount and the number of
+    // shares, so a partial pair is treated as missing (warn, no note).
+    if (aktiekapital && antalAktier) {
+      const kvotvarde = roundOre(aktiekapital / antalAktier)
       notes.push({
         number: notes.length + 1,
         title: 'Aktiekapital',
-        body: parts.join(' '),
+        body: [
+          `Aktiekapital: ${aktiekapital.toLocaleString('sv-SE', { maximumFractionDigits: 0 })} kr.`,
+          `Antal aktier: ${antalAktier.toLocaleString('sv-SE')}.`,
+          `Kvotvärde per aktie: ${kvotvarde.toLocaleString('sv-SE')} kr.`,
+        ].join(' '),
       })
     } else {
       // Don't write a "saknas: komplettera" placeholder into the PDF body:       // that text would land in the Bolagsverket-filed document as a user-
@@ -792,17 +794,19 @@ async function buildK3Noter(
     const aktiekapital = ak?.aktiekapital ?? null
     const antalAktier = ak?.antal_aktier ?? null
     // Kvotvärde is defined (ABL 1 kap 6 §) as aktiekapital / antal aktier;
-    // deriving it here keeps the filed note internally consistent.
-    const kvotvarde = aktiekapital && antalAktier ? roundOre(aktiekapital / antalAktier) : null
-    if (aktiekapital || antalAktier) {
-      const parts: string[] = []
-      if (aktiekapital) parts.push(`Aktiekapital: ${aktiekapital.toLocaleString('sv-SE')} kr.`)
-      if (antalAktier) parts.push(`Antal aktier: ${antalAktier.toLocaleString('sv-SE')}.`)
-      if (kvotvarde) parts.push(`Kvotvärde per aktie: ${kvotvarde.toLocaleString('sv-SE')} kr.`)
+    // deriving it here keeps the filed note internally consistent. ÅRL
+    // 5 kap 14 § requires BOTH the registered amount and the number of
+    // shares, so a partial pair is treated as missing (warn, no note).
+    if (aktiekapital && antalAktier) {
+      const kvotvarde = roundOre(aktiekapital / antalAktier)
       notes.push({
         number: notes.length + 1,
         title: 'Aktiekapital',
-        body: parts.join(' '),
+        body: [
+          `Aktiekapital: ${aktiekapital.toLocaleString('sv-SE', { maximumFractionDigits: 0 })} kr.`,
+          `Antal aktier: ${antalAktier.toLocaleString('sv-SE')}.`,
+          `Kvotvärde per aktie: ${kvotvarde.toLocaleString('sv-SE')} kr.`,
+        ].join(' '),
       })
     } else if (isAb) {
       warnings.push(

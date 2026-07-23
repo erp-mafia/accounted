@@ -46,6 +46,7 @@ function makeSupabase(opts: {
   accountingFramework: 'k2' | 'k3'
   entityType?: string
   aktiekapital?: number | null
+  antalAktier?: number | null
   agmDate?: string | null
 }): ChainableMock {
   const from = vi.fn((table: string) => {
@@ -83,7 +84,12 @@ function makeSupabase(opts: {
                   address: { city: 'Stockholm' },
                   entity_type: opts.entityType ?? 'aktiebolag',
                   aktiekapital: opts.aktiekapital ?? null,
-                  antal_aktier: opts.aktiekapital ? 500 : null,
+                  antal_aktier:
+                    opts.antalAktier !== undefined
+                      ? opts.antalAktier
+                      : opts.aktiekapital
+                        ? 500
+                        : null,
                 },
                 error: null,
               }),
@@ -358,6 +364,18 @@ describe('buildArsredovisningData: K3', () => {
     expect(data.warnings.find((w) => w.startsWith('Aktiekapitalnoten saknas'))).toBeDefined()
   })
 
+  it('treats a partial share-capital pair as missing (warns, no note) for K3', async () => {
+    const supabase = makeSupabase({
+      accountingFramework: 'k3',
+      aktiekapital: 25_000,
+      antalAktier: null,
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.noter.find((n) => n.title === 'Aktiekapital')).toBeUndefined()
+    expect(data.warnings.find((w) => w.startsWith('Aktiekapitalnoten saknas'))).toBeDefined()
+  })
+
   it('DROPS the old "K3 noter need manual augmentation" warning text', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
@@ -447,6 +465,18 @@ describe('buildArsredovisningData: K2 byte-equivalence', () => {
     expect(note).toBeDefined()
     expect(note!.body).toContain('Antal aktier: 500.')
     expect(note!.body).toContain('Kvotvärde per aktie: 50 kr.')
+  })
+
+  it('treats a partial share-capital pair as missing (warns, no note) for K2', async () => {
+    const supabase = makeSupabase({
+      accountingFramework: 'k2',
+      aktiekapital: 25_000,
+      antalAktier: null,
+    })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.noter.find((n) => n.title === 'Aktiekapital')).toBeUndefined()
+    expect(data.warnings.find((w) => w.startsWith('Aktiekapitalnoten saknas'))).toBeDefined()
   })
 
   it('does NOT call generateKassaflodesanalys for K2', async () => {

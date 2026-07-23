@@ -6,7 +6,7 @@
 -- at read time to keep a Bolagsverket-filed note internally consistent.
 
 ALTER TABLE public.company_settings
-  ADD COLUMN IF NOT EXISTS aktiekapital numeric,
+  ADD COLUMN IF NOT EXISTS aktiekapital numeric(15,2),
   ADD COLUMN IF NOT EXISTS antal_aktier integer;
 
 COMMENT ON COLUMN public.company_settings.aktiekapital IS
@@ -25,5 +25,14 @@ ALTER TABLE public.company_settings
 ALTER TABLE public.company_settings
   ADD CONSTRAINT company_settings_antal_aktier_positive
   CHECK (antal_aktier IS NULL OR antal_aktier > 0);
+
+-- The aktiekapital note (ÅRL 5 kap 14 §) needs both the registered amount
+-- and the number of shares; a lone value would produce an incomplete
+-- statutory note, so the pair is all-or-nothing.
+ALTER TABLE public.company_settings
+  DROP CONSTRAINT IF EXISTS company_settings_share_capital_pair;
+ALTER TABLE public.company_settings
+  ADD CONSTRAINT company_settings_share_capital_pair
+  CHECK ((aktiekapital IS NULL) = (antal_aktier IS NULL));
 
 NOTIFY pgrst, 'reload schema';

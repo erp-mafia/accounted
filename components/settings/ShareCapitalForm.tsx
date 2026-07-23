@@ -28,8 +28,10 @@ export function ShareCapitalForm({ settings }: ShareCapitalFormProps) {
 
   const capital = Number(aktiekapital)
   const shares = Number(antalAktier)
+  // Mirror UpdateSettingsSchema: whole-krona capital > 0, positive integer
+  // share count. No preview for values the server would reject.
   const kvotvarde =
-    aktiekapital !== '' && antalAktier !== '' && Number.isFinite(capital) && shares > 0
+    Number.isSafeInteger(capital) && capital > 0 && Number.isSafeInteger(shares) && shares > 0
       ? roundOre(capital / shares)
       : null
 
