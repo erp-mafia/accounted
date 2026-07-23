@@ -28,11 +28,12 @@ import {
   DialogClose,
 } from '@/components/ui/dialog'
 import {
-  FiscalYearSelector,
   STORAGE_KEY_PREFIX as FISCAL_YEAR_STORAGE_KEY_PREFIX,
   ALL_YEARS_VALUE as FISCAL_YEAR_ALL_VALUE,
 } from '@/components/common/FiscalYearSelector'
-import { ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Paperclip, AlertTriangle, CircleSlash, Loader2, BookOpen, X, Copy, Lock, Search, SlidersHorizontal, RotateCcw, Rows3 } from 'lucide-react'
+import { FyPicker } from '@/components/common/FyPicker'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Paperclip, CircleSlash, Loader2, BookOpen, X, Copy, Lock, Search, SlidersHorizontal, RotateCcw, Rows3 } from 'lucide-react'
 import { formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -89,6 +90,10 @@ export default function JournalEntryList() {
   const t = useTranslations('journal_list')
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [committingId, setCommittingId] = useState<string | null>(null)
+  // Confirm-before-posting (convention 10): the draft the user is about to
+  // commit, plus the predicted voucher label ("A-218") for the dialog copy.
+  const [commitTarget, setCommitTarget] = useState<JournalEntry | null>(null)
+  const [commitVoucherPreview, setCommitVoucherPreview] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [count, setCount] = useState(0)
@@ -419,6 +424,21 @@ export default function JournalEntryList() {
     setPage(0)
     setSelectedIds(new Set())
     if (mode === 'drafts') setShowMissingOnly(false)
+  }
+
+  // Open the confirm dialog and fetch the predicted voucher number. The
+  // prediction is indicative (numbers are assigned atomically at commit,
+  // and a draft in another period/series may land elsewhere); the success
+  // toast always shows the real one.
+  const openCommitConfirm = (entry: JournalEntry) => {
+    setCommitTarget(entry)
+    setCommitVoucherPreview(null)
+    fetch('/api/bookkeeping/voucher-sequences/next')
+      .then((r) => r.json())
+      .then(({ data }) => {
+        if (data?.next != null) setCommitVoucherPreview(`${data.series}${data.next}`)
+      })
+      .catch(() => {})
   }
 
   const handleCommit = async (entryId: string) => {
@@ -914,20 +934,14 @@ export default function JournalEntryList() {
         >
           <Rows3 className="h-3.5 w-3.5" />
         </Button>
-        {/* Active fiscal-year scope as a direct one-click picker, pushed to the
-            right of the control bar, keeps the räkenskapsår visible per BFL and
-            changeable in one click. Distinct from Filtrera (which now holds only
-            sort / series / date / underlag); previously both just opened the same
-            dialog. The selector persists the choice to localStorage; the first-load
-            scope resolution still happens authoritatively in the period effect. */}
+        {/* The page context picker (convention 8): fiscal-year scope as a
+            chip-dropdown far right in the toolbar, one click to change,
+            always visible per BFL. Persists to localStorage (same key as
+            before); first-load scope resolution still happens
+            authoritatively in the period effect. */}
         {periodHydrated && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground sm:ml-auto">
-            <span className="shrink-0">{t('scope_label')}</span>
-            <FiscalYearSelector
-              value={periodId}
-              onChange={handlePeriodChange}
-              label={null}
-            />
+          <div className="sm:ml-auto">
+            <FyPicker value={periodId} onChange={handlePeriodChange} />
           </div>
         )}
       </div>
@@ -1157,7 +1171,7 @@ export default function JournalEntryList() {
                         <Button
                           size="sm"
                           className="w-full sm:w-auto"
-                          onClick={() => handleCommit(entry.id)}
+                          onClick={() => openCommitConfirm(entry)}
                           disabled={!canWrite || committingId === entry.id}
                           title={!canWrite ? t('read_only_tooltip') : undefined}
                         >
@@ -1306,9 +1320,9 @@ export default function JournalEntryList() {
                             <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
                           </span>
                         ) : (
-                          <span title={t('missing_attachment_tooltip')}>
-                            <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
-                          </span>
+                          <Badge variant="warning" title={t('missing_attachment_tooltip')}>
+                            {t('missing_attachment_chip')}
+                          </Badge>
                         )
                       )
                     )}
@@ -1411,9 +1425,9 @@ export default function JournalEntryList() {
                             <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
                           </span>
                         ) : (
-                          <span title={t('missing_attachment_tooltip')}>
-                            <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground" />
-                          </span>
+                          <Badge variant="warning" title={t('missing_attachment_tooltip')}>
+                            {t('missing_attachment_chip')}
+                          </Badge>
                         )
                       )
                     )}
@@ -1500,6 +1514,39 @@ export default function JournalEntryList() {
           open={!!correctionEntry}
           onOpenChange={(open) => { if (!open) setCorrectionEntry(null) }}
           onCorrected={() => { setCorrectionEntry(null); fetchEntries() }}
+        />
+      )}
+
+      {/* Confirm-before-posting for drafts (convention 10): describes the
+          outcome ("Bokförs som A-218 ...") before the commit runs. */}
+      {commitTarget && (
+        <ConfirmDialog
+          open={!!commitTarget}
+          onOpenChange={(open) => {
+            if (!open && committingId === null) setCommitTarget(null)
+          }}
+          title={t('confirm_post_title')}
+          description={
+            commitVoucherPreview
+              ? t('confirm_post_description', {
+                  voucher: commitVoucherPreview,
+                  description: commitTarget.description || '',
+                  amount: formatCurrency(
+                    ((commitTarget.lines || []) as JournalEntryLine[]).reduce(
+                      (sum, l) => sum + (Number(l.debit_amount) || 0),
+                      0,
+                    ),
+                  ),
+                })
+              : t('confirm_post_description_generic', {
+                  description: commitTarget.description || '',
+                })
+          }
+          confirmLabel={t('post')}
+          onConfirm={async () => {
+            await handleCommit(commitTarget.id)
+            setCommitTarget(null)
+          }}
         />
       )}
 
