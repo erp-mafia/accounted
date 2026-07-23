@@ -658,7 +658,10 @@
     "approve_failed_title": "Godkännande misslyckades",
     "approved_title": "Godkänd",
     "approved_description": "Fakturan har godkänts",
-    "status_picker_aria": "Filtrera på status"
+    "status_picker_aria": "Filtrera på status",
+    "search_placeholder": "Sök leverantörsfaktura …",
+    "status_paid_date": "Betald {date}",
+    "help_body": "Godkännandet attesterar fakturan för betalning. Betalningar prickas av automatiskt när de matchas mot banken, så det finns ingen \"markera som betald\"-knapp här."
   },
   "purchase_orders": {
     "title": "Inköpsorder",

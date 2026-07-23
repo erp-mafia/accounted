@@ -658,7 +658,10 @@
     "approve_failed_title": "Approval failed",
     "approved_title": "Approved",
     "approved_description": "The invoice has been approved",
-    "status_picker_aria": "Filter by status"
+    "status_picker_aria": "Filter by status",
+    "search_placeholder": "Search supplier invoices …",
+    "status_paid_date": "Paid {date}",
+    "help_body": "Approval attests the invoice for payment. Payments are reconciled automatically when they are matched against the bank, so there is no \"mark as paid\" button here."
   },
   "purchase_orders": {
     "title": "Purchase orders",

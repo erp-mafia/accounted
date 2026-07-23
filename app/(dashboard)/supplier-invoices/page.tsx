@@ -4,32 +4,35 @@ import { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Skeleton } from "@/components/ui/skeleton"
+import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Plus, FileInput, Lock } from 'lucide-react'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { FyPicker } from '@/components/common/FyPicker'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { Plus, FileInput, Lock, Search } from 'lucide-react'
 import Link from 'next/link'
-import { PageHeader } from '@/components/ui/page-header'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
-import type { SupplierInvoice } from '@/types'
+import type { FiscalPeriod, SupplierInvoice } from '@/types'
 
 const NewSupplierInvoiceDialog = dynamic(
   () => import('@/components/supplier-invoices/NewSupplierInvoiceDialog'),
   { loading: DialogLoadingSkeleton },
 )
 
-const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
-  registered: 'secondary',
-  approved: 'default',
+// One derivable chip per row (concept scene 21): Registrerad is the "waiting
+// for attest" state (outline), Godkänd the beige ready-to-pay state; paid is
+// the sage exception-free end state.
+const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
+  registered: 'outline',
+  approved: 'secondary',
   paid: 'success',
   partially_paid: 'warning',
   overdue: 'destructive',
@@ -49,6 +52,17 @@ const STATUS_LABEL_KEYS: Record<string, string> = {
   reversed: 'status_reversed',
 }
 
+const TABS = ['all', 'registered', 'approved', 'to_pay', 'paid'] as const
+type ListTab = (typeof TABS)[number]
+
+const TAB_LABEL_KEYS: Record<ListTab, string> = {
+  all: 'tab_all',
+  registered: 'tab_registered',
+  approved: 'tab_approved',
+  to_pay: 'tab_to_pay',
+  paid: 'tab_paid',
+}
+
 export default function SupplierInvoicesPage() {
   const t = useTranslations('supplier_invoices')
   const { canWrite } = useCanWrite()
@@ -57,7 +71,11 @@ export default function SupplierInvoicesPage() {
   const searchParams = useSearchParams()
   const [invoices, setInvoices] = useState<(SupplierInvoice & { supplier?: { id: string; name: string } })[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState('all')
+  const [activeTab, setActiveTab] = useState<ListTab>('all')
+  const [searchTerm, setSearchTerm] = useState('')
+  // Fiscal-year scope (convention 8): null = all years.
+  const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
+  const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
   const [approvingId, setApprovingId] = useState<string | null>(null)
 
   // The "Registrera leverantörsfaktura" modal is driven by the URL (?new=1,
@@ -101,16 +119,33 @@ export default function SupplierInvoicesPage() {
 
   // "Att betala" is the full payment queue: registered invoices are already
   // booked as debt (2440), so they belong here too. Approval stays the gate
-  // for paying, not for visibility; unapproved rows get an inline approve.
+  // for paying, not for visibility; unapproved rows get a hover approve.
   const filteredInvoices = invoices.filter((inv) => {
-    switch (activeTab) {
-      case 'registered': return inv.status === 'registered'
-      case 'approved': return inv.status === 'approved'
-      case 'to_pay': return inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue'
-      case 'paid': return inv.status === 'paid'
-      default: return true
-    }
+    const matchesTab = (() => {
+      switch (activeTab) {
+        case 'registered': return inv.status === 'registered'
+        case 'approved': return inv.status === 'approved'
+        case 'to_pay': return inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue'
+        case 'paid': return inv.status === 'paid'
+        default: return true
+      }
+    })()
+    const query = searchTerm.trim().toLowerCase()
+    const matchesSearch =
+      !query ||
+      (inv.supplier?.name ?? '').toLowerCase().includes(query) ||
+      (inv.supplier_invoice_number ?? '').toLowerCase().includes(query) ||
+      String(inv.arrival_number ?? '').includes(query)
+    const matchesFy =
+      !fyPeriod ||
+      (inv.invoice_date >= fyPeriod.period_start && inv.invoice_date <= fyPeriod.period_end)
+    return matchesTab && matchesSearch && matchesFy
   })
+
+  const registeredCount = invoices.filter((inv) => inv.status === 'registered').length
+  const toPayCount = invoices.filter(
+    (inv) => inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue',
+  ).length
 
   async function handleApprove(id: string) {
     setApprovingId(id)
@@ -136,142 +171,200 @@ export default function SupplierInvoicesPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader
-        title={t('title')}
-        action={
-          canWrite ? (
-            <Button onClick={openNewInvoice}>
-              <Plus className="mr-2 h-4 w-4" />
-              {t('register_invoice')}
-            </Button>
-          ) : (
-            <Button
-              disabled
-              title={t('viewer_disabled_tooltip')}
+      {/* Page header (concept scene 21): title + help + primary action.
+          The help popover carries the payment model (convention 7): approval
+          attests for payment; payments reconcile via bank matching, so there
+          is deliberately no mark-as-paid button here. */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <span className="flex items-center gap-2">
+          <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+          <HelpPopover>{t('help_body')}</HelpPopover>
+        </span>
+        {canWrite ? (
+          <Button onClick={openNewInvoice}>
+            <Plus className="mr-2 h-4 w-4" />
+            {t('register_invoice')}
+          </Button>
+        ) : (
+          <Button disabled title={t('viewer_disabled_tooltip')}>
+            <Lock className="mr-2 h-4 w-4" />
+            {t('register_invoice')}
+          </Button>
+        )}
+      </div>
+
+      {/* Toolbar: seg + sök + FyPicker far right (convention 8) */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
+          {TABS.map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
+                activeTab === tab
+                  ? 'border border-border bg-card font-medium text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
             >
-              <Lock className="mr-2 h-4 w-4" />
-              {t('register_invoice')}
-            </Button>
-          )
-        }
-      />
+              {t(TAB_LABEL_KEYS[tab])}
+              {tab === 'registered' && registeredCount > 0 && (
+                <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
+                  {registeredCount}
+                </span>
+              )}
+              {tab === 'to_pay' && toPayCount > 0 && (
+                <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
+                  {toPayCount}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        <div className="relative min-w-[190px] max-w-xs flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder={t('search_placeholder')}
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="h-9 pl-10"
+          />
+        </div>
+        <div className="ml-auto">
+          <FyPicker
+            value={fyPeriodId}
+            onChange={(periodId, period) => {
+              setFyPeriodId(periodId)
+              setFyPeriod(period ?? null)
+            }}
+            includeAllOption
+          />
+        </div>
+      </div>
 
-      {/* Tabs */}
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
-          <TabsTrigger value="all">{t('tab_all')}</TabsTrigger>
-          <TabsTrigger value="registered">{t('tab_registered')}</TabsTrigger>
-          <TabsTrigger value="approved">{t('tab_approved')}</TabsTrigger>
-          <TabsTrigger value="to_pay">{t('tab_to_pay')}</TabsTrigger>
-          <TabsTrigger value="paid">{t('tab_paid')}</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value={activeTab}>
-          <Card>
-            <CardContent className="p-0">
-            {isLoading ? (
-              <div>
-                <div className="p-3 border-b border-border">
-                  <Skeleton className="h-4 w-full" />
-                </div>
-                {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="flex items-center gap-4 p-3 border-b border-border last:border-0">
-                    <Skeleton className="h-4 w-12" />
-                    <Skeleton className="h-4 w-28" />
-                    <Skeleton className="h-4 w-20" />
-                    <Skeleton className="h-4 w-20" />
-                    <Skeleton className="h-4 w-20" />
-                    <Skeleton className="h-4 w-20  ml-auto" />
-                    <Skeleton className="h-5 w-16" />
-                  </div>
-                ))}
-              </div>
-            ) : filteredInvoices.length === 0 ? (
-              <DataListEmpty
-                icon={<FileInput className="h-6 w-6" />}
-                title={t('empty_title')}
-                description={
-                  activeTab === 'all'
-                    ? t('empty_description_all')
-                    : t('empty_description_category')
-                }
-                action={
-                  activeTab === 'all' && canWrite ? (
-                    <Button onClick={openNewInvoice}>{t('register_invoice')}</Button>
-                  ) : undefined
-                }
-              />
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t('th_arrival')}</TableHead>
-                    <TableHead>{t('th_supplier')}</TableHead>
-                    <TableHead>{t('th_invoice_number')}</TableHead>
-                    <TableHead>{t('th_invoice_date')}</TableHead>
-                    <TableHead>{t('th_due_date')}</TableHead>
-                    <TableHead className="text-right">{t('th_amount')}</TableHead>
-                    <TableHead className="text-right">{t('th_remaining')}</TableHead>
-                    <TableHead>{t('th_status')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody className="stagger-enter">
-                  {filteredInvoices.map((inv) => (
-                    <TableRow key={inv.id}>
-                      <TableCell className="tabular-nums">{inv.arrival_number}</TableCell>
-                      <TableCell>
-                        <Link href={`/suppliers/${inv.supplier_id}`} className="hover:underline">
-                          {inv.supplier?.name || '-'}
-                        </Link>
-                      </TableCell>
-                      <TableCell>
-                        <Link href={`/supplier-invoices/${inv.id}`} className="text-primary hover:underline">
-                          {inv.supplier_invoice_number}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="tabular-nums">{formatDate(inv.invoice_date)}</TableCell>
-                      <TableCell className="tabular-nums">{formatDate(inv.due_date)}</TableCell>
-                      {/* Belopp rounds like the detail page when the invoice's
-                          öresavrundning flag is on; "kvar att betala" stays
-                          öre-exact (it is the actual outstanding debt). */}
-                      <TableCell className="text-right tabular-nums">
-                        {formatCurrency(getDisplayTotal(
-                          { total: inv.total, currency: inv.currency, ore_rounding: inv.ore_rounding },
-                          { ore_rounding: false },
-                        ).displayed, inv.currency)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{formatCurrency(inv.remaining_amount, inv.currency)}</TableCell>
-                      <TableCell>
-                        {activeTab === 'to_pay' && inv.status === 'registered' ? (
-                          <div className="flex items-center gap-2">
-                            <Badge variant="warning" className="whitespace-nowrap">{t('not_approved')}</Badge>
-                            {!inv.is_credit_note && canWrite && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 px-2 text-xs"
-                                onClick={() => handleApprove(inv.id)}
-                                disabled={approvingId !== null}
-                              >
-                                {t('approve')}
-                              </Button>
-                            )}
-                          </div>
-                        ) : (
-                          <Badge variant={STATUS_VARIANTS[inv.status] || 'secondary'}>
-                            {STATUS_LABEL_KEYS[inv.status] ? t(STATUS_LABEL_KEYS[inv.status]) : inv.status}
-                          </Badge>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+      {isLoading ? (
+        <div className="space-y-3">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex items-center gap-4 px-4 py-3">
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-4 w-20 flex-1" />
+              <Skeleton className="h-4 w-20" />
+              <Skeleton className="h-5 w-16" />
+            </div>
+          ))}
+        </div>
+      ) : filteredInvoices.length === 0 ? (
+        <DataListEmpty
+          icon={<FileInput className="h-6 w-6" />}
+          title={t('empty_title')}
+          description={
+            activeTab === 'all' && !searchTerm
+              ? t('empty_description_all')
+              : t('empty_description_category')
+          }
+          action={
+            activeTab === 'all' && !searchTerm && canWrite ? (
+              <Button onClick={openNewInvoice}>{t('register_invoice')}</Button>
+            ) : undefined
+          }
+        />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-[13px]">
+            <thead>
+              <tr>
+                <th className={cn(TH_CLASS, 'w-full')}>{t('th_supplier')}</th>
+                <th className={TH_CLASS}>{t('th_invoice_number')}</th>
+                <th className={cn(TH_CLASS, 'hidden text-right md:table-cell')}>{t('th_invoice_date')}</th>
+                <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>{t('th_due_date')}</th>
+                <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
+                <th className={cn(TH_CLASS, 'hidden text-right lg:table-cell')}>{t('th_remaining')}</th>
+                <th className={TH_CLASS}>{t('th_status')}</th>
+                <th className={cn(TH_CLASS, 'w-[96px]')} aria-hidden="true"></th>
+              </tr>
+            </thead>
+            <tbody className="stagger-enter">
+              {filteredInvoices.map((inv) => {
+                const chipVariant = STATUS_VARIANTS[inv.status] || 'secondary'
+                const chipLabel =
+                  inv.status === 'paid' && inv.paid_at
+                    ? t('status_paid_date', { date: formatDate(inv.paid_at) })
+                    : STATUS_LABEL_KEYS[inv.status]
+                      ? t(STATUS_LABEL_KEYS[inv.status])
+                      : inv.status
+                const canApprove =
+                  inv.status === 'registered' && !inv.is_credit_note && canWrite
+                return (
+                  <tr
+                    key={inv.id}
+                    className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
+                    onClick={() => router.push(`/supplier-invoices/${inv.id}`)}
+                  >
+                    <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                      <span className="block truncate">{inv.supplier?.name || '-'}</span>
+                    </td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
+                      <Link
+                        href={`/supplier-invoices/${inv.id}`}
+                        className="hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {inv.supplier_invoice_number}
+                      </Link>
+                    </td>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground md:table-cell')}>
+                      {formatDate(inv.invoice_date)}
+                    </td>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                      {formatDate(inv.due_date)}
+                    </td>
+                    {/* Belopp rounds like the detail page when the invoice's
+                        öresavrundning flag is on; "kvar att betala" stays
+                        öre-exact (it is the actual outstanding debt). */}
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums sensitive-field')}>
+                      {formatCurrency(getDisplayTotal(
+                        { total: inv.total, currency: inv.currency, ore_rounding: inv.ore_rounding },
+                        { ore_rounding: false },
+                      ).displayed, inv.currency)}
+                    </td>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums sensitive-field lg:table-cell')}>
+                      {formatCurrency(inv.remaining_amount, inv.currency)}
+                    </td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                      <Badge variant={chipVariant} className="font-normal">
+                        {chipLabel}
+                      </Badge>
+                    </td>
+                    {/* Attest as a hover action on registered rows (concept):
+                        approval gates payment, so it lives right on the row. */}
+                    <td
+                      className={cn(TD_CLASS, 'whitespace-nowrap text-right')}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {canApprove && (
+                        <button
+                          type="button"
+                          className={cn(
+                            QUIET_LINK_CLASS,
+                            'opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover:opacity-100',
+                            approvingId !== null && 'pointer-events-none opacity-50',
+                          )}
+                          onClick={() => handleApprove(inv.id)}
+                        >
+                          {t('approve')}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {showNewInvoice && (
         <NewSupplierInvoiceDialog
