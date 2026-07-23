@@ -12,23 +12,18 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { FyPicker } from '@/components/common/FyPicker'
+import { ContextPicker } from '@/components/common/ContextPicker'
 import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
 import { useUiState } from '@/lib/hooks/use-ui-state'
 import { resolveInitialMode } from '@/lib/ui-state/client'
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-} from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
-import { Plus, Search, ReceiptText, Repeat, FileInput, Check } from 'lucide-react'
+import { Plus, Search, ReceiptText, Repeat, FileInput } from 'lucide-react'
 import { EmptyInvoices } from '@/components/ui/empty-state'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -210,10 +205,6 @@ export default function InvoicesPage() {
     },
   ]
 
-  const activeMoreTab = (MORE_TABS as readonly string[]).includes(activeTab)
-    ? (activeTab as (typeof MORE_TABS)[number])
-    : null
-
   // One derivable status chip per row (concept scene 15). Doc-type markers
   // (proforma/följesedel/självfaktura) only appear in views where the type
   // isn't already implied.
@@ -261,64 +252,29 @@ export default function InvoicesPage() {
         />
       </div>
 
-      {/* Toolbar: seg + Fler-meny + sök + FyPicker far right (convention 8) */}
+      {/* Toolbar: one status chip-picker (founder direction: the status
+          views live behind a filter chip, not a seg), sök, FyPicker far
+          right. Counts ride as row annotations and on the trigger. */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          {SEG_TABS.map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab}
-              onClick={() => {
-                setActiveTab(tab)
-                resetPaging()
-              }}
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-                activeTab === tab
-                  ? 'border border-border bg-card font-medium text-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {t(TAB_LABEL_KEYS[tab])}
-              {tab === 'overdue' && overdueCount > 0 && (
-                <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                  {overdueCount}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-        {/* Low-frequency views behind a quiet "Fler …" menu (concept) */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              className={cn(
-                QUIET_LINK_CLASS,
-                activeMoreTab && 'text-foreground',
-              )}
-              aria-haspopup="menu"
-            >
-              {activeMoreTab ? t(TAB_LABEL_KEYS[activeMoreTab]) : t('more_views')}
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-[11rem]">
-            {MORE_TABS.map((tab) => (
-              <DropdownMenuItem
-                key={tab}
-                onClick={() => {
-                  setActiveTab(tab)
-                  resetPaging()
-                }}
-              >
-                <span className="min-w-0 flex-1">{t(TAB_LABEL_KEYS[tab])}</span>
-                {activeTab === tab && <Check className="h-3.5 w-3.5 text-primary" />}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <ContextPicker
+          value={activeTab}
+          onChange={(id) => {
+            setActiveTab(id as ListTab)
+            resetPaging()
+          }}
+          ariaLabel={t('status_picker_aria')}
+          triggerLabel={
+            activeTab === 'overdue' && overdueCount > 0
+              ? `${t(TAB_LABEL_KEYS[activeTab])} · ${overdueCount}`
+              : t(TAB_LABEL_KEYS[activeTab])
+          }
+          items={[...SEG_TABS, ...MORE_TABS].map((tab) => ({
+            id: tab,
+            label: t(TAB_LABEL_KEYS[tab]),
+            annotation:
+              tab === 'overdue' && overdueCount > 0 ? String(overdueCount) : undefined,
+          }))}
+        />
         <div className="relative min-w-[190px] max-w-xs flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input

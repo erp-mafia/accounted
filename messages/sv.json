@@ -657,7 +657,8 @@
     "approve": "Godkänn",
     "approve_failed_title": "Godkännande misslyckades",
     "approved_title": "Godkänd",
-    "approved_description": "Fakturan har godkänts"
+    "approved_description": "Fakturan har godkänts",
+    "status_picker_aria": "Filtrera på status"
   },
   "purchase_orders": {
     "title": "Inköpsorder",
@@ -5040,7 +5041,8 @@
     "create_self": "Självfaktura",
     "create_self_desc": "Registrera en självfaktura från din kund",
     "status_overdue_days": "Förfallen {days} dgr",
-    "status_paid_date": "Betald {date}"
+    "status_paid_date": "Betald {date}",
+    "status_picker_aria": "Filtrera på status"
   },
   "dashboard": {
     "skv_promo_title": "Koppla Skatteverket",

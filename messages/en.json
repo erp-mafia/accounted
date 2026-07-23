@@ -657,7 +657,8 @@
     "approve": "Approve",
     "approve_failed_title": "Approval failed",
     "approved_title": "Approved",
-    "approved_description": "The invoice has been approved"
+    "approved_description": "The invoice has been approved",
+    "status_picker_aria": "Filter by status"
   },
   "purchase_orders": {
     "title": "Purchase orders",
@@ -5040,7 +5041,8 @@
     "create_self": "Self-billing invoice",
     "create_self_desc": "Register a self-billing invoice from your customer",
     "status_overdue_days": "Overdue {days} d",
-    "status_paid_date": "Paid {date}"
+    "status_paid_date": "Paid {date}",
+    "status_picker_aria": "Filter by status"
   },
   "dashboard": {
     "skv_promo_title": "Connect Skatteverket",
