@@ -108,7 +108,7 @@ export default async function DashboardLayout({
       >
         <AgentSheetProvider>
           <CompanyTabSync />
-          <div className="min-h-screen bg-frame">
+          <div className="min-h-screen bg-frame md:flex md:flex-col">
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -199,7 +199,7 @@ export default async function DashboardLayout({
       <CompanyProvider value={companyContextValue}>
         <AgentSheetProvider>
           <CompanyTabSync />
-          <div className="min-h-screen bg-frame">
+          <div className="min-h-screen bg-frame md:flex md:flex-col">
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -278,7 +278,7 @@ export default async function DashboardLayout({
         }}
       >
         <CompanyTabSync />
-        <div className="min-h-screen bg-frame">
+        <div className="min-h-screen bg-frame md:flex md:flex-col">
           {/* Skip to content link for keyboard/screen reader users */}
           <a
             href="#main-content"
