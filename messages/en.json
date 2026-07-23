@@ -4480,7 +4480,7 @@
     "action_select_multi_end": "Done",
     "action_new_transaction": "New transaction",
     "viewer_disabled_tooltip": "You only have viewer access in this company",
-    "mode_inbox": "To post",
+    "mode_inbox": "To record",
     "mode_history": "All transactions",
     "source_label": "Source:",
     "source_all": "All ({count})",
@@ -4553,7 +4553,11 @@
     "bank_sync_session_expired": "Bank connection expired",
     "bank_sync_session_expired_desc": "Reconnect to keep syncing transactions.",
     "import_psd2_active_warning_title": "PSD2 is active for {bankName}",
-    "import_psd2_active_warning_body": "Transactions sync automatically each night. File imports are only needed for older history or when PSD2 isn't working; otherwise duplicates may occur."
+    "import_psd2_active_warning_body": "Transactions sync automatically each night. File imports are only needed for older history or when PSD2 isn't working; otherwise duplicates may occur.",
+    "create_import_desc": "CSV or SIE file from your bank",
+    "create_manual_desc": "Cash, personal outlays",
+    "mode_all": "All",
+    "footer_to_handle": "{count, plural, =0 {Nothing to handle} =1 {1 to handle} other {# to handle}}"
   },
   "bookkeeping": {
     "edit_draft_dialog_title": "Edit draft",

@@ -26,6 +26,7 @@ import {
 import { ChevronDown, EyeOff, Layers, Search, ShieldAlert, Trash2, X } from 'lucide-react'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
+import { ContextPicker } from '@/components/common/ContextPicker'
 import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
 import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
@@ -2152,26 +2153,9 @@ export default function TransactionsPage() {
 
   return (
     <div className="space-y-8">
-      {/* Status bar */}
-      <TransactionStatusBar
-        uncategorizedCount={totalUncategorizedCount ?? uncategorizedTransactions.length}
-        invoiceMatchCount={transactionsWithMatches.length}
-        mode={mode}
-        onOpenCreateDialog={() => setIsDialogOpen(true)}
-        isBatchMode={isBatchMode}
-        onToggleBatchMode={() => (isBatchMode ? exitBatchMode() : setIsBatchMode(true))}
-      />
+      {/* Page header (concept scene 10): title + Importera split button */}
+      <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
-      <div className="flex flex-wrap items-center gap-2">
-        <BankSyncStatusChip />
-        <BankSyncNowButton />
-        {/* The ignore flows tell users to "återställ under Bankavstämning":
-            this is the path there. Bankavstämning has no nav entry of its own,
-            so without a link here the copy points at an unreachable place. */}
-        <Button asChild variant="ghost" size="sm" className="ml-auto h-9 text-sm text-muted-foreground">
-          <Link href="/reports/bank-reconciliation">Bankavstämning →</Link>
-        </Button>
-      </div>
       <BankSyncSinceLastVisit />
 
       {skvNeedsReconnect && (
@@ -2187,9 +2171,43 @@ export default function TransactionsPage() {
         </div>
       )}
 
-      {/* Search + view dropdown */}
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
+      {/* Toolbar (concept order): [Att bokföra/Alla-seg] [sök] [Välj flera]
+          ... [source ContextPicker far right] */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'inbox'}
+            onClick={() => setMode('inbox')}
+            className={`inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
+              mode === 'inbox'
+                ? 'border border-border bg-card font-medium text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {t('mode_inbox')}
+            {(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 && (
+              <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
+                {totalUncategorizedCount ?? uncategorizedTransactions.length}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'history'}
+            onClick={() => setMode('history')}
+            className={`rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
+              mode === 'history'
+                ? 'border border-border bg-card font-medium text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {t('mode_all')}
+          </button>
+        </div>
+        <div className="relative min-w-[220px] max-w-xs flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Sök transaktioner…"
@@ -2198,24 +2216,39 @@ export default function TransactionsPage() {
             className="h-9 pl-10"
           />
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-9 gap-2 px-3 text-sm">
-              {mode === 'inbox'
-                ? `Att bokföra${(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 ? ` (${totalUncategorizedCount ?? uncategorizedTransactions.length})` : ''}`
-                : 'Alla transaktioner'}
-              <ChevronDown className="h-3.5 w-3.5 opacity-50" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-[14rem]">
-            <DropdownMenuRadioGroup value={mode} onValueChange={(v) => setMode(v as typeof mode)}>
-              <DropdownMenuRadioItem value="inbox">
-                {`Att bokföra${(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 ? ` (${totalUncategorizedCount ?? uncategorizedTransactions.length})` : ''}`}
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="history">Alla transaktioner</DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {mode === 'inbox' && uncategorizedTransactions.length > 0 && (
+          <Button
+            variant={isBatchMode ? 'secondary' : 'ghost'}
+            size="sm"
+            className="text-muted-foreground"
+            onClick={() => (isBatchMode ? exitBatchMode() : setIsBatchMode(true))}
+          >
+            {isBatchMode ? t('action_select_multi_end') : t('action_select_multi_start')}
+          </Button>
+        )}
+        {/* Source picker (convention 8): the one context chip, far right.
+            Merges the old in-list source dropdown; shown once Skatteverket
+            rows exist alongside bank rows. */}
+        {mode === 'inbox' && skvUnmatched.length > 0 && (
+          <div className="ml-auto">
+            <ContextPicker
+              value={sourceFilter}
+              onChange={(id) => setSourceFilter(id as typeof sourceFilter)}
+              triggerLabel={
+                sourceFilter === 'all'
+                  ? t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })
+                  : sourceFilter === 'bank'
+                    ? t('source_bank', { count: uncategorizedTransactions.length })
+                    : t('source_skatteverket', { count: skvUnmatched.length })
+              }
+              items={[
+                { id: 'all', label: t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length }) },
+                { id: 'bank', label: t('source_bank', { count: uncategorizedTransactions.length }) },
+                { id: 'skatteverket', label: t('source_skatteverket', { count: skvUnmatched.length }) },
+              ]}
+            />
+          </div>
+        )}
       </div>
 
       {/* Content based on mode */}
@@ -2240,43 +2273,7 @@ export default function TransactionsPage() {
           />
         ) : (
           <DataList className="stagger-enter">
-            {(sourceFilter !== 'all'
-              || (skvUnmatched.length > 0 && uncategorizedTransactions.length > 0)) && (
-              <DataListHeader>
-                <span className="text-xs uppercase tracking-wider text-muted-foreground">
-                  {t('source_label')}
-                </span>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-7 gap-2 px-2 text-xs">
-                      {sourceFilter === 'all'
-                        ? t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })
-                        : sourceFilter === 'bank'
-                          ? t('source_bank', { count: uncategorizedTransactions.length })
-                          : t('source_skatteverket', { count: skvUnmatched.length })}
-                      <ChevronDown className="h-3 w-3 opacity-50" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="min-w-[12rem]">
-                    <DropdownMenuRadioGroup
-                      value={sourceFilter}
-                      onValueChange={(v) => handleSourceFilterChange(v as SourceFilter)}
-                    >
-                      <DropdownMenuRadioItem value="all">
-                        {t('source_all', { count: uncategorizedTransactions.length + skvUnmatched.length })}
-                      </DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="bank">
-                        {t('source_bank', { count: uncategorizedTransactions.length })}
-                      </DropdownMenuRadioItem>
-                      <DropdownMenuRadioItem value="skatteverket">
-                        {t('source_skatteverket', { count: skvUnmatched.length })}
-                      </DropdownMenuRadioItem>
-                    </DropdownMenuRadioGroup>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </DataListHeader>
-            )}
-            {inboxItems.length === 0 && (searchTerm || sourceFilter !== 'all') ? (
+            {inboxItems.length === 0 && searchTerm ? (
               <DataListEmpty
                 title="Inga träffar"
                 description={searchTerm ? t('no_search_results') : t('source_empty')}
@@ -2399,6 +2396,23 @@ export default function TransactionsPage() {
           )}
         </div>
       )}
+
+      {/* Footer status line (concept): honest counter from the visible
+          rows + bank sync status/actions + the Bankavstämning path (the
+          ignore flows point users there). */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 text-xs text-muted-foreground">
+        {mode === 'inbox' && (
+          <span className="tabular-nums">{t('footer_to_handle', { count: inboxItems.length })}</span>
+        )}
+        <BankSyncStatusChip />
+        <BankSyncNowButton />
+        <Link
+          href="/reports/bank-reconciliation"
+          className="ml-auto transition-colors duration-150 hover:text-foreground"
+        >
+          Bankavstämning →
+        </Link>
+      </div>
 
       {/* Dialogs */}
       {showBatchSelector && (
