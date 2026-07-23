@@ -1322,6 +1322,12 @@
   },
   "settings_company": {
     "company_info_heading": "Company details",
+    "share_capital_heading": "Share capital",
+    "aktiekapital_label": "Share capital (SEK)",
+    "aktiekapital_help": "Registered share capital per Bolagsverket. Used in the annual report note on share capital.",
+    "antal_aktier_label": "Number of shares",
+    "antal_aktier_help": "Total number of shares per Bolagsverket.",
+    "kvotvarde_display": "Quota value per share: {value}",
     "company_name_label": "Company name",
     "company_name_help": "Shown on invoices, emails and declaration files. For a sole trader it is usually your own name (First Last).",
     "org_number_label": "Organisation number",

@@ -84,7 +84,6 @@ function makeSupabase(opts: {
                   entity_type: opts.entityType ?? 'aktiebolag',
                   aktiekapital: opts.aktiekapital ?? null,
                   antal_aktier: opts.aktiekapital ? 500 : null,
-                  kvotvarde: opts.aktiekapital ? 100 : null,
                 },
                 error: null,
               }),
@@ -340,6 +339,25 @@ describe('buildArsredovisningData: K3', () => {
     ).toBeDefined()
   })
 
+  it('derives kvotvärde in the aktiekapital note instead of reading a stored column', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k3', aktiekapital: 25_000 })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    const note = data.noter.find((n) => n.title === 'Aktiekapital')
+    expect(note).toBeDefined()
+    // 25 000 kr / 500 aktier per the settings mock (ABL 1 kap 6 §).
+    expect(note!.body).toContain('Antal aktier: 500.')
+    expect(note!.body).toContain('Kvotvärde per aktie: 50 kr.')
+  })
+
+  it('warns instead of emitting an aktiekapital note when settings are empty', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k3' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.noter.find((n) => n.title === 'Aktiekapital')).toBeUndefined()
+    expect(data.warnings.find((w) => w.startsWith('Aktiekapitalnoten saknas'))).toBeDefined()
+  })
+
   it('DROPS the old "K3 noter need manual augmentation" warning text', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
@@ -419,6 +437,16 @@ describe('buildArsredovisningData: K2 byte-equivalence', () => {
     const principles = data.noter.find((n) => n.title.startsWith('Redovisnings'))
     expect(principles).toBeDefined()
     expect(principles!.body).toContain('BFNAR 2016:10')
+  })
+
+  it('derives kvotvärde in the K2 aktiekapital note', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2', aktiekapital: 25_000 })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    const note = data.noter.find((n) => n.title === 'Aktiekapital')
+    expect(note).toBeDefined()
+    expect(note!.body).toContain('Antal aktier: 500.')
+    expect(note!.body).toContain('Kvotvärde per aktie: 50 kr.')
   })
 
   it('does NOT call generateKassaflodesanalys for K2', async () => {

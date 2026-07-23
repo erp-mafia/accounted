@@ -284,6 +284,11 @@ export interface CompanySettings {
   // Preliminary tax
   preliminary_tax_monthly: number | null
 
+  // Share capital per Bolagsverket (aktiekapital note in the annual report).
+  // Kvotvärde is derived as aktiekapital / antal_aktier, never stored.
+  aktiekapital?: number | null
+  antal_aktier?: number | null
+
   // Bank details for invoices
   bank_name: string | null
   clearing_number: string | null

@@ -1600,6 +1600,9 @@ export const UpdateSettingsSchema = z.object({
   tax_contact_email: z.string().email().nullable().optional().or(z.literal('')),
   fiscal_year_start_month: z.number().int().min(1).max(12).optional(),
   preliminary_tax_monthly: z.number().nullable().optional(),
+  // Share capital per Bolagsverket (annual report aktiekapital note).
+  aktiekapital: z.number().positive('Aktiekapital måste vara större än 0').nullable().optional(),
+  antal_aktier: z.number().int('Antal aktier måste vara ett heltal').positive('Antal aktier måste vara större än 0').nullable().optional(),
   employer_registered: z.boolean().nullable().optional(),
   employer_seasonal: z.boolean().optional(),
   bank_name: z.string().max(100, 'Banknamn får vara max 100 tecken').nullable().optional(),

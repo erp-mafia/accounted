@@ -1322,6 +1322,12 @@
   },
   "settings_company": {
     "company_info_heading": "Företagsuppgifter",
+    "share_capital_heading": "Aktiekapital",
+    "aktiekapital_label": "Aktiekapital (kr)",
+    "aktiekapital_help": "Registrerat aktiekapital enligt Bolagsverket. Används i årsredovisningens not om aktiekapital.",
+    "antal_aktier_label": "Antal aktier",
+    "antal_aktier_help": "Totalt antal aktier enligt Bolagsverket.",
+    "kvotvarde_display": "Kvotvärde per aktie: {value}",
     "company_name_label": "Företagsnamn",
     "company_name_help": "Visas på fakturor, e-post och deklarationsfiler. För enskild firma är det vanligtvis ditt eget namn (Förnamn Efternamn).",
     "org_number_label": "Organisationsnummer",

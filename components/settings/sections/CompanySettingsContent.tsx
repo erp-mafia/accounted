@@ -10,6 +10,7 @@ import { LogoUpload } from '@/components/settings/LogoUpload'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
+import { ShareCapitalForm } from '@/components/settings/ShareCapitalForm'
 import { useSettings } from '@/components/settings/useSettings'
 import type { CompanySettings } from '@/types'
 
@@ -21,6 +22,11 @@ export function CompanySettingsContent() {
   if (!settings) return <SettingsLoadError onRetry={refetch} />
 
   function handleSave(formData: FormData) {
+    // Empty string clears the value (schema accepts null, not '').
+    const numberOrNull = (name: string) => {
+      const raw = (formData.get(name) as string).trim()
+      return raw === '' ? null : Number(raw)
+    }
     const updates: Record<string, unknown> = {
       ...(formData.has('company_name') && { company_name: formData.get('company_name') as string }),
       ...(formData.has('org_number') && { org_number: formData.get('org_number') as string }),
@@ -30,6 +36,8 @@ export function CompanySettingsContent() {
       phone: (formData.get('phone') as string) || '',
       email: (formData.get('email') as string) || '',
       website: (formData.get('website') as string) || '',
+      ...(formData.has('aktiekapital') && { aktiekapital: numberOrNull('aktiekapital') }),
+      ...(formData.has('antal_aktier') && { antal_aktier: numberOrNull('antal_aktier') }),
     }
     return {
       updates,
@@ -48,6 +56,7 @@ export function CompanySettingsContent() {
     <div className="space-y-8">
       <SettingsFormWrapper onSave={handleSave} className="space-y-8">
         <CompanyInfoForm settings={settings} />
+        {settings.entity_type === 'aktiebolag' && <ShareCapitalForm settings={settings} />}
       </SettingsFormWrapper>
 
       <div className="border-t border-border pt-8">

@@ -4,6 +4,7 @@ import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { LATENT_TAX_DEFAULT_RATE } from '@/lib/bokslut/tax-provision/latent-tax-calculator'
+import { roundOre } from '@/lib/money'
 import {
   mapTrialBalancesToK2,
   type K2MappingResult,
@@ -526,14 +527,16 @@ async function buildK2Noter(
   if (maybeAb) {
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('aktiekapital, antal_aktier, kvotvarde')
+      .select('aktiekapital, antal_aktier')
       .eq('company_id', companyId)
       .maybeSingle()
-    type AktiekapitalShape = { aktiekapital?: number | null; antal_aktier?: number | null; kvotvarde?: number | null }
+    type AktiekapitalShape = { aktiekapital?: number | null; antal_aktier?: number | null }
     const ak = settings as AktiekapitalShape | null
     const aktiekapital = ak?.aktiekapital ?? null
     const antalAktier = ak?.antal_aktier ?? null
-    const kvotvarde = ak?.kvotvarde ?? null
+    // Kvotvärde is defined (ABL 1 kap 6 §) as aktiekapital / antal aktier;
+    // deriving it here keeps the filed note internally consistent.
+    const kvotvarde = aktiekapital && antalAktier ? roundOre(aktiekapital / antalAktier) : null
     if (aktiekapital || antalAktier) {
       const parts: string[] = []
       if (aktiekapital) parts.push(`Aktiekapital: ${aktiekapital.toLocaleString('sv-SE')} kr.`)
@@ -778,18 +781,19 @@ async function buildK3Noter(
   if (maybeAb) {
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('aktiekapital, antal_aktier, kvotvarde')
+      .select('aktiekapital, antal_aktier')
       .eq('company_id', companyId)
       .maybeSingle()
     type AktiekapitalShape = {
       aktiekapital?: number | null
       antal_aktier?: number | null
-      kvotvarde?: number | null
     }
     const ak = settings as AktiekapitalShape | null
     const aktiekapital = ak?.aktiekapital ?? null
     const antalAktier = ak?.antal_aktier ?? null
-    const kvotvarde = ak?.kvotvarde ?? null
+    // Kvotvärde is defined (ABL 1 kap 6 §) as aktiekapital / antal aktier;
+    // deriving it here keeps the filed note internally consistent.
+    const kvotvarde = aktiekapital && antalAktier ? roundOre(aktiekapital / antalAktier) : null
     if (aktiekapital || antalAktier) {
       const parts: string[] = []
       if (aktiekapital) parts.push(`Aktiekapital: ${aktiekapital.toLocaleString('sv-SE')} kr.`)
