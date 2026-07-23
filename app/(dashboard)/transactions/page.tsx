@@ -507,14 +507,6 @@ export default function TransactionsPage() {
     [inboxItems],
   )
 
-  const transactionsWithMatches = useMemo(
-    () => transactions.filter(
-      (transaction) =>
-        (transaction.potential_invoice && !transaction.invoice_id) ||
-        (transaction.potential_supplier_invoice && !transaction.supplier_invoice_id),
-    ),
-    [transactions],
-  )
 
   const PAGE_SIZE = 200
 

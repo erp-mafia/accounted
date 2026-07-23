@@ -62,9 +62,9 @@ export default function TransactionStatusBar({
       label: t('action_new_transaction'),
       icon: Plus,
       description: t('create_manual_desc'),
-      onSelect: () => {
-        if (canWrite) onOpenCreateDialog()
-      },
+      disabled: !canWrite,
+      disabledTitle: t('viewer_disabled_tooltip'),
+      onSelect: () => onOpenCreateDialog(),
     },
   ]
 

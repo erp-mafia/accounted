@@ -372,6 +372,16 @@ h1, h2, h3 {
   }
 }
 
+/* Hover-reveal fallback for touch: coarse pointers have no hover, so the
+   controls that desktop reveals on hover (row checkboxes, chevrons, quiet
+   row actions) stay visible. Targets exactly the opacity-0 +
+   group-hover:opacity-100 pairing and nothing else. */
+@media (pointer: coarse) {
+  .group .opacity-0.group-hover\:opacity-100 {
+    opacity: 1;
+  }
+}
+
 /* Always-visible thumb for modal scroll containers (DialogContent,
    SlideOverBody): inside an overlay the scrollbar is the only cue that
    content continues below the fold, so the at-rest auto-hide would read

@@ -14,6 +14,10 @@ export interface SplitButtonOption {
   icon?: LucideIcon
   /** Muted second line in the menu describing what the mode does. */
   description?: string
+  /** Disable the option (e.g. viewers): renders inert with disabledTitle
+   *  as the tooltip instead of silently no-opping. */
+  disabled?: boolean
+  disabledTitle?: string
   onSelect: () => void
 }
 
@@ -98,6 +102,7 @@ export function SplitButton({
   if (!active) return null
 
   const runOption = (option: SplitButtonOption) => {
+    if (option.disabled) return
     setActiveKey(option.key)
     if (persistKey) rememberCreateMode(persistKey, option.key)
     option.onSelect()
@@ -108,6 +113,8 @@ export function SplitButton({
       <Button
         variant={variant}
         className="rounded-r-none"
+        disabled={active.disabled}
+        title={active.disabled ? active.disabledTitle : undefined}
         onClick={() => runOption(active)}
       >
         {active.icon && <active.icon className="mr-1.5 h-4 w-4" />}
@@ -144,13 +151,17 @@ export function SplitButton({
                   key={option.key}
                   type="button"
                   role="menuitem"
+                  disabled={option.disabled}
+                  title={option.disabled ? option.disabledTitle : undefined}
                   onClick={() => {
                     setOpen(false)
                     runOption(option)
                   }}
                   className={cn(
                     'flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors',
-                    'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
+                    option.disabled
+                      ? 'cursor-not-allowed text-muted-foreground/40'
+                      : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
                   )}
                 >
                   {option.icon && (

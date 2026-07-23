@@ -22,6 +22,7 @@ import {
   ArrowLeftRight,
   FileText,
   Landmark,
+  Link2,
   Loader2,
   MoreHorizontal,
   Paperclip,
@@ -308,6 +309,12 @@ function BankHistoryRow({
           {categoryLabel && (
             <span className="hidden shrink-0 text-xs text-muted-foreground lg:inline">
               {categoryLabel}
+            </span>
+          )}
+          {isLinkedToInvoice && (
+            <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground md:inline-flex">
+              <Link2 className="h-3 w-3" />
+              {t('linked_to_invoice')}
             </span>
           )}
           {hasInvoiceMatch && (
