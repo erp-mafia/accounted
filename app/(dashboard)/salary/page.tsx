@@ -151,9 +151,6 @@ export default function SalaryPage() {
         />
       ) : (
         <div>
-          <h2 className="px-1 pb-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
-            {t('runs_title')}
-          </h2>
           {runs.length === 0 ? (
             <EmptyState
               icon={HandCoins}
