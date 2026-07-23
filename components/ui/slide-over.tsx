@@ -88,7 +88,7 @@ function SlideOverBody({
   className?: string
 }) {
   return (
-    <div className={cn('min-h-0 flex-1 overflow-y-auto px-6 py-4', className)}>
+    <div className={cn('min-h-0 flex-1 overflow-y-auto scrollbar-visible px-6 py-4', className)}>
       {children}
     </div>
   )

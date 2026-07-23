@@ -41,12 +41,16 @@ import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import type { TransactionWithInvoice, CategorizeHandler } from './transaction-types'
+import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 
 interface TransactionInboxCardProps {
   transaction: TransactionWithInvoice
   /** When set, this bank tx looks like the bank side of a 1930↔1630
    *  transfer that the user will later see on /skattekonto. */
   skvCounterpartDate?: string
+  /** Top booking suggestion for this row (concept "Förslag: …" chip); Bokför
+   *  routes straight to the kontering confirm when one exists. */
+  suggestion?: SuggestedTemplate | null
   processingId: string | null
   isSelected: boolean
   /** Row expansion (concept foldout): controlled by the page so only one
@@ -87,6 +91,7 @@ interface TransactionInboxCardProps {
 export default function TransactionInboxCard({
   transaction,
   skvCounterpartDate,
+  suggestion,
   processingId,
   isSelected,
   isExpanded,
@@ -294,6 +299,19 @@ export default function TransactionInboxCard({
         </td>
         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
           <span className="inline-flex items-center justify-end gap-2">
+            {/* Concept status chip: what Bokför will propose. Suppressed when
+                an invoice match leads (the pill already says it). */}
+            {suggestion && !matchLabel && (
+              <Badge
+                variant="secondary"
+                className="hidden max-w-[190px] font-normal lg:inline-flex"
+                title={`D: ${suggestion.debit_account} · K: ${suggestion.credit_account}`}
+              >
+                <span className="truncate">
+                  {t('suggestion_chip', { name: suggestion.name_sv })}
+                </span>
+              </Badge>
+            )}
             <Button
               size="sm"
               variant="outline"
@@ -432,10 +450,20 @@ export default function TransactionInboxCard({
           <td colSpan={5} className="border-b border-border p-0">
             <RowFoldout>
               <div className="px-1 pb-6 pt-1 sm:pl-9 sm:pr-4">
-                {(transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
+                {suggestion ||
+                (transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
                 transaction.title_edited_at ||
                 skvCounterpartDate ? (
                   <div className="space-y-1 py-1 text-xs text-muted-foreground">
+                    {suggestion && (
+                      <p className="tabular-nums">
+                        {t('suggestion_chip', { name: suggestion.name_sv })}
+                        {' · D: '}
+                        {suggestion.debit_account}
+                        {' · K: '}
+                        {suggestion.credit_account}
+                      </p>
+                    )}
                     {transaction.currency !== 'SEK' && transaction.amount_sek != null && (
                       <p className="tabular-nums">
                         {formatCurrency(transaction.amount, transaction.currency)}

@@ -372,6 +372,19 @@ h1, h2, h3 {
   }
 }
 
+/* Always-visible thumb for modal scroll containers (DialogContent,
+   SlideOverBody): inside an overlay the scrollbar is the only cue that
+   content continues below the fold, so the at-rest auto-hide would read
+   as "the dialog is cut off". */
+.scrollbar-visible::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.25);
+}
+@supports (scrollbar-color: auto) {
+  .scrollbar-visible {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
+}
+
 /* Hide scrollbar utility */
 .scrollbar-hide {
   -ms-overflow-style: none;

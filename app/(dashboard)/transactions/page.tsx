@@ -2094,6 +2094,15 @@ export default function TransactionsPage() {
   }
 
   function openCategoryDialog(transaction: TransactionWithInvoice) {
+    // Concept flow (scene 10): with a suggestion, Bokför goes straight to the
+    // compact kontering confirm (QuickReview) showing the proposed verifikat;
+    // the full template picker stays one "Ändra mall" link away. Without a
+    // suggestion (or an unresolvable template id) the picker opens as before.
+    const top = templateSuggestions[transaction.id]?.[0]
+    if (top && (isCounterpartyTemplateId(top.template_id) || getTemplateById(top.template_id))) {
+      handleOpenTemplateReview(transaction, top.template_id)
+      return
+    }
     setTemplatePickerTransaction(transaction)
     setTemplatePickerOpen(true)
   }
@@ -2453,6 +2462,7 @@ export default function TransactionsPage() {
                         key={`bank-${item.data.id}`}
                         transaction={item.data}
                         skvCounterpartDate={bankToSkvHints.get(item.data.id)}
+                        suggestion={templateSuggestions[item.data.id]?.[0] ?? null}
                         processingId={processingId}
                         isSelected={selectedIds.has(item.data.id)}
                         isExpanded={expandedTxId === item.data.id}
@@ -2602,32 +2612,28 @@ export default function TransactionsPage() {
       )}
 
       {templatePickerOpen && <Dialog open onOpenChange={setTemplatePickerOpen}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Bokför transaktion</DialogTitle>
           </DialogHeader>
           {templatePickerTransaction && (
-            <div className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+            <div className="flex items-center justify-between gap-3 text-sm">
               <span className="truncate text-muted-foreground">{templatePickerTransaction.description}</span>
-              <span className="font-medium tabular-nums flex-shrink-0 ml-3">
+              <span className="font-medium tabular-nums flex-shrink-0">
                 {templatePickerTransaction.amount > 0 ? '+' : ''}{formatCurrency(templatePickerTransaction.amount, templatePickerTransaction.currency)}
               </span>
             </div>
           )}
-          <div className="space-y-1">
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full justify-start"
-              onClick={handleManualBooking}
-            >
-              Bokför manuellt…
-            </Button>
+          {/* Alternate paths as quiet links (concept vact): the templates are
+              the main content, not three stacked buttons. */}
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <button type="button" className={QUIET_LINK_CLASS} onClick={handleManualBooking}>
+              Bokför manuellt
+            </button>
             {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full justify-start"
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
                 onClick={() => {
                   const tx = templatePickerTransaction
                   setTemplatePickerOpen(false)
@@ -2635,18 +2641,17 @@ export default function TransactionsPage() {
                   setInvoicePickerOpen(true)
                 }}
               >
-                Matcha med faktura…
-              </Button>
+                Matcha med faktura
+              </button>
             )}
             {templatePickerTransaction && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start text-muted-foreground"
+              <button
+                type="button"
+                className={QUIET_LINK_CLASS}
                 onClick={() => void handleIgnoreTransaction(templatePickerTransaction)}
               >
-                Ignorera transaktionen…
-              </Button>
+                Ignorera transaktionen
+              </button>
             )}
           </div>
           <TemplatePicker
