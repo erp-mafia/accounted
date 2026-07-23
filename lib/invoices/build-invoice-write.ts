@@ -232,10 +232,12 @@ export async function buildInvoiceWriteData(params: {
   }
   const total = documentType === 'delivery_note' ? 0 : subtotal + vatAmount
 
-  // Validate any per-line revenue-account override against the company's chart
-  // of accounts. Zod already constrains the shape to a 3xxx string; here we
-  // confirm each is a real, active class-3 account so a typo or a non-revenue
-  // account can never be booked. Never trust the client.
+  // Validate any per-line posting-account override against the company's chart
+  // of accounts. The legacy field name is revenue_account, but balance-sheet
+  // accounts are valid for deposits, customer advances, and genuine outlays.
+  // Zod already constrains the shape to classes 1-3; here we
+  // confirm each is a real, active account so a typo or unsuitable account
+  // can never be booked. Never trust the client.
   const overrideAccounts = Array.from(
     new Set(
       items
@@ -248,7 +250,8 @@ export async function buildInvoiceWriteData(params: {
       .from('chart_of_accounts')
       .select('account_number')
       .eq('company_id', companyId)
-      .eq('account_class', 3)
+      .gte('account_class', 1)
+      .lte('account_class', 3)
       .eq('is_active', true)
       .in('account_number', overrideAccounts)
 

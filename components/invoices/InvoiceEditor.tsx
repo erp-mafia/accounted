@@ -166,7 +166,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       vat_rate: z.number().min(0).max(25),
       // Article linkage (artikelregister). Optional: free-text lines omit them.
       article_id: z.string().nullable().optional(),
-      revenue_account: z.string().nullable().optional(),
+      revenue_account: z
+        .string()
+        .regex(/^[123]\d{3}$/, t('posting_account_invalid'))
+        .nullable()
+        .optional(),
       // ROT/RUT-avdrag per line. Optional: null means "no deduction".
       deduction_type: z.enum(['rot', 'rut']).nullable().optional(),
       labor_hours: z.number().nonnegative().nullable().optional(),
@@ -294,9 +298,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Artikelregister: active articles for the line picker + which line is mid quick-create.
   const [articles, setArticles] = useState<ArticleOption[]>([])
   const [savingArticleIndex, setSavingArticleIndex] = useState<number | null>(null)
-  // Class-3 (revenue) accounts for the optional per-line försäljningskonto
-  // override, plus which rows currently show that picker.
-  const [revenueAccounts, setRevenueAccounts] = useState<BASAccount[]>([])
+  // Active balance-sheet and revenue accounts for the optional per-line
+  // posting override, plus which rows currently show that picker.
+  const [postingAccounts, setPostingAccounts] = useState<BASAccount[]>([])
   const [accountOverrideRows, setAccountOverrideRows] = useState<Set<number>>(new Set())
   // Dimension tagging (kostnadsställe/projekt, dimensions PR7). Affordances
   // render only when company_settings.dimensions_enabled: a UI-visibility
@@ -497,9 +501,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   async function fetchRevenueAccounts() {
     if (!company?.id) return
     try {
-      const res = await fetch('/api/bookkeeping/accounts?class=3')
+      const res = await fetch('/api/bookkeeping/accounts')
       const body = await res.json()
-      setRevenueAccounts((body?.data as BASAccount[]) || [])
+      const accounts = ((body?.data as BASAccount[]) || [])
+        .filter((account) => account.account_class >= 1 && account.account_class <= 3)
+      setPostingAccounts(accounts)
     } catch {
       // Non-fatal: the override picker degrades to free 4-digit entry.
     }
@@ -851,7 +857,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }
 
-  // Open/close the optional per-line försäljningskonto override. Closing clears
+  // Open/close the optional per-line posting-account override. Closing clears
   // the value so the engine falls back to the VAT-rate-derived revenue account.
   function toggleAccountOverride(index: number) {
     const isOpen = accountOverrideRows.has(index) || !!watchItems[index]?.revenue_account
@@ -1896,7 +1902,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         </div>
                       )}
 
-                      {/* Optional försäljningskonto override (engångsartikel). When
+                      {/* Optional posting-account override (engångsartikel). When
                           unset the engine derives the revenue account from the VAT
                           rate; reverse-charge/export lines ignore the override. */}
                       {isInvoiceDoc && watchItems[index]?.line_type !== 'text' &&
@@ -1913,11 +1919,16 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                 render={({ field }) => (
                                   <AccountCombobox
                                     value={field.value ?? ''}
-                                    accounts={revenueAccounts}
+                                    accounts={postingAccounts}
                                     onChange={(v) => field.onChange(v || null)}
                                   />
                                 )}
                               />
+                              {errors.items?.[index]?.revenue_account && (
+                                <p className="text-sm text-destructive">
+                                  {errors.items[index].revenue_account?.message}
+                                </p>
+                              )}
                             </div>
                           </div>
                           <p className="mt-1 text-xs text-muted-foreground">{t('revenue_account_hint')}</p>

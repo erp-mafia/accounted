@@ -245,6 +245,23 @@ describe('calculateVatDeclaration', () => {
     expect(result.transactionCount).toBe(0)
   })
 
+  it('does not report a refundable deposit credited to a liability account as turnover', async () => {
+    seedLedger(
+      [
+        { account_number: '1510', debit_amount: 10000, credit_amount: 0 },
+        { account_number: '2897', debit_amount: 0, credit_amount: 10000 },
+      ],
+      ['invoice_created'],
+    )
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(0)
+    expect(result.rutor.ruta42).toBe(0)
+    expect(result.rutor.ruta49).toBe(0)
+    expect(result.invoiceCount).toBe(1)
+  })
+
   it('sums output VAT to ruta10/11/12 and revenue to ruta05', async () => {
     seedLedger(
       [

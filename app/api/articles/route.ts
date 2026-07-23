@@ -55,8 +55,8 @@ export const POST = withRouteContext(
     if (!result.success) return result.response
     const body = result.data
 
-    // Guard the optional revenue-account override against the chart of accounts.
-    // A class-3 account that merely isn't activated yet gets the standard
+    // Guard the optional posting-account override against the chart of accounts.
+    // A class 1-3 account that merely isn't activated yet gets the standard
     // ACCOUNTS_NOT_IN_CHART envelope so the client can offer activate-and-retry.
     if (body.revenue_account) {
       const status = await checkRevenueAccount(supabase, companyId!, body.revenue_account)

@@ -55,7 +55,7 @@ export const PATCH = withRouteContext(
     if (!result.success) return result.response
     const body = result.data
 
-    // Same activate-and-retry contract as POST /api/articles: a class-3 account
+    // Same activate-and-retry contract as POST /api/articles: a class 1-3 account
     // that just isn't activated yet returns ACCOUNTS_NOT_IN_CHART.
     if (body.revenue_account) {
       const status = await checkRevenueAccount(supabase, companyId!, body.revenue_account)

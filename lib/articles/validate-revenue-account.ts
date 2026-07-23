@@ -2,15 +2,15 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 
 /**
- * Classify a per-article revenue-account override against the company's chart:
+ * Classify a per-article invoice posting-account override against the company's chart.
  *
- * - 'ok'          : active class-3 account in the chart; accept as-is.
- * - 'activatable' : a class-3 account that is merely missing/inactive: either
- *                   an inactive chart row or a known BAS class-3 number not yet
+ * - 'ok'          : active class 1-3 account in the chart; accept as-is.
+ * - 'activatable' : a class 1-3 account that is merely missing/inactive: either
+ *                   an inactive chart row or a known BAS class 1-3 number not yet
  *                   in the chart. Routes translate this to ACCOUNTS_NOT_IN_CHART
  *                   so the standard activate-and-retry dialog flow applies
  *                   (same UX as the journal entry form).
- * - 'invalid'     : anything else: a non-revenue account or a number unknown to
+ * - 'invalid'     : anything else: an account outside classes 1-3 or a number unknown to
  *                   both the chart and the BAS catalogue. Never bookable.
  *
  * Throws on an unexpected DB error so the route wrapper maps it to the canonical
@@ -33,18 +33,18 @@ export async function checkRevenueAccount(
   if (error) throw error
 
   if (data) {
-    if (data.account_class !== 3) return 'invalid'
+    if (data.account_class < 1 || data.account_class > 3) return 'invalid'
     return data.is_active ? 'ok' : 'activatable'
   }
 
   const ref = getBASReference(account)
-  return ref?.account_class === 3 ? 'activatable' : 'invalid'
+  return ref && ref.account_class >= 1 && ref.account_class <= 3 ? 'activatable' : 'invalid'
 }
 
 /**
  * True when `account` exists in the company's chart of accounts as an ACTIVE
- * class-3 (revenue/intäkt) account. Used to guard the optional per-article
- * revenue-account override so a typo or a non-revenue account can never be
+ * class 1-3 account. Used to guard the optional per-article posting-account
+ * override so a typo or an unsuitable account can never be
  * pinned to an article (and later booked). Never trust the client.
  *
  * Throws on an unexpected DB error so the route wrapper maps it to the canonical
@@ -59,7 +59,8 @@ export async function isValidRevenueAccount(
     .from('chart_of_accounts')
     .select('account_number')
     .eq('company_id', companyId)
-    .eq('account_class', 3)
+    .gte('account_class', 1)
+    .lte('account_class', 3)
     .eq('is_active', true)
     .eq('account_number', account)
     .maybeSingle()

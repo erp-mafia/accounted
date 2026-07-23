@@ -117,17 +117,19 @@ describe('parseArticlesFile', () => {
     expect(result.rows[0].unit).toBe('st')
   })
 
-  it('keeps a valid 3xxx revenue account and drops a non-3xxx one', () => {
+  it('keeps class 1-3 posting accounts and drops a class-4 account', () => {
     const buffer = buildXlsx([
       ['Benämning', 'Försäljningskonto'],
       ['A', '3001'],
       ['B', '1930'],
+      ['C', '4000'],
     ])
 
     const result = parseArticlesFile(buffer, 'konto.xlsx')
     expect(result.rows[0].revenue_account).toBe('3001')
-    expect(result.rows[1].revenue_account).toBeNull()
-    expect(result.warnings.some((w) => w.toLowerCase().includes('försäljningskonto'))).toBe(true)
+    expect(result.rows[1].revenue_account).toBe('1930')
+    expect(result.rows[2].revenue_account).toBeNull()
+    expect(result.warnings.some((w) => w.toLowerCase().includes('bokföringskonto'))).toBe(true)
   })
 
   it('treats a blank cost price as null (not 0)', () => {

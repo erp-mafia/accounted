@@ -5,9 +5,9 @@ import { z } from 'zod'
 // so a tampered row cannot inject unexpected fields or malformed data
 // (defense in depth, ASVS V4.5): mirrors lib/pending-operations/schemas/create-supplier.ts.
 
-const revenueAccount = z
+const invoicePostingAccount = z
   .string()
-  .regex(/^3\d{3}$/, 'Revenue account must be a 4-digit BAS class-3 account (3xxx)')
+  .regex(/^[123]\d{3}$/, 'Posting account must be a 4-digit BAS class 1-3 account')
 
 const vatRatePercent = z.union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
 
@@ -26,7 +26,7 @@ export const CreateArticleParamsSchema = z.object({
   unit: optString(32),
   price_excl_vat: z.number().nonnegative(),
   vat_rate: vatRatePercent.default(25),
-  revenue_account: revenueAccount.nullable().optional(),
+  revenue_account: invoicePostingAccount.nullable().optional(),
   cost_price: z.number().nonnegative().nullable().optional(),
   ean: optString(32),
   housework_type: optString(64),
@@ -42,7 +42,7 @@ export const UpdateArticleParamsSchema = z.object({
   unit: optString(32),
   price_excl_vat: z.number().nonnegative().optional(),
   vat_rate: vatRatePercent.optional(),
-  revenue_account: revenueAccount.nullable().optional(),
+  revenue_account: invoicePostingAccount.nullable().optional(),
   cost_price: z.number().nonnegative().nullable().optional(),
   ean: optString(32),
   housework_type: optString(64),

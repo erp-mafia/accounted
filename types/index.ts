@@ -700,7 +700,7 @@ export interface Article {
   /** Default price currency (ISO 4217 code from the currencies table);
    *  pre-fills the invoice currency when added. */
   currency: string
-  /** Optional BAS class-3 revenue account override. null = derive from VAT treatment. */
+  /** Optional BAS class 1-3 posting account override. null = derive from VAT treatment. */
   revenue_account: string | null
   /** Margin/display only: never posted to the ledger. */
   cost_price: number | null
@@ -1062,7 +1062,7 @@ export interface InvoiceItem {
 
   // Article linkage. `article_id` is a soft back-reference to the source
   // article (for the "Affärshändelser" history view); `revenue_account` is the
-  // BAS class-3 account frozen-copied from the article at line-create time.
+  // BAS class 1-3 posting account frozen-copied from the article at line-create time.
   // null `revenue_account` preserves the legacy "derive from VAT treatment"
   // booking in generatePerRateLines().
   article_id?: string | null
@@ -1338,7 +1338,7 @@ export interface CreateInvoiceItemInput {
   vat_rate?: number
   /** Source article (optional). Free-text lines omit it. */
   article_id?: string | null
-  /** BAS class-3 revenue account override copied from the article. null = derive from VAT treatment. */
+  /** BAS class 1-3 posting account override copied from the article. null = derive from VAT treatment. */
   revenue_account?: string | null
   /** ROT/RUT toggle. null/undefined = no deduction. */
   deduction_type?: 'rot' | 'rut' | null
@@ -3779,4 +3779,3 @@ export interface AGIDeclaration {
   created_at: string
   updated_at: string
 }
-

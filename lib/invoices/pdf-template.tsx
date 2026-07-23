@@ -597,13 +597,28 @@ function createStyles(branding?: InvoiceBranding) {
 // Format currency with explicit ISO code so non-Swedish recipients see "1 234,56 SEK"
 // instead of the Swedish symbol "kr". Decimal style + appended code works for any
 // currency (SEK/EUR/USD) and avoids Intl's locale-specific symbol quirks.
-function formatCurrency(amount: number, currency: string = 'SEK', language: PdfLang = 'sv'): string {
+export function formatPdfCurrency(amount: number, currency: string = 'SEK', language: PdfLang = 'sv'): string {
   const formatted = new Intl.NumberFormat(language === 'en' ? 'en-US' : 'sv-SE', {
     style: 'decimal',
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(amount)
+    // sv-SE emits U+2212, which standard PDF fonts can silently drop. The
+    // ASCII minus is supported by every allowed invoice font.
+  }).format(amount).replaceAll('\u2212', '-')
   return `${formatted} ${currency}`
+}
+
+export function buildPdfVatBreakdown(items: InvoiceItem[]): Map<number, { base: number; vat: number }> {
+  const vatByRate = new Map<number, { base: number; vat: number }>()
+  for (const item of items) {
+    if (isTextLikeLine(item)) continue
+    const rate = item.vat_rate ?? 0
+    const group = vatByRate.get(rate) || { base: 0, vat: 0 }
+    group.base += item.line_total
+    group.vat += item.vat_amount || 0
+    vatByRate.set(rate, group)
+  }
+  return vatByRate
 }
 
 // Format date as ISO yyyy-MM-dd in both locales: universally unambiguous and
@@ -678,16 +693,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   const showVatColumn = hasPerLineVat && uniqueRates.size > 1
 
   // Calculate per-rate VAT breakdown for totals
-  const vatByRate = new Map<number, { base: number; vat: number }>()
-  if (hasPerLineVat) {
-    for (const item of billableItems) {
-      const rate = item.vat_rate ?? 0
-      const group = vatByRate.get(rate) || { base: 0, vat: 0 }
-      group.base += Math.abs(item.line_total)
-      group.vat += Math.abs(item.vat_amount || 0)
-      vatByRate.set(rate, group)
-    }
-  }
+  const vatByRate = hasPerLineVat
+    ? buildPdfVatBreakdown(billableItems)
+    : new Map<number, { base: number; vat: number }>()
   const docType = (invoice as Invoice & { document_type?: InvoiceDocumentType }).document_type || 'invoice'
   const isDeliveryNote = docType === 'delivery_note'
   const isProforma = docType === 'proforma'
@@ -891,13 +899,13 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   <Text style={styles.colQty}>{item.quantity}</Text>
                   <Text style={styles.colUnit}>{item.unit}</Text>
                   {!isDeliveryNote && (
-                    <Text style={styles.colPrice}>{formatCurrency(item.unit_price, invoice.currency, lang)}</Text>
+                    <Text style={styles.colPrice}>{formatPdfCurrency(item.unit_price, invoice.currency, lang)}</Text>
                   )}
                   {!isDeliveryNote && showVatColumn && (
                     <Text style={styles.colVat}>{item.vat_rate ?? 0}%</Text>
                   )}
                   {!isDeliveryNote && (
-                    <Text style={styles.colTotal}>{formatCurrency(item.line_total, invoice.currency, lang)}</Text>
+                    <Text style={styles.colTotal}>{formatPdfCurrency(item.line_total, invoice.currency, lang)}</Text>
                   )}
                 </View>
               )
@@ -910,7 +918,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
           <View style={styles.totalsSection}>
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>{L.subtotal}</Text>
-              <Text style={styles.totalValue}>{formatCurrency(invoice.subtotal, invoice.currency, lang)}</Text>
+              <Text style={styles.totalValue}>{formatPdfCurrency(invoice.subtotal, invoice.currency, lang)}</Text>
             </View>
             {vatByRate.size > 1 ? (
               Array.from(vatByRate.entries())
@@ -919,12 +927,12 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   <View key={rate}>
                     <View style={styles.totalRow}>
                       <Text style={styles.totalLabel}>{L.net(rate)}</Text>
-                      <Text style={styles.totalValue}>{formatCurrency(group.base, invoice.currency, lang)}</Text>
+                      <Text style={styles.totalValue}>{formatPdfCurrency(group.base, invoice.currency, lang)}</Text>
                     </View>
-                    {group.vat > 0 && (
+                    {group.vat !== 0 && (
                       <View style={styles.totalRow}>
                         <Text style={styles.totalLabel}>{L.vatRow(rate)}</Text>
-                        <Text style={styles.totalValue}>{formatCurrency(group.vat, invoice.currency, lang)}</Text>
+                        <Text style={styles.totalValue}>{formatPdfCurrency(group.vat, invoice.currency, lang)}</Text>
                       </View>
                     )}
                   </View>
@@ -938,7 +946,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               !(company.vat_registered === false && invoice.vat_amount === 0) && (
                 <View style={styles.totalRow}>
                   <Text style={styles.totalLabel}>{L.vatRow(invoice.vat_rate ?? (vatByRate.size === 1 ? (vatByRate.keys().next().value ?? 0) : 0))}</Text>
-                  <Text style={styles.totalValue}>{formatCurrency(invoice.vat_amount, invoice.currency, lang)}</Text>
+                  <Text style={styles.totalValue}>{formatPdfCurrency(invoice.vat_amount, invoice.currency, lang)}</Text>
                 </View>
               )
             )}
@@ -952,20 +960,20 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   {rounding.applies && (
                     <View style={styles.totalRow}>
                       <Text style={[styles.totalLabel, { fontSize: 8 }]}>{L.rounding}</Text>
-                      <Text style={[styles.totalValue, { fontSize: 8 }]}>{formatCurrency(rounding.roundingDelta, 'SEK', lang)}</Text>
+                      <Text style={[styles.totalValue, { fontSize: 8 }]}>{formatPdfCurrency(rounding.roundingDelta, 'SEK', lang)}</Text>
                     </View>
                   )}
                   {showDeduction && (
                     <View style={styles.totalRow}>
                       <Text style={styles.totalLabel}>{L.deductionRow}</Text>
                       <Text style={styles.totalValue}>
-                        −{formatCurrency(invoice.deduction_total ?? 0, invoice.currency, lang)}
+                        {formatPdfCurrency(-Math.abs(invoice.deduction_total ?? 0), invoice.currency, lang)}
                       </Text>
                     </View>
                   )}
                   <View style={styles.grandTotal}>
                     <Text style={styles.grandTotalLabel}>{isCreditNote ? L.toCredit : L.toPay}</Text>
-                    <Text style={styles.grandTotalValue}>{formatCurrency(grandTotal, invoice.currency, lang)}</Text>
+                    <Text style={styles.grandTotalValue}>{formatPdfCurrency(grandTotal, invoice.currency, lang)}</Text>
                   </View>
                 </>
               )
@@ -975,12 +983,12 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 {invoice.vat_amount_sek != null && invoice.vat_amount_sek !== 0 && (
                   <View style={styles.totalRow}>
                     <Text style={[styles.totalLabel, { fontSize: 9 }]}>{L.vatInSek(invoice.exchange_rate ?? '')}</Text>
-                    <Text style={[styles.totalValue, { fontSize: 9 }]}>{formatCurrency(invoice.vat_amount_sek, 'SEK', lang)}</Text>
+                    <Text style={[styles.totalValue, { fontSize: 9 }]}>{formatPdfCurrency(invoice.vat_amount_sek, 'SEK', lang)}</Text>
                   </View>
                 )}
                 <View style={styles.totalRow}>
                   <Text style={[styles.totalLabel, { fontSize: 9 }]}>{L.totalInSek}</Text>
-                  <Text style={[styles.totalValue, { fontSize: 9 }]}>{formatCurrency(invoice.total_sek, 'SEK', lang)}</Text>
+                  <Text style={[styles.totalValue, { fontSize: 9 }]}>{formatPdfCurrency(invoice.total_sek, 'SEK', lang)}</Text>
                 </View>
               </View>
             )}
@@ -1036,7 +1044,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                 const work = i.work_type ? `, ${i.work_type}` : ''
                 return (
                   <Text key={idx} style={styles.deductionLineItem}>
-                    {`${kind}${work}: ${i.description}, ${formatCurrency(i.deduction_amount ?? 0, invoice.currency, lang)}`}
+                    {`${kind}${work}: ${i.description}, ${formatPdfCurrency(i.deduction_amount ?? 0, invoice.currency, lang)}`}
                   </Text>
                 )
               })}

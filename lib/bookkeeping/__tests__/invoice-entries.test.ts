@@ -356,6 +356,34 @@ describe('createInvoiceJournalEntry: per-article revenue account override', () =
     expect(debit).toBe(1250)
   })
 
+  it('credits a selected liability account without treating the principal as revenue', async () => {
+    const invoice = makeInvoice({
+      subtotal: 10000,
+      vat_amount: 0,
+      total: 10000,
+      vat_treatment: 'exempt',
+      vat_rate: 0,
+      items: [
+        makeItem({
+          description: 'Återbetalningsbar deposition',
+          unit_price: 10000,
+          line_total: 10000,
+          vat_rate: 0,
+          vat_amount: 0,
+          revenue_account: '2897',
+        }),
+      ],
+    })
+
+    await createInvoiceJournalEntry(null as never, 'company-1', 'user-1', invoice)
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(input.lines.find((line) => line.account_number === '1510')?.debit_amount).toBe(10000)
+    expect(input.lines.find((line) => line.account_number === '2897')?.credit_amount).toBe(10000)
+    expect(input.lines.some((line) => line.account_number.startsWith('3'))).toBe(false)
+    expect(input.lines.some((line) => line.account_number.startsWith('26'))).toBe(false)
+  })
+
   it('ignores a per-line override on reverse charge: revenue stays on 3308', async () => {
     const invoice = makeInvoice({
       subtotal: 5000,
@@ -534,6 +562,32 @@ describe('createInvoiceCashEntry: per-line VAT', () => {
     const totalDebit = input.lines.reduce((sum, l) => sum + l.debit_amount, 0)
     const totalCredit = input.lines.reduce((sum, l) => sum + l.credit_amount, 0)
     expect(totalDebit).toBe(totalCredit)
+  })
+
+  it('cash method credits a selected liability account at payment', async () => {
+    const invoice = makeInvoice({
+      subtotal: 10000,
+      vat_amount: 0,
+      total: 10000,
+      vat_treatment: 'exempt',
+      items: [
+        makeItem({
+          description: 'Återbetalningsbar deposition',
+          unit_price: 10000,
+          line_total: 10000,
+          vat_rate: 0,
+          vat_amount: 0,
+          revenue_account: '2897',
+        }),
+      ],
+    })
+
+    await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, '2024-07-01')
+    const input = mockedCreateEntry.mock.calls[0][3]
+
+    expect(input.lines.find((line) => line.account_number === '1930')?.debit_amount).toBe(10000)
+    expect(input.lines.find((line) => line.account_number === '2897')?.credit_amount).toBe(10000)
+    expect(input.lines.some((line) => line.account_number.startsWith('3'))).toBe(false)
   })
 })
 

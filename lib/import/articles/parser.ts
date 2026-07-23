@@ -157,13 +157,13 @@ export function parseArticlesFile(
     const { rate: vatRate, note: vatNote } = normalizeVatRate(cell(row, columns.vat_rate_col))
     if (vatNote) vatNoteCount++
 
-    // Keep only well-formed BAS class-3 overrides; the execute route validates
+    // Keep only well-formed BAS class 1-3 overrides; the execute route validates
     // them further against the chart of accounts.
     const revenueRaw = cell(row, columns.revenue_account_col)
     let revenueAccount: string | null = null
     if (revenueRaw) {
       const digits = revenueRaw.replace(/\s/g, '')
-      if (/^3\d{3}$/.test(digits)) revenueAccount = digits
+      if (/^[123]\d{3}$/.test(digits)) revenueAccount = digits
       else droppedAccountCount++
     }
 
@@ -203,7 +203,7 @@ export function parseArticlesFile(
     warnings.push(`${vatNoteCount} rad${vatNoteCount === 1 ? '' : 'er'} hade en momssats som avrundades till närmaste giltiga (0/6/12/25 %).`)
   }
   if (droppedAccountCount > 0) {
-    warnings.push(`${droppedAccountCount} rad${droppedAccountCount === 1 ? '' : 'er'} hade ett ogiltigt försäljningskonto (måste vara 3xxx) som ignorerades.`)
+    warnings.push(`${droppedAccountCount} rad${droppedAccountCount === 1 ? '' : 'er'} hade ett ogiltigt bokföringskonto (måste vara klass 1-3) som ignorerades.`)
   }
   if (rows.length === 0) {
     warnings.push('Inga giltiga artiklar hittades. Kontrollera att namn-/benämningskolumnen är korrekt mappad.')

@@ -48,11 +48,11 @@ export default function ArticleForm({
   const { company } = useCompany()
   const supabase = createClient()
   const t = useTranslations('form_article')
-  // Active class-3 (revenue) accounts for the combobox. The combobox accepts
+  // Active class 1-3 posting accounts for the combobox. The combobox accepts
   // unknown 4-digit numbers optimistically: the API answers with
   // ACCOUNTS_NOT_IN_CHART for activatable BAS accounts, and the host page's
   // ActivateAccountsDialog flow takes over (same UX as the journal entry form).
-  const [revenueAccounts, setRevenueAccounts] = useState<BASAccount[]>([])
+  const [postingAccounts, setPostingAccounts] = useState<BASAccount[]>([])
   // Inline account creation: what the user typed in the combobox when they hit
   // "Skapa konto": non-null opens AddAccountDialog prefilled with it.
   const [createAccountPrefill, setCreateAccountPrefill] = useState<string | null>(null)
@@ -66,9 +66,11 @@ export default function ArticleForm({
 
   async function fetchRevenueAccounts() {
     try {
-      const res = await fetch('/api/bookkeeping/accounts?class=3')
+      const res = await fetch('/api/bookkeeping/accounts')
       const body = await res.json()
-      setRevenueAccounts((body?.data as BASAccount[]) || [])
+      const accounts = ((body?.data as BASAccount[]) || [])
+        .filter((account) => account.account_class >= 1 && account.account_class <= 3)
+      setPostingAccounts(accounts)
     } catch {
       // Non-fatal: the combobox degrades to free 4-digit entry.
     }
@@ -141,7 +143,11 @@ export default function ArticleForm({
         // ISO 4217 alpha-3; the authoritative allow-list is the currencies
         // table (the DB FK rejects unknown codes).
         currency: z.string().regex(/^[A-Z]{3}$/),
-        revenue_account: z.string().optional(),
+        revenue_account: z
+          .string()
+          .regex(/^[123]\d{3}$/, t('posting_account_invalid'))
+          .or(z.literal(''))
+          .optional(),
         cost_price: z.number().nonnegative().optional(),
         ean: z.string().optional(),
         housework_type: z.string().optional(),
@@ -345,12 +351,15 @@ export default function ArticleForm({
                 render={({ field }) => (
                   <AccountCombobox
                     value={field.value || ''}
-                    accounts={revenueAccounts}
+                    accounts={postingAccounts}
                     onChange={field.onChange}
                     onCreateAccount={(prefill) => setCreateAccountPrefill(prefill)}
                   />
                 )}
               />
+              {errors.revenue_account && (
+                <p className="text-sm text-destructive">{errors.revenue_account.message}</p>
+              )}
               <p className="text-xs text-muted-foreground">{t('revenue_account_hint')}</p>
             </div>
 
@@ -476,7 +485,7 @@ export default function ArticleForm({
 
       {/* Inline custom-account creation (renders in a portal, outside the form).
           After create: refresh the chart and select the new number as the
-          article's revenue account: mirrors the journal entry form. */}
+          article's posting account: mirrors the journal entry form. */}
       <AddAccountDialog
         open={createAccountPrefill != null}
         onOpenChange={(next) => {

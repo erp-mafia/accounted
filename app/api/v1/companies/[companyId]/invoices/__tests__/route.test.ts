@@ -995,6 +995,56 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
     expect(insertedItems![0].revenue_account).toBe('3041')
   })
 
+  it('persists a class-2 posting account on an invoice item', async () => {
+    withInvoiceWriteScope()
+    const createdInvoice = { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', status: 'draft' }
+    let insertedItems: Array<Record<string, unknown>> | null = null
+    mockServiceClient.mockReturnValue({
+      from: (table: string) => {
+        const handler: ProxyHandler<object> = {
+          get(_target, prop) {
+            if (prop === 'insert') {
+              return (rows: Record<string, unknown> | Array<Record<string, unknown>>) => {
+                if (table === 'invoice_items') insertedItems = rows as Array<Record<string, unknown>>
+                return new Proxy({}, handler)
+              }
+            }
+            if (prop === 'then') {
+              const data = table === 'company_members'
+                ? { company_id: COMPANY_ID, role: 'owner' }
+                : table === 'customers'
+                  ? SWEDISH_BUSINESS_CUSTOMER
+                  : table === 'chart_of_accounts'
+                    ? [{ account_number: '2897' }]
+                    : table === 'invoices'
+                      ? createdInvoice
+                      : null
+              return (resolve: (value: unknown) => void) => resolve({ data, error: null })
+            }
+            return () => new Proxy({}, handler)
+          },
+        }
+        return new Proxy({}, handler)
+      },
+    })
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        items: [
+          { description: 'Deposition', quantity: 1, unit: 'st', unit_price: 1000, vat_rate: 0, revenue_account: '2897' },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(insertedItems![0].revenue_account).toBe('2897')
+  })
+
   it('rejects a revenue_account not in the chart of accounts', async () => {
     withInvoiceWriteScope()
     mockServiceClient.mockReturnValue(

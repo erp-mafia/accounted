@@ -466,7 +466,7 @@ async function commitCreateArticle(
 
   if (validated.revenue_account) {
     const ok = await isValidRevenueAccount(supabase, companyId, validated.revenue_account)
-    if (!ok) return { error: 'Revenue account is not an active class-3 account', status: 400 }
+    if (!ok) return { error: 'Posting account is not an active class 1-3 account', status: 400 }
   }
 
   const { data, error } = await supabase
@@ -524,7 +524,7 @@ async function commitUpdateArticle(
 
   if (validated.revenue_account) {
     const ok = await isValidRevenueAccount(supabase, companyId, validated.revenue_account)
-    if (!ok) return { error: 'Revenue account is not an active class-3 account', status: 400 }
+    if (!ok) return { error: 'Posting account is not an active class 1-3 account', status: 400 }
   }
 
   const { article_id, ...rest } = validated
@@ -1067,14 +1067,14 @@ async function commitCreateInvoice(
     vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
   }
 
-  // Validate any per-line revenue-account override (defense in depth: the field
+  // Validate any per-line posting-account override (defense in depth: the legacy field
   // is frozen onto invoice_items and flows to generatePerRateLines()).
   const overrideAccounts = Array.from(
     new Set(billableItems.map((i) => i.revenue_account).filter((a): a is string => !!a)),
   )
   for (const acct of overrideAccounts) {
     if (!(await isValidRevenueAccount(supabase, companyId, acct))) {
-      return { error: `Försäljningskonto ${acct} är inte ett aktivt intäktskonto (klass 3)`, status: 400 }
+      return { error: `Bokföringskonto ${acct} är inte ett aktivt balans- eller intäktskonto (klass 1-3)`, status: 400 }
     }
   }
 
@@ -4923,4 +4923,3 @@ async function commitPendingOperationInner(
     data: result.data,
   }
 }
-

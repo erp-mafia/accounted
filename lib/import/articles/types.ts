@@ -36,7 +36,7 @@ export interface ParsedArticleRow {
    * edit step; cleared once the operator confirms the rate. Not persisted.
    */
   vat_rate_adjusted: boolean
-  /** Optional BAS class-3 revenue-account override (validated server-side). */
+  /** Optional BAS class 1-3 posting-account override (validated server-side). */
   revenue_account: string | null
   cost_price: number | null
   ean: string | null
