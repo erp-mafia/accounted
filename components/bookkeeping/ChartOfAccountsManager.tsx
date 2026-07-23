@@ -1,12 +1,12 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { AccountNumber } from '@/components/ui/account-number'
 import {
@@ -18,15 +18,14 @@ import { EditAccountDialog } from './EditAccountDialog'
 import { PruneAccountsDialog } from './PruneAccountsDialog'
 import {
   Search,
-  ChevronDown,
   ChevronRight,
   Plus,
   Pencil,
   Trash2,
   Loader2,
   CheckCircle2,
-  BookOpen,
 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import type { BASAccount } from '@/types'
 import { BAS_REFERENCE, isStandardBASAccount, type BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -48,6 +47,7 @@ interface ReferenceAccount extends BASReferenceAccount {
 export default function ChartOfAccountsManager() {
   const { toast } = useToast()
   const t = useTranslations('chart_of_accounts')
+  const tNav = useTranslations('nav')
   const tCommon = useTranslations('common')
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
 
@@ -65,10 +65,14 @@ export default function ChartOfAccountsManager() {
     }
   }
 
-  // View state
+  // View state. Mina konton renders flat (concept scene 30), so its band
+  // rows track the classes the user has explicitly FOLDED AWAY; the BAS
+  // catalog (~1300 rows) keeps the inverse default and tracks the classes
+  // the user has opened.
   const [view, setView] = useState<'my-accounts' | 'bas-catalog'>('my-accounts')
   const [searchQuery, setSearchQuery] = useState('')
-  const [expandedClasses, setExpandedClasses] = useState<Set<number>>(new Set())
+  const [collapsedMyClasses, setCollapsedMyClasses] = useState<Set<number>>(new Set())
+  const [expandedCatalogClasses, setExpandedCatalogClasses] = useState<Set<number>>(new Set())
   const [hideK2Excluded, setHideK2Excluded] = useState<boolean | null>(null)
 
   // Data state
@@ -278,17 +282,23 @@ export default function ChartOfAccountsManager() {
   }
 
   // -------------------------------------------
-  // Toggle class expansion
+  // Toggle class expansion (band rows)
   // -------------------------------------------
 
-  function toggleClass(cls: number) {
-    setExpandedClasses((prev) => {
+  function toggleMyClass(cls: number) {
+    setCollapsedMyClasses((prev) => {
       const next = new Set(prev)
-      if (next.has(cls)) {
-        next.delete(cls)
-      } else {
-        next.add(cls)
-      }
+      if (next.has(cls)) next.delete(cls)
+      else next.add(cls)
+      return next
+    })
+  }
+
+  function toggleCatalogClass(cls: number) {
+    setExpandedCatalogClasses((prev) => {
+      const next = new Set(prev)
+      if (next.has(cls)) next.delete(cls)
+      else next.add(cls)
       return next
     })
   }
@@ -343,59 +353,105 @@ export default function ChartOfAccountsManager() {
   // Render
   // -------------------------------------------
 
-  if (loading) {
-    return (
-      <Card>
-        <CardContent className="p-8 text-center text-muted-foreground">
-          <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
-          {t('loading')}
-        </CardContent>
-      </Card>
-    )
+  const shownCount = view === 'my-accounts' ? filteredAccounts.length : filteredReference.length
+  const totalCount = view === 'my-accounts' ? accounts.length : referenceAccounts.length
+
+  // Page header + toolbar render even while loading so the chrome is stable.
+  const header = (
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <h1 className="font-display text-2xl leading-8 tracking-tight">{tNav('chart_of_accounts')}</h1>
+      <div className="flex items-center gap-4">
+        <Badge variant="outline" className="font-normal">{t('bas_version_chip')}</Badge>
+        <button type="button" className={QUIET_LINK_CLASS} onClick={() => setPruneDialogOpen(true)}>
+          {t('prune_button')}
+        </button>
+        <Button onClick={() => setAddDialogOpen(true)}>
+          <Plus className="mr-2 h-4 w-4" />
+          {t('add_own')}
+        </Button>
+      </div>
+    </div>
+  )
+
+  const switchView = (next: 'my-accounts' | 'bas-catalog') => {
+    setView(next)
+    setCollapsedMyClasses(new Set())
+    setExpandedCatalogClasses(new Set())
+    if (next === 'bas-catalog') void ensureReferenceLoaded()
   }
 
-  return (
-    <div className="space-y-4">
-      {/* Header controls */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <Tabs
-          value={view}
-          onValueChange={(v) => {
-            const next = v as 'my-accounts' | 'bas-catalog'
-            setView(next)
-            setExpandedClasses(new Set())
-            if (next === 'bas-catalog') void ensureReferenceLoaded()
-          }}
+  // Concept band row (Klass N: label), clickable to fold the class away.
+  const bandRow = (
+    cls: number,
+    open: boolean,
+    onToggle: () => void,
+    countLabel: string,
+    colSpan: number,
+  ) => (
+    <tr key={`band-${cls}`}>
+      <td colSpan={colSpan} className="border-b border-border p-0">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          className="flex w-full items-center gap-1.5 bg-muted/40 px-3 py-[7px] text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground transition-colors duration-150 hover:bg-muted/60"
         >
-          <TabsList>
-            <TabsTrigger value="my-accounts">
-              {t('tab_my_accounts')}
-              <span className="ml-1.5 text-xs text-muted-foreground tabular-nums">
-                ({accounts.length})
-              </span>
-            </TabsTrigger>
-            <TabsTrigger value="bas-catalog">
-              <BookOpen className="mr-1.5 h-3.5 w-3.5" />
-              {t('tab_bas_catalog')}
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+          <ChevronRight className={cn('h-3 w-3 shrink-0 transition-transform duration-200', open && 'rotate-90')} />
+          {t('class_heading', { cls, label: classLabel(cls) })}
+          <span className="font-normal normal-case tabular-nums">{countLabel}</span>
+        </button>
+      </td>
+    </tr>
+  )
 
-        {view === 'my-accounts' && (
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" onClick={() => setPruneDialogOpen(true)}>
-              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-              {t('prune_button')}
-            </Button>
-            <Button size="sm" onClick={() => setAddDialogOpen(true)}>
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              {t('add_own')}
-            </Button>
-          </div>
-        )}
+  return (
+    <div className="space-y-8">
+      {header}
 
+      {/* Toolbar: seg + search; the K2 filter rides far right in catalog view */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'my-accounts'}
+            onClick={() => switchView('my-accounts')}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
+              view === 'my-accounts'
+                ? 'border border-border bg-card font-medium text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {t('tab_my_accounts')}
+            <span className="font-normal text-muted-foreground tabular-nums">{accounts.length}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'bas-catalog'}
+            onClick={() => switchView('bas-catalog')}
+            className={cn(
+              'rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
+              view === 'bas-catalog'
+                ? 'border border-border bg-card font-medium text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {t('tab_bas_catalog')}
+          </button>
+        </div>
+        <div className="relative min-w-[190px] max-w-xs flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder={t('search_placeholder')}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="h-9 pl-10"
+          />
+        </div>
         {view === 'bas-catalog' && (
-          <label className="flex items-center gap-2 text-sm">
+          <label className="ml-auto flex items-center gap-2 text-sm">
             <Switch
               checked={hideK2Excluded ?? false}
               onCheckedChange={setHideK2Excluded}
@@ -406,117 +462,103 @@ export default function ChartOfAccountsManager() {
         )}
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder={t('search_placeholder')}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-9"
-        />
-      </div>
-
-      {/* My Accounts view */}
-      {view === 'my-accounts' && (
-        <div className="space-y-2">
-          {Object.entries(groupedAccounts)
-            .sort(([a], [b]) => Number(a) - Number(b))
-            .map(([cls, classAccounts]) => {
-              const classNum = Number(cls)
-              const isExpanded = expandedClasses.has(classNum) || !!searchQuery
-              const activeCount = classAccounts.filter((a) => a.is_active).length
-
-              return (
-                <Card key={cls}>
-                  <button
-                    onClick={() => toggleClass(classNum)}
-                    className="w-full flex items-center justify-between p-4 hover:bg-muted/50 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      {isExpanded ? (
-                        <ChevronDown className="h-4 w-4 shrink-0" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 shrink-0" />
-                      )}
-                      <span className="font-semibold text-left">
-                        {t('class_heading', { cls, label: classLabel(classNum) })}
-                      </span>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {t('active_count_label', { active: activeCount, total: classAccounts.length })}
-                      </span>
-                    </div>
-                  </button>
-
-                  {isExpanded && (
-                    <CardContent className="pt-0 pb-4">
-                      <table className="w-full text-sm">
-                        <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                          <tr className="border-b text-left">
-                            <th className="py-2 w-24">{t('col_account')}</th>
-                            <th className="py-2">{t('col_name')}</th>
-                            <th className="py-2 w-20 text-center">{t('col_sru')}</th>
-                            <th className="py-2 w-24 text-center">{t('col_type')}</th>
-                            <th className="py-2 w-20 text-right">{t('col_usage')}</th>
-                            <th className="py-2 w-16 text-center">{t('col_active')}</th>
-                            <th className="py-2 w-20 text-right"></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {classAccounts.map((account) => (
+      {loading ? (
+        <div className="p-8 text-center text-muted-foreground">
+          <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
+          {t('loading')}
+        </div>
+      ) : view === 'my-accounts' ? (
+        filteredAccounts.length === 0 ? (
+          <p className="px-1 py-12 text-center text-sm text-muted-foreground">
+            {searchQuery ? t('no_matches') : t('no_accounts')}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[13px]">
+              <thead>
+                <tr>
+                  <th className={cn(TH_CLASS, 'w-[96px]')}>{t('col_account')}</th>
+                  <th className={cn(TH_CLASS, 'w-full')}>{t('col_name')}</th>
+                  <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>{t('col_sru')}</th>
+                  <th className={cn(TH_CLASS, 'hidden md:table-cell')}>{t('col_type')}</th>
+                  <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>{t('col_usage')}</th>
+                  <th className={TH_CLASS}>{t('col_active')}</th>
+                  <th className={cn(TH_CLASS, 'w-[84px]')} aria-hidden="true"></th>
+                </tr>
+              </thead>
+              <tbody className="stagger-enter">
+                {Object.entries(groupedAccounts)
+                  .sort(([a], [b]) => Number(a) - Number(b))
+                  .map(([cls, classAccounts]) => {
+                    const classNum = Number(cls)
+                    const open = !collapsedMyClasses.has(classNum) || !!searchQuery
+                    const activeCount = classAccounts.filter((a) => a.is_active).length
+                    return (
+                      <Fragment key={cls}>
+                        {bandRow(
+                          classNum,
+                          open,
+                          () => toggleMyClass(classNum),
+                          t('active_count_label', { active: activeCount, total: classAccounts.length }),
+                          7,
+                        )}
+                        {open &&
+                          classAccounts.map((account) => (
                             <tr
                               key={account.id}
-                              className={`border-b last:border-0 transition-opacity ${
-                                !account.is_active ? 'opacity-50' : ''
-                              }`}
+                              className={cn(
+                                'group transition-colors duration-150 hover:bg-secondary/35',
+                                !account.is_active && 'opacity-50',
+                              )}
                             >
-                              <td className="py-2">
+                              <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
                                 <AccountNumber number={account.account_number} name={account.account_name} />
                               </td>
-                              <td className="py-2">
-                                <span className="flex items-center gap-1.5">
-                                  {account.account_name}
+                              <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                                <span className="flex min-w-0 items-center gap-1.5">
+                                  <span className="truncate">{account.account_name}</span>
                                   {account.is_system_account && (
-                                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                    <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
                                       {t('system_badge')}
                                     </span>
                                   )}
                                   {!isStandardBASAccount(account.account_number) && (
-                                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                    <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
                                       {t('own_badge')}
                                     </span>
                                   )}
                                 </span>
                               </td>
-                              <td className="py-2 text-center">
-                                <span className="text-xs font-mono text-muted-foreground">
-                                  {account.sru_code || '\u2014'}
-                                </span>
+                              <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                                {account.sru_code || ''}
                               </td>
-                              <td className="py-2 text-center">
-                                <span className="text-xs text-muted-foreground">
-                                  {typeLabel(account.account_type)}
-                                </span>
+                              <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground md:table-cell')}>
+                                {typeLabel(account.account_type)}
                               </td>
-                              <td className="py-2 text-right">
-                                <span className="text-xs text-muted-foreground tabular-nums">
-                                  {usageCounts.get(account.account_number) ?? '\u2014'}
-                                </span>
+                              <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                                {usageCounts.get(account.account_number) ?? ''}
                               </td>
-                              <td className="py-2 text-center">
+                              <td className={cn(TD_CLASS, 'whitespace-nowrap py-[9px]')}>
                                 <Switch
                                   checked={account.is_active}
                                   onCheckedChange={() => toggleActive(account)}
                                   disabled={togglingAccount === account.account_number}
+                                  aria-label={t('col_active') + ' ' + account.account_number}
                                   className="scale-75"
                                 />
                               </td>
-                              <td className="py-2 text-right">
-                                <div className="flex items-center justify-end gap-1">
+                              <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[5px]')}>
+                                <span
+                                  className={cn(
+                                    'inline-flex items-center justify-end gap-1 transition-opacity duration-150',
+                                    'opacity-0 focus-within:opacity-100 group-hover:opacity-100',
+                                  )}
+                                >
                                   <Button
                                     variant="ghost"
                                     size="icon"
-                                    className="h-10 w-10"
+                                    className="h-8 w-8"
+                                    aria-label={tCommon('edit')}
                                     onClick={() => setEditAccount(account)}
                                   >
                                     <Pencil className="h-3.5 w-3.5" />
@@ -525,7 +567,8 @@ export default function ChartOfAccountsManager() {
                                     <Button
                                       variant="ghost"
                                       size="icon"
-                                      className="h-10 w-10 text-destructive hover:text-destructive"
+                                      className="h-8 w-8 text-destructive hover:text-destructive"
+                                      aria-label={t('delete_confirm_action')}
                                       onClick={() => deleteAccount(account)}
                                       disabled={deletingAccount === account.account_number}
                                     >
@@ -536,151 +579,115 @@ export default function ChartOfAccountsManager() {
                                       )}
                                     </Button>
                                   )}
-                                </div>
+                                </span>
                               </td>
                             </tr>
                           ))}
-                        </tbody>
-                      </table>
-                    </CardContent>
-                  )}
-                </Card>
-              )
-            })}
-
-          {filteredAccounts.length === 0 && (
-            <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                {searchQuery ? t('no_matches') : t('no_accounts')}
-              </CardContent>
-            </Card>
+                      </Fragment>
+                    )
+                  })}
+              </tbody>
+            </table>
+          </div>
+        )
+      ) : (
+        <div>
+          {referenceLoading && referenceAccounts.length === 0 ? (
+            <div className="p-8 text-center text-muted-foreground">
+              <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
+              {t('loading')}
+            </div>
+          ) : filteredReference.length === 0 ? (
+            <p className="px-1 py-12 text-center text-sm text-muted-foreground">{t('no_matches')}</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-[13px]">
+                <thead>
+                  <tr>
+                    <th className={cn(TH_CLASS, 'w-[96px]')}>{t('col_account')}</th>
+                    <th className={cn(TH_CLASS, 'w-full')}>{t('col_name')}</th>
+                    <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>{t('col_sru')}</th>
+                    <th className={cn(TH_CLASS, 'hidden md:table-cell')}>{t('col_type')}</th>
+                    <th className={cn(TH_CLASS, 'text-right')}>{t('col_status')}</th>
+                  </tr>
+                </thead>
+                <tbody className="stagger-enter">
+                  {Object.entries(groupedReference)
+                    .sort(([a], [b]) => Number(a) - Number(b))
+                    .map(([cls, classAccounts]) => {
+                      const classNum = Number(cls)
+                      const open = expandedCatalogClasses.has(classNum) || !!searchQuery
+                      const activatedCount = classAccounts.filter((a) => a.is_activated).length
+                      return (
+                        <Fragment key={cls}>
+                          {bandRow(
+                            classNum,
+                            open,
+                            () => toggleCatalogClass(classNum),
+                            t('active_count_label', { active: activatedCount, total: classAccounts.length }),
+                            5,
+                          )}
+                          {open &&
+                            classAccounts.map((account) => (
+                              <tr
+                                key={account.account_number}
+                                className="group transition-colors duration-150 hover:bg-secondary/35"
+                              >
+                                <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
+                                  <AccountNumber number={account.account_number} name={account.account_name} />
+                                </td>
+                                <td
+                                  className={cn(TD_CLASS, 'max-w-0 w-full')}
+                                  title={account.description || undefined}
+                                >
+                                  <span className="block truncate">{account.account_name}</span>
+                                </td>
+                                <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                                  {account.sru_code || ''}
+                                </td>
+                                <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground md:table-cell')}>
+                                  {typeLabel(account.account_type)}
+                                </td>
+                                <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
+                                  {account.is_activated ? (
+                                    <span className="inline-flex items-center gap-1 text-xs text-success">
+                                      <CheckCircle2 className="h-3.5 w-3.5" />
+                                      {t('activated')}
+                                    </span>
+                                  ) : (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-7 px-3.5 text-xs"
+                                      onClick={() => activateBASAccount(account.account_number)}
+                                      disabled={activatingAccounts.has(account.account_number)}
+                                    >
+                                      {activatingAccounts.has(account.account_number) ? (
+                                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                                      ) : (
+                                        <Plus className="mr-1 h-3 w-3" />
+                                      )}
+                                      {t('add')}
+                                    </Button>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                        </Fragment>
+                      )
+                    })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
 
-      {/* BAS Catalog view */}
-      {view === 'bas-catalog' && (
-        <div className="space-y-2">
-          {referenceLoading && referenceAccounts.length === 0 && (
-            <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
-                {t('loading')}
-              </CardContent>
-            </Card>
-          )}
-          {Object.entries(groupedReference)
-            .sort(([a], [b]) => Number(a) - Number(b))
-            .map(([cls, classAccounts]) => {
-              const classNum = Number(cls)
-              const isExpanded = expandedClasses.has(classNum) || !!searchQuery
-              const activatedCount = classAccounts.filter((a) => a.is_activated).length
-
-              return (
-                <Card key={cls}>
-                  <button
-                    onClick={() => toggleClass(classNum)}
-                    className="w-full flex items-center justify-between p-4 hover:bg-muted/50 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      {isExpanded ? (
-                        <ChevronDown className="h-4 w-4 shrink-0" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 shrink-0" />
-                      )}
-                      <span className="font-semibold text-left">
-                        {t('class_heading', { cls, label: classLabel(classNum) })}
-                      </span>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {t('active_count_label', { active: activatedCount, total: classAccounts.length })}
-                      </span>
-                    </div>
-                  </button>
-
-                  {isExpanded && (
-                    <CardContent className="pt-0 pb-4">
-                      <table className="w-full text-sm">
-                        <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                          <tr className="border-b text-left">
-                            <th className="py-2 w-24">{t('col_account')}</th>
-                            <th className="py-2">{t('col_name')}</th>
-                            <th className="py-2 w-20 text-center">{t('col_sru')}</th>
-                            <th className="py-2 w-24 text-center">{t('col_type')}</th>
-                            <th className="py-2 w-28 text-right">{t('col_status')}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {classAccounts.map((account) => (
-                            <tr
-                              key={account.account_number}
-                              className={`border-b last:border-0 ${
-                                account.is_activated ? 'bg-muted/30' : ''
-                              }`}
-                            >
-                              <td className="py-2">
-                                <AccountNumber number={account.account_number} name={account.account_name} />
-                              </td>
-                              <td className="py-2">
-                                <div>
-                                  <span>{account.account_name}</span>
-                                  {account.description && (
-                                    <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
-                                      {account.description}
-                                    </p>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="py-2 text-center">
-                                <span className="text-xs font-mono text-muted-foreground">
-                                  {account.sru_code || '\u2014'}
-                                </span>
-                              </td>
-                              <td className="py-2 text-center">
-                                <span className="text-xs text-muted-foreground">
-                                  {typeLabel(account.account_type)}
-                                </span>
-                              </td>
-                              <td className="py-2 text-right">
-                                {account.is_activated ? (
-                                  <span className="inline-flex items-center gap-1 text-xs text-success">
-                                    <CheckCircle2 className="h-3.5 w-3.5" />
-                                    {t('activated')}
-                                  </span>
-                                ) : (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-9 text-xs"
-                                    onClick={() => activateBASAccount(account.account_number)}
-                                    disabled={activatingAccounts.has(account.account_number)}
-                                  >
-                                    {activatingAccounts.has(account.account_number) ? (
-                                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                                    ) : (
-                                      <Plus className="mr-1 h-3 w-3" />
-                                    )}
-                                    {t('add')}
-                                  </Button>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </CardContent>
-                  )}
-                </Card>
-              )
-            })}
-
-          {!referenceLoading && filteredReference.length === 0 && (
-            <Card>
-              <CardContent className="p-8 text-center text-muted-foreground">
-                {t('no_matches')}
-              </CardContent>
-            </Card>
-          )}
-        </div>
+      {/* Footer note (concept pgnote) */}
+      {!loading && totalCount > 0 && (
+        <p className="px-1 text-xs text-muted-foreground">
+          {t('footer_note', { shown: shownCount, total: totalCount })}
+        </p>
       )}
 
       {/* Dialogs */}

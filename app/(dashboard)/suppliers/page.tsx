@@ -2,19 +2,20 @@
 
 import { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
-import { PageHeader } from '@/components/ui/page-header'
+import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Search, Building2, Lock } from 'lucide-react'
 import Link from 'next/link'
+import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Supplier, SupplierType, CreateSupplierInput } from '@/types'
@@ -39,17 +40,13 @@ const SUPPLIER_TYPE_KEYS: Record<SupplierType, string> = {
 }
 const INITIAL_VISIBLE_ROWS = 100
 
+// "Betalsätt" cell (concept scene 26): the supplier's primary payment route,
+// e.g. "BG 5050-1055". First match wins, mirroring the detail page's order.
 function getPaymentInfo(supplier: Supplier, t: (key: string) => string): { label: string; value: string } | null {
   if (supplier.bankgiro) return { label: t('label_bg'), value: supplier.bankgiro }
   if (supplier.plusgiro) return { label: t('label_pg'), value: supplier.plusgiro }
   if (supplier.iban) return { label: t('label_iban'), value: supplier.iban }
   if (supplier.bank_account) return { label: t('label_bank_account'), value: supplier.bank_account }
-  return null
-}
-
-function formatLocation(supplier: Supplier): string | null {
-  if (supplier.city && supplier.country) return `${supplier.city}, ${supplier.country}`
-  if (supplier.city) return supplier.city
   return null
 }
 
@@ -66,6 +63,7 @@ export default function SuppliersPage() {
   const { toast } = useToast()
   const supabase = createClient()
   const tCommon = useTranslations('common')
+  const router = useRouter()
 
   async function fetchSuppliers() {
     if (!company) return
@@ -90,6 +88,7 @@ export default function SuppliersPage() {
 
   useEffect(() => {
     fetchSuppliers()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function handleCreateSupplier(data: CreateSupplierInput) {
@@ -131,148 +130,137 @@ export default function SuppliersPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader
-        title={t('title')}
-        action={
-          <div className="flex items-center gap-2">
-            <ReportExportMenu
-              size="default"
-              items={[
-                { format: 'xlsx', href: '/api/export/suppliers' },
-                { format: 'csv', href: '/api/export/suppliers?format=csv' },
-              ]}
-            />
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button
-                  disabled={!canWrite}
-                  title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-                >
-                  {canWrite ? (
-                    <Plus className="mr-2 h-4 w-4" />
-                  ) : (
-                    <Lock className="mr-2 h-4 w-4" />
-                  )}
-                  {t('new_supplier')}
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-                <DialogHeader>
-                  <DialogTitle>{t('add_supplier')}</DialogTitle>
-                </DialogHeader>
-                <SupplierForm
-                  onSubmit={handleCreateSupplier}
-                  isLoading={isCreating}
-                />
-              </DialogContent>
-            </Dialog>
-          </div>
-        }
-      />
-
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder={t('search_placeholder')}
-          value={searchTerm}
-          onChange={(e) => {
-            setSearchTerm(e.target.value)
-            setVisibleCount(INITIAL_VISIBLE_ROWS)
-          }}
-          className="pl-10"
-        />
+      {/* Page header (concept scene 26): title + export + Ny leverantör */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+        <div className="flex items-center gap-2">
+          <ReportExportMenu
+            size="default"
+            items={[
+              { format: 'xlsx', href: '/api/export/suppliers' },
+              { format: 'csv', href: '/api/export/suppliers?format=csv' },
+            ]}
+          />
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button
+                disabled={!canWrite}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              >
+                {canWrite ? (
+                  <Plus className="mr-2 h-4 w-4" />
+                ) : (
+                  <Lock className="mr-2 h-4 w-4" />
+                )}
+                {t('new_supplier')}
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{t('add_supplier')}</DialogTitle>
+              </DialogHeader>
+              <SupplierForm
+                onSubmit={handleCreateSupplier}
+                isLoading={isCreating}
+              />
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
-      {/* Supplier list */}
+      {/* Toolbar: search (concept) */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[220px] max-w-xs flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder={t('search_placeholder')}
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value)
+              setVisibleCount(INITIAL_VISIBLE_ROWS)
+            }}
+            className="h-9 pl-10"
+          />
+        </div>
+      </div>
+
       {isLoading ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {[1, 2, 3].map((i) => (
-            <Card key={i}>
-              <CardContent className="p-6 space-y-3">
-                <Skeleton className="h-5 w-1/2" />
-                <Skeleton className="h-3 w-2/3" />
-                <div className="h-px bg-muted" />
-                <Skeleton className="h-3 w-1/2" />
-                <Skeleton className="h-3 w-1/3" />
-              </CardContent>
-            </Card>
+        <div className="space-y-3">
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} className="h-10 w-full" />
           ))}
         </div>
       ) : filteredSuppliers.length === 0 ? (
-        <Card>
-          <CardContent className="p-0">
-            {searchTerm ? (
-              <EmptyState
-                icon={Building2}
-                title={t('no_search_results_title')}
-                description={t('no_search_results_description', { term: searchTerm })}
-              />
-            ) : (
-              <EmptyState
-                icon={Building2}
-                title={t('empty_title')}
-                description={t('empty_description')}
-                actionLabel={canWrite ? t('new_supplier') : undefined}
-                onAction={canWrite ? () => setIsDialogOpen(true) : undefined}
-              />
-            )}
-          </CardContent>
-        </Card>
+        searchTerm ? (
+          <EmptyState
+            icon={Building2}
+            title={t('no_search_results_title')}
+            description={t('no_search_results_description', { term: searchTerm })}
+          />
+        ) : (
+          <EmptyState
+            icon={Building2}
+            title={t('empty_title')}
+            description={t('empty_description')}
+            actionLabel={canWrite ? t('new_supplier') : undefined}
+            onAction={canWrite ? () => setIsDialogOpen(true) : undefined}
+          />
+        )
       ) : (
         <>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {visibleSuppliers.map((supplier) => {
-            const payment = getPaymentInfo(supplier, t)
-            const location = formatLocation(supplier)
-            return (
-              <Link key={supplier.id} href={`/suppliers/${supplier.id}`} className="group">
-                <Card className="h-full cursor-pointer transition-colors duration-150 hover:border-foreground/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-                  <CardContent className="p-6 flex flex-col h-full">
-                    <div className="space-y-1 mb-4">
-                      <h3 className="text-[15px] font-semibold tracking-tight leading-tight truncate group-hover:text-primary transition-colors">
-                        {supplier.name}
-                      </h3>
-                      <p className="text-xs text-muted-foreground leading-snug">
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[13px]">
+              <thead>
+                <tr>
+                  <th className={cn(TH_CLASS, 'w-full')}>{t('th_name')}</th>
+                  <th className={TH_CLASS}>{t('th_type')}</th>
+                  <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_payment')}</th>
+                  <th className={cn(TH_CLASS, 'hidden md:table-cell')}>{t('th_email')}</th>
+                  <th className={cn(TH_CLASS, 'hidden lg:table-cell')}>{t('th_org_number')}</th>
+                </tr>
+              </thead>
+              <tbody className="stagger-enter">
+                {visibleSuppliers.map((supplier) => {
+                  const payment = getPaymentInfo(supplier, t)
+                  return (
+                    <tr
+                      key={supplier.id}
+                      className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
+                      onClick={() => router.push(`/suppliers/${supplier.id}`)}
+                    >
+                      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                        <Link
+                          href={`/suppliers/${supplier.id}`}
+                          className="block truncate hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {supplier.name}
+                        </Link>
+                      </td>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
                         {t(SUPPLIER_TYPE_KEYS[supplier.supplier_type])}
-                      </p>
-                    </div>
-
-                    <dl className="mt-auto space-y-2 text-sm border-t pt-3">
-                      {supplier.org_number && (
-                        <div className="flex items-baseline justify-between gap-3">
-                          <dt className="text-xs text-muted-foreground shrink-0">{t('label_org_number')}</dt>
-                          <dd className="tabular-nums truncate">{supplier.org_number}</dd>
-                        </div>
-                      )}
-                      {payment && (
-                        <div className="flex items-baseline justify-between gap-3">
-                          <dt className="text-xs text-muted-foreground shrink-0">{payment.label}</dt>
-                          <dd className="tabular-nums truncate">{payment.value}</dd>
-                        </div>
-                      )}
-                      {supplier.email && (
-                        <div className="flex items-baseline justify-between gap-3">
-                          <dt className="text-xs text-muted-foreground shrink-0">{t('label_email')}</dt>
-                          <dd className="truncate">{supplier.email}</dd>
-                        </div>
-                      )}
-                      {location && (
-                        <div className="flex items-baseline justify-between gap-3">
-                          <dt className="text-xs text-muted-foreground shrink-0">{t('label_location')}</dt>
-                          <dd className="truncate">{location}</dd>
-                        </div>
-                      )}
-                      {!supplier.org_number && !payment && !supplier.email && !location && (
-                        <p className="text-xs text-muted-foreground italic">{t('no_contact_info')}</p>
-                      )}
-                    </dl>
-                  </CardContent>
-                </Card>
-              </Link>
-            )
-          })}
+                      </td>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground sm:table-cell')}>
+                        {payment ? `${payment.label} ${payment.value}` : ''}
+                      </td>
+                      <td className={cn(TD_CLASS, 'hidden max-w-[220px] truncate text-muted-foreground md:table-cell')}>
+                        {supplier.email || ''}
+                      </td>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground lg:table-cell')}>
+                        {supplier.org_number || ''}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
+
+          {/* Footer note (concept pgnote) */}
+          <p className="px-1 text-xs text-muted-foreground tabular-nums">
+            {t('count_summary', { count: suppliers.length })}
+          </p>
+
           {visibleCount < filteredSuppliers.length && (
             <div className="flex justify-center">
               <Button

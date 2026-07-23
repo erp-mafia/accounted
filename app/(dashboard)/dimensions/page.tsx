@@ -1,8 +1,6 @@
 import Link from 'next/link'
 import { getTranslations } from 'next-intl/server'
-import { History } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { PageHeader } from '@/components/ui/page-header'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import DimensionsManager from '@/components/dimensions/DimensionsManager'
 
 /**
@@ -17,18 +15,14 @@ export default async function DimensionsPage() {
   const t = await getTranslations('nav')
   return (
     <div className="space-y-8">
-      {/* "Tagga historik" stays Swedish like the workbench it opens (PR6). */}
-      <PageHeader
-        title={t('dimensions')}
-        action={
-          <Button variant="outline" asChild>
-            <Link href="/dimensions/tagging">
-              <History className="mr-2 h-4 w-4" />
-              Tagga historik
-            </Link>
-          </Button>
-        }
-      />
+      {/* Page header (concept scene 31): title + quiet Tagga historik.
+          "Tagga historik" stays Swedish like the workbench it opens (PR6). */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('dimensions')}</h1>
+        <Link href="/dimensions/tagging" className={QUIET_LINK_CLASS}>
+          Tagga historik
+        </Link>
+      </div>
       <DimensionsManager />
     </div>
   )

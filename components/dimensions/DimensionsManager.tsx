@@ -3,13 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
   Dialog,
   DialogContent,
@@ -23,19 +22,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import {
   Plus,
   Search,
@@ -325,88 +316,102 @@ export default function DimensionsManager() {
     const isActive = sortColumn === column
     const Icon = isActive ? (sortDir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown
     return (
-      <TableHead className={className}>
+      <th className={cn(TH_CLASS, className)}>
         <button
           type="button"
           onClick={() => updateSort(column)}
-          className="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+          className="inline-flex items-center gap-1 transition-colors duration-150 hover:text-foreground"
         >
           {label}
           <Icon className="h-3 w-3 opacity-70" aria-hidden="true" />
         </button>
-      </TableHead>
+      </th>
     )
   }
 
-  function renderStatusBadge(value: DimensionValueDto) {
+  function renderStatus(value: DimensionValueDto) {
     return value.is_active ? (
-      <Badge variant="success">{t('status_active')}</Badge>
+      <span className="text-muted-foreground">{t('status_active')}</span>
     ) : (
-      <Badge variant="secondary">{t('status_archived')}</Badge>
+      <Badge variant="outline" className="font-normal">{t('status_archived')}</Badge>
     )
   }
 
   if (isLoading) {
     return (
       <div className="space-y-8">
-        <Skeleton className="h-10 w-64" />
-        <Card>
-          <CardContent className="p-6 space-y-3">
-            {[1, 2, 3, 4, 5].map((i) => (
-              <Skeleton key={i} className="h-10 w-full" />
-            ))}
-          </CardContent>
-        </Card>
+        <Skeleton className="h-9 w-64" />
+        <div className="space-y-3">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <Skeleton key={i} className="h-10 w-full" />
+          ))}
+        </div>
       </div>
     )
   }
 
   if (loadFailed && dimensions.length === 0) {
     return (
-      <Card>
-        <CardContent className="p-0">
-          <EmptyState
-            icon={Tags}
-            title={t('load_failed_title')}
-            description={t('load_failed_description')}
-            actionLabel={t('retry')}
-            onAction={() => void loadDimensions(true)}
-          />
-        </CardContent>
-      </Card>
+      <EmptyState
+        icon={Tags}
+        title={t('load_failed_title')}
+        description={t('load_failed_description')}
+        actionLabel={t('retry')}
+        onAction={() => void loadDimensions(true)}
+      />
     )
   }
 
   return (
     <div className="space-y-8">
-      {/* Segmented tabs: one per registry dimension (1 Kostnadsställe,
-          6 Projekt, plus any custom 20+ dims) */}
+      {/* Toolbar (concept scene 31): seg per registry dimension with a
+          muted value count, search, and the actions far right. */}
       <div className="space-y-2">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <Tabs
-            value={activeDimId ?? undefined}
-            onValueChange={(id) => {
-              setActiveDimId(id)
-              setSearchTerm('')
-            }}
-          >
-            <TabsList>
-              {dimensions.map((dim) => (
-                <TabsTrigger key={dim.id} value={dim.id}>
-                  {dim.name}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
+            {dimensions.map((dim) => (
+              <button
+                key={dim.id}
+                type="button"
+                role="tab"
+                aria-selected={activeDimId === dim.id}
+                onClick={() => {
+                  setActiveDimId(dim.id)
+                  setSearchTerm('')
+                }}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
+                  activeDimId === dim.id
+                    ? 'border border-border bg-card font-medium text-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {dim.name}
+                {dim.values.length > 0 && (
+                  <span className="text-muted-foreground tabular-nums">{dim.values.length}</span>
+                )}
+              </button>
+            ))}
+          </div>
+          <div className="relative min-w-[180px] max-w-xs flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder={t('search_placeholder')}
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="h-9 pl-10"
+            />
+          </div>
+          <div className="ml-auto flex items-center gap-4">
+            <button
+              type="button"
+              className={cn(QUIET_LINK_CLASS, 'disabled:pointer-events-none disabled:opacity-50')}
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               onClick={() => setNewDimDialogOpen(true)}
             >
               {t('new_dimension')}
-            </Button>
+            </button>
             <Button
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -424,116 +429,76 @@ export default function DimensionsManager() {
         )}
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder={t('search_placeholder')}
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="pl-10"
-        />
-      </div>
-
-      {/* Value list */}
+      {/* Value list (concept dry-table: Kod, Namn, Start, Slut, Status) */}
       {sortedValues.length === 0 ? (
-        <Card>
-          <CardContent className="p-0">
-            {searchTerm ? (
-              <EmptyState
-                icon={Search}
-                title={t('no_search_results_title')}
-                description={t('no_search_results_description', { term: searchTerm })}
-              />
-            ) : (
-              <EmptyState
-                icon={Tags}
-                title={t('empty_title')}
-                description={t('empty_description', { dimension: activeDim?.name ?? '' })}
-                actionLabel={canWrite ? t('new_value') : undefined}
-                onAction={canWrite ? () => setDialog({ mode: 'create' }) : undefined}
-              />
-            )}
-          </CardContent>
-        </Card>
+        searchTerm ? (
+          <EmptyState
+            icon={Search}
+            title={t('no_search_results_title')}
+            description={t('no_search_results_description', { term: searchTerm })}
+          />
+        ) : (
+          <EmptyState
+            icon={Tags}
+            title={t('empty_title')}
+            description={t('empty_description', { dimension: activeDim?.name ?? '' })}
+            actionLabel={canWrite ? t('new_value') : undefined}
+            onAction={canWrite ? () => setDialog({ mode: 'create' }) : undefined}
+          />
+        )
       ) : (
-        <>
-          {/* Desktop table */}
-          <Card className="hidden md:block">
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <SortableHeader column="code" label={t('col_code')} />
-                    <SortableHeader column="name" label={t('col_name')} />
-                    <SortableHeader column="status" label={t('col_status')} />
-                    {isProjectTab && (
-                      <>
-                        <SortableHeader column="start_date" label={t('col_start')} />
-                        <SortableHeader column="end_date" label={t('col_end')} />
-                      </>
-                    )}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sortedValues.map((value) => (
-                    <TableRow
-                      key={value.id}
-                      className="cursor-pointer"
-                      onClick={() => setDialog({ mode: 'edit', value })}
-                    >
-                      <TableCell className="font-mono">{value.code}</TableCell>
-                      <TableCell className="font-medium">{value.name}</TableCell>
-                      <TableCell>{renderStatusBadge(value)}</TableCell>
-                      {isProjectTab && (
-                        <>
-                          <TableCell className="tabular-nums text-muted-foreground">
-                            {value.start_date ? formatDate(value.start_date) : '-'}
-                          </TableCell>
-                          <TableCell className="tabular-nums text-muted-foreground">
-                            {value.end_date ? formatDate(value.end_date) : '-'}
-                          </TableCell>
-                        </>
-                      )}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          {/* Mobile card list */}
-          <div className="grid gap-4 md:hidden">
-            {sortedValues.map((value) => (
-              <Card
-                key={value.id}
-                className="cursor-pointer transition-colors duration-150 hover:bg-secondary/60"
-                onClick={() => setDialog({ mode: 'edit', value })}
-              >
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-mono text-sm">{value.code}</p>
-                      <p className="text-sm text-muted-foreground mt-1 truncate">
-                        {value.name}
-                      </p>
-                    </div>
-                    {renderStatusBadge(value)}
-                  </div>
-                </CardHeader>
-                {isProjectTab && (value.start_date || value.end_date) && (
-                  <CardContent>
-                    <p className="text-sm text-muted-foreground tabular-nums">
-                      {value.start_date ? formatDate(value.start_date) : '-'}
-                      {' till '}
-                      {value.end_date ? formatDate(value.end_date) : '-'}
-                    </p>
-                  </CardContent>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-[13px]">
+            <thead>
+              <tr>
+                <SortableHeader column="code" label={t('col_code')} />
+                <SortableHeader column="name" label={t('col_name')} className="w-full" />
+                {isProjectTab && (
+                  <>
+                    <SortableHeader
+                      column="start_date"
+                      label={t('col_start')}
+                      className="hidden text-right sm:table-cell"
+                    />
+                    <SortableHeader
+                      column="end_date"
+                      label={t('col_end')}
+                      className="hidden text-right sm:table-cell"
+                    />
+                  </>
                 )}
-              </Card>
-            ))}
-          </div>
-        </>
+                <SortableHeader column="status" label={t('col_status')} />
+              </tr>
+            </thead>
+            <tbody className="stagger-enter">
+              {sortedValues.map((value) => (
+                <tr
+                  key={value.id}
+                  className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
+                  onClick={() => setDialog({ mode: 'edit', value })}
+                >
+                  <td className={cn(TD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>
+                    {value.code}
+                  </td>
+                  <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                    <span className="block truncate">{value.name}</span>
+                  </td>
+                  {isProjectTab && (
+                    <>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                        {value.start_date ? formatDate(value.start_date) : ''}
+                      </td>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                        {value.end_date ? formatDate(value.end_date) : ''}
+                      </td>
+                    </>
+                  )}
+                  <td className={cn(TD_CLASS, 'whitespace-nowrap')}>{renderStatus(value)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {/* Create/edit dialog */}

@@ -717,7 +717,13 @@
     "label_pg": "PG",
     "label_iban": "IBAN",
     "label_bank_account": "Bank account",
-    "no_contact_info": "No contact details"
+    "no_contact_info": "No contact details",
+    "count_summary": "{count, plural, one {1 supplier} other {# suppliers}}",
+    "th_name": "Name",
+    "th_type": "Type",
+    "th_payment": "Payment method",
+    "th_email": "Email",
+    "th_org_number": "Org. no."
   },
   "accruals": {
     "row_toggle": "Defer over period",
@@ -762,7 +768,8 @@
     "category_equipment": "Equipment",
     "category_vehicle": "Vehicle",
     "category_computer": "Computer",
-    "category_other_tangible": "Other tangible"
+    "category_other_tangible": "Other tangible",
+    "count_footer": "{count, plural, one {1 asset} other {# assets}}"
   },
   "employees": {
     "title": "Employees",
@@ -4164,7 +4171,9 @@
     "toast_pruned_title": "Chart of accounts cleaned",
     "toast_pruned_description": "{deleted} accounts deleted",
     "toast_pruned_with_skipped": "{deleted} accounts deleted, {skipped} skipped",
-    "toast_prune_failed": "Could not clean up the chart of accounts"
+    "toast_prune_failed": "Could not clean up the chart of accounts",
+    "bas_version_chip": "BAS 2026",
+    "footer_note": "Showing {shown} of {total} accounts, grouped by BAS class. SRU codes carry through to the income tax return."
   },
   "dimensions": {
     "new_value": "New value",
@@ -4660,7 +4669,8 @@
     "col_price": "Price excl. VAT",
     "col_vat": "VAT",
     "col_status": "Status",
-    "activate_and_save": "Activate and save"
+    "activate_and_save": "Activate and save",
+    "count_footer": "{count, plural, one {1 article} other {# articles}}"
   },
   "article_detail": {
     "back": "Back to articles",
@@ -4768,7 +4778,8 @@
     "col_identifier": "Org. no. / Personal no.",
     "col_email": "Email",
     "col_city": "City",
-    "col_created": "Created"
+    "col_created": "Created",
+    "count_summary": "{count, plural, one {1 customer} other {# customers}}"
   },
   "products": {
     "title": "Products",

@@ -5,15 +5,13 @@ import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent } from '@/components/ui/card'
-import { Skeleton } from "@/components/ui/skeleton"
+import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
-import { PageHeader } from '@/components/ui/page-header'
 import { EmptyState } from '@/components/ui/empty-state'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Plus, ArrowLeft, UserCircle } from 'lucide-react'
+import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { Plus, UserCircle } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import type { Employee } from '@/types'
 
@@ -28,6 +26,11 @@ const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
   board_member: 'employment_board_member',
 }
 
+/**
+ * Anställda register (concept scene 28): header + dry-table. Tax table,
+ * jämkning, förmåner and semester are configured on the employee detail
+ * page; the register is the roster.
+ */
 export default function EmployeesPage() {
   const t = useTranslations('employees')
   const [employees, setEmployees] = useState<Employee[]>([])
@@ -61,91 +64,90 @@ export default function EmployeesPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-start gap-3">
-        <Button variant="ghost" size="icon" asChild>
-          <Link href="/salary" aria-label={t('back_to_payroll')}><ArrowLeft className="h-4 w-4" /></Link>
-        </Button>
-        <div className="flex-1">
-          <PageHeader
-            title={t('title')}
-            description={t('registered_count', { count: employees.length })}
-            action={
-              canWrite ? (
-                <Button onClick={openNewEmployee}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  {t('new_employee')}
-                </Button>
-              ) : undefined
-            }
-          />
-        </div>
+      {/* Page header (concept scene 28) */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+        {canWrite && (
+          <Button onClick={openNewEmployee}>
+            <Plus className="mr-2 h-4 w-4" />
+            {t('new_employee')}
+          </Button>
+        )}
       </div>
 
       {loading ? (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {[1, 2, 3].map(i => (
-            <Skeleton key={i} className="h-16 rounded-lg" />
+            <Skeleton key={i} className="h-10 rounded-lg" />
           ))}
         </div>
       ) : employees.length === 0 ? (
-        <Card>
-          <CardContent className="p-0">
-            <EmptyState
-              icon={UserCircle}
-              title={t('empty_title')}
-              description={t('empty_description')}
-              actionLabel={canWrite ? t('add_employee') : undefined}
-              onAction={canWrite ? openNewEmployee : undefined}
-            />
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={UserCircle}
+          title={t('empty_title')}
+          description={t('empty_description')}
+          actionLabel={canWrite ? t('add_employee') : undefined}
+          onAction={canWrite ? openNewEmployee : undefined}
+        />
       ) : (
-        <Card>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t('th_name')}</TableHead>
-                  <TableHead>{t('th_personnummer')}</TableHead>
-                  <TableHead>{t('th_type')}</TableHead>
-                  <TableHead className="text-right">{t('th_salary')}</TableHead>
-                  <TableHead className="text-right">{t('th_employment_degree')}</TableHead>
-                  <TableHead>{t('th_tax_table')}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
+        <div>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[13px]">
+              <thead>
+                <tr>
+                  <th className={cn(TH_CLASS, 'w-full')}>{t('th_name')}</th>
+                  <th className={cn(TH_CLASS, 'hidden md:table-cell')}>{t('th_personnummer')}</th>
+                  <th className={TH_CLASS}>{t('th_type')}</th>
+                  <th className={cn(TH_CLASS, 'text-right')}>{t('th_salary')}</th>
+                  <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>{t('th_employment_degree')}</th>
+                  <th className={cn(TH_CLASS, 'hidden text-right md:table-cell')}>{t('th_tax_table')}</th>
+                </tr>
+              </thead>
+              <tbody className="stagger-enter">
                 {employees.map(emp => (
-                  <TableRow key={emp.id}>
-                    <TableCell>
-                      <Link href={`/salary/employees/${emp.id}`} className="font-medium hover:underline">
+                  <tr
+                    key={emp.id}
+                    className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
+                    onClick={() => router.push(`/salary/employees/${emp.id}`)}
+                  >
+                    <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                      <Link
+                        href={`/salary/employees/${emp.id}`}
+                        className="hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         {emp.first_name} {emp.last_name}
                       </Link>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground tabular-nums">
+                    </td>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground md:table-cell')}>
                       {emp.personnummer}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    </td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
                       {EMPLOYMENT_LABEL_KEYS[emp.employment_type]
                         ? t(EMPLOYMENT_LABEL_KEYS[emp.employment_type])
                         : emp.employment_type}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
+                    </td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums sensitive-field')}>
                       {emp.salary_type === 'hourly'
                         ? emp.hourly_rate ? `${formatCurrency(emp.hourly_rate)}${t('hourly_suffix')}` : '-'
                         : emp.monthly_salary ? formatCurrency(emp.monthly_salary) : '-'}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
+                    </td>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums sm:table-cell')}>
                       {emp.employment_degree}%
-                    </TableCell>
-                    <TableCell className="text-muted-foreground tabular-nums">
+                    </td>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground md:table-cell')}>
                       {emp.tax_table_number ? t('tax_table_format', { table: emp.tax_table_number, column: emp.tax_column ?? '' }) : '-'}
-                    </TableCell>
-                  </TableRow>
+                    </td>
+                  </tr>
                 ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+              </tbody>
+            </table>
+          </div>
+          {/* Footer note (concept pgnote) */}
+          <p className="px-1 pt-3 text-xs text-muted-foreground tabular-nums">
+            {t('registered_count', { count: employees.length })}
+          </p>
+        </div>
       )}
 
       {showNewEmployee && (

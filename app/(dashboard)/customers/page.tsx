@@ -6,26 +6,17 @@ import { useLocale, useTranslations } from 'next-intl'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { Plus, Search, Users, Lock, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
 import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
-import { PageHeader } from '@/components/ui/page-header'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { formatDate } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import Link from 'next/link'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -63,15 +54,6 @@ const SORTABLE_COLUMNS: ReadonlyArray<SortColumn> = [
   'created_at',
 ]
 const INITIAL_VISIBLE_ROWS = 100
-
-function getInitials(name: string): string {
-  return name
-    .split(' ')
-    .map((w) => w[0])
-    .slice(0, 2)
-    .join('')
-    .toUpperCase()
-}
 
 function getIdentifier(customer: Customer): string {
   return customer.org_number || customer.personal_number || ''
@@ -230,6 +212,8 @@ function CustomersPageInner() {
   }, [filteredCustomers, sortColumn, sortDir])
   const visibleCustomers = sortedCustomers.slice(0, visibleCount)
 
+  // Sortable dry-table head: the button inherits the uppercase hairline
+  // styling from TH_CLASS on the th.
   function SortableHeader({
     column,
     label,
@@ -242,226 +226,165 @@ function CustomersPageInner() {
     const isActive = sortColumn === column
     const Icon = isActive ? (sortDir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown
     return (
-      <TableHead className={className}>
+      <th className={cn(TH_CLASS, className)}>
         <button
           type="button"
           onClick={() => updateSort(column)}
-          className="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+          className="inline-flex items-center gap-1 uppercase transition-colors duration-150 hover:text-foreground"
         >
           {label}
           <Icon className="h-3 w-3 opacity-70" aria-hidden="true" />
         </button>
-      </TableHead>
+      </th>
     )
   }
 
   return (
     <div className="space-y-8">
-      <PageHeader
-        title={t('title')}
-        action={
-          <div className="flex items-center gap-2">
-            <ReportExportMenu
-              size="default"
-              items={[
-                { format: 'xlsx', href: '/api/export/customers' },
-                { format: 'csv', href: '/api/export/customers?format=csv' },
-              ]}
-            />
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button
-                  disabled={!canWrite}
-                  title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-                >
-                  {canWrite ? (
-                    <Plus className="mr-2 h-4 w-4" />
-                  ) : (
-                    <Lock className="mr-2 h-4 w-4" />
-                  )}
-                  {t('new_customer')}
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-                <DialogHeader>
-                  <DialogTitle>{t('add_customer')}</DialogTitle>
-                </DialogHeader>
-                <CustomerForm
-                  onSubmit={handleCreateCustomer}
-                  isLoading={isCreating}
-                />
-              </DialogContent>
-            </Dialog>
-          </div>
-        }
-      />
-
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder={t('search_placeholder')}
-          value={searchTerm}
-          onChange={(e) => {
-            setSearchTerm(e.target.value)
-            setVisibleCount(INITIAL_VISIBLE_ROWS)
-          }}
-          className="pl-10"
-        />
+      {/* Page header (concept scene 25): title + export + Ny kund */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+        <div className="flex items-center gap-2">
+          <ReportExportMenu
+            size="default"
+            items={[
+              { format: 'xlsx', href: '/api/export/customers' },
+              { format: 'csv', href: '/api/export/customers?format=csv' },
+            ]}
+          />
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button
+                disabled={!canWrite}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              >
+                {canWrite ? (
+                  <Plus className="mr-2 h-4 w-4" />
+                ) : (
+                  <Lock className="mr-2 h-4 w-4" />
+                )}
+                {t('new_customer')}
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{t('add_customer')}</DialogTitle>
+              </DialogHeader>
+              <CustomerForm
+                onSubmit={handleCreateCustomer}
+                isLoading={isCreating}
+              />
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
-      {/* Customer list */}
+      {/* Toolbar: search (concept) */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[220px] max-w-xs flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder={t('search_placeholder')}
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value)
+              setVisibleCount(INITIAL_VISIBLE_ROWS)
+            }}
+            className="h-9 pl-10"
+          />
+        </div>
+      </div>
+
       {isLoading ? (
-        <>
-          {/* Desktop skeleton */}
-          <Card className="hidden md:block">
-            <CardContent className="p-6 space-y-3">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <Skeleton key={i} className="h-10 w-full" />
-              ))}
-            </CardContent>
-          </Card>
-          {/* Mobile skeleton */}
-          <div className="grid gap-4 md:hidden">
-            {[1, 2, 3].map((i) => (
-              <Card key={i}>
-                <CardHeader>
-                  <Skeleton className="h-5 w-1/2" />
-                  <Skeleton className="h-4 w-1/3 mt-2" />
-                </CardHeader>
-                <CardContent>
-                  <Skeleton className="h-4 w-full" />
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </>
+        <div className="space-y-3">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <Skeleton key={i} className="h-10 w-full" />
+          ))}
+        </div>
       ) : sortedCustomers.length === 0 ? (
-        <Card>
-          <CardContent className="p-0">
-            {searchTerm ? (
-              <EmptyState
-                icon={Users}
-                title={t('no_search_results_title')}
-                description={t('no_search_results_description', { term: searchTerm })}
-              />
-            ) : (
-              <EmptyCustomers onAction={() => setIsDialogOpen(true)} />
-            )}
-          </CardContent>
-        </Card>
+        searchTerm ? (
+          <EmptyState
+            icon={Users}
+            title={t('no_search_results_title')}
+            description={t('no_search_results_description', { term: searchTerm })}
+          />
+        ) : (
+          <EmptyCustomers onAction={() => setIsDialogOpen(true)} />
+        )
       ) : (
         <>
-          {/* Desktop table */}
-          <Card className="hidden md:block">
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <SortableHeader column="name" label={t('col_name')} />
-                    <SortableHeader column="customer_type" label={t('col_type')} />
-                    <SortableHeader column="identifier" label={t('col_identifier')} />
-                    <SortableHeader column="email" label={t('col_email')} />
-                    <SortableHeader column="city" label={t('col_city')} />
-                    <SortableHeader
-                      column="created_at"
-                      label={t('col_created')}
-                      className="text-right"
-                    />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {visibleCustomers.map((customer) => {
-                    const identifier = getIdentifier(customer)
-                    return (
-                      <TableRow
-                        key={customer.id}
-                        className="cursor-pointer"
-                        onClick={() => router.push(`/customers/${customer.id}`)}
-                      >
-                        <TableCell className="font-medium">
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[13px]">
+              <thead>
+                <tr>
+                  <SortableHeader column="name" label={t('col_name')} className="w-full" />
+                  <SortableHeader column="customer_type" label={t('col_type')} />
+                  <SortableHeader
+                    column="identifier"
+                    label={t('col_identifier')}
+                    className="hidden lg:table-cell"
+                  />
+                  <SortableHeader
+                    column="email"
+                    label={t('col_email')}
+                    className="hidden md:table-cell"
+                  />
+                  <SortableHeader
+                    column="city"
+                    label={t('col_city')}
+                    className="hidden sm:table-cell"
+                  />
+                </tr>
+              </thead>
+              <tbody className="stagger-enter">
+                {visibleCustomers.map((customer) => {
+                  const identifier = getIdentifier(customer)
+                  return (
+                    <tr
+                      key={customer.id}
+                      className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
+                      onClick={() => router.push(`/customers/${customer.id}`)}
+                    >
+                      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                        <span className="flex min-w-0 items-center gap-2">
                           <Link
                             href={`/customers/${customer.id}`}
-                            className="hover:text-primary transition-colors"
+                            className="truncate hover:underline"
                             onClick={(e) => e.stopPropagation()}
                           >
                             {customer.name}
                           </Link>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}
-                        </TableCell>
-                        <TableCell className="tabular-nums text-muted-foreground">
-                          <div className="flex items-center gap-2">
-                            <span>{identifier || '-'}</span>
-                            {customer.org_number && customer.vat_number_validated && (
-                              <Badge variant="success" className="text-xs">
-                                {t('verified')}
-                              </Badge>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground truncate max-w-[220px]">
-                          {customer.email || '-'}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {customer.city || '-'}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">
-                          {formatDate(customer.created_at)}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          {/* Mobile card list */}
-          <div className="grid gap-4 md:hidden">
-            {visibleCustomers.map((customer) => (
-              <Link key={customer.id} href={`/customers/${customer.id}`}>
-                <Card className="cursor-pointer transition-colors duration-150 hover:bg-secondary/60 h-full group">
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center gap-3.5">
-                      <div className="h-11 w-11 rounded-full bg-secondary flex items-center justify-center shrink-0 text-sm font-semibold tracking-tight">
-                        {getInitials(customer.name)}
-                      </div>
-                      <div className="min-w-0">
-                        <CardTitle className="text-base truncate group-hover:text-primary transition-colors">
-                          {customer.name}
-                        </CardTitle>
-                        <p className="text-sm text-muted-foreground mt-1 truncate">
-                          {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}
-                        </p>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-1.5 text-sm text-muted-foreground">
-                      {customer.email && <p className="truncate">{customer.email}</p>}
-                      {getIdentifier(customer) && (
-                        <div className="flex items-center gap-2 tabular-nums">
-                          <span>{getIdentifier(customer)}</span>
                           {customer.org_number && customer.vat_number_validated && (
-                            <Badge variant="success" className="text-xs">
+                            <Badge variant="success" className="shrink-0 font-normal">
                               {t('verified')}
                             </Badge>
                           )}
-                        </div>
-                      )}
-                      {customer.city && (
-                        <p>
-                          {customer.city}, {customer.country}
-                        </p>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            ))}
+                        </span>
+                      </td>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
+                        {t(CUSTOMER_TYPE_LABEL_KEYS[customer.customer_type])}
+                      </td>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap tabular-nums text-muted-foreground lg:table-cell')}>
+                        {identifier || ''}
+                      </td>
+                      <td className={cn(TD_CLASS, 'hidden max-w-[220px] truncate text-muted-foreground md:table-cell')}>
+                        {customer.email || ''}
+                      </td>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground sm:table-cell')}>
+                        {customer.city || ''}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
+
+          {/* Footer note (concept pgnote) */}
+          <p className="px-1 text-xs text-muted-foreground tabular-nums">
+            {t('count_summary', { count: customers.length })}
+          </p>
+
           {visibleCount < sortedCustomers.length && (
             <div className="flex justify-center">
               <Button

@@ -6,19 +6,11 @@ import { useLocale, useTranslations } from 'next-intl'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { Plus, Search, Package, Lock, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
@@ -28,9 +20,8 @@ import {
   throwOnStructuredError,
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { EmptyState } from '@/components/ui/empty-state'
-import { PageHeader } from '@/components/ui/page-header'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { compareArticles } from '@/lib/articles/sort'
 import Link from 'next/link'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -227,7 +218,9 @@ function ArticlesPageInner() {
   }, [filteredArticles, sortColumn, sortDir])
   const visibleArticles = sortedArticles.slice(0, visibleCount)
 
-  function SortableHeader({
+  // Sortable dry-table head: the button inherits the TH typography and only
+  // adds the direction affordance.
+  function SortableTh({
     column,
     label,
     className,
@@ -239,218 +232,163 @@ function ArticlesPageInner() {
     const isActive = sortColumn === column
     const Icon = isActive ? (sortDir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown
     return (
-      <TableHead className={className}>
+      <th className={cn(TH_CLASS, className)}>
         <button
           type="button"
           onClick={() => updateSort(column)}
-          className="inline-flex items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+          className="inline-flex items-center gap-1 transition-colors duration-150 hover:text-foreground"
         >
           {label}
           <Icon className="h-3 w-3 opacity-70" aria-hidden="true" />
         </button>
-      </TableHead>
+      </th>
     )
   }
 
   return (
     <div className="space-y-8">
-      <PageHeader
-        title={t('title')}
-        action={
-          <div className="flex items-center gap-2">
-            <ReportExportMenu
-              size="default"
-              items={[
-                { format: 'xlsx', href: '/api/export/articles' },
-                { format: 'csv', href: '/api/export/articles?format=csv' },
-              ]}
-            />
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button
-                  disabled={!canWrite}
-                  title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-                >
-                  {canWrite ? (
-                    <Plus className="mr-2 h-4 w-4" />
-                  ) : (
-                    <Lock className="mr-2 h-4 w-4" />
-                  )}
-                  {t('new_article')}
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
-                <DialogHeader>
-                  <DialogTitle>{t('add_article')}</DialogTitle>
-                </DialogHeader>
-                <ArticleForm
-                  onSubmit={handleCreateArticle}
-                  isLoading={isCreating}
-                />
-              </DialogContent>
-            </Dialog>
-          </div>
-        }
-      />
-
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          placeholder={t('search_placeholder')}
-          value={searchTerm}
-          onChange={(e) => {
-            setSearchTerm(e.target.value)
-            setVisibleCount(INITIAL_VISIBLE_ROWS)
-          }}
-          className="pl-10"
-        />
+      {/* Page header (concept scene 27): title + export + Ny artikel */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+        <div className="flex items-center gap-2">
+          <ReportExportMenu
+            size="default"
+            items={[
+              { format: 'xlsx', href: '/api/export/articles' },
+              { format: 'csv', href: '/api/export/articles?format=csv' },
+            ]}
+          />
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button
+                disabled={!canWrite}
+                title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+              >
+                {canWrite ? (
+                  <Plus className="mr-2 h-4 w-4" />
+                ) : (
+                  <Lock className="mr-2 h-4 w-4" />
+                )}
+                {t('new_article')}
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-2xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{t('add_article')}</DialogTitle>
+              </DialogHeader>
+              <ArticleForm
+                onSubmit={handleCreateArticle}
+                isLoading={isCreating}
+              />
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
-      {/* Article list */}
+      {/* Toolbar: search */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[190px] max-w-xs flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder={t('search_placeholder')}
+            value={searchTerm}
+            onChange={(e) => {
+              setSearchTerm(e.target.value)
+              setVisibleCount(INITIAL_VISIBLE_ROWS)
+            }}
+            className="h-9 pl-10"
+          />
+        </div>
+      </div>
+
       {isLoading ? (
-        <>
-          {/* Desktop skeleton */}
-          <Card className="hidden md:block">
-            <CardContent className="p-6 space-y-3">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <Skeleton key={i} className="h-10 w-full" />
-              ))}
-            </CardContent>
-          </Card>
-          {/* Mobile skeleton */}
-          <div className="grid gap-4 md:hidden">
-            {[1, 2, 3].map((i) => (
-              <Card key={i}>
-                <CardHeader>
-                  <Skeleton className="h-5 w-1/2" />
-                  <Skeleton className="h-4 w-1/3 mt-2" />
-                </CardHeader>
-                <CardContent>
-                  <Skeleton className="h-4 w-full" />
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </>
+        <div className="space-y-3">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <Skeleton key={i} className="h-10 w-full" />
+          ))}
+        </div>
       ) : sortedArticles.length === 0 ? (
-        <Card>
-          <CardContent className="p-0">
-            {searchTerm ? (
-              <EmptyState
-                icon={Package}
-                title={t('no_search_results_title')}
-                description={t('no_search_results_description', { term: searchTerm })}
-              />
-            ) : (
-              <EmptyState
-                icon={Package}
-                title={t('empty_title')}
-                description={t('empty_description')}
-                actionLabel={canWrite ? t('empty_action') : undefined}
-                onAction={canWrite ? () => setIsDialogOpen(true) : undefined}
-              />
-            )}
-          </CardContent>
-        </Card>
+        searchTerm ? (
+          <EmptyState
+            icon={Package}
+            title={t('no_search_results_title')}
+            description={t('no_search_results_description', { term: searchTerm })}
+          />
+        ) : (
+          <EmptyState
+            icon={Package}
+            title={t('empty_title')}
+            description={t('empty_description')}
+            actionLabel={canWrite ? t('empty_action') : undefined}
+            onAction={canWrite ? () => setIsDialogOpen(true) : undefined}
+          />
+        )
       ) : (
         <>
-          {/* Desktop table */}
-          <Card className="hidden md:block">
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <SortableHeader column="article_number" label={t('col_number')} />
-                    <SortableHeader column="name" label={t('col_name')} />
-                    <SortableHeader column="type" label={t('col_type')} />
-                    <SortableHeader column="unit" label={t('col_unit')} />
-                    <SortableHeader
-                      column="price_excl_vat"
-                      label={t('col_price')}
-                      className="text-right"
-                    />
-                    <SortableHeader
-                      column="vat_rate"
-                      label={t('col_vat')}
-                      className="text-right"
-                    />
-                    <TableHead className="text-right">{t('col_status')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {visibleArticles.map((article) => (
-                    <TableRow
-                      key={article.id}
-                      className="cursor-pointer"
-                      onClick={() => router.push(`/articles/${article.id}`)}
-                    >
-                      <TableCell className="tabular-nums text-muted-foreground">
-                        {article.article_number || '-'}
-                      </TableCell>
-                      <TableCell className="font-medium">
-                        <Link
-                          href={`/articles/${article.id}`}
-                          className="hover:text-primary transition-colors"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {article.name}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {t(ARTICLE_TYPE_LABEL_KEYS[article.type])}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{article.unit}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatCurrency(article.price_excl_vat)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
-                        {article.vat_rate} %
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Badge variant={article.active ? 'success' : 'secondary'}>
-                          {article.active ? t('status_active') : t('status_inactive')}
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[13px]">
+              <thead>
+                <tr>
+                  <SortableTh column="article_number" label={t('col_number')} />
+                  <SortableTh column="name" label={t('col_name')} className="w-full" />
+                  <SortableTh column="type" label={t('col_type')} className="hidden md:table-cell" />
+                  <SortableTh column="unit" label={t('col_unit')} className="hidden text-right sm:table-cell" />
+                  <SortableTh column="price_excl_vat" label={t('col_price')} className="text-right" />
+                  <SortableTh column="vat_rate" label={t('col_vat')} className="hidden text-right sm:table-cell" />
+                  <th className={cn(TH_CLASS, 'text-right')}>{t('col_status')}</th>
+                </tr>
+              </thead>
+              <tbody className="stagger-enter">
+                {visibleArticles.map((article) => (
+                  <tr
+                    key={article.id}
+                    className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
+                    onClick={() => router.push(`/articles/${article.id}`)}
+                  >
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+                      {article.article_number || '-'}
+                    </td>
+                    <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                      <Link
+                        href={`/articles/${article.id}`}
+                        className="block truncate hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {article.name}
+                      </Link>
+                    </td>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground md:table-cell')}>
+                      {t(ARTICLE_TYPE_LABEL_KEYS[article.type])}
+                    </td>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right text-muted-foreground sm:table-cell')}>
+                      {article.unit}
+                    </td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
+                      {formatCurrency(article.price_excl_vat)}
+                    </td>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                      {article.vat_rate} %
+                    </td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
+                      {article.active ? (
+                        <span className="text-muted-foreground">{t('status_active')}</span>
+                      ) : (
+                        <Badge variant="outline" className="font-normal">
+                          {t('status_inactive')}
                         </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          {/* Mobile card list */}
-          <div className="grid gap-4 md:hidden">
-            {visibleArticles.map((article) => (
-              <Link key={article.id} href={`/articles/${article.id}`}>
-                <Card className="cursor-pointer transition-colors duration-150 hover:bg-secondary/60 h-full group">
-                  <CardHeader className="pb-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <CardTitle className="text-base truncate group-hover:text-primary transition-colors">
-                          {article.name}
-                        </CardTitle>
-                        <div className="mt-1 text-xs text-muted-foreground tabular-nums">
-                          {t(ARTICLE_TYPE_LABEL_KEYS[article.type])}
-                          {article.article_number ? ` · #${article.article_number}` : ''}
-                        </div>
-                      </div>
-                      <span className="font-display text-lg tabular-nums shrink-0">
-                        {formatCurrency(article.price_excl_vat)}
-                      </span>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground tabular-nums">
-                      <span>{t('per_unit', { unit: article.unit })}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>{t('vat_label_value', { rate: article.vat_rate })}</span>
-                    </div>
-                  </CardContent>
-                </Card>
-              </Link>
-            ))}
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
+
+          {/* Footer count (concept pgnote) */}
+          <p className="px-1 text-xs text-muted-foreground tabular-nums">
+            {t('count_footer', { count: sortedArticles.length })}
+          </p>
+
           {visibleCount < sortedArticles.length && (
             <div className="flex justify-center">
               <Button

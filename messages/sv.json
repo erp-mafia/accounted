@@ -717,7 +717,13 @@
     "label_pg": "PG",
     "label_iban": "IBAN",
     "label_bank_account": "Bankkonto",
-    "no_contact_info": "Inga kontaktuppgifter"
+    "no_contact_info": "Inga kontaktuppgifter",
+    "count_summary": "{count, plural, one {1 leverantör} other {# leverantörer}}",
+    "th_name": "Namn",
+    "th_type": "Typ",
+    "th_payment": "Betalsätt",
+    "th_email": "E-post",
+    "th_org_number": "Org.nr"
   },
   "accruals": {
     "row_toggle": "Periodisera",
@@ -762,7 +768,8 @@
     "category_equipment": "Inventarier",
     "category_vehicle": "Fordon",
     "category_computer": "Dator",
-    "category_other_tangible": "Övriga materiella"
+    "category_other_tangible": "Övriga materiella",
+    "count_footer": "{count, plural, one {1 tillgång} other {# tillgångar}}"
   },
   "employees": {
     "title": "Anställda",
@@ -4164,7 +4171,9 @@
     "toast_pruned_title": "Kontoplan rensad",
     "toast_pruned_description": "{deleted} konton togs bort",
     "toast_pruned_with_skipped": "{deleted} konton togs bort, {skipped} hoppades över",
-    "toast_prune_failed": "Kunde inte rensa kontoplanen"
+    "toast_prune_failed": "Kunde inte rensa kontoplanen",
+    "bas_version_chip": "BAS 2026",
+    "footer_note": "Visar {shown} av {total} konton, grupperade per BAS-klass. SRU-koderna följer med till inkomstdeklarationen."
   },
   "dimensions": {
     "new_value": "Nytt värde",
@@ -4660,7 +4669,8 @@
     "col_price": "Pris exkl. moms",
     "col_vat": "Moms",
     "col_status": "Status",
-    "activate_and_save": "Aktivera och spara"
+    "activate_and_save": "Aktivera och spara",
+    "count_footer": "{count, plural, one {1 artikel} other {# artiklar}}"
   },
   "article_detail": {
     "back": "Tillbaka till artiklar",
@@ -4768,7 +4778,8 @@
     "col_identifier": "Org.nr / Personnummer",
     "col_email": "E-post",
     "col_city": "Stad",
-    "col_created": "Skapad"
+    "col_created": "Skapad",
+    "count_summary": "{count, plural, one {1 kund} other {# kunder}}"
   },
   "products": {
     "title": "Produkter",
