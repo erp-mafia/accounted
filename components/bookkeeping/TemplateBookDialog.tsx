@@ -21,6 +21,7 @@ import {
   TEMPLATE_CATEGORY_LABELS,
 } from '@/lib/bookkeeping/template-library'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { roundOre } from '@/lib/money'
 import { ArrowLeft, Check, ChevronRight, Loader2, Search } from 'lucide-react'
 import type { BookingTemplateLibrary, FiscalPeriod } from '@/types'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -34,10 +35,7 @@ interface Props {
 
 /** Sum a side of the computed lines in öre-safe steps. */
 function sumSide(lines: FormLine[], side: 'debit_amount' | 'credit_amount'): number {
-  return lines.reduce(
-    (acc, l) => Math.round((acc + (parseFloat(l[side]) || 0)) * 100) / 100,
-    0,
-  )
+  return lines.reduce((acc, l) => roundOre(acc + (parseFloat(l[side]) || 0)), 0)
 }
 
 /**
@@ -96,7 +94,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
 
   const amount = useMemo(() => {
     const parsed = parseFloat(amountInput.replace(/\s/g, '').replace(',', '.'))
-    return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed * 100) / 100 : 0
+    return Number.isFinite(parsed) && parsed > 0 ? roundOre(parsed) : 0
   }, [amountInput])
 
   // The live kontering: recomputed from the template's line pattern on
