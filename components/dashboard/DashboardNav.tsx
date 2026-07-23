@@ -510,7 +510,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     <>
       {/* Desktop sidebar */}
       <aside className="hidden md:fixed md:inset-y-0 md:flex md:w-64 md:flex-col">
-        <div className="flex min-h-0 flex-1 flex-col border-r border-border bg-background">
+        {/* Borderless on the frame: the panel next to it carries the border */}
+        <div className="flex min-h-0 flex-1 flex-col bg-transparent">
           <div className="flex flex-1 flex-col overflow-y-auto pt-7 pb-4">
             {/* Company switcher pinned to the top: the active company is
                 the strongest piece of context for everything below it. */}

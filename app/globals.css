@@ -16,6 +16,9 @@
   --background: 0 0% 100%;
   --foreground: 0 0% 9%;
 
+  /* Warm-toned frame behind the floating page panel (frame layout) */
+  --frame: 40 18% 96%;
+
   --card: 0 0% 100%;
   --card-foreground: 0 0% 9%;
 
@@ -83,6 +86,8 @@
   --background: 0 0% 7%;
   --foreground: 0 0% 87%;
 
+  --frame: 0 0% 5%;
+
   --card: 0 0% 11%;
   --card-foreground: 0 0% 87%;
 
@@ -129,6 +134,7 @@
 @theme inline {
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
+  --color-frame: hsl(var(--frame));
   --color-card: hsl(var(--card));
   --color-card-foreground: hsl(var(--card-foreground));
   --color-popover: hsl(var(--popover));

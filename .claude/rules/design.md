@@ -18,7 +18,7 @@ Swedish sole traders (enskild firma) and small business owners (aktiebolag) who 
 
 - **Palette**: Achromatic foundation. Pure white background, warm beige (`40 11% 89%`) for chips / active sidebar / hover / secondary buttons. Achromatic primary (no cool tint). Semantic colors (`--success` sage, `--warning` ochre, `--destructive` terracotta) exist but are **data-only**: they appear in charts and financial numbers (positive/negative deltas), never as chrome backgrounds. In chrome, only `--destructive` survives.
 - **Typography**: Hedvig Letters Serif for display headings, Geist (sans) for body, forms, and tables. Hedvig is single-weight (400): do not apply `font-medium` to display text; its natural high-contrast strokes carry the weight. Tabular numbers everywhere financial data appears.
-- **Surfaces**: Cards sit flat on the page: no shadow, full-opacity hairline border (`border-border`), `rounded-lg` (8px). Card background matches page background; the border carries hierarchy. Dark mode drops the warm tint from secondary for a pure-gray mood shift; light mode keeps the beige.
+- **Surfaces**: The page itself is a rounded panel (12px) floating on a warm-toned frame (`--frame`); the sidebar sits borderless on the frame. Cards sit flat on the page: no shadow, full-opacity hairline border (`border-border`), `rounded-lg` (8px). Card background matches page background; the border carries hierarchy. Dark mode drops the warm tint from secondary for a pure-gray mood shift; light mode keeps the beige.
 - **Spacing**: Generous whitespace. Dense data (tables, ledgers) uses tighter spacing but never feels cramped.
 - **Motion**: Functional, not decorative. No press-scale, no hover-lift, no spring overshoot. Hover state is a flat background shift (`bg-secondary/60`). `transition-colors duration-150` is the default. Stagger animations on list entry are fine. Respect `prefers-reduced-motion` (already wired).
 - **Icons**: Lucide: 15px in navigation, slightly larger in empty states.
@@ -34,6 +34,25 @@ Swedish sole traders (enskild firma) and small business owners (aktiebolag) who 
 ## Accessibility
 
 WCAG AA (4.5:1 text, 3:1 UI). Keyboard-navigable + visible focus rings. Respect `prefers-reduced-motion`. Color never sole state indicator. Touch targets ≥40px (44px for mobile-critical). Icon-only buttons need `aria-label`.
+
+## Locked UI-migration conventions
+
+Decided during the 2026-07 concept work (dev_docs/ui_migration_plan.md); they apply system-wide and override anything below that conflicts.
+
+1. **Frame layout.** The page is a rounded panel (12px) on a warm-toned frame (`--frame`). The panel keeps `--background`; the sidebar is borderless on the frame.
+2. **Page title is exactly 24px/32px** Hedvig Letters Serif (`text-2xl leading-8` via PageHeader).
+3. **Buttons are pills.** Radius 99px, default padding 7px 16px, 13px text. Set once in `components/ui/button.tsx`, app-wide, never per page.
+4. **Table rows are one line.** Secondary info (descriptions, OCR, roles) belongs in the detail view or a click-popup, never as sub-rows in lists.
+5. **Chips mark exceptions.** Normal states render as muted text; Badge only when the row deviates. Same chip on every row means the chip is wrong.
+6. **Attention is one ochre sentence**, not a banner: the `.attn` pattern (12.5px, `--warning` tone, single line, optionally with an embedded action link). Max one per page.
+7. **Help text lives behind a "?"** right after the H1: a small (17px) circular button opening a popover anchored at the button. No instructional copy in the page flow.
+8. **One context picker per page, far right in the toolbar**: fiscal year or account/source as a chip-dropdown with a check on the active choice. A chip that looks like a picker must be a picker.
+9. **The primary action lives in the page header**, right side. Multiple create paths collapse into a split button whose caret menu remembers the last-used mode (persisted in `user_preferences`, not localStorage).
+10. **Confirm up front, don't comment afterwards.** Actions that post or send open a small confirm dialog describing the outcome ("Bokförs som verifikat A-217 ...") instead of writing outcome text into the page afterwards.
+11. **Content lands with stagger.** `.stagger-enter` is the standard entry for list/table content, on server render and on client-fetch completion alike.
+12. **Status colors are data, not chrome**: sage/ochre/terracotta only in numbers, exception chips and `.attn`.
+13. **Overlays**: centered modal for create/confirm (template, assistant, confirmations, settings); right slide-over for reviewing an object (Granskning detail). Both with veil, Esc, and click-outside.
+14. **Manual base, AI as opt-in.** Base flows work without AI; AI entry points are clearly labeled discrete choices (e.g. "Skapa med assistenten") and no AI suggestion posts without Granskning.
 
 ## Design System Tokens
 
@@ -52,10 +71,13 @@ WCAG AA (4.5:1 text, 3:1 UI). Keyboard-navigable + visible focus rings. Respect 
 
 Compact metric cards (e.g. dashboard tiles, salary KPI row) use `p-4`. Detail cards use `p-6`. Never mix `p-5`.
 
-**Layout.**
-- Sidebar width: `md:w-64` (256px). Main content offset: `md:pl-64`.
+**Layout (frame layout).**
+- The dashboard wrapper is `bg-frame` (`--frame: 40 18% 96%` light, `0 0% 5%` dark). `<main>` is the page panel: `bg-background rounded-xl border border-border`, 10px margin against the frame, own inner scroll (`md:h-[calc(100vh-20px)] md:overflow-y-auto`). Defined once as `MAIN_PANEL_CLASS` in `app/(dashboard)/layout.tsx`; never restyle per page.
+- The panel is the desktop scroll container: `position: sticky` binds to it automatically; never assume `window` scroll on dashboard pages. Scroll reset on navigation lives in `MainContainer`.
+- Sidebar width: `md:w-64` (256px), borderless and transparent on the frame. Panel offset: `md:ml-64`.
 - Main container: `max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10` (via `components/dashboard/MainContainer.tsx`).
 - Page root: `<div className="space-y-8">`.
+- Mobile keeps the pre-frame layout: full-width document flow, bottom nav; the panel styles are `md:`-gated.
 
 **Primitives: always use these, don't hand-roll.**
 
@@ -63,7 +85,7 @@ Compact metric cards (e.g. dashboard tiles, salary KPI row) use `p-4`. Detail ca
 |---|---|---|
 | Page title + action | `components/ui/page-header.tsx` `PageHeader` | Use this, not bespoke `<h1>` + `<p>` blocks. Drop the `description` prop when it just paraphrases the title. |
 | Data table | `components/ui/table.tsx` `Table / TableHeader / TableHead / TableRow / TableCell` | Header style is baked in: `text-[11px] font-medium uppercase tracking-wider text-muted-foreground`. Wrap in `<CardContent className="p-0">` when the table is a card's primary content. Add `tabular-nums` to numeric cells. |
-| Status indicator | `components/ui/badge.tsx` `<Badge variant>` | Variants: `default / secondary / success / warning / destructive / outline`. **Never** use raw Tailwind colors (`bg-blue-100`, `bg-emerald-500/10`, etc.) for status. Map status → variant via a small `Record` per feature. |
+| Status indicator | `components/ui/badge.tsx` `<Badge variant>` | Chips mark exceptions only: normal states (Aktiv, Bokförd, Betald-i-tid) render as muted text (`text-muted-foreground text-xs`); Badge is reserved for rows that deviate (Utkast, Förfallen, Ej bokförd). A table where every row carries the same chip is wrong. Variants: `default / secondary / success / warning / destructive / outline`. **Never** use raw Tailwind colors (`bg-blue-100`, `bg-emerald-500/10`, etc.) for status. Map status → variant via a small `Record` per feature. |
 | No-data state | `components/ui/empty-state.tsx` `EmptyState` | Don't hand-roll `<div className="flex flex-col items-center py-12">…</div>`. Preset variants exist (`EmptyInvoices`, `EmptyCustomers`, `EmptyTransactions`, etc.). |
 | Loading placeholder | `components/ui/skeleton.tsx` `<Skeleton>` | Don't hand-roll `bg-muted rounded animate-pulse` divs. |
 | Inline help / formulas | `components/ui/info-tooltip.tsx` `InfoTooltip` | Hover-revealed; don't use always-visible info buttons. |
@@ -84,7 +106,7 @@ Never render raw `{x.invoice_date}` directly: always route through `formatDate()
 **Currency.** `formatCurrency(n, currency?)` from `lib/utils.ts`. Default SEK.
 
 **Typography.**
-- Page title: use `PageHeader` (renders `font-display text-3xl md:text-4xl tracking-tight`). Do not hand-roll an `<h1>`.
+- Page title: use `PageHeader` (renders `font-display text-2xl leading-8 tracking-tight`, exactly 24px/32px, locked). Do not hand-roll an `<h1>`.
 - Card title: `<CardTitle className="text-base">` for sections, default for primary cards. The primitive already drops `font-medium`: do not add it back.
 - Section divider header inside a page: `<h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">`.
 - Headline number: `font-display text-xl tabular-nums`. No `font-medium`: Hedvig's natural weight carries the gravitas.
@@ -100,5 +122,6 @@ Never render raw `{x.invoice_date}` directly: always route through `formatDate()
 - `active:scale-[...]` on buttons. Buttons do not bounce.
 - `bg-gradient-to-*` on page or card backgrounds. Flat surfaces only.
 - `font-medium` on display elements (`font-display`, h1/h2/h3, CardTitle, PageHeader title). Hedvig is single-weight by design.
-- `rounded-xl` (12px) on cards. Cards are `rounded-lg` (8px). `rounded-xl` survives only on prominent hero-style surfaces if absolutely needed.
+- `rounded-xl` (12px) on cards. Cards are `rounded-lg` (8px). `rounded-xl` survives on the page panel (frame layout) and prominent hero-style surfaces only.
+- Overriding the Button pill radius per call site (`rounded-lg`, `rounded-md` on a `<Button>`). Buttons are pills app-wide; the radius lives in `components/ui/button.tsx` alone.
 - Opacity-suffixed border classes (`border-border/30`, `border-border/60`) on cards and primary surfaces. Use full-opacity `border-border`: the new border token is calibrated for that.

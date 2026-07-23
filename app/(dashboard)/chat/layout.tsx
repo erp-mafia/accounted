@@ -44,8 +44,9 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
     //
     // dvh handles mobile browser chrome shrinking on scroll. Mobile: subtract
     // the bottom nav (h-16 = 64px) + safe-area-inset-bottom so the chat
-    // pane fills the visible viewport exactly. Desktop: full viewport.
-    <div className="flex h-[calc(100dvh-4rem-env(safe-area-inset-bottom,0px))] md:h-screen">
+    // pane fills the visible viewport exactly. Desktop: fill the frame
+    // panel (<main> has an explicit height there, so h-full resolves).
+    <div className="flex h-[calc(100dvh-4rem-env(safe-area-inset-bottom,0px))] md:h-full">
       <ChatSidebar initialConversations={conversations ?? []} />
       <div className="flex-1 min-w-0 flex flex-col bg-background">{children}</div>
     </div>

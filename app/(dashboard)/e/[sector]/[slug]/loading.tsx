@@ -104,7 +104,7 @@ function TicSkeleton() {
 
 function FullScreenWorkspaceSkeleton() {
   return (
-    <div className="h-[calc(100vh-1px)] p-4 md:p-6">
+    <div className="h-[calc(100vh-1px)] md:h-full p-4 md:p-6">
       <div className="h-full flex flex-col rounded-lg border bg-card overflow-hidden">
         <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5">
           <div className="flex items-center gap-2 min-w-0">

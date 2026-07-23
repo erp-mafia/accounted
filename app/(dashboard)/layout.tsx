@@ -28,6 +28,19 @@ import {
  */
 const NO_COMPANY_ALLOWED_PATHS = ['/settings/account']
 
+/**
+ * Frame layout: on desktop the page is a rounded panel floating on the
+ * warm-toned frame (bg-frame on the wrapper div), with its own inner
+ * scroll. 10px margin against the frame; height is the remaining
+ * viewport. The sidebar (fixed, w-64) sits borderless on the frame, so
+ * the panel starts at ml-64. On mobile the panel dissolves: full-width
+ * document flow with the bottom nav, exactly as before.
+ */
+const MAIN_PANEL_CLASS =
+  'safe-area-main-padding md:!pb-0 relative bg-background min-h-screen ' +
+  'md:min-h-0 md:ml-64 md:mt-[10px] md:mr-[10px] md:h-[calc(100vh-20px)] ' +
+  'md:overflow-y-auto md:rounded-xl md:border md:border-border'
+
 export default async function DashboardLayout({
   children,
   settingsModal,
@@ -95,7 +108,7 @@ export default async function DashboardLayout({
       >
         <AgentSheetProvider>
           <CompanyTabSync />
-          <div className="min-h-screen bg-background">
+          <div className="min-h-screen bg-frame">
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
@@ -104,7 +117,7 @@ export default async function DashboardLayout({
             />
             <main
               id="main-content"
-              className="safe-area-main-padding md:!pb-0 md:pl-64"
+              className={MAIN_PANEL_CLASS}
               role="main"
             >
               <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
@@ -186,14 +199,14 @@ export default async function DashboardLayout({
       <CompanyProvider value={companyContextValue}>
         <AgentSheetProvider>
           <CompanyTabSync />
-          <div className="min-h-screen bg-background">
+          <div className="min-h-screen bg-frame">
             <DashboardNav
               companyName={getBranding().appName.toLowerCase()}
               entityType="enskild_firma"
               isSandbox={false}
               extensionNavItems={getExtensionNavItems()}
             />
-            <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
+            <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
               <div className="max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10">
                 {children}
               </div>
@@ -265,7 +278,7 @@ export default async function DashboardLayout({
         }}
       >
         <CompanyTabSync />
-        <div className="min-h-screen bg-background">
+        <div className="min-h-screen bg-frame">
           {/* Skip to content link for keyboard/screen reader users */}
           <a
             href="#main-content"
@@ -284,7 +297,7 @@ export default async function DashboardLayout({
             userName={userProfile?.full_name ?? null}
             userEmail={user.email ?? null}
           />
-          <main id="main-content" className="safe-area-main-padding md:!pb-0 md:pl-64" role="main">
+          <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
             <MainContainer companyId={companyId}>{children}</MainContainer>
           </main>
           <AgentTrigger />

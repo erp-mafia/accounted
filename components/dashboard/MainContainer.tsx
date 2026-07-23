@@ -1,6 +1,7 @@
 'use client'
 
 import { usePathname } from 'next/navigation'
+import { useEffect } from 'react'
 import type { ReactNode } from 'react'
 
 /**
@@ -22,6 +23,15 @@ export function MainContainer({
   children: ReactNode
 }) {
   const pathname = usePathname()
+
+  // The panel (<main>) is its own scroll container on desktop, so Next's
+  // built-in scroll-to-top on navigation (which targets the window) never
+  // fires for it. Reset the panel scroll on every route change; hash-anchor
+  // scrolling still works because pages call scrollIntoView themselves.
+  useEffect(() => {
+    document.getElementById('main-content')?.scrollTo(0, 0)
+  }, [pathname])
+
   // Full-bleed routes own their own padding + multi-pane layout. They
   // shouldn't sit inside max-w-5xl or any horizontal padding: that's what
   // causes a visible gap between the dashboard sidebar and the chat-sidebar
