@@ -5026,7 +5026,21 @@
     "status_credited": "Credited",
     "due_days_overdue": "{days} days overdue",
     "due_today": "Due today",
-    "due_days_left": "{days} days left"
+    "due_days_left": "{days} days left",
+    "tab_overdue": "Overdue",
+    "more_views": "More …",
+    "th_nr": "No.",
+    "th_customer": "Customer",
+    "th_due": "Due",
+    "th_amount": "Amount",
+    "th_status": "Status",
+    "create_invoice_desc": "Regular customer invoice",
+    "create_recurring": "Recurring invoice",
+    "create_recurring_desc": "Created automatically, e.g. every month",
+    "create_self": "Self-billing invoice",
+    "create_self_desc": "Register a self-billing invoice from your customer",
+    "status_overdue_days": "Overdue {days} d",
+    "status_paid_date": "Paid {date}"
   },
   "dashboard": {
     "skv_promo_title": "Connect Skatteverket",

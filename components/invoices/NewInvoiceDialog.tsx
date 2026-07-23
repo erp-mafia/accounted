@@ -34,6 +34,8 @@ interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
   copyFromId?: string | null
+  /** Preselect the självfaktura tab (split-button entry on /invoices). */
+  selfBilled?: boolean
 }
 
 /**
@@ -47,7 +49,7 @@ interface Props {
  * shows the invoice-number preview: a static DialogTitle would duplicate or
  * contradict it.
  */
-export default function NewInvoiceDialog({ open, onOpenChange, copyFromId = null }: Props) {
+export default function NewInvoiceDialog({ open, onOpenChange, copyFromId = null, selfBilled = false }: Props) {
   const t = useTranslations('invoice_editor')
   const { company } = useCompany()
   const supabase = useMemo(() => createClient(), [])
@@ -146,7 +148,7 @@ export default function NewInvoiceDialog({ open, onOpenChange, copyFromId = null
             </div>
           )
         ) : (
-          <InvoiceEditor mode="create" bare />
+          <InvoiceEditor mode="create" bare initialSelfBilled={selfBilled} />
         )}
       </DialogContent>
     </Dialog>

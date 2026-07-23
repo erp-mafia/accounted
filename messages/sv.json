@@ -5026,7 +5026,21 @@
     "status_credited": "Krediterad",
     "due_days_overdue": "{days} dagar försenad",
     "due_today": "Förfaller idag",
-    "due_days_left": "{days} dagar kvar"
+    "due_days_left": "{days} dagar kvar",
+    "tab_overdue": "Förfallna",
+    "more_views": "Fler …",
+    "th_nr": "Nr",
+    "th_customer": "Kund",
+    "th_due": "Förfaller",
+    "th_amount": "Belopp",
+    "th_status": "Status",
+    "create_invoice_desc": "Vanlig kundfaktura",
+    "create_recurring": "Återkommande faktura",
+    "create_recurring_desc": "Skapas automatiskt, till exempel varje månad",
+    "create_self": "Självfaktura",
+    "create_self_desc": "Registrera en självfaktura från din kund",
+    "status_overdue_days": "Förfallen {days} dgr",
+    "status_paid_date": "Betald {date}"
   },
   "dashboard": {
     "skv_promo_title": "Koppla Skatteverket",

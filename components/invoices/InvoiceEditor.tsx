@@ -81,7 +81,12 @@ export type InvoiceEditorProps = (
   | { mode?: 'create' }
   | { mode: 'edit'; initial: InvoiceForEdit }
   | { mode: 'copy'; initial: InvoiceCopyInitial }
-) & { bare?: boolean }
+) & {
+  bare?: boolean
+  /** Open with the självfaktura tab preselected (the "Självfaktura" entry in
+   *  the invoice list's split button). Create mode only. */
+  initialSelfBilled?: boolean
+}
 
 // Subset of Article fields the line picker needs to pre-fill a row.
 type ArticleOption = Pick<
@@ -127,7 +132,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // Toggle between a normal customer invoice (default) and registering a
   // self-billing invoice we received (mottagen självfaktura, ML 17 kap 15§).
   // Self-billing is never available when editing an existing draft.
-  const [mode, setMode] = useState<'invoice' | 'self_billed'>('invoice')
+  const [mode, setMode] = useState<'invoice' | 'self_billed'>(
+    props.initialSelfBilled && !isEditMode ? 'self_billed' : 'invoice',
+  )
   // Company-wide opt-in from the invoice settings page: the whole payment
   // link section (manual field + Stripe auto toggle) stays hidden until the
   // company enables it. The send routes enforce the same setting server-side

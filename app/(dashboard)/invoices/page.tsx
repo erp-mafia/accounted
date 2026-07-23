@@ -9,28 +9,30 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { DataListEmpty } from '@/components/ui/data-list'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { FyPicker } from '@/components/common/FyPicker'
+import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
+import { useUiState } from '@/lib/hooks/use-ui-state'
+import { resolveInitialMode } from '@/lib/ui-state/client'
 import {
-  DataList,
-  DataListRow,
-  DataListPrimary,
-  DataListMeta,
-  DataListMetaSeparator,
-  DataListEmpty,
-} from '@/components/ui/data-list'
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
-import { Plus, Search, ReceiptText, Lock, Repeat } from 'lucide-react'
+import { Plus, Search, ReceiptText, Repeat, FileInput, Check } from 'lucide-react'
 import { EmptyInvoices } from '@/components/ui/empty-state'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import type { Invoice, InvoiceStatus } from '@/types'
+import type { FiscalPeriod, Invoice, InvoiceStatus } from '@/types'
 
 function NewInvoiceDialogLoading() {
   const t = useTranslations('invoices')
@@ -53,42 +55,32 @@ const NewInvoiceDialog = dynamic(
   { loading: NewInvoiceDialogLoading },
 )
 
-type InvoiceStatusVariant = 'default' | 'secondary' | 'success' | 'warning' | 'destructive'
-
 const INITIAL_VISIBLE_ROWS = 100
 
-const STATUS_CONFIG: Record<InvoiceStatus, { labelKey: string; variant: InvoiceStatusVariant }> = {
-  draft: { labelKey: 'status_draft', variant: 'secondary' },
-  sent: { labelKey: 'status_sent', variant: 'default' },
-  paid: { labelKey: 'status_paid', variant: 'success' },
-  partially_paid: { labelKey: 'status_partially_paid', variant: 'warning' },
-  overdue: { labelKey: 'status_overdue', variant: 'destructive' },
-  cancelled: { labelKey: 'status_cancelled', variant: 'secondary' },
-  credited: { labelKey: 'status_credited', variant: 'secondary' },
+const CREATE_MODES = ['faktura', 'aterkommande', 'sjalvfaktura'] as const
+
+// Main views (concept seg) and the low-frequency views behind "Fler …".
+const SEG_TABS = ['all', 'unpaid', 'overdue', 'draft'] as const
+const MORE_TABS = ['proforma', 'delivery_note', 'credit', 'cancelled'] as const
+type ListTab = (typeof SEG_TABS)[number] | (typeof MORE_TABS)[number]
+
+const TAB_LABEL_KEYS: Record<ListTab, string> = {
+  all: 'tab_all',
+  unpaid: 'tab_unpaid',
+  overdue: 'tab_overdue',
+  draft: 'tab_draft',
+  proforma: 'tab_proforma',
+  delivery_note: 'tab_delivery_note',
+  credit: 'tab_credit',
+  cancelled: 'tab_cancelled',
 }
 
-function useRelativeTimeLabel() {
-  const t = useTranslations('invoices')
-  return function getRelativeTimeLabel(dueDateStr: string, status: InvoiceStatus): { text: string; color: string } | null {
-    if (status === 'paid' || status === 'cancelled' || status === 'credited' || status === 'draft') return null
-
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const dueDate = new Date(dueDateStr)
-    dueDate.setHours(0, 0, 0, 0)
-    const diffDays = Math.round((dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-
-    if (diffDays < 0) {
-      return { text: t('due_days_overdue', { days: Math.abs(diffDays) }), color: 'text-destructive' }
-    } else if (diffDays === 0) {
-      return { text: t('due_today'), color: 'text-warning-foreground' }
-    } else if (diffDays <= 3) {
-      return { text: t('due_days_left', { days: diffDays }), color: 'text-warning-foreground' }
-    } else if (diffDays <= 7) {
-      return { text: t('due_days_left', { days: diffDays }), color: 'text-muted-foreground' }
-    }
-    return null
-  }
+function daysOverdue(dueDateStr: string): number {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const dueDate = new Date(dueDateStr)
+  dueDate.setHours(0, 0, 0, 0)
+  return Math.round((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
 }
 
 export default function InvoicesPage() {
@@ -100,23 +92,29 @@ export default function InvoicesPage() {
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
-  const [activeTab, setActiveTab] = useState('all')
+  const [activeTab, setActiveTab] = useState<ListTab>('all')
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
+  // Fiscal-year scope (convention 8): null = all years.
+  const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
+  const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoices')
   const tCommon = useTranslations('common')
-  const getRelativeTimeLabel = useRelativeTimeLabel()
+  const { uiState, loaded: uiStateLoaded } = useUiState()
 
   // The "Ny faktura" modal is driven by the URL (?new=1) so every entry point
   // (the header button, empty states, the command palette, and the legacy
   // /invoices/new redirect) opens the same dialog, and the browser back
   // button closes it. No canWrite gate here: like the old /invoices/new page,
-  // the editor itself disables submission for viewers.
+  // the editor itself disables submission for viewers. ?self=1 preselects the
+  // självfaktura tab (split-button entry).
   const copyFromId = searchParams.get('copy')
   const showNewInvoice = searchParams.has('new') || copyFromId !== null
+  const openSelfBilled = searchParams.has('self')
   const closeNewInvoice = () => router.replace('/invoices', { scroll: false })
   const openNewInvoice = () => router.push('/invoices?new=1', { scroll: false })
+  const openNewSelfBilled = () => router.push('/invoices?new=1&self=1', { scroll: false })
 
   async function fetchInvoices() {
     if (!company) return
@@ -149,6 +147,7 @@ export default function InvoicesPage() {
 
   useEffect(() => {
     fetchInvoices()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const filteredInvoices = invoices.filter((invoice) => {
@@ -157,263 +156,313 @@ export default function InvoicesPage() {
       (invoice.external_invoice_number ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (invoice.customer as { name: string })?.name?.toLowerCase().includes(searchTerm.toLowerCase())
 
+    const matchesFy =
+      !fyPeriod ||
+      (invoice.invoice_date >= fyPeriod.period_start && invoice.invoice_date <= fyPeriod.period_end)
+
     const isCreditNote = !!invoice.credited_invoice_id
     const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
     const matchesTab =
       (activeTab === 'all' && invoice.status !== 'cancelled') ||
       (activeTab === 'unpaid' && ['sent', 'overdue'].includes(invoice.status) && !isCreditNote && docType === 'invoice') ||
+      (activeTab === 'overdue' && invoice.status === 'overdue' && !isCreditNote && docType === 'invoice') ||
+      (activeTab === 'draft' && invoice.status === 'draft' && docType === 'invoice' && !isCreditNote) ||
       (activeTab === 'credit' && isCreditNote) ||
       (activeTab === 'proforma' && docType === 'proforma' && invoice.status !== 'cancelled') ||
       (activeTab === 'delivery_note' && docType === 'delivery_note' && invoice.status !== 'cancelled') ||
-      (activeTab === 'cancelled' && invoice.status === 'cancelled') ||
-      (activeTab !== 'all' && activeTab !== 'proforma' && activeTab !== 'delivery_note' && activeTab !== 'cancelled' && invoice.status === activeTab)
+      (activeTab === 'cancelled' && invoice.status === 'cancelled')
 
-    return matchesSearch && matchesTab
+    return matchesSearch && matchesFy && matchesTab
   })
   const visibleInvoices = filteredInvoices.slice(0, visibleCount)
 
-  const isOutstandingReceivable = (i: Invoice) =>
-    ['sent', 'overdue'].includes(i.status) && !i.credited_invoice_id
-  const stats = {
-    unpaid: invoices.filter(isOutstandingReceivable).length,
-    unpaidAmount: invoices
-      .filter(isOutstandingReceivable)
-      .reduce((sum, i) => {
-        if (i.currency === 'SEK') {
-          return sum + getDisplayTotal({ total: Number(i.total), currency: 'SEK', ore_rounding: i.ore_rounding }, { ore_rounding: oreRounding }).displayed
-        }
-        return sum + Number(i.total_sek || i.total)
-      }, 0),
-    overdue: invoices.filter((i) => i.status === 'overdue' && !i.credited_invoice_id).length,
+  const overdueCount = invoices.filter(
+    (i) => i.status === 'overdue' && !i.credited_invoice_id,
+  ).length
+
+  const resetPaging = () => setVisibleCount(INITIAL_VISIBLE_ROWS)
+
+  const createOptions: SplitButtonOption[] = [
+    {
+      key: 'faktura',
+      label: t('new_invoice'),
+      icon: Plus,
+      description: t('create_invoice_desc'),
+      onSelect: () => {
+        if (canWrite) openNewInvoice()
+      },
+    },
+    {
+      key: 'aterkommande',
+      label: t('create_recurring'),
+      icon: Repeat,
+      description: t('create_recurring_desc'),
+      onSelect: () => router.push('/invoices/recurring'),
+    },
+    {
+      key: 'sjalvfaktura',
+      label: t('create_self'),
+      icon: FileInput,
+      description: t('create_self_desc'),
+      onSelect: () => {
+        if (canWrite) openNewSelfBilled()
+      },
+    },
+  ]
+
+  const activeMoreTab = (MORE_TABS as readonly string[]).includes(activeTab)
+    ? (activeTab as (typeof MORE_TABS)[number])
+    : null
+
+  // One derivable status chip per row (concept scene 15). Doc-type markers
+  // (proforma/följesedel/självfaktura) only appear in views where the type
+  // isn't already implied.
+  function statusChip(invoice: Invoice): { label: string; variant: 'secondary' | 'outline' | 'success' | 'warning' | 'destructive' } {
+    const isCreditNote = !!invoice.credited_invoice_id
+    if (invoice.status === 'cancelled') return { label: t('status_cancelled'), variant: 'secondary' }
+    if (isCreditNote && invoice.status !== 'paid') return { label: t('badge_credit'), variant: 'destructive' }
+    if (invoice.status === 'credited') return { label: t('status_credited'), variant: 'secondary' }
+    if (invoice.status === 'draft') {
+      const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
+      const isUnsent =
+        !!invoice.invoice_number && docType === 'invoice' && !isCreditNote && !invoice.is_self_billed
+      return isUnsent
+        ? { label: t('status_unsent'), variant: 'outline' }
+        : { label: t('status_draft'), variant: 'secondary' }
+    }
+    if (invoice.status === 'paid') {
+      return {
+        label: invoice.paid_at
+          ? t('status_paid_date', { date: formatDate(invoice.paid_at) })
+          : t('status_paid'),
+        variant: 'success',
+      }
+    }
+    if (invoice.status === 'partially_paid') return { label: t('status_partially_paid'), variant: 'warning' }
+    if (invoice.status === 'overdue' && invoice.due_date) {
+      return {
+        label: t('status_overdue_days', { days: Math.max(1, daysOverdue(invoice.due_date)) }),
+        variant: 'warning',
+      }
+    }
+    return { label: t('status_sent'), variant: 'outline' }
   }
 
   return (
     <div className="space-y-8">
-      <PageHeader
-        title={t('title')}
-        action={
-          <div className="flex gap-2">
-            <Link href="/invoices/recurring">
-              <Button variant="secondary">
-                <Repeat className="mr-2 h-4 w-4" />
-                {t('recurring')}
-              </Button>
-            </Link>
-            {canWrite ? (
-              <Button onClick={openNewInvoice}>
-                <Plus className="mr-2 h-4 w-4" />
-                {t('new_invoice')}
-              </Button>
-            ) : (
-              <Button
-                disabled
-                title={t('viewer_disabled_tooltip')}
-              >
-                <Lock className="mr-2 h-4 w-4" />
-                {t('new_invoice')}
-              </Button>
-            )}
-          </div>
-        }
-      />
+      {/* Page header (concept scene 15): title + Ny faktura split button */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+        <SplitButton
+          key={uiStateLoaded ? 'loaded' : 'initial'}
+          persistKey="invoices"
+          initialModeKey={resolveInitialMode(uiState, 'invoices', CREATE_MODES, 'faktura')}
+          options={createOptions}
+        />
+      </div>
 
-      {/* Inline summary */}
-      {!isLoading && invoices.length > 0 && (
-        <p className="text-sm text-muted-foreground tabular-nums">
-          {invoices.length === 1 ? t('summary_one', { count: invoices.length }) : t('summary_other', { count: invoices.length })}
-          {stats.unpaid > 0 && (
-            <>
-              {' · '}
-              <span className="text-foreground">{t('summary_unpaid', { count: stats.unpaid })}</span>
-              {' · '}
-              {t('summary_to_collect', { amount: formatCurrency(stats.unpaidAmount) })}
-              {stats.overdue > 0 && (
-                <>
-                  {' · '}
-                  <span className="text-destructive">{t('summary_overdue', { count: stats.overdue })}</span>
-                </>
+      {/* Toolbar: seg + Fler-meny + sök + FyPicker far right (convention 8) */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
+          {SEG_TABS.map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab}
+              onClick={() => {
+                setActiveTab(tab)
+                resetPaging()
+              }}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
+                activeTab === tab
+                  ? 'border border-border bg-card font-medium text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
               )}
-            </>
-          )}
-        </p>
-      )}
-
-      {/* Search and tabs */}
-      <div className="flex flex-col sm:flex-row gap-4">
-        <div className="relative flex-1">
+            >
+              {t(TAB_LABEL_KEYS[tab])}
+              {tab === 'overdue' && overdueCount > 0 && (
+                <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
+                  {overdueCount}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        {/* Low-frequency views behind a quiet "Fler …" menu (concept) */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className={cn(
+                QUIET_LINK_CLASS,
+                activeMoreTab && 'text-foreground',
+              )}
+              aria-haspopup="menu"
+            >
+              {activeMoreTab ? t(TAB_LABEL_KEYS[activeMoreTab]) : t('more_views')}
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="min-w-[11rem]">
+            {MORE_TABS.map((tab) => (
+              <DropdownMenuItem
+                key={tab}
+                onClick={() => {
+                  setActiveTab(tab)
+                  resetPaging()
+                }}
+              >
+                <span className="min-w-0 flex-1">{t(TAB_LABEL_KEYS[tab])}</span>
+                {activeTab === tab && <Check className="h-3.5 w-3.5 text-primary" />}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <div className="relative min-w-[190px] max-w-xs flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder={t('search_placeholder')}
             value={searchTerm}
             onChange={(e) => {
               setSearchTerm(e.target.value)
-              setVisibleCount(INITIAL_VISIBLE_ROWS)
+              resetPaging()
             }}
-            className="pl-10"
+            className="h-9 pl-10"
           />
         </div>
-        <Tabs
-          value={activeTab}
-          onValueChange={(value) => {
-            setActiveTab(value)
-            setVisibleCount(INITIAL_VISIBLE_ROWS)
-          }}
-          className="min-w-0"
-        >
-          <TabsList className="w-max max-w-full justify-start">
-            <TabsTrigger value="all">{t('tab_all')}</TabsTrigger>
-            <TabsTrigger value="unpaid">{t('tab_unpaid')}</TabsTrigger>
-            <TabsTrigger value="paid">{t('tab_paid')}</TabsTrigger>
-            <TabsTrigger value="draft">{t('tab_draft')}</TabsTrigger>
-            <TabsTrigger value="proforma">{t('tab_proforma')}</TabsTrigger>
-            <TabsTrigger value="delivery_note">{t('tab_delivery_note')}</TabsTrigger>
-            <TabsTrigger value="credit">{t('tab_credit')}</TabsTrigger>
-            <TabsTrigger value="cancelled">{t('tab_cancelled')}</TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <div className="ml-auto">
+          <FyPicker
+            value={fyPeriodId}
+            onChange={(periodId, period) => {
+              setFyPeriodId(periodId)
+              setFyPeriod(period ?? null)
+              resetPaging()
+            }}
+            includeAllOption
+          />
+        </div>
       </div>
 
-      <DataList className="stagger-enter">
-        {isLoading ? (
-          [1, 2, 3].map((i) => (
+      {isLoading ? (
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
             <div key={i} className="flex items-center gap-3 px-4 py-3">
-              <div className="flex-1 space-y-2">
-                <Skeleton className="h-4 w-32" />
-                <Skeleton className="h-3 w-48" />
-              </div>
+              <Skeleton className="h-4 w-16" />
+              <Skeleton className="h-4 w-48 flex-1" />
               <Skeleton className="h-5 w-24" />
             </div>
-          ))
-        ) : filteredInvoices.length === 0 ? (
-          searchTerm ? (
-            <DataListEmpty
-              icon={<ReceiptText className="h-6 w-6" />}
-              title={t('no_search_results_title')}
-              description={t('no_search_results_description', { term: searchTerm })}
-            />
-          ) : invoices.length === 0 ? (
-            <EmptyInvoices onAction={openNewInvoice} />
-          ) : (
-            <DataListEmpty
-              icon={<ReceiptText className="h-6 w-6" />}
-              title={t('no_category_title')}
-              description={t('no_category_description')}
-            />
-          )
+          ))}
+        </div>
+      ) : filteredInvoices.length === 0 ? (
+        searchTerm ? (
+          <DataListEmpty
+            icon={<ReceiptText className="h-6 w-6" />}
+            title={t('no_search_results_title')}
+            description={t('no_search_results_description', { term: searchTerm })}
+          />
+        ) : invoices.length === 0 ? (
+          <EmptyInvoices onAction={openNewInvoice} />
         ) : (
-          visibleInvoices.map((invoice) => {
-            const status = STATUS_CONFIG[invoice.status]
-            const isCreditNote = !!invoice.credited_invoice_id
-            const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
-            const isProforma = docType === 'proforma'
-            const isDeliveryNote = docType === 'delivery_note'
-            // A draft that already has a number is issued-but-unsent ("Granska &
-            // skapa" done, "Skicka" pending): distinct from a true unnumbered
-            // draft. Show "Ej skickad" so the two don't look alike. Display-only.
-            const isUnsentInvoice =
-              invoice.status === 'draft' &&
-              !!invoice.invoice_number &&
-              !isProforma &&
-              !isDeliveryNote &&
-              !isCreditNote &&
-              !invoice.is_self_billed
-            const statusLabelKey = isUnsentInvoice ? 'status_unsent' : status.labelKey
-            const statusVariant: InvoiceStatusVariant | 'outline' = isUnsentInvoice ? 'outline' : status.variant
-            // Credit notes are never payable (invoices_credit_note_not_paid),
-            // so a due-date countdown ("X dagar försenad") is meaningless for them.
-            const relativeTime = invoice.due_date && !isCreditNote ? getRelativeTimeLabel(invoice.due_date, invoice.status) : null
-            const displayedTotal = getDisplayTotal(
-              { total: Number(invoice.total), currency: invoice.currency, ore_rounding: invoice.ore_rounding },
-              { ore_rounding: oreRounding },
-            ).displayed
-            return (
-              <Link key={invoice.id} href={`/invoices/${invoice.id}`} className="block focus:outline-none">
-                <DataListRow
-                  trailing={
-                    <div className="text-right">
-                      <p
-                        className={cn(
-                          'font-medium tabular-nums leading-none',
-                          isCreditNote && 'text-destructive'
-                        )}
+          <DataListEmpty
+            icon={<ReceiptText className="h-6 w-6" />}
+            title={t('no_category_title')}
+            description={t('no_category_description')}
+          />
+        )
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-[13px]">
+            <thead>
+              <tr>
+                <th className={TH_CLASS}>{t('th_nr')}</th>
+                <th className={cn(TH_CLASS, 'w-full')}>{t('th_customer')}</th>
+                <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>{t('th_due')}</th>
+                <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
+                <th className={TH_CLASS}>{t('th_status')}</th>
+              </tr>
+            </thead>
+            <tbody className="stagger-enter">
+              {visibleInvoices.map((invoice) => {
+                const chip = statusChip(invoice)
+                const isCreditNote = !!invoice.credited_invoice_id
+                const docType = (invoice as Invoice & { document_type?: string }).document_type || 'invoice'
+                const displayedTotal = getDisplayTotal(
+                  { total: Number(invoice.total), currency: invoice.currency, ore_rounding: invoice.ore_rounding },
+                  { ore_rounding: oreRounding },
+                ).displayed
+                const number = invoice.is_self_billed
+                  ? invoiceDisplayNumber(invoice)
+                  : invoice.invoice_number
+                // Doc-type marker only where the view doesn't already imply it.
+                const typeMarker =
+                  activeTab === 'all'
+                    ? docType === 'proforma'
+                      ? t('badge_proforma')
+                      : docType === 'delivery_note'
+                        ? t('badge_delivery_note')
+                        : invoice.is_self_billed
+                          ? t('badge_self_billed')
+                          : null
+                    : null
+                return (
+                  <tr
+                    key={invoice.id}
+                    className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
+                    onClick={() => router.push(`/invoices/${invoice.id}`)}
+                  >
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
+                      <Link
+                        href={`/invoices/${invoice.id}`}
+                        className="hover:underline"
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        {formatCurrency(displayedTotal, invoice.currency)}
-                      </p>
-                      {invoice.currency !== 'SEK' && invoice.total_sek && (
-                        <p
-                          className={cn(
-                            'mt-1 text-[11px] tabular-nums',
-                            isCreditNote ? 'text-destructive/70' : 'text-muted-foreground'
-                          )}
-                        >
-                          {formatCurrency(Number(invoice.total_sek))}
-                        </p>
+                        {number ?? '·'}
+                      </Link>
+                    </td>
+                    <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+                      <span className="block truncate">
+                        {(invoice.customer as { name: string })?.name ?? '-'}
+                      </span>
+                    </td>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
+                      {invoice.due_date && !isCreditNote && invoice.status !== 'draft'
+                        ? formatDate(invoice.due_date)
+                        : ''}
+                    </td>
+                    <td
+                      className={cn(
+                        TD_CLASS,
+                        'whitespace-nowrap text-right tabular-nums sensitive-field',
+                        isCreditNote && 'text-destructive',
                       )}
-                    </div>
-                  }
-                >
-                  <DataListPrimary className={cn(!invoice.invoice_number && !invoice.external_invoice_number && 'italic text-muted-foreground')}>
-                    {invoice.is_self_billed ? invoiceDisplayNumber(invoice) : (invoice.invoice_number ?? '-')}{' '}
-                    <span className="font-normal text-muted-foreground">
-                      · {(invoice.customer as { name: string })?.name}
-                    </span>
-                  </DataListPrimary>
-                  <DataListMeta>
-                    <span className="tabular-nums">{formatDate(invoice.invoice_date)}</span>
-                    <DataListMetaSeparator />
-                    <Badge
-                      variant={statusVariant as 'default' | 'secondary' | 'destructive' | 'outline'}
-                      className="h-4 px-1.5 py-0 text-[10px]"
+                      title={
+                        invoice.currency !== 'SEK' && invoice.total_sek
+                          ? formatCurrency(Number(invoice.total_sek))
+                          : undefined
+                      }
                     >
-                      {t(statusLabelKey)}
-                    </Badge>
-                    {isCreditNote && (
-                      <>
-                        <DataListMetaSeparator />
-                        <Badge variant="destructive" className="h-4 px-1.5 py-0 text-[10px]">
-                          {t('badge_credit')}
+                      {formatCurrency(displayedTotal, invoice.currency)}
+                    </td>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                      <span className="inline-flex items-center gap-1.5">
+                        {typeMarker && (
+                          <Badge variant="outline" className="font-normal">
+                            {typeMarker}
+                          </Badge>
+                        )}
+                        <Badge variant={chip.variant} className="font-normal">
+                          {chip.label}
                         </Badge>
-                      </>
-                    )}
-                    {isProforma && (
-                      <>
-                        <DataListMetaSeparator />
-                        <Badge variant="outline" className="h-4 px-1.5 py-0 text-[10px]">
-                          {t('badge_proforma')}
-                        </Badge>
-                      </>
-                    )}
-                    {isDeliveryNote && (
-                      <>
-                        <DataListMetaSeparator />
-                        <Badge variant="outline" className="h-4 px-1.5 py-0 text-[10px]">
-                          {t('badge_delivery_note')}
-                        </Badge>
-                      </>
-                    )}
-                    {invoice.is_self_billed && (
-                      <>
-                        <DataListMetaSeparator />
-                        <Badge variant="outline" className="h-4 px-1.5 py-0 text-[10px]">
-                          {t('badge_self_billed')}
-                        </Badge>
-                      </>
-                    )}
-                    {relativeTime && (
-                      <>
-                        <DataListMetaSeparator />
-                        <span className={cn('font-medium', relativeTime.color)}>
-                          {relativeTime.text}
-                        </span>
-                      </>
-                    )}
-                  </DataListMeta>
-                </DataListRow>
-              </Link>
-            )
-          })
-        )}
-      </DataList>
+                      </span>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {!isLoading && visibleCount < filteredInvoices.length && (
         <div className="flex justify-center">
@@ -431,6 +480,7 @@ export default function InvoicesPage() {
         <NewInvoiceDialog
           open
           copyFromId={copyFromId}
+          selfBilled={openSelfBilled}
           onOpenChange={(open) => {
             if (!open) closeNewInvoice()
           }}
