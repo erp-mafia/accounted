@@ -3828,7 +3828,7 @@
     "confirm_post_title": "Bokför verifikat",
     "confirm_post_description": "Bokförs som verifikat {voucher}: {description}, {amount}. Verifikatet kan inte ändras i efterhand, bara rättas eller stornas.",
     "confirm_post_description_generic": "Verifikatet \"{description}\" bokförs med nästa lediga verifikationsnummer och kan därefter inte ändras, bara rättas eller stornas.",
-    "bulkbar_selected": "markerade"
+    "bulkbar_selected": "{count, plural, one {markerad} other {markerade}}"
   },
   "attachment_preview_sheet": {
     "title": "Bilagor",
@@ -4566,7 +4566,7 @@
     "th_description": "Beskrivning",
     "th_amount": "Belopp",
     "th_status": "Status",
-    "bulkbar_selected": "markerade",
+    "bulkbar_selected": "{count, plural, one {markerad} other {markerade}}",
     "batch_book": "Bokför",
     "batch_bulk_book": "Bokför i klump",
     "batch_bulk_book_hint": "Välj minst två transaktioner från samma datum och samma riktning",

@@ -961,7 +961,7 @@ export default function JournalEntryList() {
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
             <span className="whitespace-nowrap">
               <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
-              {t('bulkbar_selected')}
+              {t('bulkbar_selected', { count: selectedIds.size })}
             </span>
             <Input
               value={batchReason}

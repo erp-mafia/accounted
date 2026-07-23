@@ -2391,7 +2391,7 @@ export default function TransactionsPage() {
                   <>
                     <span className="whitespace-nowrap">
                       <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
-                      {t('bulkbar_selected')}
+                      {t('bulkbar_selected', { count: selectedIds.size })}
                     </span>
                     <Button size="sm" onClick={() => setShowBatchSelector(true)}>
                       {t('batch_book')}
