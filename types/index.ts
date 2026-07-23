@@ -59,8 +59,24 @@ export interface UserPreferences {
   id: string
   user_id: string
   active_company_id: string | null
+  // Client-driven UI preferences (nav collapse/fold state, last-used create
+  // modes). jsonb DEFAULT '{}'. Cosmetic only, never load-bearing.
+  ui_state?: UserUiState
   created_at: string
   updated_at: string
+}
+
+// Shape of user_preferences.ui_state. All fields optional: the bag grows
+// as UI surfaces add preferences (UI migration plan PR 2/3).
+export interface UserUiState {
+  nav_collapsed?: boolean
+  nav_folds?: {
+    register?: boolean
+    bokslut?: boolean
+  }
+  // Split-button last-used create modes, keyed per surface (plan PR 3/4),
+  // e.g. create_mode.bookkeeping = 'mall'.
+  create_mode?: Record<string, string>
 }
 
 // Transaction categories

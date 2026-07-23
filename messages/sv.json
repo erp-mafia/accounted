@@ -97,11 +97,11 @@
     "time_tracking": "Tidrapportering",
     "expenses": "Utlägg",
     "receipts": "Kvitton",
-    "deadlines": "Deadlines",
+    "deadlines": "Viktiga datum",
     "vat_declaration": "Moms",
     "skattekonto": "Skattekonto",
     "periodiseringar": "Periodiseringar",
-    "year_end": "Bokslut",
+    "year_end": "Årsbokslut",
     "annual_report": "Årsredovisning",
     "income_declaration": "Inkomstdeklaration",
     "pending": "Väntande",
@@ -129,7 +129,13 @@
     "logout_sandbox": "Avsluta sandbox",
     "trial_days_left": "Provperiod: {days, plural, =1 {1 dag} other {# dagar}} kvar",
     "ext_tic": "Företagsprofil",
-    "ext_invoice_inbox": "Dokumentinkorg"
+    "ext_invoice_inbox": "Dokumentinkorg",
+    "fold_register": "Register",
+    "fold_bokslut": "Bokslut",
+    "collapse_nav": "Minimera menyn",
+    "expand_nav": "Expandera menyn",
+    "members_roles": "Medlemmar och roller",
+    "subscription": "Abonnemang"
   },
   "agentKnowledge": {
     "load_error_title": "Kunde inte läsa in kunskapsprofilen",
@@ -4447,7 +4453,9 @@
     "default_company_name": "Min verksamhet",
     "add_company": "Lägg till företag",
     "error_no_access": "Du har inte tillgång till detta företag.",
-    "error_switch_failed": "Företagsbytet kunde inte sparas. Försök igen."
+    "error_switch_failed": "Företagsbytet kunde inte sparas. Försök igen.",
+    "search_placeholder": "Sök företag...",
+    "no_results": "Inga företag matchar"
   },
   "transactions": {
     "page_title": "Transaktioner",

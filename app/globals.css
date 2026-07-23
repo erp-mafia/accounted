@@ -11,6 +11,14 @@
 
 :root {
   color-scheme: light;
+
+  /* Sidebar column width (frame layout). Default for shells that don't
+     override it; the dashboard shell (#dash-shell) sets it inline from
+     user_preferences.ui_state (248px expanded / 64px collapsed rail) and
+     the nav toggle updates it client-side. aside and <main> both read the
+     variable so they stay in lockstep. */
+  --nav-w: 248px;
+
   /* Grayscale Chrome Palette: paper white + warm beige */
 
   --background: 0 0% 100%;
@@ -168,6 +176,7 @@
 * {
   border-color: hsl(var(--border));
 }
+
 
 body {
   background-color: hsl(var(--background));

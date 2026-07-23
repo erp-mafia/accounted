@@ -38,8 +38,9 @@ const NO_COMPANY_ALLOWED_PATHS = ['/settings/account']
  */
 const MAIN_PANEL_CLASS =
   'safe-area-main-padding md:!pb-0 relative bg-background min-h-screen ' +
-  'md:min-h-0 md:ml-64 md:mt-[10px] md:mr-[10px] md:h-[calc(100vh-20px)] ' +
-  'md:overflow-y-auto md:rounded-xl md:border md:border-border'
+  'md:min-h-0 md:ml-[var(--nav-w)] md:mt-[10px] md:mr-[10px] md:h-[calc(100vh-20px)] ' +
+  'md:overflow-y-auto md:rounded-xl md:border md:border-border ' +
+  'md:transition-[margin-left] md:duration-200'
 
 export default async function DashboardLayout({
   children,
@@ -146,6 +147,7 @@ export default async function DashboardLayout({
     { data: userProfile },
     entitlements,
     { data: allSettingsNames },
+    { data: userPrefs },
   ] = await Promise.all([
     supabase.from('companies').select('*').eq('id', companyId).single(),
     supabase.from('company_members').select('role').eq('company_id', companyId).eq('user_id', user.id).single(),
@@ -168,6 +170,9 @@ export default async function DashboardLayout({
     // select returns exactly the caller's companies, letting non-active rows
     // show company_settings.company_name instead of the frozen companies.name.
     supabase.from('company_settings').select('company_id, company_name'),
+    // Per-user UI state (nav collapse/fold state): server-rendered so the
+    // sidebar width is right on first paint, no post-hydration jump.
+    supabase.from('user_preferences').select('ui_state').eq('user_id', user.id).maybeSingle(),
   ])
 
   // company_id -> current display name for every company the user belongs to.
@@ -248,6 +253,12 @@ export default async function DashboardLayout({
 
   const isSandbox = settings?.is_sandbox === true
 
+  // Client-driven UI preferences (sidebar collapse + fold state). Read here
+  // so the shell renders at the right width on first paint; the nav toggles
+  // flip the data attribute client-side and persist via /api/user/ui-state.
+  const uiState = (userPrefs?.ui_state ?? {}) as import('@/types').UserUiState
+  const navCollapsed = uiState.nav_collapsed === true
+
   const companyContextValue = {
     company: companyWithName,
     role: memberRow.role as CompanyRole,
@@ -278,7 +289,11 @@ export default async function DashboardLayout({
         }}
       >
         <CompanyTabSync />
-        <div className="min-h-screen bg-frame md:flex md:flex-col">
+        <div
+          id="dash-shell"
+          className="min-h-screen bg-frame md:flex md:flex-col"
+          style={{ '--nav-w': navCollapsed ? '64px' : '248px' } as React.CSSProperties}
+        >
           {/* Skip to content link for keyboard/screen reader users */}
           <a
             href="#main-content"
@@ -296,6 +311,7 @@ export default async function DashboardLayout({
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}
             userEmail={user.email ?? null}
+            initialUiState={uiState}
           />
           <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
             <MainContainer companyId={companyId}>{children}</MainContainer>

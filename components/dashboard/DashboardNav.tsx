@@ -22,7 +22,6 @@ import {
   Menu,
   X,
   HelpCircle,
-  ChevronDown,
   Building2,
   Wallet,
   TrendingUp,
@@ -32,7 +31,6 @@ import {
   Tag,
   Tags,
   ChevronRight,
-  ChevronsUpDown,
   Clock,
   Sparkles,
   Percent,
@@ -42,28 +40,25 @@ import {
   FileCheck,
   FileSpreadsheet,
   ScrollText,
+  PanelLeft,
+  PanelLeftClose,
+  Library,
+  BookCheck,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
 import { clearRecaptIdentity } from '@/lib/recapt'
 import { SupportLink } from '@/components/ui/support-link'
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-} from '@/components/ui/dropdown-menu'
 import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
+import UserMenu from '@/components/dashboard/UserMenu'
 import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
-import type { EntityType } from '@/types'
+import type { EntityType, UserUiState } from '@/types'
 
 void _ENABLED_EXTENSION_IDS
 
@@ -91,6 +86,9 @@ interface DashboardNavProps {
   // distinct from the active COMPANY shown by CompanySwitcher up top.
   userName?: string | null
   userEmail?: string | null
+  // Server-read user_preferences.ui_state: seeds sidebar collapse + fold
+  // state so the first client render matches the server-stamped width.
+  initialUiState?: UserUiState
 }
 
 type NavLabelKey =
@@ -125,28 +123,34 @@ type NavLabelKey =
   | 'help'
   | 'settings'
 
-// Nav layout (July 2026, interaction-mode grouping, dev_docs/nav_ia_redesign.md
-// Phase 0): same routes as before, regrouped by what the user is doing.
-//   top-of-sidebar       : CompanySwitcher (active company / org context).
-//   top section          : flat, no dropdown: Hem, Assistent. Hem doubles as
-//                          the "what needs me" surface until a dedicated
-//                          /inbox exists.
-//   four dropdowns       : Arbeta (produce: the bookkeeping funnel first,
-//                          then invoices, supplier invoices, payroll),
-//                          Analys (KPI + reports), Data (master-data
-//                          registers + import/export), Skatt & bokslut
-//                          (statutory: VAT, tax account, deadlines, year-end).
-//   bottom-left popover  : signed-in user's name + initial, opens upward
-//                          to Inställningar, Hjälp, Support, Logga ut.
-// Help + Settings are NOT in `navItems`; they live in the account popover.
+// Nav layout (July 2026, UI-migration concept, dev_docs/ui_migration_plan.md
+// PR 2): same routes, concept structure.
+//   top of rail          : collapse toggle (64px icon rail when collapsed;
+//                          state persists in user_preferences.ui_state).
+//   top section          : flat, no header: Hem, Assistent (Flöden joins
+//                          when the flow engine exists).
+//   four groups          : static headers (Arbeta, Analys, Data,
+//                          Skatt & bokslut); the Register (Data) and
+//                          Bokslut (Skatt) sub-lists are animated folds.
+//   bottom user block    : sticky; avatar + name + active company, opens
+//                          the upward UserMenu with the company-switcher
+//                          flyout, account links and logout.
+// Help + Settings are NOT in `navItems`; they live in the user menu.
 // Pending (Granskning) stays visible at all times: the badge carries the count.
 type GroupKey = 'top' | 'arbeta' | 'analys' | 'data' | 'skatt'
+// Folds: collapsible sub-lists inside a group (concept: Register under DATA,
+// Bokslut under SKATT & BOKSLUT). Child rows render text-indented behind a
+// hairline; open/closed state persists in user_preferences.ui_state.
+type FoldKey = 'register' | 'bokslut'
 
 interface NavItem {
   href: string
   labelKey: NavLabelKey
   icon: typeof LayoutDashboard
   group: GroupKey
+  // When set, the item renders inside this fold (consecutive items with the
+  // same fold key form one fold block at that position in the group).
+  fold?: FoldKey
   // Payroll surfaces: visible only to employers: every aktiebolag (unchanged
   // behaviour) plus any company that has registered as an employer via
   // company_settings.pays_salaries (e.g. an enskild firma with staff). #782
@@ -168,16 +172,17 @@ interface NavItem {
   betaBadge?: boolean
 }
 
+// Nav layout per the UI-migration concept (ui_migration_plan.md PR 2):
+// same destinations, concept ordering, with the Register and Bokslut
+// sub-lists as folds.
 const navItems: NavItem[] = [
-  // Top section: flat list, always visible, no header
+  // Top section: flat list, always visible, no header. (Flöden joins here
+  // when the flow engine exists.)
   { href: '/', labelKey: 'home', icon: Home, group: 'top' },
   { href: '/chat', labelKey: 'assistant', icon: Sparkles, group: 'top' },
-  // Arbeta: everything the user produces. The bookkeeping funnel leads
-  // (Bokföring · Underlag · Transaktioner · Granskning: kept as separate
-  // rows until the unified workspace lands), then the transactional flows.
-  // employerOnly: shown to aktiebolag and to any employer (pays_salaries), so an
-  // enskild firma that hires staff gets payroll. Owner self-payroll stays
-  // blocked at the engine/DB layer (EF owner takes egna uttag, not lön). #782
+  // Arbeta: everything the user produces, bookkeeping funnel first
+  // (Bokföring · Underlag · Transaktioner · Granskning), then the
+  // transactional flows. employerOnly: aktiebolag or pays_salaries. #782
   { href: '/bookkeeping', labelKey: 'bookkeeping', icon: BookOpen, group: 'arbeta' },
   { href: '/e/general/invoice-inbox', labelKey: 'invoice_inbox', icon: Inbox, group: 'arbeta', requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'] },
   { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'arbeta' },
@@ -185,39 +190,63 @@ const navItems: NavItem[] = [
   { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
   { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
-  // Analys: read the numbers. KPI stays a separate row until the fused
-  // Rapporter surface (nav_ia_redesign §F) is built.
+  // Analys: read the numbers.
   { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'analys' },
   { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'analys' },
-  // "Vad din agent vet" now lives inside Settings (Assistenten -> Kunskap,
-  // the default view), reachable via /settings/assistant, not the top nav.
-  // Data: master-data registers + data plumbing. Anställda is a register
-  // (you edit an employee rarely, you run payroll monthly), so it lives here
-  // while the Löner flow stays in Arbeta.
-  { href: '/customers', labelKey: 'customers', icon: Users, group: 'data' },
-  { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'data' },
-  { href: '/articles', labelKey: 'articles', icon: Tag, group: 'data' },
-  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', employerOnly: true },
-  { href: '/assets', labelKey: 'assets', icon: Package, group: 'data' },
-  { href: '/chart-of-accounts', labelKey: 'chart_of_accounts', icon: ListTree, group: 'data' },
-  { href: '/dimensions', labelKey: 'dimensions', icon: Tags, group: 'data', requiresDimensions: true },
+  // Data: the Register fold (master data) + Importera/exportera as its own
+  // row. Anställda is a register (you edit an employee rarely, you run
+  // payroll monthly), so it lives here while Löner stays in Arbeta.
+  { href: '/customers', labelKey: 'customers', icon: Users, group: 'data', fold: 'register' },
+  { href: '/suppliers', labelKey: 'suppliers', icon: Building2, group: 'data', fold: 'register' },
+  { href: '/articles', labelKey: 'articles', icon: Tag, group: 'data', fold: 'register' },
+  { href: '/salary/employees', labelKey: 'employees', icon: Users, group: 'data', fold: 'register', employerOnly: true },
+  { href: '/assets', labelKey: 'assets', icon: Package, group: 'data', fold: 'register' },
+  { href: '/chart-of-accounts', labelKey: 'chart_of_accounts', icon: ListTree, group: 'data', fold: 'register' },
+  { href: '/dimensions', labelKey: 'dimensions', icon: Tags, group: 'data', fold: 'register', requiresDimensions: true },
   { href: '/import', labelKey: 'import', icon: Upload, group: 'data' },
-  // Skatt & bokslut: everything submitted to the state. Rescues the
-  // previously nav-orphaned /skattekonto and /deadlines, and promotes the
-  // VAT declaration out of the report catalog. The year-end chain
-  // (periodiseringar → bokslut → årsredovisning → inkomstdeklaration) is
-  // listed in workflow order; the last two are entity-gated because the
-  // surfaces only exist for one company form (ÅR + INK2 for aktiebolag,
-  // NE-bilaga for enskild firma).
+  // Skatt & bokslut: everything submitted to the state; the year-end chain
+  // (periodiseringar → årsbokslut → årsredovisning → inkomstdeklaration)
+  // lives in the Bokslut fold in workflow order; the last two are
+  // entity-gated because the surface only exists for one company form.
   { href: '/reports/vat-declaration', labelKey: 'vat_declaration', icon: Percent, group: 'skatt' },
   { href: '/skattekonto', labelKey: 'skattekonto', icon: Landmark, group: 'skatt' },
   { href: '/deadlines', labelKey: 'deadlines', icon: CalendarClock, group: 'skatt' },
-  { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar', icon: CalendarRange, group: 'skatt' },
-  { href: '/bookkeeping/year-end', labelKey: 'year_end', icon: FileCheck, group: 'skatt' },
-  { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', entityOnly: 'aktiebolag' },
-  { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'aktiebolag' },
-  { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'enskild_firma' },
+  { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar', icon: CalendarRange, group: 'skatt', fold: 'bokslut' },
+  { href: '/bookkeeping/year-end', labelKey: 'year_end', icon: FileCheck, group: 'skatt', fold: 'bokslut' },
+  { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', fold: 'bokslut', entityOnly: 'aktiebolag' },
+  { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', fold: 'bokslut', entityOnly: 'aktiebolag' },
+  { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', fold: 'bokslut', entityOnly: 'enskild_firma' },
 ]
+
+// Fold header presentation (label + icon). The fold rows themselves come
+// from navItems entries carrying the matching `fold` key.
+const foldConfig: Record<FoldKey, { labelKey: string; icon: typeof LayoutDashboard }> = {
+  register: { labelKey: 'fold_register', icon: Library },
+  bokslut: { labelKey: 'fold_bokslut', icon: BookCheck },
+}
+
+// Splits a group's items into a render sequence of plain items and fold
+// blocks (consecutive same-fold items become one block).
+type NavSegment =
+  | { type: 'item'; item: NavItem }
+  | { type: 'fold'; key: FoldKey; items: NavItem[] }
+
+function segmentItems(items: NavItem[]): NavSegment[] {
+  const segments: NavSegment[] = []
+  for (const item of items) {
+    if (item.fold) {
+      const last = segments[segments.length - 1]
+      if (last && last.type === 'fold' && last.key === item.fold) {
+        last.items.push(item)
+      } else {
+        segments.push({ type: 'fold', key: item.fold, items: [item] })
+      }
+    } else {
+      segments.push({ type: 'item', item })
+    }
+  }
+  return segments
+}
 
 // Map known extension hrefs to nav translation keys so sidebar labels translate.
 // Extensions whose manifest label happens to be English-ready can stay null.
@@ -234,19 +263,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-// Best single-character initial we can show in the bottom-left account
-// trigger. Prefers the first letter of the user's full name; falls back
-// to the email's first character; falls back to "?" so the avatar never
-// renders empty.
-function accountInitial(name: string | null, email: string | null): string {
-  const trimmedName = name?.trim()
-  if (trimmedName && trimmedName.length > 0) return trimmedName[0]!.toUpperCase()
-  const trimmedEmail = email?.trim()
-  if (trimmedEmail && trimmedEmail.length > 0) return trimmedEmail[0]!.toUpperCase()
-  return '?'
-}
-
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
@@ -294,21 +311,48 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const hasCompany = !!company
   const ALWAYS_ENABLED = new Set(['/settings'])
   const isItemEnabled = (href: string) => hasCompany || ALWAYS_ENABLED.has(href)
-  // Per-group collapse state. Default: ALL groups expanded. The user
-  // can see every child link without hunting. Clicking the chevron
-  // collapses the group; opening it again restores the children.
-  // Active route still forces a group expanded even when the user has
-  // manually collapsed it (so deep-linking into /salary doesn't leave
-  // Personal hidden).
   type ExpandableGroup = Exclude<GroupKey, 'top'>
-  const [manualCollapsed, setManualCollapsed] = useState<Record<ExpandableGroup, boolean>>({
-    arbeta: false,
-    analys: false,
-    data: false,
-    skatt: false,
+
+  // Persist a partial ui_state patch. Fire-and-forget: this is cosmetic
+  // preference data; a lost write self-corrects on the next toggle.
+  const persistUiState = (patch: Partial<UserUiState>) => {
+    void fetch('/api/user/ui-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }).catch(() => {})
+  }
+
+  // Sidebar collapse (64px icon rail). The width is CSS-variable-driven:
+  // #dash-shell sets --nav-w inline (server-rendered from ui_state), and
+  // both the aside and <main> read it, so one property flip resizes the
+  // whole shell in lockstep. The React state only drives which sidebar
+  // variant renders.
+  const [collapsed, setCollapsed] = useState(initialUiState?.nav_collapsed === true)
+  const toggleCollapsed = () => {
+    const next = !collapsed
+    setCollapsed(next)
+    document
+      .getElementById('dash-shell')
+      ?.style.setProperty('--nav-w', next ? '64px' : '248px')
+    persistUiState({ nav_collapsed: next })
+  }
+
+  // Fold state (Register, Bokslut). Closed by default; an active child
+  // route forces its fold open so deep links never land in a hidden row.
+  const [foldsOpen, setFoldsOpen] = useState<Record<FoldKey, boolean>>({
+    register: initialUiState?.nav_folds?.register ?? false,
+    bokslut: initialUiState?.nav_folds?.bokslut ?? false,
   })
-  const toggleGroup = (g: ExpandableGroup) =>
-    setManualCollapsed((prev) => ({ ...prev, [g]: !prev[g] }))
+  const toggleFold = (key: FoldKey) => {
+    setFoldsOpen((prev) => {
+      const next = { ...prev, [key]: !prev[key] }
+      persistUiState({ nav_folds: { [key]: next[key] } })
+      return next
+    })
+  }
+  const isFoldOpen = (key: FoldKey, items: NavItem[]) =>
+    foldsOpen[key] || items.some((it) => isActive(it.href))
 
   const openMobileMenu = () => {
     if (closeTimerRef.current) {
@@ -479,11 +523,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     { key: 'skatt', items: filteredItems.filter((i) => i.group === 'skatt') },
   ]
 
-  // A group is expanded when the user hasn't manually collapsed it OR
-  // an active route lives inside it (the active route always wins so a
-  // deep-link to /salary keeps Personal open even if previously collapsed).
-  const isGroupExpanded = (g: ExpandableGroup, items: NavItem[]) =>
-    !manualCollapsed[g] || items.some((it) => isActive(it.href))
+  // Flat leaf list for the collapsed 64px icon rail: fold children render
+  // as plain icons (group headers and fold headers disappear).
+  const railItems = [...topItems, ...sidebarGroups.flatMap(({ items }) => items)]
 
   const allMobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = [
     { href: '/', labelKey: 'home', icon: Home },
@@ -506,209 +548,281 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     return null
   }
 
+  const badgeFor = (href: string): number | null =>
+    href === '/transactions' && uncategorizedCount > 0
+      ? uncategorizedCount
+      : href === '/pending' && pendingOpsCount > 0
+        ? pendingOpsCount
+        : null
+
+  const countBubble = (badge: number) => (
+    <span className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
+      {badge > 99 ? '99+' : badge}
+    </span>
+  )
+
+  // One sidebar row (expanded sidebar). Fold children render text-indented
+  // without an icon behind the fold's hairline (concept PR 2).
+  const renderSidebarItem = (item: NavItem, opts?: { child?: boolean }) => {
+    const active = isActive(item.href)
+    const enabled = isItemEnabled(item.href) && !item.comingSoon
+    const badge = badgeFor(item.href)
+    const decorBadge = renderBadge(item, 'sidebar')
+    const content = (
+      <>
+        {!opts?.child &&
+          renderNavIcon(
+            item,
+            cn(
+              'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
+              active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
+            ),
+          )}
+        <span className="flex-1">{tNav(item.labelKey)}</span>
+        {decorBadge ? decorBadge : badge !== null && countBubble(badge)}
+      </>
+    )
+    const baseClass = cn(
+      'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
+      enabled
+        ? cn(
+            'transition-colors duration-150',
+            active
+              ? 'bg-secondary text-foreground font-medium'
+              : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
+          )
+        : 'text-muted-foreground/40 cursor-not-allowed',
+    )
+    return enabled ? (
+      <Link key={item.href} href={item.href} className={baseClass}>
+        {content}
+      </Link>
+    ) : (
+      <div
+        key={item.href}
+        className={baseClass}
+        aria-disabled="true"
+        title={item.comingSoon ? tNav('badge_coming_soon') : tNav('needs_company_tooltip')}
+      >
+        {content}
+      </div>
+    )
+  }
+
+  // Fold block: header row + grid-rows 0fr/1fr height animation, children
+  // indented behind a hairline left edge.
+  const renderFold = (segKey: FoldKey, items: NavItem[]) => {
+    const open = isFoldOpen(segKey, items)
+    const cfg = foldConfig[segKey]
+    const FoldIcon = cfg.icon
+    return (
+      <div key={segKey}>
+        <button
+          type="button"
+          onClick={() => toggleFold(segKey)}
+          aria-expanded={open}
+          className="group flex w-full items-center px-3 py-[7px] text-[13px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors duration-150"
+        >
+          <FoldIcon className="mr-2.5 h-[15px] w-[15px] flex-shrink-0 text-muted-foreground group-hover:text-foreground" />
+          <span className="flex-1 text-left">{tNav(cfg.labelKey)}</span>
+          <ChevronRight
+            className={cn('h-3 w-3 transition-transform duration-200', open && 'rotate-90')}
+          />
+        </button>
+        <div
+          className="grid transition-[grid-template-rows] duration-200 ease-out"
+          style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
+        >
+          <div className="overflow-hidden">
+            <div className="ml-[19px] border-l border-border pl-1.5 py-px space-y-px">
+              {items.map((item) => renderSidebarItem(item, { child: true }))}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Collapsed 64px rail: icon-only rows, native title tooltips, count
+  // bubbles pinned to the icon corner.
+  const renderRailItem = (
+    item: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard; comingSoon?: boolean },
+  ) => {
+    const active = isActive(item.href)
+    const enabled = isItemEnabled(item.href) && !item.comingSoon
+    const badge = badgeFor(item.href)
+    const label = tNav(item.labelKey)
+    const inner = (
+      <span className="relative">
+        {renderNavIcon(
+          item,
+          cn('h-[17px] w-[17px]', active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'),
+        )}
+        {badge !== null && (
+          <span className="absolute -top-2 -right-2.5 min-w-[15px] h-[15px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-semibold px-0.5">
+            {badge > 99 ? '99' : badge}
+          </span>
+        )}
+      </span>
+    )
+    const baseClass = cn(
+      'group flex h-9 w-9 items-center justify-center rounded-lg',
+      enabled
+        ? cn('transition-colors duration-150', active ? 'bg-secondary' : 'hover:bg-secondary/60')
+        : 'opacity-40 cursor-not-allowed',
+    )
+    return enabled ? (
+      <Link key={item.href} href={item.href} className={baseClass} title={label} aria-label={label}>
+        {inner}
+      </Link>
+    ) : (
+      <div key={item.href} className={baseClass} title={label} aria-disabled="true">
+        {inner}
+      </div>
+    )
+  }
+
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden md:fixed md:inset-y-0 md:flex md:w-64 md:flex-col">
+      <aside className="hidden md:fixed md:inset-y-0 md:z-10 md:flex md:w-[var(--nav-w)] md:flex-col md:transition-[width] md:duration-200">
         {/* Borderless on the frame: the panel next to it carries the border */}
         <div className="flex min-h-0 flex-1 flex-col bg-transparent">
-          <div className="flex flex-1 flex-col overflow-y-auto pt-7 pb-4">
-            {/* Company switcher pinned to the top: the active company is
-                the strongest piece of context for everything below it. */}
-            <div className="px-5 mb-8">
-              <CompanySwitcher />
-            </div>
+          {/* Collapse toggle (concept: icon at the very top of the rail) */}
+          <div
+            className={cn(
+              'flex flex-shrink-0 pt-3 pb-1',
+              collapsed ? 'justify-center' : 'justify-end pr-3',
+            )}
+          >
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              aria-label={collapsed ? tNav('expand_nav') : tNav('collapse_nav')}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors duration-150"
+            >
+              {collapsed ? (
+                <PanelLeft className="h-4 w-4" />
+              ) : (
+                <PanelLeftClose className="h-4 w-4" />
+              )}
+            </button>
+          </div>
+
+          {/* Nav items in their own scroll container so the user block
+              below stays sticky (concept PR 2). */}
+          <div className="flex-1 min-h-0 overflow-y-auto pt-1 pb-2">
+            {collapsed ? (
+              <nav
+                className="flex flex-col items-center gap-px px-2"
+                aria-label={tNav('main_navigation')}
+              >
+                {railItems.map((item) => renderRailItem(item))}
+                {visibleExtensionNavItems.map((item) => {
+                  const Icon = resolveIcon(item.icon)
+                  const labelTranslationKey = extensionLabelKey(item.href)
+                  const label = labelTranslationKey ? tNav(labelTranslationKey) : item.label
+                  const active = isActive(item.href)
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      title={label}
+                      aria-label={label}
+                      className={cn(
+                        'group flex h-9 w-9 items-center justify-center rounded-lg transition-colors duration-150',
+                        active ? 'bg-secondary' : 'hover:bg-secondary/60',
+                      )}
+                    >
+                      <Icon
+                        className={cn(
+                          'h-[17px] w-[17px]',
+                          active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
+                        )}
+                      />
+                    </Link>
+                  )
+                })}
+              </nav>
+            ) : (
             <nav className="px-3" aria-label={tNav('main_navigation')}>
               {/* Top section: flat, no header. Hem, Assistent. */}
               <div className="mb-4 space-y-px">
-                {topItems.map((item) => {
-                  const active = isActive(item.href)
-                  const enabled = isItemEnabled(item.href)
-                  const badge: number | null = null
-                  const decorBadge = renderBadge(item, 'sidebar')
-                  const content = (
-                    <>
-                      {renderNavIcon(
-                        item,
-                        cn(
-                          'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
-                          active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground',
-                        ),
-                      )}
-                      <span className="flex-1">{tNav(item.labelKey)}</span>
-                      {decorBadge ? decorBadge : badge !== null && (
-                        <span className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
-                          {badge > 99 ? '99+' : badge}
-                        </span>
-                      )}
-                    </>
-                  )
-                  const baseClass = cn(
-                    'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
-                    enabled
-                      ? cn(
-                          'transition-colors duration-150',
-                          active
-                            ? 'bg-secondary text-foreground font-medium'
-                            : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
-                        )
-                      : 'text-muted-foreground/40 cursor-not-allowed',
-                  )
-                  return enabled ? (
-                    <Link key={item.href} href={item.href} className={baseClass}>
-                      {content}
-                    </Link>
-                  ) : (
-                    <div
-                      key={item.href}
-                      className={baseClass}
-                      aria-disabled="true"
-                      title={tNav('needs_company_tooltip')}
-                    >
-                      {content}
-                    </div>
-                  )
-                })}
+                {topItems.map((item) => renderSidebarItem(item))}
               </div>
 
-              {/* Collapsible groups: Arbeta, Analys, Data, Skatt & bokslut */}
+              {/* Groups: Arbeta, Analys, Data, Skatt & bokslut. Static
+                  headers; only the Register/Bokslut folds collapse. */}
               {sidebarGroups
                 .filter(({ items }) => items.length > 0)
-                .map(({ key, items }) => {
-                  const expanded = isGroupExpanded(key, items)
-                  return (
-                    <div key={key} className="mb-1">
-                      <button
-                        onClick={() => toggleGroup(key)}
-                        className="w-full flex items-center justify-between px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em] hover:text-foreground transition-colors rounded-lg"
-                      >
-                        <span>{tNav(groupLabelKey[key])}</span>
-                        <ChevronDown
-                          className={cn(
-                            'h-3 w-3 transition-transform duration-200',
-                            expanded && 'rotate-180',
-                          )}
-                        />
-                      </button>
-                      {expanded && (
-                        <div className="space-y-px animate-fade-in mb-2">
-                          {items.map((item) => {
-                            const Icon = item.icon
-                            const active = isActive(item.href)
-                            const enabled = isItemEnabled(item.href) && !item.comingSoon
-                            const badge =
-                              item.href === '/transactions' && uncategorizedCount > 0
-                                ? uncategorizedCount
-                                : item.href === '/pending' && pendingOpsCount > 0
-                                  ? pendingOpsCount
-                                  : null
-                            const decorBadge = renderBadge(item, 'sidebar')
-                            const content = (
-                              <>
-                                <Icon
-                                  className={cn(
-                                    'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
-                                    active
-                                      ? 'text-primary'
-                                      : 'text-muted-foreground group-hover:text-foreground',
-                                  )}
-                                />
-                                <span className="flex-1">{tNav(item.labelKey)}</span>
-                                {decorBadge ? decorBadge : badge !== null && (
-                                  <span className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
-                                    {badge > 99 ? '99+' : badge}
-                                  </span>
-                                )}
-                              </>
-                            )
-                            const baseClass = cn(
-                              'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
-                              enabled
-                                ? cn(
-                                    'transition-colors duration-150',
-                                    active
-                                      ? 'bg-secondary text-foreground font-medium'
-                                      : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
-                                  )
-                                : 'text-muted-foreground/40 cursor-not-allowed',
-                            )
-                            return enabled ? (
-                              <Link key={item.href} href={item.href} className={baseClass}>
-                                {content}
-                              </Link>
-                            ) : (
-                              <div
-                                key={item.href}
-                                className={baseClass}
-                                aria-disabled="true"
-                                title={
-                                  item.comingSoon
-                                    ? tNav('badge_coming_soon')
-                                    : tNav('needs_company_tooltip')
-                                }
-                              >
-                                {content}
-                              </div>
-                            )
-                          })}
-                          {/* Extension nav items land in Arbeta since extension
-                              workspaces are work surfaces. Future categorised
-                              extensions can opt into a different group via
-                              their manifest. */}
-                          {key === 'arbeta' &&
-                            visibleExtensionNavItems.map((item) => {
-                              const Icon = resolveIcon(item.icon)
-                              const active = isActive(item.href)
-                              const enabled = hasCompany
-                              const labelTranslationKey = extensionLabelKey(item.href)
-                              const label = labelTranslationKey
-                                ? tNav(labelTranslationKey)
-                                : item.label
-                              const content = (
-                                <>
-                                  <Icon
-                                    className={cn(
-                                      'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
-                                      active
-                                        ? 'text-primary'
-                                        : 'text-muted-foreground group-hover:text-foreground',
-                                    )}
-                                  />
-                                  {label}
-                                </>
-                              )
-                              const baseClass = cn(
-                                'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
-                                enabled
-                                  ? cn(
-                                      'transition-colors duration-150',
-                                      active
-                                        ? 'bg-secondary text-foreground font-medium'
-                                        : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
-                                    )
-                                  : 'text-muted-foreground/40 cursor-not-allowed',
-                              )
-                              return enabled ? (
-                                <Link key={item.href} href={item.href} className={baseClass}>
-                                  {content}
-                                </Link>
-                              ) : (
-                                <div
-                                  key={item.href}
-                                  className={baseClass}
-                                  aria-disabled="true"
-                                  title={tNav('needs_company_tooltip')}
-                                >
-                                  {content}
-                                </div>
-                              )
-                            })}
-                        </div>
-                      )}
+                .map(({ key, items }) => (
+                  <div key={key} className="mb-4">
+                    <div className="px-3 pb-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em]">
+                      {tNav(groupLabelKey[key])}
                     </div>
-                  )
-                })}
+                    <div className="space-y-px">
+                      {segmentItems(items).map((seg) =>
+                        seg.type === 'item'
+                          ? renderSidebarItem(seg.item)
+                          : renderFold(seg.key, seg.items),
+                      )}
+                      {/* Extension nav items land in Arbeta since extension
+                          workspaces are work surfaces. Future categorised
+                          extensions can opt into a different group via
+                          their manifest. */}
+                      {key === 'arbeta' &&
+                        visibleExtensionNavItems.map((item) => {
+                          const Icon = resolveIcon(item.icon)
+                          const active = isActive(item.href)
+                          const enabled = hasCompany
+                          const labelTranslationKey = extensionLabelKey(item.href)
+                          const label = labelTranslationKey
+                            ? tNav(labelTranslationKey)
+                            : item.label
+                          const content = (
+                            <>
+                              <Icon
+                                className={cn(
+                                  'mr-2.5 h-[15px] w-[15px] flex-shrink-0',
+                                  active
+                                    ? 'text-primary'
+                                    : 'text-muted-foreground group-hover:text-foreground',
+                                )}
+                              />
+                              {label}
+                            </>
+                          )
+                          const baseClass = cn(
+                            'group flex items-center px-3 py-[7px] text-[13px] rounded-lg',
+                            enabled
+                              ? cn(
+                                  'transition-colors duration-150',
+                                  active
+                                    ? 'bg-secondary text-foreground font-medium'
+                                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary/60',
+                                )
+                              : 'text-muted-foreground/40 cursor-not-allowed',
+                          )
+                          return enabled ? (
+                            <Link key={item.href} href={item.href} className={baseClass}>
+                              {content}
+                            </Link>
+                          ) : (
+                            <div
+                              key={item.href}
+                              className={baseClass}
+                              aria-disabled="true"
+                              title={tNav('needs_company_tooltip')}
+                            >
+                              {content}
+                            </div>
+                          )
+                        })}
+                    </div>
+                  </div>
+                ))}
             </nav>
+            )}
           </div>
 
           {/* Trial countdown touchpoint: the paywall is a lifecycle flow, not
@@ -716,7 +830,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               chrome instead of only inside Inställningar → Abonnemang.
               Hidden for sandbox/demo (no checkout) and once any non-trial
               grant is active (trialEndsAt is null then). */}
-          {!isSandbox && trialDaysLeft !== null && (
+          {!collapsed && !isSandbox && trialDaysLeft !== null && (
             <div className="flex-shrink-0 px-3 pb-2">
               <Link
                 href="/settings/billing"
@@ -731,75 +845,22 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             </div>
           )}
 
-          {/* Account popover (bottom-left). Triggered by the signed-in
-              user's name + initial. Holds Inställningar, Hjälp, Support,
-              Logga ut. CompanySwitcher lives at the top of the sidebar,
-              not in here, different concept ("which company am I working
-              with" vs "who am I logged in as"). */}
-          <div className="flex-shrink-0 px-3 py-3 border-t border-border">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors duration-150"
-                >
-                  <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-[11px] font-semibold uppercase text-foreground">
-                    {accountInitial(userName, userEmail)}
-                  </span>
-                  <span className="flex-1 truncate font-medium text-foreground">
-                    {userName?.trim() || userEmail || tNav('mitt_konto')}
-                  </span>
-                  <ChevronsUpDown className="h-3.5 w-3.5 opacity-50 group-hover:opacity-100" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="start" className="w-60">
-                {(userName || userEmail) && (
-                  <>
-                    <DropdownMenuLabel className="font-normal">
-                      <div className="flex flex-col gap-0.5">
-                        {userName && (
-                          <span className="text-sm font-medium text-foreground truncate">
-                            {userName}
-                          </span>
-                        )}
-                        {userEmail && (
-                          <span className="text-xs text-muted-foreground truncate">
-                            {userEmail}
-                          </span>
-                        )}
-                      </div>
-                    </DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
-                <DropdownMenuItem asChild>
-                  <Link href="/settings" className="cursor-pointer">
-                    <Settings className="mr-2 h-4 w-4" />
-                    {tNav('settings')}
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link href="/help" className="cursor-pointer">
-                    <HelpCircle className="mr-2 h-4 w-4" />
-                    {tNav('help')}
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <SupportLink variant="muted" className="cursor-pointer" />
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault()
-                    void handleLogout()
-                  }}
-                  className="cursor-pointer text-muted-foreground focus:text-foreground"
-                >
-                  <LogOut className="mr-2 h-4 w-4" />
-                  {isSandbox ? tNav('logout_sandbox') : tCommon('logout')}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+          {/* Sticky user block (bottom-left): avatar, name, active company.
+              Opens the upward user menu with the company-switcher flyout,
+              account links and logout (concept PR 2). */}
+          <div
+            className={cn(
+              'flex-shrink-0 border-t border-border/60',
+              collapsed ? 'px-2 py-2' : 'px-3 py-2',
+            )}
+          >
+            <UserMenu
+              userName={userName}
+              userEmail={userEmail}
+              isSandbox={isSandbox}
+              collapsed={collapsed}
+              onLogout={() => void handleLogout()}
+            />
           </div>
         </div>
       </aside>

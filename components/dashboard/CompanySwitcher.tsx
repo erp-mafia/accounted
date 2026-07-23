@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
-import { switchCompany } from '@/lib/company/actions'
+import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
 import { Check, ChevronsUpDown, Plus, Loader2 } from 'lucide-react'
 
@@ -81,33 +81,16 @@ export default function CompanySwitcher() {
       return
     }
     setIsPending(true)
-    const result = await switchCompany(companyId)
-    if (result.error) {
+    // Shared switch-and-reload mechanism (lib/company/switch-client), same
+    // path as the sidebar user-menu flyout.
+    const result = await performCompanySwitch(companyId)
+    if (result?.error) {
       setIsPending(false)
       toast({
         title: t(result.error === 'not_member' ? 'error_no_access' : 'error_switch_failed'),
         variant: 'destructive',
       })
-      return
     }
-    // Notify every other open tab of the same user so they hard-reload
-    // onto the new company. BroadcastChannel is best-effort: if the
-    // browser doesn't support it (very old) we still hard-reload
-    // ourselves, and other tabs will self-correct via the visibilitychange
-    // / pageshow listeners in CompanyTabSync on their next focus event.
-    if (typeof BroadcastChannel !== 'undefined') {
-      try {
-        const channel = new BroadcastChannel('gnubok-company-switch')
-        channel.postMessage({ companyId })
-        channel.close()
-      } catch {
-        // Ignore: hard reload still happens below
-      }
-    }
-    // Hard navigation: tears down React state, router cache, in-flight
-    // fetches, blob URLs, etc. This is the whole point: nothing from the
-    // previous company can survive the switch.
-    window.location.assign('/')
   }
 
   // Always allow opening the dropdown (to show "Lägg till företag")
