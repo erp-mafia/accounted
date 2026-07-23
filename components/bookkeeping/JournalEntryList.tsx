@@ -30,6 +30,14 @@ import {
 } from '@/components/common/FiscalYearSelector'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import {
+  TH_CLASS,
+  TD_CLASS,
+  VTH_CLASS,
+  VTD_CLASS,
+  QUIET_LINK_CLASS,
+  RowFoldout,
+} from '@/components/ui/dry-table'
 import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
 import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -77,35 +85,6 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100] as const
 const PAGE_SIZE_VALUES = new Set<PageSizeChoice>(['20', '50', '100', 'all'])
 // Sentinel limit sent for "Alla". The route clamps this to its own MAX_LIMIT.
 const ALL_PAGE_SIZE = 100000
-
-// Concept table styles (scene 9 "dry-table"): borderless table on the
-// panel, uppercase hairline heads, 13px rows.
-const TH_CLASS =
-  'px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground border-b border-border whitespace-nowrap'
-const TD_CLASS = 'px-4 py-[11px] border-b border-border align-top'
-const VTH_CLASS =
-  'py-2 pr-4 text-left text-[10.5px] font-medium uppercase tracking-[0.07em] text-muted-foreground border-b border-border'
-const VTD_CLASS = 'py-[7px] pr-4 border-b border-border/60 align-top'
-const QUIET_LINK_CLASS =
-  'text-[12.5px] text-muted-foreground underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground'
-
-// Animated row expansion (concept vwrap/vinner): grid-rows 0fr -> 1fr on
-// mount; the global reduced-motion rule collapses the transition.
-function RowFoldout({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(false)
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => setOpen(true))
-    return () => cancelAnimationFrame(raf)
-  }, [])
-  return (
-    <div
-      className="grid transition-[grid-template-rows] duration-300 ease-out"
-      style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
-    >
-      <div className="min-h-0 overflow-hidden">{children}</div>
-    </div>
-  )
-}
 
 export default function JournalEntryList() {
   const router = useRouter()

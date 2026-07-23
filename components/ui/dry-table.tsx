@@ -1,0 +1,35 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+
+// Concept dry-table (scenes 9/10): borderless table straight on the panel,
+// uppercase hairline heads, 13px rows, hover-revealed row controls. Shared by
+// the verifikat list and the transaction inbox so the two read as the same
+// instrument. Keep these in sync with .claude/rules/design.md; page-specific
+// tweaks belong at the call site via cn(), not here.
+export const TH_CLASS =
+  'px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground border-b border-border whitespace-nowrap'
+export const TD_CLASS = 'px-4 py-[11px] border-b border-border align-top'
+export const VTH_CLASS =
+  'py-2 pr-4 text-left text-[10.5px] font-medium uppercase tracking-[0.07em] text-muted-foreground border-b border-border'
+export const VTD_CLASS = 'py-[7px] pr-4 border-b border-border/60 align-top'
+export const QUIET_LINK_CLASS =
+  'text-[12.5px] text-muted-foreground underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground'
+
+// Animated row expansion (concept vwrap/vinner): grid-rows 0fr -> 1fr on
+// mount; the global reduced-motion rule collapses the transition.
+export function RowFoldout({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setOpen(true))
+    return () => cancelAnimationFrame(raf)
+  }, [])
+  return (
+    <div
+      className="grid transition-[grid-template-rows] duration-300 ease-out"
+      style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
+    >
+      <div className="min-h-0 overflow-hidden">{children}</div>
+    </div>
+  )
+}
