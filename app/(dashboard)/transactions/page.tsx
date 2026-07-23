@@ -27,8 +27,8 @@ import { ChevronDown, EyeOff, Layers, Search, ShieldAlert, Trash2, X } from 'luc
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { ContextPicker } from '@/components/common/ContextPicker'
+import { AttnLine } from '@/components/ui/attn-line'
 import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
-import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
 import TransactionHistoryList from '@/components/transactions/TransactionHistoryList'
 import InboxZeroState from '@/components/transactions/InboxZeroState'
@@ -2156,19 +2156,11 @@ export default function TransactionsPage() {
       {/* Page header (concept scene 10): title + Importera split button */}
       <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
 
-      <BankSyncSinceLastVisit />
 
       {skvNeedsReconnect && (
-        <div className="flex flex-wrap items-start gap-3 rounded-lg border border-border bg-secondary/40 p-4 text-sm">
-          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-          <div className="min-w-0 flex-1 space-y-1">
-            <p className="font-medium">{t('skv_reconnect_title')}</p>
-            <p className="text-muted-foreground">{t('skv_reconnect_body')}</p>
-          </div>
-          <Button asChild variant="outline" size="sm" className="shrink-0">
-            <Link href="/settings/tax">{t('skv_reconnect_cta')}</Link>
-          </Button>
-        </div>
+        <AttnLine action={{ label: t('skv_reconnect_cta'), href: '/settings/tax' }}>
+          {t('skv_reconnect_body')}
+        </AttnLine>
       )}
 
       {/* Toolbar (concept order): [Att bokföra/Alla-seg] [sök] [Välj flera]

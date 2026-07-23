@@ -255,7 +255,7 @@ export default function TransactionInboxCard({
   const showIgnoreItem = isUnbooked && isImportedTransaction(transaction) && !!onIgnore
   const showDeleteItem = canDelete && !!onDelete
   const showOverflowMenu =
-    showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showIgnoreItem || showDeleteItem
+    showInvoiceMatchButton || showAskAssistant || showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showIgnoreItem || showDeleteItem
 
   return (
     <motion.div
@@ -310,22 +310,6 @@ export default function TransactionInboxCard({
             {!isBatchMode && (
               <>
                 {primaryAction}
-                {showInvoiceMatchButton && (
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-9 w-9"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onOpenMatchInvoicePicker(transaction)
-                    }}
-                    aria-label={invoiceMatchLabel}
-                    title={invoiceMatchLabel}
-                    disabled={isProcessing || isDisabled}
-                  >
-                    <Link2 className="h-4 w-4" />
-                  </Button>
-                )}
                 {/* "Fråga [namn]": hand this bank line to the assistant for
                     categorization/booking. The transaction-side entry point to
                     the agent, mirroring "Fråga assistenten" in Dokumentinkorgen.
@@ -335,26 +319,6 @@ export default function TransactionInboxCard({
                     group. (The Paperclip indicator next to the description
                     stays the single click target for opening the underlag:
                     we don't duplicate that here.) */}
-                {showAskAssistant && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 text-muted-foreground hover:text-foreground"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      openAgentSheet({
-                        intentId: 'transaction.categorization',
-                        intentArgs: { transaction_id: transaction.id },
-                        contextRef: `transaction:${transaction.id}`,
-                      })
-                    }}
-                    aria-label={`Fråga ${assistantName}`}
-                    title={`Fråga ${assistantName}`}
-                    disabled={isProcessing || isDisabled}
-                  >
-                    <MessageCircle className="h-4 w-4" />
-                  </Button>
-                )}
                 {/* Secondary actions (split, edit, delete) collapse into a ⋯
                     overflow menu so the row stays uncluttered. */}
                 {showOverflowMenu && (
@@ -373,6 +337,32 @@ export default function TransactionInboxCard({
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="min-w-[14rem]">
+                      {showInvoiceMatchButton && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onOpenMatchInvoicePicker(transaction)
+                          }}
+                        >
+                          <Link2 className="h-4 w-4" />
+                          {invoiceMatchLabel}
+                        </DropdownMenuItem>
+                      )}
+                      {showAskAssistant && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openAgentSheet({
+                              intentId: 'transaction.categorization',
+                              intentArgs: { transaction_id: transaction.id },
+                              contextRef: `transaction:${transaction.id}`,
+                            })
+                          }}
+                        >
+                          <MessageCircle className="h-4 w-4" />
+                          {`Fråga ${assistantName}`}
+                        </DropdownMenuItem>
+                      )}
                       {showMatchVoucherItem && (
                         <DropdownMenuItem
                           onClick={(e) => {
