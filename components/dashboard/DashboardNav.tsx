@@ -622,7 +622,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           />
         </button>
         <div
-          className="grid transition-[grid-template-rows] duration-200 ease-out"
+          className="grid transition-[grid-template-rows] duration-300 ease-out"
           style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
         >
           <div className="overflow-hidden">
@@ -677,7 +677,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden md:fixed md:inset-y-0 md:z-10 md:flex md:w-[var(--nav-w)] md:flex-col md:transition-[width] md:duration-200">
+      {/* Width, and the panel margin beside it, share the same 300ms
+          decelerating curve so collapse reads as one movement. */}
+      <aside className="hidden md:fixed md:inset-y-0 md:z-10 md:flex md:w-[var(--nav-w)] md:flex-col md:transition-[width] md:duration-300 md:ease-[cubic-bezier(0.32,0.72,0,1)]">
         {/* Borderless on the frame: the panel next to it carries the border */}
         <div className="flex min-h-0 flex-1 flex-col bg-transparent">
           {/* Sidebar header: brand mark left, collapse toggle right. The
@@ -722,8 +724,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               below stays sticky (concept PR 2). */}
           <div className="flex-1 min-h-0 overflow-y-auto pt-1 pb-2">
             {collapsed ? (
+              /* The rail/full swap remounts, so each side slides+fades in
+                 while the aside width animates: one smooth movement. */
               <nav
-                className="flex flex-col items-center gap-px px-2"
+                className="flex flex-col items-center gap-px px-2 animate-in fade-in slide-in-from-right-2 duration-200"
                 aria-label={tNav('main_navigation')}
               >
                 {railItems.map((item) => renderRailItem(item))}
@@ -754,7 +758,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 })}
               </nav>
             ) : (
-            <nav className="px-3" aria-label={tNav('main_navigation')}>
+            <nav
+              className="px-3 animate-in fade-in slide-in-from-left-2 duration-200"
+              aria-label={tNav('main_navigation')}
+            >
               {/* Top section: flat, no header. Hem, Assistent. */}
               <div className="mb-4 space-y-px">
                 {topItems.map((item) => renderSidebarItem(item))}

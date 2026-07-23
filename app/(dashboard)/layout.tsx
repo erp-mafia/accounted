@@ -40,7 +40,7 @@ const MAIN_PANEL_CLASS =
   'safe-area-main-padding md:!pb-0 relative bg-background min-h-screen ' +
   'md:min-h-0 md:ml-[var(--nav-w)] md:mt-[10px] md:mr-[10px] md:h-[calc(100vh-20px)] ' +
   'md:overflow-y-auto md:rounded-xl md:border md:border-border ' +
-  'md:transition-[margin-left] md:duration-200'
+  'md:transition-[margin-left] md:duration-300 md:ease-[cubic-bezier(0.32,0.72,0,1)]'
 
 export default async function DashboardLayout({
   children,

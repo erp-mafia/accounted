@@ -5258,7 +5258,9 @@
     "status_approved": "Godkänd",
     "status_paid": "Betald",
     "status_booked": "Bokförd",
-    "status_corrected": "Korrigerad"
+    "status_corrected": "Korrigerad",
+    "th_employees": "Anställda",
+    "run_payout_note": "utbetalning {date}"
   },
   "salary_run": {
     "title": "Lönekörning {period}",

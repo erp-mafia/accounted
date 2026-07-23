@@ -7,12 +7,11 @@ import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { ArrowRight, CalendarClock, CheckCircle2, HandCoins, Loader2, Plus, UserX, Users } from 'lucide-react'
-import { PageHeader } from '@/components/ui/page-header'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { VacationBalanceCard } from '@/components/salary/VacationBalanceCard'
@@ -20,7 +19,7 @@ import { useAgiSubmission } from '@/lib/hooks/use-agi-submission'
 import { deriveAgiFilingState } from '@/lib/salary/agi-submission-state'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import type { Employee, SalaryRun } from '@/types'
 
 const supabase = createClient()
@@ -230,25 +229,20 @@ export default function SalaryPage() {
     // Real header renders immediately; only the data surfaces are skeletons.
     return (
       <div className="space-y-8">
-        <PageHeader
-          title={t('title')}
-          action={
-            <div className="flex gap-2">
-              <Button variant="outline" asChild>
-                <Link href="/salary/employees">
-                  <Users className="mr-2 h-4 w-4" />
-                  {t('employees')}
-                </Link>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+          <div className="flex items-center gap-4">
+            <Link href="/salary/employees" className={QUIET_LINK_CLASS}>
+              {t('employees')}
+            </Link>
+            {canWrite && (
+              <Button disabled>
+                <Plus className="mr-2 h-4 w-4" />
+                {t('start_run')}
               </Button>
-              {canWrite && (
-                <Button disabled>
-                  <Plus className="mr-2 h-4 w-4" />
-                  {t('start_run')}
-                </Button>
-              )}
-            </div>
-          }
-        />
+            )}
+          </div>
+        </div>
         <Skeleton className="h-28 rounded-lg" />
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {[1, 2, 3].map(i => (
@@ -363,29 +357,25 @@ export default function SalaryPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader
-        title={t('title')}
-        action={
-          <div className="flex gap-2">
-            <Button variant="outline" asChild>
-              <Link href="/salary/employees">
-                <Users className="mr-2 h-4 w-4" />
-                {t('employees')}
-              </Link>
+      {/* Page header (concept scene 22): quiet Anställda link + primary */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+        <div className="flex items-center gap-4">
+          <Link href="/salary/employees" className={QUIET_LINK_CLASS}>
+            {t('employees')}
+          </Link>
+          {canWrite && (
+            <Button onClick={startRun} disabled={starting}>
+              {starting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="mr-2 h-4 w-4" />
+              )}
+              {t('start_run')}
             </Button>
-            {canWrite && (
-              <Button onClick={startRun} disabled={starting}>
-                {starting ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Plus className="mr-2 h-4 w-4" />
-                )}
-                {t('start_run')}
-              </Button>
-            )}
-          </div>
-        }
-      />
+          )}
+        </div>
+      </div>
 
       {/* Hero - the one thing to do now */}
       {hero.kind === 'onboarding' ? (
@@ -401,41 +391,38 @@ export default function SalaryPage() {
           </CardContent>
         </Card>
       ) : hero.kind === 'cta' ? (
-        <Card>
-          <CardContent className="p-6 flex flex-col md:flex-row md:items-center gap-4 justify-between">
-            <div className="space-y-1 min-w-0">
-              <h2 className="font-display text-xl md:text-2xl tracking-tight">{hero.title}</h2>
-              <p className="text-sm text-muted-foreground">{hero.description}</p>
-            </div>
-            <Button asChild className="shrink-0">
-              <Link href={`/salary/runs/${hero.runId}`}>
-                {hero.label}
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
+        /* The one thing to do now, flat on the page (concept: no card chrome) */
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0 space-y-1">
+            <h2 className="font-display text-xl tracking-tight">{hero.title}</h2>
+            <p className="text-sm text-muted-foreground">{hero.description}</p>
+          </div>
+          <Button asChild className="shrink-0">
+            <Link href={`/salary/runs/${hero.runId}`}>
+              {hero.label}
+              <ArrowRight className="ml-2 h-4 w-4" />
+            </Link>
+          </Button>
+        </div>
       ) : (
-        <Card>
-          <CardContent className="p-6 flex flex-col md:flex-row md:items-center gap-4 justify-between">
-            <div className="space-y-1 min-w-0">
-              <h2 className="font-display text-xl md:text-2xl tracking-tight">
-                {t('quiet_title', {
-                  period: `${nextPeriod.year}-${String(nextPeriod.month).padStart(2, '0')}`,
-                })}
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                {t('quiet_description', { date: formatDate(nextPayDate) })}
-              </p>
-            </div>
-            {canWrite && (
-              <Button variant="outline" onClick={startRun} disabled={starting} className="shrink-0">
-                {starting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                {t('quiet_action')}
-              </Button>
-            )}
-          </CardContent>
-        </Card>
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0 space-y-1">
+            <h2 className="font-display text-xl tracking-tight">
+              {t('quiet_title', {
+                period: `${nextPeriod.year}-${String(nextPeriod.month).padStart(2, '0')}`,
+              })}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {t('quiet_description', { date: formatDate(nextPayDate) })}
+            </p>
+          </div>
+          {canWrite && (
+            <Button variant="outline" onClick={startRun} disabled={starting} className="shrink-0">
+              {starting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {t('quiet_action')}
+            </Button>
+          )}
+        </div>
       )}
 
       {/* Attention cards */}
@@ -539,68 +526,85 @@ export default function SalaryPage() {
         <VacationBalanceCard canWrite={canWrite} />
       </div>
 
-      {/* History */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('runs_title')}</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          {runs.length === 0 ? (
-            <EmptyState
-              icon={HandCoins}
-              title={t('empty_runs_title')}
-              description={t('empty_runs_description')}
-              actionLabel={canWrite ? t('start_run') : undefined}
-              onAction={canWrite ? startRun : undefined}
-            />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t('th_period')}</TableHead>
-                  <TableHead>{t('th_payday')}</TableHead>
-                  <TableHead className="text-right">{t('th_gross')}</TableHead>
-                  <TableHead className="text-right">{t('th_net')}</TableHead>
-                  <TableHead className="text-right">{t('th_contributions')}</TableHead>
-                  <TableHead>{t('th_status')}</TableHead>
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {runs.slice(0, 12).map(run => (
-                  <TableRow key={run.id}>
-                    <TableCell className="font-medium tabular-nums">
-                      {periodOf(run)}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground tabular-nums">
-                      {formatDate(run.payment_date)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(run.total_gross)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(run.total_net)}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatCurrency(run.total_avgifter)}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'}>
-                        {STATUS_LABEL_KEYS[run.status] ? t(STATUS_LABEL_KEYS[run.status]) : run.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Link href={`/salary/runs/${run.id}`} className="text-muted-foreground hover:text-foreground">
-                        <ArrowRight className="h-4 w-4" />
-                      </Link>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      {/* Lönekörningar (concept scene 22): eyebrow + dry-table. Booked
+          runs are the normal state and read as muted text; everything
+          mid-flow gets a chip plus the payout date. */}
+      <div>
+        <h2 className="px-1 pb-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
+          {t('runs_title')}
+        </h2>
+        {runs.length === 0 ? (
+          <EmptyState
+            icon={HandCoins}
+            title={t('empty_runs_title')}
+            description={t('empty_runs_description')}
+            actionLabel={canWrite ? t('start_run') : undefined}
+            onAction={canWrite ? startRun : undefined}
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[13px]">
+              <thead>
+                <tr>
+                  <th className={TH_CLASS}>{t('th_period')}</th>
+                  <th className={cn(TH_CLASS, 'w-full')}>{t('th_status')}</th>
+                  <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>{t('th_employees')}</th>
+                  <th className={cn(TH_CLASS, 'text-right')}>{t('th_gross')}</th>
+                  <th className={cn(TH_CLASS, 'text-right')}>{t('th_net')}</th>
+                </tr>
+              </thead>
+              <tbody className="stagger-enter">
+                {runs.slice(0, 12).map(run => {
+                  const employeeCount = (run as SalaryRun & { employees?: unknown[] }).employees?.length
+                  const inFlight = run.status !== 'booked' && run.status !== 'corrected'
+                  return (
+                    <tr
+                      key={run.id}
+                      className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
+                      onClick={() => router.push(`/salary/runs/${run.id}`)}
+                    >
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
+                        <Link
+                          href={`/salary/runs/${run.id}`}
+                          className="hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {periodOf(run)}
+                        </Link>
+                      </td>
+                      <td className={cn(TD_CLASS, 'max-w-0 w-full whitespace-nowrap')}>
+                        <span className="inline-flex items-center gap-2">
+                          {run.status === 'booked' ? (
+                            <span className="text-muted-foreground">{t('status_booked')}</span>
+                          ) : (
+                            <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'} className="font-normal">
+                              {STATUS_LABEL_KEYS[run.status] ? t(STATUS_LABEL_KEYS[run.status]) : run.status}
+                            </Badge>
+                          )}
+                          {inFlight && (
+                            <span className="text-[11.5px] text-muted-foreground tabular-nums">
+                              {t('run_payout_note', { date: formatDate(run.payment_date) })}
+                            </span>
+                          )}
+                        </span>
+                      </td>
+                      <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums sm:table-cell')}>
+                        {employeeCount ?? ''}
+                      </td>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums sensitive-field')}>
+                        {formatCurrency(run.total_gross)}
+                      </td>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums sensitive-field')}>
+                        {formatCurrency(run.total_net)}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

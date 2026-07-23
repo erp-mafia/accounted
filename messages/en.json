@@ -5258,7 +5258,9 @@
     "status_approved": "Approved",
     "status_paid": "Paid",
     "status_booked": "Posted",
-    "status_corrected": "Corrected"
+    "status_corrected": "Corrected",
+    "th_employees": "Employees",
+    "run_payout_note": "payout {date}"
   },
   "salary_run": {
     "title": "Payroll run {period}",
