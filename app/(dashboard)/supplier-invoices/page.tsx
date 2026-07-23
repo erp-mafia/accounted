@@ -215,7 +215,7 @@ export default function SupplierInvoicesPage() {
                     <TableHead>{t('th_status')}</TableHead>
                   </TableRow>
                 </TableHeader>
-                <TableBody>
+                <TableBody className="stagger-enter">
                   {filteredInvoices.map((inv) => (
                     <TableRow key={inv.id}>
                       <TableCell className="tabular-nums">{inv.arrival_number}</TableCell>

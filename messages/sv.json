@@ -63,7 +63,8 @@
       "sent": "Skickad",
       "matched": "Matchad",
       "unmatched": "Omatchad"
-    }
+    },
+    "more_options": "Fler alternativ"
   },
   "nav": {
     "dashboard": "Översikt",

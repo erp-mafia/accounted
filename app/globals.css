@@ -63,6 +63,10 @@
   --warning: 38 55% 50%;
   --warning-foreground: 0 0% 9%;
 
+  /* Attn: darker ochre for the one-sentence attention line (.attn / AttnLine),
+     derived from --warning but AA-safe as small text on the page background. */
+  --attn: 38 50% 34%;
+
   --warm-accent: 38 45% 52%;
 
   /* Chart colors */
@@ -127,6 +131,8 @@
   --warning: 38 50% 55%;
   --warning-foreground: 38 50% 90%;
 
+  --attn: 38 45% 62%;
+
   --warm-accent: 38 42% 58%;
 
   --chart-1: 155 22% 48%;
@@ -164,6 +170,7 @@
   --color-success-foreground: hsl(var(--success-foreground));
   --color-warning: hsl(var(--warning));
   --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-attn: hsl(var(--attn));
   --color-warm-accent: hsl(var(--warm-accent));
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);

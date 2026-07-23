@@ -672,7 +672,7 @@ export default function JournalEntryList() {
   // Verifikat/Utkast toggle stays reachable.
   if (!loading && entries.length === 0 && !hasActiveFilters && listMode === 'committed' && draftCount === 0) {
     return (
-      <DataList>
+      <DataList className="stagger-enter">
         <DataListEmpty
           icon={<BookOpen className="h-6 w-6" />}
           title={t('empty_title')}
@@ -933,7 +933,7 @@ export default function JournalEntryList() {
       </div>
 
       {loading ? (
-        <DataList>
+        <DataList className="stagger-enter">
           <DataListLoading />
         </DataList>
       ) : filteredEntries.length === 0 ? (
@@ -941,7 +941,7 @@ export default function JournalEntryList() {
         // filtered committed view with no matches, or a committed view with no
         // posted entries yet (but drafts exist, hence we got here, not the
         // pristine early return above).
-        <DataList>
+        <DataList className="stagger-enter">
           <DataListEmpty
             icon={
               listMode === 'drafts' || !hasActiveFilters ? (
@@ -967,7 +967,7 @@ export default function JournalEntryList() {
           />
         </DataList>
       ) : (
-      <DataList>
+      <DataList className="stagger-enter">
         {/* Batch-mark "Inget underlag krävs": select-all + contextual action bar,
             rendered as the list header so it reads as part of the ledger rather
             than a detached box above it. */}

@@ -63,7 +63,8 @@
       "sent": "Sent",
       "matched": "Matched",
       "unmatched": "Unmatched"
-    }
+    },
+    "more_options": "More options"
   },
   "nav": {
     "dashboard": "Overview",

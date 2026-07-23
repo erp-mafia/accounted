@@ -1055,7 +1055,7 @@ export default function PendingOperationsPage() {
         </DropdownMenu>
       </div>
 
-      <DataList>
+      <DataList className="stagger-enter">
         {showBulkControls && bulkEligible.length > 0 && (
           <DataListHeader>
             <div className="flex items-center gap-2">

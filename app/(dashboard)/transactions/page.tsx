@@ -2220,7 +2220,7 @@ export default function TransactionsPage() {
 
       {/* Content based on mode */}
       {isLoading ? (
-        <DataList>
+        <DataList className="stagger-enter">
           {[1, 2, 3].map((i) => (
             <div key={i} className="flex items-center gap-3 px-4 py-3">
               <Skeleton className="h-5 w-5 rounded" />
@@ -2239,7 +2239,7 @@ export default function TransactionsPage() {
             onCreateTransaction={() => setIsDialogOpen(true)}
           />
         ) : (
-          <DataList>
+          <DataList className="stagger-enter">
             {(sourceFilter !== 'all'
               || (skvUnmatched.length > 0 && uncategorizedTransactions.length > 0)) && (
               <DataListHeader>

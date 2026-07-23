@@ -58,6 +58,7 @@ import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
+import { persistUiState } from '@/lib/ui-state/client'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType, UserUiState } from '@/types'
 
@@ -313,16 +314,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const ALWAYS_ENABLED = new Set(['/settings'])
   const isItemEnabled = (href: string) => hasCompany || ALWAYS_ENABLED.has(href)
   type ExpandableGroup = Exclude<GroupKey, 'top'>
-
-  // Persist a partial ui_state patch. Fire-and-forget: this is cosmetic
-  // preference data; a lost write self-corrects on the next toggle.
-  const persistUiState = (patch: Partial<UserUiState>) => {
-    void fetch('/api/user/ui-state', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    }).catch(() => {})
-  }
 
   // Sidebar collapse (64px icon rail). The width is CSS-variable-driven:
   // #dash-shell sets --nav-w inline (server-rendered from ui_state), and

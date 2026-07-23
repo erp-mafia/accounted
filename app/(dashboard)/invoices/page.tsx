@@ -273,7 +273,7 @@ export default function InvoicesPage() {
         </Tabs>
       </div>
 
-      <DataList>
+      <DataList className="stagger-enter">
         {isLoading ? (
           [1, 2, 3].map((i) => (
             <div key={i} className="flex items-center gap-3 px-4 py-3">
