@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { DataListEmpty } from '@/components/ui/data-list'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { FyPicker } from '@/components/common/FyPicker'
+import { ContextPicker } from '@/components/common/ContextPicker'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Plus, FileInput, Lock, Search } from 'lucide-react'
 import Link from 'next/link'
@@ -193,37 +194,32 @@ export default function SupplierInvoicesPage() {
         )}
       </div>
 
-      {/* Toolbar: seg + sök + FyPicker far right (convention 8) */}
+      {/* Toolbar: one status chip-picker (founder direction: the status
+          views live behind a filter chip, not a seg), sök, FyPicker far
+          right. Counts ride as row annotations and on the trigger. */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          {TABS.map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab}
-              onClick={() => setActiveTab(tab)}
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-                activeTab === tab
-                  ? 'border border-border bg-card font-medium text-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {t(TAB_LABEL_KEYS[tab])}
-              {tab === 'registered' && registeredCount > 0 && (
-                <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                  {registeredCount}
-                </span>
-              )}
-              {tab === 'to_pay' && toPayCount > 0 && (
-                <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                  {toPayCount}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+        <ContextPicker
+          value={activeTab}
+          onChange={(id) => setActiveTab(id as ListTab)}
+          ariaLabel={t('status_picker_aria')}
+          triggerLabel={(() => {
+            const count =
+              activeTab === 'registered' ? registeredCount : activeTab === 'to_pay' ? toPayCount : 0
+            return count > 0
+              ? `${t(TAB_LABEL_KEYS[activeTab])} · ${count}`
+              : t(TAB_LABEL_KEYS[activeTab])
+          })()}
+          items={TABS.map((tab) => ({
+            id: tab,
+            label: t(TAB_LABEL_KEYS[tab]),
+            annotation:
+              tab === 'registered' && registeredCount > 0
+                ? String(registeredCount)
+                : tab === 'to_pay' && toPayCount > 0
+                  ? String(toPayCount)
+                  : undefined,
+          }))}
+        />
         <div className="relative min-w-[190px] max-w-xs flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
