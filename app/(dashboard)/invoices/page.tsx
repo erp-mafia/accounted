@@ -399,7 +399,7 @@ export default function InvoicesPage() {
                     <td
                       className={cn(
                         TD_CLASS,
-                        'whitespace-nowrap text-right tabular-nums sensitive-field',
+                        'whitespace-nowrap text-right tabular-nums rr-mask',
                         isCreditNote && 'text-destructive',
                       )}
                       title={

@@ -1105,7 +1105,7 @@ export default function JournalEntryList() {
                           )}
                         </span>
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums sensitive-field')}>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
                         {formatCurrency(voucherTotal, 'SEK', { minimumFractionDigits: 2 })}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>

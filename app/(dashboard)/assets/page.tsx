@@ -139,7 +139,7 @@ export default function AssetsPage() {
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
                         {formatDate(asset.acquisition_date)}
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums sensitive-field')}>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
                         {formatCurrency(Number(asset.acquisition_cost))}
                       </td>
                       <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground md:table-cell')}>

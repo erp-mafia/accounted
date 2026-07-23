@@ -127,7 +127,7 @@ export default function EmployeesPage() {
                         ? t(EMPLOYMENT_LABEL_KEYS[emp.employment_type])
                         : emp.employment_type}
                     </td>
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums sensitive-field')}>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
                       {emp.salary_type === 'hourly'
                         ? emp.hourly_rate ? `${formatCurrency(emp.hourly_rate)}${t('hourly_suffix')}` : '-'
                         : emp.monthly_salary ? formatCurrency(emp.monthly_salary) : '-'}

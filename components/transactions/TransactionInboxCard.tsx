@@ -302,7 +302,7 @@ export default function TransactionInboxCard({
         <td
           className={cn(
             TD_CLASS,
-            'whitespace-nowrap text-right tabular-nums sensitive-field',
+            'whitespace-nowrap text-right tabular-nums rr-mask',
             isIncome && 'text-success',
           )}
         >

@@ -320,13 +320,13 @@ export default function SupplierInvoicesPage() {
                     {/* Belopp rounds like the detail page when the invoice's
                         öresavrundning flag is on; "kvar att betala" stays
                         öre-exact (it is the actual outstanding debt). */}
-                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums sensitive-field')}>
+                    <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
                       {formatCurrency(getDisplayTotal(
                         { total: inv.total, currency: inv.currency, ore_rounding: inv.ore_rounding },
                         { ore_rounding: false },
                       ).displayed, inv.currency)}
                     </td>
-                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums sensitive-field lg:table-cell')}>
+                    <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums rr-mask lg:table-cell')}>
                       {formatCurrency(inv.remaining_amount, inv.currency)}
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap')}>

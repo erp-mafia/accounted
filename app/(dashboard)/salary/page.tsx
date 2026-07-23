@@ -216,10 +216,10 @@ export default function SalaryPage() {
                         <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums sm:table-cell')}>
                           {employeeCount ?? ''}
                         </td>
-                        <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums sensitive-field')}>
+                        <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
                           {formatCurrency(run.total_gross)}
                         </td>
-                        <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums sensitive-field')}>
+                        <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
                           {formatCurrency(run.total_net)}
                         </td>
                       </tr>

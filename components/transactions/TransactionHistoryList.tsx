@@ -330,7 +330,7 @@ function BankHistoryRow({
       <td
         className={cn(
           TD_CLASS,
-          'whitespace-nowrap text-right tabular-nums sensitive-field',
+          'whitespace-nowrap text-right tabular-nums rr-mask',
           isIncome && 'text-success',
         )}
         title={
@@ -469,7 +469,7 @@ function SkattekontoHistoryRow({
       <td
         className={cn(
           TD_CLASS,
-          'whitespace-nowrap text-right tabular-nums sensitive-field',
+          'whitespace-nowrap text-right tabular-nums rr-mask',
           isIncome && 'text-success',
         )}
       >
