@@ -693,24 +693,38 @@ export default function JournalEntryList() {
       <div className="flex flex-wrap items-center gap-2">
         {/* Verifikat vs Utkast. Drafts live in their own view with a count badge so
             they don't sink to the last page of the committed list. */}
-        <div className="inline-flex shrink-0 rounded-md border border-border p-0.5">
+        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
           <button
             type="button"
+            role="tab"
+            aria-selected={listMode === 'committed'}
             onClick={() => switchMode('committed')}
-            className={`h-7 rounded px-3 text-xs font-medium transition-colors ${listMode === 'committed' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            className={cn(
+              'rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
+              listMode === 'committed'
+                ? 'border border-border bg-card font-medium text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
           >
             {t('mode_vouchers')}
           </button>
           <button
             type="button"
+            role="tab"
+            aria-selected={listMode === 'drafts'}
             onClick={() => switchMode('drafts')}
-            className={`inline-flex h-7 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${listMode === 'drafts' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
+              listMode === 'drafts'
+                ? 'border border-border bg-card font-medium text-foreground'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
           >
             {t('mode_drafts')}
             {draftCount > 0 && (
-              <Badge variant="secondary" className="h-4 min-w-4 justify-center px-1 text-[10px] tabular-nums">
+              <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
                 {draftCount}
-              </Badge>
+              </span>
             )}
           </button>
         </div>
