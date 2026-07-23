@@ -3819,7 +3819,15 @@
     "bulk_mark_none": "Inga verifikat utan underlag matchar filtret.",
     "bulk_mark_body": "{count} verifikat som saknar underlag matchar nuvarande filter. De markeras som \"Inget underlag krävs\". Du kan ångra per verifikat efteråt.",
     "bulk_mark_confirm": "Markera {count}",
-    "bulk_cancel": "Avbryt"
+    "bulk_cancel": "Avbryt",
+    "th_voucher": "Verifikation",
+    "th_date": "Datum",
+    "th_description": "Beskrivning",
+    "th_amount": "Belopp",
+    "missing_attachment_chip": "Underlag saknas",
+    "confirm_post_title": "Bokför verifikat",
+    "confirm_post_description": "Bokförs som verifikat {voucher}: {description}, {amount}. Verifikatet kan inte ändras i efterhand, bara rättas eller stornas.",
+    "confirm_post_description_generic": "Verifikatet \"{description}\" bokförs med nästa lediga verifikationsnummer och kan därefter inte ändras, bara rättas eller stornas."
   },
   "attachment_preview_sheet": {
     "title": "Bilagor",
@@ -4579,11 +4587,7 @@
     "tpl_not_balancing": "Balanserar inte",
     "tpl_book": "Bokför",
     "tpl_cancel": "Avbryt",
-    "tpl_no_period": "Det finns inget räkenskapsår som täcker det valda datumet",
-    "confirm_post_title": "Bokför verifikat",
-    "confirm_post_description": "Bokförs som verifikat {voucher}: {description}, {amount}. Verifikatet kan inte ändras i efterhand, bara rättas eller stornas.",
-    "confirm_post_description_generic": "Verifikatet \"{description}\" bokförs med nästa lediga verifikationsnummer och kan därefter inte ändras, bara rättas eller stornas.",
-    "missing_attachment_chip": "Underlag saknas"
+    "tpl_no_period": "Det finns inget räkenskapsår som täcker det valda datumet"
   },
   "articles": {
     "title": "Artiklar",

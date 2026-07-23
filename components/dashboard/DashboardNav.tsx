@@ -701,7 +701,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 alt=""
                 width={26}
                 height={26}
-                className="rounded-md"
+                className="h-[26px] w-[26px] rounded-md"
               />
             </Link>
             <button

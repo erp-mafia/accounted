@@ -3819,7 +3819,15 @@
     "bulk_mark_none": "No entries without documents match the filter.",
     "bulk_mark_body": "{count} entries without a supporting document match the current filter. They will be marked \"No supporting document required\". You can undo this per entry afterwards.",
     "bulk_mark_confirm": "Mark {count}",
-    "bulk_cancel": "Cancel"
+    "bulk_cancel": "Cancel",
+    "th_voucher": "Voucher",
+    "th_date": "Date",
+    "th_description": "Description",
+    "th_amount": "Amount",
+    "missing_attachment_chip": "Missing document",
+    "confirm_post_title": "Post voucher",
+    "confirm_post_description": "Will be posted as voucher {voucher}: {description}, {amount}. A posted voucher cannot be edited, only corrected or reversed.",
+    "confirm_post_description_generic": "The voucher \"{description}\" will be posted with the next available voucher number and can then only be corrected or reversed."
   },
   "attachment_preview_sheet": {
     "title": "Attachments",
@@ -4579,11 +4587,7 @@
     "tpl_not_balancing": "Does not balance",
     "tpl_book": "Post",
     "tpl_cancel": "Cancel",
-    "tpl_no_period": "No fiscal year covers the chosen date",
-    "confirm_post_title": "Post voucher",
-    "confirm_post_description": "Will be posted as voucher {voucher}: {description}, {amount}. A posted voucher cannot be edited, only corrected or reversed.",
-    "confirm_post_description_generic": "The voucher \"{description}\" will be posted with the next available voucher number and can then only be corrected or reversed.",
-    "missing_attachment_chip": "Missing document"
+    "tpl_no_period": "No fiscal year covers the chosen date"
   },
   "articles": {
     "title": "Articles",
