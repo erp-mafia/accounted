@@ -350,9 +350,6 @@ export default function TransactionsPage() {
   // Registered cash accounts (cash_accounts): the account chooser's rows,
   // with PSD2 balances when the bank reports them.
   const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
-  // Cached skattekonto saldo (from the skatteverket extension); null when the
-  // extension is disabled, disconnected, or has no snapshot yet.
-  const [skvSaldo, setSkvSaldo] = useState<number | null>(null)
 
   const { toast } = useToast()
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
@@ -454,13 +451,12 @@ export default function TransactionsPage() {
 
   // Account chooser (concept scene 10): the source picker doubles as a
   // balance readout. The total sums only SEK ledgers (mixing currencies into
-  // one figure would be a lie) plus the skattekonto saldo when known; null
-  // hides the annotation entirely.
+  // one figure would be a lie); null hides the annotation entirely.
   const totalSourceBalance = useMemo(() => {
     const sekBalances = cashAccounts.filter((a) => a.currency === 'SEK' && a.balance != null)
-    if (sekBalances.length === 0 && skvSaldo == null) return null
-    return sekBalances.reduce((sum, a) => sum + (a.balance ?? 0), 0) + (skvSaldo ?? 0)
-  }, [cashAccounts, skvSaldo])
+    if (sekBalances.length === 0) return null
+    return sekBalances.reduce((sum, a) => sum + (a.balance ?? 0), 0)
+  }, [cashAccounts])
 
   const hasUnassignedBankRows = useMemo(
     () => uncategorizedTransactions.some((tx) => tx.cash_account_id == null),
@@ -468,7 +464,7 @@ export default function TransactionsPage() {
   )
 
   const sourceItems = useMemo<ContextPickerItem[]>(() => {
-    const showSkvSource = skvRows.length > 0 || skvSaldo != null
+    const showSkvSource = skvRows.length > 0
     const items: ContextPickerItem[] = [
       {
         id: 'all',
@@ -491,14 +487,10 @@ export default function TransactionsPage() {
       items.push({ id: 'bank:other', label: t('source_bank_other') })
     }
     if (showSkvSource) {
-      items.push({
-        id: 'skatteverket',
-        label: t('source_skatteverket_label'),
-        annotation: skvSaldo != null ? formatCurrency(skvSaldo) : undefined,
-      })
+      items.push({ id: 'skatteverket', label: t('source_skatteverket_label') })
     }
     return items
-  }, [cashAccounts, hasUnassignedBankRows, skvRows.length, skvSaldo, t, totalSourceBalance])
+  }, [cashAccounts, hasUnassignedBankRows, skvRows.length, t, totalSourceBalance])
 
   // A narrowed filter can go stale (account disabled, skv rows drained,
   // "övriga" bucket emptied): fall back to everything rather than filtering
@@ -571,23 +563,6 @@ export default function TransactionsPage() {
         )
       } catch {
         setSkvNeedsReconnect(false)
-      }
-    })()
-    // Cached saldo snapshot for the account chooser's Skattekonto row.
-    // Any failure just drops the annotation.
-    void (async () => {
-      try {
-        const res = await fetch('/api/extensions/ext/skatteverket/skattekonto/saldo')
-        if (!res.ok) {
-          setSkvSaldo(null)
-          return
-        }
-        const json = (await res.json()) as { data?: { saldoSkatteverket?: number } | null }
-        setSkvSaldo(
-          typeof json.data?.saldoSkatteverket === 'number' ? json.data.saldoSkatteverket : null,
-        )
-      } catch {
-        setSkvSaldo(null)
       }
     })()
     try {
@@ -2094,15 +2069,6 @@ export default function TransactionsPage() {
   }
 
   function openCategoryDialog(transaction: TransactionWithInvoice) {
-    // Concept flow (scene 10): with a suggestion, Bokför goes straight to the
-    // compact kontering confirm (QuickReview) showing the proposed verifikat;
-    // the full template picker stays one "Ändra mall" link away. Without a
-    // suggestion (or an unresolvable template id) the picker opens as before.
-    const top = templateSuggestions[transaction.id]?.[0]
-    if (top && (isCounterpartyTemplateId(top.template_id) || getTemplateById(top.template_id))) {
-      handleOpenTemplateReview(transaction, top.template_id)
-      return
-    }
     setTemplatePickerTransaction(transaction)
     setTemplatePickerOpen(true)
   }
@@ -2462,7 +2428,6 @@ export default function TransactionsPage() {
                         key={`bank-${item.data.id}`}
                         transaction={item.data}
                         skvCounterpartDate={bankToSkvHints.get(item.data.id)}
-                        suggestion={templateSuggestions[item.data.id]?.[0] ?? null}
                         processingId={processingId}
                         isSelected={selectedIds.has(item.data.id)}
                         isExpanded={expandedTxId === item.data.id}

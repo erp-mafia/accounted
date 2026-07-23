@@ -7,7 +7,7 @@ import ExtractionStatus from '@/components/ui/extraction-status'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { TD_CLASS, QUIET_LINK_CLASS, RowFoldout } from '@/components/ui/dry-table'
+import { TD_CLASS, RowFoldout } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import {
@@ -41,16 +41,12 @@ import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import type { TransactionWithInvoice, CategorizeHandler } from './transaction-types'
-import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 
 interface TransactionInboxCardProps {
   transaction: TransactionWithInvoice
   /** When set, this bank tx looks like the bank side of a 1930↔1630
    *  transfer that the user will later see on /skattekonto. */
   skvCounterpartDate?: string
-  /** Top booking suggestion for this row (concept "Förslag: …" chip); Bokför
-   *  routes straight to the kontering confirm when one exists. */
-  suggestion?: SuggestedTemplate | null
   processingId: string | null
   isSelected: boolean
   /** Row expansion (concept foldout): controlled by the page so only one
@@ -91,7 +87,6 @@ interface TransactionInboxCardProps {
 export default function TransactionInboxCard({
   transaction,
   skvCounterpartDate,
-  suggestion,
   processingId,
   isSelected,
   isExpanded,
@@ -224,26 +219,43 @@ export default function TransactionInboxCard({
       contextRef: `transaction:${transaction.id}`,
     })
 
+  // The foldout carries row detail only (actions live on the row: pill + ⋯).
+  // Rows with nothing to show don't expand at all; once bank-tx metadata
+  // classification lands (see the transactions-metadata issue) every imported
+  // row will have foldout content again.
+  const hasFoldoutContent =
+    (transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
+    Boolean(transaction.title_edited_at && originalName) ||
+    Boolean(skvCounterpartDate) ||
+    (HAS_AI_EXTRACTION && (extraction.status === 'running' || extraction.status === 'failed'))
+  const canExpand = hasFoldoutContent
+  const expanded = isExpanded && canExpand
+
   return (
     <>
       <tr
         data-tx-id={transaction.id}
         className={cn(
-          'group cursor-pointer transition-colors duration-150',
-          isExpanded ? 'bg-secondary/25' : 'hover:bg-secondary/35',
+          'group transition-colors duration-150',
+          canExpand && 'cursor-pointer',
+          expanded ? 'bg-secondary/25' : 'hover:bg-secondary/35',
           isSelected && 'bg-secondary/40',
           isDisabled && 'opacity-50',
         )}
-        role="button"
-        tabIndex={0}
-        aria-expanded={isExpanded}
-        onClick={() => onToggleExpand(transaction.id)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            onToggleExpand(transaction.id)
-          }
-        }}
+        role={canExpand ? 'button' : undefined}
+        tabIndex={canExpand ? 0 : undefined}
+        aria-expanded={canExpand ? expanded : undefined}
+        onClick={canExpand ? () => onToggleExpand(transaction.id) : undefined}
+        onKeyDown={
+          canExpand
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  onToggleExpand(transaction.id)
+                }
+              }
+            : undefined
+        }
       >
         {/* Hover-revealed selection checkbox (concept .cb) */}
         <td
@@ -299,19 +311,6 @@ export default function TransactionInboxCard({
         </td>
         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
           <span className="inline-flex items-center justify-end gap-2">
-            {/* Concept status chip: what Bokför will propose. Suppressed when
-                an invoice match leads (the pill already says it). */}
-            {suggestion && !matchLabel && (
-              <Badge
-                variant="secondary"
-                className="hidden max-w-[190px] font-normal lg:inline-flex"
-                title={`D: ${suggestion.debit_account} · K: ${suggestion.credit_account}`}
-              >
-                <span className="truncate">
-                  {t('suggestion_chip', { name: suggestion.name_sv })}
-                </span>
-              </Badge>
-            )}
             <Button
               size="sm"
               variant="outline"
@@ -436,34 +435,28 @@ export default function TransactionInboxCard({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            <ChevronRight
-              className={cn(
-                'h-3.5 w-3.5 text-muted-foreground transition-all duration-200',
-                isExpanded ? 'rotate-90 opacity-100' : 'opacity-0 group-hover:opacity-100',
-              )}
-            />
+            {canExpand ? (
+              <ChevronRight
+                className={cn(
+                  'h-3.5 w-3.5 text-muted-foreground transition-all duration-200',
+                  expanded ? 'rotate-90 opacity-100' : 'opacity-0 group-hover:opacity-100',
+                )}
+              />
+            ) : (
+              <span className="h-3.5 w-3.5" aria-hidden />
+            )}
           </span>
         </td>
       </tr>
-      {isExpanded && (
+      {expanded && (
         <tr>
           <td colSpan={5} className="border-b border-border p-0">
             <RowFoldout>
               <div className="px-1 pb-6 pt-1 sm:pl-9 sm:pr-4">
-                {suggestion ||
-                (transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
+                {(transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
                 transaction.title_edited_at ||
                 skvCounterpartDate ? (
                   <div className="space-y-1 py-1 text-xs text-muted-foreground">
-                    {suggestion && (
-                      <p className="tabular-nums">
-                        {t('suggestion_chip', { name: suggestion.name_sv })}
-                        {' · D: '}
-                        {suggestion.debit_account}
-                        {' · K: '}
-                        {suggestion.credit_account}
-                      </p>
-                    )}
                     {transaction.currency !== 'SEK' && transaction.amount_sek != null && (
                       <p className="tabular-nums">
                         {formatCurrency(transaction.amount, transaction.currency)}
@@ -495,86 +488,6 @@ export default function TransactionInboxCard({
                     </div>
                   )}
 
-                {/* Quiet link actions (concept vact); the primary keeps its
-                    pill because it changes legal state. */}
-                <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2">
-                  <Button
-                    size="sm"
-                    onClick={runPrimary}
-                    disabled={isProcessing || isDisabled}
-                  >
-                    {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    {primaryLabel}
-                  </Button>
-                  {showInvoiceMatchButton && (
-                    <button
-                      type="button"
-                      className={QUIET_LINK_CLASS}
-                      onClick={() => onOpenMatchInvoicePicker(transaction)}
-                    >
-                      {invoiceMatchLabel}
-                    </button>
-                  )}
-                  {showAskAssistant && (
-                    <button type="button" className={QUIET_LINK_CLASS} onClick={askAssistant}>
-                      {`Fråga ${assistantName}`}
-                    </button>
-                  )}
-                  {showMatchVoucherItem && (
-                    <button
-                      type="button"
-                      className={QUIET_LINK_CLASS}
-                      onClick={() => onOpenMatchVoucher!(transaction)}
-                    >
-                      {t('match_voucher_btn')}
-                    </button>
-                  )}
-                  {showAttachDocumentItem && (
-                    <button
-                      type="button"
-                      className={QUIET_LINK_CLASS}
-                      onClick={() => onOpenAttachDocument!(transaction)}
-                    >
-                      {t('attach_document_btn')}
-                    </button>
-                  )}
-                  {showSplitItem && (
-                    <button
-                      type="button"
-                      className={QUIET_LINK_CLASS}
-                      onClick={() => onOpenSplitMatch!(transaction)}
-                    >
-                      {splitMatchLabel}
-                    </button>
-                  )}
-                  {showEditItem && (
-                    <button
-                      type="button"
-                      className={QUIET_LINK_CLASS}
-                      onClick={() => onEditTitle!(transaction)}
-                    >
-                      {t('edit_title_aria')}
-                    </button>
-                  )}
-                  {showIgnoreItem && (
-                    <button
-                      type="button"
-                      className={QUIET_LINK_CLASS}
-                      onClick={() => onIgnore!(transaction)}
-                    >
-                      {t('ignore_btn')}
-                    </button>
-                  )}
-                  {showDeleteItem && (
-                    <button
-                      type="button"
-                      className={cn(QUIET_LINK_CLASS, 'hover:text-destructive')}
-                      onClick={() => onDelete!(transaction.id)}
-                    >
-                      {t('delete_aria')}
-                    </button>
-                  )}
-                </div>
               </div>
             </RowFoldout>
           </td>
