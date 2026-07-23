@@ -157,7 +157,7 @@ export default function TransactionHistoryList({
           <div className="ml-auto">
             <ContextPicker
               value={sourceFilter}
-              onChange={(id) => setSourceFilter(id as SourceFilter)}
+              onChange={(id) => onSourceFilterChange(id as SourceFilter)}
               triggerLabel={
                 sourceFilter === 'all'
                   ? t('source_all')

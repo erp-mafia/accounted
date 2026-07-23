@@ -37,7 +37,6 @@ import type {
   TransactionWithInvoice,
   ViewMode,
   CategorizeHandler,
-  SourceFilter,
 } from '@/components/transactions/transaction-types'
 import type {
   SkattekontoTransactionWithSuggestion,
@@ -2460,7 +2459,9 @@ export default function TransactionsPage() {
           transactions={transactions}
           skvRows={skvRows}
           searchTerm={searchTerm}
-          sourceFilter={sourceFilter}
+          sourceFilter={
+            sourceFilter === 'all' || sourceFilter === 'skatteverket' ? sourceFilter : 'bank'
+          }
           onSourceFilterChange={handleSourceFilterChange}
           jeUnderlagStatus={jeUnderlagStatus}
           onOpenMatchDialog={openMatchDialog}
