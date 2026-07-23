@@ -32,7 +32,7 @@ export function RecentReportsShelf({
 
   return (
     <div className="space-y-3">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+      <h2 className="font-sans text-sm font-medium">
         {t('recent_heading')}
       </h2>
       <div className="flex flex-wrap gap-2">

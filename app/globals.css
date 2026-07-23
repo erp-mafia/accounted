@@ -201,11 +201,15 @@ body {
   font-optical-sizing: auto;
 }
 
-h1, h2, h3 {
-  font-family: var(--font-display);
-  font-weight: 500;
-  letter-spacing: -0.015em;
-  font-optical-sizing: auto;
+/* Layered so utility classes (e.g. font-sans on a pane title) can override:
+   unlayered element rules would beat Tailwind's layered utilities. */
+@layer base {
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: -0.015em;
+    font-optical-sizing: auto;
+  }
 }
 
 /* Number styling - tabular for alignment */

@@ -24,7 +24,6 @@ interface DashboardContentProps {
   userFirstName?: string | null
   /** Expiring PSD2 consents (dashboard-only worklist extra). */
   expiringBankConnections?: { id: string; bank_name: string; days_left: number }[]
-  staleUncategorizedCount: number
   /** Unified pending-work counts from lib/worklist: same source as the sidebar badges. */
   worklist: WorklistCounts
   /** High-confidence transaction↔invoice matches for inline one-click confirm. */
@@ -53,7 +52,6 @@ export default function DashboardContent({
   companyId,
   userFirstName,
   expiringBankConnections,
-  staleUncategorizedCount,
   worklist,
   suggestedMatches,
   resumeItems,
@@ -146,7 +144,6 @@ export default function DashboardContent({
           worklist={worklist}
           suggestedMatches={suggestedMatches}
           expiringBankConnections={expiringBankConnections}
-          staleUncategorizedCount={staleUncategorizedCount}
         />
         <ResumePane items={resumeItems} />
       </div>

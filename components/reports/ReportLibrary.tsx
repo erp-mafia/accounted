@@ -35,7 +35,7 @@ export function ReportLibrary({
     <div className="space-y-8">
       {sections.map((section) => (
         <div key={section.category} className="space-y-3">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          <h2 className="font-sans text-sm font-medium">
             {t(section.labelKey)}
           </h2>
           <DataList>

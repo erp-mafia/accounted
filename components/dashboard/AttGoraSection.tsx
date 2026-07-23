@@ -52,7 +52,6 @@ interface AttGoraSectionProps {
   worklist: WorklistCounts
   suggestedMatches: SuggestedMatch[]
   expiringBankConnections?: ExpiringBankConnection[]
-  staleUncategorizedCount: number
 }
 
 interface WorklistRowProps {
@@ -100,7 +99,6 @@ export default function AttGoraSection({
   worklist,
   suggestedMatches,
   expiringBankConnections = [],
-  staleUncategorizedCount,
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
   const { toast } = useToast()
@@ -205,7 +203,7 @@ export default function AttGoraSection({
     <section aria-label={t('att_gora_title')}>
       {/* Pane header: Geist title + quiet count over a hairline */}
       <div className="flex items-baseline justify-between border-b border-border px-1 pb-2.5">
-        <h2 className="text-sm font-medium">{t('att_gora_title')}</h2>
+        <h2 className="font-sans text-sm font-medium">{t('att_gora_title')}</h2>
         <p className="text-xs text-muted-foreground tabular-nums" role="status" aria-live="polite">
           {allClear ? t('all_done') : t('att_gora_left', { count: displayTotal })}
         </p>
@@ -231,13 +229,6 @@ export default function AttGoraSection({
                         icon={ArrowLeftRight}
                         label={t('row_book_transactions')}
                         count={counts.book_transaction}
-                        badge={
-                          staleUncategorizedCount > 0 ? (
-                            <Badge variant="warning" className="shrink-0">
-                              {t('row_book_transactions_stale', { count: staleUncategorizedCount })}
-                            </Badge>
-                          ) : undefined
-                        }
                       />
                     )}
                     {matches.length > 0 && (
