@@ -5,22 +5,13 @@ import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import {
-  DataList,
-  DataListHeader,
-  DataListRow,
-  DataListPrimary,
-  DataListMeta,
-  DataListMetaSeparator,
-  DataListEmpty,
-} from '@/components/ui/data-list'
+import { DataListEmpty } from '@/components/ui/data-list'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { ContextPicker } from '@/components/common/ContextPicker'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
@@ -28,14 +19,9 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { getCategoryDisplayName } from '@/lib/tax/expense-warnings'
 import {
-  ArrowUpRight,
-  ArrowDownRight,
   ArrowLeftRight,
-  Check,
-  ChevronDown,
-  Landmark,
-  Link2,
   FileText,
+  Landmark,
   Loader2,
   MoreHorizontal,
   Paperclip,
@@ -76,6 +62,11 @@ interface TransactionHistoryListProps {
   onLoadMore?: () => void
 }
 
+/**
+ * "Alla" view: every transaction (booked and not), rendered in the same
+ * dry-table language as the inbox so the two modes read as one page.
+ * Bokförd is the normal state (muted text); Ej bokförd is the exception chip.
+ */
 export default function TransactionHistoryList({
   transactions,
   skvRows = [],
@@ -131,79 +122,101 @@ export default function TransactionHistoryList({
 
   const showSourceFilter = sourceFilter !== 'all' || (skvRows.length > 0 && transactions.length > 0)
   const filtered = merged
-  const showHeader = showSourceFilter
+
+  const FILTERS: Array<{ key: HistoryFilter; labelKey: string }> = [
+    { key: 'all', labelKey: 'filter_all' },
+    { key: 'business', labelKey: 'filter_business' },
+    { key: 'private', labelKey: 'filter_private' },
+  ]
 
   return (
     <div className="space-y-4">
-      {/* Business/private tabs */}
-      <Tabs value={filter} onValueChange={(v) => setFilter(v as HistoryFilter)}>
-        <TabsList>
-          <TabsTrigger value="all">{t('filter_all')}</TabsTrigger>
-          <TabsTrigger value="business">{t('filter_business')}</TabsTrigger>
-          <TabsTrigger value="private">{t('filter_private')}</TabsTrigger>
-        </TabsList>
-      </Tabs>
-
-      <DataList>
-        {showHeader && (
-          <DataListHeader>
-            <span className="text-xs uppercase tracking-wider text-muted-foreground">
-              {t('source_label')}
-            </span>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-xs">
-                  {sourceFilter === 'all'
-                    ? t('source_all')
-                    : sourceFilter === 'bank'
-                      ? t('source_bank')
-                      : t('source_skatteverket')}
-                  <ChevronDown className="h-3 w-3 opacity-50" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="min-w-[12rem]">
-                <DropdownMenuRadioGroup
-                  value={sourceFilter}
-                  onValueChange={(v) => onSourceFilterChange(v as SourceFilter)}
-                >
-                  <DropdownMenuRadioItem value="all">{t('source_all')}</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="bank">{t('source_bank')}</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="skatteverket">{t('source_skatteverket')}</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </DataListHeader>
+      {/* Business/private seg + source chip, mirroring the inbox toolbar. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
+          {FILTERS.map(({ key, labelKey }) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={filter === key}
+              onClick={() => setFilter(key)}
+              className={cn(
+                'rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
+                filter === key
+                  ? 'border border-border bg-card font-medium text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {t(labelKey)}
+            </button>
+          ))}
+        </div>
+        {showSourceFilter && (
+          <div className="ml-auto">
+            <ContextPicker
+              value={sourceFilter}
+              onChange={(id) => setSourceFilter(id as SourceFilter)}
+              triggerLabel={
+                sourceFilter === 'all'
+                  ? t('source_all')
+                  : sourceFilter === 'bank'
+                    ? t('source_bank')
+                    : t('source_skatteverket')
+              }
+              items={[
+                { id: 'all', label: t('source_all') },
+                { id: 'bank', label: t('source_bank') },
+                { id: 'skatteverket', label: t('source_skatteverket') },
+              ]}
+            />
+          </div>
         )}
+      </div>
 
-        {filtered.length === 0 ? (
-          <DataListEmpty
-            icon={<ArrowLeftRight className="h-6 w-6" />}
-            title={t('empty_title')}
-            description={searchTerm ? t('empty_search') : t('empty_filter')}
-          />
-        ) : (
-          filtered.map((item) =>
-            item.source === 'bank' ? (
-              <BankHistoryRow
-                key={`bank-${item.data.id}`}
-                transaction={item.data}
-                jeUnderlagStatus={jeUnderlagStatus}
-                onOpenMatchDialog={onOpenMatchDialog}
-                onOpenCategoryDialog={onOpenCategoryDialog}
-                onOpenAttachDocument={onOpenAttachDocument}
-                onDelete={onDelete}
-              />
-            ) : (
-              <SkattekontoHistoryRow
-                key={`skv-${item.data.id}`}
-                row={item.data}
-                onBokfor={onSkvBokfor}
-                onMatch={onSkvMatch}
-              />
-            ),
-          )
-        )}
-      </DataList>
+      {filtered.length === 0 ? (
+        <DataListEmpty
+          icon={<ArrowLeftRight className="h-6 w-6" />}
+          title={t('empty_title')}
+          description={searchTerm ? t('empty_search') : t('empty_filter')}
+        />
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-[13px]">
+            <thead>
+              <tr>
+                <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>
+                <th className={TH_CLASS}>{t('th_date')}</th>
+                <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
+                <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
+                <th className={cn(TH_CLASS, 'text-right')}>{t('th_status')}</th>
+              </tr>
+            </thead>
+            <tbody className="stagger-enter">
+              {filtered.map((item) =>
+                item.source === 'bank' ? (
+                  <BankHistoryRow
+                    key={`bank-${item.data.id}`}
+                    transaction={item.data}
+                    jeUnderlagStatus={jeUnderlagStatus}
+                    onOpenMatchDialog={onOpenMatchDialog}
+                    onOpenCategoryDialog={onOpenCategoryDialog}
+                    onOpenAttachDocument={onOpenAttachDocument}
+                    onDelete={onDelete}
+                  />
+                ) : (
+                  <SkattekontoHistoryRow
+                    key={`skv-${item.data.id}`}
+                    row={item.data}
+                    onBokfor={onSkvBokfor}
+                    onMatch={onSkvMatch}
+                  />
+                ),
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {hasMore && onLoadMore && !searchTerm && filtered.length > 0 && (
         <div className="flex justify-center">
@@ -261,96 +274,105 @@ function BankHistoryRow({
   const hasJeDoc = jeStatus === 'has'
   const missingUnderlag = isBooked && !transaction.document_id && jeStatus === 'missing'
   const showAttachItem = canWrite && !!onOpenAttachDocument
+  const showOverflowMenu =
+    hasInvoiceMatch || (canDelete && !!onDelete) || (isBooked && canWrite) || showAttachItem
 
-  // Primary status badge: pick the most informative one.
-  const statusBadge = (() => {
-    if (isBooked) {
-      return (
-        <Badge variant="success" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
-          <Check className="h-3 w-3" />
-          {t('posted')}
-        </Badge>
-      )
-    }
-    return (
-      <Badge variant="warning" className="h-4 px-1.5 py-0 text-[10px]">
-        {t('not_posted')}
-      </Badge>
-    )
-  })()
-
+  const isPrivate = transaction.is_business === false
   const categoryLabel =
-    transaction.is_business !== null &&
-    !(
-      transaction.is_business &&
-      transaction.category === 'uncategorized' &&
-      transaction.journal_entry_id
-    )
-      ? transaction.is_business
-        ? getCategoryDisplayName(transaction.category)
-        : t('private_badge')
+    transaction.is_business === true &&
+    !(transaction.category === 'uncategorized' && transaction.journal_entry_id)
+      ? getCategoryDisplayName(transaction.category)
       : null
 
   return (
-    <DataListRow
+    <tr
       data-tx-id={transaction.id}
-      leading={
-        <span
-          className={cn(
-            'inline-flex h-5 w-5 items-center justify-center',
-            isIncome ? 'text-success' : 'text-foreground/60'
+      className="group transition-colors duration-150 hover:bg-secondary/35"
+    >
+      <td className={cn(TD_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></td>
+      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+        {formatDate(transaction.date)}
+      </td>
+      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate">{transaction.description}</span>
+          <TransactionAttachmentIndicator
+            documentId={transaction.document_id}
+            journalEntryId={transaction.journal_entry_id}
+            hasJeDoc={hasJeDoc}
+            missing={missingUnderlag}
+            onAttach={
+              showAttachItem ? () => onOpenAttachDocument!(transaction) : undefined
+            }
+          />
+          {categoryLabel && (
+            <span className="hidden shrink-0 text-xs text-muted-foreground lg:inline">
+              {categoryLabel}
+            </span>
           )}
-          aria-hidden
-        >
-          {isIncome ? (
-            <ArrowUpRight className="h-4 w-4" />
-          ) : (
-            <ArrowDownRight className="h-4 w-4" />
+          {hasInvoiceMatch && (
+            <Badge variant="secondary" className="hidden shrink-0 gap-1 font-normal md:inline-flex">
+              <FileText className="h-3 w-3" />
+              {t('possible_match_invoice', {
+                number: transaction.potential_invoice!.invoice_number ?? '',
+              })}
+            </Badge>
           )}
         </span>
-      }
-      trailing={
-        <>
-          <div className="text-right">
-            <p
-              className={cn(
-                'font-medium tabular-nums leading-none',
-                isIncome && 'text-success'
-              )}
-            >
-              {isIncome ? '+' : ''}
-              {formatCurrency(transaction.amount, transaction.currency)}
-            </p>
-            {transaction.currency !== 'SEK' && transaction.amount_sek != null && (
-              <p className="mt-1 text-[11px] text-muted-foreground tabular-nums">
-                {formatCurrency(transaction.amount_sek)}
-              </p>
-            )}
-          </div>
-          {!isBooked && (
-            <Button
-              size="sm"
-              variant="default"
-              className="h-8 px-3 text-xs"
-              onClick={() => onOpenCategoryDialog(transaction)}
-            >
-              {t('book')}
-            </Button>
-          )}
-          {isBooked && (
-            <Button asChild size="sm" variant="ghost" className="h-8 px-3 text-xs">
-              <Link href={`/bookkeeping/${transaction.journal_entry_id}`}>
+      </td>
+      <td
+        className={cn(
+          TD_CLASS,
+          'whitespace-nowrap text-right tabular-nums sensitive-field',
+          isIncome && 'text-success',
+        )}
+        title={
+          transaction.currency !== 'SEK' && transaction.amount_sek != null
+            ? formatCurrency(transaction.amount_sek)
+            : undefined
+        }
+      >
+        {isIncome ? '+' : ''}
+        {formatCurrency(transaction.amount, transaction.currency)}
+      </td>
+      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
+        <span className="inline-flex items-center justify-end gap-2">
+          {isBooked ? (
+            <>
+              <span className="text-muted-foreground">
+                {isPrivate ? t('private_badge') : t('posted')}
+              </span>
+              <Link
+                href={`/bookkeeping/${transaction.journal_entry_id}`}
+                className={QUIET_LINK_CLASS}
+              >
                 {t('view_voucher_short')}
               </Link>
-            </Button>
+            </>
+          ) : isPrivate ? (
+            <span className="text-muted-foreground">{t('private_badge')}</span>
+          ) : (
+            <>
+              <Badge variant="secondary" className="font-normal">
+                {t('not_posted')}
+              </Badge>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-3.5 text-xs"
+                onClick={() => onOpenCategoryDialog(transaction)}
+              >
+                {t('book')}
+              </Button>
+            </>
           )}
-          {(hasInvoiceMatch || (canDelete && onDelete) || (isBooked && canWrite) || showAttachItem) && (
+          {showOverflowMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 text-muted-foreground"
+                  className="h-7 w-7 text-muted-foreground hover:text-foreground"
                   aria-label="Fler alternativ"
                 >
                   <MoreHorizontal className="h-4 w-4" />
@@ -397,53 +419,9 @@ function BankHistoryRow({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-        </>
-      }
-    >
-      <div className="flex items-center gap-1.5 min-w-0">
-        <DataListPrimary>{transaction.description}</DataListPrimary>
-        <TransactionAttachmentIndicator
-          documentId={transaction.document_id}
-          journalEntryId={transaction.journal_entry_id}
-          hasJeDoc={hasJeDoc}
-          missing={missingUnderlag}
-          onAttach={
-            showAttachItem ? () => onOpenAttachDocument!(transaction) : undefined
-          }
-        />
-      </div>
-      <DataListMeta>
-        <span className="tabular-nums">{formatDate(transaction.date)}</span>
-        <DataListMetaSeparator />
-        {statusBadge}
-        {categoryLabel && (
-          <>
-            <DataListMetaSeparator />
-            <span>{categoryLabel}</span>
-          </>
-        )}
-        {isLinkedToInvoice && (
-          <>
-            <DataListMetaSeparator />
-            <span className="inline-flex items-center gap-1">
-              <Link2 className="h-3 w-3" />
-              {t('linked_to_invoice')}
-            </span>
-          </>
-        )}
-        {hasInvoiceMatch && (
-          <>
-            <DataListMetaSeparator />
-            <span className="inline-flex items-center gap-1 text-primary">
-              <FileText className="h-3 w-3" />
-              {t('possible_match_invoice', {
-                number: transaction.potential_invoice!.invoice_number ?? '',
-              })}
-            </span>
-          </>
-        )}
-      </DataListMeta>
-    </DataListRow>
+        </span>
+      </td>
+    </tr>
   )
 }
 
@@ -461,101 +439,69 @@ function SkattekontoHistoryRow({
   const isIncome = amount > 0
   const isBooked = !!row.journal_entry_id
 
-  const statusBadge = (() => {
-    if (isBooked) {
-      return (
-        <Badge variant="success" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
-          <Check className="h-3 w-3" />
-          {t('posted')}
-        </Badge>
-      )
-    }
-    if (row.match_suggestion) {
-      return (
-        <Badge variant="warning" className="h-4 px-1.5 py-0 text-[10px]">
-          {t('possible_duplicate')}
-        </Badge>
-      )
-    }
-    return (
-      <Badge variant="outline" className="h-4 px-1.5 py-0 text-[10px]">
-        {t('not_posted')}
-      </Badge>
-    )
-  })()
-
   return (
-    <DataListRow
-      leading={
-        <span
-          className={cn(
-            'inline-flex h-5 w-5 items-center justify-center',
-            isIncome ? 'text-success' : 'text-foreground/60'
-          )}
-          aria-hidden
-        >
-          {isIncome ? (
-            <ArrowUpRight className="h-4 w-4" />
-          ) : (
-            <ArrowDownRight className="h-4 w-4" />
+    <tr className="group transition-colors duration-150 hover:bg-secondary/35">
+      <td className={cn(TD_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></td>
+      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+        {formatDate(row.transaktionsdatum)}
+      </td>
+      <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate">{row.transaktionstext}</span>
+          <Badge variant="outline" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-[10px] font-normal">
+            <Landmark className="h-3 w-3" />
+            {t('skv_badge')}
+          </Badge>
+          {!isBooked && row.match_suggestion && (
+            <Badge variant="warning" className="h-4 shrink-0 px-1.5 py-0 text-[10px]">
+              {t('possible_duplicate')}
+            </Badge>
           )}
         </span>
-      }
-      trailing={
-        <>
-          <div className="text-right">
-            <p
-              className={cn(
-                'font-medium tabular-nums leading-none',
-                isIncome && 'text-success'
-              )}
-            >
-              {isIncome ? '+' : ''}
-              {formatCurrency(amount)}
-            </p>
-          </div>
-          {!isBooked && onMatch && (
-            <Button
-              size="sm"
-              variant={row.match_suggestion ? 'default' : 'outline'}
-              className="h-8 px-3 text-xs"
-              onClick={() => onMatch(row)}
-            >
-              <Link2 className="mr-1 h-3 w-3" />
-              {row.match_suggestion ? t('link') : t('match')}
-            </Button>
-          )}
-          {!isBooked && !row.match_suggestion && onBokfor && (
-            <Button
-              size="sm"
-              variant="default"
-              className="h-8 px-3 text-xs"
-              onClick={() => onBokfor(row)}
-            >
-              {t('book')}
-            </Button>
-          )}
-          {isBooked && (
-            <Button asChild size="sm" variant="ghost" className="h-8 px-3 text-xs">
-              <Link href={`/bookkeeping/${row.journal_entry_id}`}>
+      </td>
+      <td
+        className={cn(
+          TD_CLASS,
+          'whitespace-nowrap text-right tabular-nums sensitive-field',
+          isIncome && 'text-success',
+        )}
+      >
+        {isIncome ? '+' : ''}
+        {formatCurrency(amount)}
+      </td>
+      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
+        <span className="inline-flex items-center justify-end gap-2">
+          {isBooked ? (
+            <>
+              <span className="text-muted-foreground">{t('posted')}</span>
+              <Link href={`/bookkeeping/${row.journal_entry_id}`} className={QUIET_LINK_CLASS}>
                 {t('view_voucher_short')}
               </Link>
-            </Button>
+            </>
+          ) : (
+            <>
+              <Badge variant="secondary" className="font-normal">
+                {t('not_posted')}
+              </Badge>
+              {onMatch && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-3.5 text-xs"
+                  onClick={() => onMatch(row)}
+                >
+                  {row.match_suggestion ? t('link') : t('match')}
+                </Button>
+              )}
+              {!row.match_suggestion && onBokfor && (
+                <button type="button" className={QUIET_LINK_CLASS} onClick={() => onBokfor(row)}>
+                  {t('book')}
+                </button>
+              )}
+            </>
           )}
-        </>
-      }
-    >
-      <DataListPrimary>{row.transaktionstext}</DataListPrimary>
-      <DataListMeta>
-        <span className="tabular-nums">{formatDate(row.transaktionsdatum)}</span>
-        <DataListMetaSeparator />
-        <span className="inline-flex items-center gap-1">
-          <Landmark className="h-3 w-3" />
-          {t('skv_badge')}
         </span>
-        <DataListMetaSeparator />
-        {statusBadge}
-      </DataListMeta>
-    </DataListRow>
+      </td>
+    </tr>
   )
 }

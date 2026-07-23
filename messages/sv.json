@@ -2661,7 +2661,11 @@
     "possible_duplicate": "Möjlig dublett",
     "link": "Koppla",
     "match": "Matcha",
-    "view_voucher_short": "Visa verifikat"
+    "view_voucher_short": "Visa verifikat",
+    "th_date": "Datum",
+    "th_description": "Beskrivning",
+    "th_amount": "Belopp",
+    "th_status": "Status"
   },
   "tx_categories": {
     "expense_representation": "Representation",

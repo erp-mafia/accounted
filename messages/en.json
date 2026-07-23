@@ -2661,7 +2661,11 @@
     "possible_duplicate": "Possible duplicate",
     "link": "Link",
     "match": "Match",
-    "view_voucher_short": "View voucher"
+    "view_voucher_short": "View voucher",
+    "th_date": "Date",
+    "th_description": "Description",
+    "th_amount": "Amount",
+    "th_status": "Status"
   },
   "tx_categories": {
     "expense_representation": "Representation",
