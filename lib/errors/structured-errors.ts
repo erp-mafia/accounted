@@ -670,6 +670,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ett angivet bokföringskonto finns inte eller är inte ett aktivt balans- eller intäktskonto (klass 1-3).',
     message_en: 'A supplied posting account does not exist or is not an active balance-sheet or revenue account (class 1-3).',
   },
+  INVOICE_CREATE_POSTING_ACCOUNT_VAT_CONFLICT: {
+    httpStatus: 400,
+    message_sv: 'Ett balanskonto (klass 1-2) kan bara användas på rader utan moms. Använd ett intäktskonto (3xxx) för momspliktiga rader.',
+    message_en: 'A balance-sheet account (class 1-2) can only be used on zero-VAT lines. Use a revenue account (3xxx) for VAT-bearing lines.',
+  },
   INVOICE_CREATE_ROT_RUT_VALIDATION: {
     httpStatus: 400,
     message_sv: 'ROT/RUT-avdraget kunde inte valideras. Kontrollera personnummer och fastighetsbeteckning.',

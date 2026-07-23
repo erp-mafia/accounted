@@ -59,7 +59,11 @@ export function CompanySettingsContent() {
     <div className="space-y-8">
       <SettingsFormWrapper onSave={handleSave} className="space-y-8">
         <CompanyInfoForm settings={settings} />
-        {settings.entity_type === 'aktiebolag' && <ShareCapitalForm settings={settings} />}
+        {settings.entity_type === 'aktiebolag' && (
+          <ShareCapitalForm
+            settings={{ aktiekapital: settings.aktiekapital, antal_aktier: settings.antal_aktier }}
+          />
+        )}
       </SettingsFormWrapper>
 
       <div className="border-t border-border pt-8">

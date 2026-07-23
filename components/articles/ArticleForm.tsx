@@ -18,6 +18,7 @@ import { createClient } from '@/lib/supabase/client'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import type { BASAccount, CreateArticleInput } from '@/types'
+import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 
 // A row from the currencies reference table (lib migration
 // 20260630110000_currencies_reference_table.sql).
@@ -145,7 +146,7 @@ export default function ArticleForm({
         currency: z.string().regex(/^[A-Z]{3}$/),
         revenue_account: z
           .string()
-          .regex(/^[123]\d{3}$/, t('posting_account_invalid'))
+          .regex(INVOICE_POSTING_ACCOUNT_REGEX, t('posting_account_invalid'))
           .or(z.literal(''))
           .optional(),
         cost_price: z.number().nonnegative().optional(),

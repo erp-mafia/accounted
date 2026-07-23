@@ -1045,6 +1045,34 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
     expect(insertedItems![0].revenue_account).toBe('2897')
   })
 
+  it('rejects a class-2 posting account on a VAT-bearing line', async () => {
+    withInvoiceWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: SWEDISH_BUSINESS_CUSTOMER, error: null },
+        chart_of_accounts: { data: [{ account_number: '2897' }], error: null },
+      }),
+    )
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        items: [
+          { description: 'Deposition', quantity: 1, unit: 'st', unit_price: 1000, vat_rate: 25, revenue_account: '2897' },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_CREATE_POSTING_ACCOUNT_VAT_CONFLICT')
+  })
+
   it('rejects a revenue_account not in the chart of accounts', async () => {
     withInvoiceWriteScope()
     mockServiceClient.mockReturnValue(

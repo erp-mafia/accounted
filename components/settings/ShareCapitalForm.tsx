@@ -6,10 +6,14 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
-import type { CompanySettings } from '@/types'
 
+// Deliberately narrow (data minimisation): the form only ever needs the two
+// share-capital fields, not the whole CompanySettings object.
 interface ShareCapitalFormProps {
-  settings: CompanySettings
+  settings: {
+    aktiekapital?: number | null
+    antal_aktier?: number | null
+  }
 }
 
 /**

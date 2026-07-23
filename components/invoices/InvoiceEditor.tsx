@@ -62,6 +62,7 @@ import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import type { InvoiceCopyInitial } from '@/lib/invoices/copy-invoice'
+import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import type { Customer, Currency, CreateInvoiceInput, CreateCustomerInput, InvoiceDocumentType, Article, Invoice, InvoiceItem, BASAccount } from '@/types'
 
 const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
@@ -168,7 +169,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       article_id: z.string().nullable().optional(),
       revenue_account: z
         .string()
-        .regex(/^[123]\d{3}$/, t('posting_account_invalid'))
+        .regex(INVOICE_POSTING_ACCOUNT_REGEX, t('posting_account_invalid'))
         .nullable()
         .optional(),
       // ROT/RUT-avdrag per line. Optional: null means "no deduction".

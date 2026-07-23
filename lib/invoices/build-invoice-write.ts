@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Currency, Customer, InvoiceDocumentType } from '@/types'
 import { getVatRules, getAvailableVatRates } from '@/lib/invoices/vat-rules'
+import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
 import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import {
@@ -224,6 +225,21 @@ export async function buildInvoiceWriteData(params: {
             allowedRates: Array.from(allowedRates),
             customerType: customer.customer_type,
           },
+        }
+      }
+      // A class 1-2 (balance-sheet) posting override is only valid on
+      // zero-VAT lines (deposits, advances, outlays). On a VAT-bearing line
+      // it would divert the tax base away from a 3xxx account and understate
+      // ruta 05 of the momsdeklaration (ML 17 kap 24§).
+      if (
+        item.revenue_account &&
+        isBalanceSheetAccount(item.revenue_account) &&
+        itemRate > 0
+      ) {
+        return {
+          ok: false,
+          code: 'INVOICE_CREATE_POSTING_ACCOUNT_VAT_CONFLICT',
+          details: { account: item.revenue_account, vatRate: itemRate },
         }
       }
       const lineTotal = item.quantity * item.unit_price

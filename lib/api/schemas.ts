@@ -6,6 +6,7 @@ import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
+import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import type { AuditAction } from '@/types'
 
 // ============================================================
@@ -47,10 +48,10 @@ const invoiceEmailAddressList = z
     `Högst ${MAX_INVOICE_EMAIL_COPY_RECIPIENTS} kopiemottagare är tillåtna`,
   )
 
-/** BAS class-3 revenue account: exactly 4 digits starting with 3 (försäljning/intäkt). */
-const revenueAccount = z
+/** Invoice-line posting account: an asset, liability/equity, or revenue account. */
+const invoicePostingAccount = z
   .string()
-  .regex(/^3\d{3}$/, 'Revenue account must be a 4-digit BAS class-3 account (3xxx)')
+  .regex(INVOICE_POSTING_ACCOUNT_REGEX, 'Posting account must be a 4-digit BAS class 1-3 account')
 
 /** Swedish VAT rate as an integer percent. */
 const vatRatePercent = z.union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
@@ -350,10 +351,12 @@ export const CreateInvoiceItemSchema = z
     unit_price: z.number(),
     vat_rate: z.number().min(0).max(100).optional(),
     // Article linkage. `article_id` ties the line to a catalog article (text
-    // rows omit it). `revenue_account` is the optional BAS class-3 override the
-    // engine books to; the API validates it against chart_of_accounts before use.
+    // rows omit it). `revenue_account` is the legacy wire name for the optional
+    // BAS class 1-3 posting-account override the engine books to; the API
+    // validates it against chart_of_accounts before use, and class 1-2
+    // accounts are only accepted on zero-VAT lines (build-invoice-write.ts).
     article_id: uuid.nullable().optional(),
-    revenue_account: revenueAccount.nullable().optional(),
+    revenue_account: invoicePostingAccount.nullable().optional(),
     // ROT/RUT-avdrag fields. `deduction_amount` is intentionally omitted from
     // the client schema: the API computes it from rot-rut-rules.ts so a
     // tampered client can't expand the 1513 receivable beyond the line total.
@@ -606,9 +609,9 @@ export const CreateArticleSchema = z.object({
   // seeded currencies reference table: an unknown code is a clean 400 here
   // instead of a raw FK violation (23503) surfacing at insert time.
   currency: CurrencySchema.optional(),
-  // Optional BAS class-3 revenue-account override. Null/omitted = derive from
+  // Optional BAS class 1-3 posting-account override. Null/omitted = derive from
   // the invoice's VAT treatment (current behaviour).
-  revenue_account: revenueAccount.nullable().optional(),
+  revenue_account: invoicePostingAccount.nullable().optional(),
   // Margin/display only; never posted.
   cost_price: nonNegativeAmount.nullable().optional(),
   ean: z.string().max(32).nullable().optional(),

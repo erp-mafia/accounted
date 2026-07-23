@@ -967,6 +967,9 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                     <View style={styles.totalRow}>
                       <Text style={styles.totalLabel}>{L.deductionRow}</Text>
                       <Text style={styles.totalValue}>
+                        {/* deduction_total is stored as a positive magnitude;
+                            -Math.abs() keeps the row a reduction even if the
+                            stored sign convention ever changes. */}
                         {formatPdfCurrency(-Math.abs(invoice.deduction_total ?? 0), invoice.currency, lang)}
                       </Text>
                     </View>

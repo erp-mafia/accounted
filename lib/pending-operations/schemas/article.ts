@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 
 // Commit-boundary re-validation for staged article operations. A staged
 // pending_operations row is re-parsed here before it touches the articles table
@@ -7,7 +8,7 @@ import { z } from 'zod'
 
 const invoicePostingAccount = z
   .string()
-  .regex(/^[123]\d{3}$/, 'Posting account must be a 4-digit BAS class 1-3 account')
+  .regex(INVOICE_POSTING_ACCOUNT_REGEX, 'Posting account must be a 4-digit BAS class 1-3 account')
 
 const vatRatePercent = z.union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
 
