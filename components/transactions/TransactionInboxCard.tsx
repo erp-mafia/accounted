@@ -12,14 +12,11 @@ import {
   DataListRow,
   DataListPrimary,
   DataListMeta,
-  DataListMetaSeparator,
 } from '@/components/ui/data-list'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import {
   AlertCircle,
-  ArrowUpRight,
-  ArrowDownRight,
   EyeOff,
   FileSearch,
   FileText,
@@ -172,8 +169,8 @@ export default function TransactionInboxCard({
       return (
         <Button
           size="sm"
-          variant="default"
-          className="h-9 px-3 text-sm"
+          variant="secondary"
+          className="h-8 px-3 text-xs"
           onClick={(e) => {
             e.stopPropagation()
             onOpenMatchDialog(transaction)
@@ -195,8 +192,8 @@ export default function TransactionInboxCard({
       return (
         <Button
           size="sm"
-          variant="default"
-          className="h-9 px-3 text-sm"
+          variant="secondary"
+          className="h-8 px-3 text-xs"
           onClick={(e) => {
             e.stopPropagation()
             onOpenMatchDialog(transaction)
@@ -276,7 +273,7 @@ export default function TransactionInboxCard({
         data-tx-id={transaction.id}
         selected={isSelected}
         className={cn(isDisabled && 'opacity-50')}
-        rowClassName="py-4 gap-4"
+        rowClassName="py-3 gap-3"
         onClick={showCheckbox ? () => onToggleSelect(transaction.id) : undefined}
         leading={
           showCheckbox ? (
@@ -287,18 +284,8 @@ export default function TransactionInboxCard({
               aria-label="Välj transaktion"
             />
           ) : (
-            <span
-              className={cn(
-                'inline-flex h-6 w-6 items-center justify-center',
-                isIncome ? 'text-success' : 'text-foreground/60'
-              )}
-              aria-hidden
-            >
-              {isIncome ? (
-                <ArrowUpRight className="h-5 w-5" />
-              ) : (
-                <ArrowDownRight className="h-5 w-5" />
-              )}
+            <span className="w-[84px] shrink-0 pt-0.5 text-[13px] tabular-nums text-muted-foreground">
+              {formatDate(transaction.date)}
             </span>
           )
         }
@@ -307,7 +294,7 @@ export default function TransactionInboxCard({
             <div className="text-right">
               <p
                 className={cn(
-                  'text-base font-medium tabular-nums leading-none',
+                  'text-sm font-medium tabular-nums leading-none',
                   isIncome && 'text-success'
                 )}
               >
@@ -465,32 +452,27 @@ export default function TransactionInboxCard({
         }
       >
         <div className="flex items-center gap-1.5 min-w-0">
-          <DataListPrimary className="text-base">{transaction.description}</DataListPrimary>
+          <DataListPrimary className="text-sm">{transaction.description}</DataListPrimary>
           <TransactionAttachmentIndicator documentId={attachedDocumentId} />
         </div>
-        <DataListMeta className="mt-1">
-          <span className="tabular-nums">{formatDate(transaction.date)}</span>
-          {transaction.title_edited_at && (
-            <>
-              <DataListMetaSeparator />
+        {(transaction.title_edited_at || skvCounterpartDate) && (
+          <DataListMeta className="mt-0.5">
+            {transaction.title_edited_at && (
               <span
                 className="text-muted-foreground"
                 title={originalName ? t('original_name_tooltip', { name: originalName }) : undefined}
               >
                 {t('edited_badge')}
               </span>
-            </>
-          )}
-          {skvCounterpartDate && (
-            <>
-              <DataListMetaSeparator />
+            )}
+            {skvCounterpartDate && (
               <Badge variant="warning" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
                 <AlertCircle className="h-3 w-3" />
                 Möjlig 1930↔1630
               </Badge>
-            </>
-          )}
-        </DataListMeta>
+            )}
+          </DataListMeta>
+        )}
         {/* Extraction status: visible only while AI is reading a freshly
             attached document, or briefly if reading failed. */}
         {HAS_AI_EXTRACTION &&
