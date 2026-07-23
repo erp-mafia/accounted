@@ -1293,7 +1293,9 @@ export default function PendingOperationsPage() {
                           ? 'secondary'
                           : op.status === 'committed'
                             ? 'success'
-                            : 'destructive'
+                            : op.status === 'failed_partial'
+                              ? 'warning'
+                              : 'destructive'
                       }
                       className="mt-0.5 shrink-0 font-normal"
                     >
@@ -1301,7 +1303,9 @@ export default function PendingOperationsPage() {
                         ? t('badge_auto_expired')
                         : op.status === 'committed'
                           ? t('badge_approved')
-                          : t('badge_rejected')}
+                          : op.status === 'failed_partial'
+                            ? t('badge_failed_partial')
+                            : t('badge_rejected')}
                     </Badge>
                     <div className="min-w-0 flex-1">
                       <div className="text-[13.5px] leading-snug">{op.title}</div>
@@ -1311,6 +1315,14 @@ export default function PendingOperationsPage() {
                           ? ` · ${t('history_reason', { reason: op.rejection_reason })}`
                           : ''}
                       </div>
+                      {op.status === 'failed_partial' && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {t('failed_partial_detail')}
+                          {failedPartialPostedIds(op) && (
+                            <span className="font-mono"> ({failedPartialPostedIds(op)})</span>
+                          )}
+                        </p>
+                      )}
                     </div>
                     <ChevronRight
                       className={cn(
@@ -1479,6 +1491,16 @@ export default function PendingOperationsPage() {
                 )}
                 {isAutoExpired(detailOp) && (
                   <p className="text-xs text-muted-foreground">{t('auto_expired_detail')}</p>
+                )}
+                {detailOp.status === 'failed_partial' && (
+                  <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
+                    <p className="text-xs leading-snug text-muted-foreground">
+                      {t('failed_partial_detail')}
+                      {failedPartialPostedIds(detailOp) && (
+                        <span className="font-mono"> ({failedPartialPostedIds(detailOp)})</span>
+                      )}
+                    </p>
+                  </div>
                 )}
               </SlideOverBody>
               <SlideOverFooter>
