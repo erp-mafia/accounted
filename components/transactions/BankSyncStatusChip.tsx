@@ -51,7 +51,7 @@ export function getChipState(rows: ConnectionRow[], now: number = Date.now()): C
   return { kind: 'healthy', mostRecent: mostRecent ?? null }
 }
 
-function useAgeFormatter() {
+export function useAgeFormatter() {
   const t = useTranslations('transactions')
   return (iso: string): string => {
     const ms = Date.now() - new Date(iso).getTime()

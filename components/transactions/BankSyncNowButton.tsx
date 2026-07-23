@@ -19,24 +19,26 @@ import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
-interface BankConn {
+export interface BankConn {
   id: string
   bank_name: string
   status: string
   provider: string
+  last_synced_at: string | null
 }
 
 /**
- * On-demand "Sync now" button beside BankSyncStatusChip. Reuses the
- * per-connection sync endpoint that BankingSettingsPanel already calls.
+ * Shared on-demand bank sync state + actions. Powers the footer "Synka nu"
+ * button below and the "Synka bank nu" row in the Importera split-button menu
+ * (TransactionStatusBar). Reuses the per-connection sync endpoint that
+ * BankingSettingsPanel already calls.
  *
- * Also handles dead PSD2 sessions: a connection whose consent has closed/expired
- * shows a "Förnya anslutning" action that re-authorizes in place (no disconnect
- * needed), and a sync that fails with a session-expiry surfaces the same
- * reconnect action right in the error toast. If the user has multiple
- * connections, a dropdown lets them pick which one to sync/reconnect.
+ * Also handles dead PSD2 sessions: a connection whose consent has closed or
+ * expired re-authorizes in place via `reconnect` (no disconnect needed), and a
+ * sync that fails with a session expiry surfaces the same reconnect action
+ * right in the error toast.
  */
-export default function BankSyncNowButton() {
+export function useBankSync() {
   const t = useTranslations('transactions')
   const { toast } = useToast()
   const router = useRouter()
@@ -51,7 +53,7 @@ export default function BankSyncNowButton() {
     const supabase = createClient()
     supabase
       .from('bank_connections')
-      .select('id, bank_name, status, provider')
+      .select('id, bank_name, status, provider, last_synced_at')
       // Include expired/error so the reconnect entry point survives a reload:
       // not just active connections that can sync.
       .in('status', ['active', 'expired', 'error'])
@@ -63,8 +65,6 @@ export default function BankSyncNowButton() {
       cancelled = true
     }
   }, [company?.id])
-
-  if (!connections || connections.length === 0) return null
 
   // Re-authorize an existing connection in place: posts the connection_id so
   // the server reuses the same row, then hands off to the bank's consent screen.
@@ -152,7 +152,51 @@ export default function BankSyncNowButton() {
     return reconnect(conn)
   }
 
-  const isBusy = busyId !== null
+  // One-shot "sync everything" for the split-button menu row: syncs every
+  // active connection in turn; with only dead connections it jumps straight
+  // to re-authorizing the first one (a retry can't revive a closed session).
+  async function syncAll() {
+    const conns = connections ?? []
+    const active = conns.filter((c) => c.status === 'active')
+    if (active.length === 0) {
+      if (conns[0]) await reconnect(conns[0])
+      return
+    }
+    for (const conn of active) {
+      await syncConnection(conn)
+    }
+  }
+
+  const lastSyncedAt =
+    (connections ?? [])
+      .map((c) => c.last_synced_at)
+      .filter((s): s is string => Boolean(s))
+      .sort()
+      .pop() ?? null
+
+  return {
+    connections,
+    busyId,
+    isBusy: busyId !== null,
+    hasBankSync,
+    reconnect,
+    syncConnection,
+    runFor,
+    syncAll,
+    lastSyncedAt,
+  }
+}
+
+/**
+ * On-demand "Sync now" button beside BankSyncStatusChip. If the user has
+ * multiple connections, a dropdown lets them pick which one to sync/reconnect.
+ */
+export default function BankSyncNowButton() {
+  const t = useTranslations('transactions')
+  const { connections, isBusy, hasBankSync, runFor } = useBankSync()
+
+  if (!connections || connections.length === 0) return null
+
   const syncLabel = isBusy ? t('bank_sync_button_syncing') : t('bank_sync_button_now')
 
   // Bank sync (and reconnect) is a paid external PSD2 call. Without the

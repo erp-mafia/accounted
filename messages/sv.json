@@ -4556,6 +4556,9 @@
     "import_psd2_active_warning_body": "Transaktioner synkas automatiskt varje natt. Filimport behövs bara för äldre historik eller om PSD2 inte fungerar; annars kan dubbletter uppstå.",
     "create_import_desc": "CSV- eller SIE-fil från banken",
     "create_manual_desc": "Kontanter, egna utlägg",
+    "create_synka": "Synka bank nu",
+    "create_synka_desc": "Hämtar nya transaktioner från banken",
+    "create_synka_desc_last": "Senast synkad {age}",
     "mode_all": "Alla",
     "footer_to_handle": "{count, plural, =0 {Inget att hantera} =1 {1 att hantera} other {# att hantera}}"
   },
