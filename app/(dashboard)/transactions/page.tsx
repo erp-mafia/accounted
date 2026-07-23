@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
-import { AnimatePresence } from 'framer-motion'
 import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -13,17 +12,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { DataList, DataListHeader, DataListEmpty } from '@/components/ui/data-list'
+import { DataList, DataListEmpty } from '@/components/ui/data-list'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-} from '@/components/ui/dropdown-menu'
-import { ChevronDown, EyeOff, Layers, Search, ShieldAlert, Trash2, X } from 'lucide-react'
+import { TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { Loader2, Search } from 'lucide-react'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
@@ -54,7 +47,7 @@ import { findBankSkvCounterparts } from '@/lib/skatteverket/bank-counterpart'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary, CashAccount } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { isImportedTransaction } from '@/lib/transactions/origin'
@@ -203,11 +196,13 @@ export default function TransactionsPage() {
   const [processingId, setProcessingId] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
 
-  // Batch mode
-  const [isBatchMode, setIsBatchMode] = useState(false)
+  // Batch selection: hover checkboxes + bulkbar (concept), no mode toggle.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showBatchSelector, setShowBatchSelector] = useState(false)
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
+  // Row expansion (concept foldout): one open row at a time, mirroring the
+  // verifikat list.
+  const [expandedTxId, setExpandedTxId] = useState<string | null>(null)
 
   // Invoice match dialog
   const [matchDialogOpen, setMatchDialogOpen] = useState(false)
@@ -512,6 +507,13 @@ export default function TransactionsPage() {
     if (sourceFilter === 'all') return
     if (!sourceItems.some((item) => item.id === sourceFilter)) setSourceFilter('all')
   }, [sourceFilter, sourceItems])
+
+  // Rows the bulkbar's "Markera alla" can select: the visible bank rows
+  // (skattekonto rows aren't batch-bookable).
+  const selectableInboxIds = useMemo(
+    () => inboxItems.filter((item) => item.source === 'bank').map((item) => item.data.id),
+    [inboxItems],
+  )
 
   const transactionsWithMatches = useMemo(
     () => transactions.filter(
@@ -1660,7 +1662,6 @@ export default function TransactionsPage() {
     })
     await refreshTransactions()
     setSelectedIds(new Set())
-    setIsBatchMode(false)
     setTimeout(() => {
       setExitingIds((prev) => {
         const next = new Set(prev)
@@ -1914,7 +1915,6 @@ export default function TransactionsPage() {
   }
 
   function exitBatchMode() {
-    setIsBatchMode(false)
     setSelectedIds(new Set())
   }
 
@@ -2329,16 +2329,6 @@ export default function TransactionsPage() {
             className="h-9 pl-10"
           />
         </div>
-        {mode === 'inbox' && uncategorizedTransactions.length > 0 && (
-          <Button
-            variant={isBatchMode ? 'secondary' : 'ghost'}
-            size="sm"
-            className="text-muted-foreground"
-            onClick={() => (isBatchMode ? exitBatchMode() : setIsBatchMode(true))}
-          >
-            {isBatchMode ? t('action_select_multi_end') : t('action_select_multi_start')}
-          </Button>
-        )}
         {/* Account chooser (convention 8): the one context chip, far right.
             Per-cash-account rows with balances (concept scene 10); hidden
             only when there is nothing beyond "Alla källor" to choose. */}
@@ -2373,55 +2363,130 @@ export default function TransactionsPage() {
           ))}
         </DataList>
       ) : mode === 'inbox' ? (
-        inboxItems.length === 0 && !searchTerm && sourceFilter === 'all' ? (
-          <InboxZeroState
-            hasTransactions={transactions.length > 0 || skvRows.length > 0}
-            onCreateTransaction={() => setIsDialogOpen(true)}
-          />
+        inboxItems.length === 0 ? (
+          searchTerm || sourceFilter !== 'all' ? (
+            <DataListEmpty
+              title="Inga träffar"
+              description={searchTerm ? t('no_search_results') : t('source_empty')}
+            />
+          ) : (
+            <InboxZeroState
+              hasTransactions={transactions.length > 0 || skvRows.length > 0}
+              onCreateTransaction={() => setIsDialogOpen(true)}
+            />
+          )
         ) : (
-          <DataList className="stagger-enter">
-            {inboxItems.length === 0 && searchTerm ? (
-              <DataListEmpty
-                title="Inga träffar"
-                description={searchTerm ? t('no_search_results') : t('source_empty')}
-              />
-            ) : null}
-            <AnimatePresence mode="popLayout">
-              {inboxItems.map(item =>
-                item.source === 'bank' ? (
-                  <TransactionInboxCard
-                    key={`bank-${item.data.id}`}
-                    transaction={item.data}
-                    skvCounterpartDate={bankToSkvHints.get(item.data.id)}
-                    processingId={processingId}
-                    isBatchMode={isBatchMode}
-                    isSelected={selectedIds.has(item.data.id)}
-                    entityType={entityType}
-                    onCategorize={handleCategorize}
-                    onOpenMatchDialog={openMatchDialog}
-                    onOpenMatchInvoicePicker={openInvoiceMatchPicker}
-                    onOpenSplitMatch={openSplitMatchDialog}
-                    onOpenMatchVoucher={openMatchVoucherDialog}
-                    onOpenAttachDocument={openAttachDocumentDialog}
-                    onOpenCategoryDialog={openCategoryDialog}
-                    onDelete={handleDeleteTransaction}
-                    onIgnore={handleIgnoreTransaction}
-                    onEditTitle={openEditTitleDialog}
-                    onToggleSelect={toggleBatchSelect}
-                  />
+          <div>
+            {/* Bulkbar (concept): hidden until at least one transaction is
+                selected via the hover checkboxes, then it pops in with the
+                count and the batch actions. */}
+            {selectedIds.size > 0 && (
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+                {batchProgress ? (
+                  <span className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    {t('batch_progress', { done: batchProgress.done, total: batchProgress.total })}
+                  </span>
                 ) : (
-                  <SkattekontoInboxCard
-                    key={`skv-${item.data.id}`}
-                    row={item.data}
-                    matchSuggestion={item.data.match_suggestion}
-                    processing={skvProcessingId === item.data.id}
-                    onBokfor={handleSkvBokfor}
-                    onMatch={r => setSkvMatchTarget(r)}
-                  />
-                ),
-              )}
-            </AnimatePresence>
-          </DataList>
+                  <>
+                    <span className="whitespace-nowrap">
+                      <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
+                      {t('bulkbar_selected')}
+                    </span>
+                    <Button size="sm" onClick={() => setShowBatchSelector(true)}>
+                      {t('batch_book')}
+                    </Button>
+                    {/* Bulk-book (samlingsverifikation): only when ≥2 selected
+                        on the same date + same direction. Disabled state
+                        explains why via title. */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setBulkBookOpen(true)}
+                      disabled={!bulkBookEligible}
+                      title={!bulkBookEligible ? t('batch_bulk_book_hint') : undefined}
+                    >
+                      {t('batch_bulk_book')}
+                    </Button>
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore}>
+                      {t('batch_ignore')}
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(QUIET_LINK_CLASS, 'hover:text-destructive')}
+                      onClick={handleBatchDelete}
+                    >
+                      {t('batch_delete')}
+                    </button>
+                    {selectedIds.size < selectableInboxIds.length && (
+                      <button
+                        type="button"
+                        className={QUIET_LINK_CLASS}
+                        onClick={() => setSelectedIds(new Set(selectableInboxIds))}
+                      >
+                        {t('batch_select_all', { count: selectableInboxIds.length })}
+                      </button>
+                    )}
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={exitBatchMode}>
+                      {t('batch_clear')}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-[13px]">
+                <thead>
+                  <tr>
+                    <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>
+                    <th className={TH_CLASS}>{t('th_date')}</th>
+                    <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
+                    <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
+                    <th className={cn(TH_CLASS, 'text-right')}>{t('th_status')}</th>
+                  </tr>
+                </thead>
+                <tbody className="stagger-enter">
+                  {inboxItems.map(item =>
+                    item.source === 'bank' ? (
+                      <TransactionInboxCard
+                        key={`bank-${item.data.id}`}
+                        transaction={item.data}
+                        skvCounterpartDate={bankToSkvHints.get(item.data.id)}
+                        processingId={processingId}
+                        isSelected={selectedIds.has(item.data.id)}
+                        isExpanded={expandedTxId === item.data.id}
+                        onToggleExpand={(id) =>
+                          setExpandedTxId((prev) => (prev === id ? null : id))
+                        }
+                        entityType={entityType}
+                        onCategorize={handleCategorize}
+                        onOpenMatchDialog={openMatchDialog}
+                        onOpenMatchInvoicePicker={openInvoiceMatchPicker}
+                        onOpenSplitMatch={openSplitMatchDialog}
+                        onOpenMatchVoucher={openMatchVoucherDialog}
+                        onOpenAttachDocument={openAttachDocumentDialog}
+                        onOpenCategoryDialog={openCategoryDialog}
+                        onDelete={handleDeleteTransaction}
+                        onIgnore={handleIgnoreTransaction}
+                        onEditTitle={openEditTitleDialog}
+                        onToggleSelect={toggleBatchSelect}
+                      />
+                    ) : (
+                      <SkattekontoInboxCard
+                        key={`skv-${item.data.id}`}
+                        row={item.data}
+                        matchSuggestion={item.data.match_suggestion}
+                        processing={skvProcessingId === item.data.id}
+                        onBokfor={handleSkvBokfor}
+                        onMatch={r => setSkvMatchTarget(r)}
+                      />
+                    ),
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         )
       ) : (
         <TransactionHistoryList
@@ -2441,67 +2506,6 @@ export default function TransactionsPage() {
           isLoadingMore={isLoadingMore}
           onLoadMore={loadMoreTransactions}
         />
-      )}
-
-      {/* Batch mode floating action bar */}
-      {isBatchMode && selectedIds.size > 0 && (
-        <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 bg-background border rounded-lg shadow-lg px-4 py-3">
-          {batchProgress ? (
-            <>
-              <Badge variant="secondary">
-                {batchProgress.done}/{batchProgress.total}
-              </Badge>
-              <p className="text-sm text-muted-foreground">
-                Bokför {batchProgress.done} av {batchProgress.total}...
-              </p>
-            </>
-          ) : (
-            <>
-              <Badge variant="secondary">{selectedIds.size} valda</Badge>
-              <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
-                <X className="mr-1 h-3 w-3" />
-                Avmarkera
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleBatchIgnore}
-              >
-                <EyeOff className="mr-1 h-3 w-3" />
-                Ignorera
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleBatchDelete}
-                className="text-destructive hover:text-destructive"
-              >
-                <Trash2 className="mr-1 h-3 w-3" />
-                Ta bort
-              </Button>
-              {/* Bulk-book (samlingsverifikation): only when ≥2 selected on
-                  the same date + same direction. Disabled state explains why
-                  via title. */}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setBulkBookOpen(true)}
-                disabled={!bulkBookEligible}
-                title={
-                  !bulkBookEligible
-                    ? 'Välj minst två transaktioner från samma datum och samma riktning'
-                    : 'Skapa en samlingsverifikation för de valda transaktionerna'
-                }
-              >
-                <Layers className="mr-1 h-3 w-3" />
-                Bokför i klump
-              </Button>
-              <Button size="sm" onClick={() => setShowBatchSelector(true)}>
-                Bokför
-              </Button>
-            </>
-          )}
-        </div>
       )}
 
       {/* Footer status line (concept): honest counter from the visible

@@ -4,22 +4,17 @@ import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useDocumentExtraction } from '@/lib/hooks/use-document-extraction'
 import ExtractionStatus from '@/components/ui/extraction-status'
-import { motion } from 'framer-motion'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import {
-  DataListRow,
-  DataListPrimary,
-  DataListMeta,
-} from '@/components/ui/data-list'
+import { TD_CLASS, QUIET_LINK_CLASS, RowFoldout } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import {
   AlertCircle,
+  ChevronRight,
   EyeOff,
   FileSearch,
-  FileText,
   Link2,
   Loader2,
   MessageCircle,
@@ -53,8 +48,11 @@ interface TransactionInboxCardProps {
    *  transfer that the user will later see on /skattekonto. */
   skvCounterpartDate?: string
   processingId: string | null
-  isBatchMode: boolean
   isSelected: boolean
+  /** Row expansion (concept foldout): controlled by the page so only one
+   *  row is open at a time, mirroring the verifikat list. */
+  isExpanded: boolean
+  onToggleExpand: (id: string) => void
   entityType?: string
   onCategorize: CategorizeHandler
   /** Confirm an auto-detected invoice match (1-click shortcut). */
@@ -78,15 +76,21 @@ interface TransactionInboxCardProps {
   /** Open the edit-title dialog. Only wired for editable (unbooked/unmatched) rows. */
   onEditTitle?: (transaction: TransactionWithInvoice) => void
   onToggleSelect: (id: string) => void
-  onAnimationComplete?: (id: string) => void
 }
 
+/**
+ * A bank transaction in the inbox, rendered as a dry-table row pair (concept
+ * scene 10): main row with hover checkbox/chevron and the primary action as a
+ * quiet pill, plus a foldout with the row's detail and full action set. The
+ * ⋯ overflow menu stays on the row for one-click access to the same actions.
+ */
 export default function TransactionInboxCard({
   transaction,
   skvCounterpartDate,
   processingId,
-  isBatchMode,
   isSelected,
+  isExpanded,
+  onToggleExpand,
   onOpenMatchDialog,
   onOpenMatchInvoicePicker,
   onOpenSplitMatch,
@@ -97,7 +101,6 @@ export default function TransactionInboxCard({
   onIgnore,
   onEditTitle,
   onToggleSelect,
-  onAnimationComplete,
 }: TransactionInboxCardProps) {
   const t = useTranslations('tx_inbox_card')
   // Attaching underlag is a write: hide the affordance from viewers so they
@@ -142,7 +145,7 @@ export default function TransactionInboxCard({
   const hasSupplierInvoiceMatch =
     !!transaction.potential_supplier_invoice && !transaction.supplier_invoice_id
   const isUncategorized = transaction.is_business === null && !transaction.journal_entry_id
-  const showCheckbox = isBatchMode && isUncategorized
+  const selectable = isUncategorized && canWrite
   // Unbooked rows are still actionable (match, split, edit, categorize): that
   // includes imported bank rows, which are the whole point of the inbox.
   const isUnbooked = !transaction.journal_entry_id
@@ -162,70 +165,22 @@ export default function TransactionInboxCard({
     !transaction.journal_entry_id && !transaction.invoice_id && !transaction.supplier_invoice_id
   const originalName = transaction.original_description
 
-  // Primary action: invoice/supplier-invoice match keeps the 1-click shortcut;
-  // otherwise the user opens the template picker.
-  const primaryAction = (() => {
-    if (hasInvoiceMatch) {
-      return (
-        <Button
-          size="sm"
-          variant="secondary"
-          className="h-8 px-3 text-xs"
-          onClick={(e) => {
-            e.stopPropagation()
-            onOpenMatchDialog(transaction)
-          }}
-          disabled={isProcessing || isDisabled}
-        >
-          {isProcessing ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <FileText className="mr-1.5 h-3.5 w-3.5" />
-          )}
-          {t('match_invoice_btn', {
-            number: transaction.potential_invoice!.invoice_number ?? '',
-          })}
-        </Button>
-      )
-    }
-    if (hasSupplierInvoiceMatch) {
-      return (
-        <Button
-          size="sm"
-          variant="secondary"
-          className="h-8 px-3 text-xs"
-          onClick={(e) => {
-            e.stopPropagation()
-            onOpenMatchDialog(transaction)
-          }}
-          disabled={isProcessing || isDisabled}
-        >
-          {isProcessing ? (
-            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <FileText className="mr-1.5 h-3.5 w-3.5" />
-          )}
-          {t('match_supplier_invoice_btn', {
-            number: transaction.potential_supplier_invoice!.supplier_invoice_number ?? '',
-          })}
-        </Button>
-      )
-    }
-    return (
-      <Button
-        size="sm"
-        variant="default"
-        className="h-9 px-3 text-sm"
-        onClick={(e) => {
-          e.stopPropagation()
-          onOpenCategoryDialog(transaction)
-        }}
-        disabled={isProcessing || isDisabled}
-      >
-        Bokför
-      </Button>
-    )
-  })()
+  const matchLabel = hasInvoiceMatch
+    ? t('match_invoice_btn', { number: transaction.potential_invoice!.invoice_number ?? '' })
+    : hasSupplierInvoiceMatch
+      ? t('match_supplier_invoice_btn', {
+          number: transaction.potential_supplier_invoice!.supplier_invoice_number ?? '',
+        })
+      : null
+
+  // Primary action: invoice/supplier-invoice match keeps the 1-click
+  // shortcut; otherwise the user opens the template picker. Rendered as the
+  // row-level quiet pill AND as the foldout's leading pill.
+  const runPrimary = () => {
+    if (matchLabel) onOpenMatchDialog(transaction)
+    else onOpenCategoryDialog(transaction)
+  }
+  const primaryLabel = matchLabel ?? 'Bokför'
 
   // Manual invoice-match affordance. Hidden once an auto-detected match is
   // already shown as the primary button: having both makes the row noisy.
@@ -240,8 +195,8 @@ export default function TransactionInboxCard({
     ? 'Dela inbetalningen på flera fakturor'
     : 'Dela utbetalningen på flera leverantörsfakturor'
 
-  // Secondary row actions are collapsed into a single ⋯ overflow menu to keep
-  // the inbox row uncluttered. Bokför + the invoice-match button stay inline.
+  // Secondary row actions live twice, deliberately: as quiet links in the
+  // foldout (concept vact) and in the row's ⋯ overflow menu for one-click use.
   // "Matcha mot befintlig verifikation": link to an already-booked voucher.
   // Available on any unbooked row (income or expense), independent of whether an
   // invoice match was auto-detected: the user may want to point the bank line at
@@ -257,225 +212,346 @@ export default function TransactionInboxCard({
   const showOverflowMenu =
     showInvoiceMatchButton || showAskAssistant || showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showIgnoreItem || showDeleteItem
 
+  const askAssistant = () =>
+    openAgentSheet({
+      intentId: 'transaction.categorization',
+      intentArgs: { transaction_id: transaction.id },
+      contextRef: `transaction:${transaction.id}`,
+    })
+
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.97, x: -16 }}
-      transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
-      onAnimationComplete={(definition) => {
-        if (typeof definition === 'object' && 'opacity' in definition && definition.opacity === 0) {
-          onAnimationComplete?.(transaction.id)
-        }
-      }}
-    >
-      <DataListRow
+    <>
+      <tr
         data-tx-id={transaction.id}
-        selected={isSelected}
-        className={cn(isDisabled && 'opacity-50')}
-        rowClassName="py-3 gap-3"
-        onClick={showCheckbox ? () => onToggleSelect(transaction.id) : undefined}
-        leading={
-          showCheckbox ? (
+        className={cn(
+          'group cursor-pointer transition-colors duration-150',
+          isExpanded ? 'bg-secondary/25' : 'hover:bg-secondary/35',
+          isSelected && 'bg-secondary/40',
+          isDisabled && 'opacity-50',
+        )}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        onClick={() => onToggleExpand(transaction.id)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onToggleExpand(transaction.id)
+          }
+        }}
+      >
+        {/* Hover-revealed selection checkbox (concept .cb) */}
+        <td
+          className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px]')}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {selectable && (
             <Checkbox
               checked={isSelected}
               onCheckedChange={() => onToggleSelect(transaction.id)}
-              onClick={(e) => e.stopPropagation()}
               aria-label="Välj transaktion"
-            />
-          ) : (
-            <span className="w-[84px] shrink-0 pt-0.5 text-[13px] tabular-nums text-muted-foreground">
-              {formatDate(transaction.date)}
-            </span>
-          )
-        }
-        trailing={
-          <>
-            <div className="text-right">
-              <p
-                className={cn(
-                  'text-sm font-medium tabular-nums leading-none',
-                  isIncome && 'text-success'
-                )}
-              >
-                {isIncome ? '+' : ''}
-                {formatCurrency(transaction.amount, transaction.currency)}
-              </p>
-              {transaction.currency !== 'SEK' && transaction.amount_sek != null && (
-                <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-                  {formatCurrency(transaction.amount_sek)}
-                </p>
+              className={cn(
+                'transition-opacity duration-150',
+                isSelected
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
               )}
-            </div>
-            {!isBatchMode && (
-              <>
-                {primaryAction}
-                {/* "Fråga [namn]": hand this bank line to the assistant for
-                    categorization/booking. The transaction-side entry point to
-                    the agent, mirroring "Fråga assistenten" in Dokumentinkorgen.
-                    The intent reads any linked underlag automatically, so it
-                    works whether or not the row already has a receipt attached.
-                    Icon-only ghost so it sits quietly in the row's action
-                    group. (The Paperclip indicator next to the description
-                    stays the single click target for opening the underlag:
-                    we don't duplicate that here.) */}
-                {/* Secondary actions (split, edit, delete) collapse into a ⋯
-                    overflow menu so the row stays uncluttered. */}
-                {showOverflowMenu && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-9 w-9 text-muted-foreground hover:text-foreground"
-                        onClick={(e) => e.stopPropagation()}
-                        aria-label={t('more_actions_aria')}
-                        title={t('more_actions_aria')}
-                        disabled={isProcessing || isDisabled}
-                      >
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="min-w-[14rem]">
-                      {showInvoiceMatchButton && (
-                        <DropdownMenuItem
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onOpenMatchInvoicePicker(transaction)
-                          }}
-                        >
-                          <Link2 className="h-4 w-4" />
-                          {invoiceMatchLabel}
-                        </DropdownMenuItem>
-                      )}
-                      {showAskAssistant && (
-                        <DropdownMenuItem
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            openAgentSheet({
-                              intentId: 'transaction.categorization',
-                              intentArgs: { transaction_id: transaction.id },
-                              contextRef: `transaction:${transaction.id}`,
-                            })
-                          }}
-                        >
-                          <MessageCircle className="h-4 w-4" />
-                          {`Fråga ${assistantName}`}
-                        </DropdownMenuItem>
-                      )}
-                      {showMatchVoucherItem && (
-                        <DropdownMenuItem
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onOpenMatchVoucher!(transaction)
-                          }}
-                        >
-                          <FileSearch className="h-4 w-4" />
-                          {t('match_voucher_btn')}
-                        </DropdownMenuItem>
-                      )}
-                      {showAttachDocumentItem && (
-                        <DropdownMenuItem
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onOpenAttachDocument!(transaction)
-                          }}
-                        >
-                          <Paperclip className="h-4 w-4" />
-                          {t('attach_document_btn')}
-                        </DropdownMenuItem>
-                      )}
-                      {showSplitItem && (
-                        <DropdownMenuItem
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onOpenSplitMatch!(transaction)
-                          }}
-                        >
-                          <Split className="h-4 w-4" />
-                          {splitMatchLabel}
-                        </DropdownMenuItem>
-                      )}
-                      {showEditItem && (
-                        <DropdownMenuItem
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onEditTitle!(transaction)
-                          }}
-                        >
-                          <Pencil className="h-4 w-4" />
-                          {t('edit_title_aria')}
-                        </DropdownMenuItem>
-                      )}
-                      {(showIgnoreItem || showDeleteItem) && (showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem) && (
-                        <DropdownMenuSeparator />
-                      )}
-                      {showIgnoreItem && (
-                        <DropdownMenuItem
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onIgnore!(transaction)
-                          }}
-                        >
-                          <EyeOff className="h-4 w-4" />
-                          {t('ignore_btn')}
-                        </DropdownMenuItem>
-                      )}
-                      {showDeleteItem && (
-                        <DropdownMenuItem
-                          className="text-destructive focus:text-destructive"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onDelete!(transaction.id)
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          {t('delete_aria')}
-                        </DropdownMenuItem>
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-              </>
-            )}
-          </>
-        }
-      >
-        <div className="flex items-center gap-1.5 min-w-0">
-          <DataListPrimary className="text-sm">{transaction.description}</DataListPrimary>
-          <TransactionAttachmentIndicator documentId={attachedDocumentId} />
-        </div>
-        {(transaction.title_edited_at || skvCounterpartDate) && (
-          <DataListMeta className="mt-0.5">
+            />
+          )}
+        </td>
+        <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+          {formatDate(transaction.date)}
+        </td>
+        <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate">{transaction.description}</span>
+            <TransactionAttachmentIndicator documentId={attachedDocumentId} />
             {transaction.title_edited_at && (
               <span
-                className="text-muted-foreground"
+                className="shrink-0 text-xs text-muted-foreground"
                 title={originalName ? t('original_name_tooltip', { name: originalName }) : undefined}
               >
                 {t('edited_badge')}
               </span>
             )}
             {skvCounterpartDate && (
-              <Badge variant="warning" className="h-4 gap-1 px-1.5 py-0 text-[10px]">
+              <Badge variant="warning" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-[10px]">
                 <AlertCircle className="h-3 w-3" />
                 Möjlig 1930↔1630
               </Badge>
             )}
-          </DataListMeta>
-        )}
-        {/* Extraction status: visible only while AI is reading a freshly
-            attached document, or briefly if reading failed. */}
-        {HAS_AI_EXTRACTION &&
-          !isBatchMode &&
-          (extraction.status === 'running' || extraction.status === 'failed') && (
-            <div className="mt-2 pt-2 border-t border-border">
-              <ExtractionStatus
-                status={extraction.status}
-                elapsedMs={extraction.elapsedMs}
-              />
-            </div>
+          </span>
+        </td>
+        <td
+          className={cn(
+            TD_CLASS,
+            'whitespace-nowrap text-right tabular-nums sensitive-field',
+            isIncome && 'text-success',
           )}
-      </DataListRow>
-    </motion.div>
+        >
+          {isIncome ? '+' : ''}
+          {formatCurrency(transaction.amount, transaction.currency)}
+        </td>
+        <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
+          <span className="inline-flex items-center justify-end gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-3.5 text-xs"
+              onClick={(e) => {
+                e.stopPropagation()
+                runPrimary()
+              }}
+              disabled={isProcessing || isDisabled}
+            >
+              {isProcessing && <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />}
+              {primaryLabel}
+            </Button>
+            {showOverflowMenu && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label={t('more_actions_aria')}
+                    title={t('more_actions_aria')}
+                    disabled={isProcessing || isDisabled}
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[14rem]">
+                  {showInvoiceMatchButton && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onOpenMatchInvoicePicker(transaction)
+                      }}
+                    >
+                      <Link2 className="h-4 w-4" />
+                      {invoiceMatchLabel}
+                    </DropdownMenuItem>
+                  )}
+                  {showAskAssistant && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        askAssistant()
+                      }}
+                    >
+                      <MessageCircle className="h-4 w-4" />
+                      {`Fråga ${assistantName}`}
+                    </DropdownMenuItem>
+                  )}
+                  {showMatchVoucherItem && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onOpenMatchVoucher!(transaction)
+                      }}
+                    >
+                      <FileSearch className="h-4 w-4" />
+                      {t('match_voucher_btn')}
+                    </DropdownMenuItem>
+                  )}
+                  {showAttachDocumentItem && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onOpenAttachDocument!(transaction)
+                      }}
+                    >
+                      <Paperclip className="h-4 w-4" />
+                      {t('attach_document_btn')}
+                    </DropdownMenuItem>
+                  )}
+                  {showSplitItem && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onOpenSplitMatch!(transaction)
+                      }}
+                    >
+                      <Split className="h-4 w-4" />
+                      {splitMatchLabel}
+                    </DropdownMenuItem>
+                  )}
+                  {showEditItem && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onEditTitle!(transaction)
+                      }}
+                    >
+                      <Pencil className="h-4 w-4" />
+                      {t('edit_title_aria')}
+                    </DropdownMenuItem>
+                  )}
+                  {(showIgnoreItem || showDeleteItem) && (showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem) && (
+                    <DropdownMenuSeparator />
+                  )}
+                  {showIgnoreItem && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onIgnore!(transaction)
+                      }}
+                    >
+                      <EyeOff className="h-4 w-4" />
+                      {t('ignore_btn')}
+                    </DropdownMenuItem>
+                  )}
+                  {showDeleteItem && (
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onDelete!(transaction.id)
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      {t('delete_aria')}
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            <ChevronRight
+              className={cn(
+                'h-3.5 w-3.5 text-muted-foreground transition-all duration-200',
+                isExpanded ? 'rotate-90 opacity-100' : 'opacity-0 group-hover:opacity-100',
+              )}
+            />
+          </span>
+        </td>
+      </tr>
+      {isExpanded && (
+        <tr>
+          <td colSpan={5} className="border-b border-border p-0">
+            <RowFoldout>
+              <div className="px-1 pb-6 pt-1 sm:pl-9 sm:pr-4">
+                {(transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
+                transaction.title_edited_at ||
+                skvCounterpartDate ? (
+                  <div className="space-y-1 py-1 text-xs text-muted-foreground">
+                    {transaction.currency !== 'SEK' && transaction.amount_sek != null && (
+                      <p className="tabular-nums">
+                        {formatCurrency(transaction.amount, transaction.currency)}
+                        {' · '}
+                        {formatCurrency(transaction.amount_sek)}
+                      </p>
+                    )}
+                    {transaction.title_edited_at && originalName && (
+                      <p>{t('original_name_tooltip', { name: originalName })}</p>
+                    )}
+                    {skvCounterpartDate && (
+                      <p>
+                        {t('skv_counterpart_label')}{' '}
+                        {t('skv_counterpart_body', { date: skvCounterpartDate })}
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+
+                {/* Extraction status: visible only while AI is reading a freshly
+                    attached document, or briefly if reading failed. */}
+                {HAS_AI_EXTRACTION &&
+                  (extraction.status === 'running' || extraction.status === 'failed') && (
+                    <div className="py-1">
+                      <ExtractionStatus
+                        status={extraction.status}
+                        elapsedMs={extraction.elapsedMs}
+                      />
+                    </div>
+                  )}
+
+                {/* Quiet link actions (concept vact); the primary keeps its
+                    pill because it changes legal state. */}
+                <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2">
+                  <Button
+                    size="sm"
+                    onClick={runPrimary}
+                    disabled={isProcessing || isDisabled}
+                  >
+                    {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    {primaryLabel}
+                  </Button>
+                  {showInvoiceMatchButton && (
+                    <button
+                      type="button"
+                      className={QUIET_LINK_CLASS}
+                      onClick={() => onOpenMatchInvoicePicker(transaction)}
+                    >
+                      {invoiceMatchLabel}
+                    </button>
+                  )}
+                  {showAskAssistant && (
+                    <button type="button" className={QUIET_LINK_CLASS} onClick={askAssistant}>
+                      {`Fråga ${assistantName}`}
+                    </button>
+                  )}
+                  {showMatchVoucherItem && (
+                    <button
+                      type="button"
+                      className={QUIET_LINK_CLASS}
+                      onClick={() => onOpenMatchVoucher!(transaction)}
+                    >
+                      {t('match_voucher_btn')}
+                    </button>
+                  )}
+                  {showAttachDocumentItem && (
+                    <button
+                      type="button"
+                      className={QUIET_LINK_CLASS}
+                      onClick={() => onOpenAttachDocument!(transaction)}
+                    >
+                      {t('attach_document_btn')}
+                    </button>
+                  )}
+                  {showSplitItem && (
+                    <button
+                      type="button"
+                      className={QUIET_LINK_CLASS}
+                      onClick={() => onOpenSplitMatch!(transaction)}
+                    >
+                      {splitMatchLabel}
+                    </button>
+                  )}
+                  {showEditItem && (
+                    <button
+                      type="button"
+                      className={QUIET_LINK_CLASS}
+                      onClick={() => onEditTitle!(transaction)}
+                    >
+                      {t('edit_title_aria')}
+                    </button>
+                  )}
+                  {showIgnoreItem && (
+                    <button
+                      type="button"
+                      className={QUIET_LINK_CLASS}
+                      onClick={() => onIgnore!(transaction)}
+                    >
+                      {t('ignore_btn')}
+                    </button>
+                  )}
+                  {showDeleteItem && (
+                    <button
+                      type="button"
+                      className={cn(QUIET_LINK_CLASS, 'hover:text-destructive')}
+                      onClick={() => onDelete!(transaction.id)}
+                    >
+                      {t('delete_aria')}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </RowFoldout>
+          </td>
+        </tr>
+      )}
+    </>
   )
 }
