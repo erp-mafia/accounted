@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { usePathname, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
@@ -688,13 +689,30 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
       <aside className="hidden md:fixed md:inset-y-0 md:z-10 md:flex md:w-[var(--nav-w)] md:flex-col md:transition-[width] md:duration-200">
         {/* Borderless on the frame: the panel next to it carries the border */}
         <div className="flex min-h-0 flex-1 flex-col bg-transparent">
-          {/* Collapse toggle (concept: icon at the very top of the rail) */}
+          {/* Sidebar header: brand mark left, collapse toggle right. The
+              concept hangs the nav column and the panel from the same top
+              line, so this row sits level with the panel's top edge. */}
           <div
             className={cn(
-              'flex flex-shrink-0 pt-3 pb-1',
-              collapsed ? 'justify-center' : 'justify-end pr-3',
+              'flex flex-shrink-0 items-center pt-3 pb-2',
+              collapsed
+                ? 'flex-col justify-center gap-1'
+                : 'justify-between pl-5 pr-3',
             )}
           >
+            <Link
+              href="/"
+              aria-label={getBranding().appName}
+              className="flex items-center rounded-lg"
+            >
+              <Image
+                src={getBranding().logoPath}
+                alt=""
+                width={26}
+                height={26}
+                className="rounded-md"
+              />
+            </Link>
             <button
               type="button"
               onClick={toggleCollapsed}

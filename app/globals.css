@@ -331,7 +331,11 @@ h1, h2, h3 {
               0 0 0 4px hsl(var(--primary) / 0.35);
 }
 
-/* Custom scrollbar - minimal */
+/* Overlay-style scrollbars: invisible at rest, revealed only while the
+   container is actually scrolling. ScrollbarReveal (mounted in the root
+   layout) toggles .is-scrolling on the scrolled element; the thumb fades
+   back out when scrolling stops. The gutter is reserved either way, so
+   revealing never shifts layout. */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -342,12 +346,23 @@ h1, h2, h3 {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted-foreground) / 0.2);
+  background: transparent;
   border-radius: 3px;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.3);
+.is-scrolling::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.25);
+}
+
+@supports (scrollbar-color: auto) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 300ms ease-out;
+  }
+  .is-scrolling {
+    scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  }
 }
 
 /* Hide scrollbar utility */

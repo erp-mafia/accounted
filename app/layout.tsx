@@ -11,6 +11,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { SWRProvider } from "@/components/providers/SWRProvider";
 import { RecaptLoader } from "@/components/RecaptLoader";
 import { RecaptHideWidget } from "@/components/RecaptHideWidget";
+import { ScrollbarReveal } from "@/components/ScrollbarReveal";
 import { ensureInitialized } from "@/lib/init";
 import { getBranding } from "@/lib/branding/service";
 import "./globals.css";
@@ -92,6 +93,7 @@ export default async function RootLayout({
               <Toaster />
               <DeployReloadPrompt />
               <RecaptHideWidget />
+              <ScrollbarReveal />
             </SWRProvider>
           </ThemeProvider>
         </NextIntlClientProvider>
