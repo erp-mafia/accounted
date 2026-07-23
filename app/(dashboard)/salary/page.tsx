@@ -25,10 +25,14 @@ const STATUS_LABEL_KEYS: Record<string, string> = {
   corrected: 'status_corrected',
 }
 
+// In-flight states all wear the quiet beige chip (concept scene 22's Utkast
+// look): the payout-date note beside the chip carries the urgency, not an
+// ochre border. Booked renders as muted text, corrected as the outline
+// exception.
 const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
   draft: 'secondary',
-  review: 'warning',
-  approved: 'default',
+  review: 'secondary',
+  approved: 'secondary',
   paid: 'success',
   booked: 'success',
   corrected: 'outline',
