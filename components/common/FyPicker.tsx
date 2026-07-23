@@ -125,8 +125,14 @@ export function FyPicker({
     p.locked_at ? t('badge_locked').toLowerCase() : p.is_closed ? t('badge_closed').toLowerCase() : undefined
 
   const selected = value ? periods.find((p) => p.id === value) : null
+  // Real period names often already read "Räkenskapsår 2026"; only prefix
+  // the label when the name is a bare year/name so the chip never doubles up.
+  const chipLabel = (p: FiscalPeriod) =>
+    p.name.toLowerCase().includes(t('label').toLowerCase())
+      ? p.name
+      : `${t('label')} ${p.name}`
   const triggerLabel = selected
-    ? `${t('label')} ${selected.name}`
+    ? chipLabel(selected)
     : includeAllOption
       ? t('all_years')
       : loaded
