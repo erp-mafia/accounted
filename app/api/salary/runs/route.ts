@@ -20,9 +20,11 @@ export const GET = withRouteContext(
     const { searchParams } = new URL(request.url)
     const year = searchParams.get('year')
 
+    // employee_count feeds the Anställda column on the Löner landing; the
+    // embedded count avoids shipping the per-employee rows with the list.
     let query = supabase
       .from('salary_runs')
-      .select('*')
+      .select('*, employee_count:salary_run_employees(count)')
       .eq('company_id', companyId)
 
     if (year) {

@@ -173,7 +173,10 @@ export default function SalaryPage() {
                 </thead>
                 <tbody className="stagger-enter">
                   {runs.slice(0, 12).map(run => {
-                    const employeeCount = (run as SalaryRun & { employees?: unknown[] }).employees?.length
+                    // PostgREST count embed: employee_count is [{ count: n }].
+                    const employeeCount = (
+                      run as SalaryRun & { employee_count?: { count: number }[] }
+                    ).employee_count?.[0]?.count
                     const inFlight = run.status !== 'booked' && run.status !== 'corrected'
                     return (
                       <tr
