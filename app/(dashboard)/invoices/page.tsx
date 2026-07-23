@@ -56,7 +56,7 @@ const CREATE_MODES = ['faktura', 'aterkommande', 'sjalvfaktura'] as const
 
 // Main views (concept seg) and the low-frequency views behind "Fler …".
 const SEG_TABS = ['all', 'unpaid', 'overdue', 'draft'] as const
-const MORE_TABS = ['proforma', 'delivery_note', 'credit', 'cancelled'] as const
+const MORE_TABS = ['paid', 'proforma', 'delivery_note', 'credit', 'cancelled'] as const
 type ListTab = (typeof SEG_TABS)[number] | (typeof MORE_TABS)[number]
 
 const TAB_LABEL_KEYS: Record<ListTab, string> = {
@@ -64,6 +64,7 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   unpaid: 'tab_unpaid',
   overdue: 'tab_overdue',
   draft: 'tab_draft',
+  paid: 'tab_paid',
   proforma: 'tab_proforma',
   delivery_note: 'tab_delivery_note',
   credit: 'tab_credit',
@@ -87,7 +88,15 @@ export default function InvoicesPage() {
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
-  const [activeTab, setActiveTab] = useState<ListTab>('all')
+  const [activeTab, setActiveTab] = useState<ListTab>(() => {
+    // Deep links from the worklist and older bookmarks: ?status= / ?tab=.
+    const param = searchParams.get('status') ?? searchParams.get('tab')
+    const alias: Record<string, ListTab> = { drafts: 'draft' }
+    const candidate = param ? (alias[param] ?? (param as ListTab)) : null
+    return candidate && [...SEG_TABS, ...MORE_TABS].includes(candidate as never)
+      ? (candidate as ListTab)
+      : 'all'
+  })
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
   // Fiscal-year scope (convention 8): null = all years.
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
@@ -162,6 +171,7 @@ export default function InvoicesPage() {
       (activeTab === 'unpaid' && ['sent', 'overdue'].includes(invoice.status) && !isCreditNote && docType === 'invoice') ||
       (activeTab === 'overdue' && invoice.status === 'overdue' && !isCreditNote && docType === 'invoice') ||
       (activeTab === 'draft' && invoice.status === 'draft' && docType === 'invoice' && !isCreditNote) ||
+      (activeTab === 'paid' && invoice.status === 'paid') ||
       (activeTab === 'credit' && isCreditNote) ||
       (activeTab === 'proforma' && docType === 'proforma' && invoice.status !== 'cancelled') ||
       (activeTab === 'delivery_note' && docType === 'delivery_note' && invoice.status !== 'cancelled') ||
@@ -183,9 +193,9 @@ export default function InvoicesPage() {
       label: t('new_invoice'),
       icon: Plus,
       description: t('create_invoice_desc'),
-      onSelect: () => {
-        if (canWrite) openNewInvoice()
-      },
+      disabled: !canWrite,
+      disabledTitle: t('viewer_disabled_tooltip'),
+      onSelect: () => openNewInvoice(),
     },
     {
       key: 'aterkommande',
@@ -199,9 +209,9 @@ export default function InvoicesPage() {
       label: t('create_self'),
       icon: FileInput,
       description: t('create_self_desc'),
-      onSelect: () => {
-        if (canWrite) openNewSelfBilled()
-      },
+      disabled: !canWrite,
+      disabledTitle: t('viewer_disabled_tooltip'),
+      onSelect: () => openNewSelfBilled(),
     },
   ]
 
