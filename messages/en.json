@@ -415,7 +415,7 @@
   "pending": {
     "title": "Review",
     "subtitle": "Operations waiting for approval",
-    "tab_pending": "Pending",
+    "tab_pending": "Waiting",
     "tab_committed": "Approved",
     "tab_rejected": "Rejected",
     "tab_all": "All",
@@ -445,10 +445,10 @@
     "badge_high_risk": "High risk",
     "badge_approved": "Approved",
     "badge_rejected": "Rejected",
-    "empty_pending_title": "No pending operations",
+    "empty_pending_title": "All clear.",
     "empty_committed_title": "No approved operations",
     "empty_rejected_title": "No rejected operations",
-    "empty_pending_description": "When an operation needs approval it will appear here for review.",
+    "empty_pending_description": "Nothing is waiting for your review. Operations that need approval appear here.",
     "empty_finished_description": "Operations you have approved or rejected appear here.",
     "bulk_confirm_intro": "Confirming will perform the following:",
     "bulk_confirm_footer": "Operations run in order. Failed ones are skipped and reported afterwards.",
@@ -515,7 +515,13 @@
     "badge_auto_expired": "Expired automatically",
     "auto_expired_detail": "Expired automatically after 30 days without action. Nothing was booked.",
     "badge_failed_partial": "Partially completed",
-    "failed_partial_detail": "The action was interrupted after an irreversible posting had already been made. What was posted remains and may need manual correction."
+    "failed_partial_detail": "The action was interrupted after an irreversible posting had already been made. What was posted remains and may need manual correction.",
+    "approve_all": "Approve all ({count})",
+    "bulkbar_selected": "selected",
+    "bulk_excluded_note": "{count, plural, one {1 needs individual review} other {# need individual review}}",
+    "badge_medium_risk": "Medium risk",
+    "badge_low_risk": "Low risk",
+    "show_conversation": "Show the conversation"
   },
   "deadlines": {
     "title": "Deadlines",

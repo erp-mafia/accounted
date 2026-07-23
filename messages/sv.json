@@ -415,7 +415,7 @@
   "pending": {
     "title": "Granskning",
     "subtitle": "Operationer som väntar på godkännande",
-    "tab_pending": "Väntande",
+    "tab_pending": "Väntar",
     "tab_committed": "Godkända",
     "tab_rejected": "Avvisade",
     "tab_all": "Alla",
@@ -445,10 +445,10 @@
     "badge_high_risk": "Hög risk",
     "badge_approved": "Godkänd",
     "badge_rejected": "Avvisad",
-    "empty_pending_title": "Inga väntande operationer",
+    "empty_pending_title": "Allt klart.",
     "empty_committed_title": "Inga godkända operationer",
     "empty_rejected_title": "Inga avvisade operationer",
-    "empty_pending_description": "När en operation kräver godkännande visas den här för granskning.",
+    "empty_pending_description": "Inget väntar på din granskning. När en operation kräver godkännande visas den här.",
     "empty_finished_description": "Operationer du har godkänt eller avvisat visas här.",
     "bulk_confirm_intro": "Genom att bekräfta utförs följande:",
     "bulk_confirm_footer": "Operationerna körs i ordning. Misslyckade hoppas över och rapporteras efteråt.",
@@ -515,7 +515,13 @@
     "badge_auto_expired": "Utgick automatiskt",
     "auto_expired_detail": "Utgick automatiskt efter 30 dagar utan åtgärd. Inget bokfördes.",
     "badge_failed_partial": "Delvis genomförd",
-    "failed_partial_detail": "Åtgärden avbröts efter att en oåterkallelig bokföring redan hade skett. Det som bokfördes står kvar och kan behöva rättas manuellt."
+    "failed_partial_detail": "Åtgärden avbröts efter att en oåterkallelig bokföring redan hade skett. Det som bokfördes står kvar och kan behöva rättas manuellt.",
+    "approve_all": "Godkänn alla ({count})",
+    "bulkbar_selected": "{count, plural, one {markerad} other {markerade}}",
+    "bulk_excluded_note": "{count, plural, one {1 kräver enskild granskning} other {# kräver enskild granskning}}",
+    "badge_medium_risk": "Medel risk",
+    "badge_low_risk": "Låg risk",
+    "show_conversation": "Visa konversationen"
   },
   "deadlines": {
     "title": "Deadlines",

@@ -2,29 +2,19 @@
 
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
 import { useTranslations } from 'next-intl'
-import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
+import { ContextPicker } from '@/components/common/ContextPicker'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
-  DataList,
-  DataListHeader,
-  DataListRow,
-  DataListPrimary,
-  DataListMeta,
-  DataListMetaSeparator,
-  DataListEmpty,
-  DataListLoading,
-} from '@/components/ui/data-list'
-import {
-  DropdownMenu,
-  DropdownMenuTrigger,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuLabel,
-} from '@/components/ui/dropdown-menu'
+  SlideOver,
+  SlideOverContent,
+  SlideOverHeader,
+  SlideOverBody,
+  SlideOverFooter,
+} from '@/components/ui/slide-over'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import {
   Dialog,
@@ -37,13 +27,14 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
 import {
   ClipboardCheck,
   Bot,
-  ChevronDown,
+  Check,
+  ChevronRight,
   Loader2,
   Lock,
   MessageSquare,
@@ -270,11 +261,6 @@ function originLabel(
  * Strict on reason === 'expired' so commit-time auto-rejects (404/409, where
  * reason is the error text) do NOT read as "expired".
  */
-function isAutoExpired(op: PendingOperation): boolean {
-  const rd = op.result_data as { auto_rejected?: boolean; reason?: string } | null
-  return op.status === 'rejected' && rd?.auto_rejected === true && rd?.reason === 'expired'
-}
-
 /**
  * failed_partial rows (issue #842): the executor posted an irreversible
  * voucher/credit note and then failed a later step. The dispatcher persisted
@@ -286,6 +272,11 @@ function failedPartialPostedIds(op: PendingOperation): string | null {
   const entries = Object.entries(rd?.posted_ids ?? {})
   if (entries.length === 0) return null
   return entries.map(([key, value]) => `${key}: ${value}`).join(', ')
+}
+
+function isAutoExpired(op: PendingOperation): boolean {
+  const rd = op.result_data as { auto_rejected?: boolean; reason?: string } | null
+  return op.status === 'rejected' && rd?.auto_rejected === true && rd?.reason === 'expired'
 }
 
 function formatRelativeTime(dateStr: string): string {
@@ -670,7 +661,10 @@ export default function PendingOperationsPage() {
     committed: null,
     rejected: null,
   })
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  // Detail slide-over (convention 13): id rather than the row object, so the
+  // panel tracks realtime refetches and closes itself when the op leaves the
+  // current list (approved elsewhere, tab switch, filter change).
+  const [detailOpId, setDetailOpId] = useState<string | null>(null)
   const [selectedOp, setSelectedOp] = useState<PendingOperation | null>(null)
   const [showCommitDialog, setShowCommitDialog] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
@@ -927,7 +921,6 @@ export default function PendingOperationsPage() {
   const bulkEligibleIds = useMemo(() => bulkEligible.map((op) => op.id), [bulkEligible])
   const allSelected =
     bulkEligibleIds.length > 0 && bulkEligibleIds.every((id) => selectedIds.has(id))
-  const someSelected = bulkEligibleIds.some((id) => selectedIds.has(id))
 
   const pendingTotal = filteredOperations.filter((op) => op.status === 'pending').length
   const excludedFromBulk = pendingTotal - bulkEligible.length
@@ -978,19 +971,49 @@ export default function PendingOperationsPage() {
     return Array.from(counts.entries()).map(([type, count]) => ({ type, count }))
   }, [bulkEligible, selectedIds])
 
-  const tabLabel = (label: string, status: TabStatus) => {
-    const count = counts[status]
-    return count == null ? label : `${label} (${count})`
+  // Source/kicker line for a row and the detail panel: operation type,
+  // origin (when an agent staged it) and relative age.
+  const sourceLine = (op: PendingOperation) => {
+    const isAgent = op.actor_type && op.actor_type !== 'user'
+    return [
+      operationLabel(op.operation_type, t),
+      isAgent ? (originLabel(op, t) ?? op.actor_label ?? op.actor_type) : null,
+      formatRelativeTime(op.created_at),
+    ]
+      .filter(Boolean)
+      .join(' · ')
   }
 
-  const showFilterDot = sourceFilter !== 'all'
+  const detailOp = detailOpId
+    ? filteredOperations.find((op) => op.id === detailOpId) ?? null
+    : null
+  const detailPeriod = detailOp ? getPeriodStatus(detailOp) : null
+  const detailPeriodLocked = detailPeriod != null && detailPeriod.status !== 'open'
+  const detailConversationId = detailOp?.agent_metadata?.conversation_id ?? null
+
+  const SEG_STATUSES: Array<{ status: TabStatus; labelKey: string }> = [
+    { status: 'pending', labelKey: 'tab_pending' },
+    { status: 'committed', labelKey: 'tab_committed' },
+    { status: 'rejected', labelKey: 'tab_rejected' },
+  ]
 
   return (
     <div className="space-y-8">
-      <PageHeader
-        title={t('title')}
-        description={t('subtitle')}
-      />
+      {/* Page header (concept scene 11): title + Godkänn alla */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+        {activeTab === 'pending' && bulkEligible.length > 0 && (
+          <Button
+            disabled={isBulkCommitting || isRejecting}
+            onClick={() => {
+              setSelectedIds(new Set(bulkEligibleIds))
+              setShowBulkDialog(true)
+            }}
+          >
+            {t('approve_all', { count: bulkEligible.length })}
+          </Button>
+        )}
+      </div>
 
       {conversationFilter && (
         <div className="flex items-center justify-between rounded-md border bg-muted/30 px-3 py-2 text-sm">
@@ -1019,291 +1042,344 @@ export default function PendingOperationsPage() {
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as PendingOperationStatus)}>
-          <TabsList>
-            <TabsTrigger value="pending">{tabLabel(t('tab_pending'), 'pending')}</TabsTrigger>
-            <TabsTrigger value="committed">{tabLabel(t('tab_committed'), 'committed')}</TabsTrigger>
-            <TabsTrigger value="rejected">{tabLabel(t('tab_rejected'), 'rejected')}</TabsTrigger>
-          </TabsList>
-        </Tabs>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-9 gap-2">
-              <span className="text-xs uppercase tracking-wider text-muted-foreground">
-                Filter
-              </span>
-              <span>{sourceFilterLabels(t)[sourceFilter]}</span>
-              {showFilterDot && (
-                <span className="h-1.5 w-1.5 rounded-full bg-primary" aria-hidden />
+      {/* Toolbar (concept): status seg left, source picker (convention 8)
+          far right. The count chip rides only on Väntar: it is the queue. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
+          {SEG_STATUSES.map(({ status, labelKey }) => (
+            <button
+              key={status}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === status}
+              onClick={() => setActiveTab(status)}
+              className={cn(
+                'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
+                activeTab === status
+                  ? 'border border-border bg-card font-medium text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
               )}
-              <ChevronDown className="h-3.5 w-3.5 opacity-50" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-[12rem]">
-            <DropdownMenuLabel>Källa</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={sourceFilter}
-              onValueChange={(v) => setSourceFilter(v as SourceFilter)}
             >
-              <DropdownMenuRadioItem value="all">{t('tab_all')}</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="agent">{t('tab_agent')}</DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="high_risk">{t('tab_high_risk')}</DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+              {t(labelKey)}
+              {status === 'pending' && (counts.pending ?? 0) > 0 && (
+                <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
+                  {counts.pending}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto">
+          <ContextPicker
+            value={sourceFilter}
+            onChange={(id) => setSourceFilter(id as SourceFilter)}
+            triggerLabel={sourceFilterLabels(t)[sourceFilter]}
+            items={[
+              { id: 'all', label: t('tab_all') },
+              { id: 'agent', label: t('tab_agent') },
+              { id: 'high_risk', label: t('tab_high_risk') },
+            ]}
+          />
+        </div>
       </div>
 
-      <DataList className="stagger-enter">
-        {showBulkControls && bulkEligible.length > 0 && (
-          <DataListHeader>
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="select-all"
-                checked={allSelected ? true : someSelected ? 'indeterminate' : false}
-                onCheckedChange={() => toggleSelectAll()}
-                aria-label={t('select_all_aria')}
-              />
-              <label htmlFor="select-all" className="text-sm cursor-pointer">
-                {selectedCount > 0
-                  ? t('selected_count', { count: selectedCount })
-                  : excludedFromBulk > 0
-                    ? t('select_all_count_partial', {
-                        eligible: bulkEligible.length,
-                        total: pendingTotal,
-                        excluded: excludedFromBulk,
-                      })
-                    : t('select_all_count', { count: bulkEligible.length })}
-              </label>
-            </div>
-
-            {/* Only worth showing when there's more than one type to pick from:
-                with a single type it just duplicates "Markera alla". */}
-            {typeCounts.length >= 2 && selectedCount === 0 && (
-              <div className="flex flex-wrap items-center gap-1">
-                <span className="text-xs text-muted-foreground">{t('quick_pick')}</span>
-                {typeCounts.map(([type, count]) => {
-                  const label = operationLabel(type, t)
-                  return (
-                    <Button
-                      key={type}
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2 text-xs"
-                      onClick={() => selectAllOfType(type)}
-                    >
-                      {label} ({count})
-                    </Button>
-                  )
-                })}
-              </div>
-            )}
-
-            <div className="ml-auto flex items-center gap-2">
-              {selectedCount > 0 && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 px-3 text-xs"
-                  onClick={() => setSelectedIds(new Set())}
+      <div>
+        {/* Bulkbar (concept): hidden until at least one operation is selected
+            via the hover checkboxes, then it pops in with the count, the batch
+            actions, and the selection shortcuts as quiet links. */}
+        {showBulkControls && selectedCount > 0 && (
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+            <span className="whitespace-nowrap">
+              <strong className="font-semibold tabular-nums">{selectedCount}</strong>{' '}
+              {t('bulkbar_selected', { count: selectedCount })}
+            </span>
+            <Button
+              size="sm"
+              disabled={isBulkCommitting || isRejecting}
+              onClick={() => setShowBulkDialog(true)}
+            >
+              {t('approve_count', { count: selectedCount })}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={isRejecting || isBulkCommitting}
+              onClick={() => openRejectDialog('bulk')}
+            >
+              {t('reject_count', { count: selectedCount })}
+            </Button>
+            {typeCounts.length >= 2 &&
+              typeCounts.map(([type, count]) => (
+                <button
+                  key={type}
+                  type="button"
+                  className={QUIET_LINK_CLASS}
+                  onClick={() => selectAllOfType(type)}
                 >
-                  {t('deselect')}
-                </Button>
-              )}
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 px-3 text-xs"
-                disabled={selectedCount === 0 || isRejecting || isBulkCommitting}
-                onClick={() => openRejectDialog('bulk')}
-              >
-                {selectedCount > 0
-                  ? t('reject_selected', { count: selectedCount })
-                  : t('reject_selected_none')}
-              </Button>
-              <Button
-                size="sm"
-                className="h-8 px-3 text-xs"
-                disabled={selectedCount === 0 || isBulkCommitting || isRejecting}
-                onClick={() => setShowBulkDialog(true)}
-              >
-                {selectedCount > 0
-                  ? t('approve_selected', { count: selectedCount })
-                  : t('approve_selected_none')}
-              </Button>
-            </div>
-          </DataListHeader>
+                  {operationLabel(type, t)} ({count})
+                </button>
+              ))}
+            {!allSelected && (
+              <button type="button" className={QUIET_LINK_CLASS} onClick={toggleSelectAll}>
+                {t('select_all_count', { count: bulkEligible.length })}
+              </button>
+            )}
+            {excludedFromBulk > 0 && (
+              <span className="text-muted-foreground">
+                {t('bulk_excluded_note', { count: excludedFromBulk })}
+              </span>
+            )}
+            <button
+              type="button"
+              className={QUIET_LINK_CLASS}
+              onClick={() => setSelectedIds(new Set())}
+            >
+              {t('deselect')}
+            </button>
+          </div>
         )}
 
         {isLoading ? (
           <DataListLoading />
         ) : filteredOperations.length === 0 ? (
-          <DataListEmpty
-            icon={<ClipboardCheck className="h-6 w-6" />}
-            title={
-              activeTab === 'pending'
-                ? t('empty_pending_title')
-                : activeTab === 'committed'
+          activeTab === 'pending' ? (
+            /* Concept empty state: the queue is the good news. */
+            <div className="flex flex-col items-center px-6 py-16 text-center">
+              <Check className="h-9 w-9 text-success" strokeWidth={2.5} aria-hidden />
+              <p className="mt-3 font-display text-xl">{t('empty_pending_title')}</p>
+              <p className="mt-1.5 max-w-[44ch] text-[13px] text-muted-foreground">
+                {t('empty_pending_description')}
+              </p>
+            </div>
+          ) : (
+            <DataListEmpty
+              icon={<ClipboardCheck className="h-6 w-6" />}
+              title={
+                activeTab === 'committed'
                   ? t('empty_committed_title')
                   : t('empty_rejected_title')
-            }
-            description={
-              activeTab === 'pending'
-                ? t('empty_pending_description')
-                : t('empty_finished_description')
-            }
-          />
+              }
+              description={t('empty_finished_description')}
+            />
+          )
         ) : (
-          filteredOperations.map((op) => {
-            const label = operationLabel(op.operation_type, t)
-            const isExpanded = expandedId === op.id
-            const period = getPeriodStatus(op)
-            const periodLocked = period != null && period.status !== 'open'
-            const canBulkSelect =
-              showBulkControls && op.status === 'pending' && op.risk_level !== 'high' && !periodLocked
-            const isSelected = selectedIds.has(op.id)
-            const isAgent = op.actor_type && op.actor_type !== 'user'
-            const conversationId = op.agent_metadata?.conversation_id ?? null
-            const warningSentence = singleActionWarning(op.operation_type)
-            const showHighRiskWarning =
-              op.risk_level === 'high' && warningSentence && op.status === 'pending'
+          <div className="stagger-enter">
+            {filteredOperations.map((op) => {
+              const period = getPeriodStatus(op)
+              const periodLocked = period != null && period.status !== 'open'
+              const canBulkSelect =
+                showBulkControls && op.status === 'pending' && op.risk_level !== 'high' && !periodLocked
+              const isSelected = selectedIds.has(op.id)
+              const isAgent = op.actor_type && op.actor_type !== 'user'
+              const warningSentence = singleActionWarning(op.operation_type)
+              const showHighRiskWarning =
+                op.risk_level === 'high' && warningSentence && op.status === 'pending'
 
-            return (
-              <DataListRow
-                key={op.id}
-                selected={isSelected}
-                expanded={isExpanded}
-                onClick={() => setExpandedId(isExpanded ? null : op.id)}
-                leading={
-                  canBulkSelect ? (
-                    <div onClick={(e) => e.stopPropagation()}>
+              return (
+                <div
+                  key={op.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={op.title}
+                  onClick={() => setDetailOpId(op.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setDetailOpId(op.id)
+                    }
+                  }}
+                  className={cn(
+                    'group flex cursor-pointer items-start gap-3 border-b border-border px-1 py-[13px] transition-colors duration-150',
+                    detailOpId === op.id ? 'bg-secondary/25' : 'hover:bg-secondary/35',
+                    isSelected && 'bg-secondary/40',
+                  )}
+                >
+                  {/* Hover-revealed selection checkbox (concept .cb) */}
+                  <span
+                    className="w-[18px] shrink-0 pt-0.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {canBulkSelect && (
                       <Checkbox
                         checked={isSelected}
                         onCheckedChange={() => toggleSelected(op.id)}
                         aria-label={t('select_operation_aria')}
-                      />
-                    </div>
-                  ) : undefined
-                }
-                trailing={
-                  op.status === 'pending' ? (
-                    <>
-                      <Button
-                        size="sm"
-                        className="h-8 px-3 text-xs"
-                        disabled={periodLocked}
-                        title={periodLocked ? 'Perioden är låst' : undefined}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (periodLocked) return
-                          setSelectedOp(op)
-                          setShowCommitDialog(true)
-                        }}
-                      >
-                        {t('approve')}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-8 px-3 text-xs"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openRejectDialog(op)
-                        }}
-                      >
-                        {t('reject')}
-                      </Button>
-                    </>
-                  ) : undefined
-                }
-                expandedContent={
-                  <>
-                    {/* Period-lock banner sits ABOVE the preview so the reviewer
-                        sees the blocker as soon as they expand the row. */}
-                    {periodLocked && period && op.status === 'pending' && (
-                      <div className="mb-3">
-                        <PeriodLockBanner period={period} />
-                      </div>
-                    )}
-                    <OperationPreview op={op} />
-                  </>
-                }
-              >
-                <DataListPrimary>{op.title}</DataListPrimary>
-                <DataListMeta>
-                  <span className="font-medium text-foreground/70">{label}</span>
-                  {isAgent && (
-                    <>
-                      <DataListMetaSeparator />
-                      <span className="inline-flex items-center gap-1">
-                        <Bot className="h-3 w-3" />
-                        {/* The origin line doubles as the deep-link into the
-                            originating conversation: no separate strip needed. */}
-                        {conversationId ? (
-                          <a
-                            href={`/pending?conversation=${conversationId}`}
-                            className="hover:underline"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            {originLabel(op, t) ?? op.actor_label ?? op.actor_type}
-                          </a>
-                        ) : (
-                          originLabel(op, t) ?? op.actor_label ?? op.actor_type
+                        className={cn(
+                          'transition-opacity duration-150',
+                          isSelected
+                            ? 'opacity-100'
+                            : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
                         )}
-                      </span>
-                    </>
-                  )}
-                  <DataListMetaSeparator />
-                  <span>{formatRelativeTime(op.created_at)}</span>
-                  {op.risk_level === 'high' && (
-                    <Badge variant="destructive" className="ml-1 h-4 px-1.5 py-0 text-[10px]">
-                      {t('badge_high_risk')}
+                      />
+                    )}
+                  </span>
+                  {/* Actor column (concept op-actor) */}
+                  <span className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden>
+                    {isAgent ? (
+                      <Bot className="h-4 w-4" />
+                    ) : (
+                      <ClipboardCheck className="h-4 w-4" />
+                    )}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[11.5px] text-muted-foreground">{sourceLine(op)}</div>
+                    <div className="mt-0.5 text-[13.5px] leading-snug">{op.title}</div>
+                    {showHighRiskWarning && (
+                      <p className="mt-1 flex items-start gap-1 text-xs text-destructive">
+                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                        <span>{warningSentence}</span>
+                      </p>
+                    )}
+                    {op.status === 'rejected' && op.rejection_category && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Avvisad: {REJECTION_CATEGORY_LABELS[op.rejection_category]}
+                        {op.rejection_reason ? `, "${op.rejection_reason}"` : ''}
+                      </p>
+                    )}
+                    {/* rejection_category is always NULL on auto-expired rows, so
+                        this never collides with the manual-rejection line above. */}
+                    {isAutoExpired(op) && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {t('auto_expired_detail')}
+                      </p>
+                    )}
+                  </div>
+                  {/* Risk chip (concept op-risk): only where it informs the
+                      approval decision, i.e. on the pending queue. */}
+                  {op.status === 'pending' && (
+                    <Badge
+                      variant={op.risk_level === 'high' ? 'destructive' : 'outline'}
+                      className="mt-0.5 shrink-0 font-normal"
+                    >
+                      {op.risk_level === 'high'
+                        ? t('badge_high_risk')
+                        : op.risk_level === 'medium'
+                          ? t('badge_medium_risk')
+                          : t('badge_low_risk')}
                     </Badge>
                   )}
                   {isAutoExpired(op) && (
-                    <Badge variant="secondary" className="ml-1 h-4 px-1.5 py-0 text-[10px]">
+                    <Badge variant="secondary" className="mt-0.5 shrink-0 font-normal">
                       {t('badge_auto_expired')}
                     </Badge>
                   )}
-                  {op.status === 'failed_partial' && (
-                    <Badge variant="warning" className="ml-1 h-4 px-1.5 py-0 text-[10px]">
-                      {t('badge_failed_partial')}
-                    </Badge>
-                  )}
-                </DataListMeta>
-                {showHighRiskWarning && (
-                  <p className="mt-1 flex items-start gap-1 text-xs text-destructive">
-                    <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
-                    <span>{warningSentence}</span>
-                  </p>
-                )}
-                {op.status === 'rejected' && op.rejection_category && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Avvisad: {REJECTION_CATEGORY_LABELS[op.rejection_category]}
-                    {op.rejection_reason ? `, "${op.rejection_reason}"` : ''}
-                  </p>
-                )}
-                {/* rejection_category is always NULL on auto-expired rows, so
-                    this never collides with the manual-rejection line above. */}
-                {isAutoExpired(op) && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t('auto_expired_detail')}
-                  </p>
-                )}
-                {op.status === 'failed_partial' && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t('failed_partial_detail')}
-                    {failedPartialPostedIds(op) && (
-                      <span className="font-mono"> ({failedPartialPostedIds(op)})</span>
+                  <span className="flex shrink-0 items-center gap-2 pt-px">
+                    {op.status === 'pending' && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-3.5 text-xs"
+                          disabled={periodLocked}
+                          title={periodLocked ? 'Perioden är låst' : undefined}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (periodLocked) return
+                            setSelectedOp(op)
+                            setShowCommitDialog(true)
+                          }}
+                        >
+                          {t('approve')}
+                        </Button>
+                        <button
+                          type="button"
+                          className={QUIET_LINK_CLASS}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openRejectDialog(op)
+                          }}
+                        >
+                          {t('reject')}
+                        </button>
+                      </>
                     )}
+                    <ChevronRight
+                      className={cn(
+                        'h-3.5 w-3.5 text-muted-foreground transition-all duration-200',
+                        detailOpId === op.id
+                          ? 'opacity-100'
+                          : 'opacity-0 group-hover:opacity-100',
+                      )}
+                    />
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Detail slide-over (convention 13): the review surface. Derived from
+          the live list, so a realtime refetch that resolves the op closes it. */}
+      <SlideOver
+        open={detailOp != null}
+        onOpenChange={(open) => {
+          if (!open) setDetailOpId(null)
+        }}
+      >
+        <SlideOverContent aria-describedby={undefined}>
+          {detailOp && (
+            <>
+              <SlideOverHeader kicker={sourceLine(detailOp)} title={detailOp.title} />
+              <SlideOverBody className="space-y-4">
+                {detailPeriodLocked && detailPeriod && detailOp.status === 'pending' && (
+                  <PeriodLockBanner period={detailPeriod} />
+                )}
+                {detailOp.status === 'pending' && singleActionWarning(detailOp.operation_type) && (
+                  <p className="text-xs text-muted-foreground">
+                    {singleActionWarning(detailOp.operation_type)}
                   </p>
                 )}
-              </DataListRow>
-            )
-          })
-        )}
-      </DataList>
+                <OperationPreview op={detailOp} />
+                {detailOp.status === 'rejected' && detailOp.rejection_category && (
+                  <p className="text-xs text-muted-foreground">
+                    Avvisad: {REJECTION_CATEGORY_LABELS[detailOp.rejection_category]}
+                    {detailOp.rejection_reason ? `, "${detailOp.rejection_reason}"` : ''}
+                  </p>
+                )}
+                {isAutoExpired(detailOp) && (
+                  <p className="text-xs text-muted-foreground">{t('auto_expired_detail')}</p>
+                )}
+              </SlideOverBody>
+              <SlideOverFooter>
+                {detailConversationId && (
+                  <button
+                    type="button"
+                    className={cn(QUIET_LINK_CLASS, 'mr-auto')}
+                    onClick={() => {
+                      setConversationFilter(detailConversationId)
+                      setDetailOpId(null)
+                    }}
+                  >
+                    {t('show_conversation')}
+                  </button>
+                )}
+                {detailOp.status === 'pending' && (
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => openRejectDialog(detailOp)}
+                      disabled={isRejecting}
+                    >
+                      {t('reject')}
+                    </Button>
+                    <Button
+                      disabled={detailPeriodLocked || isCommitting}
+                      title={detailPeriodLocked ? 'Perioden är låst' : undefined}
+                      onClick={() => {
+                        setSelectedOp(detailOp)
+                        setShowCommitDialog(true)
+                      }}
+                    >
+                      {t('approve')}
+                    </Button>
+                  </>
+                )}
+              </SlideOverFooter>
+            </>
+          )}
+        </SlideOverContent>
+      </SlideOver>
 
       {/* Commit confirmation dialog */}
       <ConfirmationDialog
