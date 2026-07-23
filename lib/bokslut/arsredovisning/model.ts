@@ -3,7 +3,10 @@ import { buildArsredovisningData } from './build-data'
 import { listSignatureRequests } from './signature-service'
 import { getAnnualReportProfile } from './profile-service'
 import { evaluateAnnualReportEligibility } from './eligibility'
-import { validateAnnualReportCompleteness } from './completeness'
+import {
+  validateAnnualReportCompleteness,
+  validateStatementIntegrity,
+} from './completeness'
 import {
   ANNUAL_REPORT_SCHEMA_VERSION,
   type AnnualReportDisclosureState,
@@ -113,7 +116,7 @@ export async function buildCanonicalAnnualReport(
     metrics,
   })
   const disclosures = disclosureState(report)
-  const validation = validateAnnualReportCompleteness({
+  let validation = validateAnnualReportCompleteness({
     report,
     profile,
     disclosures,
@@ -131,6 +134,18 @@ export async function buildCanonicalAnnualReport(
       reportData: report,
       signatureRequests: activeSignatures,
     })
+  }
+
+  const crossDocumentIssues = validateStatementIntegrity(report, ixbrl).filter(
+    (issue) => issue.code === 'AR-IXBRL-STATEMENT-MISMATCH',
+  )
+  if (crossDocumentIssues.length > 0) {
+    validation = {
+      ...validation,
+      ok: false,
+      error_count: validation.error_count + crossDocumentIssues.length,
+      issues: [...validation.issues, ...crossDocumentIssues],
+    }
   }
 
   return {

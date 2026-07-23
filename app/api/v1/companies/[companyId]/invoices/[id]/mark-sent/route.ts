@@ -42,8 +42,11 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
+import {
+  hasRequiredInvoicePaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 import { eventBus } from '@/lib/events'
-import type { EntityType, Invoice } from '@/types'
+import type { CompanySettings, EntityType, Invoice } from '@/types'
 
 // Explicit projection: drops user_id, company_id (internal scoping).
 // default_dimensions must stay in this projection: the fetched row feeds
@@ -204,16 +207,33 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Fetch company settings (accounting method + entity type drive the
-    // journal-entry decision). Best-effort: without settings we default
-    // to enskild_firma / accrual which matches the dashboard default.
-    const { data: settings } = await ctx.supabase
+    // Fetch company settings before number allocation. Besides the accounting
+    // decision, payable invoices need a currency-matching account.
+    const { data: settings, error: settingsError } = await ctx.supabase
       .from('company_settings')
-      .select('accounting_method, entity_type')
+      .select('accounting_method, entity_type, invoice_payment_accounts, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic')
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
-    const accountingMethod = (settings as { accounting_method?: string } | null)?.accounting_method ?? 'accrual'
-    const entityType = ((settings as { entity_type?: string } | null)?.entity_type ?? 'enskild_firma') as EntityType
+    if (settingsError || !settings) {
+      if (settingsError) {
+        ctx.log.error('invoices.mark-sent: company settings fetch failed', settingsError as Error, {
+          invoiceId,
+          companyId: ctx.companyId,
+        })
+      }
+      return v1ErrorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', ctx.log, {
+        requestId: ctx.requestId,
+      })
+    }
+    const companySettings = settings as CompanySettings
+    if (!hasRequiredInvoicePaymentAccount(companySettings, typed)) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
+        requestId: ctx.requestId,
+        details: { currency: typed.currency },
+      })
+    }
+    const accountingMethod = companySettings.accounting_method ?? 'accrual'
+    const entityType = (companySettings.entity_type ?? 'enskild_firma') as EntityType
     const isRealInvoice = !typed.document_type || typed.document_type === 'invoice'
     const wouldCreateJournalEntry = isRealInvoice && accountingMethod === 'accrual'
 

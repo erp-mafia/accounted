@@ -15,6 +15,7 @@
  */
 
 import type { ConceptAmount, ConceptAmounts } from './types'
+import { equalOre, roundOre, sumOre } from '@/lib/money'
 
 export interface TrialBalanceRowLike {
   account_number: string
@@ -29,7 +30,7 @@ export interface TrialBalanceRowLike {
  * never serve both statements:
  *   - `full` (including the closing entry) carries the booked 2099 and the
  *     correct equity: it drives the BR concepts.
- *   - `preClosing` (generateTrialBalance with excludeYearEndClosing: true)
+ *   - `preClosing` (generateTrialBalance with excludeFinalClosingEntry: true)
  *     still has the RR accounts open: it drives the RR concepts.
  * Mirrors how lib/reports' generateIncomeStatement/generateBalanceSheet split
  * the same source.
@@ -49,6 +50,15 @@ interface PostMapping {
   /** Orientation of the produced amount. */
   balance: 'debit' | 'credit'
   ranges: Range[]
+}
+
+interface SignReclassification {
+  sourceConcept: string
+  targetConcept: string
+  balance: 'debit' | 'credit'
+  ranges: Range[]
+  mode: 'net' | 'deviating_rows'
+  warning: string
 }
 
 const r = (start: string, end: string): Range => ({ start, end })
@@ -383,6 +393,42 @@ const RECLASSIFIED_ACCOUNTS: Record<string, string> = {
   '2089': 'Fond för utvecklingsutgifter (2089) redovisas under Reservfond: granska klassificeringen (K2 tillåter inte aktivering av egenupparbetade utgifter).',
 }
 
+/**
+ * Tax settlement and VAT accounts can carry the opposite economic balance
+ * from their BAS class. K2 presentation follows the balance's substance:
+ * a tax-account credit is a liability, while a net debit on tax or VAT
+ * liability accounts is a current receivable.
+ */
+const SIGN_RECLASSIFICATIONS: SignReclassification[] = [
+  {
+    sourceConcept: 'OvrigaFordringarKortfristiga',
+    targetConcept: 'Skatteskulder',
+    balance: 'debit',
+    ranges: [r('1630', '1659')],
+    mode: 'deviating_rows',
+    warning:
+      'Skatte- och momsfordringskonton 1630-1659 har ett nettokreditsaldo och har därför redovisats som skatteskuld.',
+  },
+  {
+    sourceConcept: 'Skatteskulder',
+    targetConcept: 'OvrigaFordringarKortfristiga',
+    balance: 'credit',
+    ranges: [r('2500', '2599')],
+    mode: 'net',
+    warning:
+      'Skatteskuldkonton 2500-2599 har ett nettodebetsaldo och har därför redovisats som övrig fordran.',
+  },
+  {
+    sourceConcept: 'OvrigaKortfristigaSkulder',
+    targetConcept: 'OvrigaFordringarKortfristiga',
+    balance: 'credit',
+    ranges: [r('2610', '2659')],
+    mode: 'net',
+    warning:
+      'Momsavräkningskonton 2610-2659 har ett nettodebetsaldo och har därför redovisats som övrig fordran.',
+  },
+]
+
 export interface K2MappingResult {
   rr: ConceptAmounts
   br: ConceptAmounts
@@ -421,7 +467,7 @@ export interface K2MappingResult {
 }
 
 function netBalance(row: TrialBalanceRowLike, orientation: 'debit' | 'credit'): number {
-  const net = row.closing_debit - row.closing_credit
+  const net = roundOre(row.closing_debit - row.closing_credit)
   return orientation === 'debit' ? net : -net
 }
 
@@ -429,34 +475,80 @@ function inRanges(account: string, ranges: Range[]): boolean {
   return ranges.some((range) => account >= range.start && account <= range.end)
 }
 
-function sumForMapping(rows: TrialBalanceRowLike[], mapping: PostMapping): number {
-  let total = 0
-  for (const row of rows) {
-    if (inRanges(row.account_number, mapping.ranges)) {
-      total += netBalance(row, mapping.balance)
-    }
-  }
-  return Math.round(total)
+function exactSumForMapping(rows: TrialBalanceRowLike[], mapping: PostMapping): number {
+  return sumOre(
+    rows
+      .filter((row) => inRanges(row.account_number, mapping.ranges))
+      .map((row) => netBalance(row, mapping.balance)),
+  )
 }
 
-function amount(
+function roundWhole(amount: number): number {
+  const normalized = roundOre(amount)
+  const rounded = Math.round(Math.abs(normalized))
+  return rounded === 0 ? 0 : Math.sign(normalized) * rounded
+}
+
+function exactAmount(
   mapping: PostMapping,
   current: TrialBalanceRowLike[],
   previous: TrialBalanceRowLike[] | null,
 ): ConceptAmount {
   return {
-    current: sumForMapping(current, mapping),
-    previous: previous ? sumForMapping(previous, mapping) : null,
+    current: exactSumForMapping(current, mapping),
+    previous: previous ? exactSumForMapping(previous, mapping) : null,
+  }
+}
+
+function deviatingRowsTotal(
+  rows: TrialBalanceRowLike[],
+  rule: SignReclassification,
+): number {
+  return sumOre(
+    rows
+      .filter((row) => inRanges(row.account_number, rule.ranges))
+      .map((row) => netBalance(row, rule.balance))
+      .filter((balance) => balance < 0),
+  )
+}
+
+function applySignReclassifications(
+  br: ConceptAmounts,
+  current: TrialBalanceRowLike[],
+  previous: TrialBalanceRowLike[] | null,
+  warnings: string[],
+): void {
+  for (const rule of SIGN_RECLASSIFICATIONS) {
+    let reclassified = false
+    for (const field of ['current', 'previous'] as const) {
+      const rows = field === 'current' ? current : previous
+      if (!rows) continue
+      const deviatingBalance =
+        rule.mode === 'deviating_rows'
+          ? deviatingRowsTotal(rows, rule)
+          : exactSumForMapping(rows, {
+              concept: rule.sourceConcept,
+              balance: rule.balance,
+              ranges: rule.ranges,
+            })
+      if (deviatingBalance >= 0) continue
+
+      const amountToMove = -deviatingBalance
+      adjustConcept(br, rule.sourceConcept, field, amountToMove)
+      adjustConcept(br, rule.targetConcept, field, amountToMove)
+      reclassified = true
+    }
+    if (reclassified) warnings.push(rule.warning)
   }
 }
 
 function add(a: ConceptAmount, b: ConceptAmount, sign = 1): ConceptAmount {
   return {
-    current: a.current + sign * b.current,
+    current: roundOre(a.current + sign * b.current),
     previous:
       a.previous === null && b.previous === null
         ? null
-        : (a.previous ?? 0) + sign * (b.previous ?? 0),
+        : roundOre((a.previous ?? 0) + sign * (b.previous ?? 0)),
   }
 }
 
@@ -486,13 +578,32 @@ export function mapTrialBalancesToK2(
 ): K2MappingResult {
   const warnings: string[] = []
   const rr: ConceptAmounts = {}
+  const rrExact: ConceptAmounts = {}
   const br: ConceptAmounts = {}
+  const brExact: ConceptAmounts = {}
 
   for (const mapping of K2_RR_MAPPINGS) {
-    rr[mapping.concept] = amount(mapping, current.preClosing, previous?.preClosing ?? null)
+    rrExact[mapping.concept] = exactAmount(
+      mapping,
+      current.preClosing,
+      previous?.preClosing ?? null,
+    )
+    const exact = rrExact[mapping.concept]
+    rr[mapping.concept] = {
+      current: roundWhole(exact.current),
+      previous: exact.previous === null ? null : roundWhole(exact.previous),
+    }
   }
   for (const mapping of K2_BR_MAPPINGS) {
-    br[mapping.concept] = amount(mapping, current.full, previous?.full ?? null)
+    brExact[mapping.concept] = exactAmount(mapping, current.full, previous?.full ?? null)
+  }
+  applySignReclassifications(brExact, current.full, previous?.full ?? null, warnings)
+  for (const mapping of K2_BR_MAPPINGS) {
+    const exact = brExact[mapping.concept]
+    br[mapping.concept] = {
+      current: roundWhole(exact.current),
+      previous: exact.previous === null ? null : roundWhole(exact.previous),
+    }
   }
 
   // Reclassification + unmapped sweep over balance-carrying accounts. Both TB
@@ -536,21 +647,20 @@ export function mapTrialBalancesToK2(
   // tagged totals exactly (kontrollera 3005), so a ±1 kr residual is
   // distributed back into a line item instead of tolerated. Deterministic
   // rule, per year:
-  //   - BR: the residual (Tillgångar − Eget kapital och skulder) is added to
-  //     the largest post (by absolute value) on the equity/liabilities side,
-  //     excluding AretsResultatEgetKapital, whose value must stay equal to
-  //     the booked 2099 / RR result (ties broken toward the LATER post in
-  //     the uppställningsform, so liabilities win over aktiekapital).
+  //   - BR: each side is reconciled to its rounded exact total. The residual
+  //     is assigned only to a post with an exact öre amount on that side.
+  //     Exact whole-krona posts, such as a booked reserve, are never changed.
   //   - RR: the residual (RR-resultat − konto 2099) is absorbed by the
   //     largest RR post: cost posts are increased by the residual, income
   //     posts decreased (ties broken toward the EARLIER post).
-  // Residuals beyond ±1 kr are real bookkeeping errors and are left for the
-  // exact balance checks below.
+  // Multi-krona residuals are distributed over multiple fractional posts.
+  // A residual without enough fractional posts is left for the exact balance
+  // checks below instead of changing a booked whole-krona amount.
   let smoothedAny = false
   for (const field of ['current', 'previous'] as const) {
     if (field === 'previous' && previous === null) continue
-    const rrSmoothed = smoothRrResidual(rr, br, totals, field)
-    const brSmoothed = smoothBrResidual(br, totals, field)
+    const rrSmoothed = smoothRrResidual(rr, rrExact, br, brExact, totals, field)
+    const brSmoothed = smoothBrResidual(br, brExact, totals, field)
     smoothedAny = smoothedAny || rrSmoothed || brSmoothed
   }
   if (smoothedAny) totals = computeTotals(rr, br)
@@ -574,28 +684,6 @@ export function mapTrialBalancesToK2(
   return { rr, br, totals, warnings, unmappedAccounts }
 }
 
-function pickLargestConcept(
-  amounts: ConceptAmounts,
-  mappings: PostMapping[],
-  field: 'current' | 'previous',
-  exclude: ReadonlySet<string>,
-  tieBreak: 'first' | 'last',
-): string | null {
-  let best: string | null = null
-  let bestAbs = -1
-  for (const mapping of mappings) {
-    if (exclude.has(mapping.concept)) continue
-    const value = amounts[mapping.concept]?.[field]
-    if (value === null || value === undefined || value === 0) continue
-    const abs = Math.abs(value)
-    if (abs > bestAbs || (abs === bestAbs && tieBreak === 'last')) {
-      best = mapping.concept
-      bestAbs = abs
-    }
-  }
-  return best
-}
-
 function adjustConcept(
   amounts: ConceptAmounts,
   concept: string,
@@ -603,13 +691,15 @@ function adjustConcept(
   delta: number,
 ): void {
   const existing = amounts[concept] ?? { current: 0, previous: null }
-  amounts[concept] = { ...existing, [field]: (existing[field] ?? 0) + delta }
+  amounts[concept] = { ...existing, [field]: roundOre((existing[field] ?? 0) + delta) }
 }
 
 /** Absorb a ±1 kr rounding residual between the RR result and BR 2099. */
 function smoothRrResidual(
   rr: ConceptAmounts,
+  rrExact: ConceptAmounts,
   br: ConceptAmounts,
+  brExact: ConceptAmounts,
   totals: K2MappingResult['totals'],
   field: 'current' | 'previous',
 ): boolean {
@@ -617,39 +707,94 @@ function smoothRrResidual(
   const result = totals.aretsResultat[field]
   if (target === null || target === undefined || result === null) return false
   const diff = result - target
-  if (diff === 0 || Math.abs(diff) > 1) return false
-  const concept = pickLargestConcept(rr, K2_RR_MAPPINGS, field, new Set(), 'first')
-  if (!concept) return false
-  const balance = K2_RR_MAPPINGS.find((mapping) => mapping.concept === concept)?.balance
-  // Debit (cost) posts enter the result with weight −1, credit (income)
-  // posts with +1: adjust so the recomputed result lands on the 2099 value.
-  adjustConcept(rr, concept, field, balance === 'debit' ? diff : -diff)
+  if (diff === 0) return false
+
+  const exactResult = computeTotals(rrExact, brExact).aretsResultat[field]
+  const exactTarget = brExact['AretsResultatEgetKapital']?.[field]
+  if (exactResult === null || exactTarget === null || exactTarget === undefined) return false
+  if (!equalOre(exactResult, exactTarget)) return false
+
+  const direction = Math.sign(diff)
+  const candidates = K2_RR_MAPPINGS.flatMap((mapping, index) => {
+    const rounded = rr[mapping.concept]?.[field]
+    const exact = rrExact[mapping.concept]?.[field]
+    if (rounded === null || rounded === undefined || exact === null || exact === undefined) return []
+    if (Math.abs(exact - rounded) < 0.000001) return []
+    const delta = mapping.balance === 'debit' ? direction : -direction
+    return [{ concept: mapping.concept, delta, error: Math.abs(rounded + delta - exact), index }]
+  }).sort((left, right) => left.error - right.error || left.index - right.index)
+  if (candidates.length < Math.abs(diff)) return false
+  for (const candidate of candidates.slice(0, Math.abs(diff))) {
+    adjustConcept(rr, candidate.concept, field, candidate.delta)
+  }
   return true
 }
 
 /** Equity/liability-side posts (everything from Aktiekapital onwards). */
+const FIRST_EQ_LIAB_MAPPING_INDEX = K2_BR_MAPPINGS.findIndex(
+  (mapping) => mapping.concept === 'Aktiekapital',
+)
+const ASSET_MAPPINGS = K2_BR_MAPPINGS.slice(0, FIRST_EQ_LIAB_MAPPING_INDEX)
 const EQ_LIAB_MAPPINGS = K2_BR_MAPPINGS.slice(
-  K2_BR_MAPPINGS.findIndex((mapping) => mapping.concept === 'Aktiekapital'),
+  FIRST_EQ_LIAB_MAPPING_INDEX,
 )
 
-/** Absorb a ±1 kr rounding residual between the two BR sides. */
+/**
+ * Reconcile each BR side to its own rounded exact total without changing exact
+ * posts. Residuals must not be netted across sides: doing so could make the
+ * balance check pass while leaving one reported side different from its exact
+ * accounting total.
+ */
 function smoothBrResidual(
   br: ConceptAmounts,
+  brExact: ConceptAmounts,
   totals: K2MappingResult['totals'],
   field: 'current' | 'previous',
 ): boolean {
   const assets = totals.tillgangar[field]
   const eqLiab = totals.egetKapitalSkulder[field]
   if (assets === null || eqLiab === null) return false
-  const diff = assets - eqLiab
-  if (diff === 0 || Math.abs(diff) > 1) return false
-  const concept =
-    pickLargestConcept(br, EQ_LIAB_MAPPINGS, field, new Set(['AretsResultatEgetKapital']), 'last') ??
-    'BalanseratResultat'
-  // All equity/liability posts are credit-oriented: adding the residual
-  // raises the eget kapital och skulder side to match Tillgångar.
-  adjustConcept(br, concept, field, diff)
-  return true
+  const exactTotals = computeTotals({}, brExact)
+  const exactAssets = exactTotals.tillgangar[field]
+  const exactEqLiab = exactTotals.egetKapitalSkulder[field]
+  if (exactAssets === null || exactEqLiab === null) return false
+  if (!equalOre(exactAssets, exactEqLiab)) return false
+
+  const sides = [
+    { mappings: ASSET_MAPPINGS, rounded: assets, target: roundWhole(exactAssets) },
+    { mappings: EQ_LIAB_MAPPINGS, rounded: eqLiab, target: roundWhole(exactEqLiab) },
+  ]
+  const residuals = sides.map((side) => side.target - side.rounded)
+  if (residuals.every((residual) => residual === 0)) return false
+  const plans = sides.map((side, index) => {
+    const residual = residuals[index]
+    if (residual === 0) return []
+    const direction = Math.sign(residual)
+    const candidates = side.mappings.flatMap((mapping, mappingIndex) => {
+      if (mapping.concept === 'AretsResultatEgetKapital') return []
+      const rounded = br[mapping.concept]?.[field]
+      const exact = brExact[mapping.concept]?.[field]
+      if (rounded === null || rounded === undefined || exact === null || exact === undefined) return []
+      if (Math.abs(exact - rounded) < 0.000001) return []
+      return [{
+        concept: mapping.concept,
+        error: Math.abs(rounded + direction - exact),
+        index: mappingIndex,
+      }]
+    }).sort((left, right) => left.error - right.error || left.index - right.index)
+    if (candidates.length < Math.abs(residual)) return null
+    return candidates.slice(0, Math.abs(residual)).map((candidate) => ({
+      concept: candidate.concept,
+      delta: direction,
+    }))
+  })
+  if (plans.some((plan) => plan === null)) return false
+  for (const plan of plans) {
+    for (const adjustment of plan ?? []) {
+      adjustConcept(br, adjustment.concept, field, adjustment.delta)
+    }
+  }
+  return plans.some((plan) => (plan?.length ?? 0) > 0)
 }
 
 function computeTotals(rr: ConceptAmounts, br: ConceptAmounts): K2MappingResult['totals'] {

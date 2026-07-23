@@ -885,10 +885,24 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en: 'Customer has no email address.',
     remediation: { description: 'Add an email address on the customer record before sending.' },
   },
+  INVOICE_SEND_TOO_MANY_RECIPIENTS: {
+    httpStatus: 400,
+    message_sv: 'Ett fakturautskick får ha högst 20 mottagare totalt.',
+    message_en: 'An invoice email may have at most 20 recipients in total.',
+    remediation: { description: 'Remove CC or BCC recipients before sending the invoice.' },
+  },
   INVOICE_SEND_COMPANY_SETTINGS_MISSING: {
     httpStatus: 404,
     message_sv: 'Företagsinställningar saknas.',
     message_en: 'Company settings are missing.',
+  },
+  INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Fakturan saknar ett betalningskonto för vald valuta. Lägg till kontot under Fakturering innan du skapar PDF-filen eller skickar fakturan.',
+    message_en: 'The invoice has no payment account for its currency. Add the account under Invoicing before generating the PDF or sending the invoice.',
+    remediation: {
+      description: 'Lägg till ett betalningskonto med IBAN för fakturans valuta under Fakturering.',
+    },
   },
   INVOICE_SEND_NUMBER_ASSIGN_FAILED: {
     httpStatus: 500,
@@ -2848,8 +2862,8 @@ const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
   },
   ARSREDOVISNING_INCOMPLETE: {
     httpStatus: 409,
-    message_sv: 'Årsredovisningen har blockerande kontrollfel och kan inte låsas ännu.',
-    message_en: 'The annual report has blocking validation errors and cannot be finalized yet.',
+    message_sv: 'Årsredovisningen har blockerande kontrollfel och kan inte versionssparas ännu.',
+    message_en: 'The annual report has blocking validation errors and cannot be versioned yet.',
     retryable: false,
   },
   ARSREDOVISNING_VERSION_NOT_SIGNABLE: {

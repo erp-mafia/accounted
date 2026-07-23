@@ -65,6 +65,23 @@ function previousPair(): TrialBalancePair {
   return { full, preClosing }
 }
 
+function reportedAccountsPair(): TrialBalancePair {
+  const full = [
+    tbRow('1250', 'Computers', { debit: 50 }),
+    tbRow('1259', 'Accumulated depreciation', { credit: 10 }),
+    tbRow('1930', 'Bank', { debit: 75 }),
+    tbRow('2081', 'Share capital', { credit: 50 }),
+    tbRow('2099', 'Current-year result', { credit: 90 }),
+    tbRow('2650', 'VAT settlement account', { debit: 25 }),
+  ]
+  const preClosing = [
+    ...full.filter((row) => row.account_number !== '2099'),
+    tbRow('3010', 'Revenue', { credit: 100 }),
+    tbRow('7833', 'Depreciation of computers', { debit: 10 }),
+  ]
+  return { full, preClosing }
+}
+
 describe('buildRrRows / buildBrRows — no kontonummer regression', () => {
   it('no RR or BR label contains a BAS account number', () => {
     const mapping = mapTrialBalancesToK2(currentPair(), previousPair())
@@ -79,6 +96,17 @@ describe('buildRrRows / buildBrRows — no kontonummer regression', () => {
 })
 
 describe('buildRrRows', () => {
+  it('renders account 7833 depreciation in the statutory expense post', () => {
+    const rows = buildRrRows(mapTrialBalancesToK2(reportedAccountsPair(), null))
+
+    expect(
+      rows.find(
+        (row) =>
+          row.label === 'Av- och nedskrivningar av materiella och immateriella anläggningstillgångar',
+      )?.current,
+    ).toBe(-10)
+  })
+
   it('follows the ÅRL uppställningsform order with posts and subtotals', () => {
     const mapping = mapTrialBalancesToK2(currentPair(), null)
     const labels = buildRrRows(mapping).map((r) => r.label)
@@ -130,6 +158,7 @@ describe('buildRrRows', () => {
     const rr = buildRrRows(mapping)
     const aretsResultat = rr[rr.length - 1]
     expect(aretsResultat.label).toBe('Årets resultat')
+    expect(aretsResultat.semantic_key).toBe('income_statement_result')
     expect(aretsResultat.is_total).toBe(true)
     expect(aretsResultat.current).toBe(mapping.totals.aretsResultat.current)
     expect(aretsResultat.current).toBe(300_000)
@@ -146,9 +175,24 @@ describe('buildRrRows', () => {
 })
 
 describe('buildBrRows', () => {
+  it('renders a debit on account 2650 under receivables instead of liabilities', () => {
+    const { assets, equityLiabilities } = buildBrRows(
+      mapTrialBalancesToK2(reportedAccountsPair(), null),
+    )
+
+    expect(assets.find((row) => row.label === 'Övriga fordringar')?.current).toBe(25)
+    expect(equityLiabilities.find((row) => row.label === 'Övriga skulder')?.current).toBe(0)
+    expect(assets.at(-1)?.current).toBe(140)
+    expect(equityLiabilities.at(-1)?.current).toBe(140)
+  })
+
   it('renders Kassa och bank as a post and ends both sides on tied totals', () => {
     const mapping = mapTrialBalancesToK2(currentPair(), null)
     const { assets, equityLiabilities } = buildBrRows(mapping)
+
+    expect(
+      equityLiabilities.find((row) => row.semantic_key === 'balance_sheet_current_year_result'),
+    ).toMatchObject({ label: 'Årets resultat', current: 300_000 })
 
     expect(assets.find((r) => r.label === 'Kassa och bank' && !r.is_heading)?.current).toBe(
       600_000,

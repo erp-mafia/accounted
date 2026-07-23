@@ -6,6 +6,11 @@ import type {
   CanonicalAnnualReport,
 } from './compliance-types'
 import { getEntryPoint } from '@/lib/bokslut/ixbrl/taxonomy/entry-points'
+import { validateStatementIntegrity } from './completeness'
+
+export function hasStatementIntegrityErrors(model: CanonicalAnnualReport): boolean {
+  return validateStatementIntegrity(model.report, model.ixbrl).length > 0
+}
 
 function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableValue)
@@ -143,6 +148,9 @@ export async function createAnnualReportVersion(
   model: CanonicalAnnualReport,
   finalize: boolean,
 ): Promise<AnnualReportVersionSummary> {
+  if (hasStatementIntegrityErrors(model)) {
+    throw new Error('Annual report has inconsistent financial statements and cannot be versioned')
+  }
   if (finalize && !model.validation.ok) {
     throw new Error('Annual report has blocking validation errors and cannot be finalized')
   }

@@ -202,7 +202,7 @@ describe('POST /api/invoices/[id]/book', () => {
     enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
     mockCreateInvoiceJournalEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: { ...invoice, journal_entry_id: 'je-1' }, error: null })
-    enqueue({ data: { document_attachment_id: 'document-1' }, error: null })
+    enqueue({ data: 'document-1', error: null })
 
     const { status } = await parseJsonResponse(await bookRequest())
 
@@ -212,6 +212,10 @@ describe('POST /api/invoices/[id]/book', () => {
       'company-1',
       'document-1',
       'je-1',
+    )
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'latest_sent_invoice_delivery_document',
+      { p_company_id: 'company-1', p_invoice_id: 'inv-1' },
     )
   })
 })

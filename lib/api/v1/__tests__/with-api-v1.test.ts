@@ -355,6 +355,51 @@ describe('withApiV1: idempotency', () => {
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
   })
+
+  it('hashes a cloned body and leaves the original readable by the handler', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes: ['invoices:write'],
+      mode: 'live',
+    })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+    mockCheckIdempotency.mockResolvedValue(null)
+    let observedBody: unknown
+
+    const handler = withApiV1(
+      'invoices.create',
+      async (request, ctx) => {
+        observedBody = await request.json()
+        return ok({ ok: true }, { requestId: ctx.requestId })
+      },
+      { requireScope: 'invoices:write' },
+    )
+    const requestBody = { customer_id: 'cust-1', additional_cc: ['copy@example.test'] }
+
+    const response = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1/invoices', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer gnubok_sk_x',
+          'Idempotency-Key': 'key-body-readable',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      }),
+      companyParams('company-1'),
+    )
+
+    expect(response.status).toBe(200)
+    expect(observedBody).toEqual(requestBody)
+    expect(mockCheckIdempotency).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-1',
+      'company-1',
+      'key-body-readable',
+      expect.any(String),
+    )
+  })
 })
 
 describe('withApiV1: dry-run', () => {

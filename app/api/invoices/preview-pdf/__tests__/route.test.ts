@@ -40,7 +40,7 @@ import { POST } from '../route'
 describe('POST /api/invoices/preview-pdf', () => {
   const user = { id: 'user-1', email: 'owner@example.test' }
   const customer = makeCustomer({ id: 'customer-1', name: 'Kund ÅÄÖ AB' })
-  const company = makeCompanySettings({ company_name: 'Oppy Sverige' })
+  const company = makeCompanySettings({ company_name: 'Oppy Sverige', bankgiro: '123-4567' })
   const validBody = {
     customer_id: customer.id,
     invoice_number: '2621',
@@ -88,9 +88,11 @@ describe('POST /api/invoices/preview-pdf', () => {
     )
 
     expect(response.status).toBe(400)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 
   it('returns 404 when the customer does not exist', async () => {
+    enqueue({ data: company, error: null })
     enqueue({ data: null, error: { message: 'not found' } })
 
     const response = await POST(
@@ -99,11 +101,12 @@ describe('POST /api/invoices/preview-pdf', () => {
     )
 
     expect(response.status).toBe(404)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 
   it('returns a descriptive UTF-8 filename for the PDF preview', async () => {
-    enqueue({ data: customer, error: null })
     enqueue({ data: company, error: null })
+    enqueue({ data: customer, error: null })
 
     const response = await POST(
       createMockRequest('/api/invoices/preview-pdf', { method: 'POST', body: validBody }),
@@ -112,7 +115,41 @@ describe('POST /api/invoices/preview-pdf', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('application/pdf')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
       .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
+  })
+
+  it('returns 400 when a foreign payment account is missing', async () => {
+    enqueue({ data: company, error: null })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/preview-pdf', {
+        method: 'POST',
+        body: { ...validBody, currency: 'EUR' },
+      }),
+      createMockRouteParams({}),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(renderToBufferMock).not.toHaveBeenCalled()
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('customers')
+  })
+
+  it('marks preview generation errors as private and non-cacheable', async () => {
+    enqueue({ data: company, error: null })
+    enqueue({ data: customer, error: null })
+    renderToBufferMock.mockRejectedValueOnce(new Error('render failed'))
+
+    const response = await POST(
+      createMockRequest('/api/invoices/preview-pdf', { method: 'POST', body: validBody }),
+      createMockRouteParams({}),
+    )
+
+    expect(response.status).toBe(500)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 })

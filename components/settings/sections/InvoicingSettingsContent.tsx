@@ -1,52 +1,26 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
-import { BankDetailsForm, validateBankFields } from '@/components/settings/BankDetailsForm'
 import { InvoiceSettingsForm } from '@/components/settings/InvoiceSettingsForm'
 import { InvoicePaymentLinkSettings } from '@/components/settings/InvoicePaymentLinkSettings'
+import { InvoicePaymentAccountsSettings } from '@/components/settings/InvoicePaymentAccountsSettings'
 import { InvoiceEmailTextsSettings } from '@/components/settings/InvoiceEmailTextsSettings'
+import { InvoiceEmailRecipientsSettings } from '@/components/settings/InvoiceEmailRecipientsSettings'
 import { InvoicePreviewCard } from '@/components/settings/InvoicePreviewCard'
 import { PdfPrintSettings } from '@/components/settings/PdfPrintSettings'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
 import { useSettings } from '@/components/settings/useSettings'
-import { useToast } from '@/components/ui/use-toast'
-import { normaliseSwish } from '@/lib/payments/swish'
-import { formatPlusgiroNumber } from '@/lib/bankgiro/luhn'
 import type { CompanySettings } from '@/types'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export function InvoicingSettingsContent() {
-  const t = useTranslations('settings_invoicing')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
-  const { toast } = useToast()
 
   if (isLoading) return <SettingsLoadingSkeleton />
   if (!settings) return <SettingsLoadError onRetry={refetch} />
 
   function handleSave(formData: FormData) {
-    const bankErrors = validateBankFields(formData)
-    if (bankErrors.length > 0) {
-      toast({
-        title: t('bank_validation_title'),
-        description: bankErrors.map(e => getUserErrorMessage(e)).join(', '),
-        variant: 'destructive',
-      })
-      return {}
-    }
-
     const updates: Record<string, unknown> = {
-      bank_name: formData.get('bank_name') as string,
-      clearing_number: formData.get('clearing_number') as string,
-      account_number: formData.get('account_number') as string,
-      bankgiro: (formData.get('bankgiro') as string) || null,
-      plusgiro: (formData.get('plusgiro') as string)?.trim()
-        ? formatPlusgiroNumber((formData.get('plusgiro') as string).trim())
-        : null,
-      swish: normaliseSwish(formData.get('swish') as string) || null,
-      iban: (formData.get('iban') as string || '').replace(/\s/g, '').toUpperCase() || null,
-      bic: (formData.get('bic') as string || '').replace(/\s/g, '').toUpperCase() || null,
       invoice_prefix: (formData.get('invoice_prefix') as string) || null,
       next_invoice_number: parseInt(formData.get('next_invoice_number') as string) || 1,
       next_arrival_number: parseInt(formData.get('next_arrival_number') as string) || 1,
@@ -74,11 +48,10 @@ export function InvoicingSettingsContent() {
         <InvoicePreviewCard settings={settings} />
       </div>
 
+      <InvoicePaymentAccountsSettings settings={settings} onUpdate={updateSettings} />
+
       <SettingsFormWrapper onSave={handleSave} className="space-y-8">
-        <BankDetailsForm settings={settings} />
-        <div className="border-t border-border pt-8">
-          <InvoiceSettingsForm settings={settings} />
-        </div>
+        <InvoiceSettingsForm settings={settings} />
       </SettingsFormWrapper>
 
       {/* Payment link opt-in: saves individually via toggle switch */}
@@ -89,6 +62,11 @@ export function InvoicingSettingsContent() {
       {/* PDF settings: saves individually via toggle switches */}
       <div className="border-t border-border pt-8">
         <PdfPrintSettings settings={settings} onUpdate={updateSettings} />
+      </div>
+
+      {/* Fixed invoice email recipients: explicit save */}
+      <div className="border-t border-border pt-8">
+        <InvoiceEmailRecipientsSettings settings={settings} onUpdate={updateSettings} />
       </div>
 
       {/* Invoice email texts: autosaves on blur */}

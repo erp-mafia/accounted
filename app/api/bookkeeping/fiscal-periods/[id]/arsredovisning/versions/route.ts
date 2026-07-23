@@ -8,6 +8,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { buildCanonicalAnnualReport } from '@/lib/bokslut/arsredovisning/model'
 import {
   createAnnualReportVersion,
+  hasStatementIntegrityErrors,
   listAnnualReportVersions,
 } from '@/lib/bokslut/arsredovisning/version-service'
 
@@ -83,16 +84,17 @@ export const POST = withRouteContext(
             }
           : undefined,
       })
+      if (hasStatementIntegrityErrors(model)) {
+        return errorResponseFromCode('ARSREDOVISNING_INCOMPLETE', log, {
+          requestId,
+          details: model.validation,
+        })
+      }
       if (validation.data.action === 'finalize' && !model.validation.ok) {
-        return NextResponse.json(
-          {
-            error: {
-              code: 'ARSREDOVISNING_INCOMPLETE',
-              details: model.validation,
-            },
-          },
-          { status: 409 },
-        )
+        return errorResponseFromCode('ARSREDOVISNING_INCOMPLETE', log, {
+          requestId,
+          details: model.validation,
+        })
       }
       const data = await createAnnualReportVersion(
         validation.data.action === 'finalize' ? createServiceClient() : supabase,

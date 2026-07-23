@@ -37,7 +37,7 @@ import { GET } from '../route'
 describe('GET /api/invoices/[id]/pdf', () => {
   const user = { id: 'user-1', email: 'owner@example.test' }
   const customer = makeCustomer({ name: 'Kund ÅÄÖ AB' })
-  const company = makeCompanySettings({ company_name: 'Oppy Sverige' })
+  const company = makeCompanySettings({ company_name: 'Oppy Sverige', bankgiro: '123-4567' })
   const invoice = makeInvoice({
     id: 'invoice-1',
     invoice_number: '2621',
@@ -77,6 +77,7 @@ describe('GET /api/invoices/[id]/pdf', () => {
     )
 
     expect(response.status).toBe(404)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 
   it('returns a descriptive UTF-8 filename for the PDF download', async () => {
@@ -91,5 +92,36 @@ describe('GET /api/invoices/[id]/pdf', () => {
     expect(response.status).toBe(200)
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
       .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+  })
+
+  it('returns 400 before rendering when a foreign payment account is missing', async () => {
+    enqueue({ data: { ...invoice, currency: 'EUR' }, error: null })
+    enqueue({ data: { ...company, invoice_payment_accounts: {} }, error: null })
+
+    const response = await GET(
+      createMockRequest('/api/invoices/invoice-1/pdf'),
+      createMockRouteParams({ id: 'invoice-1' }),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+    expect(renderToBufferMock).not.toHaveBeenCalled()
+  })
+
+  it('marks PDF generation errors as private and non-cacheable', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+    renderToBufferMock.mockRejectedValueOnce(new Error('render failed'))
+
+    const response = await GET(
+      createMockRequest('/api/invoices/invoice-1/pdf'),
+      createMockRouteParams({ id: 'invoice-1' }),
+    )
+
+    expect(response.status).toBe(500)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 })

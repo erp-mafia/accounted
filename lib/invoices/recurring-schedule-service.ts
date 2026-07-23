@@ -40,6 +40,14 @@ import {
   reserveInvoiceDelivery,
   sendTrackedInvoiceEmail,
 } from '@/lib/invoices/invoice-deliveries'
+import {
+  exceedsInvoiceEmailRecipientLimit,
+  invoiceEmailRecipientCount,
+  resolveInvoiceEmailRecipients,
+} from '@/lib/invoices/email-recipients'
+import {
+  hasRequiredInvoicePaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 import { createLogger } from '@/lib/logger'
 import type {
   Invoice,
@@ -439,7 +447,7 @@ async function sendInvoiceFromSchedule(
     })
     return false
   }
-  if (!invoice.customer.email) {
+  if (!invoice.customer.email?.trim()) {
     log.warn('customer has no email; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,
       customerId: invoice.customer.id,
@@ -456,7 +464,26 @@ async function sendInvoiceFromSchedule(
   if (!company) {
     throw new Error('company settings missing: cannot send invoice')
   }
-
+  if (!hasRequiredInvoicePaymentAccount(company, invoice)) {
+    log.warn('invoice currency has no usable payment account; recurring schedule cannot auto-send', {
+      invoiceId: invoice.id,
+      currency: invoice.currency,
+    })
+    return false
+  }
+  const recipients = resolveInvoiceEmailRecipients({
+    to: invoice.customer.email,
+    configuredCc: company.invoice_email_cc_addresses,
+    configuredBcc: company.invoice_email_bcc_addresses,
+    legacyCc: company.email,
+  })
+  if (exceedsInvoiceEmailRecipientLimit(recipients)) {
+    log.warn('invoice has too many email recipients; recurring schedule cannot auto-send', {
+      invoiceId: invoice.id,
+      recipientCount: invoiceEmailRecipientCount(recipients),
+    })
+    return false
+  }
   let deliveryId: string
   try {
     deliveryId = await reserveInvoiceDelivery({
@@ -498,8 +525,11 @@ async function sendInvoiceFromSchedule(
   // Render PDF with status overridden to 'sent' so the customer doesn't
   // receive a "UTKAST" stamp.
   const renderableInvoice = { ...invoice, status: 'sent' as const }
-  const { branding, company: renderCompany } = await prepareInvoicePdfRender(company)
-  const swishQrDataUrl = await buildSwishQrDataUrl(company, renderableInvoice)
+  const { branding, company: renderCompany } = await prepareInvoicePdfRender(
+    company,
+    renderableInvoice.currency,
+  )
+  const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
   const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
@@ -522,8 +552,6 @@ async function sendInvoiceFromSchedule(
     invoiceDate: invoice.invoice_date,
     documentType: invoice.document_type,
   })
-  const ccAddress = company.email || undefined
-
   const subject = generateInvoiceEmailSubject(emailData)
   const html = generateInvoiceEmailHtml(emailData)
   const text = generateInvoiceEmailText(emailData)
@@ -536,8 +564,9 @@ async function sendInvoiceFromSchedule(
       userId,
       invoiceId: invoice.id,
       deliveryId,
-      to: invoice.customer.email,
-      cc: ccAddress,
+      to: recipients.to,
+      cc: recipients.cc,
+      bcc: recipients.bcc,
       subject,
       html,
       text,

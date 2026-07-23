@@ -1,4 +1,6 @@
 import type { ArsredovisningData } from './types'
+import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
+import { buildBrRows, buildRrRows } from './statement-rows'
 import type {
   AnnualReportComplianceIssue,
   AnnualReportDisclosureState,
@@ -37,6 +39,121 @@ function push(
   remediation?: string,
 ): void {
   issues.push({ code, severity, section, message, remediation })
+}
+
+function statementRowsEqual(
+  left: ArsredovisningData['resultatrakning'],
+  right: ArsredovisningData['resultatrakning'],
+): boolean {
+  return left.length === right.length && left.every((row, index) => {
+    const other = right[index]
+    return (
+      row.label === other.label &&
+      row.semantic_key === other.semantic_key &&
+      row.current === other.current &&
+      row.previous === other.previous &&
+      Boolean(row.is_total) === Boolean(other.is_total) &&
+      Boolean(row.is_heading) === Boolean(other.is_heading) &&
+      (row.indent ?? 0) === (other.indent ?? 0)
+    )
+  })
+}
+
+export function validateStatementIntegrity(
+  report: ArsredovisningData,
+  ixbrl: IxbrlArsredovisningInput | null = null,
+): AnnualReportComplianceIssue[] {
+  const issues: AnnualReportComplianceIssue[] = []
+  if (
+    Math.round(report.balansrakning.total_assets * 100) !==
+    Math.round(report.balansrakning.total_equity_liabilities * 100)
+  ) {
+    push(
+      issues,
+      'AR-BALANCE-MISMATCH',
+      'error',
+      'statements',
+      'Balansräkningen balanserar inte i årsredovisningen.',
+    )
+  }
+
+  const incomeStatementResult = (
+    report.resultatrakning.find(
+      (row) => row.semantic_key === 'income_statement_result' && row.current !== null,
+    )
+    ?? report.resultatrakning.find(
+      (row) => row.label === 'Årets resultat' && row.current !== null,
+    )
+  )?.current ?? undefined
+  const visibleBalanceSheetResult = (
+    report.balansrakning.equity_liabilities.find(
+      (row) => row.semantic_key === 'balance_sheet_current_year_result' && row.current !== null,
+    )
+    ?? report.balansrakning.equity_liabilities.find(
+      (row) => row.label === 'Årets resultat' && row.current !== null,
+    )
+  )?.current ?? undefined
+  const dispositionResult =
+    report.forvaltningsberattelse.resultatdisposition_amounts.current_year_result
+  if (incomeStatementResult === undefined || visibleBalanceSheetResult === undefined) {
+    push(
+      issues,
+      'AR-RESULT-MISSING',
+      'error',
+      'statements',
+      'Resultat- eller balansräkningen saknar raden Årets resultat.',
+    )
+  } else if (
+    Math.round(incomeStatementResult * 100) !== Math.round(visibleBalanceSheetResult * 100) ||
+    Math.round(incomeStatementResult * 100) !== Math.round(dispositionResult * 100)
+  ) {
+    push(
+      issues,
+      'AR-RESULT-MISMATCH',
+      'error',
+      'statements',
+      'Årets resultat i resultaträkningen stämmer inte med årets resultat i balansräkningen.',
+      'Kontrollera att årsredovisningen innehåller bokslutsdispositioner och skatt före resultatstängningen.',
+    )
+  }
+
+  if (
+    report.resultatrakning.length === 0 ||
+    report.balansrakning.assets.length === 0 ||
+    report.balansrakning.equity_liabilities.length === 0
+  ) {
+    push(
+      issues,
+      'AR-STATEMENTS-EMPTY',
+      'error',
+      'statements',
+      'Resultat- eller balansräkningen saknar rader.',
+    )
+  }
+
+  if (ixbrl) {
+    const ixbrlMapping = { rr: ixbrl.rr, br: ixbrl.br, totals: ixbrl.totals }
+    const ixbrlIncomeRows = buildRrRows(ixbrlMapping)
+    const ixbrlBalanceRows = buildBrRows(ixbrlMapping)
+    if (
+      !statementRowsEqual(report.resultatrakning, ixbrlIncomeRows) ||
+      !statementRowsEqual(report.balansrakning.assets, ixbrlBalanceRows.assets) ||
+      !statementRowsEqual(
+        report.balansrakning.equity_liabilities,
+        ixbrlBalanceRows.equityLiabilities,
+      )
+    ) {
+      push(
+        issues,
+        'AR-IXBRL-STATEMENT-MISMATCH',
+        'error',
+        'statements',
+        'Beloppen i PDF-underlaget och iXBRL-underlaget stämmer inte överens.',
+        'Skapa om årsredovisningen från ett oförändrat bokslut.',
+      )
+    }
+  }
+  return issues
 }
 
 export interface ValidateAnnualReportInput {
@@ -154,18 +271,7 @@ export function validateAnnualReportCompleteness(
     )
   }
 
-  if (
-    Math.round(report.balansrakning.total_assets * 100) !==
-    Math.round(report.balansrakning.total_equity_liabilities * 100)
-  ) {
-    push(
-      issues,
-      'AR-BALANCE-MISMATCH',
-      'error',
-      'statements',
-      'Balansräkningen balanserar inte i årsredovisningen.',
-    )
-  }
+  issues.push(...validateStatementIntegrity(report))
   if (
     report.previous_period &&
     (report.balansrakning.total_assets_previous === null ||
@@ -178,9 +284,6 @@ export function validateAnnualReportCompleteness(
       'statements',
       'Jämförelsetal saknas trots att ett föregående räkenskapsår finns.',
     )
-  }
-  if (report.resultatrakning.length === 0 || report.balansrakning.assets.length === 0) {
-    push(issues, 'AR-STATEMENTS-EMPTY', 'error', 'statements', 'Resultat- eller balansräkningen saknar rader.')
   }
   if (report.noter.length === 0) {
     push(issues, 'AR-NOTES-EMPTY', 'error', 'notes', 'Årsredovisningen saknar noter.')

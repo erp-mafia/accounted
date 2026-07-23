@@ -1,6 +1,7 @@
 import type { Invoice, Customer, CompanySettings, InvoiceDocumentType } from '@/types'
 import { formatDate, getCompanyDisplayName, getCompanyPrimaryName } from '@/lib/utils'
 import { getAmountToPay } from '@/lib/invoices/rounding'
+import { companyWithInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
 import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } from './user-text'
 
 type EmailLang = 'sv' | 'en'
@@ -197,7 +198,8 @@ function safeBrandingColor(value: string | null | undefined, fallback: string): 
  * Generate HTML email for sending an invoice
  */
 export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
-  const { invoice, customer, company } = data
+  const { invoice, customer } = data
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
 
   const lang = resolveLang(customer)
   const L = LABELS[lang]
@@ -353,7 +355,8 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
  * Generate plain text email for sending an invoice
  */
 export function generateInvoiceEmailText(data: InvoiceEmailData): string {
-  const { invoice, customer, company } = data
+  const { invoice, customer } = data
+  const company = companyWithInvoicePaymentAccount(data.company, invoice.currency)
 
   const lang = resolveLang(customer)
   const L = LABELS[lang]

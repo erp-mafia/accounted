@@ -1,5 +1,7 @@
 # DPIA screening: invoice delivery history
 
+Classification: Confidential
+
 Date: 2026-07-22
 Owner: Accounted controller
 Status: Screening completed
@@ -19,14 +21,40 @@ the sent accounting document. It is not necessary in the routine browser list.
 The list therefore exposes only status, timestamps, masked recipient domains,
 provider name, error code, and an active-company-scoped link to the archived
 PDF. Subjects, bodies, full addresses, reply-to addresses, provider message IDs,
-and checksums are excluded.
+BCC recipients, filenames, and checksums are excluded.
+
+The owner/admin full statutory archive has a different legal and operational
+purpose from the routine list, so it intentionally does not apply the list's
+field minimization to `data/invoice_deliveries.json`. That export contains the
+delivery and tenant identifiers, actor identifier, channel and status, full To,
+CC, and BCC recipient arrays, reply-to and sender name, subject, plain-text and
+HTML bodies, provider and provider message identifier, error code, archived
+document identifier, attachment filename, content type and SHA-256 checksum,
+delivery timestamps, retention and redaction timestamps, and creation time. The
+ZIP may also contain the exact sent PDF and other company accounting records.
+Access is therefore restricted to owner/admin and returned only as a private
+server-generated export.
 
 ## Risks and controls
 
 - Cross-tenant disclosure: route context, explicit `company_id` filters, RLS,
-  and active-company document authorization.
+  active-company document authorization, and a second owner/admin membership
+  verification through the stateless service-role client before export. Every
+  service-role archive query uses the verified `company_id` directly or IDs
+  derived from rows scoped to that company.
 - Excess browser disclosure: allow-listed response fields, domain masking, and
-  `private, no-store` caching.
+  `private, no-store` caching. BCC recipients never leave the server-side
+  delivery evidence through the list endpoint. The exact table payload is
+  sender-only under RLS; other members use a masked summary function. Complete
+  statutory exports are owner/admin-only server operations. Their exact payload
+  exception is limited to the downloadable statutory archive purpose described
+  above and is not reused by the routine history endpoint.
+  The summary function is defined in migration `20260723003000` and the route
+  applies domain masking again before returning its allow-listed fields.
+- Forged delivery evidence: authenticated PostgREST INSERT and UPDATE access is
+  removed. Server-only functions bind reservations and state transitions to a
+  verified writable company member. Payload-free crashed reservations may be
+  reclaimed by another sender only after 15 minutes.
 - Undocumented mutation: immutable status transitions plus a metadata-only
   audit trigger. Audit state excludes recipients and message content.
 - Excess retention: fiscal-period-derived `retention_expires_at` and daily PII

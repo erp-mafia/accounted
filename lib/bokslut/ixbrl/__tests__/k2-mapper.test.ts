@@ -92,6 +92,144 @@ describe('mapTrialBalancesToK2', () => {
     expect(result.totals.aretsResultat.current).toBe(result.br['AretsResultatEgetKapital'].current)
   })
 
+  it('reclassifies tax and VAT balances by economic sign', () => {
+    const rows = [
+      row('1930', 'Bank', 100, 0),
+      row('1630', 'Tax account', 0, 20),
+      row('2518', 'Paid preliminary tax', 30, 0),
+      row('2641', 'Input VAT', 5, 0),
+      row('2081', 'Share capital', 0, 115),
+    ]
+
+    const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null)
+
+    expect(res.br['OvrigaFordringarKortfristiga'].current).toBe(35)
+    expect(res.br['Skatteskulder'].current).toBe(20)
+    expect(res.br['OvrigaKortfristigaSkulder'].current).toBe(0)
+    expect(res.totals.tillgangar.current).toBe(135)
+    expect(res.totals.egetKapitalSkulder.current).toBe(135)
+    expect(res.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('1630-1659'),
+        expect.stringContaining('2500-2599'),
+        expect.stringContaining('2610-2659'),
+      ]),
+    )
+  })
+
+  it('maps account 7833 depreciation from the statutory pre-closing balance', () => {
+    const full = [
+      row('1250', 'Computers', 50, 0),
+      row('1259', 'Accumulated depreciation', 0, 10),
+      row('1930', 'Bank', 100, 0),
+      row('2081', 'Share capital', 0, 50),
+      row('2099', 'Current-year result', 0, 90),
+    ]
+    const preClosing = [
+      ...full.filter((balance) => balance.account_number !== '2099'),
+      row('3010', 'Revenue', 0, 100),
+      row('7833', 'Depreciation of computers', 10, 0),
+    ]
+
+    const res = mapTrialBalancesToK2({ full, preClosing }, null)
+
+    expect(
+      res.rr['AvskrivningarNedskrivningarMateriellaImmateriellaAnlaggningstillgangar']
+        .current,
+    ).toBe(10)
+    expect(res.totals.aretsResultat.current).toBe(90)
+    expect(res.br['AretsResultatEgetKapital'].current).toBe(90)
+    expect(res.totals.tillgangar.current).toBe(res.totals.egetKapitalSkulder.current)
+  })
+
+  it('presents a debit on account 2650 as a receivable for each comparison year', () => {
+    const current = [
+      row('1930', 'Bank', 75, 0),
+      row('2081', 'Share capital', 0, 100),
+      row('2650', 'VAT settlement account', 25, 0),
+    ]
+    const previous = [
+      row('1930', 'Bank', 100, 0),
+      row('2081', 'Share capital', 0, 75),
+      row('2650', 'VAT settlement account', 0, 25),
+    ]
+
+    const res = mapTrialBalancesToK2(
+      { full: current, preClosing: current },
+      { full: previous, preClosing: previous },
+    )
+
+    expect(res.br['OvrigaFordringarKortfristiga']).toEqual({ current: 25, previous: 0 })
+    expect(res.br['OvrigaKortfristigaSkulder']).toEqual({ current: 0, previous: 25 })
+    expect(res.totals.tillgangar).toEqual({ current: 100, previous: 100 })
+    expect(res.totals.egetKapitalSkulder).toEqual({ current: 100, previous: 100 })
+  })
+
+  it('nets paid preliminary tax against the current tax liability', () => {
+    const rows = [
+      row('1930', 'Bank', 100, 0),
+      row('2512', 'Current tax', 0, 123.18),
+      row('2518', 'Paid preliminary tax', 23.18, 0),
+    ]
+
+    const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null)
+
+    expect(res.br['Skatteskulder'].current).toBe(100)
+    expect(res.br['OvrigaFordringarKortfristiga'].current).toBe(0)
+  })
+
+  it('nets domestic VAT without offsetting excise duty', () => {
+    const rows = [
+      row('1930', 'Bank', 15, 0),
+      row('2611', 'Output VAT', 0, 50),
+      row('2641', 'Input VAT', 75, 0),
+      row('2660', 'Excise duty', 0, 40),
+    ]
+
+    const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null)
+
+    expect(res.br['OvrigaFordringarKortfristiga'].current).toBe(25)
+    expect(res.br['OvrigaKortfristigaSkulder'].current).toBe(40)
+    expect(res.totals.tillgangar.current).toBe(40)
+    expect(res.totals.egetKapitalSkulder.current).toBe(40)
+  })
+
+  it('reclassifies a previous-year tax-account credit independently', () => {
+    const current = [
+      row('1930', 'Bank', 100, 0),
+      row('2081', 'Share capital', 0, 100),
+    ]
+    const previous = [
+      row('1930', 'Bank', 20, 0),
+      row('1630', 'Tax account', 0, 20),
+    ]
+
+    const res = mapTrialBalancesToK2(
+      { full: current, preClosing: current },
+      { full: previous, preClosing: previous },
+    )
+
+    expect(res.br['OvrigaFordringarKortfristiga']).toEqual({ current: 0, previous: 0 })
+    expect(res.br['Skatteskulder']).toEqual({ current: 0, previous: 20 })
+    expect(res.warnings).toContainEqual(expect.stringContaining('1630-1659'))
+  })
+
+  it('does not offset a tax-account liability against a separate tax receivable', () => {
+    const rows = [
+      row('1630', 'Tax account', 0, 100),
+      row('1650', 'VAT receivable', 100, 0),
+      row('2081', 'Share capital', 0, 100),
+      row('1930', 'Bank', 100, 0),
+    ]
+
+    const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null)
+
+    expect(res.br['OvrigaFordringarKortfristiga'].current).toBe(100)
+    expect(res.br['Skatteskulder'].current).toBe(100)
+    expect(res.totals.tillgangar.current).toBe(200)
+    expect(res.totals.egetKapitalSkulder.current).toBe(200)
+  })
+
   // Regression for the year-end-closing split: a realistic post-bokslut TB
   // pair must yield NON-ZERO RR concepts (from the pre-closing TB) AND a BR
   // that ties (from the full TB). Mapping a single TB can never do both: the
@@ -165,11 +303,11 @@ describe('mapTrialBalancesToK2', () => {
 })
 
 describe('mapTrialBalancesToK2: öre-rounding residual smoothing', () => {
-  it('absorbs a ±1 kr BR residual into the largest equity/liability post', () => {
+  it('absorbs a ±1 kr BR residual into a post with an exact öre balance', () => {
     // Assets round UP twice (.50 each), liabilities round once up once down:
     // rounded Tillgångar 202 vs rounded EK+skulder 201 although the TB ties
-    // exactly at 201,00. The +1 residual lands in the largest post on the
-    // equity/liabilities side (Leverantörsskulder).
+    // exactly at 201,00. The +1 residual lands on a fractional post, never
+    // on an unrelated exact whole-krona balance.
     const rows = [
       row('1510', 'Kundfordringar', 100.5, 0),
       row('1930', 'Bank', 100.5, 0),
@@ -177,9 +315,10 @@ describe('mapTrialBalancesToK2: öre-rounding residual smoothing', () => {
       row('2510', 'Skatteskulder', 0, 100.25),
     ]
     const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null)
-    expect(res.totals.tillgangar.current).toBe(202)
-    expect(res.totals.egetKapitalSkulder.current).toBe(202)
-    expect(res.br['Leverantorsskulder'].current).toBe(102)
+    expect(res.totals.tillgangar.current).toBe(201)
+    expect(res.totals.egetKapitalSkulder.current).toBe(201)
+    expect(res.br['Kundfordringar'].current).toBe(100)
+    expect(res.br['Leverantorsskulder'].current).toBe(101)
     expect(res.br['Skatteskulder'].current).toBe(100)
     expect(res.warnings).toEqual([])
   })
@@ -207,7 +346,64 @@ describe('mapTrialBalancesToK2: öre-rounding residual smoothing', () => {
     expect(res.warnings).toEqual([])
   })
 
-  it('leaves residuals beyond ±1 kr alone and reports them', () => {
+  it('distributes a multi-krona BR residual over fractional posts', () => {
+    const rows = [
+      row('1510', 'Trade receivable', 0.5, 0),
+      row('1630', 'Tax account', 0.5, 0),
+      row('1710', 'Prepaid expense', 0.5, 0),
+      row('1810', 'Short-term investment', 0.5, 0),
+      row('1930', 'Bank', 0.5, 0),
+      row('2081', 'Share capital', 0, 2.5),
+    ]
+
+    const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null)
+
+    expect(res.totals.tillgangar.current).toBe(3)
+    expect(res.totals.egetKapitalSkulder.current).toBe(3)
+    expect(res.warnings.some((warning) => warning.includes('3005'))).toBe(false)
+  })
+
+  it('normalizes exact öre sums before whole-krona rounding', () => {
+    const rows = [
+      row('1510', 'Trade receivable', 0.03, 0),
+      row('1710', 'Prepaid expense', 0.29, 0),
+      row('1930', 'Bank', 0.18, 0),
+      row('2081', 'Share capital', 0, 0.5),
+    ]
+
+    const res = mapTrialBalancesToK2({ full: rows, preClosing: rows }, null)
+
+    expect(res.totals.tillgangar.current).toBe(1)
+    expect(res.totals.egetKapitalSkulder.current).toBe(1)
+    expect(res.warnings.some((warning) => warning.includes('3005'))).toBe(false)
+  })
+
+  it('distributes a multi-krona RR residual over fractional posts', () => {
+    const incomeRows = [
+      row('3010', 'Revenue', 0, 0.5),
+      row('3810', 'Capitalized work', 0, 0.5),
+      row('3910', 'Other income', 0, 0.5),
+      row('8010', 'Group result', 0, 0.5),
+      row('8310', 'Interest income', 0, 0.5),
+    ]
+    const preClosing = [row('1930', 'Bank', 2.5, 0), ...incomeRows]
+    const full = [
+      row('1930', 'Bank', 2.5, 0),
+      row('2099', 'Current result', 0, 2.5),
+      ...incomeRows.map((incomeRow) => ({
+        ...incomeRow,
+        closing_debit: incomeRow.closing_credit,
+      })),
+    ]
+
+    const res = mapTrialBalancesToK2({ full, preClosing }, null)
+
+    expect(res.totals.aretsResultat.current).toBe(3)
+    expect(res.br['AretsResultatEgetKapital'].current).toBe(3)
+    expect(res.warnings.some((warning) => warning.includes('2099'))).toBe(false)
+  })
+
+  it('leaves real bookkeeping differences alone and reports them', () => {
     const rows = [
       row('1930', 'Bank', 1_000, 0),
       row('2440', 'Leverantörsskulder', 0, 990),

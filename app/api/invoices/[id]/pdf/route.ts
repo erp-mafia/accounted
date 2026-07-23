@@ -7,11 +7,26 @@ import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import type { Invoice, InvoiceItem, Customer, CompanySettings } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import {
+  hasRequiredInvoicePaymentAccount,
+  invoiceRequiresPaymentAccount,
+} from '@/lib/invoices/payment-accounts'
+
+const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
+
+function privateNoStore(response: NextResponse): NextResponse {
+  response.headers.set('Cache-Control', 'private, no-store')
+  return response
+}
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.pdf',
-  async (request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId, log, requestId }, { params }) => {
   const { id } = await params
+
+  // withRouteContext resolves companyId from the authenticated user's active
+  // membership. Explicit company filters remain mandatory defense in depth.
 
   // Fetch invoice with customer and items
   const { data: invoice, error: invoiceError } = await supabase
@@ -26,7 +41,10 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     .single()
 
   if (invoiceError || !invoice) {
-    return NextResponse.json({ error: 'Invoice not found' }, { status: 404 })
+    return NextResponse.json(
+      { error: 'Invoice not found' },
+      { status: 404, headers: PRIVATE_NO_STORE_HEADERS },
+    )
   }
 
   // Fetch company settings
@@ -37,7 +55,17 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     .single()
 
   if (companyError || !company) {
-    return NextResponse.json({ error: 'Company settings not found' }, { status: 404 })
+    return NextResponse.json(
+      { error: 'Company settings not found' },
+      { status: 404, headers: PRIVATE_NO_STORE_HEADERS },
+    )
+  }
+
+  if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
+    return privateNoStore(errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
+      requestId,
+      details: { currency: (invoice as Invoice).currency },
+    }))
   }
 
   // Sort items by sort_order
@@ -50,6 +78,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       .from('invoices')
       .select('invoice_number')
       .eq('id', invoice.credited_invoice_id)
+      .eq('company_id', companyId)
       .single()
 
     if (originalInvoice) {
@@ -61,8 +90,10 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Generate PDF
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
+      (invoice as Invoice).currency,
+      { paymentAccountRequired: invoiceRequiresPaymentAccount(invoice as Invoice) },
     )
-    const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, invoice as Invoice)
+    const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, invoice as Invoice)
     const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(invoice as Invoice)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
@@ -98,13 +129,14 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         'Content-Type': 'application/pdf',
         'Content-Disposition': contentDisposition('attachment', filename),
         'Content-Length': pdfBuffer.length.toString(),
+        'Cache-Control': 'private, no-store',
       },
     })
   } catch (error) {
-    console.error('PDF generation error:', error)
+    log.error('invoice PDF generation failed', error, { requestId, invoiceId: id })
     return NextResponse.json(
       { error: error instanceof Error ? getUserErrorMessage(error) : 'PDF generation failed' },
-      { status: 500 }
+      { status: 500, headers: PRIVATE_NO_STORE_HEADERS }
     )
   }
   },

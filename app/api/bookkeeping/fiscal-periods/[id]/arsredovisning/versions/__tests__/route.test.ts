@@ -22,12 +22,14 @@ vi.mock('@/lib/bokslut/arsredovisning/model', () => ({
 }))
 vi.mock('@/lib/bokslut/arsredovisning/version-service', () => ({
   createAnnualReportVersion: vi.fn(),
+  hasStatementIntegrityErrors: vi.fn(),
   listAnnualReportVersions: vi.fn(),
 }))
 
 import { buildCanonicalAnnualReport } from '@/lib/bokslut/arsredovisning/model'
 import {
   createAnnualReportVersion,
+  hasStatementIntegrityErrors,
   listAnnualReportVersions,
 } from '@/lib/bokslut/arsredovisning/version-service'
 import { GET, POST } from '../route'
@@ -57,6 +59,7 @@ function setup() {
   vi.mocked(buildCanonicalAnnualReport).mockResolvedValue({
     validation: { ok: true },
   } as never)
+  vi.mocked(hasStatementIntegrityErrors).mockReturnValue(false)
   return mock
 }
 
@@ -133,6 +136,40 @@ describe('annual report versions route', () => {
       true,
     )
   })
+
+  it.each(['snapshot', 'finalize'] as const)(
+    'rejects an inconsistent report before creating a %s version',
+    async (action) => {
+      const { enqueue } = setup()
+      enqueue({ data: { id: 'period-1' } })
+      vi.mocked(hasStatementIntegrityErrors).mockReturnValue(true)
+      vi.mocked(buildCanonicalAnnualReport).mockResolvedValue({
+        validation: {
+          ok: false,
+          issues: [{ code: 'AR-RESULT-MISMATCH', severity: 'error' }],
+        },
+      } as never)
+
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; message: string; message_en: string }
+      }>(
+        await POST(
+          createMockRequest('/x', { method: 'POST', body: { action } }),
+          params,
+        ),
+      )
+
+      expect(status).toBe(409)
+      expect(body.error).toEqual(
+        expect.objectContaining({
+          code: 'ARSREDOVISNING_INCOMPLETE',
+          message: expect.any(String),
+          message_en: expect.any(String),
+        }),
+      )
+      expect(createAnnualReportVersion).not.toHaveBeenCalled()
+    },
+  )
 
   it('accepts a VD as the fastställelseintyg signer', async () => {
     const { enqueue } = setup()

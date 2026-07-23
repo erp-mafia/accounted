@@ -21,6 +21,7 @@ import type { K2MappingResult } from '@/lib/bokslut/ixbrl/k2-mapper'
 import type { StatementRow } from './types'
 
 const ZERO: ConceptAmount = { current: 0, previous: null }
+type StatementMapping = Pick<K2MappingResult, 'rr' | 'br' | 'totals'>
 
 function hasValue(amount: ConceptAmount): boolean {
   return amount.current !== 0 || (amount.previous ?? 0) !== 0
@@ -28,6 +29,7 @@ function hasValue(amount: ConceptAmount): boolean {
 
 interface RowOptions {
   indent?: number
+  semantic_key?: StatementRow['semantic_key']
   /** Presentational minus — show cost posts as negative. */
   displayMinus?: boolean
   /** Emit the row even when zero in both years (statutory always-visible posts). */
@@ -64,6 +66,7 @@ class RowBuilder {
       label,
       current: sign * amount.current,
       previous: this.hasPrevious ? sign * (amount.previous ?? 0) : null,
+      ...(opts.semantic_key ? { semantic_key: opts.semantic_key } : {}),
       ...(isTotal ? { is_total: true } : {}),
       ...(opts.indent ? { indent: opts.indent } : {}),
     }
@@ -73,7 +76,7 @@ class RowBuilder {
 /** The mapper leaves `previous` null on every concept when the company has
  *  no previous fiscal year; any concept with a number means a jämförelseår
  *  exists. */
-function mappingHasPrevious(mapping: K2MappingResult): boolean {
+function mappingHasPrevious(mapping: StatementMapping): boolean {
   return mapping.totals.tillgangar.previous !== null
 }
 
@@ -81,7 +84,7 @@ function mappingHasPrevious(mapping: K2MappingResult): boolean {
  * Resultaträkning — kostnadsslagsindelad per ÅRL bilaga 2 / K2 risbs, in
  * uppställningsform order.
  */
-export function buildRrRows(mapping: K2MappingResult): StatementRow[] {
+export function buildRrRows(mapping: StatementMapping): StatementRow[] {
   const { rr, totals } = mapping
   const b = new RowBuilder(mappingHasPrevious(mapping))
 
@@ -171,7 +174,9 @@ export function buildRrRows(mapping: K2MappingResult): StatementRow[] {
   b.heading('Skatter')
   b.post('Skatt på årets resultat', rr['SkattAretsResultat'], { indent: 1, displayMinus: true })
   b.post('Övriga skatter', rr['OvrigaSkatter'], { indent: 1, displayMinus: true })
-  b.total('Årets resultat', totals.aretsResultat)
+  b.total('Årets resultat', totals.aretsResultat, {
+    semantic_key: 'income_statement_result',
+  })
 
   return b.rows
 }
@@ -182,7 +187,7 @@ export function buildRrRows(mapping: K2MappingResult): StatementRow[] {
  * kortfristiga fordringar, kassa och bank, eget kapital and kortfristiga
  * skulder always render.
  */
-export function buildBrRows(mapping: K2MappingResult): {
+export function buildBrRows(mapping: StatementMapping): {
   assets: StatementRow[]
   equityLiabilities: StatementRow[]
 } {
@@ -356,7 +361,11 @@ export function buildBrRows(mapping: K2MappingResult): {
   e.heading('Fritt eget kapital', 1)
   e.post('Överkursfond', br['Overkursfond'], { indent: 2 })
   e.post('Balanserat resultat', br['BalanseratResultat'], { indent: 2, alwaysShow: true })
-  e.post('Årets resultat', br['AretsResultatEgetKapital'], { indent: 2, alwaysShow: true })
+  e.post('Årets resultat', br['AretsResultatEgetKapital'], {
+    indent: 2,
+    alwaysShow: true,
+    semantic_key: 'balance_sheet_current_year_result',
+  })
   e.total('Summa fritt eget kapital', totals.frittEgetKapital, { indent: 1 })
   e.total('Summa eget kapital', totals.egetKapital)
   if (hasValue(totals.obeskattadeReserver)) {

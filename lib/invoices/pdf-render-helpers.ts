@@ -20,13 +20,17 @@
  */
 
 import QRCode from 'qrcode'
-import type { CompanySettings, Invoice } from '@/types'
+import type { CompanySettings, Currency, Invoice } from '@/types'
 import { brandingFromCompanySettings, SHOW_SWISH_ON_INVOICE, type InvoiceBranding } from '@/lib/invoices/pdf-template'
 import { buildSwishQrPayload } from '@/lib/payments/swish'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { createLogger } from '@/lib/logger'
 import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
 import { prepareInvoiceFont } from '@/lib/invoices/pdf-fonts'
+import {
+  assertInvoicePaymentAccountForRender,
+  companyWithInvoicePaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 
 const log = createLogger('invoice.swish-qr')
 const paymentLinkLog = createLogger('invoice.payment-link-qr')
@@ -40,6 +44,10 @@ export interface InvoicePdfRenderExtras {
    * unchanged on any failure, so behaviour is never worse than before.
    */
   company: CompanySettings
+}
+
+export interface InvoicePdfRenderOptions {
+  paymentAccountRequired?: boolean
 }
 
 // A company's logo is reused across every invoice render, and twice per send
@@ -144,18 +152,26 @@ async function encodeLogo(logoUrl: string): Promise<string | null> {
 
 export async function prepareInvoicePdfRender(
   company: CompanySettings,
+  currency?: Currency,
+  options: InvoicePdfRenderOptions = {},
 ): Promise<InvoicePdfRenderExtras> {
+  if (currency && options.paymentAccountRequired !== false) {
+    assertInvoicePaymentAccountForRender(company, currency)
+  }
   const branding = await prepareInvoiceFont(
     company,
     brandingFromCompanySettings(company),
   )
-  if (!company.logo_url) return { branding, company }
+  const paymentCompany = currency
+    ? companyWithInvoicePaymentAccount(company, currency)
+    : company
+  if (!paymentCompany.logo_url) return { branding, company: paymentCompany }
 
-  const dataUrl = await resolveLogoDataUrl(company.logo_url)
+  const dataUrl = await resolveLogoDataUrl(paymentCompany.logo_url)
   const resolved =
-    dataUrl && dataUrl !== company.logo_url
-      ? { ...company, logo_url: dataUrl }
-      : company
+    dataUrl && dataUrl !== paymentCompany.logo_url
+      ? { ...paymentCompany, logo_url: dataUrl }
+      : paymentCompany
   return { branding, company: resolved }
 }
 

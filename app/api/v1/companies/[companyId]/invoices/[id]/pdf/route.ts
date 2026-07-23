@@ -26,6 +26,10 @@ import { contentDisposition } from '@/lib/api/content-disposition'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import {
+  hasRequiredInvoicePaymentAccount,
+  invoiceRequiresPaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 
 const INVOICE_PDF_COLUMNS =
@@ -131,6 +135,13 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       })
     }
 
+    if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, typed)) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
+        requestId: ctx.requestId,
+        details: { currency: typed.currency },
+      })
+    }
+
     const items = (typed.items ?? []).slice().sort((a, b) => a.sort_order - b.sort_order)
 
     // Credit-note back-reference per ML 17 kap 22-23§. Best-effort: if the
@@ -153,8 +164,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     try {
       const { branding, company: renderCompany } = await prepareInvoicePdfRender(
         company as CompanySettings,
+        typed.currency,
+        { paymentAccountRequired: invoiceRequiresPaymentAccount(typed) },
       )
-      const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, typed as Invoice)
+      const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, typed as Invoice)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: typed as Invoice,
@@ -194,6 +207,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         'Content-Type': 'application/pdf',
         'Content-Disposition': contentDisposition('attachment', filename),
         'Content-Length': String(pdfBuffer.length),
+        'Cache-Control': 'private, no-store',
         'X-Request-Id': ctx.requestId,
       },
     })

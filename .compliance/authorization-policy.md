@@ -2,7 +2,7 @@
 
 Status: **Approved Documented Security Decision**
 Owner: Emil Mattsson (emil.mattsson@arcim.io)
-Last reviewed: 2026-05-11
+Last reviewed: 2026-07-23
 
 This document records authorization decisions for Accounted that go beyond the
 default "the resource creator is the only person who can act on it" model.
@@ -54,9 +54,19 @@ of who originally drafted it.
 
 Invoice delivery list responses are data-minimized even for authorized
 company members. They expose masked recipient domains and operational status,
-but not message bodies, subjects, reply-to addresses, provider message IDs, or
-attachment checksums. Archived PDFs are served only when their document row
-belongs to the request's active company.
+but not BCC recipients, message bodies, subjects, reply-to addresses, provider
+message IDs, attachment filenames, or attachment checksums. Archived PDFs are
+served only when their document row belongs to the request's active company.
+The underlying exact delivery payload is selectable only by the user who sent
+the message. Other members receive the minimized list through the dedicated
+database function, so direct PostgREST access cannot bypass route minimization.
+The complete statutory archive is an owner/admin-only server operation and may
+include exact company delivery evidence. Deferred booking uses a separate
+`SECURITY DEFINER` function that verifies active-company membership and exposes
+only the latest archived document ID. The archive route verifies owner/admin
+twice: first through the authenticated RLS client and then through a stateless
+service-role client with explicit `company_id` and `user_id` predicates. Every
+archive query is scoped by that `company_id` or by parent IDs selected for it.
 
 ### Why this is intentional
 
@@ -96,6 +106,69 @@ Although authorization is by `company_id`, the audit trail is by `user_id`:
 ---
 
 ## Specific decisions
+
+### Invoice CC and BCC configuration: owner or admin only
+
+**Decision.** Changing fixed invoice recipients or adding an arbitrary CC or
+BCC recipient to an individual invoice send requires the actor to have the
+`owner` or `admin` role in `company_members`. The dashboard hides those change
+controls for other roles. The settings route protects fixed-recipient changes;
+the dashboard and v1 send routes protect per-send additions before rendering,
+number allocation, or email delivery. The database also rejects direct member
+changes to fixed recipient fields. Once an owner or admin approves a fixed
+recipient, it applies to every send by a writable company member without a new
+role check. A fixed recipient that matches the customer address is de-duplicated
+with To precedence because it does not introduce a new external disclosure. The
+legacy company-email or authenticated sender-email fallback is also fixed
+routing: it cannot be supplied by the request, and the sender already has access
+to the invoice being sent.
+
+**Why.** Both fixed and per-send recipients can disclose customer invoice data
+to a new external address. This is a distinct disclosure decision and needs a
+narrower authorization boundary than ordinary invoice sending. Explicit
+recipients that collide with To, fixed CC, fixed BCC, or another per-send
+recipient are rejected instead of silently changing recipient classification.
+
+**Compensating audit.** Successful invoice sends retain the exact immutable
+recipient payload in `invoice_deliveries`, including the actor and company.
+Routine delivery-list and send responses remain minimized and never expose BCC.
+
+**Service write boundary.** Delivery persistence uses a stateless service-role
+client because authenticated PostgREST writes are intentionally revoked. The
+service-only RPCs do not trust that client alone: they verify the supplied actor
+is a writable member of the supplied company and bind every invoice and
+delivery row to that company. Dashboard routes enter through `withRouteContext`,
+v1 and MCP routes enter through `withApiV1` or the approved pending-operation
+path, and recurring sends derive actor, company, invoice, and schedule from the
+same company-scoped job before calling the RPC.
+
+**Cross-references.**
+- OWASP ASVS V2.3: business logic integrity
+- OWASP ASVS V8.2.1: operation-level authorization
+- GDPR Articles 5(1)(c) and 25(2): minimization and privacy by default
+- SOC 2 CC6.1: logical access
+
+### Invoice payment instructions: owner or admin only
+
+**Decision.** Changing the currency-keyed `invoice_payment_accounts` or any
+legacy SEK mirror field requires the `owner` or `admin` role. The legacy fields
+are `bank_name`, `clearing_number`, `account_number`, `bankgiro`, `plusgiro`,
+`swish`, `iban`, and `bic`. The settings route enforces this before persistence,
+matching the existing `company_settings` RLS policy.
+
+**Why.** Payment instructions determine where a customer sends company funds.
+They need the same administrative boundary as other company financial settings.
+All payable invoices, including SEK invoices, must resolve a usable account
+before PDF rendering or invoice-number allocation. Credit notes, proformas, and
+delivery notes remain exempt because they do not request payment.
+Resends are not exempt: the current implementation renders a new PDF from
+current company settings instead of reusing an earlier delivery snapshot, so it
+must not send a payable document with blank or obsolete remittance details.
+
+**Cross-references.**
+- OWASP ASVS V2.3: business logic integrity
+- OWASP ASVS V8.2.1: operation-level authorization
+- SOC 2 CC6.1: logical access
 
 ### bank_connections: managed at company scope
 

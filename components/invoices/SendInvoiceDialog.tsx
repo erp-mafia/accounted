@@ -31,6 +31,13 @@ import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { Invoice, InvoiceItem, Customer, EntityType, BASAccount } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
+import {
+  EMAIL_PATTERN,
+  exceedsInvoiceEmailRecipientLimit,
+  MAX_INVOICE_EMAIL_RECIPIENTS,
+  parseInvoiceRecipientText,
+  resolveInvoiceEmailRecipients,
+} from '@/lib/invoices/email-recipients'
 
 interface InvoiceWithRelations extends Invoice {
   customer: Customer
@@ -55,7 +62,8 @@ export default function SendInvoiceDialog({
 }: SendInvoiceDialogProps) {
   const { toast } = useToast()
   const supabase = createClient()
-  const { company, isSandbox } = useCompany()
+  const { company, role, isSandbox } = useCompany()
+  const canCustomizeRecipients = role === 'owner' || role === 'admin'
   const canEmail = useCapability(CAPABILITY.email_send)
   const t = useTranslations('invoice_send_dialog')
   const locale = useLocale() as 'sv' | 'en'
@@ -72,6 +80,10 @@ export default function SendInvoiceDialog({
   const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [editLines, setEditLines] = useState<FormLine[]>([])
   const [hasEdited, setHasEdited] = useState(false)
+  const [fixedCc, setFixedCc] = useState<string[]>([])
+  const [fixedBcc, setFixedBcc] = useState<string[]>([])
+  const [additionalCcText, setAdditionalCcText] = useState('')
+  const [additionalBccText, setAdditionalBccText] = useState('')
   const accountNameByNumber = useMemo(() => {
     const names = new Map(catalog.map((account) => [account.account_number, account.account_name]))
     for (const account of accounts) names.set(account.account_number, account.account_name)
@@ -92,6 +104,8 @@ export default function SendInvoiceDialog({
   useEffect(() => {
     if (!open) {
       setIsInitialized(false)
+      setAdditionalCcText('')
+      setAdditionalBccText('')
       return
     }
 
@@ -101,10 +115,10 @@ export default function SendInvoiceDialog({
       try {
         if (!company?.id) throw new Error(t('no_active_company'))
 
-        const [settingsResult, periodResult, originalResult] = await Promise.all([
+        const [settingsResult, periodResult, originalResult, authResult] = await Promise.all([
           supabase
             .from('company_settings')
-            .select('accounting_method, entity_type, defer_invoice_booking')
+            .select('accounting_method, entity_type, defer_invoice_booking, email, invoice_email_cc_addresses, invoice_email_bcc_addresses')
             .eq('company_id', company.id)
             .maybeSingle(),
           supabase
@@ -122,11 +136,13 @@ export default function SendInvoiceDialog({
                 .eq('company_id', company.id)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
+          supabase.auth.getUser(),
         ])
 
         if (settingsResult.error) throw new Error(t('company_settings_failed'))
         if (periodResult.error) throw new Error(t('fiscal_period_failed'))
         if (originalResult.error) throw new Error(t('original_invoice_failed'))
+        if (authResult.error || !authResult.data.user) throw new Error(t('load_failed_title'))
 
         if (cancelled) return
 
@@ -157,6 +173,16 @@ export default function SendInvoiceDialog({
         setAccounts(fetchedAccounts)
         setCatalog(fetchedCatalog)
         setEntityType((settingsResult.data?.entity_type as EntityType) || 'enskild_firma')
+        const legacyCc = settingsResult.data?.email || authResult.data.user.email
+        setFixedCc(
+          settingsResult.data?.invoice_email_cc_addresses
+          ?? (legacyCc ? [legacyCc] : []),
+        )
+        setFixedBcc(
+          canCustomizeRecipients
+            ? settingsResult.data?.invoice_email_bcc_addresses ?? []
+            : [],
+        )
         setPeriodName(periodResult.data?.name || '')
         setDeferBooking(!!settingsResult.data?.defer_invoice_booking)
         setShouldBookOnIssue(bookOnIssue)
@@ -174,7 +200,7 @@ export default function SendInvoiceDialog({
 
     init()
     return () => { cancelled = true }
-  }, [open, invoice.id, invoice.invoice_date, company?.id])
+  }, [open, invoice.id, invoice.invoice_date, company?.id, canCustomizeRecipients])
 
   const proposedLines = useMemo(() => {
     if (!isInitialized || !shouldBookOnIssue) return []
@@ -198,6 +224,29 @@ export default function SendInvoiceDialog({
       entityType,
     })
   }, [isInitialized, shouldBookOnIssue, entityType, invoice])
+
+  const additionalCc = useMemo(
+    () => parseInvoiceRecipientText(additionalCcText),
+    [additionalCcText],
+  )
+  const additionalBcc = useMemo(
+    () => parseInvoiceRecipientText(additionalBccText),
+    [additionalBccText],
+  )
+  const invalidAdditionalRecipient = [...additionalCc, ...additionalBcc]
+    .find((address) => !EMAIL_PATTERN.test(address))
+  const resolvedRecipients = resolveInvoiceEmailRecipients({
+    to: invoice.customer.email ?? '',
+    configuredCc: fixedCc,
+    configuredBcc: fixedBcc,
+    additionalCc,
+    additionalBcc,
+  })
+  const recipientError = invalidAdditionalRecipient
+    ? t('recipient_invalid', { address: invalidAdditionalRecipient })
+    : exceedsInvoiceEmailRecipientLimit(resolvedRecipients)
+      ? t('recipient_too_many', { count: MAX_INVOICE_EMAIL_RECIPIENTS })
+      : null
 
   // Seed the editable grid from the proposal once per open; edits must not be
   // clobbered by re-renders, so proposedLines is deliberately not a dependency.
@@ -269,6 +318,7 @@ export default function SendInvoiceDialog({
 
   const handleConfirm = async () => {
     if (editable && (!isBalanced || hasOrphanAmounts)) return
+    if (mode === 'email' && recipientError) return
     setIsSubmitting(true)
 
     try {
@@ -294,12 +344,23 @@ export default function SendInvoiceDialog({
             }))
         : undefined
 
+      const payload = {
+        ...(apiLines ? { lines: apiLines } : {}),
+        ...(mode === 'email' && canCustomizeRecipients && additionalCc.length > 0
+          ? { additional_cc: additionalCc }
+          : {}),
+        ...(mode === 'email' && canCustomizeRecipients && additionalBcc.length > 0
+          ? { additional_bcc: additionalBcc }
+          : {}),
+      }
+      const hasPayload = Object.keys(payload).length > 0
+
       const response = await fetch(url, {
         method: 'POST',
-        ...(apiLines
+        ...(hasPayload
           ? {
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ lines: apiLines }),
+              body: JSON.stringify(payload),
             }
           : {}),
       })
@@ -422,6 +483,56 @@ export default function SendInvoiceDialog({
                   Uppgradera
                 </a>{' '}
                 eller använd &laquo;Markera som skickad&raquo;.
+              </div>
+            )}
+            {mode === 'email' && (
+              <div className="space-y-3 rounded-lg border border-border p-3">
+                <div className="space-y-1 text-sm">
+                  <p>
+                    <span className="font-medium">{t('recipient_to_label')}:</span>{' '}
+                    {invoice.customer.email}
+                  </p>
+                  <p className="text-muted-foreground">
+                    <span className="font-medium text-foreground">{t('recipient_fixed_cc_label')}:</span>{' '}
+                    {fixedCc.length > 0 ? fixedCc.join(', ') : t('recipient_none')}
+                  </p>
+                  {canCustomizeRecipients && (
+                    <p className="text-muted-foreground">
+                      <span className="font-medium text-foreground">{t('recipient_fixed_bcc_label')}:</span>{' '}
+                      {fixedBcc.length > 0 ? fixedBcc.join(', ') : t('recipient_none')}
+                    </p>
+                  )}
+                </div>
+                {canCustomizeRecipients && (
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="invoice-additional-cc">{t('recipient_additional_cc_label')}</Label>
+                        <Input
+                          id="invoice-additional-cc"
+                          value={additionalCcText}
+                          onChange={(event) => setAdditionalCcText(event.target.value)}
+                          placeholder={t('recipient_additional_placeholder')}
+                          aria-invalid={!!recipientError}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="invoice-additional-bcc">{t('recipient_additional_bcc_label')}</Label>
+                        <Input
+                          id="invoice-additional-bcc"
+                          value={additionalBccText}
+                          onChange={(event) => setAdditionalBccText(event.target.value)}
+                          placeholder={t('recipient_additional_placeholder')}
+                          aria-invalid={!!recipientError}
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{t('recipient_additional_hint')}</p>
+                    {recipientError && (
+                      <p className="text-sm text-destructive" role="alert">{recipientError}</p>
+                    )}
+                  </>
+                )}
               </div>
             )}
             {showJournalPreview && editable ? (
@@ -629,7 +740,7 @@ export default function SendInvoiceDialog({
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={isSubmitting || !isInitialized || (editable && (!isBalanced || hasOrphanAmounts)) || (mode === 'email' && (isSandbox || !canEmail))}
+            disabled={isSubmitting || !isInitialized || (editable && (!isBalanced || hasOrphanAmounts)) || (mode === 'email' && (isSandbox || !canEmail || !!recipientError))}
             className="w-full sm:w-auto min-h-11"
             title={
               mode === 'email' && isSandbox

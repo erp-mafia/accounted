@@ -431,6 +431,43 @@ describe('invoice email templates', () => {
       expect(text).toMatch(/1[\s ]234,56 EUR/)
     })
 
+    it('uses the matching EUR payment account in both email variants', () => {
+      const eurInvoice = makeInvoice({ invoice_number: '1042', currency: 'EUR', total: 1234.56 })
+      const multiCurrencyCompany = makeCompanySettings({
+        bank_name: 'Legacy SEK Bank',
+        clearing_number: '5037',
+        account_number: '1231231',
+        iban: 'SE0011111111111111111111',
+        bic: 'NDEASESS',
+        invoice_payment_accounts: {
+          EUR: {
+            bank_name: 'Mock ASPSP',
+            clearing_number: null,
+            account_number: null,
+            bankgiro: null,
+            plusgiro: null,
+            swish: null,
+            iban: 'SE4550000000058398257466',
+            bic: 'ESSESESS',
+          },
+        },
+      })
+
+      const data = { invoice: eurInvoice, customer: svCustomer, company: multiCurrencyCompany }
+      const html = generateInvoiceEmailHtml(data)
+      const text = generateInvoiceEmailText(data)
+
+      for (const rendered of [html, text]) {
+        expect(rendered).toContain('Mock ASPSP')
+        expect(rendered).toContain('SE4550000000058398257466')
+        expect(rendered).toContain('ESSESESS')
+        expect(rendered).not.toContain('Legacy SEK Bank')
+        expect(rendered).not.toContain('5037-1231231')
+        expect(rendered).not.toContain('SE0011111111111111111111')
+        expect(rendered).not.toContain('NDEASESS')
+      }
+    })
+
     it('subtracts the ROT/RUT deduction so the email states what the customer owes', () => {
       const rotInvoice = makeInvoice({ invoice_number: '1042', total: 1234.56, deduction_total: 500 })
       const html = generateInvoiceEmailHtml({ invoice: rotInvoice, customer: svCustomer, company })

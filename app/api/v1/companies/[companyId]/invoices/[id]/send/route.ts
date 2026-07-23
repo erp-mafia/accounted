@@ -64,12 +64,39 @@ import {
   sendTrackedInvoiceEmail,
   InvoiceDeliverySnapshotError,
 } from '@/lib/invoices/invoice-deliveries'
+import {
+  EMAIL_PATTERN,
+  exceedsInvoiceEmailRecipientLimit,
+  MAX_INVOICE_EMAIL_COPY_RECIPIENTS,
+  findAdditionalInvoiceRecipientCollisions,
+  invoiceEmailRecipientCount,
+  resolveInvoiceEmailRecipients,
+} from '@/lib/invoices/email-recipients'
+import {
+  hasRequiredInvoicePaymentAccount,
+  invoiceRequiresPaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
+
+const InvoiceSendBody = z.object({
+  additional_cc: z.array(z.string().trim().pipe(z.email().max(254)))
+    .max(MAX_INVOICE_EMAIL_COPY_RECIPIENTS)
+    .optional(),
+  additional_bcc: z.array(z.string().trim().pipe(z.email().max(254)))
+    .max(MAX_INVOICE_EMAIL_COPY_RECIPIENTS)
+    .optional(),
+}).refine(
+  (data) => (
+    (data.additional_cc?.length ?? 0) + (data.additional_bcc?.length ?? 0)
+    <= MAX_INVOICE_EMAIL_COPY_RECIPIENTS
+  ),
+  { path: ['additional_cc'] },
+)
 
 const InvoiceSendResponse = z.object({
   id: z.string().uuid(),
@@ -78,7 +105,10 @@ const InvoiceSendResponse = z.object({
   total: z.number(),
   message_id: z.string().nullable(),
   sent_to: z.string(),
-  cc: z.string().nullable(),
+  cc: z.string().nullable().describe(
+    'Deprecated compatibility field containing only the first CC recipient. Use cc_addresses for the complete delivery list.',
+  ),
+  cc_addresses: z.array(z.string()),
   journal_entry_id: z.string().uuid().nullable(),
   warnings: z
     .array(z.object({ code: z.string(), message: z.string() }))
@@ -103,8 +133,15 @@ registerEndpoint({
     'A cancelled invoice is rejected (400 INVOICE_SEND_CANCELLED): its F-series number is preserved for compliance but the document is not a valid faktura.',
     'Email failure before the status flip leaves the F-series number consumed but the invoice in `draft` status. Same orphan window as :mark-sent (architecturally tracked, matches internal route).',
     'After the email succeeds, journal-entry/archive/event failures become warnings on the response; the invoice IS marked sent regardless.',
+    'additional_cc and additional_bcc require the API key user to be an owner or admin of the company.',
+    'The deprecated cc response field contains only the first address. Use cc_addresses for the complete CC list.',
+    'BCC recipients are retained only in the restricted delivery archive and are omitted from normal and dry-run responses.',
   ],
   example: {
+    request: {
+      additional_cc: ['case-owner@company.test'],
+      additional_bcc: ['invoice-archive@company.test'],
+    },
     response: {
       data: {
         id: '0e9c…',
@@ -114,6 +151,7 @@ registerEndpoint({
         message_id: 're_abc123',
         sent_to: 'finance@acme.test',
         cc: 'billing@gnubok-user.test',
+        cc_addresses: ['billing@gnubok-user.test'],
         journal_entry_id: '7b3a…',
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
@@ -124,13 +162,27 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: true,
+  request: { body: InvoiceSendBody },
   response: { success: dataEnvelope(InvoiceSendResponse) },
 })
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'invoices.send',
-  async (_request, ctx, params) => {
+  async (request, ctx, params) => {
     const { id } = await params.params
+
+    let rawBody: unknown = {}
+    const bodyText = await request.text()
+    if (bodyText) {
+      try {
+        rawBody = JSON.parse(bodyText)
+      } catch {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: { field: 'body', message: 'Body is not valid JSON.' },
+        })
+      }
+    }
 
     const idParse = z.string().uuid().safeParse(id)
     if (!idParse.success) {
@@ -211,6 +263,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    const bodyResult = InvoiceSendBody.safeParse(rawBody)
+    if (!bodyResult.success) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          issues: bodyResult.error.issues.map((issue) => ({
+            field: issue.path.join('.'),
+            message: issue.message,
+          })),
+        },
+      })
+    }
+
     // Reject delivery notes: they have a different (D-series) lifecycle.
     if (typed.document_type === 'delivery_note') {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -253,7 +318,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Step 2: customer email.
     const customer = typed.customer
-    if (!customer?.email) {
+    if (!customer?.email?.trim() || !EMAIL_PATTERN.test(customer.email.trim())) {
       return v1ErrorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', ctx.log, {
         requestId: ctx.requestId,
         details: { customer_id: typed.customer_id },
@@ -278,7 +343,71 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const settings = company as CompanySettings & { accounting_method?: string }
+    const paymentAccountRequired = invoiceRequiresPaymentAccount(typed)
+    if (!hasRequiredInvoicePaymentAccount(settings, typed)) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', ctx.log, {
+        requestId: ctx.requestId,
+        details: { currency: typed.currency },
+      })
+    }
 
+    const hasAdditionalRecipients =
+      (bodyResult.data.additional_cc?.length ?? 0) > 0
+      || (bodyResult.data.additional_bcc?.length ?? 0) > 0
+    // Fixed recipients are owner/admin-approved company routing. A fresh role
+    // check is required only when this request introduces another recipient.
+    if (hasAdditionalRecipients) {
+      const { data: membership, error: membershipError } = await ctx.supabase
+        .from('company_members')
+        .select('role')
+        .eq('company_id', ctx.companyId!)
+        .eq('user_id', ctx.userId)
+        .maybeSingle()
+
+      if (membershipError) {
+        ctx.log.error('invoices.send: failed to authorize custom recipients', membershipError)
+        return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+        })
+      }
+      if (!membership || !['owner', 'admin'].includes(membership.role)) {
+        return v1ErrorResponseFromCode('FORBIDDEN', ctx.log, {
+          requestId: ctx.requestId,
+          details: { required_roles: ['owner', 'admin'] },
+        })
+      }
+    }
+
+    const recipientInput = {
+      to: customer.email,
+      configuredCc: settings.invoice_email_cc_addresses,
+      configuredBcc: settings.invoice_email_bcc_addresses,
+      // The company email is fixed routing, not an arbitrary
+      // request-controlled recipient.
+      legacyCc: settings.email,
+      additionalCc: bodyResult.data.additional_cc,
+      additionalBcc: bodyResult.data.additional_bcc,
+    }
+    const recipientCollisions = findAdditionalInvoiceRecipientCollisions(recipientInput)
+    if (recipientCollisions.length > 0) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'recipients', collisions: recipientCollisions },
+      })
+    }
+    const recipients = resolveInvoiceEmailRecipients(recipientInput)
+    if (recipients.to.length === 0) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', ctx.log, {
+        requestId: ctx.requestId,
+        details: { customer_id: typed.customer_id },
+      })
+    }
+    if (exceedsInvoiceEmailRecipientLimit(recipients)) {
+      return v1ErrorResponseFromCode('INVOICE_SEND_TOO_MANY_RECIPIENTS', ctx.log, {
+        requestId: ctx.requestId,
+        details: { recipient_count: invoiceEmailRecipientCount(recipients) },
+      })
+    }
     const items = (typed.items ?? []).slice().sort((a, b) => a.sort_order - b.sort_order)
     // Credit notes are rejected above, so originalInvoiceNumber is never
     // needed on this code path. Kept undefined to satisfy the InvoicePDF
@@ -290,7 +419,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const isFreshAllocation = !typed.invoice_number
     if (isFreshAllocation) {
       try {
-        const preflight = await prepareInvoicePdfRender(settings)
+        const preflight = await prepareInvoicePdfRender(settings, typed.currency, {
+          paymentAccountRequired,
+        })
         await renderToBuffer(
           InvoicePDF({
             invoice: { ...(typed as Invoice), invoice_number: 'F-PREVIEW' },
@@ -315,13 +446,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (ctx.dryRun) {
       // Dry-run stops here. Validated everything that doesn't have side
       // effects; preview the would-be sent state.
-      return dryRunPreview(
+      const response = dryRunPreview(
         {
           ...typed,
           status: 'sent' as const,
           invoice_number: typed.invoice_number ?? '(allocated atomically on commit)',
           would_send_to: customer.email,
-          would_cc: settings.email || null,
+          would_cc: recipients.cc[0] ?? null,
+          would_cc_addresses: recipients.cc,
           would_create_journal_entry:
             (!typed.document_type || typed.document_type === 'invoice') &&
             (settings.accounting_method ?? 'accrual') === 'accrual',
@@ -330,6 +462,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
+      response.headers.set('Cache-Control', 'private, no-store')
+      return response
     }
 
     let deliveryId: string
@@ -419,8 +553,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     let pdfBuffer: Buffer
     try {
-      const { branding, company: renderCompany } = await prepareInvoicePdfRender(settings)
-      const swishQrDataUrl = await buildSwishQrDataUrl(settings, renderableInvoice)
+      const { branding, company: renderCompany } = await prepareInvoicePdfRender(
+        settings,
+        renderableInvoice.currency,
+        { paymentAccountRequired },
+      )
+      const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
       const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
       pdfBuffer = await renderToBuffer(
         InvoicePDF({
@@ -457,7 +595,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       documentType: typed.document_type,
     })
 
-    const ccAddress = settings.email ?? null
     const emailData = { invoice: renderableInvoice, customer, company: settings }
     const subject = generateInvoiceEmailSubject(emailData)
     const html = generateInvoiceEmailHtml(emailData)
@@ -471,8 +608,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         userId: ctx.userId,
         invoiceId,
         deliveryId,
-        to: customer.email,
-        cc: ccAddress ?? undefined,
+        to: recipients.to,
+        cc: recipients.cc,
+        bcc: recipients.bcc,
         subject,
         html,
         text,
@@ -658,7 +796,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       companyId: ctx.companyId,
       userId: ctx.userId,
       invoiceNumber: finalInvoiceNumber,
-      sentTo: customer.email,
+      recipientCounts: {
+        to: recipients.to.length,
+        cc: recipients.cc.length,
+      },
       journalEntryId,
       hadWarnings: warnings.length > 0,
     })
@@ -671,11 +812,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         total: typed.total,
         message_id: result.messageId ?? null,
         sent_to: customer.email,
-        cc: ccAddress,
+        cc: recipients.cc[0] ?? null,
+        cc_addresses: recipients.cc,
         journal_entry_id: journalEntryId,
         ...(warnings.length > 0 ? { warnings } : {}),
       },
-      { requestId: ctx.requestId },
+      {
+        requestId: ctx.requestId,
+        headers: { 'Cache-Control': 'private, no-store' },
+      },
     )
   },
   { requireIdempotencyKey: true },

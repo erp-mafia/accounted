@@ -58,8 +58,8 @@ export async function buildIxbrlInput(
 
   // Two TB variants per year (see TrialBalancePair): the FULL trial balance
   // (year-end closing included → 2099 booked, class 3-8 zeroed) drives the
-  // BR; the PRE-CLOSING trial balance (excludeYearEndClosing: the same split
-  // lib/reports' generateIncomeStatement uses) drives the RR. A single TB can
+  // BR; the PRE-CLOSING trial balance (excludeFinalClosingEntry) drives the
+  // RR while retaining tax and appropriations. A single TB can
   // never serve both: with bokslut booked every RR concept would map to 0,
   // without it the BR would not tie.
   const [pdfData, periodRow, currentTbFull, currentTbPreClosing, signatureRequests] =
@@ -72,7 +72,7 @@ export async function buildIxbrlInput(
         .eq('company_id', companyId)
         .single(),
       generateTrialBalance(supabase, companyId, fiscalPeriodId),
-      generateTrialBalance(supabase, companyId, fiscalPeriodId, { excludeYearEndClosing: true }),
+      generateTrialBalance(supabase, companyId, fiscalPeriodId, { excludeFinalClosingEntry: true }),
       options.signatureRequests ?? listSignatureRequests(supabase, companyId, fiscalPeriodId),
     ])
 
@@ -102,7 +102,7 @@ export async function buildIxbrlInput(
       try {
         const [prevFull, prevPreClosing] = await Promise.all([
           generateTrialBalance(supabase, companyId, prev.id),
-          generateTrialBalance(supabase, companyId, prev.id, { excludeYearEndClosing: true }),
+          generateTrialBalance(supabase, companyId, prev.id, { excludeFinalClosingEntry: true }),
         ])
         previousTb = { full: prevFull.rows, preClosing: prevPreClosing.rows }
       } catch {

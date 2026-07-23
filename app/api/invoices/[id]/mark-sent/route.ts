@@ -17,6 +17,10 @@ import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
+import {
+  hasRequiredInvoicePaymentAccount,
+  invoiceRequiresPaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type {
@@ -97,14 +101,6 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   }
   const customLines = linesResult.lines
 
-  // Assign invoice number now if this draft doesn't have one yet
-  try {
-    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
-  } catch (err) {
-    log.error('failed to assign invoice number on mark-sent', err as Error)
-    return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId })
-  }
-
   // Fetch full company settings for PDF rendering and accounting method
   const { data: settings, error: settingsError } = await supabase
     .from('company_settings')
@@ -114,6 +110,23 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
   if (settingsError || !settings) {
     return errorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', log, { requestId })
+  }
+
+  const invoiceCurrency = (invoice as Invoice).currency
+  const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
+  if (!hasRequiredInvoicePaymentAccount(settings as CompanySettings, invoice as Invoice)) {
+    return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', log, {
+      requestId,
+      details: { currency: invoiceCurrency },
+    })
+  }
+
+  // Assign the number only after all payment-instruction guards pass.
+  try {
+    await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
+  } catch (err) {
+    log.error('failed to assign invoice number on mark-sent', err as Error)
+    return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId })
   }
 
   const accountingMethod = (settings.accounting_method || 'accrual') as AccountingMethod
@@ -359,8 +372,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
       const { branding, company: renderCompany } = await prepareInvoicePdfRender(
         settings as CompanySettings,
+        renderableInvoice.currency,
+        { paymentAccountRequired },
       )
-      const swishQrDataUrl = await buildSwishQrDataUrl(settings as CompanySettings, renderableInvoice)
+      const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
       const pdfBuffer = await renderToBuffer(
         InvoicePDF({
           invoice: renderableInvoice,
@@ -425,14 +440,17 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
   }
 
-  return NextResponse.json({
-    success: true,
-    status: 'sent',
-    journal_entry_id: journalEntryId,
-    ...(partialFailures.length > 0
-      ? { partial: true, partial_failures: partialFailures }
-      : {}),
-  })
+  return NextResponse.json(
+    {
+      success: true,
+      status: 'sent',
+      journal_entry_id: journalEntryId,
+      ...(partialFailures.length > 0
+        ? { partial: true, partial_failures: partialFailures }
+        : {}),
+    },
+    { headers: { 'Cache-Control': 'private, no-store' } },
+  )
   },
   { requireWrite: true },
 )

@@ -27,7 +27,19 @@ import {
   InvoiceDeliverySnapshotError,
 } from '@/lib/invoices/invoice-deliveries'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { SendInvoiceSchema } from '@/lib/api/schemas'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
+import {
+  EMAIL_PATTERN,
+  exceedsInvoiceEmailRecipientLimit,
+  findAdditionalInvoiceRecipientCollisions,
+  invoiceEmailRecipientCount,
+  resolveInvoiceEmailRecipients,
+} from '@/lib/invoices/email-recipients'
+import {
+  hasRequiredInvoicePaymentAccount,
+  invoiceRequiresPaymentAccount,
+} from '@/lib/invoices/payment-accounts'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -118,7 +130,18 @@ export const POST = withRouteContext(
       })
     }
 
-    const linesResult = parseCustomIssuanceLines(rawBody)
+    const bodyResult = SendInvoiceSchema.safeParse(rawBody ?? {})
+    if (!bodyResult.success) {
+      opLog.warn('send validation failed')
+      return NextResponse.json(
+        { error: 'Ogiltig förfrågan', details: bodyResult.error.flatten() },
+        { status: 400 },
+      )
+    }
+
+    const linesResult = parseCustomIssuanceLines(
+      bodyResult.data.lines ? { lines: bodyResult.data.lines } : undefined,
+    )
     if (!linesResult.ok) {
       if (linesResult.error === 'invalid_body') {
         opLog.warn('send validation failed')
@@ -147,7 +170,7 @@ export const POST = withRouteContext(
     }
 
     const customer = invoice.customer as Customer
-    if (!customer.email) {
+    if (!customer.email?.trim() || !EMAIL_PATTERN.test(customer.email.trim())) {
       return errorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', opLog, {
         requestId,
         details: { customerId: customer.id },
@@ -162,6 +185,72 @@ export const POST = withRouteContext(
 
     if (companyError || !company) {
       return errorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', opLog, { requestId })
+    }
+
+    const invoiceCurrency = (invoice as Invoice).currency
+    const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
+    if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
+      return errorResponseFromCode('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING', opLog, {
+        requestId,
+        details: { currency: invoiceCurrency },
+      })
+    }
+
+    const hasAdditionalRecipients =
+      (bodyResult.data.additional_cc?.length ?? 0) > 0
+      || (bodyResult.data.additional_bcc?.length ?? 0) > 0
+    // Fixed recipients are owner/admin-approved company routing and apply to
+    // every writable sender. Only a new per-send disclosure needs this fresh
+    // role check. See .compliance/authorization-policy.md.
+    if (hasAdditionalRecipients) {
+      const { data: membership, error: membershipError } = await supabase
+        .from('company_members')
+        .select('role')
+        .eq('company_id', companyId)
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (membershipError) {
+        opLog.error('failed to authorize custom invoice recipients', membershipError)
+        return errorResponseFromCode('INTERNAL_ERROR', opLog, { requestId })
+      }
+      if (!membership || !['owner', 'admin'].includes(membership.role)) {
+        return errorResponseFromCode('FORBIDDEN', opLog, {
+          requestId,
+          details: { required_roles: ['owner', 'admin'] },
+        })
+      }
+    }
+
+    const recipientInput = {
+      to: customer.email,
+      configuredCc: company.invoice_email_cc_addresses,
+      configuredBcc: company.invoice_email_bcc_addresses,
+      // This value comes from company settings or the authenticated sender. It
+      // is fixed routing, not an arbitrary request-controlled recipient.
+      legacyCc: company.email || user.email,
+      additionalCc: bodyResult.data.additional_cc,
+      additionalBcc: bodyResult.data.additional_bcc,
+    }
+    const recipientCollisions = findAdditionalInvoiceRecipientCollisions(recipientInput)
+    if (recipientCollisions.length > 0) {
+      return errorResponseFromCode('VALIDATION_ERROR', opLog, {
+        requestId,
+        details: { field: 'recipients', collisions: recipientCollisions },
+      })
+    }
+    const recipients = resolveInvoiceEmailRecipients(recipientInput)
+    if (recipients.to.length === 0) {
+      return errorResponseFromCode('INVOICE_SEND_NO_CUSTOMER_EMAIL', opLog, {
+        requestId,
+        details: { customerId: customer.id },
+      })
+    }
+    if (exceedsInvoiceEmailRecipientLimit(recipients)) {
+      return errorResponseFromCode('INVOICE_SEND_TOO_MANY_RECIPIENTS', opLog, {
+        requestId,
+        details: { recipient_count: invoiceEmailRecipientCount(recipients) },
+      })
     }
 
     const items = (invoice.items as InvoiceItem[]).sort((a, b) => a.sort_order - b.sort_order)
@@ -190,7 +279,11 @@ export const POST = withRouteContext(
     const isFreshAllocation = !invoice.invoice_number
     if (isFreshAllocation) {
       try {
-        const preflight = await prepareInvoicePdfRender(company as CompanySettings)
+        const preflight = await prepareInvoicePdfRender(
+          company as CompanySettings,
+          (invoice as Invoice).currency,
+          { paymentAccountRequired },
+        )
         await renderToBuffer(
           InvoicePDF({
             invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW' },
@@ -253,8 +346,10 @@ export const POST = withRouteContext(
     const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
     const { branding, company: renderCompany } = await prepareInvoicePdfRender(
       company as CompanySettings,
+      renderableInvoice.currency,
+      { paymentAccountRequired },
     )
-    const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, renderableInvoice)
+    const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
     const paymentLinkQrDataUrl = await buildPaymentLinkQrDataUrl(renderableInvoice)
     const pdfBuffer = await renderToBuffer(
       InvoicePDF({
@@ -285,7 +380,6 @@ export const POST = withRouteContext(
       isCreditNote,
     })
 
-    const ccAddress = company.email || user.email
     const partialFailures: Array<{ step: string; reason: string }> = []
     if (paymentLinkFailure) {
       // The failure string is a raw provider/DB message: log it, but the
@@ -377,8 +471,9 @@ export const POST = withRouteContext(
         userId: user.id,
         invoiceId: id,
         deliveryId,
-        to: customer.email,
-        cc: ccAddress,
+        to: recipients.to,
+        cc: recipients.cc,
+        bcc: recipients.bcc,
         subject,
         html,
         text,
@@ -575,15 +670,31 @@ export const POST = withRouteContext(
       })
     }
 
-    return NextResponse.json({
-      success: true,
-      message: `${isCreditNote ? 'Kreditfakturan' : 'Fakturan'} har skickats till ${customer.email} (kopia till ${ccAddress})`,
-      messageId: result.messageId,
+    opLog.info('invoice sent', {
       deliveryId: result.deliveryId,
-      ...(partialFailures.length > 0
-        ? { partial: true, partial_failures: partialFailures }
-        : {}),
+      messageId: result.messageId,
+      recipientCounts: {
+        to: recipients.to.length,
+        cc: recipients.cc.length,
+      },
     })
+
+    return NextResponse.json(
+      {
+        success: true,
+        message: `${isCreditNote ? 'Kreditfakturan' : 'Fakturan'} har skickats till ${customer.email}`,
+        messageId: result.messageId,
+        deliveryId: result.deliveryId,
+        recipient_counts: {
+          to: recipients.to.length,
+          cc: recipients.cc.length,
+        },
+        ...(partialFailures.length > 0
+          ? { partial: true, partial_failures: partialFailures }
+          : {}),
+      },
+      { headers: { 'Cache-Control': 'private, no-store' } },
+    )
   },
   { requireWrite: true },
 )

@@ -171,6 +171,17 @@ export type BankConnectionStatus = 'pending' | 'pending_selection' | 'active' | 
 // Currency types
 export type Currency = 'SEK' | 'EUR' | 'USD' | 'GBP' | 'NOK' | 'DKK'
 
+export interface InvoicePaymentAccount {
+  bank_name: string | null
+  clearing_number: string | null
+  account_number: string | null
+  bankgiro: string | null
+  plusgiro: string | null
+  swish: string | null
+  iban: string | null
+  bic: string | null
+}
+
 // Profile (extends auth.users)
 export interface Profile {
   id: string
@@ -282,6 +293,9 @@ export interface CompanySettings {
   swish: string | null
   iban: string | null
   bic: string | null
+  // Invoice payment instructions keyed by the currency they can receive.
+  // Legacy bank fields above remain the SEK fallback for older companies.
+  invoice_payment_accounts?: Partial<Record<Currency, InvoicePaymentAccount>>
 
   // Accounting method
   accounting_method: AccountingMethod
@@ -352,6 +366,11 @@ export interface CompanySettings {
 
   // Editable invoice email texts. null = all defaults.
   invoice_email_texts: InvoiceEmailTexts | null
+  // Fixed invoice-email recipients. null means the company has not configured
+  // the setting yet and keeps the historical automatic CC fallback. [] is an
+  // explicit choice to send no copies.
+  invoice_email_cc_addresses?: string[] | null
+  invoice_email_bcc_addresses?: string[] | null
 
   // Automation
   send_invoice_reminders: boolean
@@ -1009,6 +1028,7 @@ export interface InvoiceDelivery {
   status: InvoiceDeliveryStatus
   to_addresses: string[]
   cc_addresses: string[]
+  bcc_addresses: string[]
   reply_to: string | null
   from_name: string | null
   subject: string | null

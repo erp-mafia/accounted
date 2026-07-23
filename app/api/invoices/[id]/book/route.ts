@@ -126,16 +126,10 @@ export const POST = withRouteContext(
 
     // The send flow archived the exact delivered PDF before this deferred
     // journal entry existed. Attach the newest successful delivery snapshot now.
-    const { data: deliveryDocument, error: deliveryDocumentError } = await supabase
-      .from('invoice_deliveries')
-      .select('document_attachment_id')
-      .eq('invoice_id', id)
-      .eq('company_id', companyId)
-      .eq('status', 'sent')
-      .not('document_attachment_id', 'is', null)
-      .order('sent_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
+    const { data: deliveryDocumentId, error: deliveryDocumentError } = await supabase.rpc(
+      'latest_sent_invoice_delivery_document',
+      { p_company_id: companyId, p_invoice_id: id },
+    )
 
     if (deliveryDocumentError) {
       log.error('failed to find delivered invoice PDF for deferred booking', deliveryDocumentError, {
@@ -145,18 +139,18 @@ export const POST = withRouteContext(
         code: 'PDF_LINK_FAILED',
         message: 'Fakturan bokfördes, men den arkiverade PDF-filen kunde inte kopplas till verifikationen.',
       })
-    } else if (deliveryDocument?.document_attachment_id) {
+    } else if (typeof deliveryDocumentId === 'string') {
       try {
         await linkToJournalEntry(
           supabase,
           companyId!,
-          deliveryDocument.document_attachment_id,
+          deliveryDocumentId,
           journalEntry.id,
         )
       } catch (err) {
         log.error('failed to link delivered invoice PDF on deferred booking', err as Error, {
           invoiceId: id,
-          documentId: deliveryDocument.document_attachment_id,
+          documentId: deliveryDocumentId,
         })
         warnings.push({
           code: 'PDF_LINK_FAILED',

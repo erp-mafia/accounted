@@ -981,9 +981,17 @@ async function writeMasterData(
   for (const t of MASTER_DATA_DUMP_TABLES) {
     const pageKey = t.pageKey ?? 'id'
     try {
-      const rows = t.via
-        ? await fetchChildTableRows(supabase, companyId, t)
-        : await fetchAllRows<Record<string, unknown>>(({ from, to }) => {
+      const rows = t.name === 'invoice_deliveries'
+        ? await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
+            supabase
+              .rpc('export_invoice_delivery_evidence', { p_company_id: companyId })
+              .order('created_at', { ascending: true })
+              .order('id', { ascending: true })
+              .range(from, to),
+          { dedupeBy: (row) => String(row.id) })
+        : t.via
+          ? await fetchChildTableRows(supabase, companyId, t)
+          : await fetchAllRows<Record<string, unknown>>(({ from, to }) => {
             let q = supabase.from(t.name).select('*').eq('company_id', companyId)
             if (t.orderBy) {
               q = q.order(t.orderBy, { ascending: true })
@@ -997,6 +1005,7 @@ async function writeMasterData(
           }, { dedupeBy: (r) => String(r[pageKey]) })
       data.file(t.file, JSON.stringify(rows, null, 2))
     } catch (err) {
+      if (t.name === 'invoice_deliveries') throw err
       data.file(
         t.file,
         JSON.stringify(

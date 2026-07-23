@@ -29,6 +29,11 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
+const mockEnsureInvoiceNumber = vi.fn()
+vi.mock('@/lib/invoices/ensure-invoice-number', () => ({
+  ensureInvoiceNumber: (...args: unknown[]) => mockEnsureInvoiceNumber(...args),
+}))
+
 const mockRenderToBuffer = vi.fn()
 vi.mock('@react-pdf/renderer', () => ({
   renderToBuffer: (...args: unknown[]) => mockRenderToBuffer(...args),
@@ -86,6 +91,7 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
   const company = makeCompanySettings({
     accounting_method: 'accrual',
     entity_type: 'enskild_firma',
+    bankgiro: '123-4567',
   })
   const invoice = makeInvoice({
     id: 'inv-1',
@@ -162,6 +168,43 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     expect(status).toBe(400)
   })
 
+  it.each(['SEK', 'EUR'] as const)(
+    'rejects a %s invoice without a payment account before number allocation',
+    async (currency) => {
+    enqueue({
+      data: makeInvoice({
+        ...invoice,
+        invoice_number: null,
+        currency,
+      }),
+      error: null,
+    })
+    enqueue({
+      data: {
+        ...company,
+        invoice_payment_accounts: {},
+        clearing_number: null,
+        account_number: null,
+        bankgiro: null,
+        plusgiro: null,
+        swish: null,
+        iban: null,
+      },
+      error: null,
+    })
+
+    const request = createMockRequest('/api/invoices/inv-1/mark-sent', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+    expect(mockRenderToBuffer).not.toHaveBeenCalled()
+    },
+  )
+
   it('archives the rendered PDF as underlag linked to the journal entry', async () => {
     enqueue({ data: invoice, error: null }) // fetch invoice
     enqueue({ data: company, error: null }) // settings
@@ -181,6 +224,7 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
     expect(status).toBe(200)
     expect(body.success).toBe(true)
     expect(body.journal_entry_id).toBe('je-7')
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(mockRecordManualInvoiceDelivery).toHaveBeenCalledWith({
       supabase: mockSupabase,
       companyId: 'company-1',

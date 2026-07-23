@@ -9,7 +9,7 @@
  *     class 3-8 account is zeroed (equal debit/credit churn) and 2099
  *     carries the year's result.
  *   - `preClosing`: the same year WITHOUT the closing entry
- *     (excludeYearEndClosing): RR accounts still open, 2099 only carries
+ *     (excludeFinalClosingEntry): RR accounts still open, 2099 only carries
  *     the prior-year churn from the resultatdisposition entry.
  */
 

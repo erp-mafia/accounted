@@ -65,13 +65,14 @@ describe('GET /api/invoices/[id]/deliveries', () => {
     expect(response.status).toBe(404)
   })
 
-  it('returns minimized delivery metadata with masked recipient domains', async () => {
+  it('returns minimized delivery evidence for the active company', async () => {
     const delivery = {
       id: 'delivery-1',
       channel: 'email',
       status: 'sent',
       to_addresses: ['customer@example.com'],
-      cc_addresses: [],
+      cc_addresses: ['accounts@example.com'],
+      bcc_addresses: ['archive@example.com'],
       reply_to: 'sender@example.com',
       from_name: 'Example AB',
       subject: 'Faktura F-1001',
@@ -102,7 +103,7 @@ describe('GET /api/invoices/[id]/deliveries', () => {
       channel: 'email',
       status: 'sent',
       to_addresses: ['***@example.com'],
-      cc_addresses: [],
+      cc_addresses: ['***@example.com'],
       provider: 'resend',
       error_code: null,
       document_attachment_id: 'document-1',
@@ -110,15 +111,20 @@ describe('GET /api/invoices/[id]/deliveries', () => {
       failed_at: null,
       created_at: '2026-07-22T10:29:59.000Z',
     }])
+    expect(body.data[0]).not.toHaveProperty('bcc_addresses')
+    expect(body.data[0]).not.toHaveProperty('reply_to')
+    expect(body.data[0]).not.toHaveProperty('from_name')
+    expect(body.data[0]).not.toHaveProperty('subject')
     expect(body.data[0]).not.toHaveProperty('body_text')
     expect(body.data[0]).not.toHaveProperty('body_html')
-    expect(body.data[0]).not.toHaveProperty('subject')
-    expect(body.data[0]).not.toHaveProperty('reply_to')
     expect(body.data[0]).not.toHaveProperty('provider_message_id')
     expect(body.data[0]).not.toHaveProperty('attachment_filename')
     expect(body.data[0]).not.toHaveProperty('attachment_content_type')
     expect(body.data[0]).not.toHaveProperty('attachment_sha256')
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
-    expect(mockSupabase.from).toHaveBeenCalledWith('invoice_deliveries')
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('list_invoice_delivery_summaries', {
+      p_company_id: 'company-1',
+      p_invoice_id: INVOICE_ID,
+    })
   })
 })

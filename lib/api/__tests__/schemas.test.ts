@@ -1230,6 +1230,62 @@ describe('UpdateSettingsSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('rejects more than 19 fixed invoice copy recipients in total', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      invoice_email_cc_addresses: Array.from(
+        { length: 10 },
+        (_, index) => `copy-${index}@example.test`,
+      ),
+      invoice_email_bcc_addresses: Array.from(
+        { length: 10 },
+        (_, index) => `archive-${index}@example.test`,
+      ),
+    })
+
+    expect(result.success).toBe(false)
+  })
+
+  it('accepts empty strings when clearing nested invoice payment account fields', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      invoice_payment_accounts: {
+        SEK: {
+          clearing_number: '',
+          account_number: '',
+          bankgiro: '',
+          plusgiro: '',
+          iban: '',
+          bic: '',
+        },
+      },
+    })
+
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts null when clearing the legacy SEK bank account mirror', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      bank_name: null,
+      clearing_number: null,
+      account_number: null,
+      bankgiro: null,
+      plusgiro: null,
+      swish: null,
+      iban: null,
+      bic: null,
+    })
+
+    expect(result.success).toBe(true)
+  })
+
+  it('accepts and normalizes a non-Swedish IBAN in the legacy SEK mirror', () => {
+    const result = UpdateSettingsSchema.safeParse({
+      iban: 'gb29 nwbk 6016 1331 9268 19',
+    })
+
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.iban).toBe('GB29NWBK60161331926819')
+  })
+
   it('accepts a positive next_arrival_number (supplier-invoice start floor)', () => {
     const result = UpdateSettingsSchema.safeParse({ next_arrival_number: 248 })
     expect(result.success).toBe(true)

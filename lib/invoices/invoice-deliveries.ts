@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EmailService, SendEmailOptions, SendEmailResult } from '@/lib/email/service'
 import { deleteDocument, uploadDocument } from '@/lib/core/documents/document-service'
+import { createServiceClient } from '@/lib/supabase/server'
 import type { InvoiceDelivery } from '@/types'
 
 const PDF_CONTENT_TYPE = 'application/pdf'
@@ -21,6 +22,7 @@ export interface TrackedInvoiceEmailInput {
   deliveryId: string
   to: string | string[]
   cc?: string | string[]
+  bcc?: string | string[]
   replyTo?: string
   fromName?: string
   subject: string
@@ -44,6 +46,9 @@ function addresses(value?: string | string[]): string[] {
 /**
  * Persist a reusable delivery attempt before allocating an invoice number.
  * The unique preparing row is also the concurrency lock for one invoice send.
+ * The stateless service-role client is only transport for the service-only RPC:
+ * the RPC re-authorizes userId as a writable member of companyId and scopes the
+ * invoice row to the same company before it can write anything.
  */
 export async function reserveInvoiceDelivery(args: {
   supabase: SupabaseClient
@@ -51,31 +56,13 @@ export async function reserveInvoiceDelivery(args: {
   userId: string
   invoiceId: string
 }): Promise<string> {
-  const { data, error } = await args.supabase
-    .from('invoice_deliveries')
-    .insert({
-      company_id: args.companyId,
-      user_id: args.userId,
-      invoice_id: args.invoiceId,
-      channel: 'email',
-      status: 'preparing',
-    })
-    .select('id')
-    .single()
+  const { data, error } = await createServiceClient().rpc('reserve_invoice_delivery', {
+    p_company_id: args.companyId,
+    p_invoice_id: args.invoiceId,
+    p_actor_user_id: args.userId,
+  })
 
-  if (data?.id) return data.id
-
-  if ((error as { code?: string } | null)?.code === '23505') {
-    const { data: existing, error: existingError } = await args.supabase
-      .from('invoice_deliveries')
-      .select('id')
-      .eq('company_id', args.companyId)
-      .eq('invoice_id', args.invoiceId)
-      .eq('status', 'preparing')
-      .maybeSingle()
-
-    if (!existingError && existing?.id) return existing.id
-  }
+  if (!error && typeof data === 'string') return data
 
   throw new InvoiceDeliverySnapshotError(
     `Failed to reserve invoice delivery: ${error?.message || 'unknown error'}`,
@@ -94,6 +81,7 @@ export async function sendTrackedInvoiceEmail(
     deliveryId,
     to,
     cc,
+    bcc,
     replyTo,
     fromName,
     subject,
@@ -116,30 +104,33 @@ export async function sendTrackedInvoiceEmail(
     { upload_source: 'system' },
   )
 
-  const { data: delivery, error: deliveryError } = await supabase
-    .from('invoice_deliveries')
-    .update({
-      status: 'pending',
-      to_addresses: addresses(to),
-      cc_addresses: addresses(cc),
-      reply_to: replyTo || null,
-      from_name: fromName || null,
-      subject,
-      body_text: text,
-      body_html: html,
-      document_attachment_id: document.id,
-      attachment_filename: filename,
-      attachment_content_type: PDF_CONTENT_TYPE,
-      attachment_sha256: document.sha256_hash,
-    })
-    .eq('id', deliveryId)
-    .eq('company_id', companyId)
-    .eq('invoice_id', invoiceId)
-    .eq('status', 'preparing')
-    .select('*')
-    .single()
+  // These service-only RPCs re-authorize userId against companyId and bind
+  // every transition to the reserved invoice, so no caller-supplied tenant or
+  // actor identifier is trusted merely because this client bypasses RLS.
+  const deliveryWriter = createServiceClient()
+  const { data: capturedDeliveryId, error: deliveryError } = await deliveryWriter.rpc(
+    'capture_invoice_delivery_payload',
+    {
+      p_delivery_id: deliveryId,
+      p_company_id: companyId,
+      p_invoice_id: invoiceId,
+      p_actor_user_id: userId,
+      p_to_addresses: addresses(to),
+      p_cc_addresses: addresses(cc),
+      p_bcc_addresses: addresses(bcc),
+      p_reply_to: replyTo || null,
+      p_from_name: fromName || null,
+      p_subject: subject,
+      p_body_text: text,
+      p_body_html: html,
+      p_document_attachment_id: document.id,
+      p_attachment_filename: filename,
+      p_attachment_content_type: PDF_CONTENT_TYPE,
+      p_attachment_sha256: document.sha256_hash,
+    },
+  )
 
-  if (deliveryError || !delivery) {
+  if (deliveryError || capturedDeliveryId !== deliveryId) {
     try {
       await deleteDocument(supabase, companyId, document.id)
     } catch {
@@ -154,6 +145,7 @@ export async function sendTrackedInvoiceEmail(
   const emailOptions: SendEmailOptions = {
     to,
     cc,
+    bcc,
     subject,
     html,
     text,
@@ -170,22 +162,22 @@ export async function sendTrackedInvoiceEmail(
   const result = await emailService.sendEmail(emailOptions)
 
   if (!result.success) {
-    const { error: failureRecordError } = await supabase
-      .from('invoice_deliveries')
-      .update({
-        status: 'failed',
-        provider: result.provider || null,
-        provider_message_id: null,
-        error_code: 'provider_failed',
-        document_attachment_id: null,
-        failed_at: new Date().toISOString(),
-      })
-      .eq('id', delivery.id)
-      .eq('company_id', companyId)
-      .eq('status', 'pending')
+    const { data: failedDeliveryId, error: failureRecordError } = await deliveryWriter.rpc(
+      'finalize_invoice_delivery',
+      {
+        p_delivery_id: deliveryId,
+        p_company_id: companyId,
+        p_actor_user_id: userId,
+        p_status: 'failed',
+        p_provider: result.provider || null,
+        p_provider_message_id: null,
+        p_error_code: 'provider_failed',
+      },
+    )
 
+    const failureRecorded = !failureRecordError && failedDeliveryId === deliveryId
     let cleanupFailed = false
-    if (!failureRecordError) {
+    if (failureRecorded) {
       try {
         const cleanup = await deleteDocument(supabase, companyId, document.id)
         cleanupFailed = !cleanup.ok
@@ -196,9 +188,9 @@ export async function sendTrackedInvoiceEmail(
 
     return {
       ...result,
-      deliveryId: delivery.id,
+      deliveryId,
       documentId: document.id,
-      ...(failureRecordError
+      ...(!failureRecorded
         ? { trackingWarning: 'failure_record_failed' as const }
         : cleanupFailed
           ? { trackingWarning: 'failure_cleanup_failed' as const }
@@ -206,23 +198,31 @@ export async function sendTrackedInvoiceEmail(
     }
   }
 
-  const { error: finalizeError } = await supabase
-    .from('invoice_deliveries')
-    .update({
-      status: 'sent',
-      provider: result.provider || null,
-      provider_message_id: result.messageId || null,
-      sent_at: new Date().toISOString(),
-    })
-    .eq('id', delivery.id)
-    .eq('company_id', companyId)
-    .eq('status', 'pending')
+  const { data: finalizedDeliveryId, error: finalizeError } = await deliveryWriter.rpc(
+    'finalize_invoice_delivery',
+    {
+      p_delivery_id: deliveryId,
+      p_company_id: companyId,
+      p_actor_user_id: userId,
+      p_status: 'sent',
+      p_provider: result.provider || null,
+      p_provider_message_id: result.messageId || null,
+      p_error_code: null,
+    },
+  )
 
+  // Delivery is irreversible once the provider succeeds. A failed terminal
+  // transition is returned as a reconciliation warning; each caller still
+  // advances the invoice to sent, and ordinary send routes reject non-drafts,
+  // so a pending evidence row never becomes permission to send a duplicate.
+  // Pending rows are outside the preparing-only reservation lock, so retained
+  // evidence also cannot block a later explicitly authorized resend.
+  const finalized = !finalizeError && finalizedDeliveryId === deliveryId
   return {
     ...result,
-    deliveryId: delivery.id,
+    deliveryId,
     documentId: document.id,
-    ...(finalizeError ? { trackingWarning: 'finalize_failed' as const } : {}),
+    ...(!finalized ? { trackingWarning: 'finalize_failed' as const } : {}),
   }
 }
 
@@ -233,18 +233,12 @@ export async function recordManualInvoiceDelivery(args: {
   invoiceId: string
   sentAt?: string
 }): Promise<InvoiceDelivery> {
-  const { data, error } = await args.supabase
-    .from('invoice_deliveries')
-    .insert({
-      company_id: args.companyId,
-      user_id: args.userId,
-      invoice_id: args.invoiceId,
-      channel: 'manual',
-      status: 'marked_sent',
-      sent_at: args.sentAt || new Date().toISOString(),
-    })
-    .select('*')
-    .single()
+  const { data, error } = await createServiceClient().rpc('record_manual_invoice_delivery', {
+    p_company_id: args.companyId,
+    p_invoice_id: args.invoiceId,
+    p_actor_user_id: args.userId,
+    p_sent_at: args.sentAt || null,
+  })
 
   if (error || !data) {
     throw new InvoiceDeliverySnapshotError(

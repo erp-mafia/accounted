@@ -593,6 +593,10 @@ describe('generateFullArchive', () => {
       expect(items).toEqual([
         { id: 'item-1', invoice_id: 'inv-1', description: 'Konsulttid' },
       ])
+      expect(supabase.rpc).toHaveBeenCalledWith(
+        'export_invoice_delivery_evidence',
+        { p_company_id: 'company-1' },
+      )
     })
 
     it('skips raw SIE blobs when include_documents is false but keeps metadata', async () => {

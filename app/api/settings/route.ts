@@ -10,6 +10,7 @@ import {
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSettingsSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 export const GET = withRouteContext(
   'settings.get',
@@ -43,7 +44,7 @@ export const GET = withRouteContext(
 
 export const PUT = withRouteContext(
   'settings.update',
-  async (request, { supabase, companyId, log }) => {
+  async (request, { supabase, companyId, log, requestId, user }) => {
     // Fetch current settings to check for tax-relevant changes
     const { data: oldSettings } = await supabase
       .from('company_settings')
@@ -54,6 +55,39 @@ export const PUT = withRouteContext(
     const validation = await validateBody(request, UpdateSettingsSchema)
     if (!validation.success) return validation.response
     const body = validation.data
+
+    const changesInvoiceEmailRecipients =
+      body.invoice_email_cc_addresses !== undefined
+      || body.invoice_email_bcc_addresses !== undefined
+    const changesInvoicePaymentInstructions =
+      body.invoice_payment_accounts !== undefined
+      || body.bank_name !== undefined
+      || body.clearing_number !== undefined
+      || body.account_number !== undefined
+      || body.bankgiro !== undefined
+      || body.plusgiro !== undefined
+      || body.swish !== undefined
+      || body.iban !== undefined
+      || body.bic !== undefined
+    if (changesInvoiceEmailRecipients || changesInvoicePaymentInstructions) {
+      const { data: membership, error: membershipError } = await supabase
+        .from('company_members')
+        .select('role')
+        .eq('company_id', companyId)
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (membershipError) {
+        log.error('failed to authorize restricted invoice settings', membershipError)
+        return errorResponseFromCode('INTERNAL_ERROR', log, { requestId })
+      }
+      if (!membership || !['owner', 'admin'].includes(membership.role)) {
+        return errorResponseFromCode('FORBIDDEN', log, {
+          requestId,
+          details: { required_roles: ['owner', 'admin'] },
+        })
+      }
+    }
 
     const reminderDays = [
       body.reminder_days_level_1 ?? oldSettings?.reminder_days_level_1 ?? 15,

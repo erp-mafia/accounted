@@ -1,7 +1,32 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import type { PoolClient } from 'pg'
 import { getPool, withUserContext } from '@/tests/pg/setup'
 import { insertAuthUser, insertCompanyMember, seedCompany } from '@/tests/pg/fixtures'
+
+async function withServiceRoleContext<T>(
+  userId: string,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await getPool().connect()
+  try {
+    await client.query('BEGIN')
+    await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [
+      JSON.stringify({ sub: userId, role: 'service_role' }),
+    ])
+    await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [userId])
+    await client.query(`SELECT set_config('request.jwt.claim.role', 'service_role', true)`)
+    await client.query(`SET LOCAL ROLE service_role`)
+    const result = await fn(client)
+    await client.query('ROLLBACK')
+    return result
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
+}
 
 async function insertInvoice(userId: string, companyId: string): Promise<string> {
   const customerId = randomUUID()
@@ -68,11 +93,11 @@ async function insertPendingEmailDelivery(params: {
   await getPool().query(
     `INSERT INTO public.invoice_deliveries
        (id, user_id, company_id, invoice_id, channel, status,
-        to_addresses, cc_addresses, reply_to, from_name, subject,
+        to_addresses, cc_addresses, bcc_addresses, reply_to, from_name, subject,
         body_text, body_html, document_attachment_id, attachment_filename,
         attachment_content_type, attachment_sha256, retention_expires_at)
      VALUES ($1, $2, $3, $4, 'email', 'pending',
-             ARRAY['customer@example.com'], ARRAY['copy@example.com'],
+             ARRAY['customer@example.com'], ARRAY['copy@example.com'], ARRAY['archive@example.com'],
              'sender@example.com', 'Example AB', 'Faktura F-1001',
              'Exact plain text', '<p>Exact HTML</p>', $5,
              'invoice.pdf', 'application/pdf', $6, $7)`,
@@ -155,6 +180,16 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
         [deliveryId],
       ),
     ).rejects.toThrow(/invoice delivery payload is immutable/i)
+
+    await expect(
+      getPool().query(
+        `UPDATE public.invoice_deliveries
+            SET status = 'sent', sent_at = now(),
+                bcc_addresses = ARRAY['changed@example.com']
+          WHERE id = $1`,
+        [deliveryId],
+      ),
+    ).rejects.toThrow(/invoice delivery payload is immutable/i)
   })
 
   it('rejects invoice and document references from another company', async () => {
@@ -226,6 +261,119 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
     expect(visibleIds).toEqual([deliveryA])
   })
 
+  it('keeps exact payload sender-only and exposes masked summaries to members', async () => {
+    const { userId, companyId } = await seedCompany()
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const deliveryId = await insertPendingEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+    })
+    await getPool().query(
+      `UPDATE public.invoice_deliveries SET status = 'sent', sent_at = now() WHERE id = $1`,
+      [deliveryId],
+    )
+
+    const directRows = await withUserContext(memberId, async (client) => {
+      return client.query(
+        `SELECT id, bcc_addresses, body_text
+           FROM public.invoice_deliveries
+          WHERE id = $1`,
+        [deliveryId],
+      )
+    })
+    expect(directRows.rowCount).toBe(0)
+
+    const summary = await withUserContext(memberId, async (client) => {
+      return client.query<Record<string, unknown>>(
+        `SELECT *
+           FROM public.list_invoice_delivery_summaries($1, $2)`,
+        [companyId, invoiceId],
+      )
+    })
+    expect(summary.rows).toEqual([
+      expect.objectContaining({
+        id: deliveryId,
+        to_addresses: ['***@example.com'],
+        cc_addresses: ['***@example.com'],
+      }),
+    ])
+    expect(summary.rows[0]).not.toHaveProperty('bcc_addresses')
+    expect(summary.rows[0]).not.toHaveProperty('body_text')
+
+    const documentLookup = await withUserContext(memberId, (client) => client.query<{ id: string }>(
+      `SELECT public.latest_sent_invoice_delivery_document($1, $2)::text AS id`,
+      [companyId, invoiceId],
+    ))
+    expect(documentLookup.rows[0].id).toBe(documentId)
+
+    const other = await seedCompany()
+    const otherInvoiceId = await insertInvoice(other.userId, other.companyId)
+    const otherDocumentId = await insertDocument(other.userId, other.companyId)
+    const otherDeliveryId = await insertPendingEmailDelivery({
+      userId: other.userId,
+      companyId: other.companyId,
+      invoiceId: otherInvoiceId,
+      documentId: otherDocumentId,
+    })
+    await getPool().query(
+      `UPDATE public.invoice_deliveries SET status = 'sent', sent_at = now() WHERE id = $1`,
+      [otherDeliveryId],
+    )
+
+    const mismatchedInvoiceLookup = await withUserContext(memberId, (client) =>
+      client.query<{ id: string | null }>(
+        `SELECT public.latest_sent_invoice_delivery_document($1, $2)::text AS id`,
+        [companyId, otherInvoiceId],
+      ),
+    )
+    expect(mismatchedInvoiceLookup.rows[0].id).toBeNull()
+    await expect(
+      withUserContext(memberId, (client) => client.query(
+        `SELECT public.latest_sent_invoice_delivery_document($1, $2)`,
+        [other.companyId, otherInvoiceId],
+      )),
+    ).rejects.toThrow(/not authorized to find delivered invoice document/i)
+
+    await expect(
+      withUserContext(memberId, (client) => client.query(
+        `SELECT id FROM public.export_invoice_delivery_evidence($1)`,
+        [companyId],
+      )),
+    ).rejects.toThrow(/owner or admin role required/i)
+
+    const ownerExport = await withUserContext(userId, (client) => client.query<{
+      id: string
+      bcc_addresses: string[]
+    }>(
+      `SELECT id, bcc_addresses
+         FROM public.export_invoice_delivery_evidence($1)
+        WHERE id = $2`,
+      [companyId, deliveryId],
+    ))
+    expect(ownerExport.rows[0]).toEqual({
+      id: deliveryId,
+      bcc_addresses: ['archive@example.com'],
+    })
+
+    const senderPayload = await withUserContext(userId, async (client) => {
+      return client.query<{ bcc_addresses: string[]; body_text: string }>(
+        `SELECT bcc_addresses, body_text
+           FROM public.invoice_deliveries
+          WHERE id = $1`,
+        [deliveryId],
+      )
+    })
+    expect(senderPayload.rows[0]).toEqual({
+      bcc_addresses: ['archive@example.com'],
+      body_text: 'Exact plain text',
+    })
+  })
+
   it('denies inserts to a viewer', async () => {
     const { userId, companyId } = await seedCompany()
     const viewerId = await insertAuthUser()
@@ -242,6 +390,173 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
         )
       }),
     ).rejects.toThrow(/row-level security|policy/i)
+  })
+
+  it('denies direct delivery writes and RPC execution to authenticated members', async () => {
+    const { userId, companyId } = await seedCompany()
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const deliveryId = await insertPendingEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+    })
+
+    await expect(
+      withUserContext(memberId, (client) => client.query(
+        `INSERT INTO public.invoice_deliveries
+           (user_id, company_id, invoice_id, channel, status, sent_at)
+         VALUES ($1, $2, $3, 'manual', 'marked_sent', now())`,
+        [memberId, companyId, invoiceId],
+      )),
+    ).rejects.toThrow(/row-level security|policy/i)
+
+    const directUpdate = await withUserContext(userId, (client) => client.query(
+      `UPDATE public.invoice_deliveries
+          SET status = 'sent', sent_at = now()
+        WHERE id = $1`,
+      [deliveryId],
+    ))
+    expect(directUpdate.rowCount).toBe(0)
+
+    await expect(
+      withUserContext(memberId, (client) => client.query(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)`,
+        [companyId, invoiceId, userId],
+      )),
+    ).rejects.toThrow(/permission denied/i)
+  })
+
+  it('uses server-only RPCs for reservation, payload capture, and finalization', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+
+    await withServiceRoleContext(userId, async (client) => {
+      const reserved = await client.query<{ id: string }>(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)::text AS id`,
+        [companyId, invoiceId, userId],
+      )
+      const deliveryId = reserved.rows[0].id
+
+      const reused = await client.query<{ id: string }>(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)::text AS id`,
+        [companyId, invoiceId, userId],
+      )
+      expect(reused.rows[0].id).toBe(deliveryId)
+
+      const captured = await client.query<{ id: string }>(
+        `SELECT public.capture_invoice_delivery_payload(
+           $1, $2, $3, $4,
+           ARRAY['customer@example.com'], ARRAY['copy@example.com'], ARRAY['archive@example.com'],
+           'sender@example.com', 'Example AB', 'Faktura F-1001',
+           'Exact plain text', '<p>Exact HTML</p>', $5,
+           'invoice.pdf', 'application/pdf', $6
+         )::text AS id`,
+        [deliveryId, companyId, invoiceId, userId, documentId, 'a'.repeat(64)],
+      )
+      expect(captured.rows[0].id).toBe(deliveryId)
+
+      const finalized = await client.query<{ id: string }>(
+        `SELECT public.finalize_invoice_delivery(
+           $1, $2, $3, 'sent', 'resend', 'provider-message-1', NULL
+         )::text AS id`,
+        [deliveryId, companyId, userId],
+      )
+      expect(finalized.rows[0].id).toBe(deliveryId)
+
+      const row = await client.query(
+        `SELECT status, bcc_addresses, body_text
+           FROM public.invoice_deliveries
+          WHERE id = $1`,
+        [deliveryId],
+      )
+      expect(row.rows[0]).toMatchObject({
+        status: 'sent',
+        bcc_addresses: ['archive@example.com'],
+        body_text: 'Exact plain text',
+      })
+    })
+  })
+
+  it('rejects service-role delivery writes for a non-member or mismatched tenant', async () => {
+    const first = await seedCompany()
+    const second = await seedCompany()
+    const outsiderId = await insertAuthUser()
+    const invoiceId = await insertInvoice(first.userId, first.companyId)
+
+    await expect(
+      withServiceRoleContext(outsiderId, (client) => client.query(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)`,
+        [first.companyId, invoiceId, outsiderId],
+      )),
+    ).rejects.toThrow(/writable company member/i)
+
+    await expect(
+      withServiceRoleContext(second.userId, (client) => client.query(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)`,
+        [second.companyId, invoiceId, second.userId],
+      )),
+    ).rejects.toThrow(/invoice not found/i)
+  })
+
+  it('reclaims only stale payload-free reservations for another sender', async () => {
+    const { userId, companyId } = await seedCompany()
+    const otherUserId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: otherUserId, role: 'admin' })
+    const invoiceId = await insertInvoice(userId, companyId)
+    const staleId = randomUUID()
+
+    await getPool().query(
+      `INSERT INTO public.invoice_deliveries
+         (id, user_id, company_id, invoice_id, channel, status, created_at)
+       VALUES ($1, $2, $3, $4, 'email', 'preparing', now() - interval '16 minutes')`,
+      [staleId, userId, companyId, invoiceId],
+    )
+
+    await withServiceRoleContext(otherUserId, async (client) => {
+      const result = await client.query<{ id: string }>(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)::text AS id`,
+        [companyId, invoiceId, otherUserId],
+      )
+      expect(result.rows[0].id).not.toBe(staleId)
+
+      const stale = await client.query(
+        `SELECT id FROM public.invoice_deliveries WHERE id = $1`,
+        [staleId],
+      )
+      expect(stale.rowCount).toBe(0)
+    })
+  })
+
+  it('restricts fixed invoice email recipient settings to owners and admins', async () => {
+    const { userId, companyId } = await seedCompany()
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+    await getPool().query(
+      `INSERT INTO public.company_settings (user_id, company_id)
+       VALUES ($1, $2)`,
+      [userId, companyId],
+    )
+
+    const memberUpdate = await withUserContext(memberId, (client) => client.query(
+      `UPDATE public.company_settings
+          SET invoice_email_bcc_addresses = ARRAY['archive@example.com']
+        WHERE company_id = $1`,
+      [companyId],
+    ))
+    expect(memberUpdate.rowCount).toBe(0)
+
+    const ownerUpdate = await withUserContext(userId, (client) => client.query(
+      `UPDATE public.company_settings
+          SET invoice_email_bcc_addresses = ARRAY['archive@example.com']
+        WHERE company_id = $1`,
+      [companyId],
+    ))
+    expect(ownerUpdate.rowCount).toBe(1)
   })
 
   it('reserves one preparing attempt and promotes it to the exact pending payload', async () => {
@@ -288,7 +603,29 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
       [deliveryId],
     )
     expect(result.rows[0].status).toBe('pending')
-    expect(result.rows[0].retention_expires_at).toBeTruthy()
+    expect(new Date(result.rows[0].retention_expires_at).toISOString().slice(0, 10)).toBe(
+      '2034-01-01',
+    )
+
+    const nextReservationId = await withServiceRoleContext(userId, async (client) => {
+      const reservation = await client.query<{ id: string }>(
+        `SELECT public.reserve_invoice_delivery($1, $2, $3)::text AS id`,
+        [companyId, invoiceId, userId],
+      )
+      const states = await client.query<{ id: string; status: string }>(
+        `SELECT id, status
+           FROM public.invoice_deliveries
+          WHERE company_id = $1 AND invoice_id = $2
+          ORDER BY created_at`,
+        [companyId, invoiceId],
+      )
+      expect(states.rows).toEqual(expect.arrayContaining([
+        { id: deliveryId, status: 'pending' },
+        { id: reservation.rows[0].id, status: 'preparing' },
+      ]))
+      return reservation.rows[0].id
+    })
+    expect(nextReservationId).not.toBe(deliveryId)
   })
 
   it('allows a failed attempt to release and delete its unsent PDF', async () => {
@@ -340,7 +677,7 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
     await getPool().query(`SELECT public.redact_expired_invoice_delivery_pii()`)
 
     const delivery = await getPool().query(
-      `SELECT to_addresses, body_text, subject, provider_message_id,
+      `SELECT to_addresses, cc_addresses, bcc_addresses, body_text, subject, provider_message_id,
               attachment_filename, attachment_sha256, pii_redacted_at
          FROM public.invoice_deliveries
         WHERE id = $1`,
@@ -348,6 +685,8 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
     )
     expect(delivery.rows[0]).toMatchObject({
       to_addresses: [],
+      cc_addresses: [],
+      bcc_addresses: [],
       body_text: null,
       subject: null,
       provider_message_id: null,

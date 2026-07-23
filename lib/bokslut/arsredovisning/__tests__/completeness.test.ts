@@ -5,7 +5,12 @@ import {
   type AnnualReportEligibilityResult,
   type AnnualReportProfile,
 } from '../compliance-types'
-import { validateAnnualReportCompleteness } from '../completeness'
+import {
+  validateAnnualReportCompleteness,
+  validateStatementIntegrity,
+} from '../completeness'
+import { mapTrialBalancesToK2 } from '../../ixbrl/k2-mapper'
+import { buildBrRows, buildRrRows } from '../statement-rows'
 
 const eligibility: AnnualReportEligibilityResult = {
   k2_eligible: true,
@@ -47,9 +52,16 @@ function report(): ArsredovisningData {
       total_equity_liabilities: 100,
       total_assets_previous: null,
       total_equity_liabilities_previous: null,
-      assets: [{ label: 'Bank', amount: 100 }],
+      assets: [{ label: 'Bank', current: 100, previous: null }],
+      equity_liabilities: [
+        { label: 'Eget kapital', current: 100, previous: null },
+        { label: 'Årets resultat', current: 20, previous: null },
+      ],
     },
-    resultatrakning: [{ label: 'Nettoomsättning', amount: 100 }],
+    resultatrakning: [
+      { label: 'Nettoomsättning', current: 20, previous: null },
+      { label: 'Årets resultat', current: 20, previous: null, is_total: true },
+    ],
     noter: [{ number: 1, title: 'Principer', body: 'K2' }],
     signatures: [{ role: 'Styrelseledamot', name: 'Anna Andersson', signed_at: '2026-03-01' }],
     warnings: [],
@@ -155,6 +167,115 @@ describe('validateAnnualReportCompleteness', () => {
     value.report.forvaltningsberattelse.resultatdisposition_amounts.proposed_dividend = 101
     const result = validateAnnualReportCompleteness(value)
     expect(result.issues.some((issue) => issue.code === 'AR-DIVIDEND-EXCEEDS-EQUITY')).toBe(true)
+  })
+
+  it('blocks a version whose income-statement result differs from equity', () => {
+    const value = input('draft')
+    value.report.resultatrakning = [
+      { label: 'Årets resultat', current: 790_296, previous: null, is_total: true },
+    ]
+    value.report.forvaltningsberattelse.resultatdisposition_amounts.current_year_result = 469_542
+
+    const result = validateAnnualReportCompleteness(value)
+
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'AR-RESULT-MISMATCH', severity: 'error' }),
+      ]),
+    )
+  })
+
+  it('compares annual-report results at whole-ore precision', () => {
+    const value = report()
+    value.resultatrakning = [
+      { label: 'Årets resultat', current: 0.1 + 0.2, previous: null, is_total: true },
+    ]
+    value.balansrakning.equity_liabilities = [
+      { label: 'Årets resultat', current: 0.3, previous: null },
+    ]
+    value.forvaltningsberattelse.resultatdisposition_amounts.current_year_result = 0.3
+
+    expect(validateStatementIntegrity(value)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'AR-RESULT-MISMATCH' }),
+      ]),
+    )
+  })
+
+  it('blocks a version when the income statement has no final result row', () => {
+    const value = input('draft')
+    value.report.resultatrakning = [
+      { label: 'Nettoomsättning', current: 100, previous: null },
+    ]
+
+    const result = validateAnnualReportCompleteness(value)
+
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'AR-RESULT-MISSING', severity: 'error' }),
+      ]),
+    )
+  })
+
+  it('identifies the statutory result by semantic key instead of its K2 label', () => {
+    const value = report()
+    value.resultatrakning = [{
+      label: 'Årets resultat/förlust',
+      semantic_key: 'income_statement_result',
+      current: 20,
+      previous: null,
+      is_total: true,
+    }]
+    value.balansrakning.equity_liabilities = [{
+      label: 'Periodens resultat',
+      semantic_key: 'balance_sheet_current_year_result',
+      current: 20,
+      previous: null,
+    }]
+
+    expect(validateStatementIntegrity(value)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'AR-RESULT-MISSING' }),
+      ]),
+    )
+  })
+
+  it('detects a line reclassification between PDF and iXBRL with unchanged totals', () => {
+    const value = input('draft')
+    const full = [
+      { account_number: '1930', account_name: 'Bank', closing_debit: 100, closing_credit: 0 },
+      { account_number: '2081', account_name: 'Share capital', closing_debit: 0, closing_credit: 80 },
+      { account_number: '2099', account_name: 'Current result', closing_debit: 0, closing_credit: 20 },
+      { account_number: '3010', account_name: 'Revenue', closing_debit: 20, closing_credit: 20 },
+    ]
+    const preClosing = [
+      { account_number: '1930', account_name: 'Bank', closing_debit: 100, closing_credit: 0 },
+      { account_number: '2081', account_name: 'Share capital', closing_debit: 0, closing_credit: 80 },
+      { account_number: '3010', account_name: 'Revenue', closing_debit: 0, closing_credit: 20 },
+    ]
+    const mapping = mapTrialBalancesToK2({ full, preClosing }, null)
+    const balanceRows = buildBrRows(mapping)
+    value.report.resultatrakning = buildRrRows(mapping)
+    value.report.balansrakning.assets = balanceRows.assets
+    value.report.balansrakning.equity_liabilities = balanceRows.equityLiabilities
+    value.report.balansrakning.total_assets = mapping.totals.tillgangar.current
+    value.report.balansrakning.total_equity_liabilities =
+      mapping.totals.egetKapitalSkulder.current
+    const ixbrl = {
+      rr: {
+        ...mapping.rr,
+        Nettoomsattning: { current: 0, previous: null },
+        OvrigaRorelseintakter: { current: 20, previous: null },
+      },
+      br: mapping.br,
+      totals: mapping.totals,
+    }
+
+    expect(validateStatementIntegrity(value.report, ixbrl as never)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'AR-IXBRL-STATEMENT-MISMATCH' }),
+      ]),
+    )
   })
 
   it('requires a documented prudence assessment for a positive dividend', () => {

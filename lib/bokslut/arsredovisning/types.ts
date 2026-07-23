@@ -38,6 +38,9 @@ export interface NoteEntry {
  */
 export interface StatementRow {
   label: string
+  /** Stable integrity key for rows whose legal meaning must not depend on the
+   * localized presentation label. */
+  semantic_key?: 'income_statement_result' | 'balance_sheet_current_year_result'
   /** Whole-SEK amount for the current year; null on heading rows. */
   current: number | null
   /** Previous-year amount (jämförelseår, ÅRL 3:5 §); null on heading rows
@@ -95,6 +98,7 @@ export interface ArsredovisningData {
     resultatdisposition_amounts: {
       retained_earnings: number
       share_premium_reserve: number
+      /** Server-derived from the statutory statement mapping, never narrative input. */
       current_year_result: number
       total: number
       proposed_dividend: number

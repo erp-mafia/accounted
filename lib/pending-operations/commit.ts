@@ -73,6 +73,15 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { prepareInvoicePdfRender, buildSwishQrDataUrl } from '@/lib/invoices/pdf-render-helpers'
+import {
+  hasRequiredInvoicePaymentAccount,
+  invoiceRequiresPaymentAccount,
+} from '@/lib/invoices/payment-accounts'
+import {
+  exceedsInvoiceEmailRecipientLimit,
+  invoiceEmailRecipientCount,
+  resolveInvoiceEmailRecipients,
+} from '@/lib/invoices/email-recipients'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
@@ -1496,12 +1505,37 @@ async function commitSendInvoice(
   }
 
   const customer = invoice.customer as Customer
-  if (!customer.email) return { error: 'Customer has no email address', status: 400 }
+  if (!customer.email?.trim()) return { error: 'Customer has no email address', status: 400 }
 
   const { data: company, error: companyError } = await supabase
     .from('company_settings').select('*').eq('company_id', companyId).single()
 
   if (companyError || !company) return { error: 'Company settings missing', status: 500 }
+
+  const paymentAccountRequired = invoiceRequiresPaymentAccount(invoice as Invoice)
+  if (!hasRequiredInvoicePaymentAccount(company as CompanySettings, invoice as Invoice)) {
+    return {
+      error:
+        getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv
+        ?? 'Betalningskonto saknas för fakturans valuta.',
+      status: 400,
+    }
+  }
+
+  const recipients = resolveInvoiceEmailRecipients({
+    to: customer.email,
+    configuredCc: company.invoice_email_cc_addresses,
+    configuredBcc: company.invoice_email_bcc_addresses,
+    legacyCc: company.email || userEmail,
+  })
+  if (exceedsInvoiceEmailRecipientLimit(recipients)) {
+    return {
+      error:
+        getErrorEntry('INVOICE_SEND_TOO_MANY_RECIPIENTS')?.message_sv
+        ?? `Ett fakturautskick får inte ha ${invoiceEmailRecipientCount(recipients)} mottagare.`,
+      status: 400,
+    }
+  }
 
   const items = (invoice.items as InvoiceItem[]).sort(
     (a: InvoiceItem, b: InvoiceItem) => a.sort_order - b.sort_order
@@ -1523,7 +1557,11 @@ async function commitSendInvoice(
   const isFreshAllocation = !invoice.invoice_number
   if (isFreshAllocation) {
     try {
-      const preflight = await prepareInvoicePdfRender(company as CompanySettings)
+      const preflight = await prepareInvoicePdfRender(
+        company as CompanySettings,
+        (invoice as Invoice).currency,
+        { paymentAccountRequired },
+      )
       await renderToBuffer(
         InvoicePDF({
           invoice: { ...(invoice as Invoice), invoice_number: 'F-PREVIEW' },
@@ -1578,8 +1616,10 @@ async function commitSendInvoice(
   const renderableInvoice = { ...(invoice as Invoice), status: 'sent' as const }
   const { branding, company: renderCompany } = await prepareInvoicePdfRender(
     company as CompanySettings,
+    renderableInvoice.currency,
+    { paymentAccountRequired },
   )
-  const swishQrDataUrl = await buildSwishQrDataUrl(company as CompanySettings, renderableInvoice)
+  const swishQrDataUrl = await buildSwishQrDataUrl(renderCompany, renderableInvoice)
   const pdfBuffer = await renderToBuffer(
     InvoicePDF({
       invoice: renderableInvoice,
@@ -1603,7 +1643,6 @@ async function commitSendInvoice(
     isCreditNote,
   })
 
-  const ccAddress = company.email || userEmail
   const emailData = { invoice: renderableInvoice, customer, company: company as CompanySettings }
   const subject = generateInvoiceEmailSubject(emailData)
   const html = generateInvoiceEmailHtml(emailData)
@@ -1617,8 +1656,9 @@ async function commitSendInvoice(
       userId,
       invoiceId,
       deliveryId,
-      to: customer.email,
-      cc: ccAddress,
+      to: recipients.to,
+      cc: recipients.cc,
+      bcc: recipients.bcc,
       subject,
       html,
       text,
@@ -1708,6 +1748,23 @@ async function commitMarkInvoiceSent(
   }
   if (invoice.status !== 'draft') return { error: 'Only draft invoices can be marked as sent', status: 409 }
 
+  const { data: settings, error: settingsError } = await supabase
+    .from('company_settings')
+    .select('accounting_method, entity_type, invoice_payment_accounts, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic')
+    .eq('company_id', companyId)
+    .single()
+
+  if (settingsError || !settings) return { error: 'Company settings missing', status: 500 }
+
+  if (!hasRequiredInvoicePaymentAccount(settings as CompanySettings, invoice as Invoice)) {
+    return {
+      error:
+        getErrorEntry('INVOICE_SEND_PAYMENT_ACCOUNT_MISSING')?.message_sv
+        ?? 'Betalningskonto saknas för fakturans valuta.',
+      status: 400,
+    }
+  }
+
   try {
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
@@ -1730,9 +1787,6 @@ async function commitMarkInvoiceSent(
     })
     deliveryHistoryWarning = 'Fakturan markerades som skickad men utskickshistoriken kunde inte sparas.'
   }
-
-  const { data: settings } = await supabase
-    .from('company_settings').select('accounting_method, entity_type').eq('company_id', companyId).single()
 
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
   let journalEntryId: string | null = null

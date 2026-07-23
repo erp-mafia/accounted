@@ -1,5 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
@@ -85,7 +84,7 @@ export async function buildArsredovisningData(
         .range(from, to),
     ),
     generateTrialBalance(supabase, companyId, fiscalPeriodId),
-    generateTrialBalance(supabase, companyId, fiscalPeriodId, { excludeYearEndClosing: true }),
+    generateTrialBalance(supabase, companyId, fiscalPeriodId, { excludeFinalClosingEntry: true }),
     // Load persisted narrative overrides: replaces the URL-query-param
     // carry from earlier phases. Caller-supplied overrides (passed in via
     // the second arg) still win, so the API can layer per-request edits on
@@ -134,8 +133,11 @@ export async function buildArsredovisningData(
     try {
       const [prevFull, prevPreClosing] = await Promise.all([
         generateTrialBalance(supabase, companyId, prevPeriodRow.id),
+        // Comparative RR figures need the same statutory view as the current
+        // year: keep booked depreciation, appropriations, and tax, excluding
+        // only the linked final result-closing entry.
         generateTrialBalance(supabase, companyId, prevPeriodRow.id, {
-          excludeYearEndClosing: true,
+          excludeFinalClosingEntry: true,
         }),
       ])
       previousTb = { full: prevFull.rows, preClosing: prevPreClosing.rows }
@@ -169,7 +171,7 @@ export async function buildArsredovisningData(
     companyId,
     fiscalPeriodId,
     (periodList ?? []) as Array<{ id: string; name: string; period_start: string; period_end: string }>,
-    accountingFramework,
+    mapping,
   )
 
   const egen_kapital_changes = buildEquityChanges(mapping)
@@ -402,12 +404,21 @@ interface PeriodRow {
   period_end: string
 }
 
+export function calculateSoliditet(mapping: K2MappingResult): number | null {
+  const totalAssets = mapping.totals.tillgangar.current
+  if (totalAssets <= 0) return null
+  const adjustedEquity =
+    mapping.totals.egetKapital.current +
+    mapping.totals.obeskattadeReserver.current * (1 - LATENT_TAX_DEFAULT_RATE)
+  return Math.round((adjustedEquity / totalAssets) * 1000) / 10
+}
+
 async function buildFlerarsoversikt(
   supabase: SupabaseClient,
   companyId: string,
   currentPeriodId: string,
   allPeriods: PeriodRow[],
-  accountingFramework: AccountingFramework,
+  currentMapping: K2MappingResult,
 ): Promise<FlerarsoversiktRow[]> {
   // Take the current period + 3 prior (oldest first).
   const sorted = [...allPeriods].sort((a, b) => a.period_start.localeCompare(b.period_start))
@@ -418,46 +429,23 @@ async function buildFlerarsoversikt(
   const rows: FlerarsoversiktRow[] = []
   for (const p of slice) {
     try {
-      const [is, tb] = await Promise.all([
-        generateIncomeStatement(supabase, companyId, p.id),
-        generateTrialBalance(supabase, companyId, p.id),
-      ])
-      // Nettoomsättning = sum of revenue sections (revenue is normally credit).
-      const netRevenue = is.total_revenue
-      const resultAfterFinancial = is.total_revenue - is.total_expenses + is.total_financial
-      const totalAssets = tb.rows
-        .filter((r) => r.account_class === 1)
-        .reduce((s, r) => s + (r.closing_debit - r.closing_credit), 0)
-      const eqLiab = tb.rows
-        .filter((r) => r.account_class === 2)
-        .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
-      // Soliditet differs by framework:
-      //   K2 (ÅRL / BFNAR 2016:10): 20xx only. 21xx (periodiseringsfonder,
-      //   överavskrivningar) are obeskattade reserver: partially deferred
-      //   tax, not equity. Including 21xx would inflate soliditet for any AB
-      //   that posts dispositions.
-      //
-      //   K3 (BFNAR 2012:1) splits 21xx into 79,4 % equity + 20,6 % latent
-      //   skatteskuld. Account 2240 holds the latent tax liability and is
-      //   already classified as a liability via class 2 / account_group 22,
-      //   so the soliditet add-on is just the equity portion of 21xx. (We
-      //   do NOT double-count 2240 here: the trial balance row for 2240
-      //   already lives in eqLiab as a liability.)
-      const baseEquity = tb.rows
-        .filter((r) => r.account_number.startsWith('20'))
-        .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
-      let equity = baseEquity
-      if (accountingFramework === 'k3') {
-        const obeskattadeReserver = tb.rows
-          .filter((r) => r.account_number.startsWith('21'))
-          .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
-        equity += obeskattadeReserver * (1 - LATENT_TAX_DEFAULT_RATE)
+      let mapping = currentMapping
+      if (p.id !== currentPeriodId) {
+        const [tbFull, tbPreClosing] = await Promise.all([
+          generateTrialBalance(supabase, companyId, p.id),
+          generateTrialBalance(supabase, companyId, p.id, { excludeFinalClosingEntry: true }),
+        ])
+        mapping = mapTrialBalancesToK2(
+          { full: tbFull.rows, preClosing: tbPreClosing.rows },
+          null,
+        )
       }
-      const soliditet =
-        totalAssets > 0 ? Math.round((equity / totalAssets) * 1000) / 10 : null
-      // Avoid the unused-variable warning while leaving eqLiab computed for
-      // future "Skulder" column expansion.
-      void eqLiab
+      const netRevenue = mapping.rr['Nettoomsattning']?.current ?? 0
+      const resultAfterFinancial = mapping.totals.resultatEfterFinansiellaPoster.current
+      // K2 flerårsöversikt defines soliditet as adjusted equity divided by
+      // total assets. Adjusted equity includes the equity portion of untaxed
+      // reserves even though those reserves remain a separate BR section.
+      const soliditet = calculateSoliditet(mapping)
       rows.push({
         year: p.name,
         net_revenue: Math.round(netRevenue),

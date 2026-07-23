@@ -82,6 +82,42 @@ describe('generateK2IxbrlDocument', () => {
     expect(xhtml).toMatch(/contextRef="balans1" name="se-gen-base:Tillgangar"[^>]*>253 000/)
   })
 
+  it('emits account 7833 depreciation and debit 2650 as the correct iXBRL facts', () => {
+    const balance = (account: string, name: string, debit: number, credit: number) => ({
+      account_number: account,
+      account_name: name,
+      closing_debit: debit,
+      closing_credit: credit,
+    })
+    const full = [
+      balance('1250', 'Computers', 50, 0),
+      balance('1259', 'Accumulated depreciation', 0, 10),
+      balance('1930', 'Bank', 75, 0),
+      balance('2081', 'Share capital', 0, 50),
+      balance('2099', 'Current-year result', 0, 90),
+      balance('2650', 'VAT settlement account', 25, 0),
+    ]
+    const preClosing = [
+      ...full.filter((row) => row.account_number !== '2099'),
+      balance('3010', 'Revenue', 0, 100),
+      balance('7833', 'Depreciation of computers', 10, 0),
+    ]
+    const mapping = mapTrialBalancesToK2({ full, preClosing }, null)
+    const input = makeInput()
+    input.rr = mapping.rr
+    input.br = mapping.br
+    input.totals = mapping.totals
+
+    const { xhtml: reportedAccountsXhtml } = generateK2IxbrlDocument(input)
+
+    expect(reportedAccountsXhtml).toMatch(
+      /name="se-gen-base:AvskrivningarNedskrivningarMateriellaImmateriellaAnlaggningstillgangar"[^>]*>10<\/ix:nonFraction>/,
+    )
+    expect(reportedAccountsXhtml).toMatch(
+      /name="se-gen-base:OvrigaFordringarKortfristiga"[^>]*>25<\/ix:nonFraction>/,
+    )
+  })
+
   it('tags the underskrifter tuple with per-signer dates (TA §2.9.1)', () => {
     expect(xhtml).toContain('se-gaap-ext:UnderskriftArsredovisningForetradareTuple')
     const tilltalsnamn = xhtml.match(/name="se-gen-base:UnderskriftHandlingTilltalsnamn"/g) ?? []

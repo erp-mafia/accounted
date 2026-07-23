@@ -49,6 +49,7 @@ const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
   emailService: { sendEmail: (options: unknown) => Promise<Record<string, unknown>> }
   to: string | string[]
   cc?: string | string[]
+  bcc?: string | string[]
   subject: string
   html: string
   text: string
@@ -60,6 +61,7 @@ const mockSendTrackedInvoiceEmail = vi.fn(async (input: {
   ...(await input.emailService.sendEmail({
     to: input.to,
     cc: input.cc,
+    bcc: input.bcc,
     subject: input.subject,
     html: input.html,
     text: input.text,
@@ -220,6 +222,9 @@ describe('executeRecurringSchedule auto-send', () => {
   const company = makeCompanySettings({
     company_name: 'Oppy Sverige',
     accounting_method: 'accrual',
+    bankgiro: '123-4567',
+    invoice_email_cc_addresses: ['fixed-copy@test.se'],
+    invoice_email_bcc_addresses: ['fixed-archive@test.se'],
   })
 
   function makeSchedule() {
@@ -329,7 +334,12 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(result.autoSent).toBe(true)
     expect(result.warning).toBeNull()
     expect(mockSendTrackedInvoiceEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ companyId: 'company-1', invoiceId: 'inv-1' }),
+      expect.objectContaining({
+        companyId: 'company-1',
+        invoiceId: 'inv-1',
+        cc: ['fixed-copy@test.se'],
+        bcc: ['fixed-archive@test.se'],
+      }),
     )
     expect(mockApplyPaymentLink).toHaveBeenCalledTimes(1)
     expect(mockApplyPaymentLink).toHaveBeenCalledWith(
@@ -366,6 +376,50 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(result.autoSent).toBe(true)
     expect(result.warning).toBeNull()
     expect(mockSendEmail).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not reserve a delivery when the customer email is blank', async () => {
+    const customerWithoutEmail = { ...customer, email: '   ' }
+    enqueue({ data: customerWithoutEmail, error: null })
+    enqueue({ data: makeInsertedInvoice(), error: null })
+    enqueue({ data: null, error: null })
+    enqueue({
+      data: { ...makeCompleteInvoice(), customer: customerWithoutEmail },
+      error: null,
+    })
+
+    const result = await executeRecurringSchedule(client, makeSchedule(), today)
+
+    expect(result.autoSent).toBe(false)
+    expect(result.warning).toContain('Auto-utskick misslyckades')
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('does not reserve an auto-send delivery when configured recipients exceed the limit', async () => {
+    enqueue({ data: customer, error: null })
+    enqueue({ data: makeInsertedInvoice(), error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: makeCompleteInvoice(), error: null })
+    enqueue({
+      data: {
+        ...company,
+        invoice_email_cc_addresses: Array.from(
+          { length: 20 },
+          (_, index) => `fixed-${index}@example.test`,
+        ),
+        invoice_email_bcc_addresses: [],
+      },
+      error: null,
+    })
+
+    const result = await executeRecurringSchedule(client, makeSchedule(), today)
+
+    expect(result.autoSent).toBe(false)
+    expect(result.warning).not.toBeNull()
+    expect(mockReserveInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockRenderToBuffer).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
   it('never auto-sends from a sandbox company; invoice stays a numbered draft', async () => {

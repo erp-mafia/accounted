@@ -539,28 +539,24 @@ describe('generateTrialBalance', () => {
     expect(result.isBalanced).toBe(true)
   })
 
-  // ── excludeYearEndClosing symmetry ───────────────────────────────
-  // A reversed year_end entry keeps status='reversed' and stays in the
-  // ledger; its storno carries source_type='storno'. Excluding on
-  // source_type alone drops the original but keeps the counter-entry,
-  // inflating the P&L by exactly the reversed amount. The filter must also
-  // exclude entries chained to year_end entries via reverses_id /
-  // correction_of_id.
+  // ── final-closing precision ──────────────────────────────────────
+  // Tax and appropriations are also source_type='year_end'. The statutory
+  // pre-closing report must exclude only fiscal_periods.closing_entry_id.
 
-  it('excludes stornos and corrections chained to year_end entries', async () => {
+  it('excludes only the fiscal period closing entry', async () => {
     mockResults = {
       fiscal_periods: [
         {
-          data: { period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: null },
+          data: {
+            period_start: '2025-01-01',
+            period_end: '2025-12-31',
+            opening_balance_entry_id: null,
+            closing_entry_id: 'closing-1',
+          },
           error: null,
         },
       ],
-      journal_entries: [
-        // 1st: the year_end entry-id fetch added for chain exclusion
-        { data: [{ id: 'ye-1' }, { id: 'ye-2' }], error: null },
-        // 2nd: the entries step of the period-lines fetch
-        { data: [{ id: 'entry-1' }], error: null },
-      ],
+      journal_entries: [{ data: [{ id: 'tax-1' }, { id: 'appropriation-1' }], error: null }],
       journal_entry_lines: [
         {
           data: [
@@ -574,34 +570,124 @@ describe('generateTrialBalance', () => {
     }
 
     await generateTrialBalance(supabase, 'company-1', 'period-1', {
-      excludeYearEndClosing: true,
+      excludeFinalClosingEntry: true,
     })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const builders = supabase.from.mock.results.map((r: { value: any }) => r.value)
-    const orCalls = builders.flatMap(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (b: any) => (b.or ? b.or.mock.calls.map((c: unknown[]) => c[0]) : []),
-    )
-    expect(orCalls).toContain('reverses_id.is.null,reverses_id.not.in.(ye-1,ye-2)')
-    expect(orCalls).toContain('correction_of_id.is.null,correction_of_id.not.in.(ye-1,ye-2)')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const neqCalls = builders.flatMap((b: any) => (b.neq ? b.neq.mock.calls : []))
-    expect(neqCalls).toContainEqual(['source_type', 'year_end'])
+    expect(neqCalls).not.toContainEqual(['source_type', 'year_end'])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const orCalls = builders.flatMap((b: any) => (b.or ? b.or.mock.calls : []))
+    expect(orCalls).toContainEqual(['id.neq.closing-1,status.neq.posted'])
   })
 
-  it('skips the chain filters when the company has no year_end entries', async () => {
+  it('fails closed when a closed period has no linked final closing entry', async () => {
     mockResults = {
       fiscal_periods: [
         {
-          data: { period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: null },
+          data: {
+            period_start: '2025-01-01',
+            period_end: '2025-12-31',
+            opening_balance_entry_id: null,
+            closing_entry_id: null,
+            is_closed: true,
+          },
+          error: null,
+        },
+      ],
+      journal_entries: [{ data: [{ id: 'tax-1' }, { id: 'appropriation-1' }], error: null }],
+      journal_entry_lines: [{ data: [], error: null }],
+      chart_of_accounts: [{ data: [], error: null }],
+    }
+
+    await expect(
+      generateTrialBalance(supabase, 'company-1', 'period-1', {
+        excludeFinalClosingEntry: true,
+      }),
+    ).rejects.toThrow(/missing closing_entry_id/i)
+
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps year-end adjustments for an open period without a final closing entry', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: {
+            period_start: '2025-01-01',
+            period_end: '2025-12-31',
+            opening_balance_entry_id: null,
+            closing_entry_id: null,
+            is_closed: false,
+          },
+          error: null,
+        },
+      ],
+      journal_entries: [{ data: [{ id: 'tax-1' }], error: null }],
+      journal_entry_lines: [{ data: [], error: null }],
+      chart_of_accounts: [{ data: [], error: null }],
+    }
+
+    await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      excludeFinalClosingEntry: true,
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const builders = supabase.from.mock.results.map((r: { value: any }) => r.value)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const neqCalls = builders.flatMap((b: any) => (b.neq ? b.neq.mock.calls : []))
+    expect(neqCalls).not.toContainEqual(['source_type', 'year_end'])
+  })
+
+  it('keeps a linked reversed closing together with its storno', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: {
+            period_start: '2025-01-01',
+            period_end: '2025-12-31',
+            opening_balance_entry_id: null,
+            closing_entry_id: 'closing-1',
+          },
+          error: null,
+        },
+      ],
+      journal_entries: [{ data: [{ id: 'closing-1' }, { id: 'storno-1' }], error: null }],
+      journal_entry_lines: [{ data: [], error: null }],
+      chart_of_accounts: [{ data: [], error: null }],
+    }
+
+    await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      excludeFinalClosingEntry: true,
+    })
+
+    // The OR excludes closing-1 only while status is posted. If it is
+    // reversed during an administrative undo, both it and its storno remain.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const builders = supabase.from.mock.results.map((r: { value: any }) => r.value)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const orCalls = builders.flatMap((b: any) => (b.or ? b.or.mock.calls : []))
+    expect(orCalls).toContainEqual(['id.neq.closing-1,status.neq.posted'])
+  })
+
+  it('preserves the broad year-end exclusion for operational reports', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: {
+            period_start: '2025-01-01',
+            period_end: '2025-12-31',
+            opening_balance_entry_id: null,
+            closing_entry_id: 'closing-1',
+          },
           error: null,
         },
       ],
       journal_entries: [
-        // year_end id fetch: none exist
-        { data: [], error: null },
-        { data: [{ id: 'entry-1' }], error: null },
+        { data: [{ id: 'reversed-year-end-1' }], error: null },
+        { data: [{ id: 'ordinary-1' }], error: null },
       ],
       journal_entry_lines: [{ data: [], error: null }],
       chart_of_accounts: [{ data: [], error: null }],
@@ -613,14 +699,17 @@ describe('generateTrialBalance', () => {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const builders = supabase.from.mock.results.map((r: { value: any }) => r.value)
-    const orCalls = builders.flatMap(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (b: any) => (b.or ? b.or.mock.calls : []),
-    )
-    expect(orCalls).toHaveLength(0)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const neqCalls = builders.flatMap((b: any) => (b.neq ? b.neq.mock.calls : []))
     expect(neqCalls).toContainEqual(['source_type', 'year_end'])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const orCalls = builders.flatMap((b: any) => (b.or ? b.or.mock.calls : []))
+    expect(orCalls).toContainEqual([
+      'reverses_id.is.null,reverses_id.not.in.(reversed-year-end-1)',
+    ])
+    expect(orCalls).toContainEqual([
+      'correction_of_id.is.null,correction_of_id.not.in.(reversed-year-end-1)',
+    ])
   })
 
   it('returns empty period activity when the range matches no lines', async () => {
