@@ -82,9 +82,9 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
 
   return (
     <section aria-label={t('resume_title')}>
-      {/* Pane header: serif title over a hairline */}
+      {/* Pane header: Geist title over a hairline */}
       <div className="flex items-baseline justify-between border-b border-border px-1 pb-2.5">
-        <h2 className="font-display text-lg tracking-tight">{t('resume_title')}</h2>
+        <h2 className="text-sm font-medium">{t('resume_title')}</h2>
       </div>
       <div>
         {items.map((item) => {
