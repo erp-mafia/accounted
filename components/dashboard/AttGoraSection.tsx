@@ -203,11 +203,9 @@ export default function AttGoraSection({
 
   return (
     <section aria-label={t('att_gora_title')}>
-      {/* Pane header (concept k-head): eyebrow + quiet count over a hairline */}
-      <div className="flex items-center justify-between border-b border-border px-1 pb-2.5">
-        <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-          {t('att_gora_title')}
-        </h2>
+      {/* Pane header: serif title + quiet count over a hairline */}
+      <div className="flex items-baseline justify-between border-b border-border px-1 pb-2.5">
+        <h2 className="font-display text-lg tracking-tight">{t('att_gora_title')}</h2>
         <p className="text-xs text-muted-foreground tabular-nums" role="status" aria-live="polite">
           {allClear ? t('all_done') : t('att_gora_left', { count: displayTotal })}
         </p>
