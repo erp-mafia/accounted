@@ -1,8 +1,8 @@
 import { redirect } from 'next/navigation'
 import DashboardContent from '@/components/dashboard/DashboardContent'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { getWorklistCounts, listSuggestedMatches } from '@/lib/worklist'
-import type { Deadline, OnboardingProgress } from '@/types'
+import { listResumeItems } from '@/lib/worklist/resume'
+import type { OnboardingProgress } from '@/types'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
@@ -12,9 +12,11 @@ import {
 
 export const dynamic = 'force-dynamic'
 
-// Home route = Översikt (DashboardContent). The agent chat has its own nav
-// entry at /chat, so / no longer forwards there. Initial setup is an optional,
-// persisted surface inside the dashboard and never replaces the overview.
+// Home route = Hem (concept scene 14): greeting + Att göra + Fortsätt.
+// The KPI/revenue/deadline widgets left the page (founder direction,
+// dev_docs/last_session_resume.md §8), which also pruned their fetches:
+// the journal-line YTD aggregation, unpaid-invoice totals and deadline
+// queries are gone and the page got faster.
 
 export default async function DashboardPage() {
   const [{ supabase, user }, companyId] = await Promise.all([
@@ -30,12 +32,7 @@ export default async function DashboardPage() {
     redirect('/onboarding')
   }
 
-  // Fetch current year date boundaries
-  const startOfYearStr = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0]
-  const startOfMonthStr = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
   const now = new Date()
-  const today = now.toISOString().split('T')[0]
-  const nextWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
 
   // Fetch all data in parallel
   const [
@@ -43,41 +40,36 @@ export default async function DashboardPage() {
     { count: customerCount },
     { count: invoiceCount },
     { count: transactionCount },
-    { data: journalLines },
-    { data: unpaidInvoices },
     { data: bankConnections },
-    { data: deadlines },
     { count: sieImportCount },
     { count: staleUncategorizedCount },
     { count: skatteverketTokenCount },
+    { data: profile },
     agentProfile,
     worklist,
     suggestedMatches,
+    resumeItems,
   ] = await Promise.all([
     getDashboardSettings(),
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
-    supabase.from('journal_entry_lines')
-      .select('account_number, debit_amount, credit_amount, journal_entry:journal_entries!inner(entry_date, status, company_id)')
-      .eq('journal_entry.status', 'posted')
-      .eq('journal_entry.company_id', companyId)
-      .gte('journal_entry.entry_date', startOfYearStr),
-    supabase.from('invoices').select('total, total_sek, vat_amount, vat_amount_sek, status, ore_rounding').eq('company_id', companyId).in('status', ['sent', 'overdue']).is('credited_invoice_id', null),
-    supabase.from('bank_connections').select('id, accounts_data, status, consent_expires, bank_name').eq('company_id', companyId).eq('status', 'active'),
-    supabase.from('deadlines').select('*, customer:customers(id, name)').eq('company_id', companyId).eq('is_completed', false).is('dismissed_at', null)
-      .or(`due_date.lt.${today},due_date.lte.${nextWeek}`).order('due_date', { ascending: true }),
+    supabase.from('bank_connections').select('id, status, consent_expires, bank_name').eq('company_id', companyId).eq('status', 'active'),
     supabase.from('sie_imports').select('*', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'completed'),
     supabase.from('transactions').select('*', { count: 'exact', head: true }).eq('company_id', companyId).is('journal_entry_id', null).eq('is_ignored', false).is('is_business', null).lt('date', new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]),
     // Skatteverket tokens are user-scoped (one BankID identity per user) but
     // carry the active company_id; either filter would work: we use user_id
     // because that's what the token-store reads/writes against.
     supabase.from('skatteverket_tokens').select('*', { count: 'exact', head: true }).eq('user_id', user.id),
+    // First name for the greeting.
+    supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
     getResolvedDashboardAgentProfile(),
     // Pending-work counts + suggested matches come from lib/worklist: the
     // same source as the sidebar badges, so the numbers can never diverge.
     getWorklistCounts(supabase, companyId),
     listSuggestedMatches(supabase, companyId, 5),
+    // In-progress work for the Fortsätt pane: pure draft-state derivation.
+    listResumeItems(supabase, companyId, now),
   ])
 
   // A FAILED settings read must not masquerade as "onboarding not done":
@@ -104,68 +96,7 @@ export default async function DashboardPage() {
     hasSkatteverketConnected: (skatteverketTokenCount || 0) > 0,
   }
 
-  // Calculate totals from journal entry lines using account classes
-  const calculateTotals = (lines: typeof journalLines, fromDate: string) => {
-    const filtered = (lines || []).filter((l) => {
-      const entry = l.journal_entry as unknown as { entry_date: string; status: string }
-      return entry.entry_date >= fromDate
-    })
-
-    let revenue = 0
-    let expenses = 0
-
-    for (const line of filtered) {
-      const acct = line.account_number
-      if (acct.startsWith('3')) {
-        // Revenue: class 3, credit-normal accounts
-        revenue += Math.round(((line.credit_amount || 0) - (line.debit_amount || 0)) * 100) / 100
-      } else if (acct.startsWith('4') || acct.startsWith('5') || acct.startsWith('6') || acct.startsWith('7')) {
-        // Expenses: classes 4-7, debit-normal accounts
-        expenses += Math.round(((line.debit_amount || 0) - (line.credit_amount || 0)) * 100) / 100
-      }
-    }
-
-    revenue = Math.round(revenue * 100) / 100
-    expenses = Math.round(expenses * 100) / 100
-
-    return { income: revenue, expenses, net: Math.round((revenue - expenses) * 100) / 100 }
-  }
-
-  const ytdTotals = calculateTotals(journalLines, startOfYearStr)
-  const mtdTotals = calculateTotals(journalLines, startOfMonthStr)
-
-  // Mirror the per-invoice öresavrundning rule used on the invoice list/detail
-  // pages: sum the displayed (rounded) SEK amount per invoice so the dashboard
-  // total matches what the user sees on the invoice list when the setting is on.
-  const unpaidTotal = (unpaidInvoices || []).reduce(
-    (sum, inv) => sum + getDisplayTotal(
-      { total: Number(inv.total_sek || inv.total), currency: 'SEK', ore_rounding: inv.ore_rounding },
-      settings,
-    ).displayed,
-    0
-  )
-
-  const unpaidVatTotal = (unpaidInvoices || []).reduce(
-    (sum, inv) => sum + Number(inv.vat_amount_sek || inv.vat_amount || 0),
-    0
-  )
-
-  const overdueCount = (unpaidInvoices || []).filter(
-    (inv) => inv.status === 'overdue'
-  ).length
-
-  let bankBalance: number | null = null
-  if (bankConnections && bankConnections.length > 0) {
-    const allBalances = bankConnections.flatMap(conn => {
-      const accounts = conn.accounts_data as { balance: number }[] | null
-      return accounts || []
-    })
-    if (allBalances.length > 0) {
-      bankBalance = allBalances.reduce((sum, acc) => sum + (acc.balance || 0), 0)
-    }
-  }
-
-  const nowMs = new Date().getTime()
+  const nowMs = now.getTime()
   const expiringBankConnections = (bankConnections || [])
     .filter(conn => {
       if (!conn.consent_expires) return false
@@ -182,24 +113,18 @@ export default async function DashboardPage() {
       ),
     }))
 
+  const userFirstName = profile?.full_name?.trim().split(/\s+/)[0] ?? null
+
   return (
     <DashboardContent
       companyId={companyId}
       agentBuilt={agentBuilt}
-      summary={{
-        ytd: ytdTotals,
-        mtd: mtdTotals,
-        unpaidInvoicesCount: (unpaidInvoices || []).length,
-        unpaidInvoicesTotal: unpaidTotal,
-        unpaidVatTotal,
-        overdueInvoicesCount: overdueCount,
-        bankBalance,
-        expiringBankConnections,
-        deadlines: (deadlines || []) as Deadline[],
-        staleUncategorizedCount: staleUncategorizedCount || 0,
-      }}
+      userFirstName={userFirstName}
+      expiringBankConnections={expiringBankConnections}
+      staleUncategorizedCount={staleUncategorizedCount || 0}
       worklist={worklist}
       suggestedMatches={suggestedMatches}
+      resumeItems={resumeItems}
       onboardingProgress={onboardingProgress}
       initialSetup={{
         path: settings.initial_setup_path ?? null,

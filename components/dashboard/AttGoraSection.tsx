@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -69,23 +68,29 @@ function WorklistRow({ href, icon: Icon, label, detail, count, badge }: Worklist
   return (
     <Link
       href={href}
-      className="flex items-center gap-3 px-4 py-3 hover:bg-secondary/60 transition-colors duration-150"
+      className="group flex w-full items-start gap-3 border-b border-border px-1 py-3.5 transition-colors duration-150 hover:bg-secondary/30"
     >
-      <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
-      <div className="flex-1 min-w-0">
-        <p className="text-sm truncate">{label}</p>
-        {detail && <p className="text-xs text-muted-foreground mt-0.5 truncate">{detail}</p>}
+      <span className="mt-px w-[18px] shrink-0 text-muted-foreground" aria-hidden>
+        <Icon className="h-[15px] w-[15px]" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[13.5px]">{label}</p>
+        {detail && <p className="mt-0.5 truncate text-xs text-muted-foreground">{detail}</p>}
       </div>
-      {badge}
-      <span className="font-display text-base tabular-nums shrink-0">{count}</span>
-      <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
+      <span className="ml-auto flex shrink-0 items-center gap-2.5 pt-px">
+        {badge}
+        <Badge variant="secondary" className="font-normal tabular-nums">
+          {count}
+        </Badge>
+        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+      </span>
     </Link>
   )
 }
 
 function BandHeader({ children }: { children: React.ReactNode }) {
   return (
-    <p className="px-4 pt-4 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+    <p className="px-1 pt-5 pb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">
       {children}
     </p>
   )
@@ -198,15 +203,17 @@ export default function AttGoraSection({
 
   return (
     <section aria-label={t('att_gora_title')}>
-      <div className="flex items-baseline justify-between mb-4">
-        <h2 className="font-display text-lg">{t('att_gora_title')}</h2>
-        <p className="text-sm text-muted-foreground tabular-nums" role="status" aria-live="polite">
+      {/* Pane header (concept k-head): eyebrow + quiet count over a hairline */}
+      <div className="flex items-center justify-between border-b border-border px-1 pb-2.5">
+        <h2 className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+          {t('att_gora_title')}
+        </h2>
+        <p className="text-xs text-muted-foreground tabular-nums" role="status" aria-live="polite">
           {allClear ? t('all_done') : t('att_gora_left', { count: displayTotal })}
         </p>
       </div>
 
-      <Card>
-        <CardContent className="p-0">
+      <div>
           {allClear ? (
             <EmptyState
               icon={CheckCircle2}
@@ -219,7 +226,7 @@ export default function AttGoraSection({
               {bokforRows && (
                 <div>
                   <BandHeader>{t('band_bokfor')}</BandHeader>
-                  <div className="divide-y divide-border">
+                  <div>
                     {counts.book_transaction > 0 && (
                       <WorklistRow
                         href="/transactions"
@@ -319,7 +326,7 @@ export default function AttGoraSection({
               {granskaRows && (
                 <div>
                   <BandHeader>{t('band_granska')}</BandHeader>
-                  <div className="divide-y divide-border">
+                  <div>
                     {counts.supplier_invoice_approval > 0 && (
                       <WorklistRow
                         href="/supplier-invoices"
@@ -351,7 +358,7 @@ export default function AttGoraSection({
               {bevakaRows && (
                 <div>
                   <BandHeader>{t('band_bevaka')}</BandHeader>
-                  <div className="divide-y divide-border">
+                  <div>
                     {counts.overdue_invoice > 0 && (
                       <WorklistRow
                         href="/invoices?status=unpaid"
@@ -392,8 +399,7 @@ export default function AttGoraSection({
               )}
             </div>
           )}
-        </CardContent>
-      </Card>
+      </div>
     </section>
   )
 }

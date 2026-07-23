@@ -1,46 +1,36 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { cn, formatCurrency } from '@/lib/utils'
-import { UpcomingDeadlinesWidget } from '@/components/deadlines/UpcomingDeadlinesWidget'
-import { TaxTodoWidget } from '@/components/deadlines/TaxTodoWidget'
-import { useCapability } from '@/contexts/CompanyContext'
+import { useCapability, useCompany } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import NewUserChecklist from '@/components/onboarding/NewUserChecklist'
 import AttGoraSection from '@/components/dashboard/AttGoraSection'
+import ResumePane from '@/components/dashboard/ResumePane'
 import BackupHealthBanner from '@/components/dashboard/BackupHealthBanner'
 import { SkatteverketPromoCard } from '@/components/dashboard/SkatteverketPromoCard'
-import {
-  ChevronRight,
-  CheckCircle2,
-  ArrowRight,
-  MessageCircle,
-} from 'lucide-react'
-import type { Deadline, InitialSetupState, OnboardingProgress } from '@/types'
+import { ArrowRight, MessageCircle } from 'lucide-react'
+import type { InitialSetupState, OnboardingProgress } from '@/types'
 import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
-import { visibleWorklistTotalFrom } from '@/lib/worklist/visible-total'
+import type { ResumeItem } from '@/lib/worklist/resume'
 
 interface DashboardContentProps {
   companyId: string
-  summary: {
-    ytd: { income: number; expenses: number; net: number }
-    mtd: { income: number; expenses: number; net: number }
-    unpaidInvoicesCount: number
-    unpaidInvoicesTotal: number
-    unpaidVatTotal: number
-    overdueInvoicesCount: number
-    bankBalance: number | null
-    expiringBankConnections?: { id: string; bank_name: string; days_left: number }[]
-    deadlines: Deadline[]
-    staleUncategorizedCount: number
-  }
+  /** Signed-in user's first name for the greeting; null falls back to a
+   *  nameless greeting. */
+  userFirstName?: string | null
+  /** Expiring PSD2 consents (dashboard-only worklist extra). */
+  expiringBankConnections?: { id: string; bank_name: string; days_left: number }[]
+  staleUncategorizedCount: number
   /** Unified pending-work counts from lib/worklist: same source as the sidebar badges. */
   worklist: WorklistCounts
   /** High-confidence transaction↔invoice matches for inline one-click confirm. */
   suggestedMatches: SuggestedMatch[]
+  /** In-progress work for the Fortsätt pane (lib/worklist/resume). */
+  resumeItems: ResumeItem[]
   onboardingProgress?: OnboardingProgress
   initialSetup: InitialSetupState
   /**
@@ -52,30 +42,57 @@ interface DashboardContentProps {
   agentBuilt?: boolean
 }
 
-export default function DashboardContent({ companyId, summary, worklist, suggestedMatches, onboardingProgress, initialSetup, agentBuilt = true }: DashboardContentProps) {
+/**
+ * Hem (concept scene 14): greeting, then the two panes side by side:
+ * Att göra (obligations, lib/worklist) and Fortsätt (in-progress work,
+ * lib/worklist/resume). KPI tiles, revenue/expense cards and the deadline/tax
+ * widgets left the page (founder direction, dev_docs/last_session_resume.md
+ * §8): the numbers live at /kpi and /reports, deadlines render as Bevaka rows.
+ */
+export default function DashboardContent({
+  companyId,
+  userFirstName,
+  expiringBankConnections,
+  staleUncategorizedCount,
+  worklist,
+  suggestedMatches,
+  resumeItems,
+  onboardingProgress,
+  initialSetup,
+  agentBuilt = true,
+}: DashboardContentProps) {
   const t = useTranslations('dashboard')
   const hasAi = useCapability(CAPABILITY.ai)
+  const { company } = useCompany()
 
-  const formatLargeNumber = (amount: number) => {
-    return new Intl.NumberFormat('sv-SE', {
-      style: 'decimal',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount)
-  }
-
-  // One number, one source (visibleWorklistTotal): the worklist total plus
-  // expiring bank connections (dashboard-only), minus the hidden paid inbox row
-  // for non-payers. Must match AttGoraSection's header off the same helper.
-  const todoCount = visibleWorklistTotalFrom(
-    worklist,
-    hasAi,
-    summary.expiringBankConnections?.length ?? 0,
-  )
+  // Time-of-day greeting (concept: "God morgon, Jakob."). Client-side clock
+  // on purpose (the user's local morning, not the server's), captured once
+  // so render stays pure.
+  const [greetingNow] = useState(() => new Date())
+  const hour = greetingNow.getHours()
+  const greeting =
+    hour < 10 ? t('greeting_morning') : hour < 17 ? t('greeting_day') : t('greeting_evening')
+  const dateLine = new Intl.DateTimeFormat('sv-SE', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  }).format(greetingNow)
 
   return (
     <div className="stagger-enter space-y-8">
       <BackupHealthBanner />
+
+      {/* Greeting hero (concept scene 14) */}
+      <section>
+        <h1 className="font-display text-2xl leading-8 tracking-tight">
+          {userFirstName ? `${greeting}, ${userFirstName}.` : `${greeting}.`}
+        </h1>
+        <p className="mt-1.5 text-[13px] text-muted-foreground">
+          {dateLine}
+          {company?.name ? ` · ${company.name}` : ''}
+        </p>
+      </section>
+
       <NewUserChecklist
         initialState={initialSetup}
         hasBookkeepingImported={!!onboardingProgress?.hasSIEImport}
@@ -83,12 +100,10 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
         hasSkatteverketConnected={!!onboardingProgress?.hasSkatteverketConnected}
         hasAgentBuilt={agentBuilt}
       />
+
       {/* Build-assistant hero: shown only until the company has a verified
           agent_profile, so existing/migrated users get a clear prompt instead
-          of a full-screen onboarding takeover. Once the assistant is built the
-          dashboard leads with the metrics + the unified "Att göra" worklist
-          below; we deliberately drop a next-best-action hero here so the page
-          has a single CTA surface instead of two that point at the same work. */}
+          of a full-screen onboarding takeover. */}
       {!agentBuilt && (
         <section>
           {/* Non-payers keep seeing the hero (conversion surface) but it
@@ -120,87 +135,21 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
         </section>
       )}
 
-      {/* Key metrics: 4 compact cards */}
-      <section>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-xs text-muted-foreground mb-2">{t('result')}</p>
-              <p className={cn(
-                'font-display text-xl tabular-nums leading-tight',
-                summary.mtd.net >= 0 ? 'text-success' : 'text-destructive'
-              )}>
-                {formatLargeNumber(summary.mtd.net)}
-                <span className="text-sm ml-0.5 text-muted-foreground font-normal">kr</span>
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                {formatCurrency(summary.ytd.net)} {t('this_year_short')}
-              </p>
-            </CardContent>
-          </Card>
-
-          <Link href="/invoices?status=unpaid">
-            <Card className="h-full hover:border-primary/50 transition-colors cursor-pointer">
-              <CardContent className="p-4">
-                <div className="flex items-start justify-between">
-                  <p className="text-xs text-muted-foreground mb-2">{t('to_be_paid')}</p>
-                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />
-                </div>
-                <p className="font-display text-xl tabular-nums leading-tight">
-                  {summary.unpaidInvoicesCount}
-                  {t('units') && <span className="text-sm ml-0.5 text-muted-foreground font-normal">{t('units')}</span>}
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {formatCurrency(summary.unpaidInvoicesTotal)}
-                </p>
-              </CardContent>
-            </Card>
-          </Link>
-
-          {summary.bankBalance !== null ? (
-            <Card>
-              <CardContent className="p-4">
-                <p className="text-xs text-muted-foreground mb-2">{t('bank_balance')}</p>
-                <p className="font-display text-xl tabular-nums leading-tight">
-                  {formatLargeNumber(summary.bankBalance)}
-                  <span className="text-sm ml-0.5 text-muted-foreground font-normal">kr</span>
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <Link href="/import">
-              <Card className="h-full hover:border-primary/50 transition-colors cursor-pointer">
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between">
-                    <p className="text-xs text-muted-foreground mb-2">{t('bank_balance')}</p>
-                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50" />
-                  </div>
-                  <p className="text-sm font-medium text-primary">{t('connect_bank')}</p>
-                </CardContent>
-              </Card>
-            </Link>
-          )}
-
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-xs text-muted-foreground mb-2">{t('todo')}</p>
-              <div role="status" aria-live="polite">
-                {todoCount > 0 ? (
-                  <p className="font-display text-xl tabular-nums leading-tight">
-                    {todoCount}
-                    {t('units') && <span className="text-sm ml-0.5 text-muted-foreground font-normal">{t('units')}</span>}
-                  </p>
-                ) : (
-                  <div className="flex items-center gap-1.5">
-                    <CheckCircle2 className="h-4 w-4 text-success" />
-                    <p className="text-sm font-medium text-success">{t('all_done')}</p>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </section>
+      {/* The two panes (concept hem-grid). When nothing is in progress the
+          right pane renders null and Att göra takes the full width. */}
+      <div
+        className={
+          resumeItems.length > 0 ? 'grid items-start gap-x-6 gap-y-8 md:grid-cols-2' : undefined
+        }
+      >
+        <AttGoraSection
+          worklist={worklist}
+          suggestedMatches={suggestedMatches}
+          expiringBankConnections={expiringBankConnections}
+          staleUncategorizedCount={staleUncategorizedCount}
+        />
+        <ResumePane items={resumeItems} />
+      </div>
 
       {/* Connect-Skatteverket nudge for existing companies. Gated on
           agentBuilt so it never stacks under the build-assistant hero:
@@ -210,64 +159,6 @@ export default function DashboardContent({ companyId, summary, worklist, suggest
           companyId={companyId}
           connected={!!onboardingProgress?.hasSkatteverketConnected}
         />
-      )}
-
-      {/* Att göra: the unified worklist. One section, every actionable item,
-          same counts as the sidebar badges (lib/worklist). */}
-      <AttGoraSection
-        worklist={worklist}
-        suggestedMatches={suggestedMatches}
-        expiringBankConnections={summary.expiringBankConnections}
-        staleUncategorizedCount={summary.staleUncategorizedCount}
-      />
-
-      {/* Result: revenue / expenses (always visible) */}
-      <section>
-        <div className="grid md:grid-cols-2 gap-4">
-          <Card>
-            <CardContent className="p-6">
-              <p className="text-sm text-muted-foreground mb-3">{t('revenue')}</p>
-              <p className="font-display text-2xl tabular-nums leading-tight">
-                {formatLargeNumber(summary.mtd.income)}
-                <span className="text-base ml-1 text-muted-foreground font-normal">kr</span>
-              </p>
-              <p className="text-xs text-muted-foreground mt-0.5">{t('this_month')}</p>
-              <div className="mt-4 pt-3 border-t border-border flex items-baseline justify-between">
-                <p className="text-xs text-muted-foreground">{t('this_year_block')}</p>
-                <p className="text-sm font-medium tabular-nums">{formatCurrency(summary.ytd.income)}</p>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-6">
-              <p className="text-sm text-muted-foreground mb-3">{t('expenses')}</p>
-              <p className="font-display text-2xl tabular-nums leading-tight">
-                {formatLargeNumber(summary.mtd.expenses)}
-                <span className="text-base ml-1 text-muted-foreground font-normal">kr</span>
-              </p>
-              <p className="text-xs text-muted-foreground mt-0.5">{t('this_month')}</p>
-              <div className="mt-4 pt-3 border-t border-border flex items-baseline justify-between">
-                <p className="text-xs text-muted-foreground">{t('this_year_block')}</p>
-                <p className="text-sm font-medium tabular-nums">{formatCurrency(summary.ytd.expenses)}</p>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </section>
-
-      {/* Upcoming deadlines */}
-      {summary.deadlines && summary.deadlines.length > 0 && (
-        <section>
-          <UpcomingDeadlinesWidget deadlines={summary.deadlines} maxItems={8} />
-        </section>
-      )}
-
-      {/* Tax todo */}
-      {summary.deadlines?.some(d => d.deadline_type === 'tax' && !d.is_completed) && (
-        <section>
-          <TaxTodoWidget deadlines={summary.deadlines} />
-        </section>
       )}
     </div>
   )
