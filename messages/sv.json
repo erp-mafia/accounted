@@ -135,7 +135,8 @@
     "collapse_nav": "Minimera menyn",
     "expand_nav": "Expandera menyn",
     "members_roles": "Medlemmar och roller",
-    "subscription": "Abonnemang"
+    "subscription": "Abonnemang",
+    "discord_community": "Discord-community"
   },
   "agentKnowledge": {
     "load_error_title": "Kunde inte läsa in kunskapsprofilen",

@@ -18,11 +18,17 @@ import {
   HelpCircle,
   Loader2,
   LogOut,
+  MessagesSquare,
   Plus,
   Search,
   Settings,
   Users,
 } from 'lucide-react'
+
+// Community invite (Accounted's Discord). Deliberately a constant, not
+// branding config: self-hosted rebrands can hide or swap it when someone
+// actually asks for that.
+const DISCORD_INVITE_URL = 'https://discord.gg/D9SxtTgvx'
 
 interface UserMenuProps {
   userName: string | null
@@ -239,7 +245,9 @@ export default function UserMenu({
               </button>
 
               {companiesOpen && (
-                <div className="absolute bottom-0 left-full z-[61] ml-1.5 w-60 rounded-lg border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-left-1 duration-150">
+                // Top-aligned with the company row, growing DOWNWARD
+                // (founder feedback 2026-07-23: never upward over the menu).
+                <div className="absolute top-0 left-full z-[61] ml-1.5 w-60 rounded-lg border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-left-1 duration-150">
                   <div className="flex items-center gap-2 border-b border-border/60 px-3 pb-2 pt-1.5">
                     <Search className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                     <input
@@ -318,6 +326,16 @@ export default function UserMenu({
                 <HelpCircle className="h-4 w-4 flex-shrink-0" />
                 {tNav('help')}
               </Link>
+              <a
+                href={DISCORD_INVITE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={close}
+                className={menuRow}
+              >
+                <MessagesSquare className="h-4 w-4 flex-shrink-0" />
+                {tNav('discord_community')}
+              </a>
               <SupportLink variant="muted" className={menuRow} />
               <div className="my-1 border-t border-border/60" />
               <button

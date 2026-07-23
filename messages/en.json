@@ -135,7 +135,8 @@
     "collapse_nav": "Collapse menu",
     "expand_nav": "Expand menu",
     "members_roles": "Members and roles",
-    "subscription": "Subscription"
+    "subscription": "Subscription",
+    "discord_community": "Discord community"
   },
   "agentKnowledge": {
     "load_error_title": "Couldn't load the knowledge profile",
