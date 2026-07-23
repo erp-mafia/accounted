@@ -655,7 +655,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           </Button>
           <div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <h1 className={cn('font-display text-2xl sm:text-3xl tracking-tight', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : (invoice.invoice_number ?? '-')}</h1>
+              <h1 className={cn('font-display text-2xl leading-8 tracking-tight', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : (invoice.invoice_number ?? '-')}</h1>
               {isProforma && (
                 <Badge variant="outline">{t('badge_proforma')}</Badge>
               )}

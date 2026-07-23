@@ -192,7 +192,7 @@ export default function ArticleDetailPage({
               <Icon className="h-6 w-6 text-primary" />
             </div>
             <div>
-              <h1 className="font-display text-2xl md:text-3xl tracking-tight">{article.name}</h1>
+              <h1 className="font-display text-2xl leading-8 tracking-tight">{article.name}</h1>
               <div className="flex items-center gap-2 mt-1">
                 <Badge variant={article.active ? 'success' : 'secondary'}>
                   {article.active ? t('status_active') : t('status_inactive')}

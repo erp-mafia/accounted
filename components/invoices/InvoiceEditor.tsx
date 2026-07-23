@@ -1373,7 +1373,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           </Button>
         )}
         <div className="flex-1 min-w-0">
-          <Heading className={bare ? 'font-display text-xl tracking-tight' : 'font-display text-2xl md:text-3xl tracking-tight'}>
+          <Heading className={bare ? 'font-display text-xl tracking-tight' : 'font-display text-2xl leading-8 tracking-tight'}>
             {titleText}
             {numberPreview && !isSelfBilled && (
               <span className={bare ? 'ml-2 text-muted-foreground tabular-nums text-lg' : 'ml-2 text-muted-foreground tabular-nums text-xl md:text-2xl'}>

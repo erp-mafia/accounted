@@ -204,7 +204,7 @@ export default function CustomerDetailPage({
               <Icon className="h-6 w-6 text-primary" />
             </div>
             <div>
-              <h1 className="font-display text-2xl md:text-3xl tracking-tight">{customer.name}</h1>
+              <h1 className="font-display text-2xl leading-8 tracking-tight">{customer.name}</h1>
               <p className="text-sm text-muted-foreground">{t(CUSTOMER_TYPE_KEY[customer.customer_type])}</p>
             </div>
           </div>

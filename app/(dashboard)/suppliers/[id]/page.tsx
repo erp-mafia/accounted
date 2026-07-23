@@ -154,7 +154,7 @@ export default function SupplierDetailPage() {
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>
-            <h1 className="font-display text-2xl md:text-3xl tracking-tight">{supplier.name}</h1>
+            <h1 className="font-display text-2xl leading-8 tracking-tight">{supplier.name}</h1>
             <p className="text-muted-foreground">
               {supplierTypeLabels[supplier.supplier_type]}
               {supplier.org_number && t('org_number_inline', { number: supplier.org_number })}

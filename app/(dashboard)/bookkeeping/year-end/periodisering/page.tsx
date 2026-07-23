@@ -364,7 +364,7 @@ export default function PeriodiseringWizardPage() {
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
-        <h1 className="font-display text-3xl md:text-4xl tracking-tight">
+        <h1 className="font-display text-2xl leading-8 tracking-tight">
           {closingYear ? `Periodisering: Bokslut ${closingYear}` : 'Periodisering'}
         </h1>
         <Button variant="outline" asChild>

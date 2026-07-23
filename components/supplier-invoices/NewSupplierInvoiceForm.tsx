@@ -1487,7 +1487,7 @@ export default function NewSupplierInvoiceForm({
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>
-            <h1 className="font-display text-2xl md:text-3xl tracking-tight">{t('page_title')}</h1>
+            <h1 className="font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
           </div>
         </div>
       )}

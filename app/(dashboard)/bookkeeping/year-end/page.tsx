@@ -225,7 +225,7 @@ export default function YearEndPage() {
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h1 className="font-display text-3xl md:text-4xl tracking-tight">Årsbokslut</h1>
+        <h1 className="font-display text-2xl leading-8 tracking-tight">Årsbokslut</h1>
         <div className="flex gap-2">
           <AgentSparkleButton
             intentId="bokslut.step"

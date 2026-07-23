@@ -29,7 +29,7 @@ export default function TransactionStatusBar({
   return (
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <div>
-        <h1 className="font-display text-3xl md:text-4xl tracking-tight">{t('page_title')}</h1>
+        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
         {uncategorizedCount > 0 && mode === 'inbox' && (
           <p className="text-muted-foreground mt-1">
             <span className="text-foreground font-semibold">{uncategorizedCount}</span> {t('subtitle_to_post')}

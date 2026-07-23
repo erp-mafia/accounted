@@ -14,7 +14,7 @@ export default function ConsultantEmptyState({ firstName }: ConsultantEmptyState
   return (
     <div className="stagger-enter">
       <header className="mb-16">
-        <h1 className="font-display text-2xl md:text-3xl tracking-tight">
+        <h1 className="font-display text-2xl leading-8 tracking-tight">
           {greeting}{firstName ? `, ${firstName}` : ''}
         </h1>
       </header>
