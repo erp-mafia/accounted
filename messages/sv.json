@@ -521,7 +521,11 @@
     "bulk_excluded_note": "{count, plural, one {1 kräver enskild granskning} other {# kräver enskild granskning}}",
     "badge_medium_risk": "Medel risk",
     "badge_low_risk": "Låg risk",
-    "show_conversation": "Visa konversationen"
+    "show_conversation": "Visa konversationen",
+    "tab_history": "Historik",
+    "details_btn": "Visa detaljer",
+    "empty_history_title": "Ingen historik ännu",
+    "history_reason": "orsak: \"{reason}\""
   },
   "deadlines": {
     "title": "Deadlines",

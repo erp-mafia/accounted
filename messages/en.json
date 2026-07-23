@@ -521,7 +521,11 @@
     "bulk_excluded_note": "{count, plural, one {1 needs individual review} other {# need individual review}}",
     "badge_medium_risk": "Medium risk",
     "badge_low_risk": "Low risk",
-    "show_conversation": "Show the conversation"
+    "show_conversation": "Show the conversation",
+    "tab_history": "History",
+    "details_btn": "Show details",
+    "empty_history_title": "No history yet",
+    "history_reason": "reason: \"{reason}\""
   },
   "deadlines": {
     "title": "Deadlines",

@@ -35,14 +35,15 @@ import {
   Bot,
   Check,
   ChevronRight,
+  Info,
   Loader2,
   Lock,
   MessageSquare,
   AlertTriangle,
+  X,
 } from 'lucide-react'
 import type {
   PendingOperation,
-  PendingOperationStatus,
   PendingOperationRejectionCategory,
 } from '@/types'
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
@@ -219,6 +220,16 @@ function getPeriodStatus(op: PendingOperation): PeriodStatusShape | null {
     lock_date: typeof obj.lock_date === 'string' ? obj.lock_date : null,
   }
 }
+
+// Concept gact buttons (scene 11): tinted outline pills under the op text.
+// The tint is sanctioned here by the concept spec: approve reads sage,
+// reject terracotta, details neutral.
+const GACT_CLASS =
+  'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-[5px] text-xs transition-colors duration-150 disabled:pointer-events-none disabled:opacity-50'
+const GACT_OK_CLASS = 'border-success/40 text-success hover:bg-success/10'
+const GACT_NO_CLASS = 'border-destructive/40 text-destructive hover:bg-destructive/10'
+const GACT_NEUTRAL_CLASS =
+  'border-border text-muted-foreground hover:bg-secondary/40 hover:text-foreground'
 
 const REJECTION_CATEGORY_LABELS: Record<PendingOperationRejectionCategory, string> = {
   wrong_category: 'Fel kategori / konto',
@@ -646,21 +657,18 @@ const sourceFilterLabels = (
   high_risk: t('tab_high_risk'),
 })
 
-type TabStatus = Extract<PendingOperationStatus, 'pending' | 'committed' | 'rejected'>
-type StatusCounts = Record<TabStatus, number | null>
+// Concept scene 11: two views. Historik merges committed + rejected,
+// distinguished per row by a status chip.
+type ViewTab = 'pending' | 'history'
 
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<PendingOperationStatus>('pending')
+  const [activeTab, setActiveTab] = useState<ViewTab>('pending')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
   const [conversationFilter, setConversationFilter] = useState<string | null>(null)
-  const [counts, setCounts] = useState<StatusCounts>({
-    pending: null,
-    committed: null,
-    rejected: null,
-  })
+  const [pendingCount, setPendingCount] = useState<number | null>(null)
   // Detail slide-over (convention 13): id rather than the row object, so the
   // panel tracks realtime refetches and closes itself when the op leaves the
   // current list (approved elsewhere, tab switch, filter change).
@@ -692,14 +700,25 @@ export default function PendingOperationsPage() {
   const fetchOperations = useCallback(async () => {
     setIsLoading(true)
     try {
-      const res = await fetch(`/api/pending-operations?status=${activeTab}`)
-      const json = await res.json()
-      setOperations(json.data ?? [])
-      setCounts((prev) => ({
-        ...prev,
-        ...(json.counts ?? {}),
-        [activeTab]: json.count ?? json.data?.length ?? 0,
-      }))
+      if (activeTab === 'pending') {
+        const res = await fetch('/api/pending-operations?status=pending')
+        const json = await res.json()
+        setOperations(json.data ?? [])
+        setPendingCount(json.count ?? json.data?.length ?? 0)
+      } else {
+        // The API is single-status per fetch: Historik merges godkända and
+        // avvisade, newest resolution first.
+        const [committed, rejected] = await Promise.all([
+          fetch('/api/pending-operations?status=committed').then((r) => r.json()),
+          fetch('/api/pending-operations?status=rejected').then((r) => r.json()),
+        ])
+        const merged = ([...(committed.data ?? []), ...(rejected.data ?? [])] as PendingOperation[]).sort(
+          (a, b) => (b.resolved_at ?? b.created_at).localeCompare(a.resolved_at ?? a.created_at),
+        )
+        setOperations(merged)
+        const pc = committed.counts?.pending ?? rejected.counts?.pending
+        if (typeof pc === 'number') setPendingCount(pc)
+      }
     } catch {
       toast({ title: 'Kunde inte ladda operationer', variant: 'destructive' })
     }
@@ -991,10 +1010,9 @@ export default function PendingOperationsPage() {
   const detailPeriodLocked = detailPeriod != null && detailPeriod.status !== 'open'
   const detailConversationId = detailOp?.agent_metadata?.conversation_id ?? null
 
-  const SEG_STATUSES: Array<{ status: TabStatus; labelKey: string }> = [
-    { status: 'pending', labelKey: 'tab_pending' },
-    { status: 'committed', labelKey: 'tab_committed' },
-    { status: 'rejected', labelKey: 'tab_rejected' },
+  const SEG_TABS: Array<{ tab: ViewTab; labelKey: string }> = [
+    { tab: 'pending', labelKey: 'tab_pending' },
+    { tab: 'history', labelKey: 'tab_history' },
   ]
 
   return (
@@ -1046,24 +1064,24 @@ export default function PendingOperationsPage() {
           far right. The count chip rides only on Väntar: it is the queue. */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
-          {SEG_STATUSES.map(({ status, labelKey }) => (
+          {SEG_TABS.map(({ tab, labelKey }) => (
             <button
-              key={status}
+              key={tab}
               type="button"
               role="tab"
-              aria-selected={activeTab === status}
-              onClick={() => setActiveTab(status)}
+              aria-selected={activeTab === tab}
+              onClick={() => setActiveTab(tab)}
               className={cn(
                 'inline-flex items-center gap-1.5 rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150',
-                activeTab === status
+                activeTab === tab
                   ? 'border border-border bg-card font-medium text-foreground'
                   : 'text-muted-foreground hover:text-foreground',
               )}
             >
               {t(labelKey)}
-              {status === 'pending' && (counts.pending ?? 0) > 0 && (
+              {tab === 'pending' && (pendingCount ?? 0) > 0 && (
                 <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                  {counts.pending}
+                  {pendingCount}
                 </span>
               )}
             </button>
@@ -1154,11 +1172,7 @@ export default function PendingOperationsPage() {
           ) : (
             <DataListEmpty
               icon={<ClipboardCheck className="h-6 w-6" />}
-              title={
-                activeTab === 'committed'
-                  ? t('empty_committed_title')
-                  : t('empty_rejected_title')
-              }
+              title={t('empty_history_title')}
               description={t('empty_finished_description')}
             />
           )
@@ -1175,6 +1189,69 @@ export default function PendingOperationsPage() {
               const showHighRiskWarning =
                 op.risk_level === 'high' && warningSentence && op.status === 'pending'
 
+              if (op.status !== 'pending') {
+                // Historik row (concept k-row): status chip + text + sub line.
+                const resolvedAt = op.resolved_at ?? op.created_at
+                const sub = [
+                  formatRelativeTime(resolvedAt),
+                  operationLabel(op.operation_type, t),
+                  originLabel(op, t),
+                ]
+                  .filter(Boolean)
+                  .join(' · ')
+                return (
+                  <div
+                    key={op.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={op.title}
+                    onClick={() => setDetailOpId(op.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        setDetailOpId(op.id)
+                      }
+                    }}
+                    className={cn(
+                      'group flex cursor-pointer items-start gap-3 border-b border-border px-1 py-3 transition-colors duration-150',
+                      detailOpId === op.id ? 'bg-secondary/25' : 'hover:bg-secondary/35',
+                    )}
+                  >
+                    <Badge
+                      variant={
+                        isAutoExpired(op)
+                          ? 'secondary'
+                          : op.status === 'committed'
+                            ? 'success'
+                            : 'destructive'
+                      }
+                      className="mt-0.5 shrink-0 font-normal"
+                    >
+                      {isAutoExpired(op)
+                        ? t('badge_auto_expired')
+                        : op.status === 'committed'
+                          ? t('badge_approved')
+                          : t('badge_rejected')}
+                    </Badge>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13.5px] leading-snug">{op.title}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        {sub}
+                        {op.status === 'rejected' && op.rejection_reason
+                          ? ` · ${t('history_reason', { reason: op.rejection_reason })}`
+                          : ''}
+                      </div>
+                    </div>
+                    <ChevronRight
+                      className={cn(
+                        'mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-all duration-200',
+                        detailOpId === op.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+                      )}
+                    />
+                  </div>
+                )
+              }
+
               return (
                 <div
                   key={op.id}
@@ -1189,14 +1266,14 @@ export default function PendingOperationsPage() {
                     }
                   }}
                   className={cn(
-                    'group flex cursor-pointer items-start gap-3 border-b border-border px-1 py-[13px] transition-colors duration-150',
+                    'group flex cursor-pointer items-start gap-3 border-b border-border px-1 py-4 transition-colors duration-150',
                     detailOpId === op.id ? 'bg-secondary/25' : 'hover:bg-secondary/35',
                     isSelected && 'bg-secondary/40',
                   )}
                 >
                   {/* Hover-revealed selection checkbox (concept .cb) */}
                   <span
-                    className="w-[18px] shrink-0 pt-0.5"
+                    className="w-[18px] shrink-0 pt-1.5"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {canBulkSelect && (
@@ -1213,95 +1290,77 @@ export default function PendingOperationsPage() {
                       />
                     )}
                   </span>
-                  {/* Actor column (concept op-actor) */}
-                  <span className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden>
-                    {isAgent ? (
-                      <Bot className="h-4 w-4" />
-                    ) : (
-                      <ClipboardCheck className="h-4 w-4" />
-                    )}
+                  {/* Actor column with thread line (concept op-actorcol) */}
+                  <span className="flex shrink-0 flex-col items-center gap-1.5 self-stretch" aria-hidden>
+                    <span className="flex h-7 w-7 items-center justify-center rounded-full border border-border text-muted-foreground">
+                      {isAgent ? <Bot className="h-3.5 w-3.5" /> : <ClipboardCheck className="h-3.5 w-3.5" />}
+                    </span>
+                    <span className="w-px flex-1 bg-border" />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <div className="text-[11.5px] text-muted-foreground">{sourceLine(op)}</div>
-                    <div className="mt-0.5 text-[13.5px] leading-snug">{op.title}</div>
+                    <div className="pt-0.5 text-[11px] uppercase tracking-[0.07em] text-muted-foreground">
+                      {sourceLine(op)}
+                    </div>
+                    <div className="mt-1 text-[13.5px] leading-snug">{op.title}</div>
                     {showHighRiskWarning && (
                       <p className="mt-1 flex items-start gap-1 text-xs text-destructive">
                         <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                         <span>{warningSentence}</span>
                       </p>
                     )}
-                    {op.status === 'rejected' && op.rejection_category && (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Avvisad: {REJECTION_CATEGORY_LABELS[op.rejection_category]}
-                        {op.rejection_reason ? `, "${op.rejection_reason}"` : ''}
-                      </p>
-                    )}
-                    {/* rejection_category is always NULL on auto-expired rows, so
-                        this never collides with the manual-rejection line above. */}
-                    {isAutoExpired(op) && (
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {t('auto_expired_detail')}
-                      </p>
-                    )}
+                    {/* Action pills under the text (concept gact) */}
+                    <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        className={cn(GACT_CLASS, GACT_OK_CLASS)}
+                        disabled={periodLocked || isCommitting || isBulkCommitting}
+                        title={periodLocked ? 'Perioden är låst' : undefined}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (periodLocked) return
+                          setSelectedOp(op)
+                          setShowCommitDialog(true)
+                        }}
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                        {t('approve')}
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(GACT_CLASS, GACT_NO_CLASS)}
+                        disabled={isRejecting}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openRejectDialog(op)
+                        }}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        {t('reject')}
+                      </button>
+                      <button
+                        type="button"
+                        className={cn(GACT_CLASS, GACT_NEUTRAL_CLASS)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setDetailOpId(op.id)
+                        }}
+                      >
+                        <Info className="h-3.5 w-3.5" />
+                        {t('details_btn')}
+                      </button>
+                    </div>
                   </div>
-                  {/* Risk chip (concept op-risk): only where it informs the
-                      approval decision, i.e. on the pending queue. */}
-                  {op.status === 'pending' && (
-                    <Badge
-                      variant={op.risk_level === 'high' ? 'destructive' : 'outline'}
-                      className="mt-0.5 shrink-0 font-normal"
-                    >
-                      {op.risk_level === 'high'
-                        ? t('badge_high_risk')
-                        : op.risk_level === 'medium'
-                          ? t('badge_medium_risk')
-                          : t('badge_low_risk')}
-                    </Badge>
-                  )}
-                  {isAutoExpired(op) && (
-                    <Badge variant="secondary" className="mt-0.5 shrink-0 font-normal">
-                      {t('badge_auto_expired')}
-                    </Badge>
-                  )}
-                  <span className="flex shrink-0 items-center gap-2 pt-px">
-                    {op.status === 'pending' && (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 px-3.5 text-xs"
-                          disabled={periodLocked}
-                          title={periodLocked ? 'Perioden är låst' : undefined}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (periodLocked) return
-                            setSelectedOp(op)
-                            setShowCommitDialog(true)
-                          }}
-                        >
-                          {t('approve')}
-                        </Button>
-                        <button
-                          type="button"
-                          className={QUIET_LINK_CLASS}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            openRejectDialog(op)
-                          }}
-                        >
-                          {t('reject')}
-                        </button>
-                      </>
-                    )}
-                    <ChevronRight
-                      className={cn(
-                        'h-3.5 w-3.5 text-muted-foreground transition-all duration-200',
-                        detailOpId === op.id
-                          ? 'opacity-100'
-                          : 'opacity-0 group-hover:opacity-100',
-                      )}
-                    />
-                  </span>
+                  {/* Risk chip (concept op-risk) */}
+                  <Badge
+                    variant={op.risk_level === 'high' ? 'destructive' : 'outline'}
+                    className="mt-1 shrink-0 font-normal"
+                  >
+                    {op.risk_level === 'high'
+                      ? t('badge_high_risk')
+                      : op.risk_level === 'medium'
+                        ? t('badge_medium_risk')
+                        : t('badge_low_risk')}
+                  </Badge>
                 </div>
               )
             })}
