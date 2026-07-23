@@ -974,64 +974,54 @@ export default function JournalEntryList() {
         </DataList>
       ) : (
       <div>
-        {/* Batch-mark "Inget underlag krävs": select-all + contextual action
-            bar above the table (concept bulkbar). */}
-        {(eligibleEntries.length > 0 || selectedIds.size > 0) && (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-1 py-2.5">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="select-all-missing"
-                checked={allEligibleSelected}
-                onCheckedChange={toggleSelectAll}
-                disabled={eligibleEntries.length === 0}
-              />
-              <Label htmlFor="select-all-missing" className="text-sm cursor-pointer">
-                {selectedIds.size > 0
-                  ? t('batch_selected_count', { count: selectedIds.size })
-                  : t('batch_select_all', { count: eligibleEntries.length })}
-              </Label>
-            </div>
-            {selectedIds.size > 0 ? (
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <Input
-                  value={batchReason}
-                  onChange={(e) => setBatchReason(e.target.value)}
-                  placeholder={t('no_doc_required_reason_placeholder')}
-                  list="batch-no-doc-suggestions"
-                  maxLength={200}
-                  className="h-8 text-xs sm:w-56"
-                  disabled={batchSubmitting}
-                />
-                <datalist id="batch-no-doc-suggestions">
-                  <option value={t('no_doc_required_suggestion_bank_fee')} />
-                  <option value={t('no_doc_required_suggestion_interest')} />
-                  <option value={t('no_doc_required_suggestion_internal_transfer')} />
-                  <option value={t('no_doc_required_suggestion_tax_payment')} />
-                  <option value={t('no_doc_required_suggestion_salary')} />
-                </datalist>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" onClick={handleBatchExempt} disabled={batchSubmitting}>
-                    {batchSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    {t('batch_mark_no_doc')}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setSelectedIds(new Set())}
-                    disabled={batchSubmitting}
-                  >
-                    {t('batch_clear_selection')}
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              // Filter-scoped: mark every missing-doc verifikat matching the active
-              // filters across all pages: scales to a post-import flood.
-              <Button size="sm" variant="outline" onClick={openBulk}>
-                <CircleSlash className="mr-2 h-4 w-4" />
-                {t('batch_mark_all_missing')}
-              </Button>
+        {/* Bulkbar (concept): hidden until at least one verifikat is
+            selected via the hover checkboxes, then it pops in with the
+            count and the batch actions. Select-all and the filter-scoped
+            bulk mark live inside it as quiet actions. */}
+        {selectedIds.size > 0 && (
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+            <span className="whitespace-nowrap">
+              <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
+              {t('bulkbar_selected')}
+            </span>
+            <Input
+              value={batchReason}
+              onChange={(e) => setBatchReason(e.target.value)}
+              placeholder={t('no_doc_required_reason_placeholder')}
+              list="batch-no-doc-suggestions"
+              maxLength={200}
+              className="h-8 w-56 text-xs"
+              disabled={batchSubmitting}
+            />
+            <datalist id="batch-no-doc-suggestions">
+              <option value={t('no_doc_required_suggestion_bank_fee')} />
+              <option value={t('no_doc_required_suggestion_interest')} />
+              <option value={t('no_doc_required_suggestion_internal_transfer')} />
+              <option value={t('no_doc_required_suggestion_tax_payment')} />
+              <option value={t('no_doc_required_suggestion_salary')} />
+            </datalist>
+            <Button size="sm" onClick={handleBatchExempt} disabled={batchSubmitting}>
+              {batchSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {t('batch_mark_no_doc')}
+            </Button>
+            {!allEligibleSelected && (
+              <button type="button" className={QUIET_LINK_CLASS} onClick={toggleSelectAll}>
+                {t('batch_select_all', { count: eligibleEntries.length })}
+              </button>
             )}
+            {/* Filter-scoped: mark every missing-doc verifikat matching the
+                active filters across all pages: scales to a post-import flood. */}
+            <button type="button" className={QUIET_LINK_CLASS} onClick={openBulk}>
+              {t('batch_mark_all_missing')}
+            </button>
+            <button
+              type="button"
+              className={QUIET_LINK_CLASS}
+              onClick={() => setSelectedIds(new Set())}
+              disabled={batchSubmitting}
+            >
+              {t('batch_clear_selection')}
+            </button>
           </div>
         )}
 

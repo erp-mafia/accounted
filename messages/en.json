@@ -3827,7 +3827,8 @@
     "missing_attachment_chip": "Missing document",
     "confirm_post_title": "Post voucher",
     "confirm_post_description": "Will be posted as voucher {voucher}: {description}, {amount}. A posted voucher cannot be edited, only corrected or reversed.",
-    "confirm_post_description_generic": "The voucher \"{description}\" will be posted with the next available voucher number and can then only be corrected or reversed."
+    "confirm_post_description_generic": "The voucher \"{description}\" will be posted with the next available voucher number and can then only be corrected or reversed.",
+    "bulkbar_selected": "selected"
   },
   "attachment_preview_sheet": {
     "title": "Attachments",

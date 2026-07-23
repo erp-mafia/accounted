@@ -3827,7 +3827,8 @@
     "missing_attachment_chip": "Underlag saknas",
     "confirm_post_title": "Bokför verifikat",
     "confirm_post_description": "Bokförs som verifikat {voucher}: {description}, {amount}. Verifikatet kan inte ändras i efterhand, bara rättas eller stornas.",
-    "confirm_post_description_generic": "Verifikatet \"{description}\" bokförs med nästa lediga verifikationsnummer och kan därefter inte ändras, bara rättas eller stornas."
+    "confirm_post_description_generic": "Verifikatet \"{description}\" bokförs med nästa lediga verifikationsnummer och kan därefter inte ändras, bara rättas eller stornas.",
+    "bulkbar_selected": "markerade"
   },
   "attachment_preview_sheet": {
     "title": "Bilagor",
