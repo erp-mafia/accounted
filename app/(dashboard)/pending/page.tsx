@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { QUIET_LINK_CLASS, VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 import {
   SlideOver,
   SlideOverContent,
@@ -575,20 +575,90 @@ function renderPrimitive(value: unknown): string {
   return String(value)
 }
 
+// A preview_data value that is a kontering (array of account/debit/credit
+// rows). Several staged op types carry one under keys like `preview_lines`
+// without a dedicated preview component; rendering it as the actual
+// verifikat rows is what makes the detail panel say what the agent will do.
+interface PreviewKonteringLine {
+  account?: string
+  account_number?: string
+  description?: string
+  debit?: number
+  credit?: number
+  debit_amount?: number
+  credit_amount?: number
+}
+
+function isKonteringLines(value: unknown): value is PreviewKonteringLine[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (line) =>
+        line != null &&
+        typeof line === 'object' &&
+        ('account' in line || 'account_number' in line) &&
+        ('debit' in line || 'credit' in line || 'debit_amount' in line || 'credit_amount' in line),
+    )
+  )
+}
+
+function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
+  const amount = (n: number | undefined) =>
+    n && n > 0 ? n.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''
+  return (
+    <table className="w-full border-collapse text-[12.5px]" aria-label="Föreslagen kontering">
+      <thead>
+        <tr>
+          <th className={cn(VTH_CLASS, 'w-[70px]')}>Konto</th>
+          <th className={VTH_CLASS}>Beskrivning</th>
+          <th className={cn(VTH_CLASS, 'text-right')}>Debet</th>
+          <th className={cn(VTH_CLASS, 'text-right')}>Kredit</th>
+        </tr>
+      </thead>
+      <tbody>
+        {lines.map((line, i) => (
+          <tr key={i}>
+            <td className={cn(VTD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>
+              {line.account ?? line.account_number}
+            </td>
+            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>{line.description ?? ''}</td>
+            <td className={cn(VTD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
+              {amount(line.debit ?? line.debit_amount)}
+            </td>
+            <td className={cn(VTD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
+              {amount(line.credit ?? line.credit_amount)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 function GenericPreview({ data }: { data: Record<string, unknown> }) {
   // Skip period_status here: it's surfaced in the dedicated banner, not the
   // generic key-value dump (otherwise the approver sees the same fact twice).
   const entries = Object.entries(data).filter(([k, v]) => v != null && v !== '' && k !== 'period_status')
+  const konteringEntries = entries.filter(([, v]) => isKonteringLines(v))
+  const rest = entries.filter(([, v]) => !isKonteringLines(v))
   return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-      {entries.map(([key, value]) => (
-        <Fragment key={key}>
-          <span className="text-muted-foreground">{key.replace(/_/g, ' ')}</span>
-          <span className={typeof value === 'number' ? 'font-mono tabular-nums' : ''}>
-            {renderPrimitive(value)}
-          </span>
-        </Fragment>
+    <div className="space-y-3">
+      {konteringEntries.map(([key, value]) => (
+        <PreviewKonteringTable key={key} lines={value as PreviewKonteringLine[]} />
       ))}
+      {rest.length > 0 && (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+          {rest.map(([key, value]) => (
+            <Fragment key={key}>
+              <span className="text-muted-foreground">{key.replace(/_/g, ' ')}</span>
+              <span className={typeof value === 'number' ? 'font-mono tabular-nums' : ''}>
+                {renderPrimitive(value)}
+              </span>
+            </Fragment>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -1290,12 +1360,15 @@ export default function PendingOperationsPage() {
                       />
                     )}
                   </span>
-                  {/* Actor column with thread line (concept op-actorcol) */}
-                  <span className="flex shrink-0 flex-col items-center gap-1.5 self-stretch" aria-hidden>
+                  {/* Actor column with the curved thread (concept op-thread):
+                      drops from the icon and elbows toward the action row. */}
+                  <span className="flex w-7 shrink-0 flex-col self-stretch" aria-hidden>
                     <span className="flex h-7 w-7 items-center justify-center rounded-full border border-border text-muted-foreground">
                       {isAgent ? <Bot className="h-3.5 w-3.5" /> : <ClipboardCheck className="h-3.5 w-3.5" />}
                     </span>
-                    <span className="w-px flex-1 bg-border" />
+                    <span className="relative min-h-0 flex-1">
+                      <span className="absolute bottom-[11px] left-1/2 top-1 w-3 rounded-bl-lg border-b border-l border-border" />
+                    </span>
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="pt-0.5 text-[11px] uppercase tracking-[0.07em] text-muted-foreground">
@@ -1384,17 +1457,25 @@ export default function PendingOperationsPage() {
                 {detailPeriodLocked && detailPeriod && detailOp.status === 'pending' && (
                   <PeriodLockBanner period={detailPeriod} />
                 )}
+                {/* The operation itself in its own box (concept): what the
+                    agent is about to do, clearly framed. */}
+                <div className="rounded-lg border border-border p-4">
+                  <OperationPreview op={detailOp} />
+                </div>
                 {detailOp.status === 'pending' && singleActionWarning(detailOp.operation_type) && (
-                  <p className="text-xs text-muted-foreground">
-                    {singleActionWarning(detailOp.operation_type)}
-                  </p>
+                  <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
+                    <p className="text-xs leading-snug text-muted-foreground">
+                      {singleActionWarning(detailOp.operation_type)}
+                    </p>
+                  </div>
                 )}
-                <OperationPreview op={detailOp} />
                 {detailOp.status === 'rejected' && detailOp.rejection_category && (
-                  <p className="text-xs text-muted-foreground">
-                    Avvisad: {REJECTION_CATEGORY_LABELS[detailOp.rejection_category]}
-                    {detailOp.rejection_reason ? `, "${detailOp.rejection_reason}"` : ''}
-                  </p>
+                  <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
+                    <p className="text-xs leading-snug text-muted-foreground">
+                      Avvisad: {REJECTION_CATEGORY_LABELS[detailOp.rejection_category]}
+                      {detailOp.rejection_reason ? `, "${detailOp.rejection_reason}"` : ''}
+                    </p>
+                  </div>
                 )}
                 {isAutoExpired(detailOp) && (
                   <p className="text-xs text-muted-foreground">{t('auto_expired_detail')}</p>
