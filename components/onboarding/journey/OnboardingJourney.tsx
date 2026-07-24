@@ -57,7 +57,6 @@ function logError(message: string, extra?: Record<string, unknown>) {
 
 interface OnboardingJourneyProps {
   teamId: string
-  hasExistingCompanies?: boolean
   mode?: 'first' | 'add'
   initialOrgNumber?: string
   initialEntityType?: EntityType

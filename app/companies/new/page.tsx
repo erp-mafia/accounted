@@ -37,7 +37,7 @@ export default async function NewCompanyPage() {
   return (
     <div className="min-h-screen bg-background">
       <OnboardingBackdrop />
-      <OnboardingJourney teamId={teamId} hasExistingCompanies mode="add" />
+      <OnboardingJourney teamId={teamId} mode="add" />
     </div>
   )
 }

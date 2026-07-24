@@ -53,16 +53,6 @@ export default async function OnboardingPage({
     redirect('/login')
   }
 
-  // Check if user already has companies (adding another vs first-time)
-  const { data: existingMembership } = await supabase
-    .from('company_members')
-    .select('company_id')
-    .eq('user_id', user.id)
-    .limit(1)
-    .maybeSingle()
-
-  const hasCompanies = !!existingMembership
-
   const { data: teamMembership } = await supabase
     .from('team_members')
     .select('team_id')
@@ -107,7 +97,6 @@ export default async function OnboardingPage({
   return (
     <OnboardingJourney
       teamId={teamId}
-      hasExistingCompanies={hasCompanies}
       mode="first"
       initialOrgNumber={initialOrgNumber}
       initialEntityType={initialEntityType}
