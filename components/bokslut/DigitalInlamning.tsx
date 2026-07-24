@@ -22,6 +22,13 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import {
@@ -431,15 +438,15 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
         </p>
         <div className="space-y-4 px-1 pt-4 text-sm">
           <div className="flex flex-wrap gap-3">
-            <Button className="min-h-11" variant="outline" onClick={() => setShowPreview((value) => !value)}>
+            <Button variant="outline" onClick={() => setShowPreview((value) => !value)}>
               {showPreview ? 'Dölj förhandsgranskning' : 'Förhandsgranska iXBRL'}
             </Button>
-            <Button className="min-h-11" variant="outline" asChild>
+            <Button variant="outline" asChild>
               <a href={downloadUrl}>
                 <FileDown className="mr-2 h-4 w-4" /> Ladda ner tekniskt iXBRL-underlag
               </a>
             </Button>
-            <Button className="min-h-11" onClick={() => void handleValidate()} disabled={validating}>
+            <Button onClick={() => void handleValidate()} disabled={validating}>
               {validating ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
@@ -516,7 +523,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 pappersinlämning per post, eller aktivera integrationen efter avtal,
                 organisationscertifikat och godkänt acceptanstest.
               </p>
-              <Button className="min-h-11" variant="outline" asChild>
+              <Button variant="outline" asChild>
                 <a
                   href="https://bolagsverket.se/foretag/aktiebolag/arsredovisningforaktiebolag.759.html"
                   target="_blank"
@@ -545,12 +552,9 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
 
               <div className="space-y-1.5">
                 <Label htmlFor="di-version">Undertecknad årsredovisningsversion</Label>
-                <select
-                  id="di-version"
-                  className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
+                <Select
                   value={selectedVersionId}
-                  onChange={(event) => {
-                    const versionId = event.target.value
+                  onValueChange={(versionId) => {
                     setSelectedVersionId(versionId)
                     const signer = versions.find((version) => version.id === versionId)
                       ?.certificate_signer
@@ -561,18 +565,22 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     }
                   }}
                 >
-                  <option value="">Välj undertecknad version</option>
-                  {versions
-                    .filter(
-                      (version) =>
-                        version.status === 'signed' && version.digital_filing_eligible,
-                    )
-                    .map((version) => (
-                      <option key={version.id} value={version.id}>
-                        Version {version.version_number}: skapad {formatDate(version.created_at)}
-                      </option>
-                    ))}
-                </select>
+                  <SelectTrigger id="di-version">
+                    <SelectValue placeholder="Välj undertecknad version" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {versions
+                      .filter(
+                        (version) =>
+                          version.status === 'signed' && version.digital_filing_eligible,
+                      )
+                      .map((version) => (
+                        <SelectItem key={version.id} value={version.id}>
+                          Version {version.version_number}: skapad {formatDate(version.created_at)}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
                 {versions.every(
                   (version) =>
                     version.status !== 'signed' || !version.digital_filing_eligible,
@@ -594,7 +602,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   <Label htmlFor="di-avsandare-pnr">Ditt personnummer (avsändare)</Label>
                   <Input
                     id="di-avsandare-pnr"
-                    className="min-h-11"
+                   
                     inputMode="numeric"
                     placeholder="ÅÅÅÅMMDDNNNN eller ÅÅMMDD-NNNN"
                     value={avsandarePnr}
@@ -605,7 +613,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   <Label htmlFor="di-pnr">Undertecknarens personnummer</Label>
                   <Input
                     id="di-pnr"
-                    className="min-h-11"
+                   
                     inputMode="numeric"
                     placeholder="ÅÅÅÅMMDDNNNN eller ÅÅMMDD-NNNN"
                     value={pnr}
@@ -616,7 +624,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   <Label htmlFor="di-fornamn">Undertecknarens förnamn</Label>
                   <Input
                     id="di-fornamn"
-                    className="min-h-11"
+                   
                     value={fornamn}
                     onChange={(event) => setFornamn(event.target.value)}
                     readOnly={Boolean(selectedVersionId)}
@@ -626,7 +634,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   <Label htmlFor="di-efternamn">Undertecknarens efternamn</Label>
                   <Input
                     id="di-efternamn"
-                    className="min-h-11"
+                   
                     value={efternamn}
                     onChange={(event) => setEfternamn(event.target.value)}
                     readOnly={Boolean(selectedVersionId)}
@@ -634,23 +642,26 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="di-roll">Roll</Label>
-                  <select
-                    id="di-roll"
-                    className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
+                  <Select
                     value={roll}
-                    onChange={(event) => setRoll(event.target.value)}
+                    onValueChange={setRoll}
                     disabled={Boolean(selectedVersionId)}
                   >
-                    <option>Styrelseledamot</option>
-                    <option>Styrelseordförande</option>
-                    <option>Verkställande direktör</option>
-                  </select>
+                    <SelectTrigger id="di-roll">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Styrelseledamot">Styrelseledamot</SelectItem>
+                      <SelectItem value="Styrelseordförande">Styrelseordförande</SelectItem>
+                      <SelectItem value="Verkställande direktör">Verkställande direktör</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="di-epost">Undertecknarens e-post</Label>
                   <Input
                     id="di-epost"
-                    className="min-h-11"
+                   
                     type="email"
                     placeholder="namn@foretag.se"
                     value={epost}
@@ -695,7 +706,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   <p className="text-muted-foreground whitespace-pre-wrap text-xs max-h-48 overflow-y-auto">
                     {avtal.text}
                   </p>
-                  <label className="flex min-h-11 cursor-pointer items-start gap-3 text-sm">
+                  <label className="flex cursor-pointer items-start gap-3 text-sm">
                     <input
                       type="checkbox"
                       className="mt-0.5"
@@ -738,7 +749,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
 
               <div className="flex flex-wrap gap-3">
                 <Button
-                  className="min-h-11"
+                 
                   onClick={() => void handleSubmit()}
                   disabled={
                     submitting ||
@@ -756,7 +767,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 </Button>
                 {utfall && utfall.length > 0 && !utfallHasErrors && (
                   <Button
-                    className="min-h-11"
+                   
                     variant="outline"
                     onClick={() => void handleSubmit({ ignoreWarnings: true })}
                     disabled={submitting}
@@ -776,7 +787,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     Undertecknaren har fått e-post från Bolagsverket och signerar
                     fastställelseintyget där. Ärendet startar först efter signering.
                   </p>
-                  <Button className="min-h-11" variant="outline" size="sm" asChild>
+                  <Button variant="outline" size="sm" asChild>
                     <a href={kvittens.url} target="_blank" rel="noopener noreferrer">
                       <ExternalLink className="mr-2 h-4 w-4" /> Signera hos Bolagsverket
                     </a>
@@ -801,7 +812,6 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
           <div className="space-y-4 px-1 pt-4 text-sm">
             <div className="flex justify-end">
               <Button
-                className="min-h-11"
                 variant="outline"
                 size="sm"
                 disabled={pollingEvents}
@@ -861,7 +871,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     )}
                   </div>
                   {submission.bolagsverket_url && submission.status === 'uploaded' && (
-                    <Button className="min-h-11" variant="outline" size="sm" asChild>
+                    <Button variant="outline" size="sm" asChild>
                       <a href={submission.bolagsverket_url} target="_blank" rel="noopener noreferrer">
                         <ExternalLink className="mr-1 h-3.5 w-3.5" /> Signera
                       </a>

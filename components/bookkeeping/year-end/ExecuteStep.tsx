@@ -63,8 +63,8 @@ export function ExecuteStep({ periodName, isRunning, error, bolagsskattMissing, 
       </section>
 
       <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack} disabled={isRunning}>
-          Tillbaka
+        <Button variant="outline" size="sm" onClick={onBack} disabled={isRunning}>
+          ← Tillbaka
         </Button>
         <Button
           variant="destructive"

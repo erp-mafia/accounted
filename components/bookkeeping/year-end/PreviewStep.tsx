@@ -3,7 +3,6 @@
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ArrowRight } from 'lucide-react'
 import {
   Table,
   TableBody,
@@ -148,11 +147,11 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
       </section>
 
       <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack}>
-          Tillbaka
+        <Button variant="outline" size="sm" onClick={onBack}>
+          ← Tillbaka
         </Button>
-        <Button onClick={onContinue}>
-          Verkställ bokslut <ArrowRight className="ml-1 h-4 w-4" />
+        <Button variant="outline" size="sm" onClick={onContinue}>
+          Nästa: Verkställ →
         </Button>
       </div>
     </div>

@@ -216,9 +216,11 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
           fiscalYear={fiscalYear}
         />
         <div className="flex justify-between">
-          <Button variant="outline" onClick={onBack}>Tillbaka</Button>
-          <Button onClick={onContinue}>
-            Fortsätt <ArrowRight className="ml-1 h-4 w-4" />
+          <Button variant="outline" size="sm" onClick={onBack}>
+            ← Tillbaka
+          </Button>
+          <Button variant="outline" size="sm" onClick={onContinue}>
+            Nästa: Förhandsgranska →
           </Button>
         </div>
       </div>
@@ -322,8 +324,8 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
       )}
 
       <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack} disabled={posting}>
-          Tillbaka
+        <Button variant="outline" size="sm" onClick={onBack} disabled={posting}>
+          ← Tillbaka
         </Button>
         <Button onClick={handleCommit} disabled={posting || hasCorrectionRequired}>
           {posting ? (

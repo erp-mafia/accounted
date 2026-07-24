@@ -273,8 +273,8 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
       )}
 
       <div className="flex justify-between">
-        <Button variant="outline" onClick={onBack} disabled={posting}>
-          Tillbaka
+        <Button variant="outline" size="sm" onClick={onBack} disabled={posting}>
+          ← Tillbaka
         </Button>
         <Button onClick={handleCommit} disabled={posting}>
           {posting ? (

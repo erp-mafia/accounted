@@ -224,7 +224,7 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
               if (rows.length === 0) return null
               return (
                 <div key={klass}>
-                  <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-2">
+                  <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
                     Klass {klass}: {klass === 1 ? 'Tillgångar' : 'Skulder & eget kapital'}
                   </h3>
                   <Table>

@@ -112,8 +112,8 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
       )}
 
       <div className="flex justify-end">
-        <Button onClick={onContinue} disabled={!report.ready}>
-          Fortsätt
+        <Button variant="outline" size="sm" onClick={onContinue} disabled={!report.ready}>
+          Nästa: Periodiseringar →
         </Button>
       </div>
     </div>

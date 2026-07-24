@@ -11,12 +11,19 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageHeader } from '@/components/ui/page-header'
 import { ArrowLeft, FileDown, Plus, ExternalLink, Loader2, Save, CheckCircle2, Trash2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
-import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import { FyPicker } from '@/components/common/FyPicker'
 import { DigitalInlamning, INLAMNING_COMING_SOON } from '@/components/bokslut/DigitalInlamning'
 import { AnnualReportStudio } from '@/components/bokslut/AnnualReportStudio'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
@@ -463,14 +470,13 @@ export default function ArsredovisningPage() {
               .
             </p>
           <div className="mt-4">
-            <FiscalYearSelector
+            <FyPicker
               value={null}
               onChange={(id) => {
                 if (id) router.replace(`/bookkeeping/year-end/arsredovisning?period=${id}`)
               }}
               includeAllOption={false}
               hideFuturePeriods
-              label={null}
             />
           </div>
         </div>
@@ -587,7 +593,7 @@ export default function ArsredovisningPage() {
               value={proposedDividend}
               onChange={(event) => setProposedDividend(event.target.value)}
               placeholder="0"
-              className="min-h-11 max-w-[220px] tabular-nums"
+              className="max-w-[220px] tabular-nums"
             />
             <p className="text-xs text-muted-foreground">
               Beloppet används i resultatdispositionen i samma version av PDF och iXBRL.
@@ -609,23 +615,22 @@ export default function ArsredovisningPage() {
           </div>
           <div className="space-y-2">
             <Label htmlFor="ar-agm-outcome">Årsstämmans beslut om resultatdisposition</Label>
-            <select
-              id="ar-agm-outcome"
-              className="min-h-11 w-full max-w-xl rounded-md border border-border bg-background px-3 text-sm"
+            <Select
               value={agmDispositionOutcome}
-              onChange={(event) =>
+              onValueChange={(next) =>
                 setAgmDispositionOutcome(
-                  event.target.value as
-                    | ''
-                    | 'proposal_approved'
-                    | 'alternative_decision',
+                  next as 'proposal_approved' | 'alternative_decision',
                 )
               }
             >
-              <option value="">Välj efter genomförd årsstämma</option>
-              <option value="proposal_approved">Styrelsens förslag godkändes</option>
-              <option value="alternative_decision">Årsstämman fattade ett annat beslut</option>
-            </select>
+              <SelectTrigger id="ar-agm-outcome" className="max-w-xl">
+                <SelectValue placeholder="Välj efter genomförd årsstämma" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="proposal_approved">Styrelsens förslag godkändes</SelectItem>
+                <SelectItem value="alternative_decision">Årsstämman fattade ett annat beslut</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           {agmDispositionOutcome === 'alternative_decision' && (
             <div className="space-y-2">
@@ -641,7 +646,7 @@ export default function ArsredovisningPage() {
 
           <div className="pt-4 border-t border-border space-y-4">
             <div>
-              <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+              <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Lagstadgade upplysningar
               </h3>
               <p className="text-xs text-muted-foreground mt-1">
@@ -665,7 +670,7 @@ export default function ArsredovisningPage() {
               <p className="text-xs text-muted-foreground">
                 ÅRL 5:13 §. Lämna tomt om inga skulder förfaller senare än fem år.
               </p>
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+              <label className="flex cursor-pointer items-center gap-3 text-sm">
                 <Checkbox
                   id="ar-ltd-confirmed"
                   checked={longTermDebtConfirmed}
@@ -684,7 +689,7 @@ export default function ArsredovisningPage() {
                 placeholder="t.ex. Företagsinteckning 500 000 kr som säkerhet för bankkredit."
               />
               <p className="text-xs text-muted-foreground">ÅRL 5:14 §.</p>
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+              <label className="flex cursor-pointer items-center gap-3 text-sm">
                 <Checkbox
                   id="ar-securities-confirmed"
                   checked={securitiesPledgedConfirmed}
@@ -703,7 +708,7 @@ export default function ArsredovisningPage() {
                 placeholder="t.ex. Borgensåtagande för dotterbolags krediter 200 000 kr."
               />
               <p className="text-xs text-muted-foreground">ÅRL 5:15 §.</p>
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+              <label className="flex cursor-pointer items-center gap-3 text-sm">
                 <Checkbox
                   id="ar-contingent-confirmed"
                   checked={contingentLiabilitiesConfirmed}
@@ -747,7 +752,7 @@ export default function ArsredovisningPage() {
                 />
               </div>
             </div>
-            <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+            <label className="flex cursor-pointer items-center gap-3 text-sm">
               <Checkbox
                 id="ar-parent-confirmed"
                 checked={parentCompanyConfirmed}
@@ -838,48 +843,50 @@ export default function ArsredovisningPage() {
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="signature-version">Låst version</Label>
-              <select
-                id="signature-version"
-                className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
+              <Select
                 value={selectedSignatureVersionId}
-                onChange={(event) => setSelectedSignatureVersionId(event.target.value)}
+                onValueChange={setSelectedSignatureVersionId}
               >
-                <option value="">Välj version</option>
-                {versions
-                  .filter((version) => version.status === 'ready_for_signature')
-                  .map((version) => (
-                    <option key={version.id} value={version.id}>
-                      Version {version.version_number}: {version.content_hash.slice(0, 12)}
-                    </option>
-                  ))}
-              </select>
+                <SelectTrigger id="signature-version">
+                  <SelectValue placeholder="Välj version" />
+                </SelectTrigger>
+                <SelectContent>
+                  {versions
+                    .filter((version) => version.status === 'ready_for_signature')
+                    .map((version) => (
+                      <SelectItem key={version.id} value={version.id}>
+                        Version {version.version_number}: {version.content_hash.slice(0, 12)}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="signature-method">Underskriftsmetod</Label>
-              <select
-                id="signature-method"
-                className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
+              <Select
                 value={signingMethod}
-                onChange={(event) =>
+                onValueChange={(next) =>
                   setSigningMethod(
-                    event.target.value as
-                      | 'paper_original'
-                      | 'advanced_e_signature'
-                      | 'bankid',
+                    next as 'paper_original' | 'advanced_e_signature' | 'bankid',
                   )
                 }
               >
-                <option value="paper_original">Undertecknat original på papper</option>
-                <option value="advanced_e_signature">Avancerad e-signatur</option>
-                <option value="bankid">BankID via extern signeringstjänst</option>
-              </select>
+                <SelectTrigger id="signature-method">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="paper_original">Undertecknat original på papper</SelectItem>
+                  <SelectItem value="advanced_e_signature">Avancerad e-signatur</SelectItem>
+                  <SelectItem value="bankid">BankID via extern signeringstjänst</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="signature-date">Underskriftsdatum</Label>
               <Input
                 id="signature-date"
                 type="date"
-                className="min-h-11"
+               
                 value={signatureDate}
                 onChange={(event) => setSignatureDate(event.target.value)}
               />
@@ -888,7 +895,7 @@ export default function ArsredovisningPage() {
               <Label htmlFor="signature-evidence">Bevisreferens</Label>
               <Input
                 id="signature-evidence"
-                className="min-h-11"
+               
                 value={signatureEvidence}
                 onChange={(event) => setSignatureEvidence(event.target.value)}
                 placeholder="archive:AR-2026-001"
@@ -927,7 +934,7 @@ export default function ArsredovisningPage() {
                       <Button
                         size="icon"
                         variant="ghost"
-                        className="min-h-11 min-w-11"
+                        className="min-w-11"
                         aria-label={tStudio('remove_signer')}
                         onClick={() => void handleRemoveSigner(sig.id)}
                       >
@@ -937,7 +944,7 @@ export default function ArsredovisningPage() {
                     <Button
                       size="sm"
                       variant="outline"
-                      className="min-h-11"
+                     
                       onClick={() => void handleMarkSigned(sig.id)}
                       disabled={
                         !selectedSignatureVersionId ||
@@ -957,17 +964,17 @@ export default function ArsredovisningPage() {
               <Label htmlFor="signer-role" className="text-xs">
                 Roll
               </Label>
-              <select
-                id="signer-role"
-                className="min-h-11 rounded-md border border-border bg-background px-3 text-sm"
-                value={signerRole}
-                onChange={(e) => setSignerRole(e.target.value)}
-              >
-                <option>Styrelseledamot</option>
-                <option>Styrelseordförande</option>
-                <option>VD</option>
-                <option>Verkställande direktör</option>
-              </select>
+              <Select value={signerRole} onValueChange={setSignerRole}>
+                <SelectTrigger id="signer-role" className="sm:w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Styrelseledamot">Styrelseledamot</SelectItem>
+                  <SelectItem value="Styrelseordförande">Styrelseordförande</SelectItem>
+                  <SelectItem value="VD">VD</SelectItem>
+                  <SelectItem value="Verkställande direktör">Verkställande direktör</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1 flex-1 min-w-[200px]">
               <Label htmlFor="signer-name" className="text-xs">
@@ -978,10 +985,10 @@ export default function ArsredovisningPage() {
                 value={signerName}
                 onChange={(e) => setSignerName(e.target.value)}
                 placeholder="t.ex. Anna Andersson"
-                className="min-h-11"
+               
               />
             </div>
-            <Button className="min-h-11 w-full sm:w-auto" onClick={handleAddSigner} disabled={!signerName.trim()}>
+            <Button className="w-full sm:w-auto" onClick={handleAddSigner} disabled={!signerName.trim()}>
               <Plus className="mr-1 h-4 w-4" /> Lägg till
             </Button>
           </div>
@@ -1001,7 +1008,7 @@ export default function ArsredovisningPage() {
             till Bolagsverket. PDF-filen kan inte laddas upp som digital årsredovisning.
           </p>
           <div className="flex flex-wrap gap-3">
-            <Button className="min-h-11" asChild>
+            <Button asChild>
               <Link href={pdfUrl} target="_blank" rel="noopener noreferrer">
                 <FileDown className="mr-2 h-4 w-4" /> Ladda ner PDF (utkast)
               </Link>
@@ -1017,7 +1024,7 @@ export default function ArsredovisningPage() {
                   : undefined
               }
             >
-              <Button className="min-h-11" variant="outline" asChild>
+              <Button variant="outline" asChild>
                 <Link
                   href="https://bolagsverket.se/foretag/aktiebolag/arsredovisningforaktiebolag.759.html"
                   target="_blank"

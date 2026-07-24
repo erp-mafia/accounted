@@ -7,6 +7,13 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type {
@@ -59,18 +66,18 @@ function BooleanQuestion({
   return (
     <div className="space-y-2">
       <Label htmlFor={id}>{label}</Label>
-      <select
-        id={id}
-        className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
+      <Select
         value={value === null ? '' : value ? 'yes' : 'no'}
-        onChange={(event) =>
-          onChange(event.target.value === '' ? null : event.target.value === 'yes')
-        }
+        onValueChange={(next) => onChange(next === 'yes')}
       >
-        <option value="">{t('choose')}</option>
-        <option value="no">{t('no')}</option>
-        <option value="yes">{t('yes')}</option>
-      </select>
+        <SelectTrigger id={id}>
+          <SelectValue placeholder={t('choose')} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="no">{t('no')}</SelectItem>
+          <SelectItem value="yes">{t('yes')}</SelectItem>
+        </SelectContent>
+      </Select>
     </div>
   )
 }
@@ -318,7 +325,7 @@ export function AnnualReportStudio({
             [t('step_signatures'), versions.some((version) => version.status === 'signed')],
             [t('step_filing'), versions.some((version) => ['filed', 'registered'].includes(version.status))],
           ].map(([label, complete], index) => (
-            <div key={String(label)} className="flex min-h-11 items-center gap-2 border-b border-border/60 px-1 py-2 text-sm">
+            <div key={String(label)} className="flex items-center gap-2 border-b border-border/60 px-1 py-2 text-sm">
               {complete ? (
                 <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
               ) : (
@@ -372,20 +379,23 @@ export function AnnualReportStudio({
             />
             <div className="space-y-2">
               <Label htmlFor="ar-reporting-currency">{t('reporting_currency')}</Label>
-              <select
-                id="ar-reporting-currency"
-                className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
+              <Select
                 value={profile.reporting_currency}
-                onChange={(event) =>
+                onValueChange={(next) =>
                   updateProfile(
                     'reporting_currency',
-                    event.target.value as AnnualReportProfile['reporting_currency'],
+                    next as AnnualReportProfile['reporting_currency'],
                   )
                 }
               >
-                <option value="SEK">SEK</option>
-                <option value="EUR">EUR</option>
-              </select>
+                <SelectTrigger id="ar-reporting-currency">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="SEK">SEK</SelectItem>
+                  <SelectItem value="EUR">EUR</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             {profile.auditor_report_required && (
               <BooleanQuestion
@@ -401,21 +411,23 @@ export function AnnualReportStudio({
             <div className="grid gap-4 border-t border-border pt-4 md:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="ar-group-size">{t('group_size')}</Label>
-                <select
-                  id="ar-group-size"
-                  className="min-h-11 w-full rounded-md border border-border bg-background px-3 text-sm"
+                <Select
                   value={profile.parent_group_size ?? ''}
-                  onChange={(event) =>
+                  onValueChange={(next) =>
                     updateProfile(
                       'parent_group_size',
-                      (event.target.value || null) as AnnualReportProfile['parent_group_size'],
+                      next as AnnualReportProfile['parent_group_size'],
                     )
                   }
                 >
-                  <option value="">{t('choose')}</option>
-                  <option value="small">{t('group_small')}</option>
-                  <option value="large">{t('group_large')}</option>
-                </select>
+                  <SelectTrigger id="ar-group-size">
+                    <SelectValue placeholder={t('choose')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="small">{t('group_small')}</SelectItem>
+                    <SelectItem value="large">{t('group_large')}</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <BooleanQuestion
                 id="ar-consolidated"
@@ -442,7 +454,7 @@ export function AnnualReportStudio({
                     type="number"
                     min={0}
                     max={100}
-                    className="min-h-11"
+                   
                     value={profile.building_revenue_share_pct ?? ''}
                     onChange={(event) =>
                       updateProfile(
@@ -474,7 +486,7 @@ export function AnnualReportStudio({
           )}
 
           <div className="flex justify-end">
-            <Button className="min-h-11" onClick={() => void saveProfile()} disabled={saving}>
+            <Button onClick={() => void saveProfile()} disabled={saving}>
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
               {t('save_scope')}
             </Button>
@@ -520,7 +532,7 @@ export function AnnualReportStudio({
           <div className="flex flex-wrap justify-end gap-3 border-t border-border/60 pt-4">
             <Button
               variant="outline"
-              className="min-h-11"
+             
               onClick={() => void confirmSignerRoster()}
               disabled={saving || Boolean(profile.signer_roster_confirmed_at)}
             >
@@ -531,18 +543,18 @@ export function AnnualReportStudio({
             </Button>
             <Button
               variant="outline"
-              className="min-h-11"
+             
               onClick={() => void confirmNarrative()}
               disabled={saving || hasUnsavedNarrative || Boolean(profile.narrative_confirmed_at)}
             >
               <CheckCircle2 className="mr-2 h-4 w-4" />
               {profile.narrative_confirmed_at ? t('content_confirmed') : t('confirm_content')}
             </Button>
-            <Button variant="outline" className="min-h-11" onClick={() => void createVersion('snapshot')} disabled={creatingVersion !== null}>
+            <Button variant="outline" onClick={() => void createVersion('snapshot')} disabled={creatingVersion !== null}>
               {creatingVersion === 'snapshot' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileClock className="mr-2 h-4 w-4" />}
               {t('create_snapshot')}
             </Button>
-            <Button className="min-h-11" onClick={() => void createVersion('finalize')} disabled={creatingVersion !== null || blockingIssues.length > 0 || hasUnsavedNarrative}>
+            <Button onClick={() => void createVersion('finalize')} disabled={creatingVersion !== null || blockingIssues.length > 0 || hasUnsavedNarrative}>
               {creatingVersion === 'finalize' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <LockKeyhole className="mr-2 h-4 w-4" />}
               {t('lock_version')}
             </Button>
@@ -570,7 +582,7 @@ export function AnnualReportStudio({
                     <Badge variant={version.status === 'registered' ? 'success' : version.status === 'draft' ? 'outline' : 'secondary'}>
                       {t(`status_${version.status}`)}
                     </Badge>
-                    <Button className="min-h-11" variant="outline" size="sm" asChild>
+                    <Button variant="outline" size="sm" asChild>
                       <a href={`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/pdf?version=${version.id}`} target="_blank" rel="noopener noreferrer">
                         {t('open_pdf')}
                       </a>

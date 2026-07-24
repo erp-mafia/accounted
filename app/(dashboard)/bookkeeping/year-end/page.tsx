@@ -4,13 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { ContextPicker } from '@/components/common/ContextPicker'
 import { Skeleton } from '@/components/ui/skeleton'
 import { CalendarPlus, Check, Lock } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
@@ -230,27 +224,25 @@ export default function YearEndPage() {
             size="default"
           />
           {showWizard && periods && periods.length > 0 && step !== 'result' && (
-            <Select
-              value={selectedPeriodId ?? undefined}
-              onValueChange={(value) => {
+            <ContextPicker
+              items={periods.map((p) => ({
+                id: p.id,
+                label: p.name,
+                annotation: `${p.period_start} till ${p.period_end}`,
+              }))}
+              value={selectedPeriodId}
+              onChange={(value) => {
                 setSelectedPeriodId(value)
                 setStep('preflight')
                 setPreview(null)
                 setResult(null)
                 setExecuteError(null)
               }}
-            >
-              <SelectTrigger aria-label="Period" className="h-9 w-auto max-w-xs gap-2">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {periods.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name} ({p.period_start} till {p.period_end})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              triggerLabel={
+                periods.find((p) => p.id === selectedPeriodId)?.name ?? 'Välj period'
+              }
+              ariaLabel="Period"
+            />
           )}
         </div>
       </div>
@@ -293,7 +285,7 @@ export default function YearEndPage() {
           navigation stays with each step's own continue action. */}
       {showWizard && step !== 'result' && (
         <div
-          className="mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
+          className="mx-auto flex w-full max-w-4xl items-center gap-3 overflow-x-auto px-1"
           role="tablist"
           aria-label="Bokslutets steg"
         >
