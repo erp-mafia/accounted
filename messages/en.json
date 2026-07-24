@@ -5378,7 +5378,14 @@
     "date_range_preset_this_quarter": "This quarter",
     "date_range_preset_custom": "Custom",
     "date_range_from": "From",
-    "date_range_to": "To"
+    "date_range_to": "To",
+    "col_report": "Report",
+    "col_description": "Description",
+    "col_last_opened": "Last opened",
+    "opened_today": "today",
+    "opened_yesterday": "yesterday",
+    "help_text": "Every report opens for the selected fiscal year and can be narrowed to any period inside the report. Last opened remembers what you use the most.",
+    "catalog_footnote": "Every report opens for any period and can be downloaded as a PDF. The NE attachment replaces INK2 for sole traders."
   },
   "salary": {
     "title": "Payroll",

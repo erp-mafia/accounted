@@ -5378,7 +5378,14 @@
     "date_range_preset_this_quarter": "Detta kvartal",
     "date_range_preset_custom": "Anpassat",
     "date_range_from": "Från",
-    "date_range_to": "Till"
+    "date_range_to": "Till",
+    "col_report": "Rapport",
+    "col_description": "Beskrivning",
+    "col_last_opened": "Senast öppnad",
+    "opened_today": "idag",
+    "opened_yesterday": "igår",
+    "help_text": "Alla rapporter öppnas för det valda räkenskapsåret och kan avgränsas till valfri period inne i rapporten. Senast öppnad kommer ihåg vad du använder mest.",
+    "catalog_footnote": "Alla rapporter öppnas för valfri period och kan laddas ner som PDF. NE-bilagan visas i stället för INK2 för enskild firma."
   },
   "salary": {
     "title": "Löner",
