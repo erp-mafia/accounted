@@ -30,10 +30,13 @@ export function ReportExportMenu({
   items,
   children,
   size = 'sm',
+  variant = 'outline',
 }: {
   items?: ReportExportItem[]
   children?: React.ReactNode
   size?: 'default' | 'sm'
+  /** Trigger style; the VAT Stegen page uses the primary pill. */
+  variant?: 'outline' | 'default'
 }) {
   const t = useTranslations('reports')
   const hasItems = !!items && items.length > 0
@@ -44,7 +47,7 @@ export function ReportExportMenu({
       {hasItems && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size={size}>
+            <Button variant={variant} size={size}>
               <Download className="h-4 w-4 mr-2" />
               {t('export')}
             </Button>

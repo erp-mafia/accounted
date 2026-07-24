@@ -12,7 +12,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, Percent } from 'lucide-react'
-import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import {
@@ -28,7 +27,6 @@ import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
-import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
 import { Table, TableBody } from '@/components/ui/table'
@@ -1676,16 +1674,11 @@ export function VatDeclarationView() {
       {/* XML and PDF live in "Lämna in" below: they are filing artifacts, not
           report exports, and one home avoids two competing download surfaces. */}
       <ReportExportMenu
+        variant="default"
         items={[
           { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
         ]}
-      >
-        <AgentSparkleButton
-          intentId="vat.review"
-          intentArgs={{ period_type: periodType, year, period }}
-          contextRef={`vat:${year}-${periodType}-${period}`}
-        />
-      </ReportExportMenu>
+      />
 
       {/* Period selection — the declaration below follows it automatically.
           Flat toolbar row (concept language), far right like a context picker. */}
@@ -1796,9 +1789,9 @@ export function VatDeclarationView() {
               onCorrected={() => setRetryKey((k) => k + 1)}
             />
               <div className="flex justify-end">
-                <button type="button" onClick={() => setChosenStep(2)} className={QUIET_LINK_CLASS}>
+                <Button variant="outline" size="sm" onClick={() => setChosenStep(2)}>
                   Nästa: Granska deklarationen →
-                </button>
+                </Button>
               </div>
             </section>
           )}
@@ -1993,9 +1986,9 @@ export function VatDeclarationView() {
             </div>
           </div>
               <div className="flex justify-end">
-                <button type="button" onClick={() => setChosenStep(3)} className={QUIET_LINK_CLASS}>
+                <Button variant="outline" size="sm" onClick={() => setChosenStep(3)}>
                   Nästa: Bokför momsen →
-                </button>
+                </Button>
               </div>
             </section>
           )}
@@ -2011,9 +2004,9 @@ export function VatDeclarationView() {
               onStatus={setBookingStatus}
             />
               <div className="flex justify-end">
-                <button type="button" onClick={() => setChosenStep(4)} className={QUIET_LINK_CLASS}>
+                <Button variant="outline" size="sm" onClick={() => setChosenStep(4)}>
                   Nästa: Lämna in →
-                </button>
+                </Button>
               </div>
             </section>
           )}
