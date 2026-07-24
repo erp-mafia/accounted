@@ -3,146 +3,151 @@
 import { useTranslations } from 'next-intl'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { cn, formatCurrency } from '@/lib/utils'
-import { KPI_DEFINITIONS } from '@/lib/reports/kpi-definitions'
 import type { KPIReport, KPIPreferences } from '@/types'
 
 /**
- * Nyckeltal as the founder-picked "Berättelsen" layout: the month's result
- * as a serif hero over the trend chart, a hairline metric rail on the right
- * driven by the user's KPI preferences, and the cost story as quiet rows
- * below. Pure presentation: everything derives from the existing KPIReport.
+ * Nyckeltal as the founder-picked "Instrumentbrädan" layout: a grid of
+ * bordered instrument panes — monthly result bars first, then one pane per
+ * visible KPI from the user's preferences — with the cost story as quiet
+ * rows below. Pure presentation: everything derives from the existing
+ * KPIReport.
  */
 
-/** Months that actually carry activity; the hero speaks about the last one. */
-export function activeMonth(report: KPIReport) {
-  const active = report.months.filter(
-    (m) => m.income !== 0 || m.expenses !== 0 || m.net !== 0,
-  )
-  const hero = active[active.length - 1] ?? report.months[report.months.length - 1]
-  if (!hero) return null
-  const idx = report.months.indexOf(hero)
-  const prev = idx > 0 ? report.months[idx - 1] : null
-  return { hero, prev }
+const SAGE = 'hsl(155 25% 40%)'
+
+type TFn = (key: string, values?: Record<string, string | number>) => string
+
+function compactKr(n: number): string {
+  return new Intl.NumberFormat('sv-SE', { notation: 'compact', maximumFractionDigits: 1 }).format(n)
 }
 
-export function KPIStoryHero({ report }: { report: KPIReport }) {
-  const t = useTranslations('kpi')
-  const months = activeMonth(report)
-  if (!months) return null
-  const { hero, prev } = months
-
-  let sub: string | null = null
-  if (prev && prev.net !== 0) {
-    const delta = Math.round(((hero.net - prev.net) / Math.abs(prev.net)) * 100)
-    sub = t(delta >= 0 ? 'hero_delta_up' : 'hero_delta_down', {
-      delta: Math.abs(delta),
-      month: prev.label,
-    })
-  } else if (prev) {
-    sub = t('hero_vs', { month: prev.label, amount: formatCurrency(prev.net) })
-  }
-
-  return (
-    <div>
-      <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-        {t('hero_eyebrow', { month: hero.label })}
-      </p>
-      <p
-        className={cn(
-          'mt-1 font-display text-5xl leading-none tracking-tight tabular-nums',
-          hero.net < 0 && 'text-destructive',
-        )}
-      >
-        {formatCurrency(hero.net)}
-      </p>
-      {sub && <p className="mt-3 text-[13px] text-muted-foreground">{sub}</p>}
-    </div>
-  )
-}
-
-/** The right-hand metric rail, ordered and filtered by the user's KPI prefs. */
-export function KPIRail({
-  report,
-  preferences,
+/** Shared pane chrome: hairline border, compact metric padding. */
+function Pane({
+  title,
+  annotation,
+  tooltip,
+  className,
+  children,
 }: {
-  report: KPIReport
-  preferences: KPIPreferences
+  title: string
+  annotation?: React.ReactNode
+  tooltip?: React.ReactNode
+  className?: string
+  children: React.ReactNode
 }) {
-  const t = useTranslations('kpi')
-  const months = activeMonth(report)
-
-  const orderedIds = preferences.kpiOrder.filter(
-    (id) => preferences.visibleKpis.includes(id) && id !== 'netResult',
+  const label = (
+    <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+      {title}
+    </p>
   )
-
-  const rows = orderedIds
-    .map((id) => railRow(id, report, t))
-    .filter(Boolean) as RailRow[]
-
-  // The month's income closes the rail: it grounds the hero number.
-  if (months) {
-    rows.push({
-      id: 'income',
-      label: t('income_in', { month: months.hero.label }),
-      value: formatCurrency(months.hero.income),
-      note: t('income_note', { amount: formatCurrency(months.hero.expenses) }),
-    })
-  }
-
   return (
-    <div>
-      {rows.map((row) => (
-        <div
-          key={row.id}
-          className="border-b border-border/60 py-4 last:border-b-0"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              {row.tooltip ? (
-                <InfoTooltip content={row.tooltip} side="top" iconClassName="h-3 w-3">
-                  <span>{row.label}</span>
-                </InfoTooltip>
-              ) : (
-                row.label
-              )}
-            </span>
-          </div>
-          <p
-            className={cn(
-              'mt-2 font-display text-[22px] leading-7 tracking-tight tabular-nums',
-              row.destructive && 'text-destructive',
-            )}
-          >
-            {row.value}
-          </p>
-          {row.note && (
-            <p className={cn('mt-1 text-xs text-muted-foreground', row.warn && 'text-attn')}>
-              {row.note}
-            </p>
-          )}
-        </div>
-      ))}
+    <div className={cn('rounded-lg border border-border p-4', className)}>
+      <div className="flex items-center justify-between gap-3">
+        {tooltip ? (
+          <InfoTooltip content={tooltip} side="top" iconClassName="h-3 w-3">
+            {label}
+          </InfoTooltip>
+        ) : (
+          label
+        )}
+        {annotation && (
+          <span className="text-[11px] text-muted-foreground">{annotation}</span>
+        )}
+      </div>
+      {children}
     </div>
   )
 }
 
-type RailRow = {
+/** Monthly net result as plain SVG bars: muted months, the latest in sage
+ *  (terracotta when negative), a compact value label on the endpoint. */
+function ResultBarsPane({ report }: { report: KPIReport }) {
+  const t = useTranslations('kpi')
+  const months = report.months
+  if (months.length === 0) return null
+
+  const lastActive = (() => {
+    for (let i = months.length - 1; i >= 0; i--) {
+      const m = months[i]
+      if (m.income !== 0 || m.expenses !== 0 || m.net !== 0) return i
+    }
+    return months.length - 1
+  })()
+
+  const W = 320
+  const H = 120
+  const maxAbs = Math.max(...months.map((m) => Math.abs(m.net)), 1)
+  // Baseline sits lower when no month is negative, so positive bars get the room.
+  const hasNegative = months.some((m) => m.net < 0)
+  const baseline = hasNegative ? H * 0.62 : H - 4
+  const slot = W / months.length
+  const barW = Math.min(30, slot * 0.62)
+
+  return (
+    <Pane title={t('bars_title')} annotation={t('bars_unit')}>
+      <svg
+        viewBox={`0 0 ${W} ${H + 8}`}
+        className="mt-3 h-auto w-full"
+        role="img"
+        aria-label={t('bars_aria', {
+          month: months[lastActive].label,
+          amount: formatCurrency(months[lastActive].net),
+        })}
+      >
+        {months.map((m, i) => {
+          const scaled = (Math.abs(m.net) / maxAbs) * (hasNegative ? H * 0.55 : H - 26)
+          const h = m.net === 0 ? 2 : Math.max(3, scaled)
+          const x = i * slot + (slot - barW) / 2
+          const y = m.net >= 0 ? baseline - h : baseline
+          const isLast = i === lastActive
+          const fill =
+            m.net < 0
+              ? isLast
+                ? 'hsl(11 45% 52%)'
+                : 'hsl(11 45% 52% / 0.35)'
+              : isLast
+                ? SAGE
+                : 'hsl(var(--foreground) / 0.14)'
+          return (
+            <g key={m.label}>
+              <rect x={x} y={y} width={barW} height={h} rx={3} fill={fill}>
+                <title>{`${m.label}: ${formatCurrency(m.net)}`}</title>
+              </rect>
+              {isLast && (
+                <text
+                  x={x + barW / 2}
+                  y={m.net >= 0 ? y - 5 : y + h + 11}
+                  textAnchor="middle"
+                  style={{ font: '10.5px var(--font-body, ui-sans-serif)', fill: 'hsl(var(--muted-foreground))' }}
+                >
+                  {compactKr(m.net)}
+                </text>
+              )}
+            </g>
+          )
+        })}
+      </svg>
+      <div className="mt-1 flex justify-between px-1 text-[10.5px] text-muted-foreground">
+        {months.map((m) => (
+          <span key={m.label}>{m.label}</span>
+        ))}
+      </div>
+    </Pane>
+  )
+}
+
+type MetricPane = {
   id: string
-  label: string
+  title: string
   value: string
   note?: string
   tooltip?: React.ReactNode
   destructive?: boolean
   warn?: boolean
+  aging?: { ok: number; overdue: number }
 }
 
-function railRow(
-  id: string,
-  report: KPIReport,
-  t: ReturnType<typeof useTranslations<'kpi'>>,
-): RailRow | null {
-  const def = KPI_DEFINITIONS.find((d) => d.id === id)
-  if (!def) return null
+function metricPane(id: string, report: KPIReport, t: TFn): MetricPane | null {
   const tooltip = (
     <div className="space-y-1 text-xs">
       <p>{t(`def_${id}_description`)}</p>
@@ -153,7 +158,7 @@ function railRow(
     case 'cashPosition':
       return {
         id,
-        label: t('def_cashPosition_label'),
+        title: t('def_cashPosition_label'),
         value: formatCurrency(report.cashPosition),
         note: t('sub_likvida_medel'),
         tooltip,
@@ -162,7 +167,7 @@ function railRow(
     case 'vatLiability':
       return {
         id,
-        label: t('def_vatLiability_label'),
+        title: t('def_vatLiability_label'),
         value: formatCurrency(Math.abs(report.vatLiability)),
         note:
           report.vatLiability > 0
@@ -172,24 +177,29 @@ function railRow(
               : t('sub_jamnt'),
         tooltip,
       }
-    case 'outstandingReceivables':
+    case 'outstandingReceivables': {
+      const overdue = report.overdueReceivables
+      const ok = Math.max(0, report.outstandingReceivables - overdue)
       return {
         id,
-        label: t('def_outstandingReceivables_label'),
+        title: t('def_outstandingReceivables_label'),
         value: formatCurrency(report.outstandingReceivables),
         note:
-          report.overdueReceivables > 0
-            ? t('sub_overdue', { amount: formatCurrency(report.overdueReceivables) })
+          overdue > 0
+            ? t('sub_overdue', { amount: formatCurrency(overdue) })
             : t('sub_utestaende'),
         tooltip,
-        warn: report.overdueReceivables > 0,
+        warn: overdue > 0,
+        aging:
+          report.outstandingReceivables > 0 ? { ok, overdue } : undefined,
       }
+    }
     case 'grossMargin':
       return report.grossMargin === null
         ? null
         : {
             id,
-            label: t('def_grossMargin_label'),
+            title: t('def_grossMargin_label'),
             value: `${report.grossMargin}%`,
             note: t('sub_av_intakter'),
             tooltip,
@@ -199,7 +209,7 @@ function railRow(
         ? null
         : {
             id,
-            label: t('def_expenseRatio_label'),
+            title: t('def_expenseRatio_label'),
             value: `${report.expenseRatio}%`,
             note: t('sub_av_intakter'),
             tooltip,
@@ -209,7 +219,7 @@ function railRow(
         ? null
         : {
             id,
-            label: t('def_avgPaymentDays_label'),
+            title: t('def_avgPaymentDays_label'),
             value: `${report.avgPaymentDays} ${t('value_days_suffix')}`,
             note: t('sub_snitt'),
             tooltip,
@@ -217,6 +227,68 @@ function railRow(
     default:
       return null
   }
+}
+
+/** The instrument grid: result bars + one pane per visible preference KPI. */
+export function KPIPanes({
+  report,
+  preferences,
+}: {
+  report: KPIReport
+  preferences: KPIPreferences
+}) {
+  const t = useTranslations('kpi')
+
+  const orderedIds = preferences.kpiOrder.filter(
+    (id) => preferences.visibleKpis.includes(id) && id !== 'netResult',
+  )
+  const panes = orderedIds
+    .map((id) => metricPane(id, report, t as TFn))
+    .filter(Boolean) as MetricPane[]
+
+  const total = (p: MetricPane) => (p.aging ? p.aging.ok + p.aging.overdue : 0)
+
+  return (
+    <div className="grid items-stretch gap-4 sm:grid-cols-2">
+      <ResultBarsPane report={report} />
+      {panes.map((pane) => (
+        <Pane key={pane.id} title={pane.title} tooltip={pane.tooltip}>
+          <p
+            className={cn(
+              'mt-2 font-display text-2xl tabular-nums tracking-tight',
+              pane.destructive && 'text-destructive',
+            )}
+          >
+            {pane.value}
+          </p>
+          {pane.aging && total(pane) > 0 && (
+            <div
+              className="mt-3 flex h-1.5 gap-[2px] overflow-hidden rounded-full"
+              role="img"
+              aria-label={t('aging_aria', {
+                ok: formatCurrency(pane.aging.ok),
+                overdue: formatCurrency(pane.aging.overdue),
+              })}
+            >
+              <span
+                className="rounded-full bg-[hsl(155_25%_40%_/_0.45)]"
+                style={{ width: `${(pane.aging.ok / total(pane)) * 100}%` }}
+              />
+              <span
+                className="rounded-full bg-[hsl(38_65%_52%_/_0.75)]"
+                style={{ width: `${(pane.aging.overdue / total(pane)) * 100}%` }}
+              />
+            </div>
+          )}
+          {pane.note && (
+            <p className={cn('mt-2 text-xs leading-5 text-muted-foreground', pane.warn && 'text-attn')}>
+              {pane.note}
+            </p>
+          )}
+        </Pane>
+      ))}
+    </div>
+  )
 }
 
 /** Quiet bar row shared by the two breakdown lists. */

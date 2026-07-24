@@ -2,27 +2,20 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
-import dynamic from 'next/dynamic'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { FyPicker } from '@/components/common/FyPicker'
-import { KPIStoryHero, KPIRail, KPIBreakdown } from '@/components/kpi/KPIStory'
+import { KPIPanes, KPIBreakdown } from '@/components/kpi/KPIStory'
 import { KPISettingsDialog } from '@/components/kpi/KPISettingsDialog'
 import { getDefaultPreferences } from '@/lib/reports/kpi-definitions'
 import type { KPIReport, KPIPreferences } from '@/types'
 
-// Recharts is ~180KB: defer the chart so the page shell, hero and rail render
-// without waiting for the charting bundle.
-const KPIResultChart = dynamic(
-  () => import('@/components/kpi/KPIResultChart').then((m) => m.KPIResultChart),
-  { ssr: false, loading: () => <Skeleton className="mt-8 h-[200px] w-full" /> },
-)
-
 /**
- * Nyckeltal in the founder-picked "Berättelsen" layout: the month's result
- * as a serif hero + trend area on the left, the preference-driven metric
- * rail on the right, and the cost story as quiet rows below.
+ * Nyckeltal in the founder-picked "Instrumentbrädan" layout: a grid of
+ * bordered instrument panes (monthly result bars + the preference-driven
+ * KPIs) with the cost story as quiet rows below. Plain SVG bars: no
+ * charting bundle on this page anymore.
  */
 export default function KpiPage() {
   const t = useTranslations('kpi')
@@ -124,15 +117,7 @@ export default function KpiPage() {
 
       {!isLoadingReport && !error && report && (
         <div className="stagger-enter space-y-10">
-          <div className="grid items-start gap-x-11 gap-y-10 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
-            <section>
-              <KPIStoryHero report={report} />
-              {report.months.length > 0 && <KPIResultChart months={report.months} />}
-            </section>
-            <aside className="lg:border-l lg:border-border lg:pl-7">
-              <KPIRail report={report} preferences={preferences} />
-            </aside>
-          </div>
+          <KPIPanes report={report} preferences={preferences} />
           <KPIBreakdown report={report} />
         </div>
       )}
@@ -142,21 +127,10 @@ export default function KpiPage() {
 
 function LoadingSkeleton() {
   return (
-    <div className="grid items-start gap-x-11 gap-y-10 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
-      <div className="space-y-4">
-        <Skeleton className="h-3 w-28" />
-        <Skeleton className="h-12 w-64" />
-        <Skeleton className="h-3 w-40" />
-        <Skeleton className="mt-6 h-[200px] w-full" />
-      </div>
-      <div className="space-y-6 lg:border-l lg:border-border lg:pl-7">
-        {[1, 2, 3, 4].map((i) => (
-          <div key={i} className="space-y-2">
-            <Skeleton className="h-3 w-24" />
-            <Skeleton className="h-6 w-32" />
-          </div>
-        ))}
-      </div>
+    <div className="grid gap-4 sm:grid-cols-2">
+      {[1, 2, 3, 4].map((i) => (
+        <Skeleton key={i} className="h-40 w-full rounded-lg" />
+      ))}
     </div>
   )
 }
