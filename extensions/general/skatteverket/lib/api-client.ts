@@ -187,8 +187,20 @@ async function refreshTokenForUser(
     // gets 404 id_not_found back — that's ordinary session expiry, not a
     // runtime error. Classify it so the crons' quiet buckets and the UI's
     // reconnect flow catch it instead of a raw Error escaping to the logs.
+    // SKV speaks several dialects for the same terminal state: 404 with
+    // id_not_found / "refresh token is not found", 400 access_denied with
+    // "Refresh Token status is expired", and OAuth2's standard 400
+    // invalid_grant. Config-shaped 400s (invalid_client, invalid_scope)
+    // deliberately stay raw errors: telling the user to reconnect cannot
+    // fix those, and mislabeling them re-creates the self-perpetuating
+    // reconnect banner from the 2026-07 MISSING_SCOPE incident.
     const message = err instanceof Error ? err.message : String(err)
-    if (/\b404\b/.test(message) && /id_not_found|refresh token is not found/i.test(message)) {
+    const deadRefreshToken =
+      (/\b404\b/.test(message) && /id_not_found|refresh token is not found/i.test(message)) ||
+      (/\b400\b/.test(message) &&
+        (/refresh token status is expired/i.test(message) ||
+          /"error"\s*:\s*"invalid_grant"/i.test(message)))
+    if (deadRefreshToken) {
       throw new SkatteverketAuthError(
         'Sessionen har gått ut. Logga in med BankID igen.',
         'SESSION_EXPIRED'
