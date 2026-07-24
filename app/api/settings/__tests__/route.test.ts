@@ -145,6 +145,69 @@ describe('PUT /api/settings', () => {
     }
   })
 
+  it('rejects aktiekapital without antal aktier with a clear message (issue #1137)', async () => {
+    enqueue({
+      data: {
+        entity_type: 'aktiebolag',
+        onboarding_complete: true,
+        aktiekapital: null,
+        antal_aktier: null,
+      },
+    })
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { aktiekapital: 25000, antal_aktier: null },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('antal aktier')
+    // The guard fired before the update: only the oldSettings fetch ran.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects clearing only one half of a stored share-capital pair', async () => {
+    enqueue({
+      data: {
+        entity_type: 'aktiebolag',
+        onboarding_complete: true,
+        aktiekapital: 25000,
+        antal_aktier: 500,
+      },
+    })
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { antal_aktier: null },
+    }), { params: Promise.resolve({}) })
+
+    expect((await parseJsonResponse(response)).status).toBe(400)
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows updating one half when the other half is already stored', async () => {
+    enqueueMany([
+      {
+        data: {
+          entity_type: 'aktiebolag',
+          onboarding_complete: true,
+          aktiekapital: 25000,
+          antal_aktier: 500,
+        },
+      },
+      { data: { id: 's1', aktiekapital: 50000, antal_aktier: 500 } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { aktiekapital: 50000 },
+    }), { params: Promise.resolve({}) })
+
+    expect((await parseJsonResponse(response)).status).toBe(200)
+  })
+
   it('updates invoice email recipients and payment accounts', async () => {
     const updates = {
       invoice_email_cc_addresses: ['info@example.com', 'owner@example.com'],

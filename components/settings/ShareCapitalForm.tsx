@@ -57,6 +57,7 @@ export function ShareCapitalForm({ settings }: ShareCapitalFormProps) {
             step="1"
             value={aktiekapital}
             onChange={(e) => setAktiekapital(e.target.value)}
+            required={antalAktier.trim() !== ''}
           />
           <p className="text-xs text-muted-foreground">{t('aktiekapital_help')}</p>
         </div>
@@ -71,6 +72,7 @@ export function ShareCapitalForm({ settings }: ShareCapitalFormProps) {
             step="1"
             value={antalAktier}
             onChange={(e) => setAntalAktier(e.target.value)}
+            required={aktiekapital.trim() !== ''}
           />
           <p className="text-xs text-muted-foreground">{t('antal_aktier_help')}</p>
         </div>
