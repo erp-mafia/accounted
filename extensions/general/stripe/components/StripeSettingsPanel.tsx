@@ -12,7 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { useFormat } from '@/lib/hooks/use-format'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { CreditCard, Link2, RefreshCw, Unlink } from 'lucide-react'
+import { CreditCard, Link2, Loader2, RefreshCw, Unlink } from 'lucide-react'
 import type { StripeReviewEvent, StripeStatusResponse } from '../types'
 
 type ConnectionInfo = NonNullable<StripeStatusResponse['connection']>
@@ -322,7 +322,11 @@ export default function StripeSettingsPanel() {
               ) : (
                 <div className="flex items-center gap-2">
                   <Button variant="outline" size="sm" onClick={handleSyncNow} disabled={syncing}>
-                    <RefreshCw className="mr-2 h-4 w-4" />
+                    {syncing ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                    )}
                     {syncing ? t('syncing') : t('sync_now')}
                   </Button>
                   <Button variant="outline" size="sm" onClick={() => setConfirmDisconnect(true)}>

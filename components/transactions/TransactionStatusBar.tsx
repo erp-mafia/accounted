@@ -26,7 +26,7 @@ export default function TransactionStatusBar({
   const t = useTranslations('transactions')
   const router = useRouter()
   const { uiState, loaded } = useUiState()
-  const { connections, hasBankSync, syncAll, lastSyncedAt } = useBankSync()
+  const { connections, hasBankSync, syncAll, lastSyncedAt, isBusy } = useBankSync()
   const formatAge = useAgeFormatter()
 
   // "Synka bank nu" (concept: first menu row) only renders once a bank is
@@ -41,6 +41,8 @@ export default function TransactionStatusBar({
             key: 'synka',
             label: t('create_synka'),
             icon: RefreshCw,
+            busy: isBusy,
+            busyLabel: t('bank_sync_button_syncing'),
             description: lastSyncedAt
               ? t('create_synka_desc_last', { age: formatAge(lastSyncedAt) })
               : t('create_synka_desc'),

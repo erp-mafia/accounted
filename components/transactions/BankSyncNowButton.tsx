@@ -46,6 +46,9 @@ export function useBankSync() {
   const hasBankSync = useCapability(CAPABILITY.bank_sync)
   const [connections, setConnections] = useState<BankConn[] | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  // Holds isBusy true across the whole syncAll loop so the spinner doesn't
+  // flicker off between per-connection syncs.
+  const [syncingAll, setSyncingAll] = useState(false)
 
   useEffect(() => {
     if (!company?.id) return
@@ -156,14 +159,19 @@ export function useBankSync() {
   // active connection in turn; with only dead connections it jumps straight
   // to re-authorizing the first one (a retry can't revive a closed session).
   async function syncAll() {
-    const conns = connections ?? []
-    const active = conns.filter((c) => c.status === 'active')
-    if (active.length === 0) {
-      if (conns[0]) await reconnect(conns[0])
-      return
-    }
-    for (const conn of active) {
-      await syncConnection(conn)
+    setSyncingAll(true)
+    try {
+      const conns = connections ?? []
+      const active = conns.filter((c) => c.status === 'active')
+      if (active.length === 0) {
+        if (conns[0]) await reconnect(conns[0])
+        return
+      }
+      for (const conn of active) {
+        await syncConnection(conn)
+      }
+    } finally {
+      setSyncingAll(false)
     }
   }
 
@@ -177,7 +185,7 @@ export function useBankSync() {
   return {
     connections,
     busyId,
-    isBusy: busyId !== null,
+    isBusy: busyId !== null || syncingAll,
     hasBankSync,
     reconnect,
     syncConnection,

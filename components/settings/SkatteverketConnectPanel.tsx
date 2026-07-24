@@ -10,7 +10,7 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { isAllowedSkvPopupOrigin } from '@/lib/skatteverket/popup-origin'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
-import { CheckCircle2, ExternalLink, ShieldOff, FlaskConical, ShieldAlert } from 'lucide-react'
+import { CheckCircle2, ExternalLink, Loader2, ShieldOff, FlaskConical, ShieldAlert } from 'lucide-react'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 type Environment = 'test' | 'prod'
@@ -552,6 +552,7 @@ function SkatteverketSystemConnectionCard() {
             </Button>
           )}
           <Button onClick={verify} disabled={verifying}>
+            {verifying && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {verifying ? t('system_verifying') : t('system_verify')}
           </Button>
         </div>

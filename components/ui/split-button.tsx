@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { Button, type ButtonProps } from '@/components/ui/button'
 import { rememberCreateMode } from '@/lib/ui-state/client'
-import { Check, ChevronDown, type LucideIcon } from 'lucide-react'
+import { Check, ChevronDown, Loader2, type LucideIcon } from 'lucide-react'
 
 export interface SplitButtonOption {
   key: string
@@ -18,6 +18,11 @@ export interface SplitButtonOption {
    *  as the tooltip instead of silently no-opping. */
   disabled?: boolean
   disabledTitle?: string
+  /** In-flight async action (e.g. bank sync): spinner replaces the icon and
+   *  the option is inert until it resolves. */
+  busy?: boolean
+  /** Label shown on the primary face while busy (e.g. "Synkar…"). */
+  busyLabel?: string
   onSelect: () => void
 }
 
@@ -102,7 +107,7 @@ export function SplitButton({
   if (!active) return null
 
   const runOption = (option: SplitButtonOption) => {
-    if (option.disabled) return
+    if (option.disabled || option.busy) return
     setActiveKey(option.key)
     if (persistKey) rememberCreateMode(persistKey, option.key)
     option.onSelect()
@@ -113,12 +118,17 @@ export function SplitButton({
       <Button
         variant={variant}
         className="rounded-r-none"
-        disabled={active.disabled}
+        disabled={active.disabled || active.busy}
+        aria-busy={active.busy || undefined}
         title={active.disabled ? active.disabledTitle : undefined}
         onClick={() => runOption(active)}
       >
-        {active.icon && <active.icon className="mr-1.5 h-4 w-4" />}
-        {active.label}
+        {active.busy ? (
+          <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+        ) : (
+          active.icon && <active.icon className="mr-1.5 h-4 w-4" />
+        )}
+        {active.busy ? (active.busyLabel ?? active.label) : active.label}
       </Button>
       <Button
         ref={caretRef}
@@ -151,7 +161,7 @@ export function SplitButton({
                   key={option.key}
                   type="button"
                   role="menuitem"
-                  disabled={option.disabled}
+                  disabled={option.disabled || option.busy}
                   title={option.disabled ? option.disabledTitle : undefined}
                   onClick={() => {
                     setOpen(false)
@@ -164,8 +174,12 @@ export function SplitButton({
                       : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
                   )}
                 >
-                  {option.icon && (
-                    <option.icon className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                  {option.busy ? (
+                    <Loader2 className="mt-0.5 h-4 w-4 flex-shrink-0 animate-spin" />
+                  ) : (
+                    option.icon && (
+                      <option.icon className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                    )
                   )}
                   <span className="min-w-0 flex-1">
                     <span className="block text-[13px] text-foreground">{option.label}</span>

@@ -182,6 +182,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   const [submissions, setSubmissions] = useState<SubmissionRow[]>([])
   const [loadingSubmissions, setLoadingSubmissions] = useState(false)
   const [submissionsError, setSubmissionsError] = useState<string | null>(null)
+  const [pollingEvents, setPollingEvents] = useState(false)
 
   useEffect(() => {
     const signer = versions.find((version) => version.id === selectedVersionId)
@@ -384,6 +385,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   }
 
   const handlePollEvents = async () => {
+    setPollingEvents(true)
     try {
       const res = await fetch('/api/extensions/ext/bolagsverket/poll-events', {
         method: 'POST',
@@ -399,6 +401,8 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       toast({ title: 'Status uppdaterad från Bolagsverket' })
     } catch {
       toast({ title: 'Kunde inte hämta händelser', variant: 'destructive' })
+    } finally {
+      setPollingEvents(false)
     }
   }
 
@@ -794,8 +798,19 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
             <div className="flex justify-end">
-              <Button className="min-h-11" variant="outline" size="sm" onClick={() => void handlePollEvents()}>
-                <RefreshCcw className="mr-2 h-4 w-4" /> Uppdatera status
+              <Button
+                className="min-h-11"
+                variant="outline"
+                size="sm"
+                disabled={pollingEvents}
+                onClick={() => void handlePollEvents()}
+              >
+                {pollingEvents ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCcw className="mr-2 h-4 w-4" />
+                )}
+                {pollingEvents ? 'Uppdaterar …' : 'Uppdatera status'}
               </Button>
             </div>
             {submissionsError && <p className="text-xs text-destructive">{submissionsError}</p>}

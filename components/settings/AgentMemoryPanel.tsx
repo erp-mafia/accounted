@@ -371,7 +371,11 @@ export function AgentMemoryPanel() {
                                   onClick={() => patch(row.id, { is_active: false })}
                                   disabled={isBusy}
                                 >
-                                  <Trash2 className="mr-1 h-3.5 w-3.5" />
+                                  {isBusy ? (
+                                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="mr-1 h-3.5 w-3.5" />
+                                  )}
                                   Dölj
                                 </Button>
                               </>
@@ -382,7 +386,11 @@ export function AgentMemoryPanel() {
                                 onClick={() => patch(row.id, { is_active: true })}
                                 disabled={isBusy}
                               >
-                                <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                                {isBusy ? (
+                                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                                )}
                                 Återställ
                               </Button>
                             )}
