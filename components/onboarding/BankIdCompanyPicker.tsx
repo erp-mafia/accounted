@@ -43,6 +43,9 @@ interface BankIdCompanyPickerProps {
   memberCompanies: MemberCompany[]
   ticCompanies: TicPickerCompany[]
   enrichmentStale: boolean
+  /** A pending invitation exists for this email but no invite token is at
+   *  hand: point the user back to the link in the invitation email. */
+  hasPendingInvite?: boolean
 }
 
 type SetupState = { kind: 'idle' } | { kind: 'opening'; companyId: string }
@@ -78,6 +81,7 @@ export default function BankIdCompanyPicker({
   memberCompanies,
   ticCompanies,
   enrichmentStale,
+  hasPendingInvite = false,
 }: BankIdCompanyPickerProps) {
   const router = useRouter()
   const { toast } = useToast()
@@ -148,6 +152,14 @@ export default function BankIdCompanyPicker({
         </h1>
         <p className="text-muted-foreground text-sm mt-1.5">{t('subtitle')}</p>
       </header>
+
+      {hasPendingInvite && (
+        <div className="mb-6 rounded-lg border bg-muted/30 p-3">
+          <p className="text-sm text-muted-foreground text-center">
+            {t('pending_invite_note')}
+          </p>
+        </div>
+      )}
 
       {enrichmentStale && (
         <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/60 dark:bg-amber-950/30">

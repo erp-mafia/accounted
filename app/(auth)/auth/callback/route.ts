@@ -200,8 +200,9 @@ export async function GET(request: NextRequest) {
     for (const { name, value, options } of pendingCookies) {
       response.cookies.set({ name, value, ...options })
     }
-    // Keep the invite cookie alive so the onboarding page fallback can
-    // retry acceptance (only clear it when successfully processed above).
+    // Keep the invite cookie alive so the /onboarding and /select-company
+    // pages can retry acceptance via acceptPendingInviteByToken (only clear
+    // it when successfully processed above).
     return response
   }
 

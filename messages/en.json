@@ -1313,6 +1313,7 @@
     "journey_ans_monthly": "Monthly",
     "journey_ans_yearly": "Yearly",
     "journey_dup_note": "You already have {name} in Accounted.",
+    "journey_pending_invite_note": "You have a pending invitation to a company. Open the link in the invitation email to join instead.",
     "journey_fact_vat": "VAT registered",
     "journey_fact_ceased": "Deregistered",
     "journey_cancel_add": "Back to Accounted"
@@ -1325,6 +1326,7 @@
     "greeting_evening": "Good evening",
     "subtitle": "Choose a company to open or add a new one.",
     "enrichment_stale": "The information from BankID is more than a week old. Sign in with BankID again to refresh the list.",
+    "pending_invite_note": "You have a pending invitation to a company. Open the link in the invitation email to join.",
     "section_your_companies": "Your companies in {appName}",
     "already_in_app": "Already in {appName}",
     "setup_manually": "Set up manually",

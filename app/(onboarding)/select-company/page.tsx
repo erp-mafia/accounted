@@ -1,5 +1,10 @@
+import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
+import {
+  acceptPendingInviteByToken,
+  hasPendingInviteForEmail,
+} from '@/lib/company/pending-invites'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import BankIdCompanyPicker, {
   type MemberCompany,
@@ -18,8 +23,16 @@ export default async function SelectCompanyPage() {
     redirect('/login')
   }
 
-  // All four lookups key only on user.id, one parallel batch instead of
-  // four serial round-trips on the post-BankID-login landing page.
+  // Invite recovery, same as /onboarding: BankID users land here, so a missed
+  // invite acceptance (e.g. a register flow that dropped the cookie handling)
+  // gets retried before the picker funnels the invitee into creating a company.
+  const inviteToken = (await cookies()).get('gnubok-invite-token')?.value
+  if (inviteToken && (await acceptPendingInviteByToken(user, inviteToken))) {
+    redirect('/')
+  }
+
+  // All lookups key only on user.id/email, one parallel batch instead of
+  // serial round-trips on the post-BankID-login landing page.
   const [
     // Existing Accounted memberships.
     { data: memberships },
@@ -30,6 +43,9 @@ export default async function SelectCompanyPage() {
     // user-keyed in `bankid_enrichment` because it lands before company
     // selection, see fetchAndStoreEnrichment in the tic extension.
     { data: enrichmentRow },
+    // Pending invitation for this email with no cookie to accept it from:
+    // rendered as a "check your invite email" hint in the picker.
+    hasPendingInvite,
   ] = await Promise.all([
     supabase
       .from('company_members')
@@ -57,6 +73,7 @@ export default async function SelectCompanyPage() {
       .select('company_roles, created_at, updated_at')
       .eq('user_id', user.id)
       .maybeSingle(),
+    user.email ? hasPendingInviteForEmail(user.email) : Promise.resolve(false),
   ])
 
   type CompanyRow = {
@@ -172,6 +189,7 @@ export default async function SelectCompanyPage() {
       memberCompanies={memberCompanies}
       ticCompanies={ticCompanies}
       enrichmentStale={enrichmentStale}
+      hasPendingInvite={hasPendingInvite}
     />
   )
 }

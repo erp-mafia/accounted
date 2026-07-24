@@ -151,6 +151,34 @@ function RegisterPageContent() {
         return
       }
 
+      // Invited signup: accept the pending invite before routing to the
+      // picker, same as the login page's BankID path. Without this, an
+      // invitee who registers with BankID lands on /select-company with no
+      // membership and gets funneled into creating a company instead of
+      // joining the one they were invited to.
+      const inviteCookieMatch = document.cookie.match(/gnubok-invite-token=([^;]+)/)
+      const inviteToken = inviteCookieMatch?.[1]
+
+      if (inviteToken) {
+        try {
+          const res = await fetch('/api/team/accept', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: inviteToken }),
+          })
+
+          if (res.ok) {
+            document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
+            window.location.href = '/'
+            return
+          }
+        } catch (err) {
+          console.error('[register] invite acceptance failed:', err instanceof Error ? err.message : String(err))
+        }
+        // Clear cookie even on failure to avoid retrying stale tokens
+        document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
+      }
+
       router.push('/select-company')
       router.refresh()
     } catch (error) {

@@ -61,6 +61,10 @@ interface OnboardingJourneyProps {
   initialOrgNumber?: string
   initialEntityType?: EntityType
   initialLegalName?: string
+  /** A pending invitation exists for this user's email: an invitee has
+   *  likely landed here by mistake (lost invite cookie), so the first
+   *  question carries a "join via the link in the email" hint. */
+  hasPendingInvite?: boolean
 }
 
 export default function OnboardingJourney({
@@ -69,6 +73,7 @@ export default function OnboardingJourney({
   initialOrgNumber,
   initialEntityType,
   initialLegalName,
+  hasPendingInvite = false,
 }: OnboardingJourneyProps) {
   const router = useRouter()
   const t = useTranslations('onboarding')
@@ -298,6 +303,7 @@ export default function OnboardingJourney({
         return (
           <Question
             title={t('journey_orgnr_title')}
+            sub={hasPendingInvite ? t('journey_pending_invite_note') : undefined}
             attn={
               state.serverError === 'org_number_invalid'
                 ? t('journey_err_org_invalid')

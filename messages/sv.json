@@ -1313,6 +1313,7 @@
     "journey_ans_monthly": "Månadsvis",
     "journey_ans_yearly": "Årsvis",
     "journey_dup_note": "Du har redan {name} i Accounted.",
+    "journey_pending_invite_note": "Du har en väntande inbjudan till ett företag. Öppna länken i inbjudningsmejlet för att gå med istället.",
     "journey_fact_vat": "Momsregistrerat",
     "journey_fact_ceased": "Avregistrerat",
     "journey_cancel_add": "Tillbaka till Accounted"
@@ -1325,6 +1326,7 @@
     "greeting_evening": "God kväll",
     "subtitle": "Välj ett företag att öppna eller lägg till ett nytt.",
     "enrichment_stale": "Uppgifterna från BankID är äldre än en vecka. Logga in med BankID igen för att uppdatera listan.",
+    "pending_invite_note": "Du har en väntande inbjudan till ett företag. Öppna länken i inbjudningsmejlet för att gå med.",
     "section_your_companies": "Dina företag i {appName}",
     "already_in_app": "Finns redan i {appName}",
     "setup_manually": "Sätts upp manuellt",
