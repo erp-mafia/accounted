@@ -1952,6 +1952,7 @@ type ImportMode = null | 'psd2' | 'bank' | 'sie' | 'csv_data' | 'migration'
 export default function ImportPage() {
   const { company } = useCompany()
   const [mode, setMode] = useState<ImportMode>(null)
+  const [view, setView] = useState<'import' | 'export'>('import')
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
   const [userId, setUserId] = useState('')
@@ -1959,6 +1960,7 @@ export default function ImportPage() {
   const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
   const [exportExcludeClosing, setExportExcludeClosing] = useState(true)
   const t = useTranslations('import')
+  const router = useRouter()
   const hasCloudBackup = ENABLED_EXTENSION_IDS.has('cloud-backup')
   const hasBankSync = useCapability(CAPABILITY.bank_sync)
 
@@ -1997,27 +1999,37 @@ export default function ImportPage() {
         setMode(modeParam as ImportMode)
       }
     }
-    // Pre-tabs deep links used ?view=export: the export surface is now the
-    // SIE dialog + cloud panel on the single landing, so open the dialog.
-    if (searchParams.get('view') === 'export' && !window.location.hash) {
-      setSieDialogOpen(true)
+    const viewParam = searchParams.get('view')
+    if (viewParam === 'export' || viewParam === 'import') {
+      setView(viewParam)
     }
   }, [isSandbox, searchParams])
 
-  // Hash-based deep links: #sie-export opens the SIE dialog, #cloud-backup
-  // expands the cloud panel and scrolls to it.
+  // Hash-based deep links: both live on the export tab; #sie-export opens
+  // the SIE dialog, #cloud-backup expands the cloud panel and scrolls to it.
   useEffect(() => {
     if (typeof window === 'undefined') return
     const hash = window.location.hash
     if (hash === '#sie-export') {
+      setView('export')
       setSieDialogOpen(true)
     } else if (hash === '#cloud-backup') {
+      setView('export')
       setCloudOpen(true)
       setTimeout(() => {
         document.querySelector(hash)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
       }, 80)
     }
   }, [])
+
+  const handleViewChange = (next: 'import' | 'export') => {
+    setView(next)
+    const params = new URLSearchParams(searchParams.toString())
+    if (next === 'export') params.set('view', 'export')
+    else params.delete('view')
+    const qs = params.toString()
+    router.replace(qs ? `/import?${qs}` : '/import', { scroll: false })
+  }
   // Extensions are active if compiled in: no runtime toggle check needed
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMigrationExtension = ENABLED_EXTENSION_IDS.has('arcim-migration')
@@ -2037,100 +2049,112 @@ export default function ImportPage() {
         <>
           {isSandbox && <AttnLine>{t('sandbox_disabled')}</AttnLine>}
 
-          {/* Two columns of quiet rows (concept scene 32): Importera | Exportera */}
-          <div className="grid items-start gap-x-12 gap-y-10 md:grid-cols-2">
-            <div className="stagger-enter">
-              <div className="mb-1 flex items-center gap-3 px-1">
-                <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  {t('tab_import')}
-                </h2>
-                <div className="h-px flex-1 bg-border/60" />
-              </div>
-
-              {hasBankingExtension && (
-                <ImportRow
-                  title={t('psd2_title')}
-                  sub={t('psd2_description')}
-                  chip={
-                    hasBankSync ? (
-                      <Badge variant="success" className="font-normal">{t('psd2_recommended')}</Badge>
-                    ) : (
-                      <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium leading-none text-muted-foreground">
-                        {t('psd2_requires_subscription')}
-                      </span>
-                    )
-                  }
-                  chips={<LogoChip src="/logos/enable-banking.webp" name="Enable Banking" />}
-                  disabled={isSandbox}
-                  onClick={() => setMode('psd2')}
-                />
-              )}
-              {hasMigrationExtension && (
-                <ImportRow
-                  title={t('migration_title')}
-                  sub={t('migration_description')}
-                  chips={
-                    <>
-                      <LogoChip src="/logos/fortnox.svg" name="Fortnox" />
-                      <LogoChip src="/logos/visma.jpeg" name="Visma" />
-                      <LogoChip src="/logos/bokio.png" name="Bokio" />
-                      <LogoChip src="/logos/bjornlunden.png" name="Björn Lundén" />
-                      <LogoChip src="/logos/Briox_logo.png" name="Briox" />
-                    </>
-                  }
-                  disabled={isSandbox}
-                  onClick={() => setMode('migration')}
-                />
-              )}
-              <ImportRow
-                title={t('bankfile_title')}
-                sub={t('bankfile_description')}
-                onClick={() => setMode('bank')}
-              />
-              <ImportRow
-                title={t('csv_data_title')}
-                sub={t('csv_data_description')}
-                onClick={() => setMode('csv_data')}
-              />
-              <ImportRow
-                title={t('sie_title')}
-                sub={t('sie_description')}
-                onClick={() => setMode('sie')}
-              />
-            </div>
-
-            <div className="stagger-enter">
-              <div className="mb-1 flex items-center gap-3 px-1">
-                <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  {t('tab_export')}
-                </h2>
-                <div className="h-px flex-1 bg-border/60" />
-              </div>
-
-              <ImportRow
-                id="sie-export"
-                title={t('export_sie_title')}
-                sub={t('export_sie_description')}
-                onClick={() => setSieDialogOpen(true)}
-              />
-              {hasCloudBackup && (
-                <ImportRow
-                  title={t('cloud_row_title')}
-                  sub={t('cloud_row_description')}
-                  expanded={cloudOpen}
-                  onClick={() => setCloudOpen((v) => !v)}
-                />
-              )}
-            </div>
+          {/* Importera / Exportera as separate tabs (house seg), like before */}
+          <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
+            {(
+              [
+                { key: 'import', label: t('tab_import') },
+                { key: 'export', label: t('tab_export') },
+              ] as const
+            ).map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={view === key}
+                onClick={() => handleViewChange(key)}
+                className={`rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
+                  view === key
+                    ? 'border border-border bg-card font-medium text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
-          {hasCloudBackup && cloudOpen && (
-            <div id="cloud-backup" className="scroll-mt-24">
-              <CloudBackupCard />
+          {view === 'import' ? (
+            <div className="max-w-3xl">
+              <div className="stagger-enter">
+                {hasBankingExtension && (
+                  <ImportRow
+                    title={t('psd2_title')}
+                    sub={t('psd2_description')}
+                    chip={
+                      hasBankSync ? (
+                        <Badge variant="success" className="font-normal">{t('psd2_recommended')}</Badge>
+                      ) : (
+                        <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium leading-none text-muted-foreground">
+                          {t('psd2_requires_subscription')}
+                        </span>
+                      )
+                    }
+                    chips={<LogoChip src="/logos/enable-banking.webp" name="Enable Banking" />}
+                    disabled={isSandbox}
+                    onClick={() => setMode('psd2')}
+                  />
+                )}
+                {hasMigrationExtension && (
+                  <ImportRow
+                    title={t('migration_title')}
+                    sub={t('migration_description')}
+                    chips={
+                      <>
+                        <LogoChip src="/logos/fortnox.svg" name="Fortnox" />
+                        <LogoChip src="/logos/visma.jpeg" name="Visma" />
+                        <LogoChip src="/logos/bokio.png" name="Bokio" />
+                        <LogoChip src="/logos/bjornlunden.png" name="Björn Lundén" />
+                        <LogoChip src="/logos/Briox_logo.png" name="Briox" />
+                      </>
+                    }
+                    disabled={isSandbox}
+                    onClick={() => setMode('migration')}
+                  />
+                )}
+                <ImportRow
+                  title={t('bankfile_title')}
+                  sub={t('bankfile_description')}
+                  onClick={() => setMode('bank')}
+                />
+                <ImportRow
+                  title={t('csv_data_title')}
+                  sub={t('csv_data_description')}
+                  onClick={() => setMode('csv_data')}
+                />
+                <ImportRow
+                  title={t('sie_title')}
+                  sub={t('sie_description')}
+                  onClick={() => setMode('sie')}
+                />
+              </div>
+              <p className="mt-4 px-1 text-xs leading-5 text-muted-foreground">{t('pgnote')}</p>
+            </div>
+          ) : (
+            <div className="max-w-3xl">
+              <div className="stagger-enter">
+                <ImportRow
+                  id="sie-export"
+                  title={t('export_sie_title')}
+                  sub={t('export_sie_description')}
+                  onClick={() => setSieDialogOpen(true)}
+                />
+                {hasCloudBackup && (
+                  <ImportRow
+                    title={t('cloud_row_title')}
+                    sub={t('cloud_row_description')}
+                    expanded={cloudOpen}
+                    onClick={() => setCloudOpen((v) => !v)}
+                  />
+                )}
+              </div>
+              {hasCloudBackup && cloudOpen && (
+                <div id="cloud-backup" className="mt-6 scroll-mt-24">
+                  <CloudBackupCard />
+                </div>
+              )}
             </div>
           )}
-
-          <p className="px-1 text-xs leading-5 text-muted-foreground">{t('pgnote')}</p>
 
           {/* SIE export as a small centered dialog (concept overlay convention) */}
           <Dialog open={sieDialogOpen} onOpenChange={setSieDialogOpen}>
