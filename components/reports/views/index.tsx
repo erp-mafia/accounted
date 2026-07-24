@@ -1086,12 +1086,15 @@ const SKATTEVERKET_MOMS_URL =
  */
 function VatManualFilingCard({ xmlHref, pdfHref }: { xmlHref: string; pdfHref: string }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Lämna in själv (utan anslutning)</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">
+    <section>
+      <div className="mb-3 flex items-center gap-3 px-1">
+        <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Lämna in själv, med fil
+        </h3>
+        <div className="h-px flex-1 bg-border/60" />
+      </div>
+      <div className="space-y-4">
+        <p className="text-[13px] leading-6 text-muted-foreground">
           Du behöver inte vara ansluten till Skatteverket för att lämna in.
         </p>
         <ol className="list-decimal pl-6 space-y-1 text-sm text-muted-foreground">
@@ -1124,8 +1127,8 @@ function VatManualFilingCard({ xmlHref, pdfHref }: { xmlHref: string; pdfHref: s
             </a>
           </Button>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   )
 }
 
@@ -1219,20 +1222,16 @@ function VatBookingCard({
   }))
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Bokför momsrapporten</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">
+    <div className="space-y-4">
+        <p className="text-[13px] leading-6 text-muted-foreground">
           Skapa ett verifikat som nollställer periodens momskonton och bokför
           momsen att betala eller få tillbaka på redovisningskontot. Du granskar
           förslaget och kan ändra raderna innan verifikatet bokförs.
         </p>
 
         {booked && (
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+          <div className="flex items-start gap-2 text-[13px] leading-6 text-muted-foreground">
+            <AlertCircle className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
             <p>
               Momsen för perioden är redan bokförd:{' '}
               <Link
@@ -1246,8 +1245,8 @@ function VatBookingCard({
           </div>
         )}
         {draft && (
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+          <div className="flex items-start gap-2 text-[13px] leading-6 text-muted-foreground">
+            <AlertCircle className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
             <p>
               Det finns redan ett{' '}
               <Link
@@ -1262,13 +1261,10 @@ function VatBookingCard({
         )}
 
         {checksBlocked && (
-          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-            <AlertCircle className="h-4 w-4 mt-1 shrink-0 text-muted-foreground" />
-            <p>
-              Det finns fel under 1 · Kontrollera underlaget. Du kan bokföra momsen ändå,
-              men åtgärda felen innan du lämnar in.
-            </p>
-          </div>
+          <p className="text-[12.5px] leading-5 text-attn">
+            Det finns fel under steg 1, Kontrollera. Du kan bokföra momsen ändå, men
+            åtgärda felen innan du lämnar in.
+          </p>
         )}
 
         {failed ? (
@@ -1301,7 +1297,6 @@ function VatBookingCard({
             )}
           </div>
         )}
-      </CardContent>
 
       {proposal && (
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -1337,7 +1332,7 @@ function VatBookingCard({
           </DialogContent>
         </Dialog>
       )}
-    </Card>
+    </div>
   )
 }
 
@@ -1692,17 +1687,14 @@ export function VatDeclarationView() {
         />
       </ReportExportMenu>
 
-      {/* Period selection — the declaration below follows it automatically */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex flex-wrap items-end gap-4">
-            <div>
-              <Label>Periodicitet</Label>
+      {/* Period selection — the declaration below follows it automatically.
+          Flat toolbar row (concept language), far right like a context picker. */}
+      <div className="flex flex-wrap items-center justify-end gap-2">
               <Select
                 value={periodType}
                 onValueChange={(value) => handlePeriodTypeChange(value as VatPeriodType)}
               >
-                <SelectTrigger className="mt-1 w-40">
+                <SelectTrigger aria-label="Periodicitet" className="h-9 w-36">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1711,7 +1703,6 @@ export function VatDeclarationView() {
                   <SelectItem value="yearly">Årsvis</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
             {isYearly ? (
               // Annual VAT covers a räkenskapsår: picked here, not a
               // calendar year.
@@ -1726,10 +1717,8 @@ export function VatDeclarationView() {
               />
             ) : (
               <>
-                <div>
-                  <Label>År</Label>
                   <Select value={String(year)} onValueChange={(value) => setYear(parseInt(value))}>
-                    <SelectTrigger className="mt-1 w-28 tabular-nums">
+                    <SelectTrigger aria-label="År" className="h-9 w-24 tabular-nums">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1740,14 +1729,11 @@ export function VatDeclarationView() {
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
-                <div>
-                  <Label>Period</Label>
                   <Select
                     value={String(period)}
                     onValueChange={(value) => setPeriod(parseInt(value))}
                   >
-                    <SelectTrigger className="mt-1 w-44">
+                    <SelectTrigger aria-label="Period" className="h-9 w-44">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1758,12 +1744,9 @@ export function VatDeclarationView() {
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
               </>
             )}
-          </div>
-        </CardContent>
-      </Card>
+      </div>
 
       {error && (
         <Card>
@@ -1822,43 +1805,20 @@ export function VatDeclarationView() {
 
           {activeStep === 2 && (
             <section className="space-y-3">
-              <Card>
-            <CardHeader>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <CardTitle>Momsdeklaration - {data.period.start} till {data.period.end}</CardTitle>
-                <div className="flex items-center gap-3">
-                  <Badge
-                    variant={
-                      data.rutor.ruta49 > 0
-                        ? 'warning'
-                        : data.rutor.ruta49 < 0
-                        ? 'success'
-                        : 'secondary'
-                    }
-                  >
-                    {data.rutor.ruta49 > 0
-                      ? 'Att betala'
-                      : data.rutor.ruta49 < 0
-                      ? 'Att återfå'
-                      : 'Ingen moms'}
-                  </Badge>
-                  {data.rutor.ruta49 !== 0 && (
-                    <span className="font-display text-xl tabular-nums">
-                      {formatAmount(Math.abs(data.rutor.ruta49))} kr
-                    </span>
-                  )}
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="text-sm text-muted-foreground mb-4">
-                Baserat på {data.invoiceCount} fakturor och {data.transactionCount} transaktioner
-              </div>
-
-              <div className="grid md:grid-cols-2 gap-6">
+              <div className="mx-auto max-w-2xl">
+            <div className="flex flex-wrap items-baseline justify-between gap-3 px-1">
+              <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Momsdeklaration · {data.period.start} till {data.period.end}
+              </h3>
+              <span className="text-[11.5px] tabular-nums text-muted-foreground">
+                {data.invoiceCount} fakturor · {data.transactionCount} transaktioner
+              </span>
+            </div>
+            <div className="mt-4 space-y-8">
+              <div>
                 {/* Utgående moms */}
                 <div>
-                  <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
+                  <h3 className="mb-3 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Utgående moms (försäljning)
                   </h3>
                   <Table>
@@ -1940,7 +1900,7 @@ export function VatDeclarationView() {
                   {(data.rutor.ruta20 > 0 || data.rutor.ruta21 > 0 || data.rutor.ruta22 > 0 || data.rutor.ruta23 > 0 || data.rutor.ruta24 > 0 ||
                     data.rutor.ruta30 > 0 || data.rutor.ruta31 > 0 || data.rutor.ruta32 > 0) && (
                     <>
-                      <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3 mt-6">
+                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         Omvänd skattskyldighet (inköp)
                       </h3>
                       <Table>
@@ -1961,7 +1921,7 @@ export function VatDeclarationView() {
                   {/* Moms vid import */}
                   {(data.rutor.ruta50 > 0 || data.rutor.ruta60 > 0 || data.rutor.ruta61 > 0 || data.rutor.ruta62 > 0) && (
                     <>
-                      <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3 mt-6">
+                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         Moms vid import
                       </h3>
                       <Table>
@@ -1975,10 +1935,11 @@ export function VatDeclarationView() {
                     </>
                   )}
                 </div>
-
+              </div>
+              <div>
                 {/* Ingående moms */}
                 <div>
-                  <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
+                  <h3 className="mb-3 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Ingående moms (avdragsgill)
                   </h3>
                   <Table>
@@ -2018,32 +1979,19 @@ export function VatDeclarationView() {
                   </Table>
                 </div>
               </div>
+            </div>
 
-              {/* Net result: the tables' sum row. The headline amount lives in
-                  the card header next to the status badge. */}
-              <div className="mt-6 pt-4 border-t">
-                <div className="flex justify-between items-center">
-                  <div>
-                    <span className="font-mono text-xs bg-muted px-1 rounded mr-2">49</span>
-                    <span className="text-sm font-medium">
-                      {data.rutor.ruta49 >= 0 ? 'Moms att betala' : 'Moms att återfå'}
-                    </span>
-                  </div>
-                  <span
-                    className={`font-semibold tabular-nums ${
-                      data.rutor.ruta49 > 0
-                        ? 'text-warning'
-                        : data.rutor.ruta49 < 0
-                        ? 'text-success'
-                        : ''
-                    }`}
-                  >
-                    {formatAmount(Math.abs(data.rutor.ruta49))} kr
-                  </span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+            {/* Ruta 49 as the emphasized document foot (concept skv-foot). */}
+            <div className="mt-8 flex items-baseline gap-3 border-t-2 border-foreground/80 pt-3">
+              <span className="font-mono text-xs text-muted-foreground">49</span>
+              <span className="flex-1 text-sm font-medium">
+                {data.rutor.ruta49 >= 0 ? 'Moms att betala' : 'Moms att återfå'}
+              </span>
+              <span className="text-sm font-semibold tabular-nums">
+                {formatAmount(Math.abs(data.rutor.ruta49))} kr
+              </span>
+            </div>
+          </div>
               <div className="flex justify-end">
                 <button type="button" onClick={() => setChosenStep(3)} className={QUIET_LINK_CLASS}>
                   Nästa: Bokför momsen →

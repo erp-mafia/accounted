@@ -2,8 +2,6 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import {
@@ -39,6 +37,8 @@ import type { RcBasisGap } from '@/lib/reports/rc-basis-gaps'
 import type { VatPeriodType } from '@/types'
 import { formatDate } from '@/lib/utils'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { cn } from '@/lib/utils'
 
 function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -102,8 +102,6 @@ export function VatChecksCard({
   const { canWrite } = useCanWrite()
   const { dialogProps, confirm } = useDestructiveConfirm()
 
-  const errorCount = checks.filter((c) => c.status === 'ERROR').length
-  const warningCount = checks.length - errorCount
   const hasRcBasisGaps = checks.some((c) => c.code === 'RC_BASIS_MISSING')
 
   // Gap fetch tagged with the key it was requested under: loading is derived
@@ -298,24 +296,7 @@ export function VatChecksCard({
   const visibleGaps = showAll ? gaps : gaps.slice(0, GAP_PREVIEW_COUNT)
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="text-base">Kontroll av underlaget</CardTitle>
-          {errorCount > 0 ? (
-            <Badge variant="destructive">
-              {errorCount} {errorCount === 1 ? 'fel' : 'fel'}
-            </Badge>
-          ) : warningCount > 0 ? (
-            <Badge variant="warning">
-              {warningCount} {warningCount === 1 ? 'varning' : 'varningar'}
-            </Badge>
-          ) : (
-            <Badge variant="success">Inga anmärkningar</Badge>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <div className="space-y-4">
         {checks.length === 0 && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <CheckCircle2 className="h-4 w-4 text-success" />
@@ -324,23 +305,19 @@ export function VatChecksCard({
         )}
 
         {checks.length > 0 && (
-          <div className="space-y-2">
+          <div>
             {checks.map((c, i) => (
               <div
                 key={`${c.code}-${i}`}
-                className={`flex items-start gap-2 rounded-lg p-3 text-sm ${
-                  c.status === 'ERROR'
-                    ? 'bg-destructive/5 text-destructive'
-                    : 'border border-border bg-muted/30'
-                }`}
+                className="flex items-start gap-2 border-b border-border/60 py-3 text-[13px] leading-5 last:border-b-0"
               >
                 {c.status === 'ERROR' ? (
-                  <ShieldAlert className="h-4 w-4 mt-1 shrink-0" />
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
                 ) : (
-                  <AlertTriangle className="h-4 w-4 mt-1 shrink-0 text-warning" />
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
                 )}
                 <div>
-                  <span className="font-mono text-xs mr-2">{c.code}</span>
+                  <span className="mr-2 font-mono text-xs text-muted-foreground">{c.code}</span>
                   {c.message}
                 </div>
               </div>
@@ -461,21 +438,20 @@ export function VatChecksCard({
                             <span className="text-sm tabular-nums text-muted-foreground">
                               {formatAmount(gap.expectedBasisAmount)} kr
                             </span>
-                            <Button
-                              variant="outline"
+                            <button
+                              type="button"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 handleFixOne(gap)
                               }}
                               disabled={!canWrite || busy}
+                              className={cn(QUIET_LINK_CLASS, 'inline-flex items-center disabled:cursor-not-allowed disabled:opacity-50')}
                             >
-                              {fixingId === gap.entryId ? (
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                              ) : (
-                                <CheckCircle2 className="h-4 w-4 mr-2" />
+                              {fixingId === gap.entryId && (
+                                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden="true" />
                               )}
                               Korrigera
-                            </Button>
+                            </button>
                             <Button
                               variant="ghost"
                               size="icon"
@@ -598,16 +574,15 @@ export function VatChecksCard({
                 </DataList>
 
                 {gaps.length > GAP_PREVIEW_COUNT && (
-                  <Button variant="ghost" onClick={() => setShowAll((v) => !v)}>
+                  <button type="button" onClick={() => setShowAll((v) => !v)} className={QUIET_LINK_CLASS}>
                     {showAll ? 'Visa färre' : `Visa alla ${gaps.length} verifikationer`}
-                  </Button>
+                  </button>
                 )}
               </>
             )}
           </div>
         )}
-      </CardContent>
       <DestructiveConfirmDialog {...dialogProps} />
-    </Card>
+    </div>
   )
 }

@@ -2,7 +2,6 @@
 
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import React, { useState, useEffect, useCallback } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -678,12 +677,12 @@ function SkatteverketPanelInner({
 
   if (loading) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-4">
+      <section>
+        <div className="space-y-4">
           <Skeleton className="h-5 w-48" />
           <Skeleton className="h-24" />
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     )
   }
 
@@ -693,14 +692,14 @@ function SkatteverketPanelInner({
   // trial sees the upsell instead of action buttons that would 403.
   if (!hasSkvCapability) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
+      <section>
+        <div className="mb-3">
+          <h3 className="flex items-center gap-2 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
             <FileCheck className="h-4 w-4" />
             Skicka direkt till Skatteverket (valfritt)
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </h3>
+        </div>
+        <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
             Med ett abonnemang kan du ansluta med BankID och skicka deklarationen
             direkt härifrån, samt validera, spara utkast och signera.
@@ -708,8 +707,8 @@ function SkatteverketPanelInner({
           <UpgradeNote>
             Direktinlämning till Skatteverket kräver ett abonnemang.
           </UpgradeNote>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     )
   }
 
@@ -719,14 +718,14 @@ function SkatteverketPanelInner({
   // directly from Accounted, so frame it that way.
   if (!status?.connected) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
+      <section>
+        <div className="mb-3">
+          <h3 className="flex items-center gap-2 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
             <FileCheck className="h-4 w-4" />
             Skicka direkt till Skatteverket (valfritt)
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </h3>
+        </div>
+        <div className="space-y-4">
           {notice?.kind === 'error' && (
             <div
               role="alert"
@@ -745,8 +744,8 @@ function SkatteverketPanelInner({
             <Link2 className="h-4 w-4" />
             Anslut med BankID
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     )
   }
 
@@ -754,13 +753,13 @@ function SkatteverketPanelInner({
   const hasErrors = kontroller.some(k => k.status === 'ERROR')
 
   return (
-    <Card>
-      <CardHeader>
+    <section>
+      <div className="mb-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="text-base flex items-center gap-2">
+          <h3 className="flex items-center gap-2 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
             <FileCheck className="h-4 w-4" />
             Skicka direkt till Skatteverket
-          </CardTitle>
+          </h3>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="success" className="gap-1">
               <CheckCircle2 className="h-3 w-3" />
@@ -902,8 +901,8 @@ function SkatteverketPanelInner({
             </DropdownMenu>
           </div>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+      </div>
+      <div className="space-y-4">
         {/* In-flight status for overflow-menu actions: their menu closes on
             select, so this row is the only visible sign of work. */}
         {actionLoading && ACTION_IN_FLIGHT_LABELS[actionLoading] && (
@@ -1067,8 +1066,8 @@ function SkatteverketPanelInner({
             Valideringsfelen ovan måste åtgärdas innan deklarationen kan lämnas in.
           </p>
         )}
-      </CardContent>
+      </div>
       <DestructiveConfirmDialog {...dialogProps} />
-    </Card>
+    </section>
   )
 }
