@@ -1133,7 +1133,7 @@
     "security_note": "Your data is encrypted and stored securely in Sweden"
   },
   "initial_setup": {
-    "title": "Three steps and your bookkeeping is running",
+    "title": "{count} steps and your bookkeeping is running",
     "description": "You can skip ahead and do the rest later.",
     "step_books_title": "Get your books in",
     "step_books_description": "Import from another system or upload a SIE file. New business?",
@@ -1149,7 +1149,9 @@
     "step_assistant_description": "A few questions about your business calibrate an assistant that suggests bookkeeping for you.",
     "step_assistant_action": "Get started",
     "dismiss": "Hide",
-    "optional_skatteverket": "Connect Skatteverket, optional"
+    "step_skv_title": "Connect Skatteverket",
+    "step_skv_description": "See the tax account and file VAT and employer declarations right from here. Connects with BankID in a couple of minutes.",
+    "step_skv_action": "Connect Skatteverket"
   },
   "tax_assessment_notices": {
     "title": "Final tax notices and remaining tax",

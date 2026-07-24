@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Check, FileCheck } from 'lucide-react'
+import { Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
@@ -76,18 +76,20 @@ export default function NewUserChecklist({
 
   const step1Done = hasBookkeepingImported || state.path === 'fresh'
   const step2Done = hasBankConnected
-  const step3Done = hasAgentBuilt
+  // Companies built without the skatteverket extension skip that step.
+  const step3Done = !hasSkatteverket || hasSkatteverketConnected
+  const step4Done = hasAgentBuilt
 
   useEffect(() => {
     // The block retires itself once every step is done; Dölj remains the
     // manual way out.
-    if (!state.completedAt && step1Done && step2Done && step3Done && saving === null) {
+    if (!state.completedAt && step1Done && step2Done && step3Done && step4Done && saving === null) {
       void persist({ completed: true }, 'complete')
     }
   // persist intentionally stays out: its identity follows the toast hook and
   // would retrigger this completion sync after every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step1Done, step2Done, step3Done, saving, state.completedAt])
+  }, [step1Done, step2Done, step3Done, step4Done, saving, state.completedAt])
 
   if (state.dismissedAt || state.completedAt) return null
 
@@ -101,13 +103,13 @@ export default function NewUserChecklist({
     if (updated) router.push(hasBanking ? '/import?mode=psd2' : '/import?mode=bank')
   }
 
-  const activeStep = !step1Done ? 1 : !step2Done ? 2 : 3
+  const activeStep = !step1Done ? 1 : !step2Done ? 2 : !step3Done ? 3 : 4
 
   return (
-    <section className={className} aria-label={t('title')}>
+    <section className={className} aria-label={t('title', { count: hasSkatteverket ? 4 : 3 })}>
       <div className="mb-1 flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-medium">{t('title')}</h2>
+          <h2 className="text-sm font-medium">{t('title', { count: hasSkatteverket ? 4 : 3 })}</h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">{t('description')}</p>
         </div>
         <button
@@ -128,24 +130,18 @@ export default function NewUserChecklist({
           title={t('step_books_title')}
         >
           <p className="text-xs leading-5 text-muted-foreground">
-            {t('step_books_description')}
-            {!step1Done && (
-              <>
-                {' '}
-                <button
-                  type="button"
-                  disabled={saving !== null}
-                  onClick={goFresh}
-                  className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
-                >
-                  {t('step_books_fresh_link')}
-                </button>{' '}
-                {t('step_books_fresh_suffix')}
-              </>
-            )}
+            {t('step_books_description')}{' '}
+            <button
+              type="button"
+              disabled={saving !== null}
+              onClick={goFresh}
+              className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+            >
+              {t('step_books_fresh_link')}
+            </button>{' '}
+            {t('step_books_fresh_suffix')}
           </p>
-          {!step1Done && (
-            <div className="mt-3 flex flex-wrap items-center gap-3">
+          <div className="mt-3 flex flex-wrap items-center gap-3">
               <Button
                 size="sm"
                 disabled={saving !== null}
@@ -160,7 +156,6 @@ export default function NewUserChecklist({
                 <span className="ml-1 text-[11px] text-muted-foreground">{t('step_books_sie')}</span>
               </span>
             </div>
-          )}
         </Step>
 
         <Step
@@ -170,61 +165,70 @@ export default function NewUserChecklist({
           title={t('step_bank_title')}
         >
           <p className="text-xs leading-5 text-muted-foreground">{t('step_bank_description')}</p>
-          {!step2Done && (
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <Button
+              size="sm"
+              variant={activeStep === 2 ? 'default' : 'outline'}
+              disabled={saving !== null}
+              onClick={() => void goBank()}
+            >
+              {t('step_bank_action')}
+            </Button>
+            {hasBanking && (
+              <LogoMark
+                src="/logos/enable-banking-icon.png"
+                name="Enable Banking"
+                mono
+              />
+            )}
+          </div>
+        </Step>
+
+        {hasSkatteverket && (
+          <Step
+            number={3}
+            done={step3Done}
+            active={activeStep === 3}
+            title={t('step_skv_title')}
+          >
+            <p className="text-xs leading-5 text-muted-foreground">{t('step_skv_description')}</p>
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <Button
                 size="sm"
-                variant={activeStep === 2 ? 'default' : 'outline'}
-                disabled={saving !== null}
-                onClick={() => void goBank()}
+                variant={activeStep === 3 ? 'default' : 'outline'}
+                asChild
               >
-                {t('step_bank_action')}
+                {/* The authorize endpoint redirects off-site to Skatteverket. */}
+                {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+                <a href="/api/extensions/ext/skatteverket/authorize?return_to=/">
+                  {t('step_skv_action')}
+                </a>
               </Button>
-              {hasBanking && (
-                <LogoMark
-                  src="/logos/enable-banking-icon.png"
-                  name="Enable Banking"
-                  mono
-                />
-              )}
+              <LogoMark src="/logos/skatteverket_color.svg" name="Skatteverket" />
             </div>
-          )}
-        </Step>
+          </Step>
+        )}
 
         <Step
-          number={3}
-          done={step3Done}
-          active={activeStep === 3}
+          number={hasSkatteverket ? 4 : 3}
+          done={step4Done}
+          active={activeStep === 4 || (!hasSkatteverket && activeStep === 3)}
           title={t('step_assistant_title')}
           badge={t('step_assistant_beta')}
           last
         >
           <p className="text-xs leading-5 text-muted-foreground">{t('step_assistant_description')}</p>
-          {!step3Done && (
-            <div className="mt-3">
-              <Button
-                size="sm"
-                variant={activeStep === 3 ? 'default' : 'outline'}
-                onClick={() => router.push(hasAi ? '/onboarding/agent' : '/settings/billing')}
-              >
-                {t('step_assistant_action')}
-              </Button>
-            </div>
-          )}
+          <div className="mt-3">
+            <Button
+              size="sm"
+              variant={activeStep >= 3 ? 'default' : 'outline'}
+              onClick={() => router.push(hasAi ? '/onboarding/agent' : '/settings/billing')}
+            >
+              {t('step_assistant_action')}
+            </Button>
+          </div>
         </Step>
       </div>
-
-      {hasSkatteverket && !hasSkatteverketConnected && (
-        // The authorize endpoint redirects off-site to Skatteverket.
-        // eslint-disable-next-line @next/next/no-html-link-for-pages
-        <a
-          href="/api/extensions/ext/skatteverket/authorize?return_to=/"
-          className="mt-2 inline-flex min-h-10 items-center text-xs text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <FileCheck className="mr-2 h-4 w-4" />
-          {t('optional_skatteverket')}
-        </a>
-      )}
     </section>
   )
 }
@@ -268,7 +272,7 @@ function Step({
         {done ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : number}
       </span>
       <div className="min-w-0 flex-1 pt-1">
-        <p className={cn('flex items-center gap-2 text-sm', active && !done && 'font-medium')}>
+        <p className={cn('flex items-center gap-2 text-sm', active && !done && 'font-medium', done && 'text-muted-foreground')}>
           {title}
           {badge && (
             <span className="rounded-full border border-border px-2 py-0.5 text-[10px] leading-none text-muted-foreground">
@@ -276,7 +280,9 @@ function Step({
             </span>
           )}
         </p>
-        <div className="mt-1">{children}</div>
+        {/* A ticked step needs no pitch: the description and actions only
+            render while the step is still open. */}
+        {!done && <div className="mt-1">{children}</div>}
       </div>
     </div>
   )

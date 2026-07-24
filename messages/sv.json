@@ -1133,7 +1133,7 @@
     "security_note": "Din data är krypterad och lagras säkert i Sverige"
   },
   "initial_setup": {
-    "title": "Tre steg så är bokföringen igång",
+    "title": "{count} steg så är bokföringen igång",
     "description": "Du kan hoppa över och göra resten senare.",
     "step_books_title": "Få in din bokföring",
     "step_books_description": "Importera från ett annat system eller ladda upp en SIE-fil. Ny verksamhet?",
@@ -1149,7 +1149,9 @@
     "step_assistant_description": "Några frågor om din verksamhet kalibrerar en assistent som föreslår bokföring åt dig.",
     "step_assistant_action": "Kom igång",
     "dismiss": "Dölj",
-    "optional_skatteverket": "Anslut Skatteverket, valfritt"
+    "step_skv_title": "Anslut Skatteverket",
+    "step_skv_description": "Se skattekontot och lämna moms- och arbetsgivardeklarationer direkt härifrån. Ansluts med BankID på ett par minuter.",
+    "step_skv_action": "Anslut Skatteverket"
   },
   "tax_assessment_notices": {
     "title": "Slutskattebesked och kvarskatt",
