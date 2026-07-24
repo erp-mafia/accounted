@@ -27,11 +27,15 @@ export function SettingsModal({ sectionId }: { sectionId?: string }) {
   const { company } = useCompany()
   const t = useTranslations('settings_modal')
 
+  // Tab clicks inside the modal update the URL shallowly (see SettingsRail),
+  // so the pathname is the live source of truth for the active section; the
+  // sectionId route param only covers the very first intercepted render.
   // Bare /settings (or an unknown section) defaults to company, or to account
   // when there is no active company (the no-company escape hatch).
+  const urlSection = pathname.split('/')[2] ?? sectionId
   const resolved =
-    sectionId && SETTINGS_SECTIONS[sectionId]
-      ? sectionId
+    urlSection && SETTINGS_SECTIONS[urlSection]
+      ? urlSection
       : company
         ? 'company'
         : 'account'

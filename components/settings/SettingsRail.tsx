@@ -16,8 +16,11 @@ import {
 import { useSettingsNavItems } from './useSettingsNavItems'
 
 interface SettingsRailProps {
-  /** Layout context: 'page' navigates with push (real route), 'modal' replaces
-   *  the URL so section-switching keeps a single back-stack entry. */
+  /** Layout context: 'page' navigates with push (real route), 'modal' swaps
+   *  the URL shallowly (history.replaceState) so section-switching keeps a
+   *  single back-stack entry AND never re-renders the intercepted modal
+   *  route: a router navigation would remount the Dialog and replay its
+   *  open animation on every tab click. */
   variant: 'page' | 'modal'
   /** 'rail' = grouped vertical list (desktop); 'select' = grouped dropdown (mobile). */
   display: 'rail' | 'select'
@@ -38,7 +41,9 @@ export function SettingsRail({ variant, display, activeId }: SettingsRailProps) 
     items[0]?.id
 
   function navigate(href: string) {
-    if (variant === 'modal') router.replace(href)
+    // Shallow update: Next syncs usePathname() from the native History API,
+    // so SettingsModal re-resolves the section without a route transition.
+    if (variant === 'modal') window.history.replaceState(null, '', href)
     else router.push(href)
   }
 

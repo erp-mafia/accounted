@@ -876,20 +876,24 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
           {/* Sticky user block (bottom-left): avatar, name, active company.
               Opens the upward user menu with the company-switcher flyout,
-              account links and logout (concept PR 2). */}
-          <div
-            className={cn(
-              'flex-shrink-0 border-t border-border/60',
-              collapsed ? 'px-2 py-2' : 'px-3 py-2',
-            )}
-          >
-            <UserMenu
-              userName={userName}
-              userEmail={userEmail}
-              isSandbox={isSandbox}
-              collapsed={collapsed}
-              onLogout={() => void handleLogout()}
+              account links and logout (concept PR 2). The hairline above is
+              inset to the content edges, not edge-to-edge (concept). */}
+          <div className="flex-shrink-0">
+            <div
+              className={cn(
+                'border-t border-border/60',
+                collapsed ? 'mx-2' : 'mx-3',
+              )}
             />
+            <div className={cn(collapsed ? 'px-2 py-2' : 'px-3 py-2')}>
+              <UserMenu
+                userName={userName}
+                userEmail={userEmail}
+                isSandbox={isSandbox}
+                collapsed={collapsed}
+                onLogout={() => void handleLogout()}
+              />
+            </div>
           </div>
         </div>
       </aside>
