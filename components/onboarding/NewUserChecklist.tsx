@@ -108,10 +108,7 @@ export default function NewUserChecklist({
   return (
     <section className={className} aria-label={t('title', { count: hasSkatteverket ? 4 : 3 })}>
       <div className="mb-1 flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-medium">{t('title', { count: hasSkatteverket ? 4 : 3 })}</h2>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">{t('description')}</p>
-        </div>
+        <h2 className="text-sm font-medium">{t('title', { count: hasSkatteverket ? 4 : 3 })}</h2>
         <button
           type="button"
           disabled={saving !== null}

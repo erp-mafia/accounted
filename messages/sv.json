@@ -1134,7 +1134,6 @@
   },
   "initial_setup": {
     "title": "{count} steg så är bokföringen igång",
-    "description": "Du kan hoppa över och göra resten senare.",
     "step_books_title": "Få in din bokföring",
     "step_books_description": "Importera från ett annat system eller ladda upp en SIE-fil. Ny verksamhet?",
     "step_books_fresh_link": "Starta från början",

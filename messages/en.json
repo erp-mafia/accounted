@@ -1134,7 +1134,6 @@
   },
   "initial_setup": {
     "title": "{count} steps and your bookkeeping is running",
-    "description": "You can skip ahead and do the rest later.",
     "step_books_title": "Get your books in",
     "step_books_description": "Import from another system or upload a SIE file. New business?",
     "step_books_fresh_link": "Start from scratch",
