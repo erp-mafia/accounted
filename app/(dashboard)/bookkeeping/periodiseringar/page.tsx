@@ -6,7 +6,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { CalendarClock, ChevronDown } from 'lucide-react'
+import { CalendarClock } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -255,7 +255,6 @@ export default function AccrualSchedulesPage() {
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
-                  <th className={cn(TH_CLASS, 'w-8')} />
                   <th className={TH_CLASS}>Beskrivning</th>
                   <th className={TH_CLASS}>Konto</th>
                   <th className={TH_CLASS}>Period</th>
@@ -284,15 +283,6 @@ export default function AccrualSchedulesPage() {
                         className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
                         onClick={() => toggleExpanded(schedule.id)}
                       >
-                        <td className={cn(TD_CLASS, 'pr-0')}>
-                          <ChevronDown
-                            className={cn(
-                              'h-4 w-4 text-muted-foreground transition-transform duration-150',
-                              isOpen && 'rotate-180',
-                            )}
-                            aria-hidden="true"
-                          />
-                        </td>
                         <td className={cn(TD_CLASS, 'max-w-[320px]')}>
                           <span className="block truncate" title={schedule.description ?? ''}>
                             {schedule.description || '-'}
@@ -350,7 +340,7 @@ export default function AccrualSchedulesPage() {
                       </tr>
                       {isOpen && (
                         <tr className="hover:bg-transparent">
-                          <td colSpan={8} className="border-b border-border bg-muted/30 p-0">
+                          <td colSpan={7} className="border-b border-border bg-muted/30 p-0">
                             <RowFoldout>
                               <div className="px-6 py-4">
                                 <table className="w-full text-sm">

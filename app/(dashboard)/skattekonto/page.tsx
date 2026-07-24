@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { EmptyState } from '@/components/ui/empty-state'
+import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
@@ -305,10 +306,9 @@ export default function SkattekontoPage() {
       r.forfallodatum ?? r.transaktionsdatum
     const due = upcoming.map(dueOf).sort()[0]
     if (!due) return null
-    const amount = upcoming
-      .filter((r) => dueOf(r) === due)
-      .reduce((sum, r) => sum + Number(r.belopp_skatteverket), 0)
-    return { due, amount: Math.round(Math.abs(amount) * 100) / 100 }
+    const rows = upcoming.filter((r) => dueOf(r) === due)
+    const amount = rows.reduce((sum, r) => sum + Number(r.belopp_skatteverket), 0)
+    return { due, count: rows.length, amount: Math.round(Math.abs(amount) * 100) / 100 }
   }, [tx])
 
   const saldoNow = saldo?.data ? saldo.data.saldoSkatteverket : null
@@ -384,67 +384,94 @@ export default function SkattekontoPage() {
         }
       />
 
-      {/* Saldo hero, flat on the panel (concept scene 24) */}
-      <section className="max-w-3xl">
+      {/* Saldo as compact stat tiles (house metric-card idiom, KPIHeroCards) */}
+      <section className="max-w-3xl space-y-4">
         {loading && !data ? (
-          <p className="py-4 text-sm text-muted-foreground">Hämtar saldo…</p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Skeleton className="h-28 w-full rounded-lg" />
+            <Skeleton className="h-28 w-full rounded-lg" />
+          </div>
         ) : !data ? (
           <p className="py-4 text-sm text-muted-foreground">
             Inget saldo hämtat ännu: klicka på ”Synkronisera nu”.
           </p>
         ) : (
           <>
-            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              Saldo hos Skatteverket
-            </p>
-            <p
-              className={cn(
-                'mt-1 font-display text-[32px] leading-10 tabular-nums',
-                data.saldoSkatteverket < 0 && 'text-destructive',
-              )}
-            >
-              {formatCurrency(data.saldoSkatteverket)}
-            </p>
-            <p className="mt-2 text-xs text-muted-foreground">
-              OCR <span className="tabular-nums">{data.ocrNummer}</span>{' '}
-              <button
-                type="button"
-                onClick={() => copyOcr(data.ocrNummer)}
-                className={QUIET_LINK_CLASS}
-                aria-label="Kopiera OCR"
-              >
-                {t('copy')}
-              </button>
-              {saldo?.lastSyncedAt && (
-                <>
-                  {' '}· synkad{' '}
-                  <span className="tabular-nums">{formatDateTime(saldo.lastSyncedAt)}</span>
-                </>
-              )}
-            </p>
-            {data.rantaSkatteverket !== 0 && (
-              <p className="mt-1 text-xs tabular-nums text-muted-foreground">
-                Preliminär ränta: {formatCurrency(data.rantaSkatteverket)}
-              </p>
-            )}
-            {data.saldoKronofogden !== 0 && (
-              <p className="mt-1 text-xs font-medium tabular-nums text-destructive">
-                Hos Kronofogden: {formatCurrency(data.saldoKronofogden)}
-                {data.rantaKronofogden !== 0 &&
-                  ` (ränta ${formatCurrency(data.rantaKronofogden)})`}
-              </p>
-            )}
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="rounded-lg border border-border p-4">
+                <div className="flex items-center gap-2">
+                  <img
+                    src="/logos/skatteverket_color.svg"
+                    alt=""
+                    className="h-4 w-4 shrink-0 object-contain"
+                  />
+                  <p className="text-xs text-muted-foreground">Saldo hos Skatteverket</p>
+                </div>
+                <p
+                  className={cn(
+                    'mt-2 font-display text-2xl tabular-nums tracking-tight',
+                    data.saldoSkatteverket < 0 && 'text-destructive',
+                  )}
+                >
+                  {formatCurrency(data.saldoSkatteverket)}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  OCR <span className="tabular-nums">{data.ocrNummer}</span>{' '}
+                  <button
+                    type="button"
+                    onClick={() => copyOcr(data.ocrNummer)}
+                    className={QUIET_LINK_CLASS}
+                    aria-label="Kopiera OCR"
+                  >
+                    {t('copy')}
+                  </button>
+                  {saldo?.lastSyncedAt && (
+                    <>
+                      {' '}· synkad{' '}
+                      <span className="tabular-nums">{formatDateTime(saldo.lastSyncedAt)}</span>
+                    </>
+                  )}
+                </p>
+                {data.rantaSkatteverket !== 0 && (
+                  <p className="mt-1 text-xs tabular-nums text-muted-foreground">
+                    Preliminär ränta: {formatCurrency(data.rantaSkatteverket)}
+                  </p>
+                )}
+                {data.saldoKronofogden !== 0 && (
+                  <p className="mt-1 text-xs font-medium tabular-nums text-destructive">
+                    Hos Kronofogden: {formatCurrency(data.saldoKronofogden)}
+                    {data.rantaKronofogden !== 0 &&
+                      ` (ränta ${formatCurrency(data.rantaKronofogden)})`}
+                  </p>
+                )}
+              </div>
+
+              <div className="rounded-lg border border-border p-4">
+                <p className="text-xs text-muted-foreground">Nästa dragning</p>
+                {nextCharge ? (
+                  <>
+                    <p className="mt-2 font-display text-2xl tabular-nums tracking-tight">
+                      {formatCurrency(nextCharge.amount)}
+                    </p>
+                    <p className="mt-1 text-xs tabular-nums text-muted-foreground">
+                      {formatDateLong(nextCharge.due)}
+                      {nextCharge.count > 1 && ` · ${nextCharge.count} händelser`}
+                    </p>
+                  </>
+                ) : (
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Inga kommande dragningar.
+                  </p>
+                )}
+              </div>
+            </div>
 
             {reconnectMessage ? (
-              <AttnLine
-                className="mt-4"
-                action={{ label: t('attn_reconnect_action'), href: '/settings/tax' }}
-              >
+              <AttnLine action={{ label: t('attn_reconnect_action'), href: '/settings/tax' }}>
                 {reconnectMessage}
               </AttnLine>
             ) : shortfall !== null && nextCharge ? (
               <AttnLine
-                className="mt-4"
                 action={{ label: t('attn_show_payment'), onClick: () => setShowPayment(true) }}
               >
                 {t('attn_shortfall', {
@@ -456,7 +483,7 @@ export default function SkattekontoPage() {
             ) : null}
 
             {data.informationstext.length > 0 && (
-              <div className="mt-4 space-y-1">
+              <div className="space-y-1">
                 <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                   Information från Skatteverket
                 </p>

@@ -216,7 +216,7 @@ export function DeadlineList({
             <div className="px-4 py-6 text-center">
               {nearest ? (
                 <>
-                  <p className="font-display text-[52px] leading-none tabular-nums">
+                  <p className="font-display text-4xl leading-none tracking-tight tabular-nums">
                     {nearest.days === 0 ? t('rel_today') : nearest.days}
                   </p>
                   <p className="mt-2 text-xs text-muted-foreground">

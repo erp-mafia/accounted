@@ -2060,6 +2060,7 @@ export default function ImportPage() {
                       </span>
                     )
                   }
+                  chips={<LogoChip src="/logos/enable-banking.webp" name="Enable Banking" />}
                   disabled={isSandbox}
                   onClick={() => setMode('psd2')}
                 />
@@ -2067,7 +2068,16 @@ export default function ImportPage() {
               {hasMigrationExtension && (
                 <ImportRow
                   title={t('migration_title')}
-                  sub="Fortnox · Visma · Bokio · Björn Lundén · Briox"
+                  sub={t('migration_description')}
+                  chips={
+                    <>
+                      <LogoChip src="/logos/fortnox.svg" name="Fortnox" />
+                      <LogoChip src="/logos/visma.jpeg" name="Visma" />
+                      <LogoChip src="/logos/bokio.png" name="Bokio" />
+                      <LogoChip src="/logos/bjornlunden.png" name="Björn Lundén" />
+                      <LogoChip src="/logos/Briox_logo.png" name="Briox" />
+                    </>
+                  }
                   disabled={isSandbox}
                   onClick={() => setMode('migration')}
                 />
@@ -2211,6 +2221,7 @@ function ImportRow({
   title,
   sub,
   chip,
+  chips,
   disabled = false,
   expanded,
   onClick,
@@ -2219,6 +2230,8 @@ function ImportRow({
   title: string
   sub: string
   chip?: React.ReactNode
+  /** Logo chips under the sub line (provider marks, as on the live page). */
+  chips?: React.ReactNode
   disabled?: boolean
   /** For rows that fold a panel open below the grid (cloud backup). */
   expanded?: boolean
@@ -2244,6 +2257,7 @@ function ImportRow({
           {chip}
         </span>
         <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{sub}</span>
+        {chips && <span className="mt-2 flex flex-wrap gap-2">{chips}</span>}
       </span>
       <ChevronRight
         className={cn(
@@ -2254,5 +2268,16 @@ function ImportRow({
         aria-hidden="true"
       />
     </button>
+  )
+}
+
+// Provider mark chip (same recipe as the pre-migration live page): tiny logo
+// on a quiet bordered chip, so integrations read as first-class brands.
+function LogoChip({ src, name }: { src: string; name: string }) {
+  return (
+    <span className="flex items-center gap-2 rounded border border-border bg-muted/30 px-2 py-1">
+      <img src={src} alt="" className="h-4 w-4 shrink-0 rounded-sm object-contain" />
+      <span className="text-[11px] font-medium text-muted-foreground">{name}</span>
+    </span>
   )
 }
