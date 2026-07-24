@@ -67,6 +67,8 @@ describe('POST /api/bookkeeping/no-doc-required/bulk-missing', () => {
   it('dry_run counts only entries that are missing AND not exempt', async () => {
     enqueue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], error: null }) // candidates
     enqueue({ data: [{ journal_entry_id: 'a' }], error: null }) // a has a document
+    enqueue({ data: [], error: null }) // no SI references with docs
+    enqueue({ data: [], error: null }) // no SI payment-row references
     enqueue({ data: [{ journal_entry_id: 'b' }], error: null }) // b already exempt
     const res = await POST(makeReq({ dry_run: true }))
     const { status, body } = await parseJsonResponse<{ data: { count: number } }>(res)
@@ -74,9 +76,49 @@ describe('POST /api/bookkeeping/no-doc-required/bulk-missing', () => {
     expect(body.data.count).toBe(1) // only c
   })
 
+  it('dry_run excludes entries covered by a supplier-invoice reference with an anchored doc', async () => {
+    // a: covered via supplier_invoices.registration_journal_entry_id
+    // b: covered via a supplier_invoice_payments row whose SI has an anchored doc
+    // c: genuinely missing
+    // d: SI reference exists but its doc is UNANCHORED (deletable) → still missing
+    enqueue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }], error: null }) // candidates
+    enqueue({ data: [], error: null }) // no direct documents
+    enqueue({
+      data: [
+        {
+          registration_journal_entry_id: 'a',
+          payment_journal_entry_id: null,
+          document: { journal_entry_id: 'a' },
+        },
+        {
+          registration_journal_entry_id: 'd',
+          payment_journal_entry_id: null,
+          document: { journal_entry_id: null },
+        },
+      ],
+      error: null,
+    })
+    enqueue({
+      data: [
+        {
+          journal_entry_id: 'b',
+          supplier_invoice: { document_id: 'doc-1', document: { journal_entry_id: 'x' } },
+        },
+      ],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // no exemptions
+    const res = await POST(makeReq({ dry_run: true }))
+    const { status, body } = await parseJsonResponse<{ data: { count: number } }>(res)
+    expect(status).toBe(200)
+    expect(body.data.count).toBe(2) // c and d
+  })
+
   it('marks the missing entries and returns the count', async () => {
     enqueue({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], error: null }) // candidates
     enqueue({ data: [], error: null }) // no documents
+    enqueue({ data: [], error: null }) // no SI references with docs
+    enqueue({ data: [], error: null }) // no SI payment-row references
     enqueue({ data: [{ journal_entry_id: 'a' }], error: null }) // a already exempt
     enqueue({ error: null }) // helper upsert
     const res = await POST(makeReq({ period_id: null, reason: 'Importerad' }))

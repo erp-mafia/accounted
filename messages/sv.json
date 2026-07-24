@@ -319,8 +319,7 @@
     "group_company": "Företag",
     "group_accounting": "Bokföring & skatt",
     "group_sales": "Försäljning",
-    "group_tools": "Verktyg & integrationer",
-    "payments": "Betalningar"
+    "group_tools": "Verktyg & integrationer"
   },
   "settings_payments": {
     "title": "Stripe",
@@ -5870,6 +5869,11 @@
     "psd2_recommended": "Rekommenderat",
     "psd2_requires_subscription": "Kräver abonnemang",
     "psd2_description": "Automatisk hämtning av banktransaktioner via PSD2",
+    "stripe_title": "Stripe",
+    "stripe_coming_soon": "Kommer snart",
+    "stripe_description": "Koppla företagets Stripe-konto så hämtas betalningar, avgifter och utbetalningar löpande och bokförs mot Stripe-saldot.",
+    "stripe_not_enabled_title": "Stripe-tillägget är inte aktiverat",
+    "stripe_not_enabled_description": "Aktivera tillägget Stripe för att koppla ditt Stripe-konto och synka transaktioner automatiskt.",
     "migration_title": "Hämta från annat system",
     "migration_description": "Inget ändras i ditt befintliga system.",
     "bankfile_title": "Bankfil",

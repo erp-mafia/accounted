@@ -29,7 +29,9 @@ export async function GET(request: Request) {
   const errorDescription = searchParams.get('error_description')
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-  const settingsUrl = `${baseUrl}/settings/payments`
+  // The Stripe surface lives on the import page (?mode=stripe opens the panel
+  // directly); appended params below must use '&' since the base has a query.
+  const returnUrl = `${baseUrl}/import?mode=stripe`
 
   if (error) {
     const errorMessage = errorDescription || error
@@ -55,12 +57,12 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.redirect(
-      `${settingsUrl}?stripe_error=${encodeURIComponent(errorMessage)}`,
+      `${returnUrl}&stripe_error=${encodeURIComponent(errorMessage)}`,
     )
   }
 
   if (!code || !state) {
-    return NextResponse.redirect(`${settingsUrl}?stripe_error=missing_parameters`)
+    return NextResponse.redirect(`${returnUrl}&stripe_error=missing_parameters`)
   }
 
   const supabase = await createServiceClient()
@@ -84,7 +86,7 @@ export async function GET(request: Request) {
         hasCode: !!code,
       })
       return NextResponse.redirect(
-        `${settingsUrl}?stripe_error=${encodeURIComponent('invalid_state')}`,
+        `${returnUrl}&stripe_error=${encodeURIComponent('invalid_state')}`,
       )
     }
 
@@ -99,7 +101,7 @@ export async function GET(request: Request) {
         code: replayError.code,
       })
       return NextResponse.redirect(
-        `${settingsUrl}?stripe_error=${encodeURIComponent('invalid_state')}`,
+        `${returnUrl}&stripe_error=${encodeURIComponent('invalid_state')}`,
       )
     }
 
@@ -143,7 +145,7 @@ export async function GET(request: Request) {
         })
         .eq('id', pendingConnection.id)
       return NextResponse.redirect(
-        `${settingsUrl}?stripe_error=${encodeURIComponent(
+        `${returnUrl}&stripe_error=${encodeURIComponent(
           isConflict ? 'account_already_connected' : 'activation_failed',
         )}`,
       )
@@ -168,7 +170,7 @@ export async function GET(request: Request) {
       })
     }
 
-    return NextResponse.redirect(`${settingsUrl}?stripe_connected=true`)
+    return NextResponse.redirect(`${returnUrl}&stripe_connected=true`)
   } catch (error) {
     console.error('[stripe] Callback error', {
       message: error instanceof Error ? error.message : String(error),
@@ -191,7 +193,7 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.redirect(
-      `${settingsUrl}?stripe_error=${encodeURIComponent('connection_failed')}`,
+      `${returnUrl}&stripe_error=${encodeURIComponent('connection_failed')}`,
     )
   }
 }

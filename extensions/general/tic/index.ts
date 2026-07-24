@@ -226,6 +226,16 @@ function deriveFiscalYearMonthDay(
   return { startMonthDay, endMonthDay }
 }
 
+// The search doc's registrationDate is a Unix timestamp in seconds (same
+// unit as periodStart/periodEnd above), but the app-facing contract
+// (CompanyLookupResult / TICCompanyProfile) is a millisecond epoch:
+// consumers feed it straight into `new Date()`. Skipping this conversion
+// is how 2026 registrations rendered as "21 jan 1970" in onboarding.
+function registrationDateToMs(unixSeconds: number | null | undefined): number | null {
+  if (unixSeconds == null || !Number.isFinite(unixSeconds)) return null
+  return unixSeconds * 1000
+}
+
 function handleTicError(
   error: unknown,
   log: { error: (msg: string, meta?: unknown) => void } | Console,
@@ -398,7 +408,7 @@ export const ticExtension: Extension = {
             sniCodes,
             fiscalYear,
             legalEntityType: doc.legalEntityType ?? null,
-            registrationDate: doc.registrationDate ?? null,
+            registrationDate: registrationDateToMs(doc.registrationDate),
           }
 
           return NextResponse.json({ data: result })
@@ -719,7 +729,7 @@ export const ticExtension: Extension = {
             orgNumber: doc.registrationNumber,
             companyName,
             legalEntityType: doc.legalEntityType,
-            registrationDate: doc.registrationDate,
+            registrationDate: registrationDateToMs(doc.registrationDate) ?? 0,
             activityStatus: isCeasedProfile ? 'ceased' : (doc.activityStatus ?? null),
             purpose,
             address: doc.mostRecentRegisteredAddress

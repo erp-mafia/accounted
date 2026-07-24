@@ -90,7 +90,7 @@ export default function StripeSettingsPanel() {
         }
         toast({ title: t('connect_failed_title'), description: message, variant: 'destructive' })
       }
-      router.replace('/settings/payments')
+      router.replace('/import?mode=stripe')
     })
     return () => { cancelled = true }
   }, [searchParams, router, toast, t])

@@ -1,5 +1,10 @@
 # gnubok-mcp
 
+Legacy compatibility package for existing MCP configurations. New installations
+should use [`accounted-mcp`](https://www.npmjs.com/package/accounted-mcp).
+This package, its environment variables, and all existing API keys remain
+supported.
+
 Connect [Claude Desktop](https://claude.ai/download) (or any stdio MCP client) to your [Accounted](https://app.gnubok.se) bookkeeping account. This is a thin stdio → HTTPS bridge: it forwards JSON-RPC over stdio to the hosted Accounted MCP server, which exposes 90+ bookkeeping tools (invoices, transactions, VAT/momsdeklaration, payroll, reports, year-end).
 
 Write tools stage a pending operation that you confirm before anything is booked: the bridge never books on its own.

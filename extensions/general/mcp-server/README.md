@@ -1,6 +1,6 @@
 # Accounted MCP server
 
-JSON-RPC 2.0 server exposing the Accounted bookkeeping engine to MCP clients (Claude Desktop, Claude Code, etc.). Endpoint: `/api/extensions/ext/mcp-server/mcp`. OAuth and stdio bridge live alongside the API surface: see `app/api/mcp-oauth/` and `packages/gnubok-mcp/`.
+JSON-RPC 2.0 server exposing the Accounted bookkeeping engine to MCP clients (Claude Desktop, Claude Code, etc.). Endpoint: `/api/extensions/ext/mcp-server/mcp`. Add `?tool_namespace=accounted` for the Accounted tool names. Requests without it retain the legacy Gnubok namespace. OAuth and stdio bridges live alongside the API surface: see `app/api/mcp-oauth/`, `packages/accounted-mcp/`, and the compatibility package in `packages/gnubok-mcp/`.
 
 ## Tool authoring contract
 

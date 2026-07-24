@@ -319,8 +319,7 @@
     "group_company": "Company",
     "group_accounting": "Accounting & tax",
     "group_sales": "Sales",
-    "group_tools": "Tools & integrations",
-    "payments": "Payments"
+    "group_tools": "Tools & integrations"
   },
   "settings_payments": {
     "title": "Stripe",
@@ -5870,6 +5869,11 @@
     "psd2_recommended": "Recommended",
     "psd2_requires_subscription": "Requires subscription",
     "psd2_description": "Automatic bank transaction sync via PSD2",
+    "stripe_title": "Stripe",
+    "stripe_coming_soon": "Coming soon",
+    "stripe_description": "Connect your company's Stripe account to fetch payments, fees, and payouts continuously and book them against the Stripe balance.",
+    "stripe_not_enabled_title": "The Stripe extension is not enabled",
+    "stripe_not_enabled_description": "Enable the Stripe extension to connect your Stripe account and sync transactions automatically.",
     "migration_title": "Import from another system",
     "migration_description": "Nothing changes in your existing system.",
     "bankfile_title": "Bank file",

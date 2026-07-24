@@ -65,8 +65,8 @@ The check returns a \`findings\` array; each unexplained gap is a \`blocker\` (c
 For aktiebolag, BFL 7 kap requires every verifikation to have its underlag (receipt, faktura, kontrakt) attached. The v1 \`compliance/check\` endpoint does **not** gate on documents — its only supported types are \`year_end_readiness\` and \`voucher_gaps\` — so surface missing underlag through the MCP tools instead:
 
 \`\`\`
-gnubok_list_verifikat_without_documents
-gnubok_list_transactions_without_documents
+accounted_list_verifikat_without_documents
+accounted_list_transactions_without_documents
 \`\`\`
 
 Attach an already-uploaded document to its verifikation via \`POST /documents/{id}/link\`, passing the target entry in the body:

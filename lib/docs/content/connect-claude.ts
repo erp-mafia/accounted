@@ -5,7 +5,7 @@ export const CONNECT_CLAUDE_MD = `# Connect with Claude
 Accounted ships an [MCP](https://modelcontextprotocol.io) server that exposes the full bookkeeping engine (90+ tools) to any MCP client. The endpoint is:
 
 \`\`\`
-https://app.gnubok.se/api/extensions/ext/mcp-server/mcp
+https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted
 \`\`\`
 
 There are two ways to connect, depending on your client. Both reach the same tools and the same approval model: read tools answer immediately, write tools (categorise, mark paid, create voucher, year-end) **stage a pending operation** that you confirm in chat or in the **/pending** web UI before anything is booked.
@@ -17,16 +17,16 @@ Best for most users. No API key to manage: you authorise Accounted the same way 
 1. In **claude.ai** (Settings → Connectors) or **Claude Desktop** (Settings → Connectors → Add custom connector), choose **Add custom connector**.
 2. Paste the connector URL:
    \`\`\`
-   https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?client=claude-connector
+   https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=claude-connector
    \`\`\`
-   _(The "?client=claude-connector" suffix is telemetry-only: it lets Accounted see you connected via claude.ai/Desktop. It changes nothing about behaviour or scopes; drop the query string if you prefer.)_
+   _The "client=claude-connector" parameter is telemetry-only. Keep "tool_namespace=accounted": it selects the Accounted tool names._
 3. Claude opens the Accounted OAuth 2.1 consent screen. Sign in and pick the company you want Claude to act on.
 4. On the consent screen you grant **read-only scopes by default** (list invoices, read reports, compute VAT). Write scopes (create invoice, categorise, book vouchers, run year-end) are **listed separately and must be ticked explicitly**: leave them unchecked for a read-only review session.
 5. Approve. Claude now lists the Accounted tools and you can start asking questions.
 
 Because the consent is per-company and scoped, you can connect a read-only key for a reviewer and a separate write-enabled connection for day-to-day bookkeeping.
 
-## Path B: \`npx gnubok-mcp\` with an API key (stdio bridge)
+## Path B: \`npx accounted-mcp\` with an API key (stdio bridge)
 
 Best for Claude Desktop on a machine where you'd rather use a long-lived API key than the OAuth flow, or for scripting.
 
@@ -35,12 +35,12 @@ Best for Claude Desktop on a machine where you'd rather use a long-lived API key
    \`\`\`json
    {
      "mcpServers": {
-       "gnubok": {
+       "accounted": {
          "command": "npx",
-         "args": ["gnubok-mcp"],
+         "args": ["-y", "accounted-mcp"],
          "env": {
-           "GNUBOK_API_KEY": "gnubok_sk_test_...",
-           "GNUBOK_CLIENT": "claude-desktop"
+           "ACCOUNTED_API_KEY": "gnubok_sk_test_...",
+           "ACCOUNTED_CLIENT": "claude-desktop"
          }
        }
      }
@@ -50,16 +50,20 @@ Best for Claude Desktop on a machine where you'd rather use a long-lived API key
 
 The key's scopes gate exactly which tools are callable: a key without write scopes can read reports and ledgers but cannot stage a booking.
 
+The API-key value still begins with \`gnubok_sk_\`. That is a stable credential
+format, not the MCP integration name. Existing \`gnubok-mcp\` configurations
+continue to work without changes.
+
 ## Try these prompts
 
 All three run against the deterministic sandbox seed (use a \`gnubok_sk_test_*\` key or pick the sandbox company on the OAuth consent screen). They exercise the read path end-to-end without booking anything.
 
 1. **"Show my uncategorized bank transactions and suggest categories."**
-   Claude calls \`gnubok_list_uncategorized_transactions\` then \`gnubok_suggest_categories\` and walks you through the proposals. Approving one stages a \`gnubok_categorize_transaction\` pending operation: nothing is booked until you confirm.
+   Claude calls \`accounted_list_uncategorized_transactions\` then \`accounted_suggest_categories\` and walks you through the proposals. Approving one stages an \`accounted_categorize_transaction\` pending operation: nothing is booked until you confirm.
 2. **"Which invoices are overdue?"**
-   Claude calls \`gnubok_get_ar_ledger\` (kundreskontra) and lists outstanding customer invoices with aging.
+   Claude calls \`accounted_get_ar_ledger\` (kundreskontra) and lists outstanding customer invoices with aging.
 3. **"Compute my VAT report for this quarter and tell me if I can close it."**
-   Claude calls \`gnubok_get_vat_report\` for the momsdeklaration rutor, then \`gnubok_vat_close_check\` to scan for blockers (uncategorised rows, unapproved supplier invoices, missing receipts on expenses ≥ 4 000 kr: the tool's high-value heuristic; BFL requires underlag for every affärshändelse regardless of amount) and reports \`ready_to_close\`.
+   Claude calls \`accounted_get_vat_report\` for the momsdeklaration rutor, then \`accounted_vat_close_check\` to scan for blockers (uncategorised rows, unapproved supplier invoices, missing receipts on expenses ≥ 4 000 kr: the tool's high-value heuristic; BFL requires underlag for every affärshändelse regardless of amount) and reports \`ready_to_close\`.
 
 ## 10-minute reviewer test
 

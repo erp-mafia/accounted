@@ -14,14 +14,16 @@
  *
  *   Utgående redovisat värde = utgående anskaffningsvärde − utgående ack. avskrivningar
  *
- * Driven entirely off the assets table. Accumulated depreciation is
- * computed from the linear schedule (acquisition_date, useful_life_months,
- * salvage_value) at the relevant as-of date: we do not depend on
- * journal-derived avskrivningskonton because not all companies post
- * monthly avskrivningar.
+ * Anskaffningsvärden come from the asset register. Depreciation figures are
+ * resolved UPSTREAM (asset-note-figures.ts) from posted depreciation
+ * schedules, with the booking engine as fallback, so the note ties to the
+ * balansräkning and resultaträkning instead of re-deriving a theoretical
+ * schedule that can drift from what was actually booked. This module only
+ * aggregates per category and formats.
  */
 
 import type { NoteEntry } from './types'
+import type { AssetDepreciationFigures } from './asset-note-figures'
 
 export interface AnlaggningAsset {
   category: string
@@ -30,6 +32,7 @@ export interface AnlaggningAsset {
   salvage_value: number
   useful_life_months: number
   disposed_at: string | null
+  figures: AssetDepreciationFigures
 }
 
 interface CategoryRollforward {
@@ -56,44 +59,11 @@ const CATEGORY_LABELS: Record<string, string> = {
   other_tangible: 'Övriga materiella anläggningstillgångar',
 }
 
-function daysBetween(startIso: string, endIso: string): number {
-  const start = new Date(`${startIso}T00:00:00Z`)
-  const end = new Date(`${endIso}T00:00:00Z`)
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0
-  if (end < start) return 0
-  return Math.floor((end.getTime() - start.getTime()) / 86400000)
-}
-
-/**
- * Linear depreciation accumulated between acquisition_date and asOfIso.
- * Caps at (cost − salvage) once useful life elapses. Day-based pro-rata
- * matching how computeLinearDepreciation pro-rates the first/last year.
- */
-function accumulatedDepreciation(
-  asset: AnlaggningAsset,
-  asOfIso: string,
-): number {
-  if (asOfIso < asset.acquisition_date) return 0
-  const lifeDays = asset.useful_life_months * (365.25 / 12)
-  const elapsedDays = Math.min(lifeDays, daysBetween(asset.acquisition_date, asOfIso))
-  if (lifeDays === 0) return 0
-  const depreciable = asset.acquisition_cost - asset.salvage_value
-  return Math.round((depreciable * elapsedDays) / lifeDays * 100) / 100
-}
-
-/** ISO date one day before a given ISO date. Used for "day before period start". */
-function isoMinusOneDay(iso: string): string {
-  const d = new Date(`${iso}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() - 1)
-  return d.toISOString().slice(0, 10)
-}
-
 function buildRollforward(
   assets: AnlaggningAsset[],
   periodStart: string,
   periodEnd: string,
 ): CategoryRollforward[] {
-  const dayBeforeStart = isoMinusOneDay(periodStart)
   const byCategory = new Map<string, CategoryRollforward>()
 
   const getRow = (category: string): CategoryRollforward => {
@@ -136,30 +106,17 @@ function buildRollforward(
     if (acquiredBeforePeriod) {
       // Was on the books at the start of the period
       row.ibAnskaffning += asset.acquisition_cost
-      row.ibAck += accumulatedDepreciation(asset, dayBeforeStart)
+      row.ibAck += asset.figures.ibAck
     }
     if (acquiredDuringPeriod) {
       row.tillkommande += asset.acquisition_cost
     }
     if (disposedDuringPeriod) {
       row.avgaende += asset.acquisition_cost
-      row.avgaendeAck += accumulatedDepreciation(asset, asset.disposed_at!)
+      row.avgaendeAck += asset.figures.avgaendeAck
     }
 
-    // Year's depreciation: from max(acquisition_date, period_start)
-    // to min(disposed_at ?? period_end, period_end). Computed as the
-    // delta in accumulated depreciation between those two dates.
-    const yearStart =
-      asset.acquisition_date > periodStart ? asset.acquisition_date : periodStart
-    const yearEnd =
-      asset.disposed_at != null && asset.disposed_at < periodEnd
-        ? asset.disposed_at
-        : periodEnd
-    if (yearStart <= yearEnd) {
-      const startAck = accumulatedDepreciation(asset, isoMinusOneDay(yearStart))
-      const endAck = accumulatedDepreciation(asset, yearEnd)
-      row.aretsAvskrivning += Math.max(0, endAck - startAck)
-    }
+    row.aretsAvskrivning += asset.figures.aretsAvskrivning
   }
 
   // Close out totals + ordering
@@ -185,6 +142,23 @@ function buildRollforward(
   const order = Object.keys(CATEGORY_LABELS)
   rows.sort((a, b) => order.indexOf(a.category) - order.indexOf(b.category))
   return rows
+}
+
+/**
+ * Document-level totals for the roll-forward: used by build-data to
+ * cross-check the note's closing book value against the balansräkning.
+ */
+export function computeRollforwardTotals(
+  assets: AnlaggningAsset[],
+  periodStart: string,
+  periodEnd: string,
+): { ubRedovisat: number; ubAck: number } {
+  const rows = buildRollforward(assets, periodStart, periodEnd)
+  return {
+    ubRedovisat:
+      Math.round(rows.reduce((sum, r) => sum + r.ubRedovisat, 0) * 100) / 100,
+    ubAck: Math.round(rows.reduce((sum, r) => sum + r.ubAck, 0) * 100) / 100,
+  }
 }
 
 const fmt = (n: number) => Math.round(n).toLocaleString('sv-SE')

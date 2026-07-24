@@ -183,7 +183,7 @@ export type CoreEvent =
       userId: string
       companyId: string
       sessionId: string | null                      // from Mcp-Session-Id header; null if absent
-      client: string | null                         // distribution-channel marker (X-Gnubok-Client header / ?client= param, e.g. 'openclaw').
+      client: string | null                         // distribution marker (X-Accounted-Client, legacy X-Gnubok-Client, or ?client=).
                                                     // Client-supplied (allow-list-sanitized): telemetry only, never identity or authz.
     }}
   // tools/list: informs us whether agents are using progressive discovery

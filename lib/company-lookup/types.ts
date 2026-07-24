@@ -45,7 +45,9 @@ export interface CompanyLookupResult {
    */
   legalEntityType?: string | null
   /**
-   * Company registration date as a millisecond epoch (TIC's native format).
+   * Company registration date as a millisecond epoch. TIC's search API
+   * natively returns Unix seconds; the TIC extension converts to ms at the
+   * boundary so consumers can feed this straight into `new Date()`.
    * Onboarding Step 3 uses this to infer `is_first_fiscal_year`: when the
    * company was registered less than 12 months ago, we pre-check the
    * first-year toggle and seed `first_year_start` from the registration

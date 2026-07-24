@@ -47,8 +47,8 @@ export default function SkattekontoInboxCard({
 
   return (
     <tr className="group transition-colors duration-150 hover:bg-secondary/35">
-      <td className={cn(TD_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></td>
-      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+      <td className={cn(TD_CLASS, 'w-0 !p-0')} aria-hidden="true"></td>
+      <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
         {formatDate(row.transaktionsdatum)}
       </td>
       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
@@ -76,7 +76,7 @@ export default function SkattekontoInboxCard({
         {isIncome ? '+' : ''}
         {formatCurrency(amount)}
       </td>
-      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
+      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0 py-[9px]')}>
         <span className="inline-flex items-center justify-end gap-3">
           {matchSuggestion ? (
             <>

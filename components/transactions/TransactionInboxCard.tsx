@@ -258,8 +258,10 @@ export default function TransactionInboxCard({
         }
       >
         {/* Hover-revealed selection checkbox (concept .cb) */}
+        {/* Zero-width cell: the checkbox hangs in the left page margin so
+            the date column can sit flush with the page edge. */}
         <td
-          className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px]')}
+          className={cn(TD_CLASS, 'relative w-0 !p-0')}
           onClick={(e) => e.stopPropagation()}
         >
           {selectable && (
@@ -268,7 +270,7 @@ export default function TransactionInboxCard({
               onCheckedChange={() => onToggleSelect(transaction.id)}
               aria-label="Välj transaktion"
               className={cn(
-                'transition-opacity duration-150',
+                'absolute -left-5 top-1/2 -translate-y-1/2 transition-opacity duration-150 md:-left-6',
                 isSelected
                   ? 'opacity-100'
                   : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
@@ -276,7 +278,7 @@ export default function TransactionInboxCard({
             />
           )}
         </td>
-        <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+        <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
           {formatDate(transaction.date)}
         </td>
         <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
@@ -309,7 +311,7 @@ export default function TransactionInboxCard({
           {isIncome ? '+' : ''}
           {formatCurrency(transaction.amount, transaction.currency)}
         </td>
-        <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
+        <td className={cn(TD_CLASS, 'relative whitespace-nowrap text-right !pr-0 py-[9px]')}>
           <span className="inline-flex items-center justify-end gap-2">
             <Button
               size="sm"
@@ -327,10 +329,12 @@ export default function TransactionInboxCard({
             {showOverflowMenu && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
+                  {/* mr-2 tucks the button in so the dots glyph sits under
+                      the middle of the STATUS header, not at the page edge. */}
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                    className="mr-2 h-7 w-7 text-muted-foreground hover:text-foreground"
                     onClick={(e) => e.stopPropagation()}
                     aria-label={t('more_actions_aria')}
                     title={t('more_actions_aria')}
@@ -435,15 +439,15 @@ export default function TransactionInboxCard({
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            {canExpand ? (
+            {/* Expand affordance hangs in the right page margin, mirroring
+                the selection checkbox on the left. */}
+            {canExpand && (
               <ChevronRight
                 className={cn(
-                  'h-3.5 w-3.5 text-muted-foreground transition-all duration-200',
+                  'absolute -right-5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground transition-all duration-200 md:-right-6',
                   expanded ? 'rotate-90 opacity-100' : 'opacity-0 group-hover:opacity-100',
                 )}
               />
-            ) : (
-              <span className="h-3.5 w-3.5" aria-hidden />
             )}
           </span>
         </td>
@@ -452,7 +456,7 @@ export default function TransactionInboxCard({
         <tr>
           <td colSpan={5} className="border-b border-border p-0">
             <RowFoldout>
-              <div className="px-1 pb-6 pt-1 sm:pl-9 sm:pr-4">
+              <div className="pb-6 pt-1">
                 {(transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
                 transaction.title_edited_at ||
                 skvCounterpartDate ? (

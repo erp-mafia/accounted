@@ -104,6 +104,12 @@ type SourceFilter = 'all' | 'bank' | 'bank:other' | 'skatteverket' | `acct:${str
 
 const SOURCE_FILTER_STORAGE_KEY = 'Accounted:transaction-source-filter:v1'
 
+// Journal-entry ids get interpolated into the supplier-invoice .or() filter
+// string in the underlag-badge effect below. They come from journal_entries.id
+// (DB-sourced), but this guard keeps the interpolated list UUID-only, matching
+// /api/documents/counts.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 // Validates a persisted value. Stale acct:<id> entries (account removed or
 // disabled) are caught later by the sourceItems stale-filter guard.
 function isSourceFilter(value: string | null): value is SourceFilter {
@@ -671,12 +677,15 @@ export default function TransactionsPage() {
     setIsLoadingMore(false)
   }
 
-  // Underlag-status enrichment for booked rows. Three RLS-scoped reads per
+  // Underlag-status enrichment for booked rows. Five RLS-scoped reads per
   // 150-id chunk (PostgREST .in() URL-length convention, see
   // lib/worklist/categories.ts): the JEs' source types, which JEs have a
-  // current-version document, and which are exempted via
-  // journal_entry_no_doc_required. Incremental: only fetches JE ids not yet
-  // requested, so loadMoreTransactions pages are covered without refetching.
+  // current-version document, which are covered by a supplier invoice's
+  // retained document (BFL 5 kap 7 § hänvisning: registration/payment FK or a
+  // supplier_invoice_payments row: mirrors the verifikat_without_documents
+  // RPC), and which are exempted via journal_entry_no_doc_required.
+  // Incremental: only fetches JE ids not yet requested, so
+  // loadMoreTransactions pages are covered without refetching.
   // Soft-fails to "no badges" on error.
   useEffect(() => {
     if (!companyId) return
@@ -700,7 +709,10 @@ export default function TransactionsPage() {
       const merged: Record<string, JeUnderlagStatus> = {}
       for (let i = 0; i < newIds.length; i += IN_CLAUSE_CHUNK) {
         const chunk = newIds.slice(i, i + IN_CLAUSE_CHUNK)
-        const [entriesRes, docsRes, exemptRes] = await Promise.all([
+        // Only UUIDs reach the interpolated .or() string (the .in() array
+        // filters are already injection-safe).
+        const chunkInList = `(${chunk.filter((id) => UUID_RE.test(id)).join(',')})`
+        const [entriesRes, docsRes, siRefRes, sipRefRes, exemptRes] = await Promise.all([
           supabase
             .from('journal_entries')
             .select('id, source_type')
@@ -718,16 +730,53 @@ export default function TransactionsPage() {
             .eq('company_id', companyId)
             .eq('is_current_version', true),
           supabase
+            .from('supplier_invoices')
+            .select(
+              'registration_journal_entry_id, payment_journal_entry_id, document:document_attachments(journal_entry_id)',
+            )
+            .eq('company_id', companyId)
+            .not('document_id', 'is', null)
+            .or(
+              `registration_journal_entry_id.in.${chunkInList},payment_journal_entry_id.in.${chunkInList}`,
+            ),
+          supabase
+            .from('supplier_invoice_payments')
+            .select(
+              'journal_entry_id, supplier_invoice:supplier_invoices(document_id, document:document_attachments(journal_entry_id))',
+            )
+            .eq('company_id', companyId)
+            .in('journal_entry_id', chunk),
+          supabase
             .from('journal_entry_no_doc_required')
             .select('journal_entry_id')
             .in('journal_entry_id', chunk)
             .eq('company_id', companyId),
         ])
         // Soft-fail: keep the chunks that already succeeded.
-        if (entriesRes.error || docsRes.error || exemptRes.error) break
+        if (entriesRes.error || docsRes.error || siRefRes.error || sipRefRes.error || exemptRes.error) break
         const jeIdsWithDocs = new Set(
           (docsRes.data ?? []).map((d) => d.journal_entry_id as string),
         )
+        for (const si of (siRefRes.data ?? []) as unknown as {
+          registration_journal_entry_id: string | null
+          payment_journal_entry_id: string | null
+          document: { journal_entry_id: string | null } | null
+        }[]) {
+          if (!si.document?.journal_entry_id) continue // unanchored: not underlag
+          if (si.registration_journal_entry_id) jeIdsWithDocs.add(si.registration_journal_entry_id)
+          if (si.payment_journal_entry_id) jeIdsWithDocs.add(si.payment_journal_entry_id)
+        }
+        for (const sip of (sipRefRes.data ?? []) as unknown as {
+          journal_entry_id: string | null
+          supplier_invoice: {
+            document_id: string | null
+            document: { journal_entry_id: string | null } | null
+          } | null
+        }[]) {
+          if (sip.journal_entry_id && sip.supplier_invoice?.document?.journal_entry_id) {
+            jeIdsWithDocs.add(sip.journal_entry_id)
+          }
+        }
         const exemptIds = new Set(
           (exemptRes.data ?? []).map((e) => e.journal_entry_id as string),
         )
@@ -2401,15 +2450,19 @@ export default function TransactionsPage() {
               </div>
             )}
 
-            <div className="overflow-x-auto">
+            {/* Negative margin + matching padding: lets the hover-revealed
+                checkbox/chevron hang into the page margins without being
+                clipped by the overflow container, while the columns stay
+                flush with the page edges. */}
+            <div className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8">
               <table className="w-full border-collapse text-[13px]">
                 <thead>
                   <tr>
-                    <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>
-                    <th className={TH_CLASS}>{t('th_date')}</th>
+                    <th className={cn(TH_CLASS, 'w-0 !p-0')} aria-hidden="true"></th>
+                    <th className={cn(TH_CLASS, '!pl-0')}>{t('th_date')}</th>
                     <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
                     <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
-                    <th className={cn(TH_CLASS, 'text-right')}>{t('th_status')}</th>
+                    <th className={cn(TH_CLASS, 'text-right !pr-0')}>{t('th_status')}</th>
                   </tr>
                 </thead>
                 <tbody className="stagger-enter">

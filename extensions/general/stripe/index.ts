@@ -53,7 +53,7 @@ export const stripeExtension: Extension = {
 
   settingsPanel: {
     label: 'Betalningar (Stripe)',
-    path: '/settings/payments',
+    path: '/import?mode=stripe',
   },
 
   // Core-callable services, resolved via the extension registry (core never

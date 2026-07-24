@@ -241,6 +241,32 @@ describe('mcp.tool_called telemetry', () => {
     expect(event.latencyMs).toBe(0)
   })
 
+  it('applies the canonical scope gate to an Accounted alias', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    const response = await handleMcpRequest(
+      mcpRequest(
+        'tools/call',
+        {
+          name: 'accounted_create_invoice',
+          arguments: { customer_id: 'x', items: [] },
+        },
+        1,
+        {
+          url: 'http://localhost:3000/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted',
+        }
+      )
+    )
+    const body = await response.json()
+    const payload = JSON.parse(body.result.content[0].text)
+
+    expect(payload.error.code).toBe('INSUFFICIENT_SCOPE')
+    const event = await eventPromise
+    expect(event.tool).toBe('gnubok_create_invoice')
+    expect(event.requiredScope).toBe('invoices:write')
+    expect(event.errorKind).toBe('scope_denied')
+  })
+
   it('emits errorKind=unknown_tool when the tool name does not exist', async () => {
     const eventPromise = captureNextToolCalledEvent()
 
@@ -323,6 +349,21 @@ describe('client marker telemetry', () => {
 
     const event = await eventPromise
     expect(event.client).toBe('openclaw')
+  })
+
+  it('records the Accounted client header on the same telemetry field', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'accounted_list_skills', arguments: {} }, 1, {
+        url: 'http://localhost:3000/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted',
+        headers: { 'X-Accounted-Client': 'Claude-Desktop' },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('claude-desktop')
+    expect(event.tool).toBe('gnubok_list_skills')
   })
 
   it('falls back to the ?client= query param when no header is present', async () => {

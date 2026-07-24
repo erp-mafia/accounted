@@ -380,6 +380,17 @@ describe('buildArsredovisningData: K3', () => {
     expect(data.warnings.find((w) => w.startsWith('Aktiekapitalnoten saknas'))).toBeDefined()
   })
 
+  it('never queries depreciation_schedules when the asset register is empty', async () => {
+    // buildRollforwardAssets skips the posted-schedules fetch entirely for
+    // an empty register: pinning this keeps the makeSupabase mock (which has
+    // no depreciation_schedules branch) honest.
+    const supabase = makeSupabase({ accountingFramework: 'k3' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    await buildArsredovisningData(supabase, 'co1', 'fp1')
+    const tables = supabase.from.mock.calls.map((call) => call[0])
+    expect(tables).not.toContain('depreciation_schedules')
+  })
+
   it('DROPS the old "K3 noter need manual augmentation" warning text', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient

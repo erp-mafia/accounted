@@ -11,6 +11,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NotificationType } from '@/types'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { sendNotificationToUser } from './notification-sender'
 import {
   createTaxDeadlinePayload,
@@ -233,38 +234,114 @@ export async function sendMissingUnderlagNotifications(
   let sent = 0
   let skipped = 0
 
-  // Get all users who have posted entries with source types that need docs
-  const { data: entries } = await supabase
-    .from('journal_entries')
-    .select('id, user_id')
-    .eq('status', 'posted')
-    .in('source_type', NEEDS_ATTACHMENT_SOURCE_TYPES)
+  // Get all users who have posted entries with source types that need docs.
+  // This is a GLOBAL cron over every company, so each read below must page
+  // past PostgREST's 1000-row cap: a truncated read here would under-count
+  // candidates, and a truncated docs/reference read would over-count missing
+  // underlag, producing false "saknade underlag" notifications.
+  const entries = await fetchAllRows<{ id: string; user_id: string }>(({ from, to }) =>
+    supabase
+      .from('journal_entries')
+      .select('id, user_id')
+      .eq('status', 'posted')
+      .in('source_type', NEEDS_ATTACHMENT_SOURCE_TYPES)
+      .order('id')
+      .range(from, to)
+  )
 
-  if (!entries || entries.length === 0) {
+  if (entries.length === 0) {
     return { sent: 0, skipped: 0 }
   }
 
   // Get all document_attachments linked to journal entries
-  const { data: attachments } = await supabase
-    .from('document_attachments')
-    .select('journal_entry_id')
-    .eq('is_current_version', true)
-    .not('journal_entry_id', 'is', null)
-
-  const entriesWithDocs = new Set(
-    (attachments || []).map((a) => a.journal_entry_id)
+  const attachments = await fetchAllRows<{ journal_entry_id: string | null }>(({ from, to }) =>
+    supabase
+      .from('document_attachments')
+      .select('journal_entry_id')
+      .eq('is_current_version', true)
+      .not('journal_entry_id', 'is', null)
+      .order('id')
+      .range(from, to)
   )
+
+  const entriesWithDocs = new Set(attachments.map((a) => a.journal_entry_id))
+
+  // BFL 5 kap 7 § hänvisning: entries referenced by a supplier invoice whose
+  // document is retained and anchored to a journal entry count as covered
+  // (mirrors the verifikat_without_documents RPC): typically the payment
+  // verifikat, whose invoice document hangs on the registration verifikat.
+  const siRefs = await fetchAllRows<{
+    registration_journal_entry_id: string | null
+    payment_journal_entry_id: string | null
+    document: { journal_entry_id: string | null } | null
+  }>(({ from, to }) =>
+    supabase
+      .from('supplier_invoices')
+      .select(
+        'registration_journal_entry_id, payment_journal_entry_id, document:document_attachments(journal_entry_id)'
+      )
+      .not('document_id', 'is', null)
+      .order('id')
+      .range(from, to) as unknown as PromiseLike<{
+      data: {
+        registration_journal_entry_id: string | null
+        payment_journal_entry_id: string | null
+        document: { journal_entry_id: string | null } | null
+      }[] | null
+      error: { message: string } | null
+    }>
+  )
+
+  for (const si of siRefs) {
+    if (!si.document?.journal_entry_id) continue // unanchored: not underlag
+    if (si.registration_journal_entry_id) entriesWithDocs.add(si.registration_journal_entry_id)
+    if (si.payment_journal_entry_id) entriesWithDocs.add(si.payment_journal_entry_id)
+  }
+
+  const sipRefs = await fetchAllRows<{
+    journal_entry_id: string | null
+    supplier_invoice: {
+      document_id: string | null
+      document: { journal_entry_id: string | null } | null
+    } | null
+  }>(({ from, to }) =>
+    supabase
+      .from('supplier_invoice_payments')
+      .select(
+        'journal_entry_id, supplier_invoice:supplier_invoices(document_id, document:document_attachments(journal_entry_id))'
+      )
+      .not('journal_entry_id', 'is', null)
+      .order('id')
+      .range(from, to) as unknown as PromiseLike<{
+      data: {
+        journal_entry_id: string | null
+        supplier_invoice: {
+          document_id: string | null
+          document: { journal_entry_id: string | null } | null
+        } | null
+      }[] | null
+      error: { message: string } | null
+    }>
+  )
+
+  for (const sip of sipRefs) {
+    if (sip.journal_entry_id && sip.supplier_invoice?.document?.journal_entry_id) {
+      entriesWithDocs.add(sip.journal_entry_id)
+    }
+  }
 
   // Entries the user has explicitly flagged as "no underlag required" (bank
   // fees, interest, internal transfers, salary, tax payments). Treated as
   // satisfied so we don't nag the user about them.
-  const { data: exempted } = await supabase
-    .from('journal_entry_no_doc_required')
-    .select('journal_entry_id')
-
-  const exemptedEntries = new Set(
-    (exempted || []).map((e) => e.journal_entry_id)
+  const exempted = await fetchAllRows<{ journal_entry_id: string }>(({ from, to }) =>
+    supabase
+      .from('journal_entry_no_doc_required')
+      .select('journal_entry_id')
+      .order('journal_entry_id')
+      .range(from, to)
   )
+
+  const exemptedEntries = new Set(exempted.map((e) => e.journal_entry_id))
 
   // Group missing counts by user
   const userMissingCounts = new Map<string, number>()

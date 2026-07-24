@@ -399,6 +399,32 @@ export const POST = withRouteContext(
       return errorResponseFromCode('MATCH_SI_LINK_TX_FAILED', txLog, { requestId })
     }
 
+    // Propagate a document pinned to the transaction (via /attach-document or
+    // MCP) onto the payment verifikat, mirroring the categorize route (BFL
+    // 5 kap 6 §: the verifikation must reference its underlag). Guarded to
+    // unlinked current-version docs only: a doc already serving another
+    // verifikat (e.g. the supplier invoice's own document on the registration
+    // entry) must not move. Non-fatal: the match is already committed.
+    if (transaction.document_id) {
+      const { error: docLinkError } = await supabase
+        .from('document_attachments')
+        .update({ journal_entry_id: journalEntryId })
+        .eq('id', transaction.document_id)
+        .eq('company_id', companyId)
+        .is('journal_entry_id', null)
+        .eq('is_current_version', true)
+      if (docLinkError) {
+        // Structured fields so the half-linked state (doc retained but not
+        // anchored to the payment JE) can be reconstructed without an audit
+        // trail dig.
+        txLog.warn('failed to link transaction document to payment JE (non-critical)', {
+          error: docLinkError,
+          documentId: transaction.document_id,
+          journalEntryId,
+        })
+      }
+    }
+
     logMatchEvent(supabase, user.id, transactionId, 'matched', {
       supplierInvoiceId: supplier_invoice_id,
       matchConfidence: 1.0,

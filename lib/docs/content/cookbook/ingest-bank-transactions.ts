@@ -111,7 +111,7 @@ Response (cursor-paginated, newest-imported first — ordered by \`created_at\` 
 
 ## 4. Decide the category
 
-There is no category-suggestion endpoint in the v1 REST API. Ranked suggestions (from the description, counterparty history, and your booking-template library) are surfaced by the dashboard and by the MCP tool \`gnubok_suggest_categories\` — not over REST.
+There is no category-suggestion endpoint in the v1 REST API. Ranked suggestions (from the description, counterparty history, and your booking-template library) are surfaced by the dashboard and by the MCP tool \`accounted_suggest_categories\`: not over REST.
 
 In a REST integration you supply the category yourself: choose a \`category\`, or pass an explicit \`account_override\` / \`template_id\` / \`counterparty_template_id\`, based on your own mapping logic. When categorising interactively, use the dry-run in the next step to preview the resolved verifikation before you commit.
 

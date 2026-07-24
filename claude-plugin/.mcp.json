@@ -2,7 +2,7 @@
   "mcpServers": {
     "accounted": {
       "type": "http",
-      "url": "https://app.gnubok.se/api/extensions/ext/mcp-server/mcp"
+      "url": "https://app.accounted.se/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted"
     }
   }
 }

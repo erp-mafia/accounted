@@ -189,15 +189,17 @@ export default function TransactionHistoryList({
           description={searchTerm ? t('empty_search') : t('empty_filter')}
         />
       ) : (
-        <div className="overflow-x-auto">
+        /* Negative margin + matching padding: keeps the columns flush with
+           the page edges (mirrors the inbox table on the transactions page). */
+        <div className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8">
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
-                <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>
-                <th className={TH_CLASS}>{t('th_date')}</th>
+                <th className={cn(TH_CLASS, 'w-0 !p-0')} aria-hidden="true"></th>
+                <th className={cn(TH_CLASS, '!pl-0')}>{t('th_date')}</th>
                 <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
                 <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
-                <th className={cn(TH_CLASS, 'text-right')}>{t('th_status')}</th>
+                <th className={cn(TH_CLASS, 'text-right !pr-0')}>{t('th_status')}</th>
               </tr>
             </thead>
             <tbody className="stagger-enter">
@@ -303,8 +305,8 @@ function BankHistoryRow({
       data-tx-id={transaction.id}
       className="group transition-colors duration-150 hover:bg-secondary/35"
     >
-      <td className={cn(TD_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></td>
-      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+      <td className={cn(TD_CLASS, 'w-0 !p-0')} aria-hidden="true"></td>
+      <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
         {formatDate(transaction.date)}
       </td>
       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
@@ -355,7 +357,7 @@ function BankHistoryRow({
         {isIncome ? '+' : ''}
         {formatCurrency(transaction.amount, transaction.currency)}
       </td>
-      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
+      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0 py-[9px]')}>
         <span className="inline-flex items-center justify-end gap-2">
           {isBooked ? (
             <>
@@ -389,10 +391,12 @@ function BankHistoryRow({
           {showOverflowMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
+                {/* mr-2 tucks the button in so the dots glyph sits under
+                    the middle of the STATUS header, not at the page edge. */}
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                  className="mr-2 h-7 w-7 text-muted-foreground hover:text-foreground"
                   aria-label="Fler alternativ"
                 >
                   <MoreHorizontal className="h-4 w-4" />
@@ -467,8 +471,8 @@ function SkattekontoHistoryRow({
 
   return (
     <tr className="group transition-colors duration-150 hover:bg-secondary/35">
-      <td className={cn(TD_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></td>
-      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+      <td className={cn(TD_CLASS, 'w-0 !p-0')} aria-hidden="true"></td>
+      <td className={cn(TD_CLASS, '!pl-0 whitespace-nowrap tabular-nums text-muted-foreground')}>
         {formatDate(row.transaktionsdatum)}
       </td>
       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
@@ -495,7 +499,7 @@ function SkattekontoHistoryRow({
         {isIncome ? '+' : ''}
         {formatCurrency(amount)}
       </td>
-      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
+      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0 py-[9px]')}>
         <span className="inline-flex items-center justify-end gap-2">
           {isBooked ? (
             <>

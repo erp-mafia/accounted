@@ -37,6 +37,15 @@ import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import type { SkillTier } from './skills'
 import { RECOMMENDED_WORKFLOW_LOADOUTS, assertRecommendedLoadoutsValid } from './recommended-tools'
+import {
+  canonicalizeToolReferencesInText,
+  projectToolReferences,
+  projectToolReferencesInText,
+  resolveMcpToolNamespace,
+  toCanonicalToolName,
+  toPublicToolName,
+  type McpToolNamespace,
+} from './tool-namespace'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { normalizeVatRateToDecimal } from '@/lib/vat/supplier-invoice-line-checks'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
@@ -146,9 +155,10 @@ interface ActorContext {
    */
   sessionId?: string | null
   /**
-   * Distribution-channel marker from the `X-Gnubok-Client` header or the
-   * `client` query param on the endpoint URL (e.g. 'openclaw'). Telemetry-only:
-   * same trust level as Mcp-Session-Id, never used for auth or behavior.
+   * Distribution-channel marker from `X-Accounted-Client`, the legacy
+   * `X-Gnubok-Client`, or the `client` query param (e.g. 'openclaw').
+   * Telemetry-only: same trust level as Mcp-Session-Id, never used for auth or
+   * behavior.
    */
   client?: string | null
 }
@@ -1683,6 +1693,17 @@ const DIMENSION_FILTER_OUTPUT_PROPS = {
   },
 } as const
 
+let canonicalToolNamesCache: ReadonlySet<string> | undefined
+
+function getCanonicalToolNames(): ReadonlySet<string> {
+  canonicalToolNamesCache ??= new Set(tools.map((tool) => tool.name))
+  return canonicalToolNamesCache
+}
+
+function projectMcpPayload<T>(value: T, namespace: McpToolNamespace): T {
+  return projectToolReferences(value, namespace, getCanonicalToolNames())
+}
+
 // ── Tools ────────────────────────────────────────────────────
 
 export const tools: McpTool[] = [
@@ -1718,7 +1739,11 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     },
     async execute(args, _companyId, _userId, _supabase, _actor) {
-      const query = ((args.query as string) || '').toLowerCase().trim()
+      const namespace: McpToolNamespace =
+        args.__toolNamespace === 'accounted' ? 'accounted' : 'gnubok'
+      const query = canonicalizeToolReferencesInText(
+        ((args.query as string) || '').toLowerCase().trim()
+      )
       const detail = ((args.detail as string) || 'summary') as 'name' | 'summary' | 'full'
       const scopeFilter = args.scope as string | undefined
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 50)
@@ -1781,21 +1806,36 @@ export const tools: McpTool[] = [
 
       const projected = sliced.map((t) => {
         const requiredScope = TOOL_SCOPE_MAP[t.name] ?? null
-        if (detail === 'name') return { name: t.name, scope: requiredScope }
+        if (detail === 'name') {
+          return { name: toPublicToolName(t.name, namespace), scope: requiredScope }
+        }
         if (detail === 'full') {
-          const meta = { ...(deriveToolMeta(t) ?? {}), ...(t._meta ?? {}) }
-          return {
-            name: t.name,
-            description: t.description,
-            scope: requiredScope,
-            inputSchema: projectToolInputSchema(t),
-            ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
-            annotations: t.annotations,
-            ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
-          }
+          const meta = projectMcpPayload(
+            { ...(deriveToolMeta(t) ?? {}), ...(t._meta ?? {}) },
+            namespace
+          )
+          return projectMcpPayload(
+            {
+              name: toPublicToolName(t.name, namespace),
+              description: t.description,
+              scope: requiredScope,
+              inputSchema: projectToolInputSchema(t),
+              ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
+              annotations: t.annotations,
+              ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
+            },
+            namespace
+          )
         }
         // summary (default)
-        return { name: t.name, description: t.description, scope: requiredScope }
+        return projectMcpPayload(
+          {
+            name: toPublicToolName(t.name, namespace),
+            description: t.description,
+            scope: requiredScope,
+          },
+          namespace
+        )
       })
 
       return {
@@ -13614,14 +13654,19 @@ assertRecommendedLoadoutsValid(new Set(tools.map((t) => t.name)))
 
 // ── MCP Protocol Handler ─────────────────────────────────────
 
-const SERVER_INFO = {
-  // `name` is a stable identifier clients may key state on: stays 'gnubok'
-  // per the rebrand rule. `title` is the human-readable display name
-  // (MCP spec 2025-06-18).
-  name: 'gnubok',
-  title: 'Accounted',
-  version: '1.0.0',
-}
+const SERVER_INFO_BY_NAMESPACE = {
+  gnubok: {
+    // Stable legacy identity for every existing connection.
+    name: 'gnubok',
+    title: 'Accounted',
+    version: '1.0.0',
+  },
+  accounted: {
+    name: 'accounted',
+    title: 'Accounted',
+    version: '1.0.0',
+  },
+} as const
 
 const PROTOCOL_VERSION = '2025-06-18'
 
@@ -13891,8 +13936,13 @@ function emitWorkflowStarted(payload: {
  * Auth is done via Bearer API key (extension route has skipAuth: true).
  */
 export async function handleMcpRequest(request: Request): Promise<Response> {
+  const toolNamespace = resolveMcpToolNamespace(request)
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-  const wwwAuth = `Bearer resource_metadata="${appUrl}/.well-known/oauth-protected-resource"`
+  const resourceMetadataUrl = new URL('/.well-known/oauth-protected-resource', appUrl)
+  if (toolNamespace === 'accounted') {
+    resourceMetadataUrl.searchParams.set('tool_namespace', 'accounted')
+  }
+  const wwwAuth = `Bearer resource_metadata="${resourceMetadataUrl.toString()}"`
 
   // ── Pre-auth: handle fire-and-forget notifications before auth check ──
   // MCP notifications have no id and don't expect error responses.
@@ -13939,12 +13989,13 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   // followed metric. It is NOT used for auth.
   const rawSessionId = request.headers.get('mcp-session-id')
   const sessionId = rawSessionId && /^[A-Za-z0-9_-]{1,128}$/.test(rawSessionId) ? rawSessionId : null
-  // Distribution-channel marker: `X-Gnubok-Client` header (gnubok-mcp bridge
-  // ≥1.1 forwards GNUBOK_CLIENT) or a `client` query param on the endpoint URL
-  // (works with any bridge version and direct HTTP clients). Lets us measure
-  // per-channel adoption (e.g. an OpenClaw skill) in event_log without auth
-  // implications.
-  const rawClient = request.headers.get('x-gnubok-client') ?? new URL(request.url).searchParams.get('client')
+  // Distribution-channel marker: the Accounted bridge sends
+  // `X-Accounted-Client`; the legacy bridge keeps `X-Gnubok-Client`. Both are
+  // telemetry-only and share the same validation and storage path.
+  const rawClient =
+    request.headers.get('x-accounted-client') ??
+    request.headers.get('x-gnubok-client') ??
+    new URL(request.url).searchParams.get('client')
   const client = rawClient && /^[A-Za-z0-9._-]{1,64}$/.test(rawClient) ? rawClient.toLowerCase() : null
   const actor: ActorContext = {
     type: 'api_key',
@@ -13989,8 +14040,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             resources: { listChanged: false },
             prompts: { listChanged: false },
           },
-          serverInfo: SERVER_INFO,
-          instructions: [
+          serverInfo: SERVER_INFO_BY_NAMESPACE[toolNamespace],
+          instructions: projectToolReferencesInText([
             'Accounted: Swedish double-entry bookkeeping via conversation.',
             '',
             'Discovery:',
@@ -14017,8 +14068,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             'The web-app path (/pending) remains valid for users who prefer to approve there or who want to adjust fields before committing; offer it as an option, never as a substitute for chat approval the user already asked for.',
             'Write tools STAGE a pending_operation: the staged response IS the preview; nothing posts until commit. A tool whose tools/list `_meta.requires_approval` is true stages for approval; `_meta.preflight` (when present) names a read-only check to run first (e.g. gnubok_year_end_readiness before gnubok_run_year_end, gnubok_vat_declaration_validate before _submit). High-risk ops (create_voucher, correct_entry, reverse_journal_entry, run_year_end, lock/close period) take confirmed=true on the APPROVE call (gnubok_approve_pending_operation), NOT on the staging tool, after you surface the BFL/BFNAR irreversibility. Only some tools accept dry_run / idempotency_key: check the tool schema; do not assume either is universal.',
             'All amounts are SEK unless currency is specified. All dates ISO YYYY-MM-DD. Account numbers are strings (e.g. "1930").',
-            'Tool names carry the legacy gnubok_ prefix (a stable identifier kept across the rebrand); the server and app are "Accounted". Same product: the prefix is not a different system.',
-          ].join('\n'),
+            toolNamespace === 'gnubok'
+              ? 'Tool names carry the legacy gnubok_ prefix (a stable identifier kept across the rebrand); the server and app are "Accounted". Same product: the prefix is not a different system.'
+              : 'Tool names use the accounted_ prefix. Legacy gnubok_ aliases remain accepted for existing integrations.',
+          ].join('\n'), toolNamespace, getCanonicalToolNames()),
         })
       )
     }
@@ -14051,23 +14104,32 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             // Merge derived staging metadata with any literal _meta (e.g. UI
             // widget hints). Literal _meta wins on key collision so explicit
             // tool config is never clobbered.
-            const meta = { ...(deriveToolMeta(t) ?? {}), ...(t._meta ?? {}) }
-            return {
-              name: t.name,
-              ...(t.title ? { title: t.title } : {}),
-              description: t.description,
-              inputSchema: projectToolInputSchema(t),
-              ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
-              annotations: t.annotations,
-              ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
-            }
+            const meta = projectMcpPayload(
+              { ...(deriveToolMeta(t) ?? {}), ...(t._meta ?? {}) },
+              toolNamespace
+            )
+            return projectMcpPayload(
+              {
+                name: toPublicToolName(t.name, toolNamespace),
+                ...(t.title ? { title: t.title } : {}),
+                description: t.description,
+                inputSchema: projectToolInputSchema(t),
+                ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
+                annotations: t.annotations,
+                ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
+              },
+              toolNamespace
+            )
           }),
         })
       )
     }
 
     case 'tools/call': {
-      const toolName = (params as Record<string, unknown>)?.name as string
+      const rawRequestedToolName = (params as Record<string, unknown>)?.name
+      const requestedToolName =
+        typeof rawRequestedToolName === 'string' ? rawRequestedToolName : ''
+      const toolName = toCanonicalToolName(requestedToolName)
       const rawToolArgs = ((params as Record<string, unknown>)?.arguments ?? {}) as Record<
         string,
         unknown
@@ -14092,9 +14154,15 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           userId,
           companyId,
         })
-        const available = tools.map((t) => t.name).join(', ')
+        const available = tools
+          .map((t) => toPublicToolName(t.name, toolNamespace))
+          .join(', ')
         return NextResponse.json(
-          jsonRpcError(id ?? null, -32602, `Unknown tool: "${toolName}". Available tools: ${available}`)
+          jsonRpcError(
+            id ?? null,
+            -32602,
+            `Unknown tool: "${requestedToolName}". Available tools: ${available}`
+          )
         )
       }
 
@@ -14119,9 +14187,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           userId,
           companyId,
         })
+        const publicScopeError = projectMcpPayload(scopeError, toolNamespace)
         return NextResponse.json(
           jsonRpc(id ?? null, {
-            content: [{ type: 'text', text: JSON.stringify(scopeError, null, 2) }],
+            content: [{ type: 'text', text: JSON.stringify(publicScopeError, null, 2) }],
             isError: true,
           })
         )
@@ -14146,6 +14215,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         }
       } catch (err) {
         const structured = toToolError(err, { toolName })
+        const publicStructured = projectMcpPayload(structured, toolNamespace)
         emitToolCallTelemetry({
           tool: toolName,
           requiredScope: requiredScope ?? null,
@@ -14164,7 +14234,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         })
         return NextResponse.json(
           jsonRpc(id ?? null, {
-            content: [{ type: 'text', text: JSON.stringify(structured, null, 2) }],
+            content: [{ type: 'text', text: JSON.stringify(publicStructured, null, 2) }],
             isError: true,
           })
         )
@@ -14177,6 +14247,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       const requiredCapability = MCP_TOOL_CAPABILITY_MAP[toolName]
       if (requiredCapability && !(await hasCapability(supabase, effectiveCompanyId, requiredCapability))) {
         const capError = { error: capabilityBlockedError(requiredCapability) }
+        const publicCapError = projectMcpPayload(capError, toolNamespace)
         emitToolCallTelemetry({
           tool: toolName,
           requiredScope,
@@ -14193,7 +14264,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         })
         return NextResponse.json(
           jsonRpc(id ?? null, {
-            content: [{ type: 'text', text: JSON.stringify(capError, null, 2) }],
+            content: [{ type: 'text', text: JSON.stringify(publicCapError, null, 2) }],
             isError: true,
           })
         )
@@ -14217,6 +14288,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             ),
             { toolName }
           )
+          const publicBlocked = projectMcpPayload(blocked, toolNamespace)
           emitToolCallTelemetry({
             tool: toolName,
             requiredScope: requiredScope ?? null,
@@ -14233,7 +14305,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           })
           return NextResponse.json(
             jsonRpc(id ?? null, {
-              content: [{ type: 'text', text: JSON.stringify(blocked, null, 2) }],
+              content: [{ type: 'text', text: JSON.stringify(publicBlocked, null, 2) }],
               isError: true,
             })
           )
@@ -14251,9 +14323,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // what the API key can actually invoke. Inject privately via __keyScopes.
         if (toolName === 'gnubok_search_tools') {
           (toolArgs as Record<string, unknown>).__keyScopes = keyScopes
+          ;(toolArgs as Record<string, unknown>).__toolNamespace = toolNamespace
         }
         const rawResult = await tool.execute(toolArgs, effectiveCompanyId, userId, supabase, actor)
-        const result = addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
+        const canonicalResult = addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
+        const result = projectMcpPayload(canonicalResult, toolNamespace)
         const latencyMs = Date.now() - callStartedAt
         const response: Record<string, unknown> = {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
@@ -14273,8 +14347,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         }
         // Record the response's `next.tool` (when present) so the next call
         // from the same session can be matched against it.
-        if (result && typeof result === 'object' && !Array.isArray(result)) {
-          const next = (result as Record<string, unknown>).next
+        if (
+          canonicalResult &&
+          typeof canonicalResult === 'object' &&
+          !Array.isArray(canonicalResult)
+        ) {
+          const next = (canonicalResult as Record<string, unknown>).next
           if (next && typeof next === 'object') {
             const suggestedTool = (next as Record<string, unknown>).tool
             if (typeof suggestedTool === 'string') {
@@ -14300,6 +14378,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       } catch (err) {
         const latencyMs = Date.now() - callStartedAt
         const structured = toToolError(err, { toolName })
+        const publicStructured = projectMcpPayload(structured, toolNamespace)
         emitToolCallTelemetry({
           tool: toolName,
           requiredScope: requiredScope ?? null,
@@ -14319,7 +14398,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         })
         return NextResponse.json(
           jsonRpc(id ?? null, {
-            content: [{ type: 'text', text: JSON.stringify(structured, null, 2) }],
+            content: [{ type: 'text', text: JSON.stringify(publicStructured, null, 2) }],
             isError: true,
           })
         )
@@ -14329,7 +14408,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     case 'resources/list': {
       const allSkills = await loadAllSkills(supabase)
       return NextResponse.json(
-        jsonRpc(id ?? null, {
+        jsonRpc(id ?? null, projectMcpPayload({
           resources: [
             ...uiWidgets.map((w) => ({
               uri: w.uri,
@@ -14350,7 +14429,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               mimeType: r.mimeType,
             })),
           ],
-        })
+        }, toolNamespace))
       )
     }
 
@@ -14377,7 +14456,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               {
                 uri,
                 mimeType: WIDGET_MIME_TYPE,
-                text: widget.html,
+                text: projectToolReferencesInText(
+                  widget.html,
+                  toolNamespace,
+                  getCanonicalToolNames()
+                ),
               },
             ],
           })
@@ -14408,7 +14491,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                 {
                   uri,
                   mimeType: SKILL_MIME_TYPE,
-                  text: skill.body,
+                  text: projectToolReferencesInText(
+                    skill.body,
+                    toolNamespace,
+                    getCanonicalToolNames()
+                  ),
                 },
               ],
             })
@@ -14443,7 +14530,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                 {
                   uri,
                   mimeType: dataResource.mimeType,
-                  text: JSON.stringify(result, null, 2),
+                  text: JSON.stringify(projectMcpPayload(result, toolNamespace), null, 2),
                 },
               ],
             })
@@ -14462,7 +14549,15 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             companyId,
           })
           return NextResponse.json(
-            jsonRpcError(id ?? null, -32603, `Resource read error: ${message}`)
+            jsonRpcError(
+              id ?? null,
+              -32603,
+              projectToolReferencesInText(
+                `Resource read error: ${message}`,
+                toolNamespace,
+                getCanonicalToolNames()
+              )
+            )
           )
         }
       }
@@ -14485,12 +14580,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
     case 'prompts/list':
       return NextResponse.json(
-        jsonRpc(id ?? null, {
+        jsonRpc(id ?? null, projectMcpPayload({
           prompts: prompts.map((p) => ({
             name: p.name,
             description: p.description,
           })),
-        })
+        }, toolNamespace))
       )
 
     case 'prompts/get': {
@@ -14507,7 +14602,14 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           messages: [
             {
               role: 'user',
-              content: { type: 'text', text: prompt.text },
+              content: {
+                type: 'text',
+                text: projectToolReferencesInText(
+                  prompt.text,
+                  toolNamespace,
+                  getCanonicalToolNames()
+                ),
+              },
             },
           ],
         })

@@ -10,7 +10,7 @@ import { ActiveCompanyBadge } from '@/components/settings/ActiveCompanyBadge'
 const TAB_TO_ROUTE: Record<string, string> = {
   company: '/settings/company',
   invoicing: '/settings/invoicing',
-  payments: '/settings/payments',
+  payments: '/import?mode=stripe',
   bookkeeping: '/settings/bookkeeping',
   tax: '/settings/tax',
   team: '/settings/team',

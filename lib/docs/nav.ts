@@ -27,7 +27,7 @@ export const DOCS_NAV: DocsNavSection[] = [
       { label: 'Introduction', href: '/docs/api', summary: 'What the Accounted REST API is and how to authenticate.' },
       { label: 'Quickstart', href: '/docs/api/cookbook/quickstart', summary: 'Send your first invoice in five minutes.' },
       { label: 'Authentication', href: '/docs/api#authentication', summary: 'API keys, scopes, test mode.' },
-      { label: 'Connect with Claude', href: '/docs/api/connect-claude', summary: 'Connect Claude via the MCP server: OAuth connector or npx gnubok-mcp bridge.' },
+      { label: 'Connect with Claude', href: '/docs/api/connect-claude', summary: 'Connect Claude via the MCP server: OAuth connector or npx accounted-mcp bridge.' },
     ],
   },
   {

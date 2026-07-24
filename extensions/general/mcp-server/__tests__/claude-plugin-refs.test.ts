@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { workflowSkills } from '../skills'
 import { dataResources } from '../resources'
+import { toCanonicalToolName } from '../tool-namespace'
 import { discoverAtoms } from '@/scripts/lib/atom-discovery'
 
 /**
@@ -38,11 +39,11 @@ describe('claude-plugin wrapper references', () => {
     ])
   })
 
-  it('every gnubok_load_skill slug resolves to a workflow skill or a registry atom', async () => {
+  it('every accounted_load_skill slug resolves to a workflow skill or a registry atom', async () => {
     const workflowSlugs = new Set(workflowSkills.map((s) => s.slug))
     const atomIds = new Set((await discoverAtoms(repoRoot)).map((a) => a.id))
     for (const { file, body } of pluginSkills) {
-      for (const [, slug] of body.matchAll(/gnubok_load_skill\("([^"]+)"\)/g)) {
+      for (const [, slug] of body.matchAll(/accounted_load_skill\("([^"]+)"\)/g)) {
         const known = workflowSlugs.has(slug) || atomIds.has(slug)
         expect(known, `${file} references unknown skill slug "${slug}"`).toBe(true)
       }
@@ -58,11 +59,12 @@ describe('claude-plugin wrapper references', () => {
     }
   })
 
-  it('every gnubok_* tool name exists on the server', () => {
+  it('every accounted_* tool name resolves to a canonical server tool', () => {
     for (const { file, body } of pluginSkills) {
-      for (const [tool] of body.matchAll(/gnubok_[a-z_]+/g)) {
+      for (const [tool] of body.matchAll(/accounted_[a-z_]+/g)) {
+        const canonicalTool = toCanonicalToolName(tool)
         expect(
-          serverSource.includes(`name: '${tool}'`),
+          serverSource.includes(`name: '${canonicalTool}'`),
           `${file} references unknown tool "${tool}"`,
         ).toBe(true)
       }

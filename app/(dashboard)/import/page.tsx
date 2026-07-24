@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, Landmark, Loader2, ChevronRight, Download, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, CreditCard, Landmark, Loader2, ChevronRight, Download, AlertTriangle } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -1943,11 +1943,16 @@ function CSVDataImportWizard() {
 // reconnect entry point), which the old inline wizard here did not.
 const BankingPanel = getSettingsPanel('enable-banking')
 
+// Same registry mechanism for the Stripe connect/sync surface: the feed of
+// payments, fees and payouts is an import source in the same category as the
+// PSD2 bank connection above.
+const StripePanel = getSettingsPanel('stripe')
+
 // ============================================================
 // Import Page with Selection Cards
 // ============================================================
 
-type ImportMode = null | 'psd2' | 'bank' | 'sie' | 'csv_data' | 'migration'
+type ImportMode = null | 'psd2' | 'stripe' | 'bank' | 'sie' | 'csv_data' | 'migration'
 
 export default function ImportPage() {
   const { company } = useCompany()
@@ -1990,7 +1995,7 @@ export default function ImportPage() {
     // Manual file-import modes (bank file, CSV/Excel, SIE) stay reachable.
     const allowedModes = isSandbox
       ? ['bank', 'sie', 'csv_data']
-      : ['psd2', 'bank', 'sie', 'csv_data', 'migration']
+      : ['psd2', 'stripe', 'bank', 'sie', 'csv_data', 'migration']
     if (!isSandbox && searchParams.get('migration')) {
       setMode('migration')
     } else {
@@ -2033,6 +2038,11 @@ export default function ImportPage() {
   // Extensions are active if compiled in: no runtime toggle check needed
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMigrationExtension = ENABLED_EXTENSION_IDS.has('arcim-migration')
+  const hasStripeExtension = ENABLED_EXTENSION_IDS.has('stripe')
+  // Hosted: Stripe Connect has not launched, so the card is "coming soon".
+  // The panel carries the same gate internally for ?mode=stripe deep links.
+  const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
+  const stripeDisabled = isSandbox || !isSelfHosted
 
   return (
     <div className="space-y-8">
@@ -2093,6 +2103,21 @@ export default function ImportPage() {
                     chips={<LogoChip src="/logos/enable-banking-icon.png" name="Enable Banking" mono />}
                     disabled={isSandbox}
                     onClick={() => setMode('psd2')}
+                  />
+                )}
+                {hasStripeExtension && (
+                  <ImportRow
+                    title={t('stripe_title')}
+                    sub={t('stripe_description')}
+                    chip={
+                      !isSelfHosted ? (
+                        <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium leading-none text-muted-foreground">
+                          {t('stripe_coming_soon')}
+                        </span>
+                      ) : undefined
+                    }
+                    disabled={stripeDisabled}
+                    onClick={() => setMode('stripe')}
                   />
                 )}
                 {hasMigrationExtension && (
@@ -2227,6 +2252,21 @@ export default function ImportPage() {
               <Button variant="outline" onClick={() => setMode('bank')}>
                 Importera bankfil istället
               </Button>
+            </CardContent>
+          </Card>
+        )
+      )}
+      {mode === 'stripe' && (
+        hasStripeExtension && StripePanel ? (
+          <StripePanel />
+        ) : (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <CreditCard className="mb-4 h-10 w-10 text-muted-foreground/40" />
+              <p className="mb-1 font-medium">{t('stripe_not_enabled_title')}</p>
+              <p className="max-w-md text-sm text-muted-foreground">
+                {t('stripe_not_enabled_description')}
+              </p>
             </CardContent>
           </Card>
         )

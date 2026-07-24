@@ -70,7 +70,8 @@ const mockDoc: TICCompanyDocument = {
     { nameOrIdentifier: 'Test AB', companyNamingType: 'name' },
   ],
   legalEntityType: 'AB',
-  registrationDate: 946684800000,
+  // 2000-01-01 in Unix seconds (TIC's native unit; the route converts to ms)
+  registrationDate: 946684800,
   mostRecentPurpose: 'Software development',
   mostRecentRegisteredAddress: {
     streetAddress: 'Storgatan 1',
@@ -231,6 +232,8 @@ describe('TIC profile route', () => {
     expect(data.orgNumber).toBe('5560360793')
     expect(data.companyName).toBe('Test AB')
     expect(data.legalEntityType).toBe('AB')
+    // Converted from the doc's Unix seconds to a millisecond epoch.
+    expect(data.registrationDate).toBe(946684800000)
     expect(data.activityStatus).toBe('isActive')
     expect(data.purpose).toBe('Software development')
     expect(data.address).toEqual({

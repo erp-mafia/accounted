@@ -19,7 +19,12 @@ import {
   buildMateriellaAnlaggningsNot,
   buildUppskjutenSkattNot,
 } from './k3-noter-builder'
-import { buildAnlaggningstillgangarNote } from './anlaggningstillgangar-note'
+import {
+  buildAnlaggningstillgangarNote,
+  computeRollforwardTotals,
+  type AnlaggningAsset,
+} from './anlaggningstillgangar-note'
+import { computeAssetNoteFigures, loadPostedSchedules } from './asset-note-figures'
 import { computeMedelantalAnstallda } from '@/lib/salary/medelantal'
 import type {
   ArsredovisningData,
@@ -250,6 +255,8 @@ export async function buildArsredovisningData(
         period.period_end,
         narrative,
         tbFull.rows,
+        fiscalPeriodId,
+        (periodList ?? []) as PeriodRow[],
       ),
       generateKassaflodesanalys(supabase, companyId, fiscalPeriodId).then(
         (cashFlow) => ({ ok: true as const, cashFlow }),
@@ -292,6 +299,9 @@ export async function buildArsredovisningData(
       period.period_start,
       period.period_end,
       narrative,
+      tbFull.rows,
+      fiscalPeriodId,
+      (periodList ?? []) as PeriodRow[],
     )
     noter = k2Noter.notes
     noterWarnings = k2Noter.warnings
@@ -519,6 +529,60 @@ function buildEquityChanges(mapping: K2MappingResult): EgenKapitalRow[] {
   return rows
 }
 
+/**
+ * Map register assets to the roll-forward note input, resolving per-asset
+ * depreciation figures from posted schedules (engine fallback) so the note
+ * ties to the ledger. Shared by the K2 and K3 note builders. Skips the
+ * schedules query entirely when the register is empty.
+ */
+async function buildRollforwardAssets(
+  supabase: SupabaseClient,
+  companyId: string,
+  assets: Asset[],
+  allPeriods: PeriodRow[],
+  fiscalPeriodId: string,
+): Promise<AnlaggningAsset[]> {
+  if (assets.length === 0) return []
+  const schedules = await loadPostedSchedules(supabase, companyId)
+  const figures = computeAssetNoteFigures({
+    assets,
+    postedSchedules: schedules,
+    fiscalPeriods: allPeriods,
+    currentPeriodId: fiscalPeriodId,
+  })
+  return assets.map((a) => ({
+    category: a.category,
+    acquisition_date: a.acquisition_date,
+    acquisition_cost: a.acquisition_cost,
+    salvage_value: a.salvage_value,
+    useful_life_months: a.useful_life_months,
+    disposed_at: a.disposed_at,
+    figures: figures.get(a.id) ?? { ibAck: 0, aretsAvskrivning: 0, avgaendeAck: 0 },
+  }))
+}
+
+/**
+ * Cross-check the roll-forward note's closing book value against the
+ * balansräkning (full TB net of accounts 1000-1299: immateriella +
+ * materiella anläggningstillgångar; 13xx financial assets are outside the
+ * note). Returns a user-facing warning when they diverge by more than 1 kr,
+ * which is the exact inconsistency ÅRL 5:8 § forbids in a filed document.
+ */
+function rollforwardTieOutWarning(
+  rollforwardAssets: AnlaggningAsset[],
+  tbFullRows: TrialBalanceRow[],
+  periodStart: string,
+  periodEnd: string,
+): string | null {
+  const totals = computeRollforwardTotals(rollforwardAssets, periodStart, periodEnd)
+  const tbNet = tbFullRows
+    .filter((r) => r.account_number >= '1000' && r.account_number < '1300')
+    .reduce((sum, r) => sum + (r.closing_debit || 0) - (r.closing_credit || 0), 0)
+  if (Math.abs(totals.ubRedovisat - tbNet) <= 1) return null
+  const fmtKr = (n: number) => Math.round(n).toLocaleString('sv-SE')
+  return `Anläggningsnotens utgående redovisade värde (${fmtKr(totals.ubRedovisat)} kr) stämmer inte med balansräkningens bokförda värde för konto 1000-1299 (${fmtKr(tbNet)} kr). Kontrollera att anläggningsregistret är komplett och att årets avskrivningar är bokförda.`
+}
+
 async function buildK2Noter(
   supabase: SupabaseClient,
   companyId: string,
@@ -526,6 +590,9 @@ async function buildK2Noter(
   periodStart: string,
   periodEnd: string,
   narrative: NarrativeRow | null,
+  tbFullRows: TrialBalanceRow[],
+  fiscalPeriodId: string,
+  allPeriods: PeriodRow[],
 ): Promise<{ notes: NoteEntry[]; warnings: string[] }> {
   const notes: NoteEntry[] = []
   const warnings: string[] = []
@@ -639,21 +706,31 @@ async function buildK2Noter(
   // Anläggningstillgångar roll-forward (ÅRL 5:8 §). Per-category IB →
   // tillkommande → avgående → UB anskaffningsvärde, same for ackumulerade
   // avskrivningar, ending in utgående redovisat värde. Hard ÅR requirement
-  // for any company with assets on the books.
+  // for any company with assets on the books. Depreciation figures come
+  // from posted schedules so the note ties to the balansräkning.
+  const rollforwardAssets = await buildRollforwardAssets(
+    supabase,
+    companyId,
+    assets,
+    allPeriods,
+    fiscalPeriodId,
+  )
   const rollforwardNote = buildAnlaggningstillgangarNote({
     noteNumber: notes.length + 1,
-    assets: assets.map((a) => ({
-      category: a.category,
-      acquisition_date: a.acquisition_date,
-      acquisition_cost: a.acquisition_cost,
-      salvage_value: a.salvage_value,
-      useful_life_months: a.useful_life_months,
-      disposed_at: a.disposed_at,
-    })),
+    assets: rollforwardAssets,
     periodStart,
     periodEnd,
   })
-  if (rollforwardNote) notes.push(rollforwardNote)
+  if (rollforwardNote) {
+    notes.push(rollforwardNote)
+    const tieOut = rollforwardTieOutWarning(
+      rollforwardAssets,
+      tbFullRows,
+      periodStart,
+      periodEnd,
+    )
+    if (tieOut) warnings.push(tieOut)
+  }
 
   // Medelantal anställda: FTE-weighted average per ÅRL 5:20 §. We fetch the
   // full employment-window data because the column 'is_active' doesn't exist
@@ -758,6 +835,8 @@ async function buildK3Noter(
   periodEndIso: string,
   narrative: NarrativeRow | null,
   tbFullRows: TrialBalanceRow[],
+  fiscalPeriodId: string,
+  allPeriods: PeriodRow[],
 ): Promise<{ notes: NoteEntry[]; warnings: string[] }> {
   const notes: NoteEntry[] = []
   const warnings: string[] = []
@@ -886,21 +965,31 @@ async function buildK3Noter(
   // 3b. Anläggningstillgångar roll-forward (ÅRL 5:8 §). Required even under
   // K3: K3 ch.17 layers component depreciation on top, but the basic
   // per-category roll-forward of anskaffningsvärde + ackumulerade
-  // avskrivningar is the statutory baseline.
+  // avskrivningar is the statutory baseline. Depreciation figures come
+  // from posted schedules so the note ties to the balansräkning.
+  const rollforwardAssets = await buildRollforwardAssets(
+    supabase,
+    companyId,
+    assets,
+    allPeriods,
+    fiscalPeriodId,
+  )
   const rollforwardNote = buildAnlaggningstillgangarNote({
     noteNumber: notes.length + 1,
-    assets: assets.map((a) => ({
-      category: a.category,
-      acquisition_date: a.acquisition_date,
-      acquisition_cost: a.acquisition_cost,
-      salvage_value: a.salvage_value,
-      useful_life_months: a.useful_life_months,
-      disposed_at: a.disposed_at,
-    })),
+    assets: rollforwardAssets,
     periodStart: periodStartIso,
     periodEnd: periodEndIso,
   })
-  if (rollforwardNote) notes.push(rollforwardNote)
+  if (rollforwardNote) {
+    notes.push(rollforwardNote)
+    const tieOut = rollforwardTieOutWarning(
+      rollforwardAssets,
+      tbFullRows,
+      periodStartIso,
+      periodEndIso,
+    )
+    if (tieOut) warnings.push(tieOut)
+  }
 
   // 4. Uppskjutna skatter. K3 ch.29 requires disclosure of opening,
   // movement, and closing balance of uppskjuten skatteskuld. We derive
