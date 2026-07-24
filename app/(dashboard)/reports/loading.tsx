@@ -3,10 +3,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 export default function ReportsLoading() {
   return (
     <div className="space-y-8">
+      {/* Title (24px) + fiscal-year picker chip */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <Skeleton className="h-9 w-40" />
-        <Skeleton className="h-10 w-44" />
+        <Skeleton className="h-8 w-40" />
+        <Skeleton className="h-9 w-32 rounded-full" />
       </div>
+      {/* Section heading (e.g. "Senaste rapporter") */}
       <Skeleton className="h-4 w-40" />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
         {[1, 2, 3, 4, 5, 6].map((i) => (
