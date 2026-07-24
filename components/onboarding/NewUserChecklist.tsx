@@ -2,18 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import {
-  ArrowRight,
-  ArrowRightLeft,
-  FileCheck,
-  Landmark,
-  MessageCircle,
-  Sparkles,
-} from 'lucide-react'
+import { Check, FileCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -30,12 +21,14 @@ interface NewUserChecklistProps {
   hasAgentBuilt?: boolean
 }
 
-const pathIcons = {
-  migration: ArrowRightLeft,
-  bank: Landmark,
-  fresh: Sparkles,
-} as const
-
+/**
+ * First-run getting-started block on Hem, in the founder-picked stepped
+ * shape: a numbered three-step thread (get the books in, connect the bank,
+ * build the assistant) with the partner marks on the steps that have them.
+ * The persisted state machine is unchanged (path / completedAt /
+ * dismissedAt via /api/onboarding/state); "Starta från början" records the
+ * fresh path and simply checks off step one.
+ */
 export default function NewUserChecklist({
   initialState,
   className,
@@ -81,111 +74,235 @@ export default function NewUserChecklist({
     }
   }
 
+  const step1Done = hasBookkeepingImported || state.path === 'fresh'
+  const step2Done = hasBankConnected
+  const step3Done = hasAgentBuilt
+
   useEffect(() => {
-    const selectedPathComplete =
-      (state.path === 'migration' && hasBookkeepingImported) ||
-      (state.path === 'bank' && hasBankConnected)
-    if (!state.completedAt && selectedPathComplete && saving === null) {
+    // The block retires itself once every step is done; Dölj remains the
+    // manual way out.
+    if (!state.completedAt && step1Done && step2Done && step3Done && saving === null) {
       void persist({ completed: true }, 'complete')
     }
   // persist intentionally stays out: its identity follows the toast hook and
   // would retrigger this completion sync after every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasBankConnected, hasBookkeepingImported, saving, state.completedAt, state.path])
+  }, [step1Done, step2Done, step3Done, saving, state.completedAt])
 
   if (state.dismissedAt || state.completedAt) return null
 
-  const choosePath = async (path: InitialSetupPath) => {
-    const updated = await persist({ path }, path)
-    if (!updated || path === 'fresh') return
-    if (path === 'migration') {
-      router.push(hasMigration ? '/import?mode=migration' : '/import?mode=sie')
-    } else {
-      router.push(hasBanking ? '/import?mode=psd2' : '/import?mode=bank')
-    }
+  const goMigration = async () => {
+    const updated = await persist({ path: 'migration' }, 'migration')
+    if (updated) router.push(hasMigration ? '/import?mode=migration' : '/import?mode=sie')
+  }
+  const goFresh = () => void persist({ path: 'fresh' }, 'fresh')
+  const goBank = async () => {
+    const updated = await persist({ path: state.path ?? 'bank' }, 'bank')
+    if (updated) router.push(hasBanking ? '/import?mode=psd2' : '/import?mode=bank')
   }
 
-  if (!state.path) {
-    return (
-      <Card className={cn('border-foreground/20', className)}>
-        <CardHeader className="pb-4">
-          <CardTitle className="text-lg">{t('title')}</CardTitle>
-          <CardDescription>{t('description')}</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-3">
-          {(['migration', 'bank', 'fresh'] as const).map((path) => {
-            const Icon = pathIcons[path]
-            return (
-              <button
-                key={path}
-                type="button"
-                disabled={saving !== null}
-                onClick={() => void choosePath(path)}
-                className="group min-h-28 rounded-lg border border-border p-4 text-left transition-colors hover:border-foreground/40 hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <Icon className="h-5 w-5" />
-                  <ArrowRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-                </div>
-                <p className="mt-4 text-sm font-medium">{t(`${path}_title`)}</p>
-                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                  {t(`${path}_description`)}
-                </p>
-              </button>
-            )
-          })}
-        </CardContent>
-      </Card>
-    )
-  }
-
-  const primaryHref = state.path === 'migration'
-    ? (hasMigration ? '/import?mode=migration' : '/import?mode=sie')
-    : (hasBanking ? '/import?mode=psd2' : '/import?mode=bank')
-  const PrimaryIcon = pathIcons[state.path]
+  const activeStep = !step1Done ? 1 : !step2Done ? 2 : 3
 
   return (
-    <Card className={cn('border-foreground/20', className)}>
-      <CardHeader className="pb-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <CardTitle className="text-lg">{t(`${state.path}_selected_title`)}</CardTitle>
-            <CardDescription className="mt-1">{t(`${state.path}_selected_description`)}</CardDescription>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={saving !== null}
-            onClick={() => void persist({ dismissed: true }, 'dismiss')}
-          >
-            {t('dismiss')}
-          </Button>
+    <section className={className} aria-label={t('title')}>
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-medium">{t('title')}</h2>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{t('description')}</p>
         </div>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <Button asChild>
-          <Link href={primaryHref}>
-            <PrimaryIcon className="mr-2 h-4 w-4" />
-            {t(`${state.path}_action`)}
-          </Link>
-        </Button>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
-          {hasSkatteverket && !hasSkatteverketConnected && (
-            // The authorize endpoint redirects off-site to Skatteverket.
-            // eslint-disable-next-line @next/next/no-html-link-for-pages
-            <a href="/api/extensions/ext/skatteverket/authorize?return_to=/" className="inline-flex min-h-10 items-center hover:text-foreground">
-              <FileCheck className="mr-2 h-4 w-4" />
-              {t('optional_skatteverket')}
-            </a>
+        <button
+          type="button"
+          disabled={saving !== null}
+          onClick={() => void persist({ dismissed: true }, 'dismiss')}
+          className="shrink-0 text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+        >
+          {t('dismiss')}
+        </button>
+      </div>
+
+      <div className="mt-4">
+        <Step
+          number={1}
+          done={step1Done}
+          active={activeStep === 1}
+          title={t('step_books_title')}
+        >
+          <p className="text-xs leading-5 text-muted-foreground">
+            {t('step_books_description')}
+            {!step1Done && (
+              <>
+                {' '}
+                <button
+                  type="button"
+                  disabled={saving !== null}
+                  onClick={goFresh}
+                  className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                >
+                  {t('step_books_fresh_link')}
+                </button>{' '}
+                {t('step_books_fresh_suffix')}
+              </>
+            )}
+          </p>
+          {!step1Done && (
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Button
+                size="sm"
+                disabled={saving !== null}
+                onClick={() => void goMigration()}
+              >
+                {t('step_books_action')}
+              </Button>
+              <span className="flex items-center gap-1.5">
+                <LogoMark src="/logos/fortnox.svg" name="Fortnox" />
+                <LogoMark src="/logos/visma.jpeg" name="Visma" />
+                <LogoMark src="/logos/bokio.png" name="Bokio" />
+                <span className="ml-1 text-[11px] text-muted-foreground">{t('step_books_sie')}</span>
+              </span>
+            </div>
           )}
-          {!hasAgentBuilt && (
-            <Link href={hasAi ? '/onboarding/agent' : '/settings/billing'} className="inline-flex min-h-10 items-center hover:text-foreground">
-              <MessageCircle className="mr-2 h-4 w-4" />
-              {t('optional_assistant')}
-            </Link>
+        </Step>
+
+        <Step
+          number={2}
+          done={step2Done}
+          active={activeStep === 2}
+          title={t('step_bank_title')}
+        >
+          <p className="text-xs leading-5 text-muted-foreground">{t('step_bank_description')}</p>
+          {!step2Done && (
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <Button
+                size="sm"
+                variant={activeStep === 2 ? 'default' : 'outline'}
+                disabled={saving !== null}
+                onClick={() => void goBank()}
+              >
+                {t('step_bank_action')}
+              </Button>
+              {hasBanking && (
+                <LogoMark
+                  src="/logos/enable-banking-icon.png"
+                  name="Enable Banking"
+                  mono
+                />
+              )}
+            </div>
           )}
-        </div>
-      </CardContent>
-    </Card>
+        </Step>
+
+        <Step
+          number={3}
+          done={step3Done}
+          active={activeStep === 3}
+          title={t('step_assistant_title')}
+          badge={t('step_assistant_beta')}
+          last
+        >
+          <p className="text-xs leading-5 text-muted-foreground">{t('step_assistant_description')}</p>
+          {!step3Done && (
+            <div className="mt-3">
+              <Button
+                size="sm"
+                variant={activeStep === 3 ? 'default' : 'outline'}
+                onClick={() => router.push(hasAi ? '/onboarding/agent' : '/settings/billing')}
+              >
+                {t('step_assistant_action')}
+              </Button>
+            </div>
+          )}
+        </Step>
+      </div>
+
+      {hasSkatteverket && !hasSkatteverketConnected && (
+        // The authorize endpoint redirects off-site to Skatteverket.
+        // eslint-disable-next-line @next/next/no-html-link-for-pages
+        <a
+          href="/api/extensions/ext/skatteverket/authorize?return_to=/"
+          className="mt-2 inline-flex min-h-10 items-center text-xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <FileCheck className="mr-2 h-4 w-4" />
+          {t('optional_skatteverket')}
+        </a>
+      )}
+    </section>
+  )
+}
+
+/** One numbered step on the thread: dot + hairline down to the next step. */
+function Step({
+  number,
+  done,
+  active,
+  title,
+  badge,
+  last = false,
+  children,
+}: {
+  number: number
+  done: boolean
+  active: boolean
+  title: string
+  badge?: string
+  last?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div className="relative flex gap-4 pb-6 last:pb-0">
+      {!last && (
+        <span
+          className="absolute bottom-0 left-[13px] top-8 w-px bg-border"
+          aria-hidden="true"
+        />
+      )}
+      <span
+        className={cn(
+          'relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs tabular-nums',
+          done
+            ? 'border-success/40 text-success'
+            : active
+              ? 'border-foreground bg-foreground text-background'
+              : 'border-border text-muted-foreground',
+        )}
+      >
+        {done ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : number}
+      </span>
+      <div className="min-w-0 flex-1 pt-1">
+        <p className={cn('flex items-center gap-2 text-sm', active && !done && 'font-medium')}>
+          {title}
+          {badge && (
+            <span className="rounded-full border border-border px-2 py-0.5 text-[10px] leading-none text-muted-foreground">
+              {badge}
+            </span>
+          )}
+        </p>
+        <div className="mt-1">{children}</div>
+      </div>
+    </div>
+  )
+}
+
+/** Tiny partner mark: real logo on a white chip; `mono` darkens a white
+ *  source logo in light mode and lifts it in dark (Enable Banking). */
+function LogoMark({ src, name, mono = false }: { src: string; name: string; mono?: boolean }) {
+  return (
+    <span
+      className={cn(
+        'flex h-6 w-6 items-center justify-center overflow-hidden rounded-md border border-border',
+        !mono && 'bg-white',
+      )}
+      title={name}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt={name}
+        className={cn(
+          'h-4 w-4 object-contain',
+          mono &&
+            'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
+        )}
+      />
+    </span>
   )
 }

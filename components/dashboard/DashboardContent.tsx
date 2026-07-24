@@ -101,8 +101,10 @@ export default function DashboardContent({
 
       {/* Build-assistant hero: shown only until the company has a verified
           agent_profile, so existing/migrated users get a clear prompt instead
-          of a full-screen onboarding takeover. */}
-      {!agentBuilt && (
+          of a full-screen onboarding takeover. While the stepped first-run
+          checklist is visible it already carries the assistant as step 3, so
+          the hero waits until that block is dismissed or completed. */}
+      {!agentBuilt && (initialSetup.dismissedAt || initialSetup.completedAt) && (
         <section>
           {/* Non-payers keep seeing the hero (conversion surface) but it
               routes to billing instead of a build flow that would 403. */}

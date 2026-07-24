@@ -87,7 +87,10 @@ export const PATCH = withRouteContext(
     const update: Record<string, unknown> = {}
     if (body.path !== undefined) {
       update.initial_setup_path = body.path
-      update.initial_setup_completed_at = body.path === 'fresh' ? now : null
+      // Choosing a path no longer completes the setup: since the stepped
+      // Hem block (rest-of-nav 2), "fresh" just checks off step one and the
+      // block completes when every step is done.
+      update.initial_setup_completed_at = null
       update.initial_setup_dismissed_at = null
     }
     if (body.completed !== undefined) {
