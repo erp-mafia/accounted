@@ -181,8 +181,10 @@ describe('PUT /api/settings', () => {
       method: 'PUT',
       body: { antal_aktier: null },
     }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
 
-    expect((await parseJsonResponse(response)).status).toBe(400)
+    expect(status).toBe(400)
+    expect(body.error).toContain('antal aktier')
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
