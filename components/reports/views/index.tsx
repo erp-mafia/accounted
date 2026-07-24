@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { FyPicker } from '@/components/common/FyPicker'
+import { ContextPicker } from '@/components/common/ContextPicker'
 import { cn, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -1676,19 +1677,20 @@ export function VatDeclarationView() {
           artifacts, not report exports, and one home avoids two competing
           download surfaces. */}
       <div className="flex flex-wrap items-center justify-end gap-2">
-              <Select
+              {/* Cadence lives behind a settings-style "Period" chip: the
+                  concrete period chip next to it already shows the cadence
+                  ("Kvartal 2" implies quarterly, "Räkenskapsår ..." yearly). */}
+              <ContextPicker
+                items={[
+                  { id: 'monthly', label: 'Månadsvis' },
+                  { id: 'quarterly', label: 'Kvartalsvis' },
+                  { id: 'yearly', label: 'Årsvis' },
+                ]}
                 value={periodType}
-                onValueChange={(value) => handlePeriodTypeChange(value as VatPeriodType)}
-              >
-                <SelectTrigger aria-label="Periodicitet" className="h-9 w-36">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="monthly">Månadsvis</SelectItem>
-                  <SelectItem value="quarterly">Kvartalsvis</SelectItem>
-                  <SelectItem value="yearly">Årsvis</SelectItem>
-                </SelectContent>
-              </Select>
+                onChange={(value) => handlePeriodTypeChange(value as VatPeriodType)}
+                triggerLabel="Period"
+                ariaLabel="Periodicitet"
+              />
             {isYearly ? (
               // Annual VAT covers a räkenskapsår: picked here, not a
               // calendar year.
@@ -1703,33 +1705,27 @@ export function VatDeclarationView() {
               />
             ) : (
               <>
-                  <Select value={String(year)} onValueChange={(value) => setYear(parseInt(value))}>
-                    <SelectTrigger aria-label="År" className="h-9 w-24 tabular-nums">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {yearOptions.map((y) => (
-                        <SelectItem key={y} value={String(y)} className="tabular-nums">
-                          {y}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Select
+                  <ContextPicker
+                    items={yearOptions.map((y) => ({ id: String(y), label: String(y) }))}
+                    value={String(year)}
+                    onChange={(value) => setYear(parseInt(value))}
+                    triggerLabel={String(year)}
+                    ariaLabel="År"
+                    className="tabular-nums"
+                  />
+                  <ContextPicker
+                    items={getPeriodOptions().map((opt) => ({
+                      id: String(opt.value),
+                      label: opt.label,
+                    }))}
                     value={String(period)}
-                    onValueChange={(value) => setPeriod(parseInt(value))}
-                  >
-                    <SelectTrigger aria-label="Period" className="h-9 w-44">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {getPeriodOptions().map((opt) => (
-                        <SelectItem key={opt.value} value={String(opt.value)}>
-                          {opt.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    onChange={(value) => setPeriod(parseInt(value))}
+                    triggerLabel={
+                      getPeriodOptions().find((opt) => opt.value === period)?.label ??
+                      String(period)
+                    }
+                    ariaLabel="Redovisningsperiod"
+                  />
               </>
             )}
             <ReportExportMenu
