@@ -10,6 +10,10 @@ export interface StripeConnection {
   display_name: string | null
   last_event_created_at: string | null
   last_event_id: string | null
+  /** Opt-in: import the account's balance transactions as an inbox feed. */
+  transaction_sync_enabled: boolean
+  /** Balance-transaction polling cursor (max `created` processed). */
+  last_balance_txn_synced_at: string | null
   error_message: string | null
   connected_at: string | null
   disconnected_at: string | null
@@ -40,6 +44,8 @@ export interface StripeStatusResponse {
     | 'error_message'
     | 'connected_at'
     | 'last_event_created_at'
+    | 'transaction_sync_enabled'
+    | 'last_balance_txn_synced_at'
   > | null
   needs_review_count?: number
   needs_review?: StripeReviewEvent[]

@@ -15,7 +15,14 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   findFiscalPeriod: vi.fn(),
 }))
 
+// The feed-row claim is transaction-sync's concern; here we only assert the
+// payout flow invokes it with the booked entry and the payout's balance txns.
+vi.mock('../lib/transaction-sync', () => ({
+  linkPayoutFeedRows: vi.fn().mockResolvedValue(0),
+}))
+
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { linkPayoutFeedRows } from '../lib/transaction-sync'
 import { processPayoutPaidEvent } from '../lib/payouts'
 import type { StripeConnection } from '../types'
 
@@ -30,6 +37,8 @@ const CONNECTION: StripeConnection = {
   display_name: null,
   last_event_created_at: null,
   last_event_id: null,
+  transaction_sync_enabled: false,
+  last_balance_txn_synced_at: null,
   error_message: null,
   connected_at: '2026-07-01T00:00:00.000Z',
   disconnected_at: null,
@@ -118,6 +127,46 @@ describe('processPayoutPaidEvent', () => {
     const debits = input.lines.reduce((s, l) => s + (l.debit_amount || 0), 0)
     const credits = input.lines.reduce((s, l) => s + (l.credit_amount || 0), 0)
     expect(Math.round(debits * 100)).toBe(Math.round(credits * 100))
+  })
+
+  it('claims the payout feed rows against the booked entry', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'po-row-1' }] }) // claim
+    enqueue({ data: { vat_registered: true } }) // company_settings
+    enqueue({ data: null }) // finalize row
+
+    await processPayoutPaidEvent(
+      supabase as unknown as SupabaseClient,
+      CONNECTION,
+      makePayoutEvent(),
+    )
+
+    expect(vi.mocked(linkPayoutFeedRows)).toHaveBeenCalledTimes(1)
+    const [, companyId, accountId, journalEntryId, txns] =
+      vi.mocked(linkPayoutFeedRows).mock.calls[0]
+    expect(companyId).toBe('company-1')
+    expect(accountId).toBe('acct_1')
+    expect(journalEntryId).toBe('je-po-1')
+    expect(txns).toEqual(CLEAN_TXNS)
+  })
+
+  it('does not claim feed rows when the payout is not auto-booked', async () => {
+    stubBalanceTxns([
+      ...CLEAN_TXNS,
+      { type: 'refund', amount: -10000, fee: 0, currency: 'sek' },
+    ])
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'po-row-1' }] })
+    enqueue({ data: { vat_registered: true } })
+    enqueue({ data: null })
+
+    await processPayoutPaidEvent(
+      supabase as unknown as SupabaseClient,
+      CONNECTION,
+      makePayoutEvent(),
+    )
+
+    expect(vi.mocked(linkPayoutFeedRows)).not.toHaveBeenCalled()
   })
 
   it('skips a payout already claimed by an earlier run', async () => {

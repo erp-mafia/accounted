@@ -34,6 +34,7 @@ import {
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -357,8 +358,9 @@ export default function JournalEntryForm({
   )
 
   // Fetch per-account saldo as of entryDate for the accounts currently on the
-  // form. Balances are reference-only ("saldo before this entry"): they ignore
-  // the draft lines the user is typing, by design.
+  // form. The fetched value is always "saldo before this entry"; the render
+  // layer adds the typed draft amounts on top (draftDeltas) so the column
+  // shows where the account is heading.
   useEffect(() => {
     if (!accountsKey) {
       setAccountBalances({})
@@ -413,6 +415,22 @@ export default function JournalEntryForm({
       clearTimeout(handle)
     }
   }, [accountsKey, entryDate])
+
+  // What the typed-but-unposted rows would do to each account's saldo. The
+  // /account-balances convention is debit-positive for every class, so
+  // delta = debit - credit encodes direction without needing the account type:
+  // rendering "before -> after" gives instant feedback on whether the chosen
+  // side increases or decreases the account.
+  const draftDeltas = useMemo(() => {
+    const deltas: Record<string, number> = {}
+    for (const l of lines) {
+      if (!/^\d{4}$/.test(l.account_number)) continue
+      const delta = (parseFloat(l.debit_amount) || 0) - (parseFloat(l.credit_amount) || 0)
+      if (delta === 0) continue
+      deltas[l.account_number] = roundOre((deltas[l.account_number] ?? 0) + delta)
+    }
+    return deltas
+  }, [lines])
 
   // New rows inherit the current header default (a row without a per-row
   // override follows the header (see setHeaderDimension).
@@ -1446,9 +1464,24 @@ export default function JournalEntryForm({
                 {accountBalances[line.account_number] === null || accountBalances[line.account_number] === undefined ? (
                   <Skeleton className="h-3 w-20" />
                 ) : (
-                  <span>
-                    {t('saldo_label')} {formatCurrency(accountBalances[line.account_number] as number)}
-                  </span>
+                  (() => {
+                    const bal = accountBalances[line.account_number] as number
+                    const delta = draftDeltas[line.account_number]
+                    if (!delta) {
+                      return (
+                        <span>
+                          {t('saldo_label')} {formatCurrency(bal)}
+                        </span>
+                      )
+                    }
+                    const after = roundOre(bal + delta)
+                    return (
+                      <span>
+                        {t('saldo_label')} {formatCurrency(bal)}{' '}
+                        <span className="text-foreground">→ {formatCurrency(after)}</span>
+                      </span>
+                    )
+                  })()
                 )}
               </div>
             )}
@@ -1579,7 +1612,15 @@ export default function JournalEntryForm({
                     if (bal === null || bal === undefined) {
                       return <Skeleton className="h-4 w-20 ml-auto" />
                     }
-                    return formatCurrency(bal)
+                    const delta = draftDeltas[line.account_number]
+                    if (!delta) return formatCurrency(bal)
+                    const after = roundOre(bal + delta)
+                    return (
+                      <span className="inline-flex flex-col items-end leading-tight">
+                        <span className="text-[11px]">{formatCurrency(bal)}</span>
+                        <span className="text-foreground">→ {formatCurrency(after)}</span>
+                      </span>
+                    )
                   })()}
                 </td>
                 <td className="py-1.5">

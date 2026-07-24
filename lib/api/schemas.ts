@@ -1023,6 +1023,46 @@ export const CorrectJournalEntrySchema = z.object({
 })
 
 // ============================================================
+// Inline rättelse of a posted verifikat (BFL 5 kap 5 § / 9 §)
+// ============================================================
+// The correct_entry_metadata / correct_entry_lines_inline RPCs enforce the
+// full envelope (posted status, open period, company lock date, balance,
+// who/when logging); these schemas only shape the payload.
+
+/** POST /api/bookkeeping/journal-entries/[id]/correct-metadata */
+export const CorrectEntryMetadataSchema = z
+  .object({
+    description: z.string().trim().min(1, 'Beskrivningen kan inte vara tom').max(500).optional(),
+    entry_date: isoDate.optional(),
+  })
+  .refine((body) => body.description !== undefined || body.entry_date !== undefined, {
+    message: 'Minst ett fält måste anges',
+  })
+
+/**
+ * Replacement line for an inline strike. Deliberately narrower than
+ * CreateJournalEntryLineSchema: inline additions are SEK-only and carry no
+ * tax_code or currency conversion (those corrections use the storno flow).
+ */
+export const InlineRattelseLineSchema = z.object({
+  account_number: accountNumber,
+  debit_amount: nonNegativeAmount.default(0),
+  credit_amount: nonNegativeAmount.default(0),
+  line_description: z.string().max(500).optional(),
+  dimensions: DimensionsBagSchema.optional(),
+})
+
+/** POST /api/bookkeeping/journal-entries/[id]/strike-lines */
+export const StrikeLinesSchema = z
+  .object({
+    strike_line_ids: z.array(uuid).max(200).default([]),
+    lines: z.array(InlineRattelseLineSchema).max(100).default([]),
+  })
+  .refine((body) => body.strike_line_ids.length > 0 || body.lines.length > 0, {
+    message: 'Rättelsen måste stryka eller lägga till minst en rad',
+  })
+
+// ============================================================
 // Dimension registry schemas (kostnadsställe/projekt)
 // ============================================================
 // dev_docs/dimensions_implementation_plan.md §6. The registry tables

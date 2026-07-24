@@ -9,6 +9,7 @@ import {
 import { createLogger, type Logger } from '@/lib/logger'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
 import { connectedAccountOptions } from './connect'
+import { linkPayoutFeedRows } from './transaction-sync'
 import type { StripeConnection } from '../types'
 
 const defaultLog = createLogger('stripe/payouts')
@@ -230,6 +231,29 @@ async function evaluateAndBook(
     )
     if (!entry) {
       return { status: 'needs_review', reason: 'booking_returned_null', gross, fees }
+    }
+    // Claim this payout's transaction-feed rows (the payout row + the fee
+    // rows of its charges): the entry just booked carries exactly that money,
+    // so leaving them unbooked in the inbox would invite double-booking the
+    // fees. No-op for companies without the balance-transaction feed. The
+    // entry is already posted, so a linking failure must NOT flip the payout
+    // to needs_review: swallow and let the nightly sync retry (idempotent).
+    try {
+      await linkPayoutFeedRows(
+        supabase,
+        connection.company_id,
+        connection.stripe_account_id!,
+        entry.id,
+        txns,
+        log,
+      )
+    } catch (linkErr) {
+      log.warn('payout feed-row linking failed after booking', {
+        connectionId: connection.id,
+        payoutId: payout.id,
+        journalEntryId: entry.id,
+        message: linkErr instanceof Error ? linkErr.message : String(linkErr),
+      })
     }
     log.info('booked stripe payout', {
       connectionId: connection.id,

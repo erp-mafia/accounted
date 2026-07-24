@@ -138,6 +138,13 @@ function MfaVerifyContent() {
         document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
       }
 
+      if (returnTo.startsWith('/api/')) {
+        // Route-handler destinations (e.g. the MCP OAuth consent page)
+        // return raw HTML the client router cannot render: hard-navigate.
+        window.location.assign(returnTo)
+        return
+      }
+
       router.push(returnTo)
       router.refresh()
     } catch {

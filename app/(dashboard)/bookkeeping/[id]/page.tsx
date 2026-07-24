@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AccountNumber } from '@/components/ui/account-number'
 import { Textarea } from '@/components/ui/textarea'
-import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy, ChevronDown, CalendarClock, FileText, Link2, RotateCcw } from 'lucide-react'
+import { Loader2, ArrowLeft, Paperclip, AlertTriangle, Lock, MessageSquare, Pencil, Check, X, Copy, ChevronDown, CalendarClock, FileText, Link2, RotateCcw, Scissors, PenLine } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -23,6 +23,8 @@ import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttach
 import JournalEntryStatusBadge, { useSourceTypeLabels } from '@/components/bookkeeping/JournalEntryStatusBadge'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
 import CorrectOpeningBalanceDialog from '@/components/bookkeeping/CorrectOpeningBalanceDialog'
+import StrikeLinesDialog from '@/components/bookkeeping/StrikeLinesDialog'
+import CorrectMetadataDialog from '@/components/bookkeeping/CorrectMetadataDialog'
 import EditDraftEntryDialog from '@/components/bookkeeping/EditDraftEntryDialog'
 import RecordateEntryDialog from '@/components/bookkeeping/RecordateEntryDialog'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
@@ -37,6 +39,29 @@ import { fetchDimensions, type DimensionDto } from '@/components/dimensions/type
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
 
+// Snapshot of a struck line, as stored in journal_entry_rattelse_log.
+type StruckLineSnapshot = {
+  id: string
+  account_number: string
+  debit_amount: number | string
+  credit_amount: number | string
+  line_description: string | null
+  sort_order: number
+}
+
+type RattelseLogRow = {
+  id: string
+  rattelse_type: 'metadata' | 'lines'
+  old_description: string | null
+  new_description: string | null
+  old_entry_date: string | null
+  new_entry_date: string | null
+  struck_lines: StruckLineSnapshot[] | null
+  added_lines: StruckLineSnapshot[] | null
+  actor: string | null
+  created_at: string
+}
+
 export default function JournalEntryDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const router = useRouter()
@@ -50,6 +75,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [error, setError] = useState<string | null>(null)
   const [showCorrection, setShowCorrection] = useState(false)
   const [showCorrectIB, setShowCorrectIB] = useState(false)
+  const [showStrikeLines, setShowStrikeLines] = useState(false)
+  const [showCorrectMetadata, setShowCorrectMetadata] = useState(false)
+  const [rattelseLog, setRattelseLog] = useState<RattelseLogRow[]>([])
   const [showEdit, setShowEdit] = useState(false)
   const [showRecordate, setShowRecordate] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -96,14 +124,19 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     setIsLoading(true)
     setError(null)
     try {
-      const [chainRes, refsRes, retagRes] = await Promise.all([
+      const [chainRes, refsRes, retagRes, rattelseRes] = await Promise.all([
         fetch(`/api/bookkeeping/journal-entries/${id}/chain`),
         fetch(`/api/bookkeeping/journal-entries/${id}/references`),
         fetch(`/api/bookkeeping/journal-entries/${id}/retag-log`),
+        fetch(`/api/bookkeeping/journal-entries/${id}/rattelse-log`),
       ])
       if (retagRes.ok) {
         const retagPayload = await retagRes.json()
         setRetagLog(Array.isArray(retagPayload.data) ? retagPayload.data : [])
+      }
+      if (rattelseRes.ok) {
+        const rattelsePayload = await rattelseRes.json()
+        setRattelseLog(Array.isArray(rattelsePayload.data) ? rattelsePayload.data : [])
       }
       if (!chainRes.ok) {
         const { error: msg } = await chainRes.json()
@@ -277,6 +310,37 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // correction (or the original) and corrects that one.
   const canCorrect = entry.status === 'posted' && entry.source_type !== 'storno'
 
+  // Inline rättelse (strike lines in the same verifikat) keeps structural
+  // entry types on their dedicated flows: storno mirrors its original, IB
+  // feeds opening_balance_entry_id, year-end feeds dispositions. The RPC
+  // enforces the same rule server-side; this just hides the dead menu item.
+  const canInlineRattelse =
+    entry.status === 'posted' &&
+    !['storno', 'opening_balance', 'year_end', 'vat_settlement'].includes(entry.source_type)
+
+  // Struck lines (from the immutable rättelse log) render inline in the
+  // lines table with strikethrough, Fortnox-style: the original stays
+  // visible per BFL 5 kap 5 § even though it no longer counts.
+  const struckDisplayLines = rattelseLog
+    .filter((r) => r.rattelse_type === 'lines')
+    .flatMap((r) =>
+      (r.struck_lines ?? []).map((s) => ({ ...s, struck_at: r.created_at }))
+    )
+
+  // Live and struck lines interleaved by original position.
+  const displayRows: Array<
+    | { kind: 'live'; line: JournalEntryLine }
+    | { kind: 'struck'; line: StruckLineSnapshot & { struck_at: string } }
+  > = [
+    ...lines.map((l) => ({ kind: 'live' as const, line: l })),
+    ...struckDisplayLines.map((s) => ({ kind: 'struck' as const, line: s })),
+  ].sort(
+    (a, b) =>
+      (a.line.sort_order ?? 0) - (b.line.sort_order ?? 0) ||
+      // On a sort_order tie the struck original renders above its replacement.
+      (a.kind === 'struck' ? -1 : 0) - (b.kind === 'struck' ? -1 : 0)
+  )
+
   // An opening-balance verifikat must be corrected through the IB-aware flow
   // (storno + rebook + relink the period's opening_balance_entry_id), never the
   // generic "Rätta rader": that books a `correction` entry but leaves the
@@ -343,6 +407,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               {formatVoucher(entry)}
             </h1>
             <JournalEntryStatusBadge entry={entry} />
+            {rattelseLog.length > 0 && (
+              <Badge variant="outline" className="text-xs font-normal" title={t('rattelse_history_title')}>
+                Rättad
+              </Badge>
+            )}
           </div>
           <p className="text-muted-foreground">{entry.description}</p>
         </div>
@@ -411,6 +480,17 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  {canInlineRattelse && (
+                    <DropdownMenuItem onClick={() => setShowStrikeLines(true)}>
+                      <Scissors className="mr-2 h-4 w-4" />
+                      {t('strike_lines')}
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem onClick={() => setShowCorrectMetadata(true)}>
+                    <PenLine className="mr-2 h-4 w-4" />
+                    {t('correct_metadata')}
+                  </DropdownMenuItem>
+                  {canInlineRattelse && <DropdownMenuSeparator />}
                   <DropdownMenuItem onClick={() => setShowCorrection(true)}>
                     <Pencil className="mr-2 h-4 w-4" />
                     {t('correct_lines')}
@@ -643,7 +723,34 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 </tr>
               </thead>
               <tbody>
-                {lines.map((line) => {
+                {displayRows.map((row) => {
+                  if (row.kind === 'struck') {
+                    const s = row.line
+                    return (
+                      <tr key={`struck-${s.id}`} className="border-b last:border-0 text-muted-foreground">
+                        <td className="py-2 line-through decoration-muted-foreground/70">
+                          <AccountNumber number={s.account_number} showName />
+                        </td>
+                        <td className="py-2">
+                          <span className="line-through decoration-muted-foreground/70">
+                            {s.line_description || ''}
+                          </span>
+                          <span className="ml-2 no-underline text-xs">
+                            {t('struck_marker', { date: formatDate(s.struck_at) })}
+                          </span>
+                        </td>
+                        <td className="py-2 text-right tabular-nums line-through decoration-muted-foreground/70">
+                          {Number(s.debit_amount) > 0 &&
+                            Number(s.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+                        </td>
+                        <td className="py-2 text-right tabular-nums line-through decoration-muted-foreground/70">
+                          {Number(s.credit_amount) > 0 &&
+                            Number(s.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    )
+                  }
+                  const line = row.line
                   const hasForeignCurrency = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
                   return (
                     <tr key={line.id} className="border-b last:border-0">
@@ -709,7 +816,32 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
           {/* Mobile cards */}
           <div className="sm:hidden space-y-2">
-            {lines.map((line) => {
+            {displayRows.map((row) => {
+              if (row.kind === 'struck') {
+                const s = row.line
+                return (
+                  <div key={`struck-${s.id}`} className="flex items-center justify-between py-2 border-b last:border-0 gap-2 text-muted-foreground">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm line-through decoration-muted-foreground/70">
+                        <AccountNumber number={s.account_number} showName />
+                      </div>
+                      {s.line_description && (
+                        <p className="text-xs truncate line-through decoration-muted-foreground/70">{s.line_description}</p>
+                      )}
+                      <p className="text-xs">{t('struck_marker', { date: formatDate(s.struck_at) })}</p>
+                    </div>
+                    <div className="text-right shrink-0 text-sm tabular-nums line-through decoration-muted-foreground/70">
+                      {Number(s.debit_amount) > 0 && (
+                        <p>{Number(s.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} D</p>
+                      )}
+                      {Number(s.credit_amount) > 0 && (
+                        <p>{Number(s.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} K</p>
+                      )}
+                    </div>
+                  </div>
+                )
+              }
+              const line = row.line
               const hasForeignCurrency = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
               return (
                 <div key={line.id} className="flex items-center justify-between py-2 border-b last:border-0 gap-2">
@@ -818,6 +950,69 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         </Card>
       )}
 
+      {/* Rättelsehistorik (BFL 5 kap 5 § / 9 §): the immutable who/when trail
+          behind inline rättelser. Stays Swedish (voucher detail surface). */}
+      {rattelseLog.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">{t('rattelse_history_title')}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {rattelseLog.map((row) => (
+              <div key={row.id} className="text-sm border-b last:border-0 pb-3 last:pb-0">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground tabular-nums">{formatDate(row.created_at)}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {row.rattelse_type === 'metadata' ? t('rattelse_kind_metadata') : t('rattelse_kind_lines')}
+                  </span>
+                </div>
+                {row.rattelse_type === 'metadata' ? (
+                  <div className="space-y-0.5">
+                    {row.old_description !== row.new_description && (
+                      <p>
+                        <span className="text-muted-foreground line-through">{row.old_description}</span>
+                        {' → '}
+                        <span>{row.new_description}</span>
+                      </p>
+                    )}
+                    {row.old_entry_date !== row.new_entry_date && (
+                      <p className="tabular-nums">
+                        <span className="text-muted-foreground line-through">{formatDate(row.old_entry_date || '')}</span>
+                        {' → '}
+                        <span>{formatDate(row.new_entry_date || '')}</span>
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-0.5">
+                    {(row.struck_lines ?? []).map((s) => (
+                      <p key={s.id} className="tabular-nums text-muted-foreground">
+                        <span className="line-through decoration-muted-foreground/70">
+                          {s.account_number}
+                          {' '}
+                          {Number(s.debit_amount) > 0
+                            ? `${Number(s.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} D`
+                            : `${Number(s.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} K`}
+                        </span>
+                      </p>
+                    ))}
+                    {(row.added_lines ?? []).map((a) => (
+                      <p key={a.id} className="tabular-nums">
+                        {a.account_number}
+                        {' '}
+                        {Number(a.debit_amount) > 0
+                          ? `${Number(a.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} D`
+                          : `${Number(a.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} K`}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Dimension retag history (dimensions plan PR6): the immutable
           before/after trail. Stays Swedish (voucher detail surface). */}
       {dimensionsEnabled && retagLog.length > 0 && (
@@ -860,6 +1055,30 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         line={retagLine}
         onRetagged={fetchData}
       />
+
+      {/* Inline rättelse dialogs (strike lines / metadata) */}
+      {showStrikeLines && entry && (
+        <StrikeLinesDialog
+          entry={entry}
+          open={showStrikeLines}
+          onOpenChange={setShowStrikeLines}
+          onCorrected={() => {
+            setShowStrikeLines(false)
+            fetchData()
+          }}
+        />
+      )}
+      {showCorrectMetadata && entry && (
+        <CorrectMetadataDialog
+          entry={entry}
+          open={showCorrectMetadata}
+          onOpenChange={setShowCorrectMetadata}
+          onCorrected={() => {
+            setShowCorrectMetadata(false)
+            fetchData()
+          }}
+        />
+      )}
 
       {/* Correction dialog */}
       {showCorrection && entry && (

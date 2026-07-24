@@ -1,15 +1,15 @@
 {
   "horizontal/swedish-accounting-compliance": {
-    "hash": "8f0ea563286a0fcbf0c7a30307111f06453dc0d5f201869d794772bf0a1538c8",
-    "version": 3
+    "hash": "2f04bdd94e9523ef25cff4530cf8b24c6f153dee437bb54d1befacbfdabe5305",
+    "version": 4
   },
   "horizontal/swedish-accounting-compliance/bas-kontoplan": {
     "hash": "0d1b05466568344be0afd4b360d582db23331ae4f1b4b05681cc92c50d099bdb",
     "version": 2
   },
   "horizontal/swedish-accounting-compliance/bfl-bfnar": {
-    "hash": "2240a0e67af22450468f5bcd85ddf2037fd3ed37e8db662afff6cbaf93d4b398",
-    "version": 1
+    "hash": "676a6dac3ed2b5104c42d59f1e7d7a591498a5ad175192a8e24f83b3e1700c83",
+    "version": 2
   },
   "horizontal/swedish-accounting-compliance/changes-2025-2026": {
     "hash": "ffc4c5d618bb8840f43fd48c8d4a3e464768e84abdaeb49da016e0051b260964",

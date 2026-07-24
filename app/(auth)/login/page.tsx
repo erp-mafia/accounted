@@ -16,6 +16,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { isBankIdEnabled } from '@/lib/auth/bankid'
 import { getBranding } from '@/lib/branding/service'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
+import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
 
 const branding = getBranding()
@@ -50,6 +51,10 @@ function LoginPageContent() {
   const searchParams = useSearchParams()
   const callbackError = searchParams.get('error')
   const callbackFlow = searchParams.get('flow')
+  // Post-login destination, set e.g. by the MCP OAuth authorize endpoint
+  // (/login?next=/api/mcp-oauth/authorize?...). Sanitized to a same-origin
+  // relative path; '/' means no explicit destination.
+  const nextPath = safeReturnTo(searchParams.get('next'), '/')
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
   const tAuth = useTranslations('auth')
@@ -131,6 +136,13 @@ function LoginPageContent() {
           document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
         }
 
+        if (nextPath !== '/') {
+          // An explicit destination (e.g. the MCP OAuth consent page, raw
+          // HTML from a route handler) outranks the company picker.
+          window.location.assign(nextPath)
+          return
+        }
+
         // Always land on the picker after BankID login so the user sees
         // fresh CompanyRoles fetched during this session's enrichment.
         router.push('/select-company')
@@ -175,7 +187,11 @@ function LoginPageContent() {
       const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
 
       if (aal?.nextLevel === 'aal2' && aal?.currentLevel === 'aal1') {
-        router.push('/mfa/verify')
+        router.push(
+          nextPath === '/'
+            ? '/mfa/verify'
+            : `/mfa/verify?returnTo=${encodeURIComponent(nextPath)}`
+        )
         return
       }
 
@@ -201,6 +217,14 @@ function LoginPageContent() {
         }
         // Clear cookie even on failure to avoid retrying stale tokens
         document.cookie = 'gnubok-invite-token=; path=/; max-age=0'
+      }
+
+      if (nextPath !== '/') {
+        // Full navigation: the destination can be a route handler that
+        // returns raw HTML (the MCP OAuth consent page), which the client
+        // router cannot render.
+        window.location.assign(nextPath)
+        return
       }
 
       router.push('/')

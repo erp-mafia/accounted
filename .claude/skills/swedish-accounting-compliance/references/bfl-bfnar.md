@@ -90,11 +90,12 @@ Every verifikation must have an underlag (kvitto, faktura, bankutdrag, avtal, et
 ### Multiple verification series
 BFL allows multiple verification series (e.g., "A" for supplier invoices, "B" for customer invoices, "K" for bank). Each series must have unbroken numbering within the räkenskapsår. This is common in practice and your software should support it.
 
-### Rättelser (5 kap 5§)
-- An incorrect bokföringspost must be corrected with a new verifikation
-- The original post must remain visible (no overwriting)
-- The correcting post must reference the original
-- Implement as: rättelsepost with a link/reference to the original verifikation
+### Rättelser (5 kap 5§ and 5 kap 9§)
+- The original post must remain visible (no silent overwriting), and it must be recorded when the rättelse was made and who made it
+- Two permitted tracks:
+  1. **Särskild rättelsepost**: a correcting verifikation with a link/reference to the original. Always allowed; the only track once the period is locked/closed or the bokföring has been relied upon (filed declarations, bokslut)
+  2. **Rättelse in the same verifikat**: strike-and-replace of lines with the struck originals kept readable, or correction of the verifikation's text/date (5 kap 9 §). Allowed in open, unlocked periods with an immutable who/when trail. This is the track Fortnox/Visma expose as "ändra verifikat"
+- When rättelse happens through a särskild rättelsepost, it must be easy to become aware of the rättelse when inspecting the corrected post ("utan svårighet gå att få kännedom om rättelsen")
 
 ## 5. Avslutning av bokföringen (BFL 6 kap)
 

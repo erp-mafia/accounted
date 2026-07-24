@@ -170,9 +170,11 @@ export default async function DashboardLayout({
     // select returns exactly the caller's companies, letting non-active rows
     // show company_settings.company_name instead of the frozen companies.name.
     supabase.from('company_settings').select('company_id, company_name'),
-    // Per-user UI state (nav collapse/fold state): server-rendered so the
-    // sidebar width is right on first paint, no post-hydration jump.
-    supabase.from('user_preferences').select('ui_state').eq('user_id', user.id).maybeSingle(),
+    // Per-user UI state (nav collapse/fold state), server-rendered so the
+    // sidebar width is right on first paint, plus the hide-assistant-FAB
+    // preference (Inställningar → Assistenten). Batched here so it costs no
+    // extra round-trip on the dashboard critical path.
+    supabase.from('user_preferences').select('ui_state, hide_assistant_fab').eq('user_id', user.id).maybeSingle(),
   ])
 
   // company_id -> current display name for every company the user belongs to.
@@ -316,7 +318,7 @@ export default async function DashboardLayout({
           <main id="main-content" className={MAIN_PANEL_CLASS} role="main">
             <MainContainer companyId={companyId}>{children}</MainContainer>
           </main>
-          <AgentTrigger />
+          <AgentTrigger hidden={userPrefs?.hide_assistant_fab === true} />
           <LazyCommandPalette />
           <SettingsHotkey />
           {settingsModal}

@@ -22,6 +22,10 @@
       "schedule": "*/15 * * * *"
     },
     {
+      "path": "/api/extensions/stripe/transactions/cron",
+      "schedule": "30 3 * * *"
+    },
+    {
       "path": "/api/documents/verify/cron",
       "schedule": "0 3 * * *"
     },

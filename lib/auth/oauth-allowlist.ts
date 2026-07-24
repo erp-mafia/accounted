@@ -3,12 +3,19 @@ import { createServiceClientNoCookies } from './api-keys'
 
 /**
  * Built-in redirect URI patterns. These bypass the DB lookup entirely so
- * Claude's connector keeps working without seeded rows, and so local
- * development never depends on having a registration.
+ * Claude's and ChatGPT's connectors keep working without seeded rows, and so
+ * local development never depends on having a registration.
+ *
+ * ChatGPT uses a per-connector-instance callback path
+ * (https://chatgpt.com/connector/oauth/{callback_id}) plus the legacy fixed
+ * callback for already-published apps; both are documented at
+ * developers.openai.com/apps-sdk/build/auth.
  */
 export const BUILT_IN_REDIRECT_PATTERNS: readonly RegExp[] = [
   /^https:\/\/claude\.ai\/api\//,
   /^https:\/\/claude\.com\/api\//,
+  /^https:\/\/chatgpt\.com\/connector\/oauth\//,
+  /^https:\/\/chatgpt\.com\/connector_platform_oauth_redirect$/,
   /^http:\/\/localhost(:\d+)?(\/|$)/,
   /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/,
 ]

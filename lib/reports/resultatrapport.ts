@@ -60,17 +60,17 @@ export async function generateResultatrapport(
   })
   const currentRows = filterPnl(currentTb.rows)
 
-  // Prior-period comparison stays full-year. A narrower current window
-  // compared against a full prior year would be misleading; until we ship a
-  // proper "same window, prior year" comparison the cleanest move is to
-  // drop the prior column entirely when the user narrows the range.
-  // Same rule for a dimension filter: project codes are time-limited under
-  // K2/K3 (registry start/end dates), so "this code last year" may be a
-  // different project entirely: drop the column rather than compare
+  // Prior-period comparison. Full period: the previous fiscal period.
+  // Narrowed range: the same window shifted one year back (#862), so
+  // "Hittills i år" compares against the same dates last year.
+  // Dimension filter: no comparison at all; project codes are time-limited
+  // under K2/K3 (registry start/end dates), so "this code last year" may be
+  // a different project entirely: drop the column rather than compare
   // unrelated activity (#862 review).
   let priorRows: TrialBalanceRow[] = []
   let priorPeriodInfo: { start: string; end: string } | null = null
-  const isFullPeriod = !options?.fromDate && !options?.toDate && !options?.dimensions
+  const hasRange = Boolean(options?.fromDate || options?.toDate)
+  const isFullPeriod = !hasRange && !options?.dimensions
   if (isFullPeriod) {
     // Prefer the explicit continuity chain; fall back to the period that ends
     // immediately before this one. The fallback keeps the comparison working
@@ -100,6 +100,51 @@ export async function generateResultatrapport(
         const priorTb = await generateTrialBalance(supabase, companyId, priorPeriodId)
         priorRows = filterPnl(priorTb.rows)
         priorPeriodInfo = { start: prior.period_start, end: prior.period_end }
+      }
+    }
+  } else if (hasRange && !options?.dimensions) {
+    // Same window, prior year. Shift the window back one year (leap-day
+    // clamped) and read activity from whichever fiscal period(s) cover the
+    // shifted dates: brutet räkenskapsår can split a calendar window across
+    // two periods, so merge per account. The current period itself is a
+    // valid source (a long first fiscal year can contain both windows).
+    const shiftedFrom = shiftDateOneYearBack(effectiveFromDate)
+    const shiftedTo = shiftDateOneYearBack(effectiveToDate)
+    // A window longer than a year would overlap itself when shifted back;
+    // that comparison is meaningless, so leave the column empty.
+    if (shiftedTo < effectiveFromDate) {
+      const { data: candidatePeriods } = await supabase
+        .from('fiscal_periods')
+        .select('id, period_start, period_end')
+        .eq('company_id', companyId)
+        .lte('period_start', shiftedTo)
+        .gte('period_end', shiftedFrom)
+        .order('period_start', { ascending: true })
+
+      const merged = new Map<string, TrialBalanceRow>()
+      let coveredAny = false
+      for (const p of candidatePeriods ?? []) {
+        const from = shiftedFrom > p.period_start ? shiftedFrom : p.period_start
+        const to = shiftedTo < p.period_end ? shiftedTo : p.period_end
+        if (from > to) continue
+        const tbPart = await generateTrialBalance(supabase, companyId, p.id, {
+          fromDate: from,
+          toDate: to,
+        })
+        coveredAny = true
+        for (const row of filterPnl(tbPart.rows)) {
+          const existing = merged.get(row.account_number)
+          if (!existing) {
+            merged.set(row.account_number, { ...row })
+          } else {
+            existing.period_debit = round2(existing.period_debit + row.period_debit)
+            existing.period_credit = round2(existing.period_credit + row.period_credit)
+          }
+        }
+      }
+      if (coveredAny) {
+        priorRows = [...merged.values()]
+        priorPeriodInfo = { start: shiftedFrom, end: shiftedTo }
       }
     }
   }
@@ -135,9 +180,28 @@ function filterPnl(rows: TrialBalanceRow[]): TrialBalanceRow[] {
  * (class 4-7) have debit. We render every line as `credit - debit` so that
  * revenue is positive, expenses are negative, and a positive net result
  * means profit. This matches how Fortnox and Visma present a Resultatrapport.
+ *
+ * Window activity (`period_*`), not `closing_*`: when fromDate > period_start
+ * the trial balance rolls pre-window activity into the opening columns, so
+ * `closing_*` on a P&L account would silently report year-to-date amounts in
+ * a month/quarter window. In the full-period case P&L accounts carry no
+ * opening balance, so period_* equals closing_* and nothing changes there.
  */
 function signedAmount(row: TrialBalanceRow): number {
-  return row.closing_credit - row.closing_debit
+  return row.period_credit - row.period_debit
+}
+
+/**
+ * `2026-03-15` -> `2025-03-15`; leap day clamps to the target month's last
+ * day (`2028-02-29` -> `2027-02-28`). String math on the ISO parts: no Date
+ * object, no timezone edge.
+ */
+export function shiftDateOneYearBack(isoDate: string): string {
+  const [y, m, d] = isoDate.split('-').map(Number)
+  const year = y - 1
+  const daysInMonth = [31, year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  const day = Math.min(d, daysInMonth[m - 1])
+  return `${year}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
 function sumNet(rows: TrialBalanceRow[]): number {
