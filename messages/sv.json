@@ -4659,7 +4659,16 @@
     "settings_customize_accounts": "Anpassa konton",
     "settings_account_hint": "Ange kontonummer separerade med komma (t.ex. {example})",
     "settings_reset_field": "Återställ till standard",
-    "settings_reset_all": "Återställ allt"
+    "settings_reset_all": "Återställ allt",
+    "help_text": "Nyckeltalen räknas ur bokföringen för det valda räkenskapsåret. Månadens resultat visas överst; raden till höger styr du själv via Anpassa. Kostnadsslag och leverantörer summerar periodens utgifter.",
+    "hero_eyebrow": "Resultat i {month}",
+    "hero_delta_up": "+{delta} % mot {month}",
+    "hero_delta_down": "−{delta} % mot {month}",
+    "hero_vs": "{month}: {amount}",
+    "income_in": "Intäkter i {month}",
+    "income_note": "Kostnader {amount}",
+    "costs_title": "Största kostnadsslagen",
+    "suppliers_title": "Största leverantörerna"
   },
   "company_switcher": {
     "company_label": "Företag",

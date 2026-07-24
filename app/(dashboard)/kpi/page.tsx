@@ -2,32 +2,28 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent } from '@/components/ui/card'
-import { Skeleton } from "@/components/ui/skeleton"
-import { PageHeader } from '@/components/ui/page-header'
-import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import dynamic from 'next/dynamic'
-import { KPIHeroCards } from '@/components/kpi/KPIHeroCards'
-
-// Recharts is ~180KB: defer the chart components so the KPI page shell and
-// hero cards render without waiting for the charting bundle.
-const chartFallback = () => <Skeleton className="h-[300px] w-full" />
-const KPITrendChart = dynamic(
-  () => import('@/components/kpi/KPITrendChart').then((m) => m.KPITrendChart),
-  { ssr: false, loading: chartFallback },
-)
-const KPIExpenseMixChart = dynamic(
-  () => import('@/components/kpi/KPIExpenseMixChart').then((m) => m.KPIExpenseMixChart),
-  { ssr: false, loading: chartFallback },
-)
-const KPITopSuppliersChart = dynamic(
-  () => import('@/components/kpi/KPITopSuppliersChart').then((m) => m.KPITopSuppliersChart),
-  { ssr: false, loading: chartFallback },
-)
+import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { FyPicker } from '@/components/common/FyPicker'
+import { KPIStoryHero, KPIRail, KPIBreakdown } from '@/components/kpi/KPIStory'
 import { KPISettingsDialog } from '@/components/kpi/KPISettingsDialog'
 import { getDefaultPreferences } from '@/lib/reports/kpi-definitions'
 import type { KPIReport, KPIPreferences } from '@/types'
 
+// Recharts is ~180KB: defer the chart so the page shell, hero and rail render
+// without waiting for the charting bundle.
+const KPIResultChart = dynamic(
+  () => import('@/components/kpi/KPIResultChart').then((m) => m.KPIResultChart),
+  { ssr: false, loading: () => <Skeleton className="mt-8 h-[200px] w-full" /> },
+)
+
+/**
+ * Nyckeltal in the founder-picked "Berättelsen" layout: the month's result
+ * as a serif hero + trend area on the left, the preference-driven metric
+ * rail on the right, and the cost story as quiet rows below.
+ */
 export default function KpiPage() {
   const t = useTranslations('kpi')
   const [selectedPeriod, setSelectedPeriod] = useState<string>('')
@@ -98,41 +94,47 @@ export default function KpiPage() {
     <div className="space-y-8">
       <PageHeader
         title={t('title')}
+        help={
+          <HelpPopover>
+            <p>{t('help_text')}</p>
+          </HelpPopover>
+        }
         action={
-          <KPISettingsDialog
-            preferences={preferences}
-            onSave={handleSavePreferences}
-            saving={isSavingPrefs}
-          />
+          <div className="flex items-center gap-2">
+            <KPISettingsDialog
+              preferences={preferences}
+              onSave={handleSavePreferences}
+              saving={isSavingPrefs}
+            />
+            <FyPicker
+              value={selectedPeriod || null}
+              onChange={(id) => setSelectedPeriod(id || '')}
+              includeAllOption={false}
+              hideFuturePeriods
+            />
+          </div>
         }
       />
 
-      <FiscalYearSelector
-        value={selectedPeriod || null}
-        onChange={(id) => setSelectedPeriod(id || '')}
-        includeAllOption={false}
-        hideFuturePeriods
-      />
-
       {error && (
-        <Card>
-          <CardContent className="py-8 text-center text-muted-foreground">
-            <p>{error}</p>
-          </CardContent>
-        </Card>
+        <p className="py-8 text-center text-sm text-muted-foreground">{error}</p>
       )}
 
       {isLoadingReport && <LoadingSkeleton />}
 
       {!isLoadingReport && !error && report && (
-        <>
-          <KPIHeroCards report={report} preferences={preferences} />
-          {report.months.length > 0 && <KPITrendChart months={report.months} />}
-          <div className="grid gap-4 md:grid-cols-2">
-            <KPIExpenseMixChart composition={report.expenseComposition} />
-            <KPITopSuppliersChart suppliers={report.topSuppliers} />
+        <div className="stagger-enter space-y-10">
+          <div className="grid items-start gap-x-11 gap-y-10 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+            <section>
+              <KPIStoryHero report={report} />
+              {report.months.length > 0 && <KPIResultChart months={report.months} />}
+            </section>
+            <aside className="lg:border-l lg:border-border lg:pl-7">
+              <KPIRail report={report} preferences={preferences} />
+            </aside>
           </div>
-        </>
+          <KPIBreakdown report={report} />
+        </div>
       )}
     </div>
   )
@@ -140,32 +142,19 @@ export default function KpiPage() {
 
 function LoadingSkeleton() {
   return (
-    <div className="space-y-8">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {[1, 2, 3, 4].map((i) => (
-          <Card key={i}>
-            <CardContent className="p-4 space-y-2">
-              <Skeleton className="h-3 w-20" />
-              <Skeleton className="h-7 w-28" />
-              <Skeleton className="h-3 w-16" />
-            </CardContent>
-          </Card>
-        ))}
+    <div className="grid items-start gap-x-11 gap-y-10 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+      <div className="space-y-4">
+        <Skeleton className="h-3 w-28" />
+        <Skeleton className="h-12 w-64" />
+        <Skeleton className="h-3 w-40" />
+        <Skeleton className="mt-6 h-[200px] w-full" />
       </div>
-      <Card>
-        <CardContent className="p-6 space-y-3">
-          <Skeleton className="h-4 w-40" />
-          <Skeleton className="h-56" />
-        </CardContent>
-      </Card>
-      <div className="grid gap-4 md:grid-cols-2">
-        {[1, 2].map((i) => (
-          <Card key={i}>
-            <CardContent className="p-6 space-y-3">
-              <Skeleton className="h-4 w-32" />
-              <Skeleton className="h-40" />
-            </CardContent>
-          </Card>
+      <div className="space-y-6 lg:border-l lg:border-border lg:pl-7">
+        {[1, 2, 3, 4].map((i) => (
+          <div key={i} className="space-y-2">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-6 w-32" />
+          </div>
         ))}
       </div>
     </div>
