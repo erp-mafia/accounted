@@ -11,7 +11,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useCompany } from '@/contexts/CompanyContext'
-import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import { FyPicker } from '@/components/common/FyPicker'
 import { ReportDateRange, type DateRangeValue } from '@/components/common/ReportDateRange'
 import { DimensionFilter, type DimensionFilterValue } from '@/components/reports/DimensionFilter'
 import { DATE_RANGE_SLUGS, DIMENSION_FILTER_SLUGS, getReport } from '@/lib/reports/catalog'
@@ -117,7 +117,7 @@ function FocusedReportInner({
         title={reportName}
         action={
           isStandalone ? undefined : (
-            <FiscalYearSelector
+            <FyPicker
               value={selectedPeriod || null}
               onChange={(id, period) => {
                 setSelectedPeriod(id || '')

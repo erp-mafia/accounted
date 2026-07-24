@@ -316,10 +316,7 @@ export function VatChecksCard({
                 ) : (
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
                 )}
-                <div>
-                  <span className="mr-2 font-mono text-xs text-muted-foreground">{c.code}</span>
-                  {c.message}
-                </div>
+                <div>{c.message}</div>
               </div>
             ))}
           </div>
@@ -327,12 +324,15 @@ export function VatChecksCard({
 
         {showGapWorklist && (
           <div className="space-y-3">
-            <h3
-              className="text-sm font-medium uppercase tracking-wider text-muted-foreground"
-              aria-live="polite"
-            >
-              Verifikationer som saknar basbelopp ({gaps.length})
-            </h3>
+            <div className="mb-1 flex items-center gap-2">
+              <h3
+                className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground"
+                aria-live="polite"
+              >
+                Verifikationer som saknar basbelopp ({gaps.length})
+              </h3>
+              <div className="h-px flex-1 bg-border/60" />
+            </div>
 
             {gapsLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">

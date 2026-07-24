@@ -946,7 +946,7 @@ function SkatteverketPanelInner({
         {/* Validation results from Skatteverket */}
         {kontroller.length > 0 && (
           <div className="space-y-2">
-            <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+            <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
               Skatteverkets valideringsresultat
             </h3>
             {kontroller.map((k, i) => (

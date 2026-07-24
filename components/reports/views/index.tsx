@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import { FyPicker } from '@/components/common/FyPicker'
 import { cn, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -1671,17 +1671,10 @@ export function VatDeclarationView() {
   return (
     <VatDrillContext.Provider value={{ fiscalPeriodId: isYearly ? fiscalPeriodId : undefined }}>
     <div className="space-y-8">
-      {/* XML and PDF live in "Lämna in" below: they are filing artifacts, not
-          report exports, and one home avoids two competing download surfaces. */}
-      <ReportExportMenu
-        variant="default"
-        items={[
-          { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
-        ]}
-      />
-
-      {/* Period selection — the declaration below follows it automatically.
-          Flat toolbar row (concept language), far right like a context picker. */}
+      {/* One flat toolbar row (concept language): period pickers + Exportera
+          far right. XML and PDF live in "Lämna in" below: they are filing
+          artifacts, not report exports, and one home avoids two competing
+          download surfaces. */}
       <div className="flex flex-wrap items-center justify-end gap-2">
               <Select
                 value={periodType}
@@ -1699,7 +1692,7 @@ export function VatDeclarationView() {
             {isYearly ? (
               // Annual VAT covers a räkenskapsår: picked here, not a
               // calendar year.
-              <FiscalYearSelector
+              <FyPicker
                 value={fiscalPeriodId || null}
                 onChange={(id, fp) => {
                   setFiscalPeriodId(id || '')
@@ -1739,6 +1732,12 @@ export function VatDeclarationView() {
                   </Select>
               </>
             )}
+            <ReportExportMenu
+              variant="default"
+              items={[
+                { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
+              ]}
+            />
       </div>
 
       {error && (

@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useEffect, useState, useCallback } from 'react'
 import { PageHeader } from '@/components/ui/page-header'
-import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
+import { FyPicker } from '@/components/common/FyPicker'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -105,7 +105,7 @@ export function KassaflodesanalysClient() {
       <PageHeader title="Kassaflödesanalys" />
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <FiscalYearSelector
+        <FyPicker
           value={selectedPeriod}
           onChange={(id) => setSelectedPeriod(id)}
           includeAllOption={false}
