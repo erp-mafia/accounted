@@ -22,6 +22,8 @@
   z-index: 10;
   min-height: 0;
 }
+/* mode='add': quiet escape back to the app, top left */
+.jny-escape { position: absolute; top: 18px; left: 22px; z-index: 11; text-decoration: none; }
 .jny-center {
   flex: 1;
   min-height: 0;

@@ -1,6 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import WelcomeOnboarding from '@/components/dashboard/WelcomeOnboarding'
 import OnboardingJourney from '@/components/onboarding/journey/OnboardingJourney'
 import type { EntityType } from '@/types'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
@@ -64,11 +63,12 @@ export default async function OnboardingPage({
 
   const hasCompanies = !!existingMembership
 
-  // Fetch profile and team
-  const [{ data: profile }, { data: teamMembership }] = await Promise.all([
-    supabase.from('profiles').select('full_name').eq('id', user.id).single(),
-    supabase.from('team_members').select('team_id').eq('user_id', user.id).limit(1).maybeSingle(),
-  ])
+  const { data: teamMembership } = await supabase
+    .from('team_members')
+    .select('team_id')
+    .eq('user_id', user.id)
+    .limit(1)
+    .maybeSingle()
 
   let teamId = teamMembership?.team_id
 
@@ -82,59 +82,36 @@ export default async function OnboardingPage({
     redirect('/login')
   }
 
-  const firstName = profile?.full_name?.split(' ')[0] || null
-
   // The BankID picker routes here with ?org_number=… for every pick. Strip
   // formatting so whatever Step 2 displays matches what the rest of the flow
   // will store.
   const { org_number: rawOrgNumber } = await searchParams
   const initialOrgNumber = rawOrgNumber ? rawOrgNumber.replace(/[\s-]/g, '') : undefined
 
-  // BankID prefill: look up the CompanyRoles row (no Lens call) to pre-fill
-  // Step 1's entity_type radio and Step 2's company_name. If no role matches,
-  // the user fills everything manually: same fallback as a non-BankID
-  // signup. `preverifiedOrgNumber` tells Step 2 to skip the client-side
-  // /lookup since CompanyRoles already confirms existence.
+  // BankID prefill: look up the CompanyRoles row (no Lens call) to seed
+  // entity_type + company_name. If no role matches, everything is manual:
+  // same fallback as a non-BankID signup. The journey auto-submits the
+  // deep-linked orgnr, which runs the same single Lens lookup as manual
+  // entry (plan addendum 2026-07-24); on lookup failure the flow degrades
+  // to asking the questions with these role fields as prefill.
   let initialEntityType: EntityType | undefined
   let initialLegalName: string | undefined
-  let preverifiedOrgNumber: string | undefined
   if (initialOrgNumber) {
     const match = await findCompanyRoleByOrgNumber(supabase, user.id, initialOrgNumber)
     if (match) {
       initialEntityType = mapTicEntityType(match.legalEntityType) ?? undefined
       initialLegalName = match.legalName
-      preverifiedOrgNumber = initialOrgNumber
     }
   }
 
-  // Journey rollout flag (onboarding migration PR C): preview first,
-  // founder click-through, then production. The journey deliberately
-  // ignores preverifiedOrgNumber: the deep-linked orgnr runs the same
-  // single Lens lookup as manual entry (plan addendum 2026-07-24), and
-  // lookup failure degrades to asking the questions instead.
-  if (process.env.NEXT_PUBLIC_ONBOARDING_JOURNEY === 'true') {
-    return (
-      <OnboardingJourney
-        teamId={teamId}
-        hasExistingCompanies={hasCompanies}
-        mode="first"
-        initialOrgNumber={initialOrgNumber}
-        initialEntityType={initialEntityType}
-        initialLegalName={initialLegalName}
-      />
-    )
-  }
-
   return (
-    <WelcomeOnboarding
-      firstName={firstName}
+    <OnboardingJourney
       teamId={teamId}
-      skipWelcome
       hasExistingCompanies={hasCompanies}
+      mode="first"
       initialOrgNumber={initialOrgNumber}
       initialEntityType={initialEntityType}
       initialLegalName={initialLegalName}
-      preverifiedOrgNumber={preverifiedOrgNumber}
     />
   )
 }

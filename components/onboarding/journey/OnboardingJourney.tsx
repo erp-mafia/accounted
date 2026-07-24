@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { createCompanyFromOnboarding } from '@/lib/company/actions'
 import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
@@ -33,8 +34,7 @@ import { InkText } from './ink'
 import './journey.css'
 
 /**
- * The journey onboarding flow (replaces WelcomeOnboarding behind
- * NEXT_PUBLIC_ONBOARDING_JOURNEY). Renders the reducer's current step,
+ * The journey onboarding flow. Renders the reducer's current step,
  * performs the side effects, and collects the exact settings payload the
  * wizard sends today.
  *
@@ -640,6 +640,11 @@ export default function OnboardingJourney({
   return (
     <div className="jny jny-fixed" style={{ ['--jny-dawn' as string]: String(station / 4) }}>
       <div className="jny-dawn" aria-hidden="true" />
+      {mode === 'add' && state.step !== 'done' ? (
+        <Link href="/" className="jny-btn-quiet jny-escape">
+          &lsaquo; {t('journey_cancel_add')}
+        </Link>
+      ) : null}
       <div className="jny-center">
         <div ref={bandRef} style={{ width: '100%' }}>
           <JourneyTrack
