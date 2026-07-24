@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { AlertCircle, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, Percent } from 'lucide-react'
+import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, Percent } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -23,11 +23,12 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
-import { formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
 import { Table, TableBody } from '@/components/ui/table'
@@ -1144,6 +1145,7 @@ function VatBookingCard({
   period,
   fiscalPeriodId,
   checksBlocked,
+  onStatus,
 }: {
   periodType: VatPeriodType
   year: number
@@ -1155,6 +1157,8 @@ function VatBookingCard({
    * accounts the settlement clears), but the user should know before filing.
    */
   checksBlocked?: boolean
+  /** Lets the surrounding stepper mirror the booking state on its dot. */
+  onStatus?: (status: 'booked' | 'draft' | 'none') => void
 }) {
   const { canWrite } = useCanWrite()
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -1198,6 +1202,12 @@ function VatBookingCard({
 
   const booked = proposal?.existing_entries.find((e) => e.status === 'posted')
   const draft = booked ? undefined : proposal?.existing_entries.find((e) => e.status === 'draft')
+
+  const bookingStatus = booked ? 'booked' : draft ? 'draft' : 'none'
+  useEffect(() => {
+    if (upToDate && proposal) onStatus?.(bookingStatus)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [upToDate, bookingStatus])
 
   // FormLine amounts are input strings; the proposal's numbers are already
   // öre-rounded server-side, so this is display formatting, not money math.
@@ -1331,6 +1341,122 @@ function VatBookingCard({
   )
 }
 
+
+/** The Stegen header (concept Moms C): the filing pipeline as a clickable
+ *  horizontal stepper with honest per-step status subs. Statutory surface,
+ *  Swedish in both locales like the rest of the declaration. */
+function VatStepper({
+  active,
+  onSelect,
+  errorCount,
+  warningCount,
+  ruta49,
+  bookingStatus,
+}: {
+  active: number
+  onSelect: (step: number) => void
+  errorCount: number
+  warningCount: number
+  ruta49: number
+  bookingStatus: 'booked' | 'draft' | 'none' | null
+}) {
+  const steps = [
+    {
+      n: 1,
+      label: 'Kontrollera',
+      sub:
+        errorCount > 0
+          ? `${errorCount} fel`
+          : warningCount > 0
+            ? `${warningCount} ${warningCount === 1 ? 'varning' : 'varningar'}`
+            : 'klart',
+      done: errorCount === 0,
+      warn: errorCount > 0,
+    },
+    {
+      n: 2,
+      label: 'Granska',
+      sub:
+        ruta49 > 0
+          ? `${formatAmount(ruta49)} kr att betala`
+          : ruta49 < 0
+            ? `${formatAmount(Math.abs(ruta49))} kr att återfå`
+            : 'ingen moms',
+      done: false,
+      warn: false,
+    },
+    {
+      n: 3,
+      label: 'Bokför',
+      sub:
+        bookingStatus === 'booked'
+          ? 'bokförd'
+          : bookingStatus === 'draft'
+            ? 'utkast finns'
+            : 'mot 2650',
+      done: bookingStatus === 'booked',
+      warn: false,
+    },
+    { n: 4, label: 'Lämna in', sub: 'till Skatteverket', done: false, warn: false },
+  ]
+
+  return (
+    <div
+      className="mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
+      role="tablist"
+      aria-label="Momsdeklarationens steg"
+    >
+      {steps.map((step, i) => (
+        <React.Fragment key={step.n}>
+          {i > 0 && <span className="h-px min-w-4 flex-1 bg-border" aria-hidden="true" />}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={active === step.n}
+            onClick={() => onSelect(step.n)}
+            className="group flex shrink-0 items-center gap-2 text-left"
+          >
+            <span
+              className={cn(
+                'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs tabular-nums transition-colors duration-150',
+                step.done
+                  ? 'border-success/40 text-success'
+                  : active === step.n
+                    ? 'border-foreground bg-foreground text-background'
+                    : 'border-border text-muted-foreground group-hover:border-foreground/30',
+              )}
+            >
+              {step.done ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : step.n}
+            </span>
+            <span className="leading-tight">
+              <span
+                className={cn(
+                  'block text-[12.5px] transition-colors duration-150',
+                  active === step.n
+                    ? 'font-medium'
+                    : 'text-muted-foreground group-hover:text-foreground',
+                )}
+              >
+                {step.label}
+              </span>
+              {step.sub && (
+                <span
+                  className={cn(
+                    'block text-[11px] tabular-nums',
+                    step.warn ? 'text-attn' : 'text-muted-foreground',
+                  )}
+                >
+                  {step.sub}
+                </span>
+              )}
+            </span>
+          </button>
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
 export function VatDeclarationView() {
   const currentYear = new Date().getFullYear()
   const currentMonth = new Date().getMonth() + 1
@@ -1358,6 +1484,11 @@ export function VatDeclarationView() {
     error?: string
   } | null>(null)
   const [retryKey, setRetryKey] = useState(0)
+  // Stegen: which of the four pipeline steps is open. null = automatic
+  // (errors land on Kontrollera, otherwise Granska). A period switch resets
+  // to automatic so stale step choices never survive a context change.
+  const [chosenStep, setChosenStep] = useState<number | null>(null)
+  const [bookingStatus, setBookingStatus] = useState<'booked' | 'draft' | 'none' | null>(null)
 
   // Company settings drive both the momsregistrerad gate and the default
   // periodicity (moms_period in Inställningar). Applied once per company the
@@ -1453,6 +1584,11 @@ export function VatDeclarationView() {
       : `${periodType}:${year}:${period}:${isYearly ? fiscalPeriodId : ''}:${retryKey}`
 
   useEffect(() => {
+    setChosenStep(null)
+    setBookingStatus(null)
+  }, [periodType, year, period, fiscalPeriodId])
+
+  useEffect(() => {
     if (!fetchKey || periodType === null) return
     const params = new URLSearchParams({
       periodType,
@@ -1495,6 +1631,9 @@ export function VatDeclarationView() {
   // but concern manual filers just as much.
   const checks = data ? runVatDeclarationChecks(data.rutor) : []
   const checksBlocked = checks.some((c) => c.status === 'ERROR')
+  const errorCount = checks.filter((c) => c.status === 'ERROR').length
+  const warningCount = checks.filter((c) => c.status === 'WARNING').length
+  const activeStep = chosenStep ?? (checksBlocked ? 1 : 2)
 
   // Settings not settled yet — the picker defaults and the gate both depend
   // on them, so hold the whole view in a skeleton.
@@ -1651,14 +1790,21 @@ export function VatDeclarationView() {
         <div
           className={`space-y-8 transition-opacity duration-150 ${loading ? 'opacity-60' : ''}`}
         >
-          {/* The page follows the filing pipeline: kontrollera, granska,
-              bokför, lämna in. The checks come first because their errors
-              invalidate everything below them. */}
-          <section className="space-y-3">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-              1 · Kontrollera underlaget
-            </h2>
-            <VatChecksCard
+          {/* Stegen (concept): the filing pipeline as a horizontal stepper —
+              kontrollera, granska, bokför, lämna in — showing one step's
+              content at a time. Errors land on step 1, otherwise Granska. */}
+          <VatStepper
+            active={activeStep}
+            onSelect={setChosenStep}
+            errorCount={errorCount}
+            warningCount={warningCount}
+            ruta49={data.rutor.ruta49}
+            bookingStatus={bookingStatus}
+          />
+
+          {activeStep === 1 && (
+            <section className="mx-auto max-w-3xl space-y-3">
+              <VatChecksCard
               checks={checks}
               periodType={periodType}
               year={year}
@@ -1666,13 +1812,17 @@ export function VatDeclarationView() {
               fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
               onCorrected={() => setRetryKey((k) => k + 1)}
             />
-          </section>
+              <div className="flex justify-end">
+                <button type="button" onClick={() => setChosenStep(2)} className={QUIET_LINK_CLASS}>
+                  Nästa: Granska deklarationen →
+                </button>
+              </div>
+            </section>
+          )}
 
-          <section className="space-y-3">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-              2 · Granska deklarationen
-            </h2>
-          <Card>
+          {activeStep === 2 && (
+            <section className="space-y-3">
+              <Card>
             <CardHeader>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <CardTitle>Momsdeklaration - {data.period.start} till {data.period.end}</CardTitle>
@@ -1894,37 +2044,64 @@ export function VatDeclarationView() {
               </div>
             </CardContent>
           </Card>
-          </section>
+              <div className="flex justify-end">
+                <button type="button" onClick={() => setChosenStep(3)} className={QUIET_LINK_CLASS}>
+                  Nästa: Bokför momsen →
+                </button>
+              </div>
+            </section>
+          )}
 
-          <section className="space-y-3">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-              3 · Bokför momsen
-            </h2>
-            <VatBookingCard
+          {activeStep === 3 && (
+            <section className="mx-auto max-w-3xl space-y-3">
+              <VatBookingCard
               periodType={periodType}
               year={year}
               period={period}
               fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
               checksBlocked={checksBlocked}
+              onStatus={setBookingStatus}
             />
-          </section>
+              <div className="flex justify-end">
+                <button type="button" onClick={() => setChosenStep(4)} className={QUIET_LINK_CLASS}>
+                  Nästa: Lämna in →
+                </button>
+              </div>
+            </section>
+          )}
 
-          <section className="space-y-3">
-            <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-              4 · Lämna in
-            </h2>
-            <VatManualFilingCard
+          {activeStep === 4 && (
+            <section className="mx-auto max-w-3xl space-y-8">
+              <SkatteverketPanel
+                periodType={periodType}
+                year={year}
+                period={period}
+                fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
+                fiscalYearEnd={
+                  isYearly && fiscalPeriodEnd
+                    ? {
+                        year: Number(fiscalPeriodEnd.slice(0, 4)),
+                        month: Number(fiscalPeriodEnd.slice(5, 7)),
+                      }
+                    : undefined
+                }
+                hasData={data !== null}
+                localBlocked={checksBlocked}
+              />
+              <VatManualFilingCard
               xmlHref={`/api/reports/vat-declaration/eskd?${vatQueryString()}`}
               pdfHref={`/api/reports/vat-declaration/pdf?${vatQueryString()}`}
             />
-          </section>
+            </section>
+          )}
         </div>
       )}
 
-      {/* Skatteverket integration panel — hidden while the räkenskapsår for
-          helårsmoms is unresolved, so its actions can never target an
-          unconfirmed period. */}
-      {!awaitingFiscalPeriod && (
+      {/* Skatteverket integration panel for the no-data states (fetch error,
+          empty period): with data it lives inside steg 4. Hidden while the
+          räkenskapsår for helårsmoms is unresolved, so its actions can never
+          target an unconfirmed period. */}
+      {!awaitingFiscalPeriod && !data && (
         <SkatteverketPanel
           periodType={periodType}
           year={year}
