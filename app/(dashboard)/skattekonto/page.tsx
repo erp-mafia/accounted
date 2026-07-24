@@ -385,9 +385,9 @@ export default function SkattekontoPage() {
       />
 
       {/* Saldo as compact stat tiles (house metric-card idiom, KPIHeroCards) */}
-      <section className="max-w-3xl space-y-4">
+      <section className="space-y-4">
         {loading && !data ? (
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Skeleton className="h-28 w-full rounded-lg" />
             <Skeleton className="h-28 w-full rounded-lg" />
           </div>
@@ -397,7 +397,7 @@ export default function SkattekontoPage() {
           </p>
         ) : (
           <>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="rounded-lg border border-border p-4">
                 <div className="flex items-center gap-2">
                   <img
@@ -506,7 +506,7 @@ export default function SkattekontoPage() {
         bookingId={bookingId}
       />
 
-      <p className="max-w-3xl px-1 text-xs leading-5 text-muted-foreground">
+      <p className="px-1 text-xs leading-5 text-muted-foreground">
         {t('pgnote', { amount: formatCurrency(data?.saldoKronofogden ?? 0) })}
       </p>
 
@@ -599,14 +599,14 @@ function SkattekontoTable({
 
   if (sections.length === 0) {
     return (
-      <p className="max-w-3xl py-8 text-center text-sm text-muted-foreground">
+      <p className="py-8 text-center text-sm text-muted-foreground">
         {t('no_transactions')}
       </p>
     )
   }
 
   return (
-    <div className="max-w-3xl overflow-x-auto" role="region" aria-label="Skattekontohändelser">
+    <div className="overflow-x-auto" role="region" aria-label="Skattekontohändelser">
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>

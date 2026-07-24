@@ -2075,7 +2075,7 @@ export default function ImportPage() {
           </div>
 
           {view === 'import' ? (
-            <div className="max-w-3xl">
+            <div>
               <div className="stagger-enter">
                 {hasBankingExtension && (
                   <ImportRow
@@ -2090,7 +2090,7 @@ export default function ImportPage() {
                         </span>
                       )
                     }
-                    chips={<LogoChip src="/logos/enable-banking.webp" name="Enable Banking" />}
+                    chips={<LogoChip src="/logos/enable-banking-icon.png" name="Enable Banking" mono />}
                     disabled={isSandbox}
                     onClick={() => setMode('psd2')}
                   />
@@ -2131,7 +2131,7 @@ export default function ImportPage() {
               <p className="mt-4 px-1 text-xs leading-5 text-muted-foreground">{t('pgnote')}</p>
             </div>
           ) : (
-            <div className="max-w-3xl">
+            <div>
               <div className="stagger-enter">
                 <ImportRow
                   id="sie-export"
@@ -2297,10 +2297,21 @@ function ImportRow({
 
 // Provider mark chip (same recipe as the pre-migration live page): tiny logo
 // on a quiet bordered chip, so integrations read as first-class brands.
-function LogoChip({ src, name }: { src: string; name: string }) {
+// `mono` is for light-on-transparent marks (Enable Banking): the marketing
+// site's grayscale+brightness treatment makes them read on a light ground,
+// with the inverse lift in dark mode.
+function LogoChip({ src, name, mono = false }: { src: string; name: string; mono?: boolean }) {
   return (
     <span className="flex items-center gap-2 rounded border border-border bg-muted/30 px-2 py-1">
-      <img src={src} alt="" className="h-4 w-4 shrink-0 rounded-sm object-contain" />
+      <img
+        src={src}
+        alt=""
+        className={cn(
+          'h-4 w-4 shrink-0 rounded-sm object-contain',
+          mono &&
+            'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
+        )}
+      />
       <span className="text-[11px] font-medium text-muted-foreground">{name}</span>
     </span>
   )
