@@ -5,7 +5,6 @@ import { useTranslations } from 'next-intl'
 import { AlertCircle, CheckCircle2, FileClock, Loader2, LockKeyhole, Save } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
@@ -289,60 +288,57 @@ export function AnnualReportStudio({
 
   if (loading || !profile || !compliance) {
     return (
-      <Card>
-        <CardContent className="flex min-h-24 items-center justify-center p-6 text-sm text-muted-foreground">
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> {t('loading')}
-        </CardContent>
-      </Card>
+      <div className="flex min-h-24 items-center justify-center px-1 py-6 text-sm text-muted-foreground">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> {t('loading')}
+      </div>
     )
   }
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader className="space-y-3">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <CardTitle className="text-lg">{t('title')}</CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">{t('description')}</p>
+    <div className="space-y-8">
+      <div className="space-y-3 px-1">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="font-sans text-sm font-medium">{t('title')}</h3>
+            <p className="mt-1 text-sm text-muted-foreground">{t('description')}</p>
+          </div>
+          {blockingIssues.length === 0 ? (
+            <span className="text-xs text-muted-foreground">{t('no_blockers')}</span>
+          ) : (
+            <Badge variant="warning">{t('blocker_count', { count: blockingIssues.length })}</Badge>
+          )}
+        </div>
+        <div className="grid gap-2 sm:grid-cols-4">
+          {[
+            [
+              t('step_scope'),
+              compliance.eligibility.issues.every((issue) => issue.severity !== 'error'),
+            ],
+            [t('step_content'), Boolean(profile.narrative_confirmed_at)],
+            [t('step_signatures'), versions.some((version) => version.status === 'signed')],
+            [t('step_filing'), versions.some((version) => ['filed', 'registered'].includes(version.status))],
+          ].map(([label, complete], index) => (
+            <div key={String(label)} className="flex min-h-11 items-center gap-2 border-b border-border/60 px-1 py-2 text-sm">
+              {complete ? (
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
+              ) : (
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border text-xs">
+                  {index + 1}
+                </span>
+              )}
+              <span>{label}</span>
             </div>
-            <Badge variant={blockingIssues.length === 0 ? 'success' : 'warning'}>
-              {blockingIssues.length === 0
-                ? t('no_blockers')
-                : t('blocker_count', { count: blockingIssues.length })}
-            </Badge>
-          </div>
-          <div className="grid gap-2 sm:grid-cols-4">
-            {[
-              [
-                t('step_scope'),
-                compliance.eligibility.issues.every((issue) => issue.severity !== 'error'),
-              ],
-              [t('step_content'), Boolean(profile.narrative_confirmed_at)],
-              [t('step_signatures'), versions.some((version) => version.status === 'signed')],
-              [t('step_filing'), versions.some((version) => ['filed', 'registered'].includes(version.status))],
-            ].map(([label, complete], index) => (
-              <div key={String(label)} className="flex min-h-11 items-center gap-2 border-b border-border px-1 py-2 text-sm">
-                {complete ? (
-                  <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />
-                ) : (
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border text-xs">
-                    {index + 1}
-                  </span>
-                )}
-                <span>{label}</span>
-              </div>
-            ))}
-          </div>
-        </CardHeader>
-      </Card>
+          ))}
+        </div>
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('scope_title')}</CardTitle>
-          <p className="text-sm text-muted-foreground">{t('scope_description')}</p>
-        </CardHeader>
-        <CardContent className="space-y-6">
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('scope_title')}</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <p className="px-1 text-sm text-muted-foreground">{t('scope_description')}</p>
+        <div className="space-y-6 px-1 pt-4">
           <div className="grid gap-4 md:grid-cols-2">
             <BooleanQuestion
               id="ar-public"
@@ -483,14 +479,15 @@ export function AnnualReportStudio({
               {t('save_scope')}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('checks_title')}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('checks_title')}</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="space-y-4 px-1 pt-2">
           {blockingIssues.length === 0 ? (
             <div className="flex items-center gap-2 text-sm text-success">
               <CheckCircle2 className="h-4 w-4" /> {t('no_blockers')}
@@ -509,8 +506,8 @@ export function AnnualReportStudio({
             </ul>
           )}
           {digitalOnlyIssues.length > 0 && (
-            <div className="space-y-2 rounded-md border border-warning/40 bg-warning/5 p-3">
-              <p className="text-sm font-medium">{t('digital_checks_title')}</p>
+            <div className="space-y-2">
+              <p className="text-[12.5px] font-medium leading-5 text-attn">{t('digital_checks_title')}</p>
               <ul className="space-y-2">
                 {digitalOnlyIssues.map((issue) => (
                   <li key={issue.code} className="text-sm text-muted-foreground">
@@ -520,7 +517,7 @@ export function AnnualReportStudio({
               </ul>
             </div>
           )}
-          <div className="flex flex-wrap justify-end gap-3 border-t border-border pt-4">
+          <div className="flex flex-wrap justify-end gap-3 border-t border-border/60 pt-4">
             <Button
               variant="outline"
               className="min-h-11"
@@ -550,14 +547,15 @@ export function AnnualReportStudio({
               {t('lock_version')}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('versions_title')}</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('versions_title')}</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="px-1 pt-2">
           {versions.length === 0 ? (
             <p className="text-sm text-muted-foreground">{t('versions_empty')}</p>
           ) : (
@@ -582,8 +580,8 @@ export function AnnualReportStudio({
               ))}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   )
 }

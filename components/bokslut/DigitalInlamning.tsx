@@ -18,7 +18,6 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -421,15 +420,16 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
         }
       >
       {/* Steg: Granska & validera */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Digital inlämning: granska &amp; validera (iXBRL)</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Bolagsverket tar emot årsredovisningen som iXBRL (XHTML). Dokumentet nedan är
-            exakt det som lämnas in: granska det som den slutliga presentationen.
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-4 text-sm">
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Digital inlämning: granska &amp; validera (iXBRL)</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <p className="px-1 text-sm text-muted-foreground">
+          Bolagsverket tar emot årsredovisningen som iXBRL (XHTML). Dokumentet nedan är
+          exakt det som lämnas in: granska det som den slutliga presentationen.
+        </p>
+        <div className="space-y-4 px-1 pt-4 text-sm">
           <div className="flex flex-wrap gap-3">
             <Button className="min-h-11" variant="outline" onClick={() => setShowPreview((value) => !value)}>
               {showPreview ? 'Dölj förhandsgranskning' : 'Förhandsgranska iXBRL'}
@@ -486,20 +486,21 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               )}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {/* Steg: Skicka in */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Skicka in till Bolagsverket</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Årsredovisningen laddas upp till företagets eget utrymme hos Bolagsverket.
-            Undertecknaren får ett e-postmeddelande och signerar fastställelseintyget med
-            e-legitimation hos Bolagsverket: först då är årsredovisningen inlämnad.
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-4 text-sm">
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Skicka in till Bolagsverket</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <p className="px-1 text-sm text-muted-foreground">
+          Årsredovisningen laddas upp till företagets eget utrymme hos Bolagsverket.
+          Undertecknaren får ett e-postmeddelande och signerar fastställelseintyget med
+          e-legitimation hos Bolagsverket: först då är årsredovisningen inlämnad.
+        </p>
+        <div className="space-y-4 px-1 pt-4 text-sm">
           {extensionActive === null && (
             <p className="text-muted-foreground">
               <Loader2 className="inline h-4 w-4 animate-spin mr-2" />
@@ -663,7 +664,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               </p>
 
               {registryInformation && (
-                <div className="rounded-md border border-border bg-muted/20 p-4 text-xs">
+                <div className="border-t border-border/60 pt-3 text-xs">
                   <p className="font-medium">Grunduppgifter från Bolagsverket</p>
                   <p className="mt-1 text-muted-foreground">
                     {registryInformation.namn}
@@ -689,7 +690,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               )}
 
               {avtal && (
-                <div className="rounded-lg border border-border p-4 space-y-3">
+                <div className="space-y-3 border-y border-border/60 py-4">
                   <p className="font-medium">Villkor för eget utrymme hos Bolagsverket</p>
                   <p className="text-muted-foreground whitespace-pre-wrap text-xs max-h-48 overflow-y-auto">
                     {avtal.text}
@@ -766,9 +767,9 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               </div>
 
               {kvittens && (
-                <div className="rounded-lg border border-border p-4 space-y-2">
+                <div className="space-y-2 border-t border-border/60 pt-4">
                   <div className="flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4" />
+                    <ShieldCheck className="h-4 w-4 text-success" />
                     <p className="font-medium">Uppladdad till eget utrymme</p>
                   </div>
                   <p className="text-muted-foreground text-xs">
@@ -784,19 +785,20 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               )}
             </>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {/* Steg: Status */}
       {extensionActive === true && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Inlämningsstatus</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Status uppdateras automatiskt via händelseaviseringar från Bolagsverket.
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm">
+        <section>
+          <div className="mb-1 flex items-center gap-2 px-1">
+            <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Inlämningsstatus</h3>
+            <div className="h-px flex-1 bg-border/60" />
+          </div>
+          <p className="px-1 text-sm text-muted-foreground">
+            Status uppdateras automatiskt via händelseaviseringar från Bolagsverket.
+          </p>
+          <div className="space-y-4 px-1 pt-4 text-sm">
             <div className="flex justify-end">
               <Button
                 className="min-h-11"
@@ -868,8 +870,8 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 </div>
               )
             })}
-          </CardContent>
-        </Card>
+          </div>
+        </section>
       )}
       </div>
       {INLAMNING_COMING_SOON && (

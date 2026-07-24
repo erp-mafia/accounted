@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -452,10 +451,9 @@ export default function ArsredovisningPage() {
           title="Årsredovisning"
           description="Förhandsgranska och ladda ner årsredovisningen för valt räkenskapsår."
         />
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Välj räkenskapsår</CardTitle>
-            <p className="text-sm text-muted-foreground">
+        <div className="max-w-xl px-1">
+            <h3 className="font-sans text-sm font-medium">Välj räkenskapsår</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
               Välj det räkenskapsår du vill se årsredovisningen för. Du kan
               förhandsgranska och ladda ner PDF-utkastet utan att stänga året: det
               fullständiga bokslutet görs sedan via{' '}
@@ -464,8 +462,7 @@ export default function ArsredovisningPage() {
               </Link>
               .
             </p>
-          </CardHeader>
-          <CardContent>
+          <div className="mt-4">
             <FiscalYearSelector
               value={null}
               onChange={(id) => {
@@ -475,8 +472,8 @@ export default function ArsredovisningPage() {
               hideFuturePeriods
               label={null}
             />
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
     )
   }
@@ -485,12 +482,10 @@ export default function ArsredovisningPage() {
     return (
       <div className="space-y-8">
         <PageHeader title="Årsredovisning" />
-        <Card>
-          <CardContent className="p-6 space-y-3">
-            <Skeleton className="h-6 w-1/3" />
-            <Skeleton className="h-32 w-full" />
-          </CardContent>
-        </Card>
+        <div className="space-y-3">
+          <Skeleton className="h-6 w-1/3" />
+          <Skeleton className="h-32 w-full" />
+        </div>
       </div>
     )
   }
@@ -499,11 +494,7 @@ export default function ArsredovisningPage() {
     return (
       <div className="space-y-8">
         <PageHeader title="Årsredovisning" />
-        <Card>
-          <CardContent className="p-6 text-destructive">
-            {error ?? 'Kunde inte hämta data'}
-          </CardContent>
-        </Card>
+        <p className="py-4 text-sm text-destructive">{error ?? 'Kunde inte hämta data'}</p>
       </div>
     )
   }
@@ -531,16 +522,14 @@ export default function ArsredovisningPage() {
       />
 
       {data.accounting_framework === 'k3' && (
-        <Card>
-          <CardContent className="p-4 text-sm">
-            <p className="font-medium">Årsredovisning enligt K3 (BFNAR 2012:1)</p>
-            <p className="text-muted-foreground mt-1">
-              Dokumentet innehåller kassaflödesanalys, förändring av eget kapital och
-              utökade noter (uppskjuten skatt, redovisningsprinciper, materiella
-              anläggningstillgångar): krav som följer K3 men inte K2.
-            </p>
-          </CardContent>
-        </Card>
+        <div className="px-1 text-sm">
+          <p className="font-medium">Årsredovisning enligt K3 (BFNAR 2012:1)</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            Dokumentet innehåller kassaflödesanalys, förändring av eget kapital och
+            utökade noter (uppskjuten skatt, redovisningsprinciper, materiella
+            anläggningstillgångar): krav som följer K3 men inte K2.
+          </p>
+        </div>
       )}
 
       <AnnualReportStudio
@@ -553,15 +542,16 @@ export default function ArsredovisningPage() {
         onVersionsChanged={handleVersionsChanged}
       />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Förvaltningsberättelse: narrativ</CardTitle>
-          <p className="text-sm text-muted-foreground">
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Förvaltningsberättelse: narrativ</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+          <p className="px-1 text-xs leading-5 text-muted-foreground">
             Texten nedan visas i PDF:en. Klicka på <strong>Spara texten</strong> nedan
             för att behålla ändringarna mellan sessioner.
           </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        <div className="space-y-4 px-1 pt-4">
           <div className="space-y-2">
             <Label htmlFor="ar-description">Verksamhetsbeskrivning</Label>
             <Textarea
@@ -794,14 +784,15 @@ export default function ArsredovisningPage() {
               )}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Flerårsöversikt</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Flerårsöversikt</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="px-1 pt-2">
           <Table>
             <TableHeader>
               <TableRow>
@@ -830,20 +821,21 @@ export default function ArsredovisningPage() {
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Underskrifter</CardTitle>
-          <p className="text-sm text-muted-foreground">
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Underskrifter</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+          <p className="px-1 text-xs leading-5 text-muted-foreground">
             Lägg till varje styrelseledamot och eventuell VD. Lås först en version i
             arbetsflödet ovan. När originalet eller en extern e-signatur är klar registrerar
             du datum och bevisreferens mot exakt den version som skrevs under.
           </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 rounded-md border border-border bg-muted/20 p-4 md:grid-cols-2">
+        <div className="space-y-4 px-1 pt-4">
+          <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="signature-version">Låst version</Label>
               <select
@@ -993,14 +985,15 @@ export default function ArsredovisningPage() {
               <Plus className="mr-1 h-4 w-4" /> Lägg till
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">PDF för pappersinlämning</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 text-sm">
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">PDF för pappersinlämning</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="space-y-4 px-1 pt-2 text-sm">
           <p className="text-muted-foreground">
             Ladda ner PDF-utkastet och granska det. För pappersinlämning ska
             årsredovisningens original skrivas under av samtliga styrelseledamöter och
@@ -1045,24 +1038,24 @@ export default function ArsredovisningPage() {
             }
           >
           {data.warnings.length > 0 && (
-            <div className="rounded-md border border-border bg-muted/30 p-3 text-xs space-y-1">
+            <div className="space-y-1 border-t border-border/60 pt-3 text-xs">
               <p className="font-medium">Innan inlämning till Bolagsverket:</p>
-              <ul className="list-disc pl-5 space-y-1">
+              <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
                 {data.warnings.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
               </ul>
             </div>
           )}
-          <div className="rounded-md border border-border bg-muted/30 p-3 text-xs">
-            <strong>Digital inlämning är frivillig.</strong> Den görs som iXBRL genom en
+          <p className="text-xs text-muted-foreground">
+            <strong className="text-foreground">Digital inlämning är frivillig.</strong> Den görs som iXBRL genom en
             ansluten programvara. Accounteds direktinlämning förblir stängd tills avtal,
             certifikat och Bolagsverkets acceptanstest är klara. PDF-flödet ovan är den
             separata vägen för pappersinlämning.
+          </p>
           </div>
-          </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {data.accounting_framework === 'k2' && periodId && (
         <DigitalInlamning periodId={periodId} />
