@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -97,26 +96,22 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
 
   if (error) {
     return (
-      <Card>
-        <CardContent className="p-6 flex flex-wrap items-center gap-3 text-destructive">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span className="text-sm">{error}</span>
-          <Button variant="outline" onClick={() => setRetryKey((k) => k + 1)}>
-            Försök igen
-          </Button>
-        </CardContent>
-      </Card>
+      <div className="flex flex-wrap items-center gap-3 py-4 text-destructive">
+        <AlertCircle className="h-4 w-4 shrink-0" />
+        <span className="text-sm">{error}</span>
+        <Button variant="outline" onClick={() => setRetryKey((k) => k + 1)}>
+          Försök igen
+        </Button>
+      </div>
     )
   }
 
   if (loading && !data) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-4">
-          <Skeleton className="h-5 w-48" />
-          <Skeleton className="h-64" />
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        <Skeleton className="h-5 w-48" />
+        <Skeleton className="h-64" />
+      </div>
     )
   }
 
@@ -127,11 +122,10 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
       className={`space-y-8 transition-opacity duration-150 ${loading ? 'opacity-60' : ''}`}
     >
       {/* Header: company, year, filing artifact, and how to file it */}
-      <Card>
-        <CardHeader>
+      <div className="px-1">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <CardTitle className="text-base">INK2 (Aktiebolag)</CardTitle>
+              <h3 className="font-sans text-sm font-medium">INK2 (Aktiebolag)</h3>
               <p className="text-sm text-muted-foreground mt-1">
                 {data.companyInfo.companyName} · {data.fiscalYear.name}
                 {data.companyInfo.orgNumber && ` · Org.nr: ${data.companyInfo.orgNumber}`}
@@ -148,11 +142,9 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
               {downloadError}
             </div>
           )}
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3">
-            <Info className="h-4 w-4 mt-1 shrink-0 text-muted-foreground" />
-            <div className="text-sm text-muted-foreground space-y-2">
+          <div className="mt-4 flex items-start gap-2">
+            <Info className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <div className="text-[13px] leading-6 text-muted-foreground space-y-2">
               <p>
                 INK2 visar det bokföringsmässiga resultatet baserat på din bokföring.
               </p>
@@ -172,35 +164,31 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
               </ol>
             </div>
           </div>
-        </CardContent>
-      </Card>
+      </div>
 
       {/* Warnings */}
       {data.warnings.length > 0 && (
-        <Card>
-          <CardContent className="py-4">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="h-4 w-4 mt-1 shrink-0 text-warning" />
-              <div className="space-y-1">
-                <p className="text-sm font-medium">
-                  {data.warnings.length}{' '}
-                  {data.warnings.length === 1 ? 'varning' : 'varningar'}
-                </p>
-                {data.warnings.map((warning, i) => (
-                  <p key={i} className="text-sm text-muted-foreground">{warning}</p>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <div className="flex items-start gap-2 px-1">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
+          <div className="space-y-1">
+            <p className="text-[12.5px] font-medium leading-5 text-attn">
+              {data.warnings.length}{' '}
+              {data.warnings.length === 1 ? 'varning' : 'varningar'}
+            </p>
+            {data.warnings.map((warning, i) => (
+              <p key={i} className="text-[12.5px] leading-5 text-muted-foreground">{warning}</p>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Assets section */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Tillgångar</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Tillgångar</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="px-1 pt-2">
           <Table>
             <TableHeader>
               <TableRow>
@@ -228,15 +216,16 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
               </tr>
             </tfoot>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {/* Equity & Liabilities section */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Eget kapital och skulder</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Eget kapital och skulder</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="px-1 pt-2">
           <Table>
             <TableHeader>
               <TableRow>
@@ -264,15 +253,16 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
               </tr>
             </tfoot>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {/* Income Statement section */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Resultaträkning</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Resultaträkning</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="px-1 pt-2">
           <Table>
             <TableHeader>
               <TableRow>
@@ -314,15 +304,16 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
               </tr>
             </tfoot>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {/* INK2S summary */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">INK2S: Skattemässiga justeringar</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">INK2S: Skattemässiga justeringar</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="px-1 pt-2">
           <p className="text-sm text-muted-foreground mb-4">
             Grundläggande justeringar och de återläggningar som sparats i bokslutet
             beräknas automatiskt. Kontrollera övriga deklarationsjusteringar med din
@@ -384,8 +375,8 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
               </tr>
             </tfoot>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   )
 }

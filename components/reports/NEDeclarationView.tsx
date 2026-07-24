@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -108,26 +107,22 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
 
   if (error) {
     return (
-      <Card>
-        <CardContent className="p-6 flex flex-wrap items-center gap-3 text-destructive">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span className="text-sm">{error}</span>
-          <Button variant="outline" onClick={() => setRetryKey((k) => k + 1)}>
-            Försök igen
-          </Button>
-        </CardContent>
-      </Card>
+      <div className="flex flex-wrap items-center gap-3 py-4 text-destructive">
+        <AlertCircle className="h-4 w-4 shrink-0" />
+        <span className="text-sm">{error}</span>
+        <Button variant="outline" onClick={() => setRetryKey((k) => k + 1)}>
+          Försök igen
+        </Button>
+      </div>
     )
   }
 
   if (loading && !data) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-4">
-          <Skeleton className="h-5 w-48" />
-          <Skeleton className="h-64" />
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        <Skeleton className="h-5 w-48" />
+        <Skeleton className="h-64" />
+      </div>
     )
   }
 
@@ -138,11 +133,10 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
       className={`space-y-8 transition-opacity duration-150 ${loading ? 'opacity-60' : ''}`}
     >
       {/* Header: company, year, and the filing artifact */}
-      <Card>
-        <CardHeader>
+      <div className="px-1">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <CardTitle className="text-base">NE-bilaga (Enskild firma)</CardTitle>
+              <h3 className="font-sans text-sm font-medium">NE-bilaga (Enskild firma)</h3>
               <p className="text-sm text-muted-foreground mt-1">
                 {data.companyInfo.companyName} · {data.fiscalYear.name}
                 {data.companyInfo.orgNumber && ` · Org.nr: ${data.companyInfo.orgNumber}`}
@@ -159,35 +153,31 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
               {downloadError}
             </div>
           )}
-        </CardHeader>
-      </Card>
+      </div>
 
       {/* Warnings */}
       {data.warnings.length > 0 && (
-        <Card>
-          <CardContent className="py-4">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="h-4 w-4 mt-1 shrink-0 text-warning" />
-              <div className="space-y-1">
-                <p className="text-sm font-medium">
-                  {data.warnings.length}{' '}
-                  {data.warnings.length === 1 ? 'varning' : 'varningar'}
-                </p>
-                {data.warnings.map((warning, i) => (
-                  <p key={i} className="text-sm text-muted-foreground">{warning}</p>
-                ))}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <div className="flex items-start gap-2 px-1">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
+          <div className="space-y-1">
+            <p className="text-[12.5px] font-medium leading-5 text-attn">
+              {data.warnings.length}{' '}
+              {data.warnings.length === 1 ? 'varning' : 'varningar'}
+            </p>
+            {data.warnings.map((warning, i) => (
+              <p key={i} className="text-[12.5px] leading-5 text-muted-foreground">{warning}</p>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Revenue section */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Intäkter</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Intäkter</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="px-1 pt-2">
           <Table>
             <TableHeader>
               <TableRow>
@@ -217,15 +207,16 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
               </tr>
             </tfoot>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {/* Expenses section */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Kostnader</CardTitle>
-        </CardHeader>
-        <CardContent>
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Kostnader</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="px-1 pt-2">
           <Table>
             <TableHeader>
               <TableRow>
@@ -261,27 +252,21 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
               </tr>
             </tfoot>
           </Table>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      {/* Result */}
-      <Card>
-        <CardContent className="py-4">
-          <div className="flex justify-between items-center">
-            <div>
-              <span className="font-mono text-xs bg-muted px-1 rounded mr-2">R11</span>
-              <span className="font-display text-xl">Årets resultat</span>
-            </div>
-            <span
-              className={`font-display text-2xl tabular-nums ${
-                data.rutor.R11 >= 0 ? 'text-success' : 'text-destructive'
-              }`}
-            >
-              {formatWholeKronor(data.rutor.R11)}
-            </span>
-          </div>
-        </CardContent>
-      </Card>
+      {/* Result: the emphasized document foot (house skv-foot idiom). */}
+      <div className="flex items-baseline gap-3 border-t-2 border-foreground/80 px-1 pt-3">
+        <span className="font-mono text-xs text-muted-foreground">R11</span>
+        <span className="flex-1 text-sm font-medium">Årets resultat</span>
+        <span
+          className={`text-sm font-semibold tabular-nums ${
+            data.rutor.R11 >= 0 ? '' : 'text-destructive'
+          }`}
+        >
+          {formatWholeKronor(data.rutor.R11)}
+        </span>
+      </div>
     </div>
   )
 }
