@@ -1,10 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
-import { Lock, Loader2, AlertTriangle } from 'lucide-react'
+import { Lock, Loader2 } from 'lucide-react'
 
 interface ExecuteStepProps {
   periodName: string
@@ -27,14 +26,15 @@ export function ExecuteStep({ periodName, isRunning, error, bolagsskattMissing, 
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Lock className="h-4 w-4" />
+      <section>
+        <div className="mb-3 flex items-center gap-2 px-1">
+          <Lock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Klar att verkställa
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="space-y-4 px-1">
           <p className="text-sm">
             När du verkställer bokslutet för <strong>{periodName}</strong> kommer följande att hända
             i en transaktion:
@@ -51,23 +51,16 @@ export function ExecuteStep({ periodName, isRunning, error, bolagsskattMissing, 
             stornering eller bokar i den nya perioden.
           </p>
           {bolagsskattMissing && (
-            <div className="rounded-md border border-border p-3 text-sm flex items-start gap-2">
-              <AlertTriangle className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
-              <p>
-                Ingen bolagsskatt är bokförd trots att året visar vinst. Om det inte är avsiktligt
-                (t.ex. underskottsavdrag, periodiseringsfond eller överavskrivningar som nollar det
-                skattemässiga resultatet), gå tillbaka och boka skatten i dispositionssteget innan
-                du verkställer.
-              </p>
-            </div>
+            <p className="text-[12.5px] leading-5 text-attn">
+              Ingen bolagsskatt är bokförd trots att året visar vinst. Om det inte är avsiktligt
+              (t.ex. underskottsavdrag, periodiseringsfond eller överavskrivningar som nollar det
+              skattemässiga resultatet), gå tillbaka och boka skatten i dispositionssteget innan
+              du verkställer.
+            </p>
           )}
-          {error && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-              {error}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+      </section>
 
       <div className="flex justify-between">
         <Button variant="outline" onClick={onBack} disabled={isRunning}>

@@ -1,7 +1,6 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -36,8 +35,7 @@ export function ResultStep({ result }: ResultStepProps) {
   // grouped by BAS class so the user can confirm visually before leaving.
   return (
     <div className="space-y-6">
-      <Card>
-        <CardContent className="p-6 text-center space-y-4">
+      <div className="space-y-4 py-6 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-success/10">
             <CheckCircle2 className="h-7 w-7 text-success" />
           </div>
@@ -45,14 +43,14 @@ export function ResultStep({ result }: ResultStepProps) {
           <p className="text-muted-foreground">
             Perioden är stängd och en ny räkenskapsperiod har skapats.
           </p>
-        </CardContent>
-      </Card>
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Resultat</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm">
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">Resultat</h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <div className="space-y-3 px-1 pt-2 text-sm">
           <ResultRow
             label="Bokslutsverifikation"
             value={formatVoucher(result.closingEntry)}
@@ -78,12 +76,11 @@ export function ResultStep({ result }: ResultStepProps) {
             />
           )}
           <ResultRow label="Ny räkenskapsperiod" value={result.nextPeriod.name} />
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {result.resultAppropriationFailed && (
-        <Card className="border-destructive/30 bg-destructive/5">
-          <CardContent className="p-4 flex items-start gap-3">
+        <div className="flex items-start gap-3 px-1 py-2 text-destructive">
             <AlertTriangle className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
             <p className="text-sm">
               <span className="font-medium">
@@ -94,8 +91,7 @@ export function ResultStep({ result }: ResultStepProps) {
               Det måste flyttas till 2098 innan balansräkningen stämmer. Kör om bokslutet
               eller kontakta support: felet är loggat.
             </p>
-          </CardContent>
-        </Card>
+        </div>
       )}
 
       {continuity && (
@@ -105,8 +101,7 @@ export function ResultStep({ result }: ResultStepProps) {
         />
       )}
 
-      <Card>
-        <CardContent className="p-6 space-y-4">
+      <section className="space-y-4 px-1">
           <label className="flex items-start gap-3 cursor-pointer">
             <Checkbox
               checked={acknowledged}
@@ -153,8 +148,7 @@ export function ResultStep({ result }: ResultStepProps) {
               </Link>
             </Button>
           </div>
-        </CardContent>
-      </Card>
+      </section>
     </div>
   )
 }
@@ -197,9 +191,9 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
   )
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <CardTitle className="text-base">IB/UB-avstämning</CardTitle>
+    <section>
+      <div className="mb-3 flex items-center justify-between gap-2 px-1">
+        <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">IB/UB-avstämning</h3>
         {hasIssues ? (
           <Badge variant="destructive" className="gap-1">
             <AlertTriangle className="h-3 w-3" />
@@ -211,8 +205,8 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
             Stämmer
           </Badge>
         )}
-      </CardHeader>
-      <CardContent className="space-y-4">
+      </div>
+      <div className="space-y-4 px-1">
         <p className="text-sm text-muted-foreground">
           {checkedAccounts} balanskonto(n) jämförda mellan utgående balans i
           stängd period och ingående balans i ny period.
@@ -280,7 +274,7 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
             })}
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   )
 }

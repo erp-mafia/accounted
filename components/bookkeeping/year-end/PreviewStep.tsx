@@ -1,10 +1,9 @@
 'use client'
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ArrowRight, AlertTriangle } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import {
   Table,
   TableBody,
@@ -27,23 +26,15 @@ interface PreviewStepProps {
 export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: PreviewStepProps) {
   if (isLoading) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-3">
-          <Skeleton className="h-6 w-1/3" />
-          <Skeleton className="h-32 w-full" />
-        </CardContent>
-      </Card>
+      <div className="space-y-3">
+        <Skeleton className="h-6 w-1/3" />
+        <Skeleton className="h-32 w-full" />
+      </div>
     )
   }
 
   if (error) {
-    return (
-      <Card>
-        <CardContent className="p-6">
-          <p className="text-destructive">{error}</p>
-        </CardContent>
-      </Card>
-    )
+    return <p className="py-4 text-sm text-destructive">{error}</p>
   }
 
   if (!preview) return null
@@ -53,58 +44,49 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Årets resultat</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-baseline justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground">
-                Nettoresultat överförs till {preview.closingAccount} {preview.closingAccountName}
-              </p>
-              {isProfit && <Badge variant="success" className="mt-2">Vinst</Badge>}
-              {isLoss && <Badge variant="destructive" className="mt-2">Förlust</Badge>}
-            </div>
-            <p className="font-display text-3xl tabular-nums">
-              {formatCurrency(preview.netResult)}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="px-1">
+        <p className="font-sans text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          Årets resultat
+        </p>
+        <div className="mt-1 flex items-baseline justify-between gap-4">
+          <p
+            className={`font-display text-2xl tabular-nums tracking-tight ${isLoss ? 'text-destructive' : ''}`}
+          >
+            {formatCurrency(preview.netResult)}
+          </p>
+          {isProfit && <span className="text-xs text-muted-foreground">Vinst</span>}
+          {isLoss && <Badge variant="destructive" className="font-normal">Förlust</Badge>}
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Nettoresultat överförs till {preview.closingAccount} {preview.closingAccountName}
+        </p>
+      </div>
 
       {preview.bolagsskattMissing && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-warning-foreground" />
-              Ingen bolagsskatt är bokförd
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <p className="text-sm">
-              Året visar vinst men ingen skatt på årets resultat (konto 8910) finns bland de konton
-              som stängs. Gå tillbaka till dispositionssteget och boka bolagsskatten innan du
-              verkställer, om inte skattemässigt resultat är noll (t.ex. genom underskottsavdrag,
-              avsättning till periodiseringsfond eller överavskrivningar).
-            </p>
-            <Button variant="outline" size="sm" onClick={onBack}>
-              Till dispositionssteget
-            </Button>
-          </CardContent>
-        </Card>
+        <p className="px-1 text-[12.5px] leading-5 text-attn">
+          Året visar vinst men ingen skatt på årets resultat (konto 8910) finns bland de konton
+          som stängs. Gå tillbaka till dispositionssteget och boka bolagsskatten innan du
+          verkställer, om inte skattemässigt resultat är noll (t.ex. genom underskottsavdrag,
+          avsättning till periodiseringsfond eller överavskrivningar).{' '}
+          <button type="button" onClick={onBack} className="underline underline-offset-2 hover:opacity-80">
+            Till dispositionssteget
+          </button>
+        </p>
       )}
 
       {preview.currencyRevaluation && preview.currencyRevaluation.items.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Kursrevaluering (ÅRL 4:13)</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Öppna fordringar/skulder i utländsk valuta värderas om till balansdagens kurs innan bokslut.
-              Detta sker automatiskt som en del av verkställandet.
-            </p>
-          </CardHeader>
-          <CardContent>
+        <section>
+          <div className="mb-1 flex items-center gap-2 px-1">
+            <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Kursrevaluering (ÅRL 4:13)
+            </h3>
+            <div className="h-px flex-1 bg-border/60" />
+          </div>
+          <p className="px-1 text-xs leading-5 text-muted-foreground">
+            Öppna fordringar/skulder i utländsk valuta värderas om till balansdagens kurs innan
+            bokslut. Detta sker automatiskt som en del av verkställandet.
+          </p>
+          <div className="px-1 pt-4">
             <div className="grid grid-cols-3 gap-4 text-sm">
               <div>
                 <p className="text-muted-foreground text-xs uppercase tracking-wider">Kursvinst</p>
@@ -125,18 +107,20 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
                 </p>
               </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Bokslutsverifikation: förhandsgranskning</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            {preview.closingLines.length} kontorader. Nollställer klass 3-8 mot {preview.closingAccount}.
-          </p>
-        </CardHeader>
-        <CardContent className="p-0">
+      <section>
+        <div className="mb-1 flex items-center gap-2 px-1">
+          <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Bokslutsverifikation: förhandsgranskning
+          </h3>
+          <div className="h-px flex-1 bg-border/60" />
+        </div>
+        <p className="px-1 pb-2 text-xs leading-5 text-muted-foreground">
+          {preview.closingLines.length} kontorader. Nollställer klass 3-8 mot {preview.closingAccount}.
+        </p>
           <Table>
             <TableHeader>
               <TableRow>
@@ -161,8 +145,7 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
               ))}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+      </section>
 
       <div className="flex justify-between">
         <Button variant="outline" onClick={onBack}>

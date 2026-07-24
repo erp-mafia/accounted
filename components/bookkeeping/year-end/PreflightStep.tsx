@@ -1,10 +1,10 @@
 'use client'
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { CheckCircle2, AlertTriangle, XCircle, Info } from 'lucide-react'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { AlertTriangle, Info, XCircle } from 'lucide-react'
 import Link from 'next/link'
 import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
 
@@ -15,28 +15,33 @@ interface PreflightStepProps {
   onContinue: () => void
 }
 
+/** Sans eyebrow section head with a trailing hairline (house idiom). */
+function SectionHead({ icon, children }: { icon?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="mb-1 flex items-center gap-2 px-1">
+      {icon}
+      <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        {children}
+      </h3>
+      <div className="h-px flex-1 bg-border/60" />
+    </div>
+  )
+}
+
 export function PreflightStep({ report, isLoading, error, onContinue }: PreflightStepProps) {
   if (isLoading) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-3">
-          <Skeleton className="h-6 w-1/3" />
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-3/4" />
-          <Skeleton className="h-4 w-2/3" />
-        </CardContent>
-      </Card>
+      <div className="space-y-3">
+        <Skeleton className="h-6 w-1/3" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-3/4" />
+        <Skeleton className="h-4 w-2/3" />
+      </div>
     )
   }
 
   if (error) {
-    return (
-      <Card>
-        <CardContent className="p-6">
-          <p className="text-destructive">{error}</p>
-        </CardContent>
-      </Card>
-    )
+    return <p className="py-4 text-sm text-destructive">{error}</p>
   }
 
   if (!report) {
@@ -44,90 +49,66 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
   }
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <CardTitle className="text-base">{report.period.name}</CardTitle>
-              <p className="text-sm text-muted-foreground tabular-nums">
-                {report.period.period_start}: {report.period.period_end}
-              </p>
-            </div>
-            {report.ready ? (
-              <Badge variant="success" className="gap-1">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Redo för bokslut
-              </Badge>
-            ) : (
-              <Badge variant="destructive" className="gap-1">
-                <XCircle className="h-3.5 w-3.5" /> Inte redo
-              </Badge>
-            )}
-          </div>
-        </CardHeader>
-      </Card>
+    <div className="space-y-8">
+      {/* Period line: muted text for the normal state, chip only when the
+          period deviates (design.md: chips mark exceptions). */}
+      <div className="flex flex-wrap items-baseline justify-between gap-3 px-1">
+        <div className="flex items-baseline gap-3">
+          <h2 className="font-sans text-sm font-medium">{report.period.name}</h2>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {report.period.period_start} till {report.period.period_end}
+          </span>
+        </div>
+        {report.ready ? (
+          <span className="text-xs text-muted-foreground">Redo för bokslut</span>
+        ) : (
+          <Badge variant="destructive" className="font-normal">Inte redo</Badge>
+        )}
+      </div>
 
       {report.blockers.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <XCircle className="h-4 w-4 text-destructive" />
-              Måste åtgärdas innan bokslut
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {report.blockers.map((blocker, i) => (
-              <BlockerRow key={i} blocker={blocker} report={report} />
-            ))}
-          </CardContent>
-        </Card>
+        <section>
+          <SectionHead icon={<XCircle className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />}>
+            Måste åtgärdas innan bokslut
+          </SectionHead>
+          {report.blockers.map((blocker, i) => (
+            <BlockerRow key={i} blocker={blocker} report={report} />
+          ))}
+        </section>
       )}
 
       {report.warnings.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-warning-foreground" />
-              Varningar
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {report.warnings.map((warning, i) => (
-              <p key={i} className="text-sm">
-                {warning}
-              </p>
-            ))}
-          </CardContent>
-        </Card>
+        <section>
+          <SectionHead icon={<AlertTriangle className="h-3.5 w-3.5 text-attn" aria-hidden="true" />}>
+            Varningar
+          </SectionHead>
+          {report.warnings.map((warning, i) => (
+            <p key={i} className="border-b border-border/60 px-1 py-3 text-[13px] leading-5 last:border-b-0">
+              {warning}
+            </p>
+          ))}
+        </section>
       )}
 
       {report.reminders.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <Info className="h-4 w-4 text-muted-foreground" />
-              Påminnelser
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {report.reminders.map((reminder) => (
-              <div key={reminder.code} className="flex items-start gap-3 text-sm">
-                <span className="mt-1 h-1.5 w-1.5 rounded-full bg-muted-foreground shrink-0" />
-                <div className="flex-1">
-                  <p>{reminder.message}</p>
-                  {reminder.href && (
-                    <Link
-                      href={reminder.href}
-                      className="text-xs text-primary hover:underline"
-                    >
-                      Öppna
-                    </Link>
-                  )}
-                </div>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
+        <section>
+          <SectionHead icon={<Info className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />}>
+            Påminnelser
+          </SectionHead>
+          {report.reminders.map((reminder) => (
+            <div
+              key={reminder.code}
+              className="flex items-baseline justify-between gap-3 border-b border-border/60 px-1 py-3 text-[13px] leading-5 text-muted-foreground last:border-b-0"
+            >
+              <p className="flex-1">{reminder.message}</p>
+              {reminder.href && (
+                <Link href={reminder.href} className={QUIET_LINK_CLASS}>
+                  Öppna
+                </Link>
+              )}
+            </div>
+          ))}
+        </section>
       )}
 
       <div className="flex justify-end">
@@ -162,10 +143,10 @@ function BlockerRow({ blocker, report }: { blocker: string; report: BokslutReadi
   }
 
   return (
-    <div className="flex items-start justify-between gap-3 text-sm">
+    <div className="flex items-baseline justify-between gap-3 border-b border-border/60 px-1 py-3 text-[13px] leading-5 last:border-b-0">
       <p className="flex-1">{blocker}</p>
       {href && actionLabel && (
-        <Link href={href} className="text-xs text-primary hover:underline shrink-0 mt-0.5">
+        <Link href={href} className={QUIET_LINK_CLASS}>
           {actionLabel}
         </Link>
       )}

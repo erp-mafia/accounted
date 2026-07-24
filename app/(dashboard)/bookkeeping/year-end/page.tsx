@@ -1,11 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import Link from 'next/link'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Progress } from '@/components/ui/progress'
 import { EmptyState } from '@/components/ui/empty-state'
 import {
   Select,
@@ -15,7 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ArrowLeft, CalendarPlus, Lock } from 'lucide-react'
+import { CalendarPlus, Check, Lock } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
@@ -215,7 +212,6 @@ export default function YearEndPage() {
   }, [selectedPeriodId, report?.period.name, toast])
 
   const currentStepIndex = STEP_ORDER.indexOf(step)
-  const progressValue = ((currentStepIndex + 1) / STEP_ORDER.length) * 100
 
   const showWizard = useMemo(
     () => selectedPeriodId !== null && (periods?.length ?? 0) > 0,
@@ -226,19 +222,36 @@ export default function YearEndPage() {
     <div className="space-y-8">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h1 className="font-display text-2xl leading-8 tracking-tight">Årsbokslut</h1>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <AgentSparkleButton
             intentId="bokslut.step"
             intentArgs={{ step_id: null }}
             contextRef="bokslut:overview"
             size="default"
           />
-          <Button variant="outline" asChild>
-            <Link href="/bookkeeping">
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Bokföring
-            </Link>
-          </Button>
+          {showWizard && periods && periods.length > 0 && step !== 'result' && (
+            <Select
+              value={selectedPeriodId ?? undefined}
+              onValueChange={(value) => {
+                setSelectedPeriodId(value)
+                setStep('preflight')
+                setPreview(null)
+                setResult(null)
+                setExecuteError(null)
+              }}
+            >
+              <SelectTrigger aria-label="Period" className="h-9 w-auto max-w-xs gap-2">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {periods.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name} ({p.period_start} till {p.period_end})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
       </div>
 
@@ -275,66 +288,68 @@ export default function YearEndPage() {
         )
       )}
 
-      {showWizard && periods && periods.length > 0 && step !== 'result' && (
-        <Card>
-          <CardContent className="p-4 flex items-center gap-4">
-            <label className="text-sm font-medium shrink-0">Period</label>
-            <Select
-              value={selectedPeriodId ?? undefined}
-              onValueChange={(value) => {
-                setSelectedPeriodId(value)
-                setStep('preflight')
-                setPreview(null)
-                setResult(null)
-                setExecuteError(null)
-              }}
-            >
-              <SelectTrigger className="w-full max-w-sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {periods.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name} ({p.period_start} till {p.period_end})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
-      )}
-
+      {/* Stegen (concept scene 34): dots walk check -> filled -> number.
+          Steps behind the current one are clickable for going back; forward
+          navigation stays with each step's own continue action. */}
       {showWizard && step !== 'result' && (
-        <Card>
-          <CardContent className="p-4 space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{STEP_ORDER.length}: {STEP_LABELS[step]}
-              </span>
-              {STEP_ORDER.map((s, i) => (
+        <div
+          className="mx-auto flex w-full max-w-3xl items-center gap-3 overflow-x-auto px-1"
+          role="tablist"
+          aria-label="Bokslutets steg"
+        >
+          {STEP_ORDER.map((s, i) => (
+            <React.Fragment key={s}>
+              {i > 0 && <span className="h-px min-w-4 flex-1 bg-border" aria-hidden="true" />}
+              <button
+                type="button"
+                role="tab"
+                aria-selected={s === step}
+                disabled={i >= currentStepIndex}
+                onClick={() => {
+                  if (i < currentStepIndex) setStep(s)
+                }}
+                className={cn(
+                  'group flex shrink-0 items-center gap-2 text-left',
+                  i >= currentStepIndex && 'cursor-default',
+                )}
+              >
                 <span
-                  key={s}
                   className={cn(
-                    'hidden sm:inline',
-                    i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
+                    'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs tabular-nums transition-colors duration-150',
+                    i < currentStepIndex
+                      ? 'border-success/40 text-success'
+                      : s === step
+                        ? 'border-foreground bg-foreground text-background'
+                        : 'border-border text-muted-foreground',
+                  )}
+                >
+                  {i < currentStepIndex ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : i + 1}
+                </span>
+                <span
+                  className={cn(
+                    'text-[12.5px] transition-colors duration-150',
+                    s === step
+                      ? 'font-medium'
+                      : i < currentStepIndex
+                        ? 'text-muted-foreground group-hover:text-foreground'
+                        : 'text-muted-foreground',
                   )}
                 >
                   {STEP_LABELS[s]}
                 </span>
-              ))}
-            </div>
-            <Progress value={progressValue} className="h-2" />
-          </CardContent>
-        </Card>
+              </button>
+            </React.Fragment>
+          ))}
+        </div>
       )}
 
       {showWizard && step === 'preflight' && (
-        <PreflightStep
+        <div className="mx-auto w-full max-w-3xl"><PreflightStep
           report={report}
           isLoading={reportLoading}
           error={reportError}
           onContinue={() => setStep('accruals')}
-        />
+        /></div>
       )}
 
       {showWizard && step === 'accruals' && selectedPeriodId && (
@@ -354,27 +369,29 @@ export default function YearEndPage() {
       )}
 
       {showWizard && step === 'preview' && (
-        <PreviewStep
+        <div className="mx-auto w-full max-w-3xl"><PreviewStep
           preview={preview}
           isLoading={previewLoading}
           error={previewError}
           onBack={() => setStep('dispositions')}
           onContinue={() => setStep('execute')}
-        />
+        /></div>
       )}
 
       {showWizard && step === 'execute' && report && (
-        <ExecuteStep
+        <div className="mx-auto w-full max-w-3xl"><ExecuteStep
           periodName={report.period.name}
           isRunning={executing}
           error={executeError}
           bolagsskattMissing={preview?.bolagsskattMissing ?? false}
           onBack={() => setStep('preview')}
           onExecute={executeYearEnd}
-        />
+        /></div>
       )}
 
-      {step === 'result' && result && <ResultStep result={result} />}
+      {step === 'result' && result && (
+        <div className="mx-auto w-full max-w-3xl"><ResultStep result={result} /></div>
+      )}
     </div>
   )
 }
