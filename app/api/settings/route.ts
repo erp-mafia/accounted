@@ -118,7 +118,7 @@ export const PUT = withRouteContext(
       )
     }
 
-    // Share capital is all-or-nothing: the aktiekapital note (ÅRL 5 kap 14 §)
+    // Share capital is all-or-nothing: the antal aktier/kvotvärde note (ÅRL 5 kap 34 §)
     // needs both the registered amount and the share count, and the DB pair
     // constraint enforces it. Validate against the effective (body-or-stored)
     // values so the user gets a clear message instead of a raw constraint 500.
