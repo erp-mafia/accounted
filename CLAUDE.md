@@ -10,7 +10,7 @@ Swedish accounting SaaS: double-entry bookkeeping under Swedish accounting law (
 
 The accounting rules are Swedish law, enforced by DB triggers. Code that violates them fails at runtime; code that works around the triggers breaks legal compliance. Never do either.
 
-1. **Never edit or delete a posted journal entry.** Committed vouchers are immutable. Cancel with `reverseEntry()`; correct with `correctEntry()` (`lib/core/bookkeeping/storno-service.ts`). Storno, never edit.
+1. **Never edit or delete a posted journal entry outside the two sanctioned rättelse paths.** BFL 5 kap 5 § allows two correction tracks: (a) storno: cancel with `reverseEntry()`, correct with `correctEntry()` (`lib/core/bookkeeping/storno-service.ts`); (b) inline rättelse (founder-approved 2026-07-23): `correct_entry_metadata` / `correct_entry_lines_inline` RPCs, which strike-and-replace inside the same verifikat with an immutable who/when log (`journal_entry_rattelse_log`), only in open unlocked periods. Past a lock/close/declared state, storno is the only path. Never write to posted entries or their lines through any other route; never delete.
 2. **All journal writes go through `lib/bookkeeping/engine.ts`.** Never insert into journal tables directly: voucher numbers are assigned atomically by the `commit_journal_entry` RPC and must stay sequential, and gaps require documented explanations (BFNAR 2013:2, `voucher_gap_explanations`).
 3. **Every entry balances**: `sum(debits) === sum(credits)`, both `> 0`.
 4. **Respect period locks.** DB triggers block writes to closed/locked periods and behind the company lock date. Don't work around them: fix the flow that tried to write there.

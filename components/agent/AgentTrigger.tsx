@@ -26,11 +26,17 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 // row-level "Fråga [namn]" button in TransactionInboxCard, and the matching
 // "Fråga assistenten" in Dokumentinkorgen: both passing a transaction_id the
 // pathname-only FAB can't know.)
-export default function AgentTrigger() {
+export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   const { openAgentSheet, expandAgentSheet, isOpen, collapsed, identity } = useAgentSheet()
   const pathname = usePathname()
   const router = useRouter()
   const hasAi = useCapability(CAPABILITY.ai)
+
+  // User opt-out (Inställningar → Assistenten): the sidebar entry stays, the
+  // floating button goes. A collapsed session keeps its reopen handle even
+  // when hidden: it's the only way back to a minimized conversation, and its
+  // existence implies the user is actively using the assistant right now.
+  if (hidden && !collapsed) return null
 
   // Sheet open AND visible → hide the FAB so the icon doesn't double up. When
   // the session is merely collapsed we KEEP the FAB: it's the handle that

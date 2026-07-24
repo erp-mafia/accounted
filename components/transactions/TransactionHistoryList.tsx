@@ -23,6 +23,7 @@ import {
   FileText,
   Landmark,
   Link2,
+  FileSearch,
   Loader2,
   MoreHorizontal,
   Paperclip,
@@ -55,6 +56,11 @@ interface TransactionHistoryListProps {
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   /** Open the attach-underlag dialog (pin an inbox doc / fresh upload). */
   onOpenAttachDocument?: (transaction: TransactionWithInvoice) => void
+  /** Open the match-against-existing-voucher dialog. Unbooked rows can end up
+   *  here (not in the inbox) when is_business is already set, e.g. after a
+   *  voucher was removed without a full uncategorize; without this item such
+   *  rows have no path back to voucher matching. */
+  onOpenMatchVoucher?: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
   onSkvBokfor?: (row: StoredSkattekontoTransaction) => void
   onSkvMatch?: (row: StoredSkattekontoTransaction) => void
@@ -78,6 +84,7 @@ export default function TransactionHistoryList({
   onOpenMatchDialog,
   onOpenCategoryDialog,
   onOpenAttachDocument,
+  onOpenMatchVoucher,
   onDelete,
   onSkvBokfor,
   onSkvMatch,
@@ -203,6 +210,7 @@ export default function TransactionHistoryList({
                     onOpenMatchDialog={onOpenMatchDialog}
                     onOpenCategoryDialog={onOpenCategoryDialog}
                     onOpenAttachDocument={onOpenAttachDocument}
+                    onOpenMatchVoucher={onOpenMatchVoucher}
                     onDelete={onDelete}
                   />
                 ) : (
@@ -243,6 +251,7 @@ function BankHistoryRow({
   onOpenMatchDialog,
   onOpenCategoryDialog,
   onOpenAttachDocument,
+  onOpenMatchVoucher,
   onDelete,
 }: {
   transaction: TransactionWithInvoice
@@ -250,6 +259,7 @@ function BankHistoryRow({
   onOpenMatchDialog: (transaction: TransactionWithInvoice) => void
   onOpenCategoryDialog: (transaction: TransactionWithInvoice) => void
   onOpenAttachDocument?: (transaction: TransactionWithInvoice) => void
+  onOpenMatchVoucher?: (transaction: TransactionWithInvoice) => void
   onDelete?: (id: string) => void
 }) {
   const t = useTranslations('tx_history')
@@ -275,8 +285,11 @@ function BankHistoryRow({
   const hasJeDoc = jeStatus === 'has'
   const missingUnderlag = isBooked && !transaction.document_id && jeStatus === 'missing'
   const showAttachItem = canWrite && !!onOpenAttachDocument
+  // Same affordance as the inbox card: an unbooked row may need to be linked
+  // to an already-booked voucher (e.g. the other leg of a transfer).
+  const showMatchVoucherItem = canWrite && !isBooked && !!onOpenMatchVoucher
   const showOverflowMenu =
-    hasInvoiceMatch || (canDelete && !!onDelete) || (isBooked && canWrite) || showAttachItem
+    hasInvoiceMatch || (canDelete && !!onDelete) || (isBooked && canWrite) || showAttachItem || showMatchVoucherItem
 
   const isPrivate = transaction.is_business === false
   const categoryLabel =
@@ -394,6 +407,12 @@ function BankHistoryRow({
                     })}
                   </DropdownMenuItem>
                 )}
+                {showMatchVoucherItem && (
+                  <DropdownMenuItem onSelect={() => onOpenMatchVoucher!(transaction)}>
+                    <FileSearch className="h-3.5 w-3.5" />
+                    {t('match_voucher')}
+                  </DropdownMenuItem>
+                )}
                 {/* Attach underlag: available on both booked rows (the route
                     propagates the doc onto the verifikation) and unbooked. */}
                 {showAttachItem && (
@@ -413,7 +432,7 @@ function BankHistoryRow({
                 )}
                 {canDelete && onDelete && (
                   <>
-                    {(hasInvoiceMatch || showAttachItem) && <DropdownMenuSeparator />}
+                    {(hasInvoiceMatch || showAttachItem || showMatchVoucherItem) && <DropdownMenuSeparator />}
                     <DropdownMenuItem
                       onSelect={() => onDelete(transaction.id)}
                       className="text-destructive focus:text-destructive"

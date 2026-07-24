@@ -781,8 +781,18 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
                 <tr className="border-b text-[11px] uppercase tracking-wider text-muted-foreground">
                   <th className="text-left font-medium px-4 py-2 w-20">Konto</th>
                   <th className="text-left font-medium px-4 py-2">Kontonamn</th>
-                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">Innevarande</th>
-                  <th className="text-right font-medium px-4 py-2 w-32 tabular-nums">Föregående</th>
+                  <th
+                    className="text-right font-medium px-4 py-2 w-32 tabular-nums"
+                    title={`${data.period.start} till ${data.period.end}`}
+                  >
+                    Innevarande
+                  </th>
+                  <th
+                    className="text-right font-medium px-4 py-2 w-32 tabular-nums"
+                    title={hasPrior ? `${data.prior_period!.start} till ${data.prior_period!.end}` : undefined}
+                  >
+                    Föregående
+                  </th>
                 </tr>
               </thead>
               <tbody>

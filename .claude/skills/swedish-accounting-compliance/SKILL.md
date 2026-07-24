@@ -47,7 +47,11 @@ A verifikation must contain:
 Verifikationer must be numbered in a systematisk serie without gaps. If a verifikation is corrected, the original must be preserved and the correction linked.
 
 ### Rättelse (BFL 5 kap 5§)
-A rättelse of a bokföringspost must be documented so that both the original and the corrected post are visible. You cannot simply overwrite. Implement as: new correcting verifikation referencing the original.
+A rättelse of a bokföringspost must be documented so that both the original and the corrected post are visible, and it must be recorded when the rättelse was made and who made it. You can never silently overwrite. BFL permits two tracks:
+1. **Särskild rättelsepost** (storno + correcting verifikation referencing the original): always allowed, and the only track once the period is locked/closed or the bokföring has been relied upon (filed declarations, bokslut).
+2. **Rättelse in the same verifikat** (strike-and-replace of lines, or correcting the verifikation's text/date per BFL 5 kap 9 §): allowed while the period is open and unlocked, provided the original remains readable (struck lines stay visible) and who/when is recorded immutably. Fortnox and Visma implement this track; in Accounted it is the `correct_entry_metadata` / `correct_entry_lines_inline` RPC envelope logging to `journal_entry_rattelse_log`.
+
+A correction path that erases the original without a trace violates the law under both tracks.
 
 ### Arkivering (BFL 7 kap)
 - Räkenskapsinformation must be preserved for 7 years after the end of the calendar year the räkenskapsår ended

@@ -16,6 +16,7 @@ import {
   handleInvoicePaid,
 } from './lib/payment-links'
 import { syncStripeConnection } from './lib/sync'
+import { syncStripeBalanceTransactions } from './lib/transaction-sync'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import type { StripeConnection, StripeStatusResponse } from './types'
 
@@ -87,7 +88,7 @@ export const stripeExtension: Extension = {
         const { data: rows } = await supabase
           .from('stripe_connections')
           .select(
-            'id, status, stripe_account_id, livemode, display_name, error_message, connected_at, last_event_created_at',
+            'id, status, stripe_account_id, livemode, display_name, error_message, connected_at, last_event_created_at, transaction_sync_enabled, last_balance_txn_synced_at',
           )
           .eq('company_id', ctx.companyId)
           .order('created_at', { ascending: false })
@@ -173,11 +174,15 @@ export const stripeExtension: Extension = {
 
         try {
           const serviceClient = createServiceClientNoCookies()
-          const summary = await syncStripeConnection(
-            serviceClient,
-            connection as StripeConnection,
-          )
-          return NextResponse.json({ success: true, ...summary })
+          const typedConnection = connection as StripeConnection
+          const summary = await syncStripeConnection(serviceClient, typedConnection)
+          // The manual button covers both feeds: when the balance-transaction
+          // feed is enabled, "Synka nu" also pulls it (same module as the
+          // nightly cron, no separate rate limit needed: one user action).
+          const transactions = typedConnection.transaction_sync_enabled
+            ? await syncStripeBalanceTransactions(serviceClient, typedConnection)
+            : undefined
+          return NextResponse.json({ success: true, ...summary, transactions })
         } catch (error) {
           log.error('[stripe] Manual sync failed', {
             message: error instanceof Error ? error.message : String(error),
@@ -188,6 +193,62 @@ export const stripeExtension: Extension = {
             { status: 502 },
           )
         }
+      },
+    },
+    {
+      method: 'POST',
+      path: '/transaction-sync',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+        if (!ctx?.companyId) {
+          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
+        }
+        const companyId = ctx.companyId
+
+        const capabilityBlocked = await requireCapability(
+          supabase,
+          companyId,
+          CAPABILITY.stripe_payments,
+        )
+        if (capabilityBlocked) return capabilityBlocked
+
+        const rl = await checkRateLimit({
+          prefix: 'stripe:transaction-sync-toggle',
+          identifier: user.id,
+          ...RATE_LIMIT_SYNC,
+        })
+        if (!rl.ok) return rl.response!
+
+        const body = (await request.json().catch(() => ({}))) as { enabled?: unknown }
+        if (typeof body.enabled !== 'boolean') {
+          return NextResponse.json(
+            { error: 'enabled (boolean) krävs.' },
+            { status: 400 },
+          )
+        }
+
+        const { data: updated, error: updateError } = await supabase
+          .from('stripe_connections')
+          .update({ transaction_sync_enabled: body.enabled })
+          .eq('company_id', companyId)
+          .eq('status', 'active')
+          .select('id')
+
+        if (updateError) {
+          return NextResponse.json(
+            { error: 'Kunde inte spara inställningen. Försök igen.' },
+            { status: 500 },
+          )
+        }
+        if (!updated || updated.length === 0) {
+          return NextResponse.json({ error: 'Inget anslutet Stripe-konto.' }, { status: 404 })
+        }
+
+        return NextResponse.json({ success: true, enabled: body.enabled })
       },
     },
     {

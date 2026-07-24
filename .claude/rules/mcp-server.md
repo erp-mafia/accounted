@@ -10,7 +10,7 @@ Accounted exposes its bookkeeping engine as an MCP server for Claude Desktop/Cod
 
 **MCP extension** (`extensions/general/mcp-server/`): 90+ tools covering transactions, categorization, customers/suppliers, invoices, accounts, fiscal periods, reports (trial balance, GL, BS, IS, AR/supplier ledger, VAT, KPI), reconciliation, salary runs, AGI, year-end, document upload, and loadable skills. JSON-RPC 2.0. Endpoint: `/api/extensions/ext/mcp-server/mcp`.
 
-**OAuth 2.1** for Claude connectors: `.well-known/oauth-protected-resource` + `.well-known/oauth-authorization-server` discovery; `/api/mcp-oauth/authorize`, `/token` (PKCE), `/register`. Stateless AES-256-GCM auth codes (`lib/auth/oauth-codes.ts`). Single-use via `oauth_used_codes`. Allowlist: `claude.ai/api/*`, `claude.com/api/*`, `localhost`.
+**OAuth 2.1** for Claude and ChatGPT connectors: `.well-known/oauth-protected-resource` + `.well-known/oauth-authorization-server` discovery; `/api/mcp-oauth/authorize`, `/token` (PKCE), `/register`. Stateless AES-256-GCM auth codes (`lib/auth/oauth-codes.ts`). Single-use via `oauth_used_codes`. Allowlist: `claude.ai/api/*`, `claude.com/api/*`, `chatgpt.com/connector/oauth/*`, `chatgpt.com/connector_platform_oauth_redirect`, `localhost`.
 
 **npm package** (`packages/gnubok-mcp`): Stdio-to-HTTP bridge; users run `npx gnubok-mcp` with API key.
 

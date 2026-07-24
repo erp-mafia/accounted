@@ -2,16 +2,25 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { AttnLine } from '@/components/ui/attn-line'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeftRight, ArrowRightLeft, FileText, ArrowLeft, Landmark, Loader2, Info, ChevronRight, FileSpreadsheet, Download, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, Landmark, Loader2, ChevronRight, Download, AlertTriangle } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -1944,6 +1953,8 @@ export default function ImportPage() {
   const { company } = useCompany()
   const [mode, setMode] = useState<ImportMode>(null)
   const [view, setView] = useState<'import' | 'export'>('import')
+  const [sieDialogOpen, setSieDialogOpen] = useState(false)
+  const [cloudOpen, setCloudOpen] = useState(false)
   const [userId, setUserId] = useState('')
   const [isSandbox, setIsSandbox] = useState(false)
   const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
@@ -1994,20 +2005,24 @@ export default function ImportPage() {
     }
   }, [isSandbox, searchParams])
 
-  // Hash-based deep links (#cloud-backup, #sie-export) → switch to export tab and scroll
+  // Hash-based deep links: both live on the export tab; #sie-export opens
+  // the SIE dialog, #cloud-backup expands the cloud panel and scrolls to it.
   useEffect(() => {
     if (typeof window === 'undefined') return
     const hash = window.location.hash
-    if (hash === '#cloud-backup' || hash === '#sie-export') {
+    if (hash === '#sie-export') {
       setView('export')
+      setSieDialogOpen(true)
+    } else if (hash === '#cloud-backup') {
+      setView('export')
+      setCloudOpen(true)
       setTimeout(() => {
         document.querySelector(hash)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
-      }, 50)
+      }, 80)
     }
   }, [])
 
-  const handleViewChange = (next: string) => {
-    if (next !== 'import' && next !== 'export') return
+  const handleViewChange = (next: 'import' | 'export') => {
     setView(next)
     const params = new URLSearchParams(searchParams.toString())
     if (next === 'export') params.set('view', 'export')
@@ -2022,276 +2037,171 @@ export default function ImportPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title={view === 'export' ? t('export_title') : t('title')}
-        description={view === 'export' ? t('export_subtitle') : undefined}
+        title={t('title')}
+        help={
+          <HelpPopover>
+            <p>{t('help_text')}</p>
+          </HelpPopover>
+        }
       />
 
       {mode === null && (
         <>
-          {isSandbox && (
-            <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/50 px-4 py-3">
-              <Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-              <p className="text-sm text-muted-foreground">
-                {t('sandbox_disabled')}
-              </p>
+          {isSandbox && <AttnLine>{t('sandbox_disabled')}</AttnLine>}
+
+          {/* Importera / Exportera as separate tabs (house seg), like before */}
+          <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
+            {(
+              [
+                { key: 'import', label: t('tab_import') },
+                { key: 'export', label: t('tab_export') },
+              ] as const
+            ).map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={view === key}
+                onClick={() => handleViewChange(key)}
+                className={`rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
+                  view === key
+                    ? 'border border-border bg-card font-medium text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {view === 'import' ? (
+            <div>
+              <div className="stagger-enter">
+                {hasBankingExtension && (
+                  <ImportRow
+                    title={t('psd2_title')}
+                    sub={t('psd2_description')}
+                    chip={
+                      hasBankSync ? (
+                        <Badge variant="success" className="font-normal">{t('psd2_recommended')}</Badge>
+                      ) : (
+                        <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium leading-none text-muted-foreground">
+                          {t('psd2_requires_subscription')}
+                        </span>
+                      )
+                    }
+                    chips={<LogoChip src="/logos/enable-banking-icon.png" name="Enable Banking" mono />}
+                    disabled={isSandbox}
+                    onClick={() => setMode('psd2')}
+                  />
+                )}
+                {hasMigrationExtension && (
+                  <ImportRow
+                    title={t('migration_title')}
+                    sub={t('migration_description')}
+                    chips={
+                      <>
+                        <LogoChip src="/logos/fortnox.svg" name="Fortnox" />
+                        <LogoChip src="/logos/visma.jpeg" name="Visma" />
+                        <LogoChip src="/logos/bokio.png" name="Bokio" />
+                        <LogoChip src="/logos/bjornlunden.png" name="Björn Lundén" />
+                        <LogoChip src="/logos/Briox_logo.png" name="Briox" />
+                      </>
+                    }
+                    disabled={isSandbox}
+                    onClick={() => setMode('migration')}
+                  />
+                )}
+                <ImportRow
+                  title={t('bankfile_title')}
+                  sub={t('bankfile_description')}
+                  onClick={() => setMode('bank')}
+                />
+                <ImportRow
+                  title={t('csv_data_title')}
+                  sub={t('csv_data_description')}
+                  onClick={() => setMode('csv_data')}
+                />
+                <ImportRow
+                  title={t('sie_title')}
+                  sub={t('sie_description')}
+                  onClick={() => setMode('sie')}
+                />
+              </div>
+              <p className="mt-4 px-1 text-xs leading-5 text-muted-foreground">{t('pgnote')}</p>
+            </div>
+          ) : (
+            <div>
+              <div className="stagger-enter">
+                <ImportRow
+                  id="sie-export"
+                  title={t('export_sie_title')}
+                  sub={t('export_sie_description')}
+                  onClick={() => setSieDialogOpen(true)}
+                />
+                {hasCloudBackup && (
+                  <ImportRow
+                    title={t('cloud_row_title')}
+                    sub={t('cloud_row_description')}
+                    expanded={cloudOpen}
+                    onClick={() => setCloudOpen((v) => !v)}
+                  />
+                )}
+              </div>
+              {hasCloudBackup && cloudOpen && (
+                <div id="cloud-backup" className="mt-6 scroll-mt-24">
+                  <CloudBackupCard />
+                </div>
+              )}
             </div>
           )}
 
-          <Tabs value={view} onValueChange={handleViewChange}>
-            <TabsList className="grid w-full max-w-xs grid-cols-2">
-              <TabsTrigger value="import">{t('tab_import')}</TabsTrigger>
-              <TabsTrigger value="export">{t('tab_export')}</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="import" className="mt-6">
-              <div className="space-y-2">
-            {/* 1. Koppla bank */}
-            {hasBankingExtension && (
-              <div
-                role="button"
-                tabIndex={isSandbox ? -1 : 0}
-                aria-disabled={isSandbox}
-                className={cn(
-                  'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
-                  isSandbox
-                    ? 'opacity-50 cursor-not-allowed'
-                    : 'cursor-pointer hover:border-foreground/15'
-                )}
-                onClick={() => { if (!isSandbox) setMode('psd2') }}
-                onKeyDown={(e) => { if (!isSandbox && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setMode('psd2') } }}
-              >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
-                  <Landmark className="h-[18px] w-[18px] text-foreground/60" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-[15px] font-semibold leading-tight">{t('psd2_title')}</h3>
-                    {hasBankSync ? (
-                      <Badge variant="success">{t('psd2_recommended')}</Badge>
-                    ) : (
-                      <span className="text-[11px] font-medium text-muted-foreground bg-secondary px-2 py-0.5 rounded-full leading-none">
-                        {t('psd2_requires_subscription')}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
-                    {t('psd2_description')}
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
-              </div>
-            )}
-
-            {/* 2. Hämta från annat system */}
-            {hasMigrationExtension === true && (
-              <div
-                role="button"
-                tabIndex={isSandbox ? -1 : 0}
-                aria-disabled={isSandbox}
-                className={cn(
-                  'group rounded-lg border bg-card p-6 transition-colors',
-                  isSandbox
-                    ? 'opacity-50 cursor-not-allowed'
-                    : 'cursor-pointer hover:border-foreground/15'
-                )}
-                onClick={() => { if (!isSandbox) setMode('migration') }}
-                onKeyDown={(e) => { if (!isSandbox && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setMode('migration') } }}
-              >
-                <div className="flex items-start gap-4">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
-                    <ArrowRightLeft className="h-[18px] w-[18px] text-foreground/60" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-[15px] font-semibold leading-tight">{t('migration_title')}</h3>
-                    <p className="text-sm mt-1 leading-relaxed max-w-lg underline decoration-foreground/20 underline-offset-2 text-muted-foreground">
-                      {t('migration_description')}
-                    </p>
-                  </div>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
-                </div>
-                <div className="flex flex-wrap gap-2 mt-4 ml-[52px]">
-                  {([
-                    { name: 'Fortnox', logo: '/logos/fortnox.svg' },
-                    { name: 'Visma', logo: '/logos/visma.jpeg' },
-                    { name: 'Bokio', logo: '/logos/bokio.png' },
-                    { name: 'Björn Lundén', logo: '/logos/bjornlunden.png' },
-                    { name: 'Briox', logo: '/logos/Briox_logo.png' },
-                  ] as const).map(provider => (
-                    <div key={provider.name} className="flex items-center gap-2 rounded border border-border bg-muted/30 px-2 py-1">
-                      <img src={provider.logo} alt={provider.name} className="h-4 w-4 shrink-0 rounded-sm object-contain" />
-                      <span className="text-[11px] font-medium text-muted-foreground">{provider.name}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* 3. Banktransaktioner: manual file imports (bank file, CSV/Excel,
-                SIE) run entirely on uploaded data with no external service, so
-                they stay available in the sandbox, unlike the API-backed options
-                above (bank connection, provider migration) which need live
-                credentials. */}
-            <div
-              role="button"
-              tabIndex={0}
-              className={cn(
-                'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
-                'cursor-pointer hover:border-foreground/15'
-              )}
-              onClick={() => setMode('bank')}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMode('bank') } }}
-            >
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
-                <ArrowLeftRight className="h-[18px] w-[18px] text-foreground/60" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-[15px] font-semibold leading-tight">{t('bankfile_title')}</h3>
-                <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
-                  {t('bankfile_description')}
-                </p>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {['CSV', 'OFX', 'SEB', 'Swedbank', 'Nordea'].map(fmt => (
-                    <span key={fmt} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
-                      {fmt}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
-            </div>
-
-            {/* 4. CSV/Excel-data (ingående balanser, kunder, leverantörer) */}
-            <div
-              role="button"
-              tabIndex={0}
-              className={cn(
-                'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
-                'cursor-pointer hover:border-foreground/15'
-              )}
-              onClick={() => setMode('csv_data')}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMode('csv_data') } }}
-            >
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
-                <FileSpreadsheet className="h-[18px] w-[18px] text-foreground/60" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-[15px] font-semibold leading-tight">{t('csv_data_title')}</h3>
-                <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
-                  {t('csv_data_description')}
-                </p>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {[
-                    { key: 'XLSX', label: 'XLSX' },
-                    { key: 'CSV', label: 'CSV' },
-                    { key: 'opening_balances', label: t('csv_chip_opening_balances') },
-                    { key: 'customers', label: t('csv_chip_customers') },
-                    { key: 'suppliers', label: t('csv_chip_suppliers') },
-                    { key: 'articles', label: t('csv_chip_articles') },
-                  ].map(chip => (
-                    <span key={chip.key} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
-                      {chip.label}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
-            </div>
-
-            {/* 5. Bokföringsdata (SIE) */}
-            <div
-              role="button"
-              tabIndex={0}
-              className={cn(
-                'group flex items-start gap-4 rounded-lg border bg-card p-6 transition-colors',
-                'cursor-pointer hover:border-foreground/15'
-              )}
-              onClick={() => setMode('sie')}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setMode('sie') } }}
-            >
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
-                <FileText className="h-[18px] w-[18px] text-foreground/60" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-[15px] font-semibold leading-tight">{t('sie_title')}</h3>
-                <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-lg">
-                  {t('sie_description')}
-                </p>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {['SIE4', '.se'].map(fmt => (
-                    <span key={fmt} className="text-[11px] text-muted-foreground/80 bg-muted/80 px-1.5 py-0.5 rounded leading-none">
-                      {fmt}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <ChevronRight className="h-4 w-4 text-muted-foreground/40 shrink-0 mt-2 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
-            </div>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="export" className="mt-6">
+          {/* SIE export as a small centered dialog (concept overlay convention) */}
+          <Dialog open={sieDialogOpen} onOpenChange={setSieDialogOpen}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle className="font-display text-lg tracking-tight">
+                  {t('export_sie_title')}
+                </DialogTitle>
+                <DialogDescription className="text-[13px] leading-relaxed">
+                  {t('export_sie_dialog_description')}
+                </DialogDescription>
+              </DialogHeader>
               <div className="space-y-4">
-                {/* SIE-export */}
-                <div id="sie-export" className="scroll-mt-24 rounded-lg border border-border bg-card p-6">
-                  <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
-                    {/* Identity */}
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-foreground/[0.06]">
-                        <FileSpreadsheet className="h-[18px] w-[18px] text-foreground/60" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-[15px] font-semibold leading-tight">{t('export_sie_title')}</h3>
-                        <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
-                          {t('export_sie_description')}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Controls */}
-                    <div className="space-y-4">
-                      <FiscalYearSelector
-                        value={exportPeriodId}
-                        onChange={setExportPeriodId}
-                        includeAllOption={false}
-                        hideFuturePeriods
-                        label={t('export_sie_period_label')}
-                      />
-                      <label className="flex items-start gap-2 text-sm text-muted-foreground cursor-pointer">
-                        <input
-                          type="checkbox"
-                          className="mt-0.5 h-4 w-4 rounded border-border"
-                          checked={exportExcludeClosing}
-                          onChange={(e) => setExportExcludeClosing(e.target.checked)}
-                        />
-                        <span>{t('export_sie_exclude_closing_label')}</span>
-                      </label>
-                      <Button
-                        onClick={() => {
-                          if (exportPeriodId) {
-                            const params = new URLSearchParams({ period_id: exportPeriodId })
-                            if (exportExcludeClosing) params.set('exclude_closing', 'true')
-                            window.open(`/api/reports/sie-export?${params.toString()}`, '_blank')
-                          }
-                        }}
-                        disabled={!exportPeriodId}
-                        className="w-full sm:w-auto"
-                      >
-                        <Download className="mr-2 h-4 w-4" />
-                        {t('export_sie_button')}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Molnsynkronisering (Google Drive) */}
-                {hasCloudBackup && (
-                  <div id="cloud-backup" className="scroll-mt-24">
-                    <CloudBackupCard />
-                  </div>
-                )}
+                <FiscalYearSelector
+                  value={exportPeriodId}
+                  onChange={setExportPeriodId}
+                  includeAllOption={false}
+                  hideFuturePeriods
+                  label={t('export_sie_period_label')}
+                />
+                <label className="flex cursor-pointer items-start gap-2 text-sm text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4 rounded border-border"
+                    checked={exportExcludeClosing}
+                    onChange={(e) => setExportExcludeClosing(e.target.checked)}
+                  />
+                  <span>{t('export_sie_exclude_closing_label')}</span>
+                </label>
               </div>
-            </TabsContent>
-          </Tabs>
+              <DialogFooter>
+                <Button
+                  onClick={() => {
+                    if (exportPeriodId) {
+                      const params = new URLSearchParams({ period_id: exportPeriodId })
+                      if (exportExcludeClosing) params.set('exclude_closing', 'true')
+                      window.open(`/api/reports/sie-export?${params.toString()}`, '_blank')
+                    }
+                  }}
+                  disabled={!exportPeriodId}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  {t('export_sie_button')}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </>
       )}
 
@@ -2326,5 +2236,83 @@ export default function ImportPage() {
       {mode === 'csv_data' && <CSVDataImportWizard />}
       {mode === 'migration' && <MigrationWizard userId={userId} />}
     </div>
+  )
+}
+
+// Quiet action row (concept scene 32): borderless list row with title, muted
+// sub-line and a chevron; chips only for the recommended/gated exceptions.
+function ImportRow({
+  title,
+  sub,
+  chip,
+  chips,
+  disabled = false,
+  expanded,
+  onClick,
+  id,
+}: {
+  title: string
+  sub: string
+  chip?: React.ReactNode
+  /** Logo chips under the sub line (provider marks, as on the live page). */
+  chips?: React.ReactNode
+  disabled?: boolean
+  /** For rows that fold a panel open below the grid (cloud backup). */
+  expanded?: boolean
+  onClick: () => void
+  id?: string
+}) {
+  return (
+    <button
+      type="button"
+      id={id}
+      onClick={onClick}
+      disabled={disabled}
+      aria-expanded={expanded}
+      className={cn(
+        'group flex w-full items-center justify-between gap-4 border-b border-border/60 px-1 py-3 text-left',
+        'transition-colors duration-150 hover:bg-secondary/35',
+        'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
+      )}
+    >
+      <span className="min-w-0">
+        <span className="flex flex-wrap items-center gap-2 text-sm font-medium">
+          {title}
+          {chip}
+        </span>
+        <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{sub}</span>
+        {chips && <span className="mt-2 flex flex-wrap gap-2">{chips}</span>}
+      </span>
+      <ChevronRight
+        className={cn(
+          'h-4 w-4 shrink-0 text-muted-foreground/40 transition-transform duration-150',
+          'group-hover:translate-x-0.5 group-hover:text-muted-foreground',
+          expanded && 'rotate-90',
+        )}
+        aria-hidden="true"
+      />
+    </button>
+  )
+}
+
+// Provider mark chip (same recipe as the pre-migration live page): tiny logo
+// on a quiet bordered chip, so integrations read as first-class brands.
+// `mono` is for light-on-transparent marks (Enable Banking): the marketing
+// site's grayscale+brightness treatment makes them read on a light ground,
+// with the inverse lift in dark mode.
+function LogoChip({ src, name, mono = false }: { src: string; name: string; mono?: boolean }) {
+  return (
+    <span className="flex items-center gap-2 rounded border border-border bg-muted/30 px-2 py-1">
+      <img
+        src={src}
+        alt=""
+        className={cn(
+          'h-4 w-4 shrink-0 rounded-sm object-contain',
+          mono &&
+            'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
+        )}
+      />
+      <span className="text-[11px] font-medium text-muted-foreground">{name}</span>
+    </span>
   )
 }

@@ -6,6 +6,11 @@ describe('isBuiltInRedirectUri', () => {
   it.each([
     ['https://claude.ai/api/oauth/callback', true],
     ['https://claude.com/api/oauth/callback', true],
+    ['https://chatgpt.com/connector/oauth/abc123', true],
+    ['https://chatgpt.com/connector_platform_oauth_redirect', true],
+    ['https://chatgpt.com/connector_platform_oauth_redirect/extra', false],
+    ['https://chatgpt.com/other/path', false],
+    ['https://chatgpt.com.evil.com/connector/oauth/x', false],
     ['http://localhost:3000/cb', true],
     ['http://localhost/cb', true],
     ['http://127.0.0.1:8080/cb', true],

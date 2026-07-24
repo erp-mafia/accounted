@@ -103,6 +103,10 @@ export default function JournalEntryList() {
   const [count, setCount] = useState(0)
   const [page, setPage] = useState(0)
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({})
+  // Entries with inline rättelser (journal_entry_rattelse_log rows): drives
+  // the "Rättad" marker so a rättelse is discoverable from the list
+  // (BFL 5 kap 5 §), not only on the detail page.
+  const [rattelseFlags, setRattelseFlags] = useState<Set<string>>(new Set())
   const [noDocRequired, setNoDocRequired] = useState<Map<string, string | null>>(new Map())
   const [showMissingOnly, setShowMissingOnly] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -207,6 +211,23 @@ export default function JournalEntryList() {
         })
       )
       setAttachmentCounts(Object.assign({}, ...results))
+    } catch {
+      // Non-critical: silently ignore
+    }
+  }, [])
+
+  const fetchRattelseFlags = useCallback(async (entryIds: string[]) => {
+    if (entryIds.length === 0) {
+      setRattelseFlags(new Set())
+      return
+    }
+    try {
+      const res = await fetch(
+        `/api/bookkeeping/journal-entries/rattelse-flags?ids=${entryIds.join(',')}`
+      )
+      if (!res.ok) return
+      const { data } = await res.json()
+      setRattelseFlags(new Set((data || []) as string[]))
     } catch {
       // Non-critical: silently ignore
     }
@@ -371,9 +392,10 @@ export default function JournalEntryList() {
     }
     setLoading(false)
 
-    // Fetch attachment counts for the loaded entries
+    // Fetch attachment counts + rättelse markers for the loaded entries
     const ids = loadedEntries.map((e: JournalEntry) => e.id)
     fetchAttachmentCounts(ids)
+    fetchRattelseFlags(ids)
   }
 
   // Cheap count-only query for the "Utkast" badge, all years, so the badge
@@ -1102,6 +1124,15 @@ export default function JournalEntryList() {
                           )}
                           {(entry.status === 'reversed' || entry.status === 'draft' || entry.source_type === 'storno' || entry.source_type === 'correction') && (
                             <JournalEntryStatusBadge entry={entry} showStatus={entry.status === 'reversed' || entry.status === 'draft'} />
+                          )}
+                          {rattelseFlags.has(entry.id) && (
+                            <Badge
+                              variant="outline"
+                              className="text-xs font-normal shrink-0"
+                              title={t('rattelse_badge_tooltip')}
+                            >
+                              {t('rattelse_badge')}
+                            </Badge>
                           )}
                         </span>
                       </td>

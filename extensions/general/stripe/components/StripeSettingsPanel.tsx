@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
@@ -45,6 +46,7 @@ export default function StripeSettingsPanel() {
   const [disconnecting, setDisconnecting] = useState(false)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [togglingTransactionSync, setTogglingTransactionSync] = useState(false)
   const [needsReviewCount, setNeedsReviewCount] = useState(0)
   const [needsReview, setNeedsReview] = useState<StripeReviewEvent[]>([])
 
@@ -129,6 +131,7 @@ export default function StripeSettingsPanel() {
       const data = (await res.json().catch(() => ({}))) as {
         settled?: number
         needsReview?: number
+        transactions?: { imported?: number; linked?: number }
         error?: string
       }
       if (!res.ok) {
@@ -139,16 +142,52 @@ export default function StripeSettingsPanel() {
         })
         return
       }
+      const paymentsLine = t('sync_done_description', {
+        settled: data.settled ?? 0,
+        review: data.needsReview ?? 0,
+      })
       toast({
         title: t('sync_done_title'),
-        description: t('sync_done_description', {
-          settled: data.settled ?? 0,
-          review: data.needsReview ?? 0,
-        }),
+        description: data.transactions
+          ? `${paymentsLine} ${t('sync_done_transactions', {
+              imported: data.transactions.imported ?? 0,
+              linked: data.transactions.linked ?? 0,
+            })}`
+          : paymentsLine,
       })
       await loadStatus()
     } finally {
       setSyncing(false)
+    }
+  }
+
+  async function handleToggleTransactionSync(enabled: boolean) {
+    setTogglingTransactionSync(true)
+    try {
+      const res = await fetch('/api/extensions/ext/stripe/transaction-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      })
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string }
+        toast({
+          title: t('transaction_sync_toggle_failed'),
+          description: data.error,
+          variant: 'destructive',
+        })
+        return
+      }
+      toast({
+        title: enabled
+          ? t('transaction_sync_enabled_toast')
+          : t('transaction_sync_disabled_toast'),
+      })
+      await loadStatus()
+    } catch {
+      toast({ title: t('transaction_sync_toggle_failed'), variant: 'destructive' })
+    } finally {
+      setTogglingTransactionSync(false)
     }
   }
 
@@ -178,6 +217,25 @@ export default function StripeSettingsPanel() {
     }
   }
 
+  // Hosted: Stripe Connect is not launched yet, so the settings surface is
+  // "coming soon" even where the platform credentials are configured (test
+  // mode): users must not be able to connect or toggle transaction sync until
+  // launch. Self-hosted admins run their own keys and keep the full panel.
+  const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
+  if (!isSelfHosted) {
+    return (
+      <Card>
+        <CardContent className="p-0">
+          <EmptyState
+            icon={CreditCard}
+            title={t('coming_soon_title')}
+            description={t('coming_soon_description')}
+          />
+        </CardContent>
+      </Card>
+    )
+  }
+
   if (loading) {
     return (
       <Card>
@@ -191,31 +249,15 @@ export default function StripeSettingsPanel() {
   }
 
   if (!configured) {
-    // Hosted: the Connect platform isn't live yet, so the whole integration
-    // presents as "coming soon" (every server path is already a no-op without
-    // STRIPE_CONNECT_CLIENT_ID). Self-hosted admins get the honest
-    // configuration message instead: for them it's a setup task, not a launch.
-    const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
-    if (isSelfHosted) {
-      return (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('title')}</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <p className="text-sm text-muted-foreground">{t('not_configured')}</p>
-          </CardContent>
-        </Card>
-      )
-    }
+    // Self-hosted without STRIPE_CONNECT_CLIENT_ID: honest configuration
+    // message, for these admins it's a setup task, not a launch.
     return (
       <Card>
-        <CardContent className="p-0">
-          <EmptyState
-            icon={CreditCard}
-            title={t('coming_soon_title')}
-            description={t('coming_soon_description')}
-          />
+        <CardHeader>
+          <CardTitle className="text-base">{t('title')}</CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <p className="text-sm text-muted-foreground">{t('not_configured')}</p>
         </CardContent>
       </Card>
     )
@@ -303,6 +345,36 @@ export default function StripeSettingsPanel() {
               {connecting ? t('connecting') : t('connect')}
             </Button>
             <p className="mt-3 text-sm text-muted-foreground">{t('connect_hint')}</p>
+          </div>
+        )}
+
+        {isActive && connection && (
+          <div className="flex flex-wrap items-start justify-between gap-4 rounded-lg border border-border p-4">
+            <div className="min-w-0 max-w-prose space-y-1">
+              <p className="text-sm font-medium">{t('transaction_sync_title')}</p>
+              <p className="text-sm text-muted-foreground">
+                {t('transaction_sync_description')}
+              </p>
+              {connection.transaction_sync_enabled ? (
+                <p className="text-xs text-muted-foreground">
+                  {connection.last_balance_txn_synced_at
+                    ? t('transaction_sync_last_synced', {
+                        date: formatDateLong(connection.last_balance_txn_synced_at),
+                      })
+                    : t('transaction_sync_never_synced')}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {t('transaction_sync_backfill_note')}
+                </p>
+              )}
+            </div>
+            <Switch
+              checked={connection.transaction_sync_enabled}
+              onCheckedChange={handleToggleTransactionSync}
+              disabled={togglingTransactionSync}
+              aria-label={t('transaction_sync_title')}
+            />
           </div>
         )}
 

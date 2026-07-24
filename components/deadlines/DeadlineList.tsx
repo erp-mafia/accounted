@@ -1,47 +1,46 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Deadline, DeadlineType } from '@/types'
-import { Button } from '@/components/ui/button'
-import { DeadlineCard } from './DeadlineCard'
+import { DeadlineRow, deadlineDateLabel } from './DeadlineRow'
 import { DeadlineGroupCard, isSkattekontoDeadline } from './DeadlineGroupCard'
-import { DeadlineFilters } from './DeadlineFilters'
-import { DeadlineForm } from './DeadlineForm'
-import { isDeadlineOverdue } from '@/lib/calendar/utils'
-import { Plus, Lock } from 'lucide-react'
-import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { isDeadlineOverdue, parseDate, startOfDay } from '@/lib/calendar/utils'
+
+type TypeSegment = 'all' | 'tax' | 'invoicing' | 'own'
+
+const SEGMENT_TYPES: Record<Exclude<TypeSegment, 'all'>, ReadonlyArray<DeadlineType>> = {
+  tax: ['tax'],
+  invoicing: ['invoicing'],
+  own: ['delivery', 'report', 'other'],
+}
 
 interface DeadlineListProps {
   deadlines: Deadline[]
-  customers: { id: string; name: string }[]
-  onDeadlineCreate: (data: Omit<Deadline, 'id' | 'user_id' | 'company_id' | 'created_at' | 'updated_at'>) => Promise<void>
   onDeadlineToggle: (deadline: Deadline) => Promise<void>
-  onDeadlineEdit: (deadline: Deadline) => Promise<void>
-  onDeadlineDelete: (deadline: Deadline) => Promise<void>
+  onDeadlineEdit: (deadline: Deadline) => void
 }
 
+/**
+ * Viktiga datum as the concept thread (scene 17): a type seg, borderless
+ * rows under hairline section headers, and a "Närmast" countdown pane on the
+ * right. Marking done confirms up front via ConfirmDialog.
+ */
 export function DeadlineList({
   deadlines,
-  customers,
-  onDeadlineCreate,
   onDeadlineToggle,
   onDeadlineEdit,
-  onDeadlineDelete,
 }: DeadlineListProps) {
-  const { canWrite } = useCanWrite()
-  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed'>('pending')
-  const [typeFilter, setTypeFilter] = useState<DeadlineType | 'all'>('all')
-  const [showForm, setShowForm] = useState(false)
-  const [editingDeadline, setEditingDeadline] = useState<Deadline | null>(null)
+  const t = useTranslations('deadlines')
+  const [segment, setSegment] = useState<TypeSegment>('all')
+  const [confirmTarget, setConfirmTarget] = useState<Deadline | null>(null)
 
   const filteredDeadlines = useMemo(() => {
-    return deadlines.filter((d) => {
-      if (statusFilter === 'pending' && d.is_completed) return false
-      if (statusFilter === 'completed' && !d.is_completed) return false
-      if (typeFilter !== 'all' && d.deadline_type !== typeFilter) return false
-      return true
-    })
-  }, [deadlines, statusFilter, typeFilter])
+    if (segment === 'all') return deadlines
+    const types = SEGMENT_TYPES[segment]
+    return deadlines.filter((d) => types.includes(d.deadline_type))
+  }, [deadlines, segment])
 
   const groupedDeadlines = useMemo(() => {
     const today = new Date().toISOString().split('T')[0]
@@ -65,41 +64,46 @@ export function DeadlineList({
     return { overdue, today: todayDeadlines, upcoming, completed }
   }, [filteredDeadlines])
 
-  const handleResetFilters = () => {
-    setStatusFilter('all')
-    setTypeFilter('all')
-  }
+  // "Närmast" pane: days to the nearest pending deadline (across the
+  // unfiltered list: the countdown is page context, not a filter readout).
+  const nearest = useMemo(() => {
+    const pending = deadlines
+      .filter((d) => !d.is_completed && !isDeadlineOverdue(d))
+      .sort((a, b) => a.due_date.localeCompare(b.due_date))
+    const first = pending[0]
+    if (!first) return null
+    const today = startOfDay(new Date())
+    const days = Math.round(
+      (parseDate(first.due_date).getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
+    )
+    return { deadline: first, days: Math.max(0, days) }
+  }, [deadlines])
 
-  const handleFormSubmit = async (data: Omit<Deadline, 'id' | 'user_id' | 'company_id' | 'created_at' | 'updated_at'>) => {
-    if (editingDeadline) {
-      await onDeadlineEdit({ ...editingDeadline, ...data })
-    } else {
-      await onDeadlineCreate(data)
+  const overdueCount = useMemo(
+    () => deadlines.filter((d) => !d.is_completed && isDeadlineOverdue(d)).length,
+    [deadlines],
+  )
+
+  const handleRequestToggle = (deadline: Deadline) => {
+    // Un-completing is a harmless revert: no confirmation (matches the undo
+    // toast the page already offers).
+    if (deadline.is_completed) {
+      void onDeadlineToggle(deadline)
+      return
     }
-    setShowForm(false)
-    setEditingDeadline(null)
-  }
-
-  const handleEdit = (deadline: Deadline) => {
-    setEditingDeadline(deadline)
-    setShowForm(true)
-  }
-
-  const handleFormClose = () => {
-    setShowForm(false)
-    setEditingDeadline(null)
+    setConfirmTarget(deadline)
   }
 
   const sections = [
-    { key: 'overdue', label: 'Förfallna', items: groupedDeadlines.overdue },
-    { key: 'today', label: 'Idag', items: groupedDeadlines.today },
-    { key: 'upcoming', label: 'Kommande', items: groupedDeadlines.upcoming },
-    { key: 'completed', label: 'Klara', items: groupedDeadlines.completed },
-  ].filter(s => s.items.length > 0)
+    { key: 'overdue', label: t('section_overdue'), items: groupedDeadlines.overdue },
+    { key: 'today', label: t('section_today'), items: groupedDeadlines.today },
+    { key: 'upcoming', label: t('section_upcoming'), items: groupedDeadlines.upcoming },
+    { key: 'completed', label: t('section_completed'), items: groupedDeadlines.completed },
+  ].filter((s) => s.items.length > 0)
 
   // Skattekonto obligations legally share the same due date (moms + AGI +
   // preliminärskatt all fall on "den 12:e"): collapse 2+ such rows into one
-  // grouped card per date instead of near-identical rows. Other deadlines
+  // grouped row per date instead of near-identical rows. Other deadlines
   // render as before, in their original order.
   type ListEntry =
     | { kind: 'single'; deadline: Deadline }
@@ -131,103 +135,125 @@ export function DeadlineList({
 
   return (
     <div className="space-y-6">
-      {/* Toolbar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <DeadlineFilters
-          status={statusFilter}
-          type={typeFilter}
-          onStatusChange={setStatusFilter}
-          onTypeChange={setTypeFilter}
-          onReset={handleResetFilters}
-        />
-        <Button
-          onClick={() => setShowForm(true)}
-          disabled={!canWrite}
-          title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
-        >
-          {canWrite ? (
-            <Plus className="h-4 w-4 mr-2" />
-          ) : (
-            <Lock className="h-4 w-4 mr-2" />
-          )}
-          Ny deadline
-        </Button>
+      {/* Toolbar: the type seg (concept: Alla / Skatt / Fakturering / Egna) */}
+      <div className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]" role="tablist">
+        {(
+          [
+            { key: 'all', label: t('seg_all') },
+            { key: 'tax', label: t('seg_tax') },
+            { key: 'invoicing', label: t('seg_invoicing') },
+            { key: 'own', label: t('seg_own') },
+          ] as const
+        ).map(({ key, label }) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={segment === key}
+            onClick={() => setSegment(key)}
+            className={`rounded-md px-3.5 py-[5px] text-[12.5px] transition-colors duration-150 ${
+              segment === key
+                ? 'border border-border bg-card font-medium text-foreground'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      {/* Content */}
-      {filteredDeadlines.length === 0 ? (
-        <div className="py-20 text-center">
-          <p className="text-sm text-muted-foreground">
-            {statusFilter !== 'all' || typeFilter !== 'all'
-              ? 'Inga deadlines matchar filtret.'
-              : 'Inga deadlines ännu.'}
+      <div className="gap-8 lg:grid lg:grid-cols-[minmax(0,1fr)_240px] lg:items-start">
+        {/* The thread */}
+        {filteredDeadlines.length === 0 ? (
+          <p className="py-16 text-center text-sm text-muted-foreground">
+            {segment !== 'all' ? t('empty_filtered') : t('empty_title')}
           </p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-4"
-            onClick={() => setShowForm(true)}
-            disabled={!canWrite}
-            title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
-          >
-            {canWrite ? (
-              <Plus className="h-3.5 w-3.5 mr-1.5" />
-            ) : (
-              <Lock className="h-3.5 w-3.5 mr-1.5" />
-            )}
-            Skapa en deadline
-          </Button>
-        </div>
-      ) : (
-        <div className="space-y-8">
-          {sections.map(({ key, label, items }) => (
-            <section key={key}>
-              <div className="flex items-center gap-3 mb-2 px-1">
-                <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  {label}
-                </h3>
-                <span className="text-xs tabular-nums text-muted-foreground/50">
-                  {items.length}
-                </span>
-                <div className="flex-1 h-px bg-border/60" />
-              </div>
-              <div className="space-y-1.5">
-                {toEntries(items).map((entry) =>
-                  entry.kind === 'group' ? (
-                    <DeadlineGroupCard
-                      key={`skattekonto-${entry.date}`}
-                      deadlines={entry.items}
-                      onToggle={onDeadlineToggle}
-                      onEdit={handleEdit}
-                    />
-                  ) : (
-                    <DeadlineCard
-                      key={entry.deadline.id}
-                      deadline={entry.deadline}
-                      onToggle={onDeadlineToggle}
-                      onEdit={handleEdit}
-                      onDelete={onDeadlineDelete}
-                    />
-                  ),
-                )}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
+        ) : (
+          <div className="stagger-enter space-y-8">
+            {sections.map(({ key, label, items }) => (
+              <section key={key}>
+                <div className="mb-1 flex items-center gap-3 px-1">
+                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    {label}
+                  </h2>
+                  <span className="text-xs tabular-nums text-muted-foreground/50">
+                    {items.length}
+                  </span>
+                  <div className="h-px flex-1 bg-border/60" />
+                </div>
+                <div>
+                  {toEntries(items).map((entry) =>
+                    entry.kind === 'group' ? (
+                      <DeadlineGroupCard
+                        key={`skattekonto-${entry.date}`}
+                        deadlines={entry.items}
+                        onEdit={onDeadlineEdit}
+                        onRequestToggle={handleRequestToggle}
+                      />
+                    ) : (
+                      <DeadlineRow
+                        key={entry.deadline.id}
+                        deadline={entry.deadline}
+                        onEdit={onDeadlineEdit}
+                        onRequestToggle={handleRequestToggle}
+                      />
+                    ),
+                  )}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
 
-      <DeadlineForm
-        open={showForm}
-        onOpenChange={handleFormClose}
-        onSubmit={handleFormSubmit}
-        onDelete={(deadline) => {
-          if (deadline.id) {
-            const full = deadlines.find(d => d.id === deadline.id)
-            if (full) onDeadlineDelete(full)
-          }
+        {/* "Närmast" pane (concept aside) */}
+        <aside className="mt-8 lg:mt-0">
+          <div className="rounded-lg border border-border">
+            <div className="border-b border-border px-4 py-2.5">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                {t('nearest_title')}
+              </p>
+            </div>
+            <div className="px-4 py-6 text-center">
+              {nearest ? (
+                <>
+                  <p className="font-display text-4xl leading-none tracking-tight tabular-nums">
+                    {nearest.days === 0 ? t('rel_today') : nearest.days}
+                  </p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {nearest.days === 0
+                      ? nearest.deadline.title
+                      : t('nearest_days_to', { title: nearest.deadline.title })}
+                  </p>
+                  <p className="mt-1 text-xs tabular-nums text-muted-foreground/60">
+                    {deadlineDateLabel(nearest.deadline.due_date)}
+                  </p>
+                </>
+              ) : (
+                <p className="py-4 text-xs text-muted-foreground">{t('nearest_empty')}</p>
+              )}
+              {overdueCount > 0 && (
+                <p className="mt-3 text-xs font-medium text-destructive">
+                  {t('nearest_overdue', { count: overdueCount })}
+                </p>
+              )}
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <ConfirmDialog
+        open={confirmTarget !== null}
+        onOpenChange={(open) => !open && setConfirmTarget(null)}
+        title={t('confirm_done_title')}
+        description={
+          confirmTarget
+            ? `${deadlineDateLabel(confirmTarget.due_date)} · ${confirmTarget.title}`
+            : undefined
+        }
+        confirmLabel={t('group_confirm')}
+        onConfirm={async () => {
+          if (confirmTarget) await onDeadlineToggle(confirmTarget)
         }}
-        initialData={editingDeadline || undefined}
-        customers={customers}
       />
     </div>
   )

@@ -28,6 +28,8 @@ const CONNECTION: StripeConnection = {
   display_name: 'Test AB',
   last_event_created_at: null,
   last_event_id: null,
+  transaction_sync_enabled: false,
+  last_balance_txn_synced_at: null,
   error_message: null,
   connected_at: '2026-07-01T00:00:00.000Z',
   disconnected_at: null,

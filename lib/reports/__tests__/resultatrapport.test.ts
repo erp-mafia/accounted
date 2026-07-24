@@ -4,7 +4,7 @@ vi.mock('../trial-balance', () => ({
   generateTrialBalance: vi.fn(),
 }))
 
-import { generateResultatrapport } from '../resultatrapport'
+import { generateResultatrapport, shiftDateOneYearBack } from '../resultatrapport'
 import { generateTrialBalance } from '../trial-balance'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { TrialBalanceRow } from '@/types'
@@ -16,7 +16,7 @@ beforeEach(() => {
 })
 
 function makeRow(overrides: Partial<TrialBalanceRow>): TrialBalanceRow {
-  return {
+  const row: TrialBalanceRow = {
     account_number: '3001',
     account_name: 'Test',
     account_class: 3,
@@ -28,6 +28,14 @@ function makeRow(overrides: Partial<TrialBalanceRow>): TrialBalanceRow {
     closing_credit: 0,
     ...overrides,
   }
+  // Full-period P&L reality: no opening balance, so window activity equals
+  // closing. Tests specify closing_*; mirror into period_* unless the test
+  // sets period activity explicitly.
+  if (row.period_debit === 0 && row.period_credit === 0) {
+    row.period_debit = row.closing_debit
+    row.period_credit = row.closing_credit
+  }
+  return row
 }
 
 function tb(rows: TrialBalanceRow[]) {
@@ -278,5 +286,185 @@ describe('generateResultatrapport', () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       generateResultatrapport(q.supabase as any, 'company-1', 'missing')
     ).rejects.toThrow('Fiscal period not found')
+  })
+
+  it('compares a date range against the same window shifted one year back', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: 'period-0' },
+      error: null,
+    })
+    // Fiscal periods covering the shifted window 2025-01-01..2025-03-31.
+    q.enqueue({
+      data: [{ id: 'period-0', period_start: '2025-01-01', period_end: '2025-12-31' }],
+      error: null,
+    })
+
+    mockTrialBalance
+      .mockResolvedValueOnce(
+        tb([makeRow({ account_number: '3001', account_class: 3, closing_credit: 90000 })])
+      )
+      .mockResolvedValueOnce(
+        tb([makeRow({ account_number: '3001', account_class: 3, closing_credit: 60000 })])
+      )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1', {
+      fromDate: '2026-01-01',
+      toDate: '2026-03-31',
+    })
+
+    expect(report.groups[0].rows[0].current_period).toBe(90000)
+    expect(report.groups[0].rows[0].prior_period).toBe(60000)
+    expect(report.prior_period).toEqual({ start: '2025-01-01', end: '2025-03-31' })
+    expect(mockTrialBalance).toHaveBeenNthCalledWith(2, expect.anything(), 'company-1', 'period-0', {
+      fromDate: '2025-01-01',
+      toDate: '2025-03-31',
+    })
+  })
+
+  it('merges the shifted window across two fiscal periods (brutet räkenskapsår)', async () => {
+    const q = createQueuedMockSupabase()
+    // Current period: brutet räkenskapsår Jul 2025 - Jun 2026; window is the
+    // calendar Q1 2026, so the shifted window Jan-Mar 2025 spans FY 24/25
+    // only. Use a window that straddles instead: Jun-Jul 2026 shifted to
+    // Jun-Jul 2025, split across FY 24/25 (ends Jun 30) and FY 25/26.
+    q.enqueue({
+      data: { period_start: '2025-07-01', period_end: '2026-06-30', previous_period_id: 'period-0' },
+      error: null,
+    })
+    q.enqueue({
+      data: [
+        { id: 'period-old', period_start: '2024-07-01', period_end: '2025-06-30' },
+        { id: 'period-1', period_start: '2025-07-01', period_end: '2026-06-30' },
+      ],
+      error: null,
+    })
+
+    mockTrialBalance
+      // Current window
+      .mockResolvedValueOnce(
+        tb([makeRow({ account_number: '3001', account_class: 3, closing_credit: 50000 })])
+      )
+      // Prior part 1: 2025-06-01..2025-06-30 in period-old
+      .mockResolvedValueOnce(
+        tb([makeRow({ account_number: '3001', account_class: 3, closing_credit: 10000 })])
+      )
+      // Prior part 2: 2025-07-01..2025-07-31 in period-1 (current period is a
+      // legitimate source when the shifted window reaches into it)
+      .mockResolvedValueOnce(
+        tb([makeRow({ account_number: '3001', account_class: 3, closing_credit: 15000 })])
+      )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1', {
+      fromDate: '2026-06-01',
+      toDate: '2026-07-31',
+    })
+
+    expect(report.groups[0].rows[0].prior_period).toBe(25000)
+    expect(report.prior_period).toEqual({ start: '2025-06-01', end: '2025-07-31' })
+    expect(mockTrialBalance).toHaveBeenNthCalledWith(2, expect.anything(), 'company-1', 'period-old', {
+      fromDate: '2025-06-01',
+      toDate: '2025-06-30',
+    })
+    expect(mockTrialBalance).toHaveBeenNthCalledWith(3, expect.anything(), 'company-1', 'period-1', {
+      fromDate: '2025-07-01',
+      toDate: '2025-07-31',
+    })
+  })
+
+  it('drops the comparison when the shifted window would overlap the current one', async () => {
+    const q = createQueuedMockSupabase()
+    // 18-month fiscal period with a 14-month window: shifting back one year
+    // overlaps the window itself, so no comparison is possible.
+    q.enqueue({
+      data: { period_start: '2025-01-01', period_end: '2026-06-30', previous_period_id: null },
+      error: null,
+    })
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([makeRow({ account_number: '3001', account_class: 3, closing_credit: 100000 })])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1', {
+      fromDate: '2025-01-01',
+      toDate: '2026-02-28',
+    })
+
+    expect(report.prior_period).toBeNull()
+    expect(mockTrialBalance).toHaveBeenCalledTimes(1)
+  })
+
+  it('still drops the comparison for dimension-filtered ranges', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: 'period-0' },
+      error: null,
+    })
+
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([makeRow({ account_number: '3001', account_class: 3, closing_credit: 100000 })])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1', {
+      fromDate: '2026-01-01',
+      toDate: '2026-03-31',
+      dimensions: { '6': 'P001' },
+    })
+
+    expect(report.prior_period).toBeNull()
+    expect(mockTrialBalance).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports window activity, not rolled-forward YTD closing', async () => {
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: null },
+      error: null,
+    })
+    q.enqueue({ data: [], error: null }) // no fiscal period covers the shifted window
+
+    // A June window: trial balance rolls Jan-May (60 000) into opening, so
+    // closing shows 100 000 YTD while the window's own activity is 40 000.
+    mockTrialBalance.mockResolvedValueOnce(
+      tb([
+        makeRow({
+          account_number: '3001',
+          account_class: 3,
+          opening_credit: 60000,
+          period_credit: 40000,
+          closing_credit: 100000,
+        }),
+      ])
+    )
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1', {
+      fromDate: '2026-06-01',
+      toDate: '2026-06-30',
+    })
+
+    expect(report.groups[0].rows[0].current_period).toBe(40000)
+    expect(report.net_result_current).toBe(40000)
+  })
+})
+
+describe('shiftDateOneYearBack', () => {
+  it('shifts a plain date one year back', () => {
+    expect(shiftDateOneYearBack('2026-03-15')).toBe('2025-03-15')
+    expect(shiftDateOneYearBack('2026-01-01')).toBe('2025-01-01')
+    expect(shiftDateOneYearBack('2026-12-31')).toBe('2025-12-31')
+  })
+
+  it('clamps leap day to the last day of February', () => {
+    expect(shiftDateOneYearBack('2028-02-29')).toBe('2027-02-28')
+  })
+
+  it('keeps Feb 29 when the target year is also a leap year divisible correctly', () => {
+    // 2001 -> 2000 is a leap year (divisible by 400)
+    expect(shiftDateOneYearBack('2001-02-28')).toBe('2000-02-28')
   })
 })

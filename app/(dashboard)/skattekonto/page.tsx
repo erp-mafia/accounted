@@ -1,13 +1,16 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { AttnLine } from '@/components/ui/attn-line'
 import { EmptyState } from '@/components/ui/empty-state'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Skeleton } from '@/components/ui/skeleton'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   Dialog,
@@ -18,6 +21,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { cn } from '@/lib/utils'
 import {
   formatCurrency,
   formatDate,
@@ -29,9 +33,7 @@ import {
   AlertCircle,
   Copy,
   ExternalLink,
-  FileCheck,
   Landmark,
-  Link2,
   RefreshCw,
 } from 'lucide-react'
 import { useCapability } from '@/contexts/CompanyContext'
@@ -70,7 +72,9 @@ interface MatchCandidate {
 
 export default function SkattekontoPage() {
   const { toast } = useToast()
+  const t = useTranslations('skattekonto')
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
+  const [showPayment, setShowPayment] = useState(false)
   const [saldo, setSaldo] = useState<SaldoEnvelope | null>(null)
   const [tx, setTx] = useState<TransaktionerEnvelope['data'] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -294,59 +298,85 @@ export default function SkattekontoPage() {
       .catch(() => {})
   }
 
+  // Next charge (concept attn line): the earliest upcoming due date and the
+  // sum of everything Skatteverket draws that day.
+  const nextCharge = useMemo(() => {
+    const upcoming = tx?.upcoming ?? []
+    const dueOf = (r: StoredSkattekontoTransaction) =>
+      r.forfallodatum ?? r.transaktionsdatum
+    const due = upcoming.map(dueOf).sort()[0]
+    if (!due) return null
+    const rows = upcoming.filter((r) => dueOf(r) === due)
+    const amount = rows.reduce((sum, r) => sum + Number(r.belopp_skatteverket), 0)
+    return { due, count: rows.length, amount: Math.round(Math.abs(amount) * 100) / 100 }
+  }, [tx])
+
+  const saldoNow = saldo?.data ? saldo.data.saldoSkatteverket : null
+  const shortfall =
+    nextCharge && saldoNow !== null && saldoNow < nextCharge.amount
+      ? Math.round((nextCharge.amount - saldoNow) * 100) / 100
+      : null
+
+  const helpNode = (
+    <HelpPopover>
+      <p>{t('help_text')}</p>
+    </HelpPopover>
+  )
+
   if (notConnected) {
     return (
-      <div className="space-y-6">
-        <PageHeading />
-        <Card>
-          <CardContent className="p-0">
-            <EmptyState
-              icon={Landmark}
-              title="Skatteverket är inte anslutet"
-              description="För att se saldo och transaktioner på skattekontot behöver du ansluta med BankID i inställningarna."
-            >
-              <Button asChild>
-                <Link href="/settings/tax">
-                  <ExternalLink className="mr-2 h-4 w-4" />
-                  Anslut Skatteverket
-                </Link>
-              </Button>
-            </EmptyState>
-          </CardContent>
-        </Card>
+      <div className="space-y-8">
+        <PageHeader title="Skattekonto" help={helpNode} />
+        <EmptyState
+          icon={Landmark}
+          title="Skatteverket är inte anslutet"
+          description="För att se saldo och transaktioner på skattekontot behöver du ansluta med BankID i inställningarna."
+        >
+          <Button asChild>
+            <Link href="/settings/tax">
+              <ExternalLink className="mr-2 h-4 w-4" />
+              Anslut Skatteverket
+            </Link>
+          </Button>
+        </EmptyState>
       </div>
     )
   }
 
   if (loadError) {
     return (
-      <div className="space-y-6">
-        <PageHeading />
-        <Card>
-          <CardContent className="p-0">
-            <EmptyState
-              icon={AlertCircle}
-              title="Kunde inte hämta skattekontot"
-              description="Något gick fel när saldo och transaktioner skulle hämtas. Försök igen om en stund."
-            >
-              <Button variant="outline" onClick={() => void reload()}>
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Försök igen
-              </Button>
-            </EmptyState>
-          </CardContent>
-        </Card>
+      <div className="space-y-8">
+        <PageHeader title="Skattekonto" help={helpNode} />
+        <EmptyState
+          icon={AlertCircle}
+          title="Kunde inte hämta skattekontot"
+          description="Något gick fel när saldo och transaktioner skulle hämtas. Försök igen om en stund."
+        >
+          <Button variant="outline" onClick={() => void reload()}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Försök igen
+          </Button>
+        </EmptyState>
       </div>
     )
   }
 
+  const data = saldo?.data ?? null
+
   return (
-    <div className="space-y-6">
-      <PageHeading
-        right={
+    <div className="space-y-8">
+      <PageHeader
+        title="Skattekonto"
+        help={helpNode}
+        action={
           // The span carries the tooltip: `title` is suppressed on disabled elements.
           <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
-            <Button onClick={syncNow} disabled={syncing || !hasSkvCapability}>
+            <Button
+              variant="ghost"
+              onClick={syncNow}
+              disabled={syncing || !hasSkvCapability}
+              className="text-muted-foreground hover:text-foreground"
+            >
               <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
               {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
             </Button>
@@ -354,72 +384,131 @@ export default function SkattekontoPage() {
         }
       />
 
-      {reconnectMessage && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <AlertCircle className="h-4 w-4 shrink-0 text-destructive" />
-            <p className="text-sm">{reconnectMessage}</p>
+      {/* Saldo as compact stat tiles (house metric-card idiom, KPIHeroCards) */}
+      <section className="space-y-4">
+        {loading && !data ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Skeleton className="h-28 w-full rounded-lg" />
+            <Skeleton className="h-28 w-full rounded-lg" />
           </div>
-          <Button asChild variant="outline" size="sm">
-            <Link href="/settings/tax">
-              <ExternalLink className="mr-2 h-3.5 w-3.5" />
-              Anslut igen
-            </Link>
-          </Button>
-        </div>
-      )}
+        ) : !data ? (
+          <p className="py-4 text-sm text-muted-foreground">
+            Inget saldo hämtat ännu: klicka på ”Synkronisera nu”.
+          </p>
+        ) : (
+          <>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-lg border border-border p-4">
+                <div className="flex items-center gap-2">
+                  <img
+                    src="/logos/skatteverket_color.svg"
+                    alt=""
+                    className="h-4 w-4 shrink-0 object-contain"
+                  />
+                  <p className="text-xs text-muted-foreground">Saldo hos Skatteverket</p>
+                </div>
+                <p
+                  className={cn(
+                    'mt-2 font-display text-2xl tabular-nums tracking-tight',
+                    data.saldoSkatteverket < 0 && 'text-destructive',
+                  )}
+                >
+                  {formatCurrency(data.saldoSkatteverket)}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  OCR <span className="tabular-nums">{data.ocrNummer}</span>{' '}
+                  <button
+                    type="button"
+                    onClick={() => copyOcr(data.ocrNummer)}
+                    className={QUIET_LINK_CLASS}
+                    aria-label="Kopiera OCR"
+                  >
+                    {t('copy')}
+                  </button>
+                  {saldo?.lastSyncedAt && (
+                    <>
+                      {' '}· synkad{' '}
+                      <span className="tabular-nums">{formatDateTime(saldo.lastSyncedAt)}</span>
+                    </>
+                  )}
+                </p>
+                {data.rantaSkatteverket !== 0 && (
+                  <p className="mt-1 text-xs tabular-nums text-muted-foreground">
+                    Preliminär ränta: {formatCurrency(data.rantaSkatteverket)}
+                  </p>
+                )}
+                {data.saldoKronofogden !== 0 && (
+                  <p className="mt-1 text-xs font-medium tabular-nums text-destructive">
+                    Hos Kronofogden: {formatCurrency(data.saldoKronofogden)}
+                    {data.rantaKronofogden !== 0 &&
+                      ` (ränta ${formatCurrency(data.rantaKronofogden)})`}
+                  </p>
+                )}
+              </div>
 
-      <BalanceHero saldo={saldo} loading={loading} onCopyOcr={copyOcr} />
+              <div className="rounded-lg border border-border p-4">
+                <p className="text-xs text-muted-foreground">Nästa dragning</p>
+                {nextCharge ? (
+                  <>
+                    <p className="mt-2 font-display text-2xl tabular-nums tracking-tight">
+                      {formatCurrency(nextCharge.amount)}
+                    </p>
+                    <p className="mt-1 text-xs tabular-nums text-muted-foreground">
+                      {formatDateLong(nextCharge.due)}
+                      {nextCharge.count > 1 && ` · ${nextCharge.count} händelser`}
+                    </p>
+                  </>
+                ) : (
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Inga kommande dragningar.
+                  </p>
+                )}
+              </div>
+            </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Transaktioner</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Tabs defaultValue="booked">
-            <TabsList>
-              <TabsTrigger value="booked">
-                Genomförda {tx?.booked ? `(${tx.booked.length})` : ''}
-              </TabsTrigger>
-              <TabsTrigger value="overdue">
-                Förfallna {tx?.overdue ? `(${tx.overdue.length})` : ''}
-              </TabsTrigger>
-              <TabsTrigger value="upcoming">
-                Kommande {tx?.upcoming ? `(${tx.upcoming.length})` : ''}
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value="booked" className="mt-4">
-              <TransactionTable
-                rows={tx?.booked ?? []}
-                onBokfor={bokfor}
-                onMatch={openMatch}
-                bookingId={bookingId}
-                emptyText="Inga genomförda transaktioner än."
-              />
-            </TabsContent>
-            <TabsContent value="overdue" className="mt-4">
-              <TransactionTable
-                rows={tx?.overdue ?? []}
-                onBokfor={bokfor}
-                onMatch={openMatch}
-                bookingId={bookingId}
-                emptyText="Inga förfallna transaktioner."
-                showForfallodatum
-              />
-            </TabsContent>
-            <TabsContent value="upcoming" className="mt-4">
-              <TransactionTable
-                rows={tx?.upcoming ?? []}
-                onBokfor={bokfor}
-                onMatch={openMatch}
-                bookingId={bookingId}
-                emptyText="Inga kommande transaktioner."
-                showForfallodatum
-              />
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-      </Card>
+            {reconnectMessage ? (
+              <AttnLine action={{ label: t('attn_reconnect_action'), href: '/settings/tax' }}>
+                {reconnectMessage}
+              </AttnLine>
+            ) : shortfall !== null && nextCharge ? (
+              <AttnLine
+                action={{ label: t('attn_show_payment'), onClick: () => setShowPayment(true) }}
+              >
+                {t('attn_shortfall', {
+                  date: formatDateLong(nextCharge.due),
+                  charge: formatCurrency(nextCharge.amount),
+                  missing: formatCurrency(shortfall),
+                })}
+              </AttnLine>
+            ) : null}
+
+            {data.informationstext.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Information från Skatteverket
+                </p>
+                {data.informationstext.map((info, i) => (
+                  <p key={i} className="text-xs leading-5 text-muted-foreground">
+                    {info}
+                  </p>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </section>
+
+      {/* One dry table with band rows (concept): Kommande, Förfallna, Genomförda */}
+      <SkattekontoTable
+        tx={tx}
+        onBokfor={bokfor}
+        onMatch={openMatch}
+        bookingId={bookingId}
+      />
+
+      <p className="px-1 text-xs leading-5 text-muted-foreground">
+        {t('pgnote', { amount: formatCurrency(data?.saldoKronofogden ?? 0) })}
+      </p>
 
       <MatchDialog
         row={matchOpenFor}
@@ -432,256 +521,224 @@ export default function SkattekontoPage() {
         }}
         onConfirm={confirmMatch}
       />
+
+      <Dialog open={showPayment} onOpenChange={setShowPayment}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display text-lg tracking-tight">
+              {t('payment_title')}
+            </DialogTitle>
+            {nextCharge && (
+              <DialogDescription className="text-[13px] leading-relaxed">
+                {t('payment_description', {
+                  date: formatDateLong(nextCharge.due),
+                  charge: formatCurrency(nextCharge.amount),
+                })}
+              </DialogDescription>
+            )}
+          </DialogHeader>
+          <dl className="space-y-3 text-sm">
+            <div className="flex items-baseline justify-between gap-4">
+              <dt className="text-muted-foreground">{t('payment_bankgiro_label')}</dt>
+              <dd className="font-medium tabular-nums">5050-1055</dd>
+            </div>
+            <div className="flex items-baseline justify-between gap-4">
+              <dt className="text-muted-foreground">OCR</dt>
+              <dd className="flex items-center gap-2 font-medium tabular-nums">
+                {data?.ocrNummer}
+                {data && (
+                  <button
+                    type="button"
+                    onClick={() => copyOcr(data.ocrNummer)}
+                    className="text-muted-foreground transition-colors hover:text-foreground"
+                    aria-label="Kopiera OCR"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </dd>
+            </div>
+            {shortfall !== null && (
+              <div className="flex items-baseline justify-between gap-4">
+                <dt className="text-muted-foreground">{t('payment_shortfall_label')}</dt>
+                <dd className="font-medium tabular-nums">{formatCurrency(shortfall)}</dd>
+              </div>
+            )}
+          </dl>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
 
-function PageHeading({ right }: { right?: React.ReactNode }) {
-  return <PageHeader title="Skattekonto" action={right} />
+type TableSection = {
+  key: 'upcoming' | 'overdue' | 'booked'
+  label: string
+  rows: SkattekontoTransactionWithSuggestion[]
 }
 
-function BalanceHero({
-  saldo,
-  loading,
-  onCopyOcr,
-}: {
-  saldo: SaldoEnvelope | null
-  loading: boolean
-  onCopyOcr: (ocr: string) => void
-}) {
-  if (loading && !saldo?.data) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-sm text-muted-foreground">
-          Hämtar saldo…
-        </CardContent>
-      </Card>
-    )
-  }
-
-  if (!saldo?.data) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-center text-sm text-muted-foreground">
-          Inget saldo hämtat ännu: klicka på &quot;Synkronisera nu&quot;.
-        </CardContent>
-      </Card>
-    )
-  }
-
-  const { data } = saldo
-  const skvNegative = data.saldoSkatteverket < 0
-  const kfmNegative = data.saldoKronofogden < 0
-
-  return (
-    <Card>
-      <CardContent className="space-y-6 pt-6">
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              Skatteverket
-            </p>
-            <p
-              className={`font-display text-2xl tabular-nums ${
-                skvNegative ? 'text-destructive' : 'text-foreground'
-              }`}
-            >
-              {formatCurrency(data.saldoSkatteverket)}
-            </p>
-            {data.rantaSkatteverket !== 0 && (
-              <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-                Preliminär ränta: {formatCurrency(data.rantaSkatteverket)}
-              </p>
-            )}
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              Kronofogden
-            </p>
-            <p
-              className={`font-display text-2xl tabular-nums ${
-                kfmNegative ? 'text-destructive' : 'text-foreground'
-              }`}
-            >
-              {formatCurrency(data.saldoKronofogden)}
-            </p>
-            {data.rantaKronofogden !== 0 && (
-              <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-                Preliminär ränta: {formatCurrency(data.rantaKronofogden)}
-              </p>
-            )}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 border-t pt-4 text-sm sm:grid-cols-3">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              OCR
-            </p>
-            <p className="flex items-center gap-2 font-medium tabular-nums">
-              {data.ocrNummer}
-              <button
-                onClick={() => onCopyOcr(data.ocrNummer)}
-                className="text-muted-foreground hover:text-foreground"
-                aria-label="Kopiera OCR"
-              >
-                <Copy className="h-3.5 w-3.5" />
-              </button>
-            </p>
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              Nästa avstämning
-            </p>
-            <p className="font-medium tabular-nums">{data.nastaAvstamningsdatum}</p>
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              Saldo per
-            </p>
-            <p className="font-medium tabular-nums">
-              {formatDateLong(data.senastUppdaterad)}
-            </p>
-          </div>
-        </div>
-
-        {saldo.lastSyncedAt && (
-          <p className="text-xs text-muted-foreground">
-            Synkas automatiskt varje natt. Senast synkad{' '}
-            <span className="tabular-nums">
-              {formatDateTime(saldo.lastSyncedAt)}
-            </span>
-            . Skatteverket uppdaterar saldot periodvis: datumet ovan ändras
-            inte varje gång du synkroniserar.
-          </p>
-        )}
-
-        {data.informationstext.length > 0 && (
-          <div className="rounded-md border bg-muted/30 p-3">
-            <p className="mb-1 text-xs font-medium uppercase tracking-wide">
-              Information från Skatteverket
-            </p>
-            <ul className="list-disc space-y-1 pl-5 text-sm">
-              {data.informationstext.map((t, i) => (
-                <li key={i}>{t}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function TransactionTable({
-  rows,
+function SkattekontoTable({
+  tx,
   onBokfor,
   onMatch,
   bookingId,
-  emptyText,
-  showForfallodatum = false,
 }: {
-  rows: SkattekontoTransactionWithSuggestion[]
+  tx: TransaktionerEnvelope['data'] | null
   onBokfor: (id: string) => void
   onMatch: (row: StoredSkattekontoTransaction) => void
   bookingId: string | null
-  emptyText: string
-  showForfallodatum?: boolean
 }) {
-  if (rows.length === 0) {
-    return <p className="py-8 text-center text-sm text-muted-foreground">{emptyText}</p>
+  const t = useTranslations('skattekonto')
+
+  const allSections: TableSection[] = [
+    { key: 'upcoming', label: t('band_upcoming'), rows: tx?.upcoming ?? [] },
+    { key: 'overdue', label: t('band_overdue'), rows: tx?.overdue ?? [] },
+    { key: 'booked', label: t('band_booked'), rows: tx?.booked ?? [] },
+  ]
+  const sections = allSections.filter((s) => s.rows.length > 0)
+
+  if (sections.length === 0) {
+    return (
+      <p className="py-8 text-center text-sm text-muted-foreground">
+        {t('no_transactions')}
+      </p>
+    )
   }
 
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Datum</TableHead>
-          {showForfallodatum && <TableHead>Förfallodatum</TableHead>}
-          <TableHead>Beskrivning</TableHead>
-          <TableHead className="text-right">Belopp</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead></TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.map(row => {
-          const negative = Number(row.belopp_skatteverket) < 0
-          const isBooked = !!row.journal_entry_id
-          return (
-            <TableRow key={row.id}>
-              <TableCell className="tabular-nums">{formatDate(row.transaktionsdatum)}</TableCell>
-              {showForfallodatum && (
-                <TableCell className="tabular-nums">
-                  {row.forfallodatum ? formatDate(row.forfallodatum) : '-'}
-                </TableCell>
-              )}
-              <TableCell>
-                {row.transaktionstext}
-                {!isBooked && row.match_suggestion && (
-                  <p className="mt-1 text-xs text-warning">
-                    Möjlig dublett av{' '}
-                    {row.match_suggestion.voucher_series && row.match_suggestion.voucher_number
+    <div className="overflow-x-auto" role="region" aria-label="Skattekontohändelser">
+      <table className="w-full border-collapse text-[13px]">
+        <thead>
+          <tr>
+            <th className={cn(TH_CLASS, 'w-[110px]')}>Datum</th>
+            <th className={TH_CLASS}>Händelse</th>
+            <th className={cn(TH_CLASS, 'text-right')}>Belopp</th>
+            <th className={cn(TH_CLASS, 'w-[150px]')} />
+          </tr>
+        </thead>
+        <tbody className="stagger-enter">
+          {sections.map((section) => (
+            <Fragment key={section.key}>
+              <tr className="bg-muted/30">
+                <td
+                  colSpan={4}
+                  className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground"
+                >
+                  {section.label}
+                </td>
+              </tr>
+              {section.rows.map((row) => (
+                <SkattekontoRow
+                  key={row.id}
+                  row={row}
+                  section={section.key}
+                  onBokfor={onBokfor}
+                  onMatch={onMatch}
+                  bookingId={bookingId}
+                />
+              ))}
+            </Fragment>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function SkattekontoRow({
+  row,
+  section,
+  onBokfor,
+  onMatch,
+  bookingId,
+}: {
+  row: SkattekontoTransactionWithSuggestion
+  section: TableSection['key']
+  onBokfor: (id: string) => void
+  onMatch: (row: StoredSkattekontoTransaction) => void
+  bookingId: string | null
+}) {
+  const t = useTranslations('skattekonto')
+  const amount = Number(row.belopp_skatteverket)
+  const isBooked = !!row.journal_entry_id
+  const displayDate =
+    section === 'upcoming' || section === 'overdue'
+      ? (row.forfallodatum ?? row.transaktionsdatum)
+      : row.transaktionsdatum
+
+  return (
+    <tr className="group transition-colors duration-150 hover:bg-secondary/35">
+      <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
+        {formatDate(displayDate)}
+      </td>
+      <td className={TD_CLASS}>
+        <span className="inline-flex flex-wrap items-center gap-2">
+          {row.transaktionstext}
+          {/* Chips mark exceptions: only a *genomförd* row that is still
+              unbooked deviates; upcoming rows are unbooked by nature. */}
+          {section === 'booked' && !isBooked && (
+            row.match_suggestion ? (
+              <Badge variant="warning" className="font-normal">
+                {t('chip_possible_duplicate', {
+                  voucher:
+                    row.match_suggestion.voucher_series && row.match_suggestion.voucher_number
                       ? formatVoucher({
                           voucher_series: row.match_suggestion.voucher_series,
                           voucher_number: row.match_suggestion.voucher_number,
                         })
-                      : 'utkast'}{' '}
-                    ({formatDate(row.match_suggestion.entry_date)})
-                  </p>
-                )}
-              </TableCell>
-              <TableCell
-                className={`text-right tabular-nums ${negative ? 'text-destructive' : ''}`}
-              >
-                {formatCurrency(Number(row.belopp_skatteverket))}
-              </TableCell>
-              <TableCell>
-                {isBooked ? (
-                  <Badge variant="secondary" className="gap-1">
-                    <FileCheck className="h-3 w-3" />
-                    Bokförd
-                  </Badge>
-                ) : row.match_suggestion ? (
-                  <Badge variant="warning">Möjlig dublett</Badge>
-                ) : (
-                  <Badge variant="outline">Ej bokförd</Badge>
-                )}
-              </TableCell>
-              <TableCell className="text-right">
-                {isBooked ? (
-                  <Button asChild variant="ghost" size="sm">
-                    <Link href={`/bookkeeping/${row.journal_entry_id}`}>
-                      Visa verifikat
-                    </Link>
-                  </Button>
-                ) : (
-                  <div className="flex justify-end gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => onMatch(row)}
-                      title="Koppla till befintligt verifikat"
-                    >
-                      <Link2 className="mr-1 h-3.5 w-3.5" />
-                      Matcha
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onBokfor(row.id)}
-                      disabled={bookingId === row.id}
-                    >
-                      {bookingId === row.id ? 'Bokför…' : 'Bokför'}
-                    </Button>
-                  </div>
-                )}
-              </TableCell>
-            </TableRow>
-          )
-        })}
-      </TableBody>
-    </Table>
+                      : t('chip_draft'),
+                })}
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="font-normal">
+                {t('chip_not_booked')}
+              </Badge>
+            )
+          )}
+        </span>
+      </td>
+      <td
+        className={cn(
+          TD_CLASS,
+          'whitespace-nowrap text-right tabular-nums',
+          amount > 0 && 'text-success',
+        )}
+      >
+        {amount > 0 ? `+${formatCurrency(amount)}` : formatCurrency(amount)}
+      </td>
+      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
+        {isBooked ? (
+          <Link
+            href={`/bookkeeping/${row.journal_entry_id}`}
+            className={cn(
+              QUIET_LINK_CLASS,
+              'opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100',
+            )}
+          >
+            {t('action_show_voucher')}
+          </Link>
+        ) : (
+          <span className="inline-flex items-center gap-3 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+            <button
+              type="button"
+              onClick={() => onMatch(row)}
+              className={QUIET_LINK_CLASS}
+              title="Koppla till befintligt verifikat"
+            >
+              {t('action_match')}
+            </button>
+            <button
+              type="button"
+              onClick={() => onBokfor(row.id)}
+              disabled={bookingId === row.id}
+              className={QUIET_LINK_CLASS}
+            >
+              {bookingId === row.id ? t('action_booking') : t('action_book')}
+            </button>
+          </span>
+        )}
+      </td>
+    </tr>
   )
 }
 
