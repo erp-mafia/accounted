@@ -186,12 +186,16 @@ export default function AccrualSchedulesPage() {
 
       {dueCount > 0 ? (
         <AttnLine
-          action={{
-            label: isPosting ? 'Bokför…' : 'Bokför förfallna',
-            onClick: () => {
-              if (canWrite && !isPosting) setPostConfirmOpen(true)
-            },
-          }}
+          action={
+            canWrite
+              ? {
+                  label: isPosting ? 'Bokför…' : 'Bokför förfallna',
+                  onClick: () => {
+                    if (!isPosting) setPostConfirmOpen(true)
+                  },
+                }
+              : undefined
+          }
         >
           {dueCount === 1
             ? '1 månad väntar på att bokföras.'

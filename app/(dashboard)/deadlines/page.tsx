@@ -247,6 +247,9 @@ export default function DeadlinesPage() {
         description: error instanceof Error ? getUserErrorMessage(error) : t('retry'),
         variant: 'destructive',
       })
+      // Rethrow (like create) so a failed edit keeps the form open with the
+      // user's input instead of silently discarding it.
+      throw error
     }
   }
 

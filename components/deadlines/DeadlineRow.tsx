@@ -48,9 +48,9 @@ export function deadlineAuthorityLogo(deadline: Deadline): { src: string; alt: s
       ? { src: '/logos/bolagsverket.jpg', alt: 'Bolagsverket' }
       : { src: '/logos/skatteverket_color.svg', alt: 'Skatteverket' }
   }
-  if (deadline.deadline_type === 'tax') {
-    return { src: '/logos/skatteverket_color.svg', alt: 'Skatteverket' }
-  }
+  // Manual deadlines (including user-created tax-category ones) keep the
+  // neutral type icons: the authority crest is reserved for statutory dates
+  // the system generated from the tax settings.
   return null
 }
 
