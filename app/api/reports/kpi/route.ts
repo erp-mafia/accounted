@@ -238,6 +238,20 @@ export const GET = withRouteContext('report.kpi', async (request, { supabase, co
     { class4: 0, class5: 0, class6: 0, class7: 0 }
   )
 
+  // Top expense accounts (classes 4-7) for the period: the concept's
+  // "Största kostnaderna" list. Same debit-normal reading as the class
+  // composition above.
+  const topExpenseAccounts = (filteredTrialBalance ?? trialBalanceResult).rows
+    .filter((r) => r.account_class >= 4 && r.account_class <= 7)
+    .map((r) => ({
+      account_number: r.account_number,
+      account_name: r.account_name,
+      total: Math.round((r.closing_debit - r.closing_credit) * 100) / 100,
+    }))
+    .filter((r) => r.total > 0)
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 5)
+
   // Top suppliers by spend within the fiscal period. Sum total_sek to avoid
   // mixing currencies. Drop FX invoices without a SEK conversion (total_sek
   // null): they would otherwise inflate a supplier's total with raw
@@ -293,6 +307,7 @@ export const GET = withRouteContext('report.kpi', async (request, { supabase, co
       class6: Math.round(expenseComposition.class6 * 100) / 100,
       class7: Math.round(expenseComposition.class7 * 100) / 100,
     },
+    topExpenseAccounts,
     topSuppliers,
   }
 

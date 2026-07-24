@@ -4661,12 +4661,12 @@
     "settings_reset_field": "Reset to default",
     "settings_reset_all": "Reset all",
     "help_text": "The key figures are computed from the books for the selected fiscal year. You control the panes via Customize; expense classes and suppliers sum the period's spending.",
-    "costs_title": "Largest expense classes",
-    "suppliers_title": "Largest suppliers",
+    "costs_title": "Largest expenses",
     "bars_title": "Result per month",
     "bars_unit": "kr",
     "bars_aria": "Result per month; latest {month} at {amount}",
-    "aging_aria": "Receivables: {ok} not due, {overdue} overdue"
+    "aging_aria": "Receivables: {ok} not due, {overdue} overdue",
+    "cash_covers_days": "Covers roughly {days} days of expenses"
   },
   "company_switcher": {
     "company_label": "Company",

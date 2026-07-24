@@ -3577,6 +3577,8 @@ export interface KPIReport {
     class6: number
     class7: number
   }
+  /** Top expense accounts (BAS classes 4-7) for the period, largest first. */
+  topExpenseAccounts: { account_number: string; account_name: string; total: number }[]
   topSuppliers: { supplier_id: string; supplier_name: string; total: number }[]
 }
 

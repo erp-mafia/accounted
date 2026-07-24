@@ -179,6 +179,9 @@ describe('GET /api/reports/kpi', () => {
       ],
       period: { start: '2026-01-01', end: '2026-03-31' },
       expenseComposition: { class4: 0, class5: 3000, class6: 0, class7: 0 },
+      topExpenseAccounts: [
+        { account_number: '5010', account_name: 'Lokalhyra', total: 3000 },
+      ],
       topSuppliers: [
         { supplier_id: 'sup-1', supplier_name: 'Leverantören AB', total: 500 },
         { supplier_id: 'sup-2', supplier_name: 'Andra AB', total: 200 },

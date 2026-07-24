@@ -147,6 +147,17 @@ type MetricPane = {
   aging?: { ok: number; overdue: number }
 }
 
+/** Days of expenses the cash covers, from the period's daily burn so far. */
+function cashRunwayDays(report: KPIReport): number | null {
+  if (report.cashPosition <= 0 || report.totalExpenses <= 0) return null
+  const start = new Date(report.period.start).getTime()
+  const end = Math.min(Date.now(), new Date(report.period.end).getTime())
+  const elapsedDays = Math.max(1, Math.round((end - start) / 86_400_000))
+  const dailyBurn = report.totalExpenses / elapsedDays
+  if (dailyBurn <= 0) return null
+  return Math.round(report.cashPosition / dailyBurn)
+}
+
 function metricPane(id: string, report: KPIReport, t: TFn): MetricPane | null {
   const tooltip = (
     <div className="space-y-1 text-xs">
@@ -155,15 +166,20 @@ function metricPane(id: string, report: KPIReport, t: TFn): MetricPane | null {
     </div>
   )
   switch (id) {
-    case 'cashPosition':
+    case 'cashPosition': {
+      const days = cashRunwayDays(report)
       return {
         id,
         title: t('def_cashPosition_label'),
         value: formatCurrency(report.cashPosition),
-        note: t('sub_likvida_medel'),
+        note:
+          days !== null && days < 1000
+            ? t('cash_covers_days', { days })
+            : t('sub_likvida_medel'),
         tooltip,
         destructive: report.cashPosition < 0,
       }
+    }
     case 'vatLiability':
       return {
         id,
@@ -320,51 +336,31 @@ function BreakdownRow({
   )
 }
 
-/** The cost story: expense classes and top suppliers as quiet bar rows. */
+/** The cost story (concept "Största kostnaderna"): the period's largest
+ *  expense accounts as quiet bar rows, full width. */
 export function KPIBreakdown({ report }: { report: KPIReport }) {
   const t = useTranslations('kpi')
-  const { class4, class5, class6, class7 } = report.expenseComposition
-  const classes = [
-    { prefix: '4xxx', label: t('expense_mix_class4'), amount: class4 },
-    { prefix: '5xxx', label: t('expense_mix_class5'), amount: class5 },
-    { prefix: '6xxx', label: t('expense_mix_class6'), amount: class6 },
-    { prefix: '7xxx', label: t('expense_mix_class7'), amount: class7 },
-  ].filter((c) => c.amount > 0)
-  const classMax = Math.max(...classes.map((c) => c.amount), 0)
-
-  const suppliers = report.topSuppliers.slice(0, 5)
-  const supplierMax = Math.max(...suppliers.map((s) => s.total), 0)
-
-  if (classes.length === 0 && suppliers.length === 0) return null
+  const accounts = report.topExpenseAccounts ?? []
+  if (accounts.length === 0) return null
+  const max = Math.max(...accounts.map((a) => a.total), 0)
 
   return (
-    <div className="grid items-start gap-x-11 gap-y-8 md:grid-cols-2">
-      {classes.length > 0 && (
-        <div>
-          <div className="mb-1 flex items-center gap-3 px-1">
-            <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              {t('costs_title')}
-            </h2>
-            <div className="h-px flex-1 bg-border/60" />
-          </div>
-          {classes.map((c) => (
-            <BreakdownRow key={c.prefix} prefix={c.prefix} label={c.label} amount={c.amount} max={classMax} />
-          ))}
-        </div>
-      )}
-      {suppliers.length > 0 && (
-        <div>
-          <div className="mb-1 flex items-center gap-3 px-1">
-            <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              {t('suppliers_title')}
-            </h2>
-            <div className="h-px flex-1 bg-border/60" />
-          </div>
-          {suppliers.map((s) => (
-            <BreakdownRow key={s.supplier_id} label={s.supplier_name} amount={s.total} max={supplierMax} />
-          ))}
-        </div>
-      )}
+    <div>
+      <div className="mb-1 flex items-center gap-3 px-1">
+        <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          {t('costs_title')}
+        </h2>
+        <div className="h-px flex-1 bg-border/60" />
+      </div>
+      {accounts.map((a) => (
+        <BreakdownRow
+          key={a.account_number}
+          prefix={a.account_number}
+          label={a.account_name}
+          amount={a.total}
+          max={max}
+        />
+      ))}
     </div>
   )
 }

@@ -4661,12 +4661,12 @@
     "settings_reset_field": "Återställ till standard",
     "settings_reset_all": "Återställ allt",
     "help_text": "Nyckeltalen räknas ur bokföringen för det valda räkenskapsåret. Panelerna styr du själv via Anpassa; kostnadsslag och leverantörer summerar periodens utgifter.",
-    "costs_title": "Största kostnadsslagen",
-    "suppliers_title": "Största leverantörerna",
+    "costs_title": "Största kostnaderna",
     "bars_title": "Resultat per månad",
     "bars_unit": "kr",
     "bars_aria": "Resultat per månad; senast {month} med {amount}",
-    "aging_aria": "Kundfordringar: {ok} ej förfallna, {overdue} förfallna"
+    "aging_aria": "Kundfordringar: {ok} ej förfallna, {overdue} förfallna",
+    "cash_covers_days": "Täcker cirka {days} dagars utgifter"
   },
   "company_switcher": {
     "company_label": "Företag",
