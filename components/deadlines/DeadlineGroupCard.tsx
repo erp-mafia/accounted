@@ -1,17 +1,17 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
 import { useTranslations } from 'next-intl'
 import { Deadline } from '@/types'
-import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { isDeadlineOverdue, parseDate } from '@/lib/calendar/utils'
-import { Check, Pencil } from 'lucide-react'
+import { isDeadlineOverdue } from '@/lib/calendar/utils'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { deadlineDateLabel } from './DeadlineRow'
+import { Landmark, Pencil } from 'lucide-react'
 
 /**
  * System tax deadlines that legally share the skattekonto date ("den 12:e"):
  * for a small monthly-moms employer, moms + AGI (+ debiterad preliminärskatt)
- * all fall due the same day. Rendering them as one grouped card instead of
+ * all fall due the same day. Rendering them as one grouped row instead of
  * 2-3 identical-date rows keeps the list scannable.
  */
 export const SKATTEKONTO_GROUP_TYPES = new Set([
@@ -32,158 +32,77 @@ export function isSkattekontoDeadline(d: Deadline): boolean {
   )
 }
 
-const SWEDISH_MONTHS_SHORT = [
-  'jan', 'feb', 'mar', 'apr', 'maj', 'jun',
-  'jul', 'aug', 'sep', 'okt', 'nov', 'dec',
-]
-
-interface DeadlineGroupCardProps {
+interface DeadlineGroupRowProps {
   /** Two or more skattekonto deadlines sharing the same due_date. */
   deadlines: Deadline[]
-  onToggle: (deadline: Deadline) => void
   onEdit?: (deadline: Deadline) => void
+  /** "Markera klar": the list confirms before toggling. */
+  onRequestToggle: (deadline: Deadline) => void
 }
 
 /**
- * One card for all skattekonto obligations on a shared due date, with the
- * date block rendered once and each obligation as a sub-row that keeps its
- * own "Markera klar" confirmation. Visual language mirrors DeadlineCard.
+ * One thread row for all skattekonto obligations on a shared due date
+ * (concept scene 17 row language): the date renders once, each obligation is
+ * a sub-row with its own quiet "Markera klar".
  */
-export function DeadlineGroupCard({ deadlines, onToggle, onEdit }: DeadlineGroupCardProps) {
+export function DeadlineGroupCard({ deadlines, onEdit, onRequestToggle }: DeadlineGroupRowProps) {
   const t = useTranslations('deadlines')
-  const [confirmingId, setConfirmingId] = useState<string | null>(null)
-  const confirmRef = useRef<HTMLDivElement>(null)
-
   const first = deadlines[0]
-  const dueDate = parseDate(first.due_date)
-  const dayNum = dueDate.getDate()
-  const monthStr = SWEDISH_MONTHS_SHORT[dueDate.getMonth()]
   const overdue = deadlines.some(isDeadlineOverdue)
 
-  useEffect(() => {
-    if (!confirmingId) return
-    function handleClickOutside(e: MouseEvent) {
-      if (confirmRef.current && !confirmRef.current.contains(e.target as Node)) {
-        setConfirmingId(null)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [confirmingId])
-
-  const confirming = deadlines.find((d) => d.id === confirmingId) ?? null
-
   return (
-    <div ref={confirmRef}>
-      <div
-        className={cn(
-          'rounded-lg border bg-card transition-all duration-150',
-          confirmingId && 'ring-2 ring-ring ring-offset-1',
-        )}
-      >
-        <div className="flex items-start gap-4 py-3 px-4">
-          {/* Shared date block */}
-          <div className="flex-shrink-0 w-12 text-center pt-0.5">
-            <span className="block text-lg font-display leading-none tabular-nums">
-              {dayNum}
-            </span>
-            <span className="block text-[11px] uppercase tracking-wider text-muted-foreground mt-0.5">
-              {monthStr}
-            </span>
-          </div>
+    <div className="flex items-start gap-3 py-3 -mx-2 px-2">
+      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground">
+        <Landmark className="h-3.5 w-3.5" aria-hidden="true" />
+      </span>
 
-          <div className="w-px self-stretch bg-border flex-shrink-0" />
-
-          {/* Group content */}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-baseline gap-2">
-              <p className="text-sm font-medium">{t('group_skattekonto_title')}</p>
-              <span
-                className={cn(
-                  'text-[11px] flex-shrink-0',
-                  overdue ? 'text-destructive font-medium' : 'text-muted-foreground/60',
-                )}
-              >
-                {t('group_same_day', { count: deadlines.length })}
-              </span>
-            </div>
-
-            <div className="mt-2 space-y-1">
-              {deadlines.map((deadline) => (
-                <div
-                  key={deadline.id}
-                  onClick={() => {
-                    if (!confirmingId && onEdit) onEdit(deadline)
-                  }}
-                  className={cn(
-                    'group flex items-center gap-3 rounded-md py-1.5 -mx-2 px-2 transition-colors',
-                    onEdit && !confirmingId && 'cursor-pointer hover:bg-accent/40',
-                  )}
-                >
-                  <p className="text-sm truncate flex-1 min-w-0">{deadline.title}</p>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setConfirmingId(deadline.id)
-                    }}
-                    className={cn(
-                      'text-xs text-muted-foreground hover:text-foreground transition-colors px-2.5 py-1 rounded-md border border-border hover:border-foreground/30 hover:bg-accent flex-shrink-0',
-                      confirmingId && 'invisible',
-                    )}
-                  >
-                    {t('group_mark_done')}
-                  </button>
-                  {onEdit && !confirmingId && (
-                    <Pencil className="h-3.5 w-3.5 text-muted-foreground/0 group-hover:text-muted-foreground/50 transition-colors flex-shrink-0" />
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Inline confirmation bar (one at a time, mirrors DeadlineCard) */}
-        <div
+      <div className="min-w-0 flex-1">
+        <p className="text-sm leading-6">
+          <span className="tabular-nums">{deadlineDateLabel(first.due_date)}</span>
+          <span className="text-muted-foreground/50"> · </span>
+          <span className="font-medium">{t('group_skattekonto_title')}</span>
+        </p>
+        <p
           className={cn(
-            'grid transition-all duration-200 ease-out',
-            confirming ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+            'text-xs leading-5',
+            overdue ? 'text-destructive' : 'text-muted-foreground',
           )}
         >
-          <div className="overflow-hidden">
-            {confirming && (
-              <div className="border-t px-4 py-3 flex items-center justify-between gap-4">
-                <p className="text-sm text-muted-foreground">
-                  {t.rich('group_confirm_question', {
-                    title: confirming.title,
-                    hl: (chunks) => (
-                      <span className="font-medium text-foreground">{chunks}</span>
-                    ),
-                  })}
-                </p>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 px-3 text-xs"
-                    onClick={() => setConfirmingId(null)}
-                  >
-                    {t('group_cancel')}
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="h-8 px-3 text-xs"
-                    onClick={() => {
-                      setConfirmingId(null)
-                      onToggle(confirming)
-                    }}
-                  >
-                    <Check className="h-3.5 w-3.5 mr-1.5" />
-                    {t('group_confirm')}
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
+          {t('group_same_day', { count: deadlines.length })}
+        </p>
+
+        <div className="mt-1">
+          {deadlines.map((deadline) => (
+            <div
+              key={deadline.id}
+              onClick={() => onEdit?.(deadline)}
+              className={cn(
+                'group flex items-center gap-3 rounded-md py-1.5 -mx-2 px-2 transition-colors duration-150',
+                onEdit && 'cursor-pointer hover:bg-secondary/35',
+              )}
+            >
+              <p className="min-w-0 flex-1 truncate text-sm">{deadline.title}</p>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onRequestToggle(deadline)
+                }}
+                className={cn(
+                  QUIET_LINK_CLASS,
+                  'shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100',
+                )}
+              >
+                {t('group_mark_done')}
+              </button>
+              {onEdit && (
+                <Pencil
+                  className="h-3.5 w-3.5 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground/50"
+                  aria-hidden="true"
+                />
+              )}
+            </div>
+          ))}
         </div>
       </div>
     </div>
