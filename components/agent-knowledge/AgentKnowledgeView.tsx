@@ -3,21 +3,10 @@
 import { useTranslations } from 'next-intl'
 import { Brain } from 'lucide-react'
 import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-} from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableHead,
-  TableRow,
-  TableCell,
-} from '@/components/ui/table'
+  SettingsGroup,
+  SettingsRow,
+  SettingsSectionHeader,
+} from '@/components/settings/SettingsRows'
 import { AccountNumber } from '@/components/ui/account-number'
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatDateLong } from '@/lib/utils'
@@ -74,18 +63,14 @@ export function AgentKnowledgeView({
     // already remember facts: show those rather than a dead end.
     return (
       <div className="space-y-8">
-        <Card>
-          <CardContent className="p-0">
-            <EmptyState
-              icon={Brain}
-              title={t('empty_title')}
-              description={t('empty_description')}
-              actionLabel={t('empty_action')}
-              actionHref="/transactions"
-            />
-          </CardContent>
-        </Card>
-        <div className="grid gap-4 lg:grid-cols-2">
+        <EmptyState
+          icon={Brain}
+          title={t('empty_title')}
+          description={t('empty_description')}
+          actionLabel={t('empty_action')}
+          actionHref="/transactions"
+        />
+        <div>
           <CompetenceCard competence={competence} />
           <FactsCard competence={competence} />
         </div>
@@ -109,140 +94,89 @@ export function AgentKnowledgeView({
           ? t('period_yearly')
           : (vat_profile.moms_period ?? t('unknown'))
 
-  // "Regler & profil": user-authored rules + observed VAT + conventions.
-  // Rendered inline below the graph; Minne and Kompetens have their own
-  // top-level tabs, so nesting a second tab row here would just duplicate them.
-  const configContent = (
-    <>
-      {explicit_rules.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('rules_title')}</CardTitle>
-            <CardDescription>{t('rules_description')}</CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t('col_rule')}</TableHead>
-                  <TableHead>{t('col_match')}</TableHead>
-                  <TableHead>{t('col_account')}</TableHead>
-                  <TableHead>{t('col_vat')}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {explicit_rules.map((r, i) => (
-                  <TableRow key={r.rule_name + r.match + i}>
-                    <TableCell>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-medium">{r.rule_name}</span>
-                        <Badge variant="default">{t('src_rule')}</Badge>
-                      </div>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{r.match}</TableCell>
-                    <TableCell>
-                      {r.account_number
-                        ? <AccountNumber number={r.account_number} showName size="sm" />
-                        : <span className="text-muted-foreground">-</span>}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{vatLabel(r.vat_treatment) ?? '-'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('vat_title')}</CardTitle>
-            <CardDescription>{t('vat_description')}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4 pt-0">
-            <Row label={t('vat_registered_label')}>
-              <Badge variant={vat_profile.registered ? 'success' : 'outline'}>
-                {vat_profile.registered ? t('yes') : t('no')}
-              </Badge>
-            </Row>
-            <Row label={t('vat_period_label')}>
-              <span className="text-sm">{periodLabel}</span>
-            </Row>
-            <Row label={t('vat_treatments_label')}>
-              {vat_profile.treatments_used_12m.length === 0 ? (
-                <span className="text-sm text-muted-foreground">{t('vat_no_treatments')}</span>
-              ) : (
-                <div className="flex flex-wrap justify-end gap-2">
-                  {vat_profile.treatments_used_12m.map((code) => (
-                    <Badge key={code} variant="outline">{vatLabel(code)}</Badge>
-                  ))}
-                </div>
-              )}
-            </Row>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">{t('conv_title')}</CardTitle>
-            <CardDescription>{t('conv_description')}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4 pt-0">
-            <Row label={t('conv_method_label')}>
-              <span className="text-sm">{methodLabel}</span>
-            </Row>
-            <Row label={t('conv_series_label')}>
-              {conventions.voucher_series_in_use.length === 0 ? (
-                <span className="text-sm text-muted-foreground">-</span>
-              ) : (
-                <div className="flex flex-wrap justify-end gap-2">
-                  {conventions.voucher_series_in_use.map((s) => (
-                    <Badge key={s} variant="secondary" className="font-mono">{s}</Badge>
-                  ))}
-                </div>
-              )}
-            </Row>
-            <Row label={t('conv_salary_label')}>
-              <Badge variant={conventions.salary_run_active ? 'success' : 'outline'}>
-                {conventions.salary_run_active ? t('yes') : t('no')}
-              </Badge>
-            </Row>
-            {conventions.typical_booking_lag_days !== null && (
-              <Row label={t('conv_lag_label')}>
-                <span className="text-sm tabular-nums">{t('meta_lag_value', { days: conventions.typical_booking_lag_days })}</span>
-              </Row>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    </>
-  )
-
   return (
     <div className="space-y-8">
       {/* The cinematic hero: a self-contained dark panel with its own header */}
       <LedgerGraph deep={deep} companyName={companyName} />
 
-      <section className="space-y-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('tab_config')}
-        </h2>
-        {configContent}
+      {/* "Regler & profil": user-authored rules + observed VAT + conventions,
+          in the flat settings language (groups under eyebrow labels, static
+          descriptions behind the group "?"). Minne and Kompetens have their
+          own top-level views, so no second tab row here. */}
+      <section>
+        <SettingsSectionHeader title={t('tab_config')} />
+
+        {explicit_rules.length > 0 && (
+          <SettingsGroup label={t('rules_title')} help={t('rules_description')}>
+            {explicit_rules.map((r, i) => {
+              const vat = vatLabel(r.vat_treatment)
+              return (
+                <div
+                  key={r.rule_name + r.match + i}
+                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-border px-1 py-3"
+                >
+                  <span className="text-sm">{r.rule_name}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+                    {r.match}
+                  </span>
+                  <span className="flex shrink-0 flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
+                    {r.account_number ? (
+                      <AccountNumber number={r.account_number} showName size="sm" />
+                    ) : (
+                      <span>-</span>
+                    )}
+                    {vat && <span>· {vat}</span>}
+                    <span>· {t('src_rule')}</span>
+                  </span>
+                </div>
+              )
+            })}
+          </SettingsGroup>
+        )}
+
+        <SettingsGroup label={t('vat_title')} help={t('vat_description')}>
+          <SettingsRow label={t('vat_registered_label')}>
+            <span>{vat_profile.registered ? t('yes') : t('no')}</span>
+          </SettingsRow>
+          <SettingsRow label={t('vat_period_label')}>
+            <span>{periodLabel}</span>
+          </SettingsRow>
+          <SettingsRow label={t('vat_treatments_label')}>
+            {vat_profile.treatments_used_12m.length === 0 ? (
+              <span className="text-muted-foreground">{t('vat_no_treatments')}</span>
+            ) : (
+              <span>{vat_profile.treatments_used_12m.map((code) => vatLabel(code)).join(' · ')}</span>
+            )}
+          </SettingsRow>
+        </SettingsGroup>
+
+        <SettingsGroup label={t('conv_title')} help={t('conv_description')}>
+          <SettingsRow label={t('conv_method_label')}>
+            <span>{methodLabel}</span>
+          </SettingsRow>
+          <SettingsRow label={t('conv_series_label')}>
+            {conventions.voucher_series_in_use.length === 0 ? (
+              <span className="text-muted-foreground">-</span>
+            ) : (
+              <span className="font-mono text-xs">{conventions.voucher_series_in_use.join(', ')}</span>
+            )}
+          </SettingsRow>
+          <SettingsRow label={t('conv_salary_label')}>
+            <span>{conventions.salary_run_active ? t('yes') : t('no')}</span>
+          </SettingsRow>
+          {conventions.typical_booking_lag_days !== null && (
+            <SettingsRow label={t('conv_lag_label')}>
+              <span className="tabular-nums">
+                {t('meta_lag_value', { days: conventions.typical_booking_lag_days })}
+              </span>
+            </SettingsRow>
+          )}
+        </SettingsGroup>
       </section>
 
       <p className="text-right text-xs text-muted-foreground">
         {t('footer_basis', { entries: meta.coverage.posted_entries_window, date: formatDateLong(meta.computed_at) })}
       </p>
-    </div>
-  )
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <div>{children}</div>
     </div>
   )
 }

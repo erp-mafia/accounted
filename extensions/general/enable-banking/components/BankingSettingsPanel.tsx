@@ -440,7 +440,7 @@ export default function BankingSettingsPanel() {
           <Button variant="outline" size="sm" onClick={() => fetchConnections()}>
             Försök igen
           </Button>
-          <Button variant="ghost" size="sm" asChild>
+          <Button variant="outline" size="sm" asChild>
             <Link href="/import?mode=bank">Importera bankfil istället</Link>
           </Button>
         </div>
@@ -514,7 +514,7 @@ export default function BankingSettingsPanel() {
                     Välj konton
                   </Button>
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     onClick={() => handleDisconnectBank(connection.id)}

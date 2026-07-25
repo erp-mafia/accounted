@@ -82,7 +82,7 @@ export function TaxTableStatus({ year, compact = false }: Props) {
       <span className="min-w-0 text-xs text-muted-foreground">{label}</span>
       <Button
         type="button"
-        variant="ghost"
+        variant="outline"
         size="sm"
         onClick={check}
         disabled={loading}

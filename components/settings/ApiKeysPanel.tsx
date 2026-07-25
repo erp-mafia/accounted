@@ -187,7 +187,7 @@ function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel: strin
         {text}
       </pre>
       <Button
-        variant="ghost"
+        variant="outline"
         size="sm"
         className="absolute right-1.5 top-1.5 h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
         onClick={handleCopy}
@@ -685,7 +685,7 @@ export function ApiKeysPanel() {
               {newKeyValue}
             </code>
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               className="absolute right-2 top-2"
               onClick={handleCopy}

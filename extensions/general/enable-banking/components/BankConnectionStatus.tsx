@@ -110,7 +110,7 @@ export function BankConnectionStatus({
           {(isConnectionExpired || isConnectionError) && onReconnect && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="gap-1 text-muted-foreground hover:text-foreground">
+                <Button variant="outline" size="sm" className="gap-1 text-muted-foreground hover:text-foreground">
                   Förnya anslutning
                   <ChevronDown className="h-3.5 w-3.5" />
                 </Button>
@@ -135,7 +135,7 @@ export function BankConnectionStatus({
           )}
           {isConnectionError && (
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               className="text-muted-foreground hover:text-foreground"
               onClick={() => onSync(connection.id)}
@@ -147,7 +147,7 @@ export function BankConnectionStatus({
           )}
           {connection.status === 'active' && (
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               className="text-muted-foreground hover:text-foreground"
               onClick={() => onSync(connection.id)}
@@ -159,7 +159,7 @@ export function BankConnectionStatus({
           )}
           {onManageAccounts && (
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               className="text-muted-foreground hover:text-foreground"
               onClick={() => onManageAccounts(connection.id)}
@@ -168,7 +168,7 @@ export function BankConnectionStatus({
             </Button>
           )}
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             className="text-muted-foreground hover:text-destructive"
             onClick={() => onDisconnect(connection.id)}

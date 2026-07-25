@@ -153,13 +153,26 @@ export function BillingSettingsContent() {
       <div>
         {header}
         <SettingsGroup label="Ditt abonnemang">
-          <SettingsRow label="Status" borderless>
-            <span>Aktivt</span>
+          <SettingsRow label="Status">
+            <span className="font-medium">Aktivt</span>
             <SettingsRowNote>Du kan hantera eller avsluta det när som helst.</SettingsRowNote>
+          </SettingsRow>
+          <SettingsRow label="Hantera" borderless>
+            <SettingsRowNote>Byt kort, ändra plan eller säg upp via Stripes kundportal.</SettingsRowNote>
             <SettingsRowEnd>
               <BillingActions isPaying configured={view.configured} />
             </SettingsRowEnd>
           </SettingsRow>
+        </SettingsGroup>
+        <SettingsGroup label="I abonnemanget">
+          <ul className="space-y-2 px-1 pt-3">
+            {INCLUDED.map((item) => (
+              <li key={item} className="flex items-start gap-2 text-sm">
+                <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
         </SettingsGroup>
       </div>
     )

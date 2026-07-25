@@ -83,7 +83,7 @@ export function InstallAppSection() {
     <SettingsRow label={t('install_app_title')} help={t('install_app_description')}>
       {installPrompt ? (
         <SettingsRowEnd>
-          <Button variant="ghost" size="sm" onClick={handleInstall}>
+          <Button variant="outline" size="sm" onClick={handleInstall}>
             <MonitorDown className="mr-2 h-3.5 w-3.5" />
             {t('install_app_button')}
           </Button>

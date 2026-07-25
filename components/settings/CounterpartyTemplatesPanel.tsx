@@ -216,7 +216,7 @@ export function CounterpartyTemplatesPanel() {
                   {/* Delete */}
                   <div className="flex justify-end pt-1">
                     <Button
-                      variant="ghost"
+                      variant="outline"
                       size="sm"
                       onClick={() => handleDelete(tt.id)}
                       disabled={deletingId === tt.id}

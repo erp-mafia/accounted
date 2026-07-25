@@ -276,7 +276,7 @@ export function SecuritySettings() {
                   <SettingsRowNote>{t('mfa_required_note')}</SettingsRowNote>
                 ) : (
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
                     onClick={handleUnenrollMfa}
                     disabled={isUnenrolling}
@@ -302,7 +302,7 @@ export function SecuritySettings() {
               <SettingsRowEnd>
                 {hasPassword === false ? (
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
                     onClick={() =>
                       router.push('/account/set-password?returnTo=/mfa/enroll')
@@ -312,7 +312,7 @@ export function SecuritySettings() {
                   </Button>
                 ) : (
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
                     onClick={() =>
                       router.push(`/mfa/enroll?returnTo=${encodeURIComponent('/settings/account')}`)

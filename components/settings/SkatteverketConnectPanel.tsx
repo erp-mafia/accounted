@@ -1,6 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
+import Image from 'next/image'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -275,7 +276,12 @@ function SkatteverketPersonalConnectionCard() {
   if (loading) {
     return (
       <SettingsGroup>
-        <SettingsRow label={t('title')} help={connectHelp} borderless>
+        <SettingsRow label={
+          <span className="inline-flex items-center gap-2">
+            <Image src="/logos/skatteverket.svg" alt="" aria-hidden="true" width={14} height={14} className="dark:invert" />
+            {t('title')}
+          </span>
+        } help={connectHelp} borderless>
           <SettingsRowNote>{t('loading_status')}</SettingsRowNote>
         </SettingsRow>
       </SettingsGroup>
@@ -286,7 +292,12 @@ function SkatteverketPersonalConnectionCard() {
     return (
       <SettingsGroup>
         {status?.disabled && <WarningLine>{t('disabled_message')}</WarningLine>}
-        <SettingsRow label={t('title')} help={connectHelp} borderless={!hasSkatteverket}>
+        <SettingsRow label={
+          <span className="inline-flex items-center gap-2">
+            <Image src="/logos/skatteverket.svg" alt="" aria-hidden="true" width={14} height={14} className="dark:invert" />
+            {t('title')}
+          </span>
+        } help={connectHelp} borderless={!hasSkatteverket}>
           <EnvironmentBadge environment={status?.environment} disabled={status?.disabled} />
           <SettingsRowEnd>
             <Button
@@ -328,7 +339,12 @@ function SkatteverketPersonalConnectionCard() {
         </WarningLine>
       )}
 
-      <SettingsRow label={t('title')} help={connectHelp}>
+      <SettingsRow label={
+          <span className="inline-flex items-center gap-2">
+            <Image src="/logos/skatteverket.svg" alt="" aria-hidden="true" width={14} height={14} className="dark:invert" />
+            {t('title')}
+          </span>
+        } help={connectHelp}>
         {status.expired ? (
           <Badge variant="warning">{t('expired')}</Badge>
         ) : (

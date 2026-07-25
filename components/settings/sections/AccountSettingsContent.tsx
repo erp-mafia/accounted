@@ -225,7 +225,7 @@ export function AccountSettingsContent() {
       <SettingsGroup label={tSettings('legal_title')}>
         <SettingsRow label={tSettings('legal_privacy')}>
           <SettingsRowEnd>
-            <Button variant="ghost" size="sm" asChild>
+            <Button variant="outline" size="sm" asChild>
               <Link href="/privacy" target="_blank" rel="noopener noreferrer">
                 <ExternalLink className="mr-2 h-3.5 w-3.5" />
                 {tCommon('open')}
@@ -235,7 +235,7 @@ export function AccountSettingsContent() {
         </SettingsRow>
         <SettingsRow label={tSettings('legal_dpa')}>
           <SettingsRowEnd>
-            <Button variant="ghost" size="sm" asChild>
+            <Button variant="outline" size="sm" asChild>
               <Link href="/dpa" target="_blank" rel="noopener noreferrer">
                 <ExternalLink className="mr-2 h-3.5 w-3.5" />
                 {tCommon('open')}
@@ -249,7 +249,7 @@ export function AccountSettingsContent() {
       <SettingsGroup>
         <SettingsRow label={tCommon('logout')} help={tCommon('logout_description')}>
           <SettingsRowEnd>
-            <Button variant="ghost" size="sm" onClick={handleLogout}>
+            <Button variant="outline" size="sm" onClick={handleLogout}>
               <LogOut className="mr-2 h-3.5 w-3.5" />
               {tCommon('logout')}
             </Button>

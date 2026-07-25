@@ -191,7 +191,7 @@ export function AgentMemoryPanel() {
         />
         {canWrite && (
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             onClick={() => setShowAdd((v) => !v)}
             disabled={adding}
@@ -228,7 +228,7 @@ export function AgentMemoryPanel() {
                 </SettingsSelect>
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="ghost" size="sm" onClick={() => { setShowAdd(false); setNewContent('') }}>
+                <Button variant="outline" size="sm" onClick={() => { setShowAdd(false); setNewContent('') }}>
                   Avbryt
                 </Button>
                 <Button size="sm" onClick={addMemory} disabled={adding || newContent.trim().length < 2}>
@@ -347,7 +347,7 @@ export function AgentMemoryPanel() {
                           {isEditing ? (
                             <>
                               <Button
-                                variant="ghost"
+                                variant="outline"
                                 size="sm"
                                 onClick={() => setEditingId(null)}
                                 disabled={isBusy}
@@ -366,7 +366,7 @@ export function AgentMemoryPanel() {
                           ) : row.is_active ? (
                             <>
                               <Button
-                                variant="ghost"
+                                variant="outline"
                                 size="sm"
                                 onClick={() => startEdit(row)}
                                 disabled={isBusy}
@@ -375,7 +375,7 @@ export function AgentMemoryPanel() {
                                 Redigera
                               </Button>
                               <Button
-                                variant="ghost"
+                                variant="outline"
                                 size="sm"
                                 onClick={() => patch(row.id, { is_active: false })}
                                 disabled={isBusy}
@@ -390,7 +390,7 @@ export function AgentMemoryPanel() {
                             </>
                           ) : (
                             <Button
-                              variant="ghost"
+                              variant="outline"
                               size="sm"
                               onClick={() => patch(row.id, { is_active: true })}
                               disabled={isBusy}

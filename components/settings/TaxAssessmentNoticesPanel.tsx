@@ -198,7 +198,7 @@ export function TaxAssessmentNoticesPanel() {
             {saving ? t('saving') : t(editingId ? 'update_action' : 'save_action')}
           </Button>
           {editingId && (
-            <Button type="button" variant="ghost" size="sm" onClick={resetForm} disabled={saving}>
+            <Button type="button" variant="outline" size="sm" onClick={resetForm} disabled={saving}>
               {t('cancel')}
             </Button>
           )}
@@ -221,11 +221,11 @@ export function TaxAssessmentNoticesPanel() {
             </SettingsRowNote>
           </div>
           <div className="flex shrink-0 gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={() => editNotice(notice)} disabled={saving}>
+            <Button type="button" variant="outline" size="sm" onClick={() => editNotice(notice)} disabled={saving}>
               <Pencil className="mr-2 h-4 w-4" />
               {t('edit')}
             </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={() => void archiveNotice(notice)} disabled={saving}>
+            <Button type="button" variant="outline" size="sm" onClick={() => void archiveNotice(notice)} disabled={saving}>
               <Trash2 className="mr-2 h-4 w-4" />
               {t('archive')}
             </Button>

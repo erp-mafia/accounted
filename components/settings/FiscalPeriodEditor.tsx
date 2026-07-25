@@ -242,7 +242,7 @@ export function FiscalPeriodEditor() {
             <div className="flex justify-end gap-2 px-1 pt-3">
               <Button
                 type="button"
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 onClick={handleReset}
                 disabled={!isDirty || isSaving}

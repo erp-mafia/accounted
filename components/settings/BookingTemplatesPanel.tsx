@@ -139,7 +139,7 @@ export function BookingTemplatesPanel() {
         {canWrite && (
           <div className="flex shrink-0 items-center gap-1">
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               onClick={handleExport}
               className="text-muted-foreground hover:text-foreground"
@@ -148,7 +148,7 @@ export function BookingTemplatesPanel() {
               {t('export')}
             </Button>
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
               onClick={() => importRef.current?.click()}
               className="text-muted-foreground hover:text-foreground"

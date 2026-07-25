@@ -146,7 +146,7 @@ export function FiscalYearsManager() {
                 )}
                 {canManage && status === 'open' && (
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     disabled={isMutating}
@@ -164,7 +164,7 @@ export function FiscalYearsManager() {
                 )}
                 {canManage && status === 'locked' && (
                   <Button
-                    variant="ghost"
+                    variant="outline"
                     size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     disabled={isMutating}
@@ -189,7 +189,7 @@ export function FiscalYearsManager() {
       {/* Trailing quiet action: create the next fiscal year. */}
       <div className="px-1 pt-3">
         <Button
-          variant="ghost"
+          variant="outline"
           size="sm"
           className="text-muted-foreground hover:text-foreground"
           onClick={() => setDialogOpen(true)}

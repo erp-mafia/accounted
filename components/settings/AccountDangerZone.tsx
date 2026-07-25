@@ -122,7 +122,7 @@ export function AccountDangerZone() {
             >
               <span className="text-sm">{b.name}</span>
               <SettingsRowEnd>
-                <Button variant="ghost" size="sm" asChild>
+                <Button variant="outline" size="sm" asChild>
                   <Link href="/settings/company">{t('blockers_manage')}</Link>
                 </Button>
               </SettingsRowEnd>
@@ -138,7 +138,7 @@ export function AccountDangerZone() {
         >
           <SettingsRowNote>{tRetention('account_title')}</SettingsRowNote>
           <SettingsRowEnd>
-            <Button variant="ghost" size="sm" asChild>
+            <Button variant="outline" size="sm" asChild>
               <Link href="/reports?type=sie">
                 <ExternalLink className="mr-2 h-3.5 w-3.5" />
                 {t('export_sie')}

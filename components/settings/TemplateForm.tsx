@@ -251,7 +251,7 @@ export function TemplateForm({
                 />
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
                   onClick={() => removeLine(i)}
                   disabled={lines.length <= 2}
