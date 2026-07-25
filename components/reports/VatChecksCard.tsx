@@ -3,14 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { ContextPicker } from '@/components/common/ContextPicker'
 import {
   DataList,
   DataListMeta,
@@ -71,6 +64,27 @@ const SUPPLY_LABELS: Record<SupplyType, string> = {
   service: 'tjänst',
   goods: 'vara',
 }
+/** Chip labels (sentence case); SUPPLY_LABELS stays lowercase for dialog prose. */
+const SUPPLY_DISPLAY: Record<SupplyType, string> = {
+  service: 'Tjänst',
+  goods: 'Vara',
+}
+
+const SUPPLIER_ITEMS = [
+  { id: 'eu_business', label: 'EU-leverantör' },
+  { id: 'non_eu_business', label: 'Utanför EU' },
+  { id: 'swedish_business', label: 'Svensk omvänd skattskyldighet' },
+]
+
+// Non-EU + goods is import VAT (ruta 50/60-62), not reverse charge: the
+// goods choice disappears entirely for non-EU suppliers.
+const supplyItemsFor = (supplierType: SupplierType) =>
+  supplierType === 'non_eu_business'
+    ? [{ id: 'service', label: 'Tjänst' }]
+    : [
+        { id: 'service', label: 'Tjänst' },
+        { id: 'goods', label: 'Vara' },
+      ]
 
 /** How many gap rows render before the "Visa alla" toggle. */
 const GAP_PREVIEW_COUNT = 8
@@ -355,54 +369,38 @@ export function VatChecksCard({
               </p>
             ) : (
               <>
-                <div className="flex flex-wrap items-end gap-4">
-                  <div>
-                    <Label htmlFor="rc-supplier-type">Leverantörstyp</Label>
-                    <Select
-                      value={sharedSel.supplierType}
-                      onValueChange={(value) => {
-                        const supplierType = value as SupplierType
-                        setSharedSel((prev) => ({
-                          supplierType,
-                          // Non-EU + goods is import VAT, not reverse charge:
-                          // coerce back to service so an invalid combo can't
-                          // be mass-applied.
-                          supplyType:
-                            supplierType === 'non_eu_business' ? 'service' : prev.supplyType,
-                        }))
-                      }}
-                      disabled={busy}
-                    >
-                      <SelectTrigger id="rc-supplier-type" className="mt-1 w-56">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="eu_business">EU-leverantör</SelectItem>
-                        <SelectItem value="non_eu_business">Utanför EU</SelectItem>
-                        <SelectItem value="swedish_business">Svensk omvänd skattskyldighet</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label htmlFor="rc-supply-type">Typ av inköp</Label>
-                    <Select
-                      value={sharedSel.supplyType}
-                      onValueChange={(value) =>
-                        setSharedSel((prev) => ({ ...prev, supplyType: value as SupplyType }))
-                      }
-                      disabled={busy}
-                    >
-                      <SelectTrigger id="rc-supply-type" className="mt-1 w-32">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="service">Tjänst</SelectItem>
-                        {sharedSel.supplierType !== 'non_eu_business' && (
-                          <SelectItem value="goods">Vara</SelectItem>
-                        )}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                {/* Classification chips (house context-picker style), then the
+                    bulk action: the chip values ("EU-leverantör", "Tjänst")
+                    are self-describing, so no field labels. */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <ContextPicker
+                    items={SUPPLIER_ITEMS}
+                    value={sharedSel.supplierType}
+                    onChange={(value) => {
+                      const supplierType = value as SupplierType
+                      setSharedSel((prev) => ({
+                        supplierType,
+                        // Non-EU + goods is import VAT, not reverse charge:
+                        // coerce back to service so an invalid combo can't
+                        // be mass-applied.
+                        supplyType:
+                          supplierType === 'non_eu_business' ? 'service' : prev.supplyType,
+                      }))
+                    }}
+                    triggerLabel={SUPPLIER_LABELS[sharedSel.supplierType]}
+                    ariaLabel="Leverantörstyp"
+                    disabled={busy}
+                  />
+                  <ContextPicker
+                    items={supplyItemsFor(sharedSel.supplierType)}
+                    value={sharedSel.supplyType}
+                    onChange={(value) =>
+                      setSharedSel((prev) => ({ ...prev, supplyType: value as SupplyType }))
+                    }
+                    triggerLabel={SUPPLY_DISPLAY[sharedSel.supplyType]}
+                    ariaLabel="Typ av inköp"
+                    disabled={busy}
+                  />
                   <Button onClick={handleFixAll} disabled={!canWrite || busy}>
                     {bulkProgress ? (
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -481,70 +479,45 @@ export function VatChecksCard({
                               fiktiv moms: saknar basbelopp{' '}
                               {formatAmount(gap.expectedBasisAmount)} kr
                             </p>
-                            <div className="flex flex-wrap items-end gap-4">
-                              <div>
-                                <Label htmlFor={`rc-supplier-${gap.entryId}`}>
-                                  Leverantörstyp
-                                </Label>
-                                <Select
-                                  value={sel.supplierType}
-                                  onValueChange={(value) => {
-                                    const supplierType = value as SupplierType
-                                    setOverrides((prev) => ({
-                                      ...prev,
-                                      [gap.entryId]: {
-                                        supplierType,
-                                        supplyType:
-                                          supplierType === 'non_eu_business'
-                                            ? 'service'
-                                            : sel.supplyType,
-                                      },
-                                    }))
-                                  }}
-                                  disabled={busy}
-                                >
-                                  <SelectTrigger
-                                    id={`rc-supplier-${gap.entryId}`}
-                                    className="mt-1 w-56"
-                                  >
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="eu_business">EU-leverantör</SelectItem>
-                                    <SelectItem value="non_eu_business">Utanför EU</SelectItem>
-                                    <SelectItem value="swedish_business">Svensk omvänd skattskyldighet</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div>
-                                <Label htmlFor={`rc-supply-${gap.entryId}`}>Typ av inköp</Label>
-                                <Select
-                                  value={sel.supplyType}
-                                  onValueChange={(value) =>
-                                    setOverrides((prev) => ({
-                                      ...prev,
-                                      [gap.entryId]: {
-                                        ...sel,
-                                        supplyType: value as SupplyType,
-                                      },
-                                    }))
-                                  }
-                                  disabled={busy}
-                                >
-                                  <SelectTrigger
-                                    id={`rc-supply-${gap.entryId}`}
-                                    className="mt-1 w-32"
-                                  >
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="service">Tjänst</SelectItem>
-                                    {sel.supplierType !== 'non_eu_business' && (
-                                      <SelectItem value="goods">Vara</SelectItem>
-                                    )}
-                                  </SelectContent>
-                                </Select>
-                              </div>
+                            {/* Same chips as the toolbar, scoped to this row:
+                                a changed value becomes a per-row override. */}
+                            <div className="flex flex-wrap items-center gap-2">
+                              <ContextPicker
+                                items={SUPPLIER_ITEMS}
+                                value={sel.supplierType}
+                                onChange={(value) => {
+                                  const supplierType = value as SupplierType
+                                  setOverrides((prev) => ({
+                                    ...prev,
+                                    [gap.entryId]: {
+                                      supplierType,
+                                      supplyType:
+                                        supplierType === 'non_eu_business'
+                                          ? 'service'
+                                          : sel.supplyType,
+                                    },
+                                  }))
+                                }}
+                                triggerLabel={SUPPLIER_LABELS[sel.supplierType]}
+                                ariaLabel="Leverantörstyp"
+                                disabled={busy}
+                              />
+                              <ContextPicker
+                                items={supplyItemsFor(sel.supplierType)}
+                                value={sel.supplyType}
+                                onChange={(value) =>
+                                  setOverrides((prev) => ({
+                                    ...prev,
+                                    [gap.entryId]: {
+                                      ...sel,
+                                      supplyType: value as SupplyType,
+                                    },
+                                  }))
+                                }
+                                triggerLabel={SUPPLY_DISPLAY[sel.supplyType]}
+                                ariaLabel="Typ av inköp"
+                                disabled={busy}
+                              />
                             </div>
                           </div>
                         }

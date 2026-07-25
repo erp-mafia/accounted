@@ -113,10 +113,13 @@ function FocusedReportInner({
         </Link>
       )}
 
-      <PageHeader
-        title={reportName}
-        action={
-          isStandalone ? undefined : (
+      {/* Standalone pages (Momsdeklaration) render their own PageHeader so
+          the primary action can live on the title row; the view receives the
+          title via pageTitle instead. */}
+      {!isStandalone && (
+        <PageHeader
+          title={reportName}
+          action={
             <FyPicker
               value={selectedPeriod || null}
               onChange={(id, period) => {
@@ -132,9 +135,9 @@ function FocusedReportInner({
               initialPeriods={initialPeriods}
               initialCompanyId={initialCompanyId}
             />
-          )
-        }
-      />
+          }
+        />
+      )}
 
       {DATE_RANGE_SLUGS.has(slug) && selectedPeriodBounds && (
         <ReportDateRange
@@ -159,6 +162,7 @@ function FocusedReportInner({
       ) : isPeriodless || selectedPeriod ? (
         <FocusedView
           slug={slug}
+          reportName={reportName}
           periodId={selectedPeriod}
           periodBounds={selectedPeriodBounds}
           dateRange={dateRange}
@@ -182,6 +186,7 @@ function FocusedReportInner({
 
 function FocusedView({
   slug,
+  reportName,
   periodId,
   periodBounds,
   dateRange,
@@ -192,6 +197,7 @@ function FocusedView({
   onNavigateToAccount,
 }: {
   slug: string
+  reportName: string
   periodId: string
   periodBounds: { start: string; end: string } | null
   dateRange: DateRangeValue
@@ -215,7 +221,7 @@ function FocusedView({
     case 'balance-sheet':
       return <BalanceSheetView periodId={periodId} dateRange={dateRange} onNavigateToAccount={onNavigateToAccount} />
     case 'vat-declaration':
-      return <VatDeclarationView />
+      return <VatDeclarationView pageTitle={reportName} />
     case 'periodisk-sammanstallning':
       return <PeriodiskSammanstallningView />
     case 'ne-declaration':

@@ -14,13 +14,6 @@ import { Badge } from '@/components/ui/badge'
 import { AlertCircle, Check, ChevronDown, ChevronRight, ExternalLink, FileCode, FileDown, Percent } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { cn, formatDate } from '@/lib/utils'
@@ -28,6 +21,7 @@ import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { PageHeader } from '@/components/ui/page-header'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
 import { Table, TableBody } from '@/components/ui/table'
@@ -1451,7 +1445,13 @@ function VatStepper({
   )
 }
 
-export function VatDeclarationView() {
+const MONTH_NAMES = [
+  'Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
+  'Juli', 'Augusti', 'September', 'Oktober', 'November', 'December',
+]
+const QUARTER_SPANS = ['jan-mar', 'apr-jun', 'jul-sep', 'okt-dec']
+
+export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   const currentYear = new Date().getFullYear()
   const currentMonth = new Date().getMonth() + 1
   const currentQuarter = Math.ceil(currentMonth / 3)
@@ -1509,41 +1509,6 @@ export function VatDeclarationView() {
   // Registered but never picked a redovisningsperiod (rare — onboarding
   // requires it, but companies created outside that flow can miss it).
   const momsPeriodMissing = settings?.vat_registered === true && !settings.moms_period
-
-  // Generate year options (last 5 years)
-  const yearOptions = Array.from({ length: 5 }, (_, i) => currentYear - i)
-
-  // Generate period options based on type
-  const getPeriodOptions = () => {
-    switch (periodType) {
-      case 'monthly':
-        return [
-          { value: 1, label: 'Januari' },
-          { value: 2, label: 'Februari' },
-          { value: 3, label: 'Mars' },
-          { value: 4, label: 'April' },
-          { value: 5, label: 'Maj' },
-          { value: 6, label: 'Juni' },
-          { value: 7, label: 'Juli' },
-          { value: 8, label: 'Augusti' },
-          { value: 9, label: 'September' },
-          { value: 10, label: 'Oktober' },
-          { value: 11, label: 'November' },
-          { value: 12, label: 'December' },
-        ]
-      case 'quarterly':
-        return [
-          { value: 1, label: 'Kvartal 1 (jan-mar)' },
-          { value: 2, label: 'Kvartal 2 (apr-jun)' },
-          { value: 3, label: 'Kvartal 3 (jul-sep)' },
-          { value: 4, label: 'Kvartal 4 (okt-dec)' },
-        ]
-      case 'yearly':
-        return [{ value: 1, label: 'Helår' }]
-      default:
-        return []
-    }
-  }
 
   // Switching periodicity resets the period to "now" in the new unit. Done in
   // the change handler (not an effect) so the auto-fetch below never sees an
@@ -1641,26 +1606,37 @@ export function VatDeclarationView() {
 
   // Settings not settled yet — the picker defaults and the gate both depend
   // on them, so hold the whole view in a skeleton.
+  // The standalone page renders its own PageHeader (FocusedReport passes the
+  // title and skips its own), so the H1 must survive the gated/loading
+  // states too: each early return carries the action-less header.
+  const bareHeader = pageTitle ? <PageHeader title={pageTitle} /> : null
+
   if (settingsLoading || periodType === null) {
     return (
-      <Card>
-        <CardContent className="p-6 space-y-4">
-          <Skeleton className="h-5 w-32" />
-          <Skeleton className="h-64" />
-        </CardContent>
-      </Card>
+      <div className="space-y-8">
+        {bareHeader}
+        <Card>
+          <CardContent className="p-6 space-y-4">
+            <Skeleton className="h-5 w-32" />
+            <Skeleton className="h-64" />
+          </CardContent>
+        </Card>
+      </div>
     )
   }
 
   if (notVatRegistered) {
     return (
-      <EmptyState
-        icon={Percent}
-        title="Företaget är inte momsregistrerat"
-        description="Momsdeklarationen bygger på företagets skatteinställningar. Om företaget är momsregistrerat anger du momsregistrering och redovisningsperiod i inställningarna, så visas deklarationen här."
-        actionLabel="Öppna skatteinställningar"
-        actionHref="/settings/tax"
-      />
+      <div className="space-y-8">
+        {bareHeader}
+        <EmptyState
+          icon={Percent}
+          title="Företaget är inte momsregistrerat"
+          description="Momsdeklarationen bygger på företagets skatteinställningar. Om företaget är momsregistrerat anger du momsregistrering och redovisningsperiod i inställningarna, så visas deklarationen här."
+          actionLabel="Öppna skatteinställningar"
+          actionHref="/settings/tax"
+        />
+      </div>
     )
   }
 
@@ -1669,23 +1645,64 @@ export function VatDeclarationView() {
   // period type is a compliance hazard, not a convenience.
   if (momsPeriodMissing) {
     return (
-      <EmptyState
-        icon={Percent}
-        title="Redovisningsperiod för moms saknas"
-        description="Företaget är momsregistrerat men ingen redovisningsperiod (månad, kvartal eller helår) är vald. Ange den i skatteinställningarna så visas deklarationen för rätt period."
-        actionLabel="Öppna skatteinställningar"
-        actionHref="/settings/tax"
-      />
+      <div className="space-y-8">
+        {bareHeader}
+        <EmptyState
+          icon={Percent}
+          title="Redovisningsperiod för moms saknas"
+          description="Företaget är momsregistrerat men ingen redovisningsperiod (månad, kvartal eller helår) är vald. Ange den i skatteinställningarna så visas deklarationen för rätt period."
+          actionLabel="Öppna skatteinställningar"
+          actionHref="/settings/tax"
+        />
+      </div>
     )
   }
+
+  // Year and concrete period fused into ONE chip: reverse-chronological
+  // "Kvartal 2 2026", "Kvartal 1 2026", ... across the last five years, so
+  // switching period never needs two pickers. Yearly keeps the FyPicker,
+  // which is already a fused räkenskapsår chip.
+  const fusedPeriodItems: { id: string; label: string; annotation?: string }[] = []
+  if (!isYearly) {
+    for (let y = currentYear; y > currentYear - 5; y--) {
+      if (periodType === 'quarterly') {
+        for (let q = 4; q >= 1; q--) {
+          fusedPeriodItems.push({
+            id: `${y}:${q}`,
+            label: `Kvartal ${q} ${y}`,
+            annotation: QUARTER_SPANS[q - 1],
+          })
+        }
+      } else {
+        for (let m = 12; m >= 1; m--) {
+          fusedPeriodItems.push({ id: `${y}:${m}`, label: `${MONTH_NAMES[m - 1]} ${y}` })
+        }
+      }
+    }
+  }
+  const fusedLabel =
+    periodType === 'quarterly' ? `Kvartal ${period} ${year}` : `${MONTH_NAMES[period - 1]} ${year}`
 
   return (
     <VatDrillContext.Provider value={{ fiscalPeriodId: isYearly ? fiscalPeriodId : undefined }}>
     <div className="space-y-8">
-      {/* One flat toolbar row (concept language): period pickers + Exportera
-          far right. XML and PDF live in "Lämna in" below: they are filing
-          artifacts, not report exports, and one home avoids two competing
-          download surfaces. */}
+      {/* Standalone page: the title row carries the primary action (locked
+          convention 9), so Exportera sits beside the H1 and the period chips
+          get their own row below. XML and PDF live in "Lämna in": they are
+          filing artifacts, not report exports. */}
+      {pageTitle && (
+        <PageHeader
+          title={pageTitle}
+          action={
+            <ReportExportMenu
+              variant="default"
+              items={[
+                { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
+              ]}
+            />
+          }
+        />
+      )}
       <div className="flex flex-wrap items-center justify-end gap-2">
               {/* Cadence lives behind a settings-style "Period" chip: the
                   concrete period chip next to it already shows the cadence
@@ -1714,36 +1731,26 @@ export function VatDeclarationView() {
                 hideFuturePeriods
               />
             ) : (
-              <>
-                  <ContextPicker
-                    items={yearOptions.map((y) => ({ id: String(y), label: String(y) }))}
-                    value={String(year)}
-                    onChange={(value) => setYear(parseInt(value))}
-                    triggerLabel={String(year)}
-                    ariaLabel="År"
-                    className="tabular-nums"
-                  />
-                  <ContextPicker
-                    items={getPeriodOptions().map((opt) => ({
-                      id: String(opt.value),
-                      label: opt.label,
-                    }))}
-                    value={String(period)}
-                    onChange={(value) => setPeriod(parseInt(value))}
-                    triggerLabel={
-                      getPeriodOptions().find((opt) => opt.value === period)?.label ??
-                      String(period)
-                    }
-                    ariaLabel="Redovisningsperiod"
-                  />
-              </>
+              <ContextPicker
+                items={fusedPeriodItems}
+                value={`${year}:${period}`}
+                onChange={(id) => {
+                  const [y, p] = id.split(':').map(Number)
+                  setYear(y)
+                  setPeriod(p)
+                }}
+                triggerLabel={fusedLabel}
+                ariaLabel="Redovisningsperiod"
+              />
             )}
-            <ReportExportMenu
-              variant="default"
-              items={[
-                { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
-              ]}
-            />
+            {!pageTitle && (
+              <ReportExportMenu
+                variant="default"
+                items={[
+                  { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
+                ]}
+              />
+            )}
       </div>
 
       {error && (

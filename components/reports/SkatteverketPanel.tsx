@@ -3,7 +3,6 @@
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import React, { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   DropdownMenu,
@@ -49,8 +48,8 @@ interface SkatteverketStatus {
  * Codes from /lib/api-client.ts's SkatteverketAuthError that mean "the user
  * needs to reconnect with BankID before this action can succeed". When the API
  * returns one of these codes we flip the local status.expired flag so the
- * "Session utgången" badge + "Förnya session" button surface, even if the
- * upstream /status endpoint hasn't reflected the change yet.
+ * expired-session attn line with its "Förnya med BankID" action surfaces,
+ * even if the upstream /status endpoint hasn't reflected the change yet.
  */
 const AUTH_RECONNECT_CODES = new Set([
   'NOT_CONNECTED',
@@ -761,21 +760,12 @@ function SkatteverketPanelInner({
             Skicka direkt till Skatteverket
           </h3>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="success" className="gap-1">
-              <CheckCircle2 className="h-3 w-3" />
-              Ansluten
-            </Badge>
-            {status.expired && (
-              <>
-                <Badge variant="destructive" className="gap-1">
-                  <AlertCircle className="h-3 w-3" />
-                  Session utgången
-                </Badge>
-                <Button variant="outline" onClick={handleConnect} className="gap-2">
-                  <Link2 className="h-4 w-4" />
-                  Förnya session
-                </Button>
-              </>
+            {/* Connected is the normal state here (the not-connected branch is
+                a different section): muted text, never a chip. The expired
+                session is the one exception and gets the attn sentence below
+                instead of a badge-and-button cluster. */}
+            {!status.expired && (
+              <span className="text-xs text-muted-foreground">Ansluten</span>
             )}
             {/* Read-only lookups and recovery actions live in the overflow
                 menu: the visible surface stays the forward path (validera,
@@ -901,6 +891,18 @@ function SkatteverketPanelInner({
             </DropdownMenu>
           </div>
         </div>
+        {status.expired && (
+          <p className="mt-2 text-[12.5px] leading-5 text-attn">
+            Sessionen mot Skatteverket har gått ut.{' '}
+            <button
+              type="button"
+              onClick={handleConnect}
+              className="underline underline-offset-2 hover:opacity-80"
+            >
+              Förnya med BankID
+            </button>
+          </p>
+        )}
       </div>
       <div className="space-y-4">
         {/* In-flight status for overflow-menu actions: their menu closes on
