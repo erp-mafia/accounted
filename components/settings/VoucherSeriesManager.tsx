@@ -25,7 +25,7 @@ export function VoucherSeriesManager({ defaultSeries }: VoucherSeriesManagerProp
   const [isLoading, setIsLoading] = useState(true)
 
   const fetchSeries = useCallback(async () => {
-    if (!company?.id) return
+    if (!company?.id) { setIsLoading(false); return }
     const supabase = createClient()
     const { data } = await supabase
       .from('voucher_sequences')

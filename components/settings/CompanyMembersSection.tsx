@@ -188,7 +188,7 @@ export function CompanyMembersSection() {
               variant="ghost"
               size="icon"
               className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-              aria-label={t('members_removed')}
+              aria-label={t('members_remove_aria')}
               onClick={() => handleRemoveMember(member.id)}
               disabled={removingId === member.id}
             >
@@ -225,7 +225,7 @@ export function CompanyMembersSection() {
               variant="ghost"
               size="icon"
               className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-              aria-label={t('members_invite_revoked')}
+              aria-label={t('members_revoke_aria')}
               onClick={() => handleRevokeInvite(inv.id)}
               disabled={revokingId === inv.id}
             >
@@ -258,7 +258,7 @@ export function CompanyMembersSection() {
           <SettingsSelect
             value={inviteRole}
             onChange={(e) => setInviteRole(e.target.value)}
-            aria-label={t('members_invite_email_label')}
+            aria-label={t('members_role_label')}
           >
             <option value="viewer">{t('members_role_viewer')}</option>
             <option value="member">{t('members_role_member')}</option>

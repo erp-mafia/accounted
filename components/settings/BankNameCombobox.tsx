@@ -28,9 +28,10 @@ interface BankNameComboboxProps {
   value?: string
   onChange?: (value: string) => void
   enableBankingEnabled?: boolean
+  'aria-label'?: string
 }
 
-export function BankNameCombobox({ defaultValue = '', value: controlledValue, onChange, enableBankingEnabled = false }: BankNameComboboxProps) {
+export function BankNameCombobox({ defaultValue = '', value: controlledValue, onChange, enableBankingEnabled = false, 'aria-label': ariaLabel }: BankNameComboboxProps) {
   const isControlled = controlledValue !== undefined
   const [internalValue, setInternalValue] = useState(defaultValue)
   const value = isControlled ? controlledValue : internalValue
@@ -131,6 +132,7 @@ export function BankNameCombobox({ defaultValue = '', value: controlledValue, on
     <div ref={containerRef} className="relative">
       <input type="hidden" name="bank_name" value={value} />
       <Input
+        aria-label={ariaLabel}
         ref={inputRef}
         type="text"
         placeholder="t.ex. Nordea"

@@ -86,7 +86,7 @@ export function FactsCard({ competence }: { competence: AgentCompetence }) {
             {facts.map((f) => (
               <li key={f.id} className="flex items-start gap-2 border-b border-border px-1 py-3">
                 {f.is_pinned ? (
-                  <Pin className="mt-1 h-3.5 w-3.5 shrink-0 fill-current text-muted-foreground" aria-label={t('facts_pinned')} />
+                  <Pin role="img" className="mt-1 h-3.5 w-3.5 shrink-0 fill-current text-muted-foreground" aria-label={t('facts_pinned')} />
                 ) : (
                   <span className="mt-1 h-3.5 w-3.5 shrink-0" aria-hidden />
                 )}

@@ -1,6 +1,7 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
+import { formatDateLong } from '@/lib/utils'
 import { useState, useEffect } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
@@ -23,6 +24,7 @@ interface CalendarFeedWithUrls extends CalendarFeed {
 
 export function CalendarFeedSettings() {
   const t = useTranslations('settings_calendar_feed')
+  const locale = useLocale()
   const { toast } = useToast()
 
   const [isLoading, setIsLoading] = useState(true)
@@ -233,12 +235,7 @@ export function CalendarFeedSettings() {
           {feed.last_accessed_at && (
             <SettingsRowNote className="tabular-nums">
               {t('last_fetched')}{' '}
-              {new Date(feed.last_accessed_at).toLocaleDateString('sv-SE', {
-                day: 'numeric',
-                month: 'short',
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
+              {formatDateLong(feed.last_accessed_at, locale)}
               {' · '}
               {t('times_count', { count: feed.access_count })}
             </SettingsRowNote>

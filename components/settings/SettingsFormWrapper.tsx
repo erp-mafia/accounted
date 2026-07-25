@@ -105,6 +105,13 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
     <form
       onSubmit={handleSubmit}
       onInput={() => setDirty(true)}
+      // Radix Switch renders a button, so toggling it fires no form input
+      // event; catch those clicks too or switch-only changes never reveal
+      // the save bar.
+      onClickCapture={(e) => {
+        const el = e.target as HTMLElement
+        if (el.closest('[role="switch"]:not([disabled])')) setDirty(true)
+      }}
       className={className}
     >
       {children}

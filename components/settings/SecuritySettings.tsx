@@ -177,8 +177,8 @@ export function SecuritySettings() {
       {/* BankID-only users with no password: set-password row before the rest */}
       {hasPassword === false && (
         <SettingsRow
-          label="Sätt ett lösenord"
-          help="Du loggade in med BankID och har inget lösenord ännu. Sätt ett lösenord för att kunna aktivera 2FA eller logga in när BankID inte är tillgängligt."
+          label={t('set_password_title')}
+          help={t('set_password_description')}
         >
           <SettingsRowEnd>
             <Button
@@ -187,7 +187,7 @@ export function SecuritySettings() {
                 router.push('/account/set-password?returnTo=/settings/account')
               }
             >
-              Sätt lösenord
+              {t('set_password_button')}
             </Button>
           </SettingsRowEnd>
         </SettingsRow>

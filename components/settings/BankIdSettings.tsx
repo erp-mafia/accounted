@@ -152,8 +152,13 @@ export function BankIdSettings() {
       {/* QR flow: an expanding block below the row. Mounted only while
           linking so the BankID session starts exactly when requested. */}
       {isLinking && (
-        <div className="flex flex-col items-center border-b border-border px-1 py-4">
+        <div className="flex flex-col items-center gap-3 border-b border-border px-1 py-4">
           <BankIdAuth mode="link" onComplete={handleLinkComplete} />
+          {/* BankIdAuth's own Avbryt only resets its internal session; give
+              the row an exit so isLinking can't get stuck. */}
+          <Button variant="outline" size="sm" onClick={() => setIsLinking(false)}>
+            {t('cancel_linking')}
+          </Button>
         </div>
       )}
     </>

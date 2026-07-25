@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -31,6 +31,7 @@ interface OAuthClient {
 
 export function OAuthClientsPanel() {
   const t = useTranslations('settings_oauth_clients')
+  const locale = useLocale()
   const { toast } = useToast()
   const { dialogProps: revokeDialogProps, confirm: confirmRevoke } = useDestructiveConfirm()
 
@@ -152,7 +153,7 @@ export function OAuthClientsPanel() {
                   {c.redirect_uri}
                 </code>
                 <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                  {t('registered_on')} {formatDateLong(c.created_at)}
+                  {t('registered_on')} {formatDateLong(c.created_at, locale)}
                 </span>
               </div>
               <Button

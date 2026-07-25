@@ -1380,6 +1380,13 @@
     "joined_generic": "Du är nu medlem."
   },
   "settings_company": {
+    "members_remove_aria": "Ta bort medlem",
+    "members_revoke_aria": "Återkalla inbjudan",
+    "members_role_label": "Roll",
+    "fp_start_date_label": "Startdatum",
+    "fp_start_date_help": "Första räkenskapsåret kan börja valfri dag.",
+    "fp_range": "{start} till {end}",
+    "fp_months": "{count} månader",
     "company_info_heading": "Företagsuppgifter",
     "share_capital_heading": "Aktiekapital",
     "aktiekapital_label": "Aktiekapital (kr)",
@@ -2245,6 +2252,7 @@
     "env_prod": "Produktion"
   },
   "settings_bankid": {
+    "cancel_linking": "Avbryt",
     "title": "BankID",
     "toast_already_linked": "Detta BankID är redan kopplat till ett annat konto.",
     "toast_link_failed": "Kunde inte koppla BankID.",
@@ -2262,6 +2270,9 @@
     "link_button": "Koppla BankID"
   },
   "settings_security": {
+    "set_password_title": "Sätt ett lösenord",
+    "set_password_description": "Du loggade in med BankID och har inget lösenord ännu. Sätt ett lösenord för att kunna aktivera 2FA eller logga in när BankID inte är tillgängligt.",
+    "set_password_button": "Sätt lösenord",
     "group_security": "Säkerhet",
     "toast_weak_password_title": "Lösenordet är för svagt",
     "toast_weak_password_description": "Lösenordet måste vara minst 8 tecken och innehålla versaler, gemener, siffror och specialtecken.",

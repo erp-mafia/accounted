@@ -197,9 +197,9 @@ export function FiscalPeriodEditor() {
             </p>
 
             <SettingsRow
-              label="Startdatum"
+              label={t('fp_start_date_label')}
               htmlFor="fiscal-period-start"
-              help="Första räkenskapsåret kan börja valfri dag."
+              help={t('fp_start_date_help')}
               align="baseline"
             >
               <SettingsInput
@@ -230,9 +230,9 @@ export function FiscalPeriodEditor() {
               <p className="px-1 pt-3 text-xs text-muted-foreground">
                 {t('fp_summary_title')}:{' '}
                 <span className="tabular-nums">
-                  {formatSwedishDate(startDate)} till {formatSwedishDate(endDate)}
+                  {t('fp_range', { start: formatSwedishDate(startDate), end: formatSwedishDate(endDate) })}
                 </span>
-                {validation.months !== null && <> · {validation.months} månader</>}
+                {validation.months !== null && <> · {t('fp_months', { count: validation.months })}</>}
               </p>
             )}
             {validation.error && (
@@ -311,7 +311,7 @@ function BlockedRow({
     >
       <Lock aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       <span className="tabular-nums">
-        {formatSwedishDate(period.period_start)} till {formatSwedishDate(period.period_end)}
+        {t('fp_range', { start: formatSwedishDate(period.period_start), end: formatSwedishDate(period.period_end) })}
       </span>
       <SettingsRowNote>
         {(isCalendarYear(period) ? t('fp_blocked_calendar_year') : t('fp_blocked_broken_year')).trim()}

@@ -351,6 +351,7 @@ export function InvoicePaymentAccountsSettings({
         {/* Typeahead combobox stays boxed on purpose: it is a picker, not a field. */}
         <div className="min-w-0 flex-1 sm:max-w-64">
           <BankNameCombobox
+            aria-label={t('bank_label')}
             value={value(activeAccount, 'bank_name')}
             onChange={(next) => updateField('bank_name', next)}
             enableBankingEnabled={hasBankingExtension}

@@ -1380,6 +1380,13 @@
     "joined_generic": "You are now a member."
   },
   "settings_company": {
+    "members_remove_aria": "Remove member",
+    "members_revoke_aria": "Revoke invitation",
+    "members_role_label": "Role",
+    "fp_start_date_label": "Start date",
+    "fp_start_date_help": "The first fiscal year can start on any day.",
+    "fp_range": "{start} to {end}",
+    "fp_months": "{count} months",
     "company_info_heading": "Company details",
     "share_capital_heading": "Share capital",
     "aktiekapital_label": "Share capital (SEK)",
@@ -2245,6 +2252,7 @@
     "env_prod": "Production"
   },
   "settings_bankid": {
+    "cancel_linking": "Cancel",
     "title": "BankID",
     "toast_already_linked": "This BankID is already linked to another account.",
     "toast_link_failed": "Could not link BankID.",
@@ -2262,6 +2270,9 @@
     "link_button": "Link BankID"
   },
   "settings_security": {
+    "set_password_title": "Set a password",
+    "set_password_description": "You signed in with BankID and have no password yet. Set one to enable 2FA or to sign in when BankID is unavailable.",
+    "set_password_button": "Set password",
     "group_security": "Security",
     "toast_weak_password_title": "Password is too weak",
     "toast_weak_password_description": "The password must be at least 8 characters and include uppercase, lowercase, digits and a special character.",
