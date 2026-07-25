@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import { useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
+import { SettingsSeg } from '@/components/settings/SettingsRows'
 import { formatDateLong } from '@/lib/utils'
 import type { BillingPlan } from '@/lib/stripe/client'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -25,8 +26,9 @@ const PRICE: Record<BillingPlan, { amount: string; suffix: string; sub: string; 
 
 /**
  * Interactive billing CTA. Paying companies get the Stripe Customer Portal
- * (manage/cancel); everyone else gets a reactive plan picker + Checkout. Both
- * POST to a route that returns a hosted Stripe URL we redirect to.
+ * (manage/cancel) as a quiet row action; everyone else gets a plan picker
+ * (SettingsSeg) + Checkout. Both POST to a route that returns a hosted Stripe
+ * URL we redirect to.
  *
  * `firstChargeAt`: when the checkout route will defer the first charge to the
  * trial's end (see billing/checkout), the date it lands. Shifts the CTA from
@@ -72,7 +74,7 @@ export function BillingActions({
 
   if (isPaying) {
     return (
-      <Button size="lg" onClick={() => go('/api/billing/portal')} disabled={loading} className="w-full sm:w-auto">
+      <Button variant="outline" size="sm" onClick={() => go('/api/billing/portal')} disabled={loading}>
         Hantera abonnemang
       </Button>
     )
@@ -80,58 +82,55 @@ export function BillingActions({
 
   if (!configured) {
     return (
-      <Button size="lg" disabled className="w-full">
+      <Button size="lg" disabled className="w-full sm:w-auto">
         Uppgradering öppnar snart
       </Button>
     )
   }
 
-  const segment = (p: BillingPlan, label: ReactNode) => (
-    <button
-      type="button"
-      onClick={() => setPlan(p)}
-      className={`flex items-center rounded-md px-3 py-2 transition-colors ${
-        plan === p ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'
-      }`}
-    >
-      {label}
-    </button>
-  )
-
   return (
     <div className="space-y-4">
-      <div>
-        <div className="flex items-baseline gap-2">
-          <span className="font-display text-3xl tracking-tight tabular-nums">{PRICE[plan].amount}</span>
-          <span className="text-muted-foreground">{PRICE[plan].suffix}</span>
-        </div>
-        <p className="text-sm text-muted-foreground mt-1">{PRICE[plan].sub}</p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <SettingsSeg
+          value={plan}
+          onChange={setPlan}
+          aria-label="Betalningsintervall"
+          options={[
+            { value: 'monthly', label: 'Månadsvis' },
+            {
+              value: 'yearly',
+              label: (
+                <>
+                  Årsvis
+                  <span className="ml-2 text-muted-foreground">Spara 2 mån</span>
+                </>
+              ),
+            },
+          ]}
+        />
+        <p className="text-sm text-muted-foreground">
+          <span className="tabular-nums text-foreground">{PRICE[plan].amount}</span> {PRICE[plan].suffix}
+        </p>
       </div>
+      <p className="text-xs text-muted-foreground tabular-nums">{PRICE[plan].sub}</p>
 
-      <div className="inline-flex rounded-lg border border-border p-1 text-sm">
-        {segment('monthly', 'Månadsvis')}
-        {segment(
-          'yearly',
-          <>
-            Årsvis
-            <span className="ml-2 text-xs text-muted-foreground">Spara 2 mån</span>
-          </>,
-        )}
-      </div>
-
-      <Button size="lg" onClick={() => go('/api/billing/checkout', { plan })} disabled={loading} className="w-full">
+      <Button
+        size="lg"
+        onClick={() => go('/api/billing/checkout', { plan })}
+        disabled={loading}
+        className="w-full sm:w-auto"
+      >
         {loading ? 'Öppnar…' : firstChargeAt ? 'Starta abonnemanget: 0 kr idag' : PRICE[plan].cta}
         {!loading && <ChevronRight className="h-4 w-4" />}
       </Button>
       {firstChargeAt && (
-        <p className="text-xs text-muted-foreground text-center">
+        // The one deferred-charge line that stays visible (the rest of the
+        // legal/marketing copy lives behind the group-level "?").
+        <p className="text-xs text-muted-foreground">
           Första debiteringen sker {formatDateLong(firstChargeAt)}, när provperioden slutar. Avslutar du innan dess
           kostar det ingenting.
         </p>
       )}
-      <p className="text-xs text-muted-foreground text-center">
-        Ingen bindningstid · Avsluta när du vill · Säker betalning via Stripe
-      </p>
     </div>
   )
 }

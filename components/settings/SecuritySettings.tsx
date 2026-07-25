@@ -4,17 +4,22 @@ import { useTranslations } from 'next-intl'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, ShieldCheck, ShieldOff, KeyRound } from 'lucide-react'
+import { Loader2, ShieldCheck, ShieldOff } from 'lucide-react'
 import { isMfaRequired } from '@/lib/auth/mfa'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
 import { BankIdSettings } from '@/components/settings/BankIdSettings'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  SettingsGroup,
+  SettingsInput,
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
+} from '@/components/settings/SettingsRows'
 
 const isSelfHosted = process.env.NEXT_PUBLIC_SELF_HOSTED === 'true'
 const mfaRequired = isMfaRequired()
@@ -166,181 +171,162 @@ export function SecuritySettings() {
   }
 
   return (
-    <div className="space-y-6">
+    <SettingsGroup label={t('group_security')}>
       {bankIdEnabled && <BankIdSettings />}
 
-      {/* BankID-only users with no password: banner above everything else */}
+      {/* BankID-only users with no password: set-password row before the rest */}
       {hasPassword === false && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <KeyRound className="h-4 w-4" />
-              Sätt ett lösenord
-            </CardTitle>
-            <CardDescription>
-              Du loggade in med BankID och har inget lösenord ännu. Sätt ett
-              lösenord för att kunna aktivera 2FA eller logga in när BankID
-              inte är tillgängligt.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+        <SettingsRow
+          label="Sätt ett lösenord"
+          help="Du loggade in med BankID och har inget lösenord ännu. Sätt ett lösenord för att kunna aktivera 2FA eller logga in när BankID inte är tillgängligt."
+        >
+          <SettingsRowEnd>
             <Button
+              size="sm"
               onClick={() =>
                 router.push('/account/set-password?returnTo=/settings/account')
               }
             >
               Sätt lösenord
             </Button>
-          </CardContent>
-        </Card>
+          </SettingsRowEnd>
+        </SettingsRow>
       )}
 
-      {/* Change password: hidden when the user has no password (the banner
+      {/* Change password: hidden when the user has no password (the row
           above handles the set-initial-password flow). */}
       {hasPassword !== false && (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <KeyRound className="h-5 w-5" />
-            {t('change_password_title')}
-          </CardTitle>
-          <CardDescription>
-            {t('change_password_description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleChangePassword} className="space-y-4 max-w-md">
-            <div className="space-y-2">
-              <Label htmlFor="new_password">{t('new_password_label')}</Label>
-              <Input
-                id="new_password"
-                type="password"
-                autoComplete="new-password"
-                placeholder={t('new_password_placeholder')}
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                required
-                minLength={8}
-                disabled={isChangingPassword}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirm_new_password">{t('confirm_password_label')}</Label>
-              <Input
-                id="confirm_new_password"
-                type="password"
-                autoComplete="new-password"
-                placeholder={t('confirm_password_placeholder')}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                minLength={8}
-                disabled={isChangingPassword}
-              />
-            </div>
-            <Button type="submit" disabled={isChangingPassword}>
-              {isChangingPassword ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('saving')}
-                </>
-              ) : (
-                t('update_password_button')
-              )}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+        <form onSubmit={handleChangePassword}>
+          <SettingsRow
+            label={t('new_password_label')}
+            htmlFor="new_password"
+            help={t('change_password_description')}
+            align="baseline"
+          >
+            <SettingsInput
+              id="new_password"
+              type="password"
+              autoComplete="new-password"
+              placeholder={t('new_password_placeholder')}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              required
+              minLength={8}
+              disabled={isChangingPassword}
+            />
+          </SettingsRow>
+          <SettingsRow
+            label={t('confirm_password_label')}
+            htmlFor="confirm_new_password"
+            align="baseline"
+          >
+            <SettingsInput
+              id="confirm_new_password"
+              type="password"
+              autoComplete="new-password"
+              placeholder={t('confirm_password_placeholder')}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              required
+              minLength={8}
+              disabled={isChangingPassword}
+            />
+            <SettingsRowEnd>
+              <Button type="submit" size="sm" disabled={isChangingPassword}>
+                {isChangingPassword ? (
+                  <>
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                    {t('saving')}
+                  </>
+                ) : (
+                  t('update_password_button')
+                )}
+              </Button>
+            </SettingsRowEnd>
+          </SettingsRow>
+        </form>
       )}
 
       {/* MFA: hidden for self-hosted */}
       {!isSelfHosted && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5" />
-              {t('mfa_title')}
-            </CardTitle>
-            <CardDescription>
-              {t('mfa_description')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoadingMfa ? (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {t('loading')}
-              </div>
-            ) : hasMfa ? (
-              <div className="space-y-4">
-                <div className="flex items-center gap-3 p-4 rounded-lg border border-border bg-secondary">
-                  <ShieldCheck className="h-5 w-5 text-success" />
-                  <div>
-                    <p className="font-medium text-foreground">{t('mfa_active_title')}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {t('mfa_active_description')}
-                    </p>
-                  </div>
-                </div>
-                {!mfaRequired && (
+        <SettingsRow
+          label={t('mfa_title')}
+          help={
+            <>
+              <p>{t('mfa_description')}</p>
+              {!isLoadingMfa && !hasMfa && (
+                <p className="mt-2">{t('mfa_inactive_description')}</p>
+              )}
+            </>
+          }
+        >
+          {isLoadingMfa ? (
+            <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {t('loading')}
+            </span>
+          ) : hasMfa ? (
+            <>
+              <Badge variant="success">{t('mfa_active_title')}</Badge>
+              <SettingsRowNote>{t('mfa_active_description')}</SettingsRowNote>
+              <SettingsRowEnd>
+                {mfaRequired ? (
+                  // Required by the hosted config: no disable action exists,
+                  // so the reason stays visible as the row's status.
+                  <SettingsRowNote>{t('mfa_required_note')}</SettingsRowNote>
+                ) : (
                   <Button
-                    variant="outline"
+                    variant="ghost"
+                    size="sm"
                     onClick={handleUnenrollMfa}
                     disabled={isUnenrolling}
                   >
                     {isUnenrolling ? (
                       <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
                         {t('disabling')}
                       </>
                     ) : (
                       <>
-                        <ShieldOff className="mr-2 h-4 w-4" />
+                        <ShieldOff className="mr-2 h-3.5 w-3.5" />
                         {t('disable_mfa')}
                       </>
                     )}
                   </Button>
                 )}
-                {mfaRequired && (
-                  <p className="text-xs text-muted-foreground">
-                    {t('mfa_required_note')}
-                  </p>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="flex items-center gap-3 p-4 rounded-lg border">
-                  <ShieldOff className="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium">{t('mfa_inactive_title')}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {t('mfa_inactive_description')}
-                    </p>
-                  </div>
-                </div>
+              </SettingsRowEnd>
+            </>
+          ) : (
+            <>
+              <SettingsRowNote>{t('mfa_inactive_title')}</SettingsRowNote>
+              <SettingsRowEnd>
                 {hasPassword === false ? (
                   <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() =>
-                      router.push(
-                        '/account/set-password?returnTo=/mfa/enroll',
-                      )
+                      router.push('/account/set-password?returnTo=/mfa/enroll')
                     }
                   >
                     {t('set_password_first')}
                   </Button>
                 ) : (
                   <Button
-                    onClick={() => router.push(`/mfa/enroll?returnTo=${encodeURIComponent('/settings/account')}`)}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() =>
+                      router.push(`/mfa/enroll?returnTo=${encodeURIComponent('/settings/account')}`)
+                    }
                   >
-                    <ShieldCheck className="mr-2 h-4 w-4" />
+                    <ShieldCheck className="mr-2 h-3.5 w-3.5" />
                     {t('enable_mfa')}
                   </Button>
                 )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              </SettingsRowEnd>
+            </>
+          )}
+        </SettingsRow>
       )}
-    </div>
+    </SettingsGroup>
   )
 }

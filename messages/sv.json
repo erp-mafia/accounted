@@ -296,6 +296,19 @@
     "terms_and": "och",
     "privacy_link": "integritetspolicy"
   },
+  "settings_intro": {
+    "account": "Dina personliga uppgifter och din säkerhet. Gäller dig, inte företaget.",
+    "billing": "Varje företag har sitt eget abonnemang.",
+    "company": "Uppgifterna visas på fakturor, i e-post och i filer till myndigheter.",
+    "bookkeeping": "Regelverk, metod och serier. Det mesta sätts en gång.",
+    "tax": "Styr momsdeklarationen, arbetsgivardeklarationen och vilka datum som bevakas.",
+    "salary": "Standarder för lönekörningen. Skattetabell och semester ställs in per anställd.",
+    "invoicing": "Nummer, villkor och utseende på dina fakturor.",
+    "templates": "Återanvändbara konteringar och mönster som lärts in från din bokföring.",
+    "banking": "Transaktioner hämtas automatiskt. Accounted kan bara läsa, aldrig flytta pengar.",
+    "assistant": "Vad assistenten vet, minns och kan.",
+    "api": "Nycklar för MCP-klienter som Claude och Cursor, och för egna integrationer."
+  },
   "settings_nav": {
     "aria_label": "Inställningar",
     "company": "Företag",
@@ -379,6 +392,7 @@
     "description": "Hantera ditt företag och konto"
   },
   "settings": {
+    "group_profile": "Profil",
     "section_name": "Namn",
     "name_label": "Ditt namn",
     "name_description": "Används när vi tilltalar dig och visas som kontaktperson på vissa underlag.",
@@ -1467,6 +1481,7 @@
     "wrapper_save_failed_title": "Kunde inte spara",
     "wrapper_save_failed_default": "Kunde inte spara inställningar",
     "wrapper_try_again": "Försök igen.",
+    "wrapper_unsaved": "Osparade ändringar",
     "wrapper_saved": "Sparat",
     "wrapper_saving": "Sparar...",
     "wrapper_save_changes": "Spara ändringar",
@@ -1484,6 +1499,8 @@
     "iframe_title": "PDF-förhandsvisning av faktura"
   },
   "settings_bookkeeping": {
+    "group_basics": "Grunder",
+    "group_automation": "Automatik",
     "method_heading": "Bokföringsmetod",
     "method_label": "Metod",
     "method_accrual": "Faktureringsmetoden",
@@ -2245,6 +2262,7 @@
     "link_button": "Koppla BankID"
   },
   "settings_security": {
+    "group_security": "Säkerhet",
     "toast_weak_password_title": "Lösenordet är för svagt",
     "toast_weak_password_description": "Lösenordet måste vara minst 8 tecken och innehålla versaler, gemener, siffror och specialtecken.",
     "toast_mismatch_title": "Lösenorden matchar inte",

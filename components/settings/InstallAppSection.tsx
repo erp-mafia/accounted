@@ -4,6 +4,11 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { MonitorDown } from 'lucide-react'
+import {
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
+} from '@/components/settings/SettingsRows'
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>
@@ -25,14 +30,15 @@ function getIsStandalone() {
 }
 
 /**
- * "Install as app" section for account settings. Chromium fires
+ * "Install as app" row for account settings. Chromium fires
  * beforeinstallprompt when the PWA is installable; we capture it and offer a
- * real install button. Other browsers get per-platform instructions. Hidden
- * entirely when already running standalone (installed) or after installing.
+ * real install button. Other browsers get per-platform instructions as the
+ * row's visible note (that text IS the action). Hidden entirely when already
+ * running standalone (installed) or after installing.
  */
 export function InstallAppSection() {
   const t = useTranslations('settings')
-  // Server snapshot says standalone so the section is absent from server HTML
+  // Server snapshot says standalone so the row is absent from server HTML
   // and only appears client-side when actually running in a browser tab.
   const isStandalone = useSyncExternalStore(subscribeDisplayMode, getIsStandalone, () => true)
   const [installed, setInstalled] = useState(false)
@@ -74,21 +80,19 @@ export function InstallAppSection() {
       : t('install_app_hint_generic')
 
   return (
-    <section className="space-y-4 border-t border-border pt-8">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        {t('install_app_title')}
-      </h2>
-      <div className="flex items-center justify-between gap-4 p-4 border rounded-lg">
-        <p className="text-sm text-muted-foreground max-w-md">
-          {installPrompt ? t('install_app_description') : hint}
-        </p>
-        {installPrompt && (
-          <Button variant="outline" onClick={handleInstall}>
-            <MonitorDown className="mr-2 h-4 w-4" />
+    <SettingsRow label={t('install_app_title')} help={t('install_app_description')}>
+      {installPrompt ? (
+        <SettingsRowEnd>
+          <Button variant="ghost" size="sm" onClick={handleInstall}>
+            <MonitorDown className="mr-2 h-3.5 w-3.5" />
             {t('install_app_button')}
           </Button>
-        )}
-      </div>
-    </section>
+        </SettingsRowEnd>
+      ) : (
+        // No captured prompt: the platform-specific instruction is the only
+        // way to act, so it stays visible instead of hiding behind the "?".
+        <SettingsRowNote>{hint}</SettingsRowNote>
+      )}
+    </SettingsRow>
   )
 }

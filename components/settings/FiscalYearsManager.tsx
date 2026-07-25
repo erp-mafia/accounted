@@ -9,6 +9,7 @@ import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
+import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { Plus, Lock, Unlock, Loader2 } from 'lucide-react'
@@ -25,10 +26,11 @@ function periodStatus(p: FiscalPeriod): 'closed' | 'locked' | 'open' {
   return 'open'
 }
 
-const STATUS_VARIANT: Record<'closed' | 'locked' | 'open', 'secondary' | 'warning' | 'success'> = {
+// Open is the normal state and renders as muted text; only the deviations
+// (locked/closed) get a chip (UI-migration convention 5).
+const STATUS_VARIANT: Record<'closed' | 'locked', 'secondary' | 'warning'> = {
   closed: 'secondary',
   locked: 'warning',
-  open: 'success',
 }
 
 export function FiscalYearsManager() {
@@ -113,14 +115,83 @@ export function FiscalYearsManager() {
   }
 
   return (
-    <section className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('fy_heading')}
-        </h2>
+    <SettingsGroup label={t('fy_heading')} help={t('fy_help')}>
+      {isLoading ? (
+        <div className="space-y-2 px-1 py-3">
+          <Skeleton className="h-4 w-48" />
+          <Skeleton className="h-4 w-40" />
+        </div>
+      ) : hasError ? (
+        <p className="px-1 py-3 text-sm text-muted-foreground">{t('fy_load_error')}</p>
+      ) : sorted.length === 0 ? (
+        <p className="px-1 py-3 text-sm text-muted-foreground">{t('fy_empty')}</p>
+      ) : (
+        // Period rows: flat hairline list, no cards.
+        sorted.map((p) => {
+          const status = periodStatus(p)
+          const isMutating = mutatingId === p.id
+          return (
+            <div key={p.id} className="flex items-center gap-3 border-b border-border px-1 py-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-sm font-medium">{p.name}</span>
+                <span className="ml-2 text-sm text-muted-foreground tabular-nums">
+                  {formatDate(p.period_start)} - {formatDate(p.period_end)}
+                </span>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                {status === 'open' ? (
+                  <span className="text-xs text-muted-foreground">{t('fy_status_open')}</span>
+                ) : (
+                  <Badge variant={STATUS_VARIANT[status]}>{t(`fy_status_${status}`)}</Badge>
+                )}
+                {canManage && status === 'open' && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:text-foreground"
+                    disabled={isMutating}
+                    onClick={() => handleLock(p)}
+                  >
+                    {isMutating ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Lock className="mr-1.5 h-4 w-4" />
+                        {t('fy_action_lock')}
+                      </>
+                    )}
+                  </Button>
+                )}
+                {canManage && status === 'locked' && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:text-foreground"
+                    disabled={isMutating}
+                    onClick={() => handleUnlock(p)}
+                  >
+                    {isMutating ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Unlock className="mr-1.5 h-4 w-4" />
+                        {t('fy_action_unlock')}
+                      </>
+                    )}
+                  </Button>
+                )}
+              </div>
+            </div>
+          )
+        })
+      )}
+
+      {/* Trailing quiet action: create the next fiscal year. */}
+      <div className="px-1 pt-3">
         <Button
-          variant="outline"
+          variant="ghost"
           size="sm"
+          className="text-muted-foreground hover:text-foreground"
           onClick={() => setDialogOpen(true)}
           disabled={isLoading}
         >
@@ -128,73 +199,6 @@ export function FiscalYearsManager() {
           {t('fy_create')}
         </Button>
       </div>
-
-      <p className="text-xs text-muted-foreground">{t('fy_help')}</p>
-
-      {isLoading ? (
-        <div className="space-y-2">
-          <Skeleton className="h-4 w-48" />
-          <Skeleton className="h-4 w-40" />
-        </div>
-      ) : hasError ? (
-        <p className="text-sm text-muted-foreground">{t('fy_load_error')}</p>
-      ) : sorted.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t('fy_empty')}</p>
-      ) : (
-        <div className="divide-y divide-border">
-          {sorted.map((p) => {
-            const status = periodStatus(p)
-            const isMutating = mutatingId === p.id
-            return (
-              <div key={p.id} className="flex items-center justify-between gap-4 py-2">
-                <div className="min-w-0">
-                  <span className="text-sm font-medium">{p.name}</span>
-                  <span className="ml-2 text-sm text-muted-foreground tabular-nums">
-                    {formatDate(p.period_start)} - {formatDate(p.period_end)}
-                  </span>
-                </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <Badge variant={STATUS_VARIANT[status]}>{t(`fy_status_${status}`)}</Badge>
-                  {canManage && status === 'open' && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={isMutating}
-                      onClick={() => handleLock(p)}
-                    >
-                      {isMutating ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <>
-                          <Lock className="mr-1.5 h-4 w-4" />
-                          {t('fy_action_lock')}
-                        </>
-                      )}
-                    </Button>
-                  )}
-                  {canManage && status === 'locked' && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      disabled={isMutating}
-                      onClick={() => handleUnlock(p)}
-                    >
-                      {isMutating ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <>
-                          <Unlock className="mr-1.5 h-4 w-4" />
-                          {t('fy_action_unlock')}
-                        </>
-                      )}
-                    </Button>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
 
       <CreatePeriodDialog
         open={dialogOpen}
@@ -205,6 +209,6 @@ export function FiscalYearsManager() {
       />
 
       <DestructiveConfirmDialog {...dialogProps} />
-    </section>
+    </SettingsGroup>
   )
 }

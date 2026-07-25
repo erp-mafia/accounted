@@ -3,12 +3,19 @@
 import { useTranslations } from 'next-intl'
 import { useState, useCallback, useRef, type ChangeEvent } from 'react'
 import { Loader2, Trash2, Upload } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
+import { HelpPopover } from '@/components/ui/help-popover'
+import {
+  SettingsGroup,
+  SettingsReveal,
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
+  SettingsSeg,
+  SettingsSelect,
+  SettingsTextarea,
+} from '@/components/settings/SettingsRows'
 import { INVOICE_FONT_FAMILIES } from '@/lib/invoices/branding-constants'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { CompanySettings, InvoiceFontFamily } from '@/types'
@@ -16,6 +23,42 @@ import type { CompanySettings, InvoiceFontFamily } from '@/types'
 interface PdfPrintSettingsProps {
   settings: CompanySettings
   onUpdate: (updates: Partial<CompanySettings>) => void
+}
+
+type PdfToggleField =
+  | 'ore_rounding'
+  | 'invoice_show_ocr'
+  | 'invoice_show_bankgiro'
+  | 'invoice_show_plusgiro'
+  | 'invoice_show_swish'
+  | 'invoice_show_logo'
+  | 'invoice_show_company_name'
+
+/** Compact switch row for the show/hide grid: small label, "?", Switch. */
+function PdfToggleRow({
+  id,
+  label,
+  help,
+  checked,
+  onCheckedChange,
+}: {
+  id: string
+  label: string
+  help?: React.ReactNode
+  checked: boolean
+  onCheckedChange: (value: boolean) => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-border px-1 py-3">
+      <span className="flex min-w-0 items-center gap-2">
+        <label htmlFor={id} className="truncate text-sm">
+          {label}
+        </label>
+        {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
+      </span>
+      <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
+    </div>
+  )
 }
 
 export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) {
@@ -148,75 +191,79 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
     Custom: t('font_custom'),
   }
 
-  return (
-    <section className="space-y-6">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        {t('heading')}
-      </h2>
+  const toggleRows: Array<{ field: PdfToggleField; label: string; help: string; defaultOn: boolean }> = [
+    { field: 'ore_rounding', label: t('ore_rounding_label'), help: t('ore_rounding_help'), defaultOn: true },
+    { field: 'invoice_show_ocr', label: t('show_ocr_label'), help: t('show_ocr_help'), defaultOn: true },
+    { field: 'invoice_show_bankgiro', label: t('show_bankgiro_label'), help: t('show_bankgiro_help'), defaultOn: true },
+    { field: 'invoice_show_plusgiro', label: t('show_plusgiro_label'), help: t('show_plusgiro_help'), defaultOn: true },
+    { field: 'invoice_show_swish', label: t('show_swish_label'), help: t('show_swish_help'), defaultOn: false },
+    { field: 'invoice_show_logo', label: t('show_logo_label'), help: t('show_logo_help'), defaultOn: true },
+    { field: 'invoice_show_company_name', label: t('show_company_name_label'), help: t('show_company_name_help'), defaultOn: true },
+  ]
 
-      <div className="space-y-3">
-        <div className="space-y-1">
-          <Label htmlFor="invoice_font_family">{t('font_label')}</Label>
-          <p className="text-xs text-muted-foreground">{t('font_help')}</p>
-        </div>
-        <Select
+  return (
+    <SettingsGroup label={t('heading')}>
+      <SettingsRow
+        label={t('font_label')}
+        htmlFor="invoice_font_family"
+        help={
+          <div className="space-y-2">
+            <p>{t('font_help')}</p>
+            <p>{t('font_file_help')}</p>
+          </div>
+        }
+      >
+        <SettingsSelect
+          id="invoice_font_family"
           value={settings.invoice_font_family ?? 'Helvetica'}
-          onValueChange={(value) => {
-            if (value) void saveFont(value as InvoiceFontFamily)
+          onChange={(event) => {
+            if (event.target.value) void saveFont(event.target.value as InvoiceFontFamily)
           }}
           disabled={isSavingFont || isUploadingFont || isDeletingFont}
         >
-          <SelectTrigger id="invoice_font_family" className="max-w-sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {INVOICE_FONT_FAMILIES
-              .filter((family) => family !== 'Custom' || settings.invoice_custom_font_path)
-              .map((family) => (
-                <SelectItem key={family} value={family}>
-                  {fontLabels[family]}
-                </SelectItem>
-              ))}
-          </SelectContent>
-        </Select>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
+          {INVOICE_FONT_FAMILIES
+            .filter((family) => family !== 'Custom' || settings.invoice_custom_font_path)
+            .map((family) => (
+              <option key={family} value={family}>
+                {fontLabels[family]}
+              </option>
+            ))}
+        </SettingsSelect>
+        {settings.invoice_custom_font_name && (
+          <SettingsRowNote>
+            {t('font_uploaded_name', { name: settings.invoice_custom_font_name })}
+          </SettingsRowNote>
+        )}
+        <SettingsRowEnd>
+          <button
             type="button"
-            variant="outline"
             onClick={() => fontInputRef.current?.click()}
             disabled={isUploadingFont || isDeletingFont}
+            className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isUploadingFont ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Upload className="mr-2 h-4 w-4" />
+              <Upload className="h-3.5 w-3.5" />
             )}
             {settings.invoice_custom_font_path ? t('font_replace') : t('font_upload')}
-          </Button>
+          </button>
           {settings.invoice_custom_font_path && (
-            <Button
+            <button
               type="button"
-              variant="ghost"
               onClick={() => void deleteFont()}
               disabled={isUploadingFont || isDeletingFont}
-              className="text-muted-foreground hover:text-destructive"
+              className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isDeletingFont ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <Trash2 className="mr-2 h-4 w-4" />
+                <Trash2 className="h-3.5 w-3.5" />
               )}
               {t('font_remove')}
-            </Button>
+            </button>
           )}
-        </div>
-        {settings.invoice_custom_font_name && (
-          <p className="text-xs text-muted-foreground">
-            {t('font_uploaded_name', { name: settings.invoice_custom_font_name })}
-          </p>
-        )}
-        <p className="text-xs text-muted-foreground">{t('font_file_help')}</p>
+        </SettingsRowEnd>
         <input
           ref={fontInputRef}
           type="file"
@@ -224,146 +271,61 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
           className="hidden"
           onChange={handleFontChange}
         />
+      </SettingsRow>
+
+      {/* Show/hide switches: compact two-column grid of small switch rows. */}
+      <div className="grid gap-x-8 md:grid-cols-2">
+        {toggleRows.map(({ field, label, help, defaultOn }) => (
+          <PdfToggleRow
+            key={field}
+            id={`pdf-toggle-${field}`}
+            label={label}
+            help={help}
+            checked={settings[field] ?? defaultOn}
+            onCheckedChange={(v) => void saveToggle(field, v)}
+          />
+        ))}
       </div>
 
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <Label>{t('ore_rounding_label')}</Label>
-            <p className="text-xs text-muted-foreground">{t('ore_rounding_help')}</p>
-          </div>
-          <Switch
-            checked={settings.ore_rounding ?? true}
-            onCheckedChange={(v) => saveToggle('ore_rounding', v)}
+      {/* Placement only applies while the company name is shown. */}
+      <SettingsReveal open={settings.invoice_show_company_name ?? true}>
+        <SettingsRow label={t('placement_label')} borderless>
+          <SettingsSeg
+            value={settings.invoice_company_name_position ?? 'header'}
+            onChange={(pos) => void savePosition(pos)}
+            options={[
+              { value: 'header', label: t('placement_header') },
+              { value: 'footer', label: t('placement_footer') },
+            ]}
+            aria-label={t('placement_aria_label')}
           />
-        </div>
+        </SettingsRow>
+      </SettingsReveal>
 
-        <div className="flex items-center justify-between">
-          <div>
-            <Label>{t('show_ocr_label')}</Label>
-            <p className="text-xs text-muted-foreground">{t('show_ocr_help')}</p>
-          </div>
-          <Switch
-            checked={settings.invoice_show_ocr ?? true}
-            onCheckedChange={(v) => saveToggle('invoice_show_ocr', v)}
-          />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <div>
-            <Label>{t('show_bankgiro_label')}</Label>
-            <p className="text-xs text-muted-foreground">{t('show_bankgiro_help')}</p>
-          </div>
-          <Switch
-            checked={settings.invoice_show_bankgiro ?? true}
-            onCheckedChange={(v) => saveToggle('invoice_show_bankgiro', v)}
-          />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <div>
-            <Label>{t('show_plusgiro_label')}</Label>
-            <p className="text-xs text-muted-foreground">{t('show_plusgiro_help')}</p>
-          </div>
-          <Switch
-            checked={settings.invoice_show_plusgiro ?? true}
-            onCheckedChange={(v) => saveToggle('invoice_show_plusgiro', v)}
-          />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <div>
-            <Label>{t('show_swish_label')}</Label>
-            <p className="text-xs text-muted-foreground">{t('show_swish_help')}</p>
-          </div>
-          <Switch
-            checked={settings.invoice_show_swish ?? false}
-            onCheckedChange={(v) => saveToggle('invoice_show_swish', v)}
-            aria-label={t('show_swish_label')}
-          />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <div>
-            <Label>{t('show_logo_label')}</Label>
-            <p className="text-xs text-muted-foreground">{t('show_logo_help')}</p>
-          </div>
-          <Switch
-            checked={settings.invoice_show_logo ?? true}
-            onCheckedChange={(v) => saveToggle('invoice_show_logo', v)}
-          />
-        </div>
-
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <Label>{t('show_company_name_label')}</Label>
-              <p className="text-xs text-muted-foreground">{t('show_company_name_help')}</p>
-            </div>
-            <Switch
-              checked={settings.invoice_show_company_name ?? true}
-              onCheckedChange={(v) => saveToggle('invoice_show_company_name', v)}
-            />
-          </div>
-          {(settings.invoice_show_company_name ?? true) && (
-            <div className="flex items-center justify-between pl-0">
-              <p className="text-xs text-muted-foreground">{t('placement_label')}</p>
-              <div
-                role="group"
-                aria-label={t('placement_aria_label')}
-                className="inline-flex rounded-md border border-border p-1"
-              >
-                {(['header', 'footer'] as const).map((pos) => {
-                  const active = (settings.invoice_company_name_position ?? 'header') === pos
-                  return (
-                    <button
-                      key={pos}
-                      type="button"
-                      aria-pressed={active}
-                      onClick={() => savePosition(pos)}
-                      className={
-                        'h-10 px-4 text-sm rounded-sm transition-colors ' +
-                        (active
-                          ? 'bg-muted text-foreground'
-                          : 'text-muted-foreground hover:text-foreground')
-                      }
-                    >
-                      {pos === 'header' ? t('placement_header') : t('placement_footer')}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="space-y-4 pt-2">
-        <div className="space-y-2">
-          <Label htmlFor="invoice_late_fee_text">{t('late_fee_label')}</Label>
-          <Textarea
-            id="invoice_late_fee_text"
-            rows={2}
-            placeholder={t('late_fee_placeholder')}
-            value={lateFeeText}
-            onChange={(e) => setLateFeeText(e.target.value)}
-            onBlur={() => saveText('invoice_late_fee_text', lateFeeText)}
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="invoice_credit_terms_text">{t('credit_terms_label')}</Label>
-          <Textarea
-            id="invoice_credit_terms_text"
-            rows={2}
-            placeholder={t('credit_terms_placeholder')}
-            value={creditTermsText}
-            onChange={(e) => setCreditTermsText(e.target.value)}
-            onBlur={() => saveText('invoice_credit_terms_text', creditTermsText)}
-          />
-        </div>
-      </div>
-
-    </section>
+      <SettingsRow label={t('late_fee_label')} htmlFor="invoice_late_fee_text" align="baseline">
+        <SettingsTextarea
+          id="invoice_late_fee_text"
+          rows={2}
+          placeholder={t('late_fee_placeholder')}
+          value={lateFeeText}
+          onChange={(e) => setLateFeeText(e.target.value)}
+          onBlur={() => saveText('invoice_late_fee_text', lateFeeText)}
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={t('credit_terms_label')}
+        htmlFor="invoice_credit_terms_text"
+        align="baseline"
+      >
+        <SettingsTextarea
+          id="invoice_credit_terms_text"
+          rows={2}
+          placeholder={t('credit_terms_placeholder')}
+          value={creditTermsText}
+          onChange={(e) => setCreditTermsText(e.target.value)}
+          onBlur={() => saveText('invoice_credit_terms_text', creditTermsText)}
+        />
+      </SettingsRow>
+    </SettingsGroup>
   )
 }

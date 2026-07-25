@@ -1,10 +1,17 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Check, Clock, Minus } from 'lucide-react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useTranslations } from 'next-intl'
+import { Check } from 'lucide-react'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
+  SettingsSectionHeader,
+} from '@/components/settings/SettingsRows'
 import { formatDateLong } from '@/lib/utils'
 import { BillingActions } from '@/components/settings/BillingActions'
 
@@ -16,15 +23,14 @@ const INCLUDED = [
   'E-postutskick av fakturor, påminnelser och lönebesked',
 ]
 
-// Free vs paid, shown as a comparison table: what the paid tier adds reads
-// strongest next to what stays free forever (freeze-and-retain, nothing is
-// taken away). Free rows mirror the old ALWAYS_FREE copy.
-const FEATURE_MATRIX: { label: string; free: boolean }[] = [
-  { label: 'Bokföring och rapporter', free: true },
-  { label: 'Fakturering', free: true },
-  { label: 'SIE-export', free: true },
-  { label: 'Org.nr-uppslag och momsnummerkontroll', free: true },
-  ...INCLUDED.map((label) => ({ label, free: false })),
+// What stays free forever (freeze-and-retain, nothing is taken away). Shown
+// as the second column of the flat feature list so the paid tier reads
+// strongest right next to it. Mirrors the old ALWAYS_FREE copy.
+const ALWAYS_FREE = [
+  'Bokföring och rapporter',
+  'Fakturering',
+  'SIE-export',
+  'Org.nr-uppslag och momsnummerkontroll',
 ]
 
 // Mirrors the checkout route's deferred-first-charge condition (Stripe's 48h
@@ -42,12 +48,30 @@ interface BillingView {
   isDemo: boolean
 }
 
+function FeatureList({ heading, items }: { heading: string; items: string[] }) {
+  return (
+    <div>
+      <p className="text-xs font-medium text-muted-foreground">{heading}</p>
+      <ul className="mt-2 space-y-2">
+        {items.map((item) => (
+          <li key={item} className="flex items-start gap-2 text-sm">
+            <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 /**
  * Settings → Abonnemang. Rendered both as the full page (thin wrapper) and
  * inside the settings modal (via SETTINGS_SECTIONS), so it's a client component
  * that reads its state from GET /api/billing/status.
  */
 export function BillingSettingsContent() {
+  const tNav = useTranslations('settings_nav')
+  const tIntro = useTranslations('settings_intro')
   const [view, setView] = useState<BillingView | null>(null)
 
   useEffect(() => {
@@ -80,11 +104,16 @@ export function BillingSettingsContent() {
     return () => { active = false }
   }, [])
 
+  const header = <SettingsSectionHeader title={tNav('billing')} intro={tIntro('billing')} />
+
   if (!view) {
     return (
-      <div className="space-y-4">
-        <Skeleton className="h-12 w-full" />
-        <Skeleton className="h-64 w-full" />
+      <div>
+        {header}
+        <div className="mt-6 space-y-4">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-64 w-full" />
+        </div>
       </div>
     )
   }
@@ -93,42 +122,46 @@ export function BillingSettingsContent() {
   // them to creating a real account instead of a pay button that would 403.
   if (view.isDemo) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Abonnemang</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Du provkör Accounted i en demo. Skapa ett riktigt konto för att aktivera
-            abonnemang, AI-assistent, bankkoppling och inlämning till Skatteverket.
-          </p>
-          <ul className="space-y-2">
+      <div>
+        {header}
+        <SettingsGroup label="Ditt abonnemang">
+          <SettingsRow label="Status" borderless>
+            <span>Demo</span>
+            <SettingsRowNote>
+              Du provkör Accounted i en demo. Skapa ett riktigt konto för att aktivera
+              abonnemang, AI-assistent, bankkoppling och inlämning till Skatteverket.
+            </SettingsRowNote>
+          </SettingsRow>
+        </SettingsGroup>
+        <SettingsGroup label="I abonnemanget">
+          <ul className="space-y-2 px-1 pt-3">
             {INCLUDED.map((item) => (
               <li key={item} className="flex items-start gap-2 text-sm">
-                <Check className="h-4 w-4 mt-1 shrink-0 text-foreground" />
+                <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
                 <span>{item}</span>
               </li>
             ))}
           </ul>
-        </CardContent>
-      </Card>
+        </SettingsGroup>
+      </div>
     )
   }
 
   // Paying company → manage view.
   if (view.isPaying) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Abonnemang</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Ditt abonnemang är aktivt. Du kan hantera eller avsluta det när som helst.
-          </p>
-          <BillingActions isPaying configured={view.configured} />
-        </CardContent>
-      </Card>
+      <div>
+        {header}
+        <SettingsGroup label="Ditt abonnemang">
+          <SettingsRow label="Status" borderless>
+            <span>Aktivt</span>
+            <SettingsRowNote>Du kan hantera eller avsluta det när som helst.</SettingsRowNote>
+            <SettingsRowEnd>
+              <BillingActions isPaying configured={view.configured} />
+            </SettingsRowEnd>
+          </SettingsRow>
+        </SettingsGroup>
+      </div>
     )
   }
 
@@ -136,18 +169,18 @@ export function BillingSettingsContent() {
   // confirm instead of re-showing the sell pitch to someone who already paid.
   if (view.paidJustNow) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Abonnemang</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <p className="flex items-start gap-2 text-sm">
-            <Check className="h-4 w-4 mt-0.5 shrink-0 text-foreground" />
-            <span>Klart! Ditt abonnemang är aktiverat och alla funktioner låses upp inom någon minut.</span>
-          </p>
-          <p className="text-sm text-muted-foreground">Ladda om sidan om du inte ser ändringen.</p>
-        </CardContent>
-      </Card>
+      <div>
+        {header}
+        <SettingsGroup label="Ditt abonnemang">
+          <SettingsRow label="Status" borderless>
+            <span className="flex items-start gap-2">
+              <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
+              <span>Klart! Ditt abonnemang är aktiverat och alla funktioner låses upp inom någon minut.</span>
+            </span>
+            <SettingsRowNote>Ladda om sidan om du inte ser ändringen.</SettingsRowNote>
+          </SettingsRow>
+        </SettingsGroup>
+      </div>
     )
   }
 
@@ -156,84 +189,60 @@ export function BillingSettingsContent() {
   const deferredTo = view.chargeDeferred ? trialEndsAt : null
 
   return (
-    <div className="space-y-6">
+    <div>
+      {header}
+
+      {/* Consequential trial countdown: one attn-tone sentence, not a banner. */}
       {daysLeft !== null && (
-        <div className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-4 py-3 text-sm">
-          <Clock className="h-4 w-4 shrink-0 text-foreground" />
-          <span>
-            {daysLeft > 0
-              ? `Din provperiod löper ut om ${daysLeft} ${daysLeft === 1 ? 'dag' : 'dagar'}${
-                  trialEndsAt ? ` (${formatDateLong(trialEndsAt)})` : ''
-                }. ${
-                  deferredTo
-                    ? 'Lägg till ditt kort nu: inget dras förrän provperioden är slut.'
-                    : 'Lägg till betalning nu så fortsätter allt utan avbrott.'
-                }`
-              : 'Din provperiod har löpt ut. Aktivera abonnemanget för att få tillbaka AI, bankkoppling och inlämning.'}
-          </span>
-        </div>
+        <AttnLine className="mt-3">
+          {daysLeft > 0
+            ? `Din provperiod löper ut om ${daysLeft} ${daysLeft === 1 ? 'dag' : 'dagar'}${
+                trialEndsAt ? ` (${formatDateLong(trialEndsAt)})` : ''
+              }. ${
+                deferredTo
+                  ? 'Lägg till ditt kort nu: inget dras förrän provperioden är slut.'
+                  : 'Lägg till betalning nu så fortsätter allt utan avbrott.'
+              }`
+            : 'Din provperiod har löpt ut. Aktivera abonnemanget för att få tillbaka AI, bankkoppling och inlämning.'}
+        </AttnLine>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Allt du behöver för att sköta bokföringen själv</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
+      <SettingsGroup
+        label="Allt du behöver för att sköta bokföringen själv"
+        help="Ingen bindningstid · Avsluta när du vill · Säker betalning via Stripe"
+      >
+        <div className="px-1 pt-3">
           <BillingActions isPaying={false} configured={view.configured} firstChargeAt={deferredTo} />
+        </div>
+      </SettingsGroup>
 
-          {deferredTo && (
-            <div className="space-y-3">
-              <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">Så funkar det</h3>
-              <ol className="space-y-2 text-sm">
-                <li className="flex gap-3">
-                  <span className="w-28 shrink-0 text-muted-foreground">Idag</span>
-                  <span>Du lägger till ditt kort. Inget dras nu.</span>
-                </li>
-                <li className="flex gap-3">
-                  <span className="w-28 shrink-0 text-muted-foreground tabular-nums">{formatDateLong(deferredTo)}</span>
-                  <span>Provperioden slutar och den första debiteringen sker.</span>
-                </li>
-                <li className="flex gap-3">
-                  <span className="w-28 shrink-0 text-muted-foreground">När som helst</span>
-                  <span>Avsluta direkt via Stripe. Före {formatDateLong(deferredTo)} kostar det ingenting.</span>
-                </li>
-              </ol>
-            </div>
-          )}
+      {deferredTo && (
+        <SettingsGroup label="Så funkar det">
+          <SettingsRow label="Idag">
+            <span>Du lägger till ditt kort. Inget dras nu.</span>
+          </SettingsRow>
+          <SettingsRow label={<span className="tabular-nums">{formatDateLong(deferredTo)}</span>}>
+            <span>Provperioden slutar och den första debiteringen sker.</span>
+          </SettingsRow>
+          <SettingsRow label="När som helst" borderless>
+            <span>
+              Avsluta direkt via Stripe. Före {formatDateLong(deferredTo)} kostar det ingenting.
+            </span>
+          </SettingsRow>
+        </SettingsGroup>
+      )}
 
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-full">Funktion</TableHead>
-                <TableHead className="text-center">Gratis</TableHead>
-                <TableHead className="text-center">Abonnemang</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {FEATURE_MATRIX.map((f) => (
-                <TableRow key={f.label}>
-                  <TableCell className="text-sm">{f.label}</TableCell>
-                  <TableCell className="text-center">
-                    {f.free ? (
-                      <Check role="img" aria-label="Ingår" className="h-4 w-4 mx-auto text-foreground" />
-                    ) : (
-                      <Minus role="img" aria-label="Ingår inte" className="h-4 w-4 mx-auto text-muted-foreground/50" />
-                    )}
-                  </TableCell>
-                  <TableCell className="text-center">
-                    <Check role="img" aria-label="Ingår" className="h-4 w-4 mx-auto text-foreground" />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      <p className="text-sm text-muted-foreground leading-relaxed">
-        Utan abonnemang behåller du bokföringen, fakturorna, rapporterna och all din data utan kostnad. Ingenting
-        raderas: räkenskapsinformation bevaras i sju år enligt bokföringslagen, oavsett abonnemang.
-      </p>
+      <SettingsGroup
+        label="Funktioner"
+        // The 7-year retention reassurance moved behind the "?": long legal
+        // copy stays out of the page flow.
+        help="Utan abonnemang behåller du bokföringen, fakturorna, rapporterna och all din data utan kostnad. Ingenting raderas: räkenskapsinformation bevaras i sju år enligt bokföringslagen, oavsett abonnemang."
+      >
+        <div className="grid gap-6 px-1 pt-3 sm:grid-cols-2">
+          <FeatureList heading="I abonnemanget" items={INCLUDED} />
+          <FeatureList heading="Alltid gratis" items={ALWAYS_FREE} />
+        </div>
+      </SettingsGroup>
     </div>
   )
 }

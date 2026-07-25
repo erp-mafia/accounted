@@ -3,9 +3,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsTextarea,
+} from '@/components/settings/SettingsRows'
 import {
   EMAIL_PATTERN,
   MAX_INVOICE_EMAIL_COPY_RECIPIENTS,
@@ -107,44 +110,41 @@ export function InvoiceEmailRecipientsSettings({
   }
 
   return (
-    <section className="space-y-4">
-      <div className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('heading')}
-        </h2>
-        <p className="text-sm text-muted-foreground">{t('description')}</p>
-      </div>
+    <SettingsGroup label={t('heading')} help={t('description')}>
+      <SettingsRow
+        label={t('cc_label')}
+        htmlFor="invoice-email-cc"
+        help={t('cc_hint')}
+        align="baseline"
+      >
+        <SettingsTextarea
+          id="invoice-email-cc"
+          value={ccText}
+          onChange={(event) => setCcText(event.target.value)}
+          placeholder={t('cc_placeholder')}
+          rows={3}
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={t('bcc_label')}
+        htmlFor="invoice-email-bcc"
+        help={t('bcc_hint')}
+        align="baseline"
+      >
+        <SettingsTextarea
+          id="invoice-email-bcc"
+          value={bccText}
+          onChange={(event) => setBccText(event.target.value)}
+          placeholder={t('bcc_placeholder')}
+          rows={3}
+        />
+      </SettingsRow>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2">
-          <Label htmlFor="invoice-email-cc">{t('cc_label')}</Label>
-          <Textarea
-            id="invoice-email-cc"
-            value={ccText}
-            onChange={(event) => setCcText(event.target.value)}
-            placeholder={t('cc_placeholder')}
-            rows={3}
-          />
-          <p className="text-xs text-muted-foreground">{t('cc_hint')}</p>
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="invoice-email-bcc">{t('bcc_label')}</Label>
-          <Textarea
-            id="invoice-email-bcc"
-            value={bccText}
-            onChange={(event) => setBccText(event.target.value)}
-            placeholder={t('bcc_placeholder')}
-            rows={3}
-          />
-          <p className="text-xs text-muted-foreground">{t('bcc_hint')}</p>
-        </div>
-      </div>
-
-      <div className="flex justify-end">
-        <Button type="button" onClick={save} disabled={isSaving}>
+      <div className="flex justify-end px-1 pt-4">
+        <Button type="button" size="sm" onClick={save} disabled={isSaving}>
           {isSaving ? t('saving') : t('save')}
         </Button>
       </div>
-    </section>
+    </SettingsGroup>
   )
 }

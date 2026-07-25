@@ -3,16 +3,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { BankNameCombobox } from '@/components/settings/BankNameCombobox'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+  SettingsGroup,
+  SettingsInput,
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
+  SettingsSeg,
+  SettingsSelect,
+} from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
@@ -282,18 +282,11 @@ export function InvoicePaymentAccountsSettings({
   }
 
   return (
-    <section className="space-y-5">
-      <div className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('heading')}
-        </h2>
-        <p className="text-sm text-muted-foreground">{t('description')}</p>
-      </div>
-
+    <SettingsGroup label={t('heading')} help={t('description')}>
       {hasExternalUpdate && (
         <div
           role="alert"
-          className="flex flex-col gap-3 rounded-lg border border-border bg-muted/40 p-4 sm:flex-row sm:items-center sm:justify-between"
+          className="mt-3 flex flex-col gap-3 rounded-lg border border-border bg-muted/40 p-4 sm:flex-row sm:items-center sm:justify-between"
         >
           <div className="space-y-1">
             <p className="text-sm font-medium">{t('conflict_title')}</p>
@@ -305,146 +298,165 @@ export function InvoicePaymentAccountsSettings({
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2" aria-label={t('currency_tabs_label')}>
-        {configuredCurrencies.map((currency) => (
-          <Button
-            key={currency}
-            type="button"
-            size="sm"
-            variant={activeCurrency === currency ? 'default' : 'outline'}
-            onClick={() => setActiveCurrency(currency)}
-          >
-            {currency}
-          </Button>
-        ))}
-      </div>
+      <SettingsRow label={t('currency_tabs_label')}>
+        <SettingsSeg
+          value={activeCurrency}
+          onChange={(currency) => setActiveCurrency(currency)}
+          options={configuredCurrencies.map((currency) => ({ value: currency, label: currency }))}
+          aria-label={t('currency_tabs_label')}
+        />
+        {activeCurrency !== 'SEK' && (
+          <SettingsRowNote>
+            {t('foreign_account_hint', { currency: activeCurrency })}
+          </SettingsRowNote>
+        )}
+        {activeCurrency !== 'SEK' && (
+          <SettingsRowEnd>
+            <button
+              type="button"
+              onClick={removeActiveCurrency}
+              className="text-xs text-muted-foreground transition-colors duration-150 hover:text-destructive"
+            >
+              {t('remove_currency')}
+            </button>
+          </SettingsRowEnd>
+        )}
+      </SettingsRow>
 
       {availableCurrencies.length > 0 && (
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <div className="w-full space-y-2 sm:max-w-52">
-            <Label>{t('add_currency_label')}</Label>
-            <Select
-              value={currencyToAdd}
-              onValueChange={(next) => setCurrencyToAdd(next as Currency)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder={t('add_currency_placeholder')} />
-              </SelectTrigger>
-              <SelectContent>
-                {availableCurrencies.map((currency) => (
-                  <SelectItem key={currency} value={currency}>{currency}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <Button type="button" variant="outline" onClick={addCurrency} disabled={!currencyToAdd}>
+        <SettingsRow label={t('add_currency_label')}>
+          <SettingsSelect
+            value={currencyToAdd}
+            onChange={(event) => setCurrencyToAdd(event.target.value as Currency | '')}
+            aria-label={t('add_currency_label')}
+          >
+            <option value="">{t('add_currency_placeholder')}</option>
+            {availableCurrencies.map((currency) => (
+              <option key={currency} value={currency}>{currency}</option>
+            ))}
+          </SettingsSelect>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={addCurrency}
+            disabled={!currencyToAdd}
+          >
             {t('add_currency')}
           </Button>
-        </div>
+        </SettingsRow>
       )}
 
-      <div className="space-y-4 rounded-lg border border-border p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <h3 className="font-medium">{t('account_heading', { currency: activeCurrency })}</h3>
-            {activeCurrency !== 'SEK' && (
-              <p className="text-xs text-muted-foreground">{t('foreign_account_hint')}</p>
-            )}
-          </div>
-          {activeCurrency !== 'SEK' && (
-            <Button type="button" variant="ghost" size="sm" onClick={removeActiveCurrency}>
-              {t('remove_currency')}
-            </Button>
-          )}
+      <SettingsRow label={t('bank_label')}>
+        {/* Typeahead combobox stays boxed on purpose: it is a picker, not a field. */}
+        <div className="min-w-0 flex-1 sm:max-w-64">
+          <BankNameCombobox
+            value={value(activeAccount, 'bank_name')}
+            onChange={(next) => updateField('bank_name', next)}
+            enableBankingEnabled={hasBankingExtension}
+          />
         </div>
+      </SettingsRow>
+      <SettingsRow
+        label={t('clearing_label')}
+        htmlFor={`payment-clearing-${activeCurrency}`}
+        align="baseline"
+      >
+        <SettingsInput
+          id={`payment-clearing-${activeCurrency}`}
+          inputMode="numeric"
+          maxLength={5}
+          value={value(activeAccount, 'clearing_number')}
+          onChange={(event) => updateField('clearing_number', event.target.value.replace(/\D/g, ''))}
+          className="max-w-24 flex-none tabular-nums"
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={t('account_number_label')}
+        htmlFor={`payment-account-${activeCurrency}`}
+        align="baseline"
+      >
+        <SettingsInput
+          id={`payment-account-${activeCurrency}`}
+          inputMode="numeric"
+          maxLength={12}
+          value={value(activeAccount, 'account_number')}
+          onChange={(event) => updateField('account_number', event.target.value.replace(/\D/g, ''))}
+          className="max-w-40 flex-none tabular-nums"
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={t('bankgiro_label')}
+        htmlFor={`payment-bankgiro-${activeCurrency}`}
+        align="baseline"
+      >
+        <SettingsInput
+          id={`payment-bankgiro-${activeCurrency}`}
+          value={value(activeAccount, 'bankgiro')}
+          onChange={(event) => updateField('bankgiro', event.target.value)}
+          className="max-w-40 flex-none tabular-nums"
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={t('plusgiro_label')}
+        htmlFor={`payment-plusgiro-${activeCurrency}`}
+        align="baseline"
+      >
+        <SettingsInput
+          id={`payment-plusgiro-${activeCurrency}`}
+          value={value(activeAccount, 'plusgiro')}
+          onChange={(event) => updateField('plusgiro', event.target.value)}
+          className="max-w-40 flex-none tabular-nums"
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={t('swish_label')}
+        htmlFor={`payment-swish-${activeCurrency}`}
+        align="baseline"
+      >
+        <SettingsInput
+          id={`payment-swish-${activeCurrency}`}
+          value={value(activeAccount, 'swish')}
+          onChange={(event) => updateField('swish', event.target.value)}
+          className="max-w-40 flex-none tabular-nums"
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={
+          activeCurrency !== 'SEK'
+            ? `${t('iban_label')} ${t('required_suffix')}`
+            : t('iban_label')
+        }
+        htmlFor={`payment-iban-${activeCurrency}`}
+        align="baseline"
+      >
+        <SettingsInput
+          id={`payment-iban-${activeCurrency}`}
+          value={value(activeAccount, 'iban')}
+          onChange={(event) => updateField('iban', event.target.value.toUpperCase())}
+          placeholder="SE00 0000 0000 0000 0000 0000"
+          className="tabular-nums"
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={t('bic_label')}
+        htmlFor={`payment-bic-${activeCurrency}`}
+        align="baseline"
+      >
+        <SettingsInput
+          id={`payment-bic-${activeCurrency}`}
+          maxLength={11}
+          value={value(activeAccount, 'bic')}
+          onChange={(event) => updateField('bic', event.target.value.toUpperCase())}
+          className="max-w-32 flex-none tabular-nums"
+        />
+      </SettingsRow>
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div className="space-y-2">
-            <Label>{t('bank_label')}</Label>
-            <BankNameCombobox
-              value={value(activeAccount, 'bank_name')}
-              onChange={(next) => updateField('bank_name', next)}
-              enableBankingEnabled={hasBankingExtension}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor={`payment-clearing-${activeCurrency}`}>{t('clearing_label')}</Label>
-            <Input
-              id={`payment-clearing-${activeCurrency}`}
-              inputMode="numeric"
-              maxLength={5}
-              value={value(activeAccount, 'clearing_number')}
-              onChange={(event) => updateField('clearing_number', event.target.value.replace(/\D/g, ''))}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor={`payment-account-${activeCurrency}`}>{t('account_number_label')}</Label>
-            <Input
-              id={`payment-account-${activeCurrency}`}
-              inputMode="numeric"
-              maxLength={12}
-              value={value(activeAccount, 'account_number')}
-              onChange={(event) => updateField('account_number', event.target.value.replace(/\D/g, ''))}
-            />
-          </div>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div className="space-y-2">
-            <Label htmlFor={`payment-bankgiro-${activeCurrency}`}>{t('bankgiro_label')}</Label>
-            <Input
-              id={`payment-bankgiro-${activeCurrency}`}
-              value={value(activeAccount, 'bankgiro')}
-              onChange={(event) => updateField('bankgiro', event.target.value)}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor={`payment-plusgiro-${activeCurrency}`}>{t('plusgiro_label')}</Label>
-            <Input
-              id={`payment-plusgiro-${activeCurrency}`}
-              value={value(activeAccount, 'plusgiro')}
-              onChange={(event) => updateField('plusgiro', event.target.value)}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor={`payment-swish-${activeCurrency}`}>{t('swish_label')}</Label>
-            <Input
-              id={`payment-swish-${activeCurrency}`}
-              value={value(activeAccount, 'swish')}
-              onChange={(event) => updateField('swish', event.target.value)}
-            />
-          </div>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div className="space-y-2 sm:col-span-2">
-            <Label htmlFor={`payment-iban-${activeCurrency}`}>
-              {t('iban_label')}{activeCurrency !== 'SEK' ? ` ${t('required_suffix')}` : ''}
-            </Label>
-            <Input
-              id={`payment-iban-${activeCurrency}`}
-              value={value(activeAccount, 'iban')}
-              onChange={(event) => updateField('iban', event.target.value.toUpperCase())}
-              placeholder="SE00 0000 0000 0000 0000 0000"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor={`payment-bic-${activeCurrency}`}>{t('bic_label')}</Label>
-            <Input
-              id={`payment-bic-${activeCurrency}`}
-              maxLength={11}
-              value={value(activeAccount, 'bic')}
-              onChange={(event) => updateField('bic', event.target.value.toUpperCase())}
-            />
-          </div>
-        </div>
-      </div>
-
-      <div className="flex justify-end">
-        <Button type="button" onClick={save} disabled={isSaving || hasExternalUpdate}>
+      <div className="flex justify-end px-1 pt-4">
+        <Button type="button" size="sm" onClick={save} disabled={isSaving || hasExternalUpdate}>
           {isSaving ? t('saving') : t('save')}
         </Button>
       </div>
-    </section>
+    </SettingsGroup>
   )
 }

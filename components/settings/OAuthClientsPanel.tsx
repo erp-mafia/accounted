@@ -2,7 +2,6 @@
 
 import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,7 +15,10 @@ import {
 } from '@/components/ui/dialog'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { EmptyState } from '@/components/ui/empty-state'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
+import { SettingsGroup } from '@/components/settings/SettingsRows'
+import { formatDateLong } from '@/lib/utils'
 import { Loader2, Plus, Trash2, Globe } from 'lucide-react'
 
 interface OAuthClient {
@@ -111,75 +113,61 @@ export function OAuthClientsPanel() {
     }
   }
 
-  function formatDate(iso: string) {
-    return new Date(iso).toLocaleDateString('sv-SE', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
-  }
-
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-base">{t('title')}</CardTitle>
-              <CardDescription>
-                {t('description')}
-              </CardDescription>
-            </div>
-            <Button size="sm" onClick={() => setShowCreateDialog(true)}>
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              {t('register_uri')}
-            </Button>
+    <>
+      <SettingsGroup>
+        {/* Group eyebrow with the group's primary action on the right. Styling
+            mirrors SettingsGroup's label line; the "?" holds the old panel
+            description. */}
+        <div className="flex items-center justify-between gap-4 px-1">
+          <p className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            <span>{t('title')}</span>
+            <HelpPopover className="shrink-0">{t('description')}</HelpPopover>
+          </p>
+          <Button size="sm" onClick={() => setShowCreateDialog(true)}>
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            {t('register_uri')}
+          </Button>
+        </div>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        ) : clients.length === 0 ? (
+          <EmptyState
+            icon={Globe}
+            title={t('empty_title')}
+            description={t('empty_help')}
+          />
+        ) : (
+          clients.map((c) => (
+            <div
+              key={c.id}
+              className="flex items-center gap-3 border-b border-border px-1 py-3"
+            >
+              <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className="truncate text-sm">{c.client_name}</span>
+                <code className="min-w-0 truncate font-mono text-xs text-muted-foreground">
+                  {c.redirect_uri}
+                </code>
+                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                  {t('registered_on')} {formatDateLong(c.created_at)}
+                </span>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                onClick={() => handleRevoke(c.id, c.client_name)}
+                aria-label={t('revoke_aria', { name: c.client_name })}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
             </div>
-          ) : clients.length === 0 ? (
-            <EmptyState
-              icon={Globe}
-              title={t('empty_title')}
-              description={t('empty_help')}
-            />
-          ) : (
-            <div className="space-y-3">
-              {clients.map((c) => (
-                <div
-                  key={c.id}
-                  className="flex items-center justify-between rounded-md border px-4 py-3"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium truncate">{c.client_name}</p>
-                    <div className="flex items-center gap-3 mt-1">
-                      <code className="text-xs text-muted-foreground font-mono truncate">
-                        {c.redirect_uri}
-                      </code>
-                      <span className="text-xs text-muted-foreground whitespace-nowrap">
-                        {t('registered_on')} {formatDate(c.created_at)}
-                      </span>
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleRevoke(c.id, c.client_name)}
-                    aria-label={t('revoke_aria', { name: c.client_name })}
-                    className="text-destructive hover:text-destructive"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+          ))
+        )}
+      </SettingsGroup>
 
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
         <DialogContent>
@@ -227,6 +215,6 @@ export function OAuthClientsPanel() {
       </Dialog>
 
       <DestructiveConfirmDialog {...revokeDialogProps} />
-    </div>
+    </>
   )
 }

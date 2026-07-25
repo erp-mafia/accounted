@@ -2,7 +2,6 @@
 
 import { useTranslations } from 'next-intl'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
@@ -10,6 +9,12 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { isAllowedSkvPopupOrigin } from '@/lib/skatteverket/popup-origin'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
+} from '@/components/settings/SettingsRows'
 import { CheckCircle2, ExternalLink, Loader2, ShieldOff, FlaskConical, ShieldAlert } from 'lucide-react'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -29,12 +34,21 @@ type Status =
       disabled?: boolean
     }
 
+/** Live warning inside a settings group: one warning-tone line, no banner. */
+function WarningLine({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="border-b border-border px-1 py-3 text-[12.5px] leading-relaxed text-attn">
+      {children}
+    </p>
+  )
+}
+
 export function SkatteverketConnectPanel() {
   return (
-    <div className="space-y-4">
+    <>
       <SkatteverketPersonalConnectionCard />
       <SkatteverketSystemConnectionCard />
-    </div>
+    </>
   )
 }
 
@@ -83,9 +97,10 @@ function SkatteverketPersonalConnectionCard() {
     agd: t('scope_agd'),
   }
 
-  // Only the first load blanks the card to the loading state: later refetches
-  // (postMessage, closed-tab watcher, delayed sync refetch, visibility) update
-  // in the background so the panel doesn't flash on every signal.
+  // Only the first load blanks the section to the loading state: later
+  // refetches (postMessage, closed-tab watcher, delayed sync refetch,
+  // visibility) update in the background so the panel doesn't flash on every
+  // signal.
   const hasLoadedRef = useRef(false)
   const loadStatus = useCallback(async () => {
     if (!hasLoadedRef.current) setLoading(true)
@@ -236,64 +251,61 @@ function SkatteverketPersonalConnectionCard() {
     }
   }
 
+  // Static connect guidance lives behind the "?": what the connection is
+  // used for, plus the consent-page instructions ("godkänn alla
+  // behörigheter", the ska/skahmst explainer). The consent notes only matter
+  // when the user can actually reach the consent page: hidden while the
+  // feature is entitlement-gated.
+  const connectHelp = (
+    <div className="space-y-2">
+      <p>{t('connect_intro')}</p>
+      {hasSkatteverket && (
+        <>
+          <p>{t('connect_approve_all')}</p>
+          <p>
+            {t.rich('skahmst_note', {
+              code: (chunks) => <span className="font-mono">{chunks}</span>,
+            })}
+          </p>
+        </>
+      )}
+    </div>
+  )
+
   if (loading) {
     return (
-      <Card>
-        <CardContent className="py-8 text-sm text-muted-foreground">
-          {t('loading_status')}
-        </CardContent>
-      </Card>
+      <SettingsGroup>
+        <SettingsRow label={t('title')} help={connectHelp} borderless>
+          <SettingsRowNote>{t('loading_status')}</SettingsRowNote>
+        </SettingsRow>
+      </SettingsGroup>
     )
   }
 
   if (!status?.connected) {
     return (
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base">{t('title')}</CardTitle>
-            <EnvironmentBadge environment={status?.environment} disabled={status?.disabled} />
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {status?.disabled && (
-            <div className="flex gap-2 rounded-md border border-border bg-secondary/40 p-3 text-sm text-foreground">
-              <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-              <p>{t('disabled_message')}</p>
-            </div>
-          )}
-          <p className="text-sm text-muted-foreground">
-            {t('connect_intro')}
-          </p>
-          {/* The consent-page notes only matter when the user can actually
-              reach that page: hidden while the feature is gated. */}
-          {hasSkatteverket && (
-            <div className="space-y-2 rounded-md border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
-              {/* Pre-empt the most common broken connect: a behörighet left
-                  unticked on SKV's consent page. Before this note the
-                  "godkänn alla" guidance only appeared AFTER a failed
-                  attempt (missing_scope_message). */}
-              <p className="text-foreground">{t('connect_approve_all')}</p>
-              <p>
-                {t.rich('skahmst_note', {
-                  code: (chunks) => <span className="font-mono">{chunks}</span>,
-                })}
-              </p>
-            </div>
-          )}
-          {!hasSkatteverket && (
+      <SettingsGroup>
+        {status?.disabled && <WarningLine>{t('disabled_message')}</WarningLine>}
+        <SettingsRow label={t('title')} help={connectHelp} borderless={!hasSkatteverket}>
+          <EnvironmentBadge environment={status?.environment} disabled={status?.disabled} />
+          <SettingsRowEnd>
+            <Button
+              size="sm"
+              onClick={startConnect}
+              disabled={status?.disabled || !hasSkatteverket || connecting}
+              title={!hasSkatteverket ? 'Anslutning till Skatteverket kräver ett abonnemang' : undefined}
+            >
+              <ExternalLink className="mr-2 h-4 w-4" />
+              {connecting ? t('connect_waiting') : t('connect_with_bankid')}
+            </Button>
+          </SettingsRowEnd>
+        </SettingsRow>
+        {!hasSkatteverket && (
+          <div className="px-1 py-3">
             <UpgradeNote>Anslutning till Skatteverket kräver ett abonnemang.</UpgradeNote>
-          )}
-          <Button
-            onClick={startConnect}
-            disabled={status?.disabled || !hasSkatteverket || connecting}
-            title={!hasSkatteverket ? 'Anslutning till Skatteverket kräver ett abonnemang' : undefined}
-          >
-            <ExternalLink className="mr-2 h-4 w-4" />
-            {connecting ? t('connect_waiting') : t('connect_with_bankid')}
-          </Button>
-        </CardContent>
-      </Card>
+          </div>
+        )}
+      </SettingsGroup>
     )
   }
 
@@ -304,95 +316,35 @@ function SkatteverketPersonalConnectionCard() {
   )
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2 text-base">
-            {t('title')}
-            {status.expired ? (
-              <Badge variant="destructive">{t('expired')}</Badge>
-            ) : (
-              <Badge variant="secondary">
-                <CheckCircle2 className="mr-1 h-3 w-3" />
-                {t('connected')}
-              </Badge>
-            )}
-          </CardTitle>
-          <EnvironmentBadge environment={status.environment} disabled={status.disabled} />
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {status.needsReconsent && (
-          <div className="flex gap-2 rounded-md border border-border bg-secondary/40 p-3 text-sm text-foreground">
-            <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-            {/* MISSING_SCOPE right after a connect means the user skipped a
-                behörighet on SKV's consent page; tell them exactly that
-                instead of the generic "session expired" prompt. */}
-            <p>
-              {status.lastErrorCode === 'MISSING_SCOPE'
-                ? t('missing_scope_message')
-                : t('needs_reconsent_message')}
-            </p>
-          </div>
+    <SettingsGroup>
+      {status.needsReconsent && (
+        <WarningLine>
+          {/* MISSING_SCOPE right after a connect means the user skipped a
+              behörighet on SKV's consent page; tell them exactly that
+              instead of the generic "session expired" prompt. */}
+          {status.lastErrorCode === 'MISSING_SCOPE'
+            ? t('missing_scope_message')
+            : t('needs_reconsent_message')}
+        </WarningLine>
+      )}
+
+      <SettingsRow label={t('title')} help={connectHelp}>
+        {status.expired ? (
+          <Badge variant="warning">{t('expired')}</Badge>
+        ) : (
+          <Badge variant="success">
+            <CheckCircle2 className="mr-1 h-3 w-3" />
+            {t('connected')}
+          </Badge>
         )}
-        <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-          <div>
-            <dt className="text-muted-foreground">{t('token_expires_label')}</dt>
-            <dd className="font-medium tabular-nums">
-              {expiresAtDate.toLocaleString('sv-SE')}
-              {!status.expired && expiresInMinutes > 0 && (
-                <span className="ml-2 text-muted-foreground">
-                  {t('expires_in_minutes', { minutes: expiresInMinutes })}
-                </span>
-              )}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-muted-foreground">{t('refresh_label')}</dt>
-            <dd className="font-medium">
-              {status.canRefresh ? t('refresh_auto') : t('refresh_exhausted')}
-            </dd>
-          </div>
-        </dl>
-
-        <div>
-          <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
-            {t('permissions_label')}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {scopes.map(s => (
-              <Badge key={s} variant="outline">
-                {SCOPE_LABELS[s] ?? s}
-              </Badge>
-            ))}
-          </div>
-          {/* `ska` is the scope the interactive skattekonto API enforces;
-              skahmst (bulk E-transport service) does not substitute for it. */}
-          {!scopes.includes('ska') && (
-            <p className="mt-3 text-sm text-foreground">
-              {t('missing_skattekonto')}
-            </p>
-          )}
-          {!scopes.includes('agd') && (
-            <p className="mt-3 text-sm text-foreground">
-              {t('missing_agd')}
-            </p>
-          )}
-        </div>
-
-        {status.disabled && (
-          <div className="flex gap-2 rounded-md border border-border bg-secondary/40 p-3 text-sm text-foreground">
-            <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-            <p>{t('disabled_filings_message')}</p>
-          </div>
-        )}
-
-        <div className="flex gap-2 pt-2">
+        <EnvironmentBadge environment={status.environment} disabled={status.disabled} />
+        <SettingsRowEnd>
           {/* `ska` gates the interactive skattekonto API (saldo +
               transaktioner); a grant without it cannot sync, so offer the
               reconnect even while the token is otherwise healthy. */}
           {(status.expired || status.needsReconsent || !status.canRefresh || !scopes.includes('ska') || !scopes.includes('agd')) && (
             <Button
+              size="sm"
               onClick={startConnect}
               disabled={status.disabled || !hasSkatteverket || connecting}
               title={!hasSkatteverket ? 'Anslutning till Skatteverket kräver ett abonnemang' : undefined}
@@ -403,15 +355,48 @@ function SkatteverketPersonalConnectionCard() {
           )}
           <Button
             variant="outline"
+            size="sm"
             onClick={disconnect}
             disabled={disconnecting || connecting}
           >
             <ShieldOff className="mr-2 h-4 w-4" />
             {disconnecting ? t('disconnecting') : t('disconnect')}
           </Button>
+        </SettingsRowEnd>
+      </SettingsRow>
+
+      <SettingsRow label={t('token_expires_label')}>
+        <SettingsRowNote className="tabular-nums">
+          {expiresAtDate.toLocaleString('sv-SE')}
+          {!status.expired && expiresInMinutes > 0 && (
+            <> {t('expires_in_minutes', { minutes: expiresInMinutes })}</>
+          )}
+        </SettingsRowNote>
+      </SettingsRow>
+
+      <SettingsRow label={t('refresh_label')}>
+        <SettingsRowNote>
+          {status.canRefresh ? t('refresh_auto') : t('refresh_exhausted')}
+        </SettingsRowNote>
+      </SettingsRow>
+
+      <SettingsRow label={t('permissions_label')}>
+        <div className="flex flex-wrap gap-2">
+          {scopes.map(s => (
+            <Badge key={s} variant="outline">
+              {SCOPE_LABELS[s] ?? s}
+            </Badge>
+          ))}
         </div>
-      </CardContent>
-    </Card>
+      </SettingsRow>
+
+      {/* `ska` is the scope the interactive skattekonto API enforces;
+          skahmst (bulk E-transport service) does not substitute for it.
+          Missing scopes are actionable state: keep them visible. */}
+      {!scopes.includes('ska') && <WarningLine>{t('missing_skattekonto')}</WarningLine>}
+      {!scopes.includes('agd') && <WarningLine>{t('missing_agd')}</WarningLine>}
+      {status.disabled && <WarningLine>{t('disabled_filings_message')}</WarningLine>}
+    </SettingsGroup>
   )
 }
 
@@ -510,54 +495,44 @@ function SkatteverketSystemConnectionCard() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">{t('system_title')}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">{t('system_intro')}</p>
+    <SettingsGroup label={t('system_title')} help={t('system_intro')}>
+      {state.ombud_org_number && (
+        <SettingsRow label={t('system_org_label')}>
+          <span className="font-mono text-sm tabular-nums">{state.ombud_org_number}</span>
+        </SettingsRow>
+      )}
 
-        {state.ombud_org_number && (
-          <div className="rounded-md border border-border bg-secondary/40 p-3 text-sm">
-            <p className="text-muted-foreground">{t('system_org_label')}</p>
-            <p className="font-mono font-medium tabular-nums">{state.ombud_org_number}</p>
-          </div>
+      <SettingsRow label={t('system_behorighet_lasombud')}>
+        {grantBadge(state.connection?.lasombud_status)}
+      </SettingsRow>
+      <SettingsRow label={t('system_behorighet_moms')}>
+        {grantBadge(state.connection?.moms_ombud_status)}
+      </SettingsRow>
+
+      {state.cert?.expiresSoon && (
+        <WarningLine>
+          {t('system_cert_expires_soon', { days: state.cert.daysUntilExpiry })}
+        </WarningLine>
+      )}
+
+      <div className="flex flex-wrap items-center gap-4 px-1 py-3">
+        {state.grant_url && (
+          <a
+            href={state.grant_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors duration-150 hover:text-foreground"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            {t('system_open_ombud')}
+          </a>
         )}
-
-        <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-          <div className="flex items-center justify-between gap-2 rounded-md border border-border p-3">
-            <span>{t('system_behorighet_lasombud')}</span>
-            {grantBadge(state.connection?.lasombud_status)}
-          </div>
-          <div className="flex items-center justify-between gap-2 rounded-md border border-border p-3">
-            <span>{t('system_behorighet_moms')}</span>
-            {grantBadge(state.connection?.moms_ombud_status)}
-          </div>
-        </div>
-
-        {state.cert?.expiresSoon && (
-          <div className="flex gap-2 rounded-md border border-border bg-secondary/40 p-3 text-sm text-foreground">
-            <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-            <p>{t('system_cert_expires_soon', { days: state.cert.daysUntilExpiry })}</p>
-          </div>
-        )}
-
-        <div className="flex flex-wrap gap-2 pt-1">
-          {state.grant_url && (
-            <Button variant="outline" asChild>
-              <a href={state.grant_url} target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="mr-2 h-4 w-4" />
-                {t('system_open_ombud')}
-              </a>
-            </Button>
-          )}
-          <Button onClick={verify} disabled={verifying}>
-            {verifying && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {verifying ? t('system_verifying') : t('system_verify')}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+        <Button size="sm" onClick={verify} disabled={verifying}>
+          {verifying && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {verifying ? t('system_verifying') : t('system_verify')}
+        </Button>
+      </div>
+    </SettingsGroup>
   )
 }
 

@@ -1,9 +1,10 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { formatDate, formatDateLong } from '@/lib/utils'
+import { formatDate } from '@/lib/utils'
+import { SettingsRow, SettingsRowNote } from '@/components/settings/SettingsRows'
 
 // Read-only "Bolagsuppgifter" view of the cached TIC company profile
-// (companies.tic_snapshot). Lives in core: reads the snapshot as plain
+// (companies.tic_snapshot), rendered as flat settings rows inside the
+// section's SettingsGroup. Lives in core: reads the snapshot as plain
 // JSON rather than importing the TIC extension's types, so the
 // core-build CI boundary (no core → @/extensions/) stays intact.
 //
@@ -65,37 +66,14 @@ function cleanSignatory(raw: string): string[] {
     .filter((s) => s.length > 0)
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-2">
-        {title}
-      </h2>
-      {children}
-    </section>
-  )
-}
-
-export function CompanyProfileView({
-  snapshot,
-  fetchedAt,
-}: {
-  snapshot: SnapshotShape | null
-  fetchedAt: string | null
-}) {
+export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | null }) {
   if (!snapshot) {
+    // Dynamic status (nothing fetched yet): stays visible as a quiet line.
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Bolagsuppgifter</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            Inga företagsuppgifter hämtade ännu. Uppgifterna hämtas automatiskt
-            från Bolagsverket via organisationsnumret.
-          </p>
-        </CardContent>
-      </Card>
+      <p className="border-b border-border px-1 py-3 text-sm text-muted-foreground">
+        Inga företagsuppgifter hämtade ännu. Uppgifterna hämtas automatiskt
+        från Bolagsverket via organisationsnumret.
+      </p>
     )
   }
 
@@ -118,164 +96,156 @@ export function CompanyProfileView({
       ? `${snapshot.fiscalYear.startMonthDay} till ${snapshot.fiscalYear.endMonthDay}`
       : null
 
+  // Only show dated status entries: Bolagsverket emits informational
+  // flags like "Har aldrig varit verksam" with no date that read as
+  // noise next to the real ones. Plain text, no colour: per the
+  // design system, semantic colour is data-only and never chrome.
+  const datedStatuses = (snapshot.statuses ?? []).filter((s) => s.statusDate)
+
+  // Flatten every signatory row, clean ">" markers, split run-on
+  // clauses, and dedupe: the source repeats "Firman tecknas av
+  // styrelsen" across rows.
+  const signatoryRules = Array.from(
+    new Set(
+      (snapshot.signatory ?? []).flatMap((s) => cleanSignatory(s.description)),
+    ),
+  )
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Bolagsuppgifter</CardTitle>
-        {fetchedAt && (
-          <p className="text-xs text-muted-foreground">
-            Uppdaterad {formatDateLong(fetchedAt)}
-          </p>
-        )}
-      </CardHeader>
-      <CardContent className="space-y-8">
-        {/* Identity */}
-        <div>
-          <p className="font-display text-xl tracking-tight">
-            {snapshot.companyName ?? 'Okänt företag'}
-          </p>
-          <p className="text-sm text-muted-foreground tabular-nums">
+    <>
+      <SettingsRow label="Företag">
+        <span className="text-foreground">{snapshot.companyName ?? 'Okänt företag'}</span>
+        {(snapshot.orgNumber || entityLabel) && (
+          <SettingsRowNote className="tabular-nums">
             {[snapshot.orgNumber, entityLabel].filter(Boolean).join(' · ')}
-          </p>
-          {snapshot.address && (
-            <p className="text-sm text-muted-foreground mt-2">
-              {[
-                snapshot.address.street,
-                [snapshot.address.postalCode, snapshot.address.city].filter(Boolean).join(' '),
-              ]
-                .filter(Boolean)
-                .join(', ')}
-            </p>
-          )}
-        </div>
-
-        {regBadges.length > 0 && (
-          <Section title="Registrerat för">
-            <div className="flex flex-wrap gap-2">
-              {regBadges.map((b) => (
-                <Badge key={b} variant="secondary" className="font-normal">{b}</Badge>
-              ))}
-            </div>
-          </Section>
+          </SettingsRowNote>
         )}
+      </SettingsRow>
 
-        {Array.isArray(snapshot.sniCodes) && snapshot.sniCodes.length > 0 && (
-          <Section title="SNI-koder">
-            <ul className="space-y-1">
-              {snapshot.sniCodes.map((s) => (
-                <li key={s.code} className="text-sm tabular-nums">
-                  <span className="text-foreground">{s.code}</span>{' '}
-                  <span className="text-muted-foreground">{s.name}</span>
-                </li>
-              ))}
-            </ul>
-          </Section>
-        )}
+      {snapshot.address && (
+        <SettingsRow label="Adress">
+          <span className="text-muted-foreground">
+            {[
+              snapshot.address.street,
+              [snapshot.address.postalCode, snapshot.address.city].filter(Boolean).join(' '),
+            ]
+              .filter(Boolean)
+              .join(', ')}
+          </span>
+        </SettingsRow>
+      )}
 
-        {Array.isArray(snapshot.bankAccounts) && snapshot.bankAccounts.length > 0 && (
-          <Section title="Bankuppgifter">
-            <ul className="space-y-1">
-              {snapshot.bankAccounts.map((b, i) => (
-                <li key={`${b.type}-${b.accountNumber}-${i}`} className="text-sm tabular-nums">
-                  <span className="text-muted-foreground">{b.type}:</span>{' '}
-                  <span className="text-foreground">{b.accountNumber}</span>
-                </li>
-              ))}
-            </ul>
-          </Section>
-        )}
+      {regBadges.length > 0 && (
+        <SettingsRow label="Registrerat för">
+          {regBadges.map((b) => (
+            <Badge key={b} variant="secondary" className="font-normal">{b}</Badge>
+          ))}
+        </SettingsRow>
+      )}
 
-        {snapshot.purpose && (
-          <Section title="Verksamhet">
-            <p className="text-sm leading-6 text-muted-foreground">{snapshot.purpose}</p>
-          </Section>
-        )}
+      {Array.isArray(snapshot.sniCodes) && snapshot.sniCodes.length > 0 && (
+        <SettingsRow label="SNI-koder" align="baseline">
+          <ul className="w-full space-y-1">
+            {snapshot.sniCodes.map((s) => (
+              <li key={s.code} className="text-sm tabular-nums">
+                <span className="text-foreground">{s.code}</span>{' '}
+                <span className="text-muted-foreground">{s.name}</span>
+              </li>
+            ))}
+          </ul>
+        </SettingsRow>
+      )}
 
-        <Section title="Anställda">
-          <p className="text-sm text-muted-foreground">
-            {snapshot.employeeRange ?? 'Inga anställda'}
-          </p>
-        </Section>
+      {Array.isArray(snapshot.bankAccounts) && snapshot.bankAccounts.length > 0 && (
+        <SettingsRow label="Bankuppgifter" align="baseline">
+          <ul className="w-full space-y-1">
+            {snapshot.bankAccounts.map((b, i) => (
+              <li key={`${b.type}-${b.accountNumber}-${i}`} className="text-sm tabular-nums">
+                <span className="text-muted-foreground">{b.type}:</span>{' '}
+                <span className="text-foreground">{b.accountNumber}</span>
+              </li>
+            ))}
+          </ul>
+        </SettingsRow>
+      )}
 
-        <Section title="Senaste bokslut">
-          {snapshot.financials ? (
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-              <dt className="text-muted-foreground">Nettoomsättning</dt>
-              <dd className="text-right tabular-nums">
+      {snapshot.purpose && (
+        <SettingsRow label="Verksamhet" align="baseline">
+          <p className="text-sm leading-6 text-muted-foreground">{snapshot.purpose}</p>
+        </SettingsRow>
+      )}
+
+      <SettingsRow label="Anställda">
+        <span className="text-muted-foreground">
+          {snapshot.employeeRange ?? 'Inga anställda'}
+        </span>
+      </SettingsRow>
+
+      <SettingsRow label="Senaste bokslut">
+        {snapshot.financials ? (
+          <>
+            <span>
+              <span className="text-muted-foreground">Nettoomsättning </span>
+              <span className="tabular-nums">
                 {snapshot.financials.netSalesK != null
                   ? `${snapshot.financials.netSalesK.toLocaleString('sv-SE')} tkr`
                   : '-'}
-              </dd>
-              <dt className="text-muted-foreground">Rörelseresultat</dt>
-              <dd className="text-right tabular-nums">
+              </span>
+            </span>
+            <span>
+              <span className="text-muted-foreground">Rörelseresultat </span>
+              <span className="tabular-nums">
                 {snapshot.financials.operatingProfitK != null
                   ? `${snapshot.financials.operatingProfitK.toLocaleString('sv-SE')} tkr`
                   : '-'}
-              </dd>
-            </dl>
-          ) : (
-            <p className="text-sm text-muted-foreground">Inga finansiella uppgifter tillgängliga.</p>
-          )}
-        </Section>
-
-        {(() => {
-          // Only show dated status entries: Bolagsverket emits informational
-          // flags like "Har aldrig varit verksam" with no date that read as
-          // noise next to the real ones. Plain text, no colour: per the
-          // design system, semantic colour is data-only and never chrome.
-          const datedStatuses = (snapshot.statuses ?? []).filter((s) => s.statusDate)
-          if (datedStatuses.length === 0) return null
-          return (
-            <Section title="Status">
-              <dl className="space-y-1">
-                {datedStatuses.map((s, i) => (
-                  <div key={`${s.code}-${i}`} className="flex items-center justify-between gap-3 text-sm">
-                    <dt className={s.isCeased ? 'text-destructive' : 'text-foreground'}>
-                      {s.description ?? s.code ?? '-'}
-                    </dt>
-                    <dd className="text-xs text-muted-foreground tabular-nums">
-                      {formatDate(s.statusDate!)}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            </Section>
-          )
-        })()}
-
-        {fyLabel && (
-          <Section title="Räkenskapsår">
-            <p className="text-sm tabular-nums text-muted-foreground">Nuvarande: {fyLabel}</p>
-          </Section>
+              </span>
+            </span>
+          </>
+        ) : (
+          <span className="text-muted-foreground">Inga finansiella uppgifter tillgängliga.</span>
         )}
+      </SettingsRow>
 
-        {(() => {
-          // Flatten every signatory row, clean ">" markers, split run-on
-          // clauses, and dedupe: the source repeats "Firman tecknas av
-          // styrelsen" across rows.
-          const rules = Array.from(
-            new Set(
-              (snapshot.signatory ?? []).flatMap((s) => cleanSignatory(s.description)),
-            ),
-          )
-          if (rules.length === 0) return null
-          return (
-            <Section title="Firmateckning">
-              <ul className="space-y-1.5">
-                {rules.map((rule, i) => (
-                  <li key={i} className="text-sm leading-6 text-muted-foreground">
-                    {rule}
-                  </li>
-                ))}
-              </ul>
-            </Section>
-          )
-        })()}
+      {datedStatuses.length > 0 && (
+        <SettingsRow label="Status" align="baseline">
+          <dl className="w-full space-y-1">
+            {datedStatuses.map((s, i) => (
+              <div key={`${s.code}-${i}`} className="flex items-center justify-between gap-3 text-sm">
+                <dt className={s.isCeased ? 'text-destructive' : 'text-foreground'}>
+                  {s.description ?? s.code ?? '-'}
+                </dt>
+                <dd className="text-xs text-muted-foreground tabular-nums">
+                  {formatDate(s.statusDate!)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </SettingsRow>
+      )}
 
-        {Array.isArray(snapshot.representatives) && snapshot.representatives.length > 0 && (
-          <Section title="Företrädare">
+      {fyLabel && (
+        <SettingsRow label="Räkenskapsår">
+          <span className="tabular-nums text-muted-foreground">Nuvarande: {fyLabel}</span>
+        </SettingsRow>
+      )}
+
+      {signatoryRules.length > 0 && (
+        <SettingsRow label="Firmateckning" align="baseline">
+          <ul className="w-full space-y-1">
+            {signatoryRules.map((rule, i) => (
+              <li key={i} className="text-sm leading-6 text-muted-foreground">
+                {rule}
+              </li>
+            ))}
+          </ul>
+        </SettingsRow>
+      )}
+
+      {Array.isArray(snapshot.representatives) && snapshot.representatives.length > 0 && (
+        <SettingsRow label="Företrädare" align="baseline">
+          <div className="w-full">
             {snapshot.board && (
-              <p className="text-xs text-muted-foreground mb-2">
+              <p className="mb-2 text-xs text-muted-foreground">
                 {[
                   snapshot.board.numberOfBoardMembers != null
                     ? `${snapshot.board.numberOfBoardMembers} styrelseledamot/-ledamöter`
@@ -292,7 +262,7 @@ export function CompanyProfileView({
               {snapshot.representatives.map((r, i) => (
                 <li key={`${r.name}-${i}`} className="flex items-center justify-between gap-3 text-sm">
                   <span className="text-foreground">{r.name ?? '-'}</span>
-                  <span className="text-xs text-muted-foreground text-right">
+                  <span className="text-right text-xs text-muted-foreground">
                     {[r.positionType, r.positionStart ? formatDate(r.positionStart) : null]
                       .filter(Boolean)
                       .join(' · ')}
@@ -300,9 +270,9 @@ export function CompanyProfileView({
                 </li>
               ))}
             </ul>
-          </Section>
-        )}
-      </CardContent>
-    </Card>
+          </div>
+        </SettingsRow>
+      )}
+    </>
   )
 }

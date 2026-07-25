@@ -1,0 +1,258 @@
+'use client'
+
+import { ChevronDown } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { HelpPopover } from '@/components/ui/help-popover'
+
+/**
+ * The Fönster settings language (founder-approved concept 2026-07-25):
+ * flat hairline rows with an uppercase micro-label on the left and the
+ * control on the right, section titles in the display serif, groups under
+ * eyebrow labels, and every explanation collapsed behind a "?" popover
+ * (UI-migration convention 7 applied at row level).
+ *
+ * All settings sections compose these primitives; do not hand-roll row
+ * layouts or inline help paragraphs in section components.
+ */
+
+interface SettingsSectionHeaderProps {
+  title: string
+  /** One quiet line under the title. Longer guidance belongs in row help. */
+  intro?: React.ReactNode
+  /** Right-aligned header action (e.g. "Förhandsvisa faktura", "Skapa nyckel"). */
+  action?: React.ReactNode
+}
+
+export function SettingsSectionHeader({ title, intro, action }: SettingsSectionHeaderProps) {
+  return (
+    <header>
+      <div className="flex items-baseline justify-between gap-4">
+        <h2 className="font-display text-xl tracking-tight">{title}</h2>
+        {action ? <div className="flex shrink-0 items-center gap-3">{action}</div> : null}
+      </div>
+      {intro ? (
+        <p className="mt-1 max-w-[56ch] text-xs leading-relaxed text-muted-foreground">{intro}</p>
+      ) : null}
+    </header>
+  )
+}
+
+interface SettingsGroupProps {
+  label?: string
+  /** Group-level help ("?" right after the eyebrow) for guidance that spans the rows. */
+  help?: React.ReactNode
+  children: React.ReactNode
+  className?: string
+}
+
+export function SettingsGroup({ label, help, children, className }: SettingsGroupProps) {
+  return (
+    <section className={cn('pt-8 first:pt-6', className)}>
+      {label ? (
+        <p className="flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <span>{label}</span>
+          {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
+        </p>
+      ) : null}
+      <div>{children}</div>
+    </section>
+  )
+}
+
+interface SettingsRowProps {
+  label: React.ReactNode
+  /** Ties the label to a control; renders a <label> instead of a <span>. */
+  htmlFor?: string
+  /** Row help content: goes behind a "?" next to the label, never inline. */
+  help?: React.ReactNode
+  /** 'center' for toggles/selects/chips, 'baseline' for text inputs. */
+  align?: 'center' | 'baseline'
+  /** Drop the hairline (last row before a fold/reveal). */
+  borderless?: boolean
+  children: React.ReactNode
+  className?: string
+}
+
+export function SettingsRow({
+  label,
+  htmlFor,
+  help,
+  align = 'center',
+  borderless = false,
+  children,
+  className,
+}: SettingsRowProps) {
+  const labelClass = 'text-[11px] font-medium uppercase tracking-wider text-muted-foreground'
+  return (
+    <div
+      className={cn(
+        'flex flex-col gap-1 px-1 py-3 md:flex-row md:gap-4',
+        align === 'center' ? 'md:items-center' : 'md:items-baseline',
+        !borderless && 'border-b border-border',
+        className,
+      )}
+    >
+      <div className="flex w-full shrink-0 items-center gap-2 md:w-44">
+        {htmlFor ? (
+          <label htmlFor={htmlFor} className={labelClass}>
+            {label}
+          </label>
+        ) : (
+          <span className={labelClass}>{label}</span>
+        )}
+        {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
+      </div>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/** Right-aligned slot inside a row (quiet actions, secondary values). */
+export function SettingsRowEnd({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={cn('ml-auto flex shrink-0 items-center gap-3', className)}>{children}</div>
+}
+
+/** Muted secondary text inside a row. */
+export function SettingsRowNote({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <span className={cn('text-xs text-muted-foreground', className)}>{children}</span>
+}
+
+/**
+ * Flat text input: borderless with a dashed underline on hover and a solid
+ * one on focus. Sized by the row, not by a box.
+ */
+export function SettingsInput({ className, ...rest }: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...rest}
+      className={cn(
+        'min-w-0 flex-1 rounded-none border-0 border-b border-dashed border-transparent bg-transparent px-0 py-1 text-sm text-foreground',
+        'placeholder:text-muted-foreground/60 hover:border-border',
+        'focus:outline-none focus:border-solid focus:border-foreground/50',
+        'disabled:cursor-not-allowed disabled:border-transparent disabled:opacity-60',
+        className,
+      )}
+    />
+  )
+}
+
+/** Flat textarea sibling of SettingsInput. */
+export function SettingsTextarea({ className, ...rest }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...rest}
+      className={cn(
+        'min-w-0 flex-1 resize-y rounded-none border-0 border-b border-dashed border-transparent bg-transparent px-0 py-1 text-sm text-foreground',
+        'placeholder:text-muted-foreground/60 hover:border-border',
+        'focus:outline-none focus:border-solid focus:border-foreground/50',
+        'disabled:cursor-not-allowed disabled:border-transparent disabled:opacity-60',
+        className,
+      )}
+    />
+  )
+}
+
+/** Flat native select with a quiet chevron. */
+export function SettingsSelect({
+  className,
+  wrapperClassName,
+  children,
+  ...rest
+}: React.SelectHTMLAttributes<HTMLSelectElement> & { wrapperClassName?: string }) {
+  return (
+    <span className={cn('relative inline-flex max-w-full items-center', wrapperClassName)}>
+      <select
+        {...rest}
+        className={cn(
+          'max-w-full cursor-pointer appearance-none truncate rounded-none border-0 border-b border-dashed border-transparent bg-transparent py-1 pl-0 pr-6 text-sm text-foreground',
+          'hover:border-border focus:outline-none focus-visible:border-solid focus-visible:border-foreground/50',
+          'disabled:cursor-not-allowed disabled:opacity-60',
+          className,
+        )}
+      >
+        {children}
+      </select>
+      <ChevronDown
+        aria-hidden="true"
+        className="pointer-events-none absolute right-1 h-3.5 w-3.5 text-muted-foreground"
+      />
+    </span>
+  )
+}
+
+interface SettingsRevealProps {
+  open: boolean
+  /** Indent revealed rows behind a left hairline (gated sub-settings). */
+  indent?: boolean
+  children: React.ReactNode
+}
+
+/** Animated reveal for settings gated behind a toggle (momsreg → momsblock). */
+export function SettingsReveal({ open, indent = true, children }: SettingsRevealProps) {
+  return (
+    <div
+      inert={!open}
+      className={cn(
+        'grid transition-[grid-template-rows] duration-300 motion-reduce:transition-none',
+        open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+      )}
+    >
+      <div className="min-h-0 overflow-hidden">
+        <div className={cn(indent && 'ml-3 border-l border-border pl-4')}>{children}</div>
+      </div>
+    </div>
+  )
+}
+
+interface SettingsSegProps<T extends string> {
+  value: T
+  onChange: (value: T) => void
+  options: Array<{ value: T; label: React.ReactNode }>
+  'aria-label': string
+  disabled?: boolean
+}
+
+/** Quiet segmented control (theme, language, plan interval, sv/en texts). */
+export function SettingsSeg<T extends string>({
+  value,
+  onChange,
+  options,
+  'aria-label': ariaLabel,
+  disabled,
+}: SettingsSegProps<T>) {
+  return (
+    <div role="group" aria-label={ariaLabel} className="inline-flex items-center gap-1 rounded-lg bg-muted/70 p-1">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          disabled={disabled}
+          aria-pressed={o.value === value}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            'rounded-md px-3 py-1 text-xs transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-60',
+            o.value === value
+              ? 'border border-border bg-card font-medium text-foreground'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** Terracotta-tinted trailing block for destructive actions. */
+export function SettingsDangerZone({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <section className="mt-10 border-t border-destructive/30 pt-3">
+      <p className="px-1 text-[11px] font-medium uppercase tracking-wider text-destructive/80">
+        {label}
+      </p>
+      <div>{children}</div>
+    </section>
+  )
+}

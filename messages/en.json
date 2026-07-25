@@ -296,6 +296,19 @@
     "terms_and": "and",
     "privacy_link": "privacy policy"
   },
+  "settings_intro": {
+    "account": "Your personal details and security. Applies to you, not the company.",
+    "billing": "Each company has its own subscription.",
+    "company": "Shown on invoices, in email and in files to the authorities.",
+    "bookkeeping": "Framework, method and series. Most of this is set once.",
+    "tax": "Drives the VAT return, the employer declaration and which deadlines are tracked.",
+    "salary": "Defaults for payroll runs. Tax table and vacation are set per employee.",
+    "invoicing": "Numbers, terms and the look of your invoices.",
+    "templates": "Reusable postings and patterns learned from your bookkeeping.",
+    "banking": "Transactions are fetched automatically. Accounted can only read, never move money.",
+    "assistant": "What the assistant knows, remembers and can do.",
+    "api": "Keys for MCP clients like Claude and Cursor, and for your own integrations."
+  },
   "settings_nav": {
     "aria_label": "Settings",
     "company": "Company",
@@ -379,6 +392,7 @@
     "description": "Manage your company and account"
   },
   "settings": {
+    "group_profile": "Profile",
     "section_name": "Name",
     "name_label": "Your name",
     "name_description": "Used when we address you and shown as the contact person on some documents.",
@@ -1467,6 +1481,7 @@
     "wrapper_save_failed_title": "Could not save",
     "wrapper_save_failed_default": "Could not save settings",
     "wrapper_try_again": "Please try again.",
+    "wrapper_unsaved": "Unsaved changes",
     "wrapper_saved": "Saved",
     "wrapper_saving": "Saving...",
     "wrapper_save_changes": "Save changes",
@@ -1484,6 +1499,8 @@
     "iframe_title": "Invoice PDF preview"
   },
   "settings_bookkeeping": {
+    "group_basics": "Basics",
+    "group_automation": "Automation",
     "method_heading": "Accounting method",
     "method_label": "Method",
     "method_accrual": "Faktureringsmetoden",
@@ -2245,6 +2262,7 @@
     "link_button": "Link BankID"
   },
   "settings_security": {
+    "group_security": "Security",
     "toast_weak_password_title": "Password is too weak",
     "toast_weak_password_description": "The password must be at least 8 characters and include uppercase, lowercase, digits and a special character.",
     "toast_mismatch_title": "Passwords do not match",

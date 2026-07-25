@@ -2,8 +2,8 @@
 
 import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Loader2, Users } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
+import { SettingsGroup } from '@/components/settings/SettingsRows'
 
 interface TeamMember {
   id: string
@@ -57,41 +57,29 @@ export function TeamPanel() {
   }
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Users className="h-4 w-4" />
-            {teamName || t('team_fallback')}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="divide-y divide-border/40">
-            {members.map((member) => (
-              <div key={member.id} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="h-8 w-8 rounded-full bg-muted/60 flex items-center justify-center flex-shrink-0">
-                    <span className="text-xs font-medium text-muted-foreground">
-                      {member.email.charAt(0).toUpperCase()}
-                    </span>
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">
-                      {member.email}
-                      {member.is_current_user && (
-                        <span className="text-muted-foreground font-normal ml-1">{t('you_suffix')}</span>
-                      )}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {roleLabel(member.role)}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ))}
+    <SettingsGroup label={teamName || t('team_fallback')}>
+      {/* Read-only member roster: flat hairline rows, no cards. */}
+      {members.map((member) => (
+        <div
+          key={member.id}
+          className="flex items-center gap-3 border-b border-border px-1 py-3"
+        >
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted/60">
+            <span className="text-xs font-medium text-muted-foreground">
+              {member.email.charAt(0).toUpperCase()}
+            </span>
           </div>
-        </CardContent>
-      </Card>
-    </div>
+          <p className="min-w-0 flex-1 truncate text-sm">
+            {member.email}
+            {member.is_current_user && (
+              <span className="ml-1 text-muted-foreground">{t('you_suffix')}</span>
+            )}
+          </p>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {roleLabel(member.role)}
+          </span>
+        </div>
+      ))}
+    </SettingsGroup>
   )
 }

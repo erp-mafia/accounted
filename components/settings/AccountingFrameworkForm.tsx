@@ -1,15 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import {
   Dialog,
   DialogContent,
@@ -19,6 +11,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import {
+  SettingsRow,
+  SettingsRowNote,
+  SettingsSelect,
+} from '@/components/settings/SettingsRows'
 import type { AccountingFramework } from '@/types'
 import { Loader2 } from 'lucide-react'
 
@@ -30,8 +27,9 @@ interface AccountingFrameworkFormProps {
 }
 
 /**
- * K2/K3 selector for AB. Lives on the bookkeeping settings page. Renders nothing
- * for non-AB entities: the parent gates this component by entity_type.
+ * K2/K3 selector row for AB. Lives in the Grunder group on the bookkeeping
+ * settings page. Renders nothing for non-AB entities: the parent gates this
+ * component by entity_type.
  *
  * UX rules (regulatory area: kept in Swedish):
  *   - Default is K2 (matches the column default and BFNAR 2016:10 baseline).
@@ -100,33 +98,36 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
   }
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        Redovisningsregelverk
-      </h2>
-      <div className="space-y-2">
-        <Label htmlFor="accounting_framework">Regelverk</Label>
-        <Select
+    <>
+      <SettingsRow
+        label="Regelverk"
+        htmlFor="accounting_framework"
+        help={
+          <>
+            K2 är standard för mindre bolag och innebär förenklade regler. K3 krävs när
+            bolaget når två av tre tröskelvärden (nettoomsättning &gt; 80 MSEK, tillgångar
+            &gt; 40 MSEK, eller fler än 50 anställda). K3 ställer högre krav: kassaflödesanalys,
+            komponentavskrivning på materiella anläggningstillgångar och redovisning av
+            uppskjuten skatt på obeskattade reserver (79,4 % eget kapital / 20,6 % skuld).
+          </>
+        }
+      >
+        <SettingsSelect
+          id="accounting_framework"
           value={selected}
-          onValueChange={handleChange}
+          onChange={(e) => handleChange(e.target.value)}
+          // Saves via its own PATCH; the row sits inside the page's
+          // SettingsFormWrapper form, so keep the wrapper's dirty tracking
+          // (onInput on the form) from reacting to this select. No `name`
+          // either, so the wrapper's FormData never picks it up.
+          onInput={(e) => e.stopPropagation()}
           disabled={saving}
         >
-          <SelectTrigger id="accounting_framework" className="w-full max-w-sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="k2">K2 (BFNAR 2016:10): mindre företag</SelectItem>
-            <SelectItem value="k3">K3 (BFNAR 2012:1): större företag</SelectItem>
-          </SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground">
-          K2 är standard för mindre bolag och innebär förenklade regler. K3 krävs när
-          bolaget når två av tre tröskelvärden (nettoomsättning &gt; 80 MSEK, tillgångar
-          &gt; 40 MSEK, eller fler än 50 anställda). K3 ställer högre krav: kassaflödesanalys,
-          komponentavskrivning på materiella anläggningstillgångar och redovisning av
-          uppskjuten skatt på obeskattade reserver (79,4 % eget kapital / 20,6 % skuld).
-        </p>
-      </div>
+          <option value="k2">K2 (BFNAR 2016:10): mindre företag</option>
+          <option value="k3">K3 (BFNAR 2012:1): större företag</option>
+        </SettingsSelect>
+        {saving && <SettingsRowNote>Sparar…</SettingsRowNote>}
+      </SettingsRow>
 
       <Dialog
         open={pending !== null}
@@ -174,6 +175,6 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </section>
+    </>
   )
 }

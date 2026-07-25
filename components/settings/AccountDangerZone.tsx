@@ -20,6 +20,12 @@ import { RetentionNotice } from '@/components/ui/retention-notice'
 import { ExternalLink, Loader2 } from 'lucide-react'
 import { SupportLink } from '@/components/ui/support-link'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  SettingsDangerZone,
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
+} from '@/components/settings/SettingsRows'
 
 interface Blocker {
   id: string
@@ -28,6 +34,7 @@ interface Blocker {
 
 export function AccountDangerZone() {
   const t = useTranslations('settings_account_danger')
+  const tRetention = useTranslations('retention_notice')
   const router = useRouter()
   const [email, setEmail] = useState<string | null>(null)
   const [blockers, setBlockers] = useState<Blocker[]>([])
@@ -103,61 +110,62 @@ export function AccountDangerZone() {
 
   return (
     <>
-      <section className="space-y-4 border-t border-border pt-8">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-destructive">
-          {t('heading')}
-        </h2>
+      <SettingsDangerZone label={t('heading')}>
+        {/* Owned companies block deletion: functional state, kept visible as
+            rows (only the first row carries the label and the why-help). */}
+        {hasBlockers &&
+          blockers.map((b, i) => (
+            <SettingsRow
+              key={b.id}
+              label={i === 0 ? t('blockers_title') : ''}
+              help={i === 0 ? t('blockers_description') : undefined}
+            >
+              <span className="text-sm">{b.name}</span>
+              <SettingsRowEnd>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link href="/settings/company">{t('blockers_manage')}</Link>
+                </Button>
+              </SettingsRowEnd>
+            </SettingsRow>
+          ))}
 
-        {hasBlockers && (
-          <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
-            <p className="text-sm font-medium">{t('blockers_title')}</p>
-            <p className="text-sm text-muted-foreground">
-              {t('blockers_description')}
-            </p>
-            <ul className="space-y-2">
-              {blockers.map((b) => (
-                <li
-                  key={b.id}
-                  className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2"
-                >
-                  <span className="text-sm font-medium">{b.name}</span>
-                  <Button variant="ghost" size="sm" asChild>
-                    <Link href="/settings/company">{t('blockers_manage')}</Link>
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <RetentionNotice variant="account" />
-
-        <p className="text-sm text-muted-foreground">
-          {t('support_question')}{' '}
-          <SupportLink variant="inline" subject={t('support_subject')} />
-        </p>
+        <SettingsRow
+          label={t('delete_button')}
+          borderless
+          // The full anonymization/BFL retention copy (incl. the backup link)
+          // lives behind the "?": the visible row stays one quiet line.
+          help={<RetentionNotice variant="account" className="border-0 bg-transparent p-0" />}
+        >
+          <SettingsRowNote>{tRetention('account_title')}</SettingsRowNote>
+          <SettingsRowEnd>
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/reports?type=sie">
+                <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                {t('export_sie')}
+              </Link>
+            </Button>
+            <button
+              type="button"
+              onClick={() => setShowDialog(true)}
+              disabled={!canDelete}
+              className="text-sm font-medium text-destructive underline underline-offset-2 transition-colors duration-150 hover:text-destructive/80 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t('delete_button')}
+            </button>
+          </SettingsRowEnd>
+        </SettingsRow>
 
         {error && !showDialog && (
-          <p className="text-sm text-destructive">{error}</p>
+          <p className="px-1 text-sm text-destructive">{error}</p>
         )}
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <Button variant="outline" className="w-full sm:w-auto" asChild>
-            <Link href="/reports?type=sie">
-              <ExternalLink className="mr-2 h-4 w-4" />
-              {t('export_sie')}
-            </Link>
-          </Button>
-          <Button
-            variant="destructive"
-            className="w-full sm:w-auto"
-            onClick={() => setShowDialog(true)}
-            disabled={!canDelete}
-          >
-            {t('delete_button')}
-          </Button>
-        </div>
-      </section>
+        <p className="px-1 pt-3">
+          <SettingsRowNote>
+            {t('support_question')}{' '}
+            <SupportLink variant="inline" subject={t('support_subject')} />
+          </SettingsRowNote>
+        </p>
+      </SettingsDangerZone>
 
       <Dialog
         open={showDialog}

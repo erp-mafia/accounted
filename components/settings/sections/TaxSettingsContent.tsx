@@ -8,6 +8,7 @@ import { TaxAssessmentNoticesPanel } from '@/components/settings/TaxAssessmentNo
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
+import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { SkatteverketConnectPanel } from '@/components/settings/SkatteverketConnectPanel'
 import { useSettings } from '@/components/settings/useSettings'
 import { useToast } from '@/components/ui/use-toast'
@@ -17,6 +18,8 @@ import type { CompanySettings } from '@/types'
 export function TaxSettingsContent() {
   const { settings, isLoading, updateSettings, refetch } = useSettings()
   const t = useTranslations('settings_skatteverket')
+  const tNav = useTranslations('settings_nav')
+  const tIntro = useTranslations('settings_intro')
   const searchParams = useSearchParams()
   const router = useRouter()
   const { toast } = useToast()
@@ -125,8 +128,8 @@ export function TaxSettingsContent() {
       fiscal_year_start_month: parseInt(formData.get('fiscal_year_start_month') as string) || 1,
       pays_salaries: paysSalaries,
       employer_registered: employerRegistered,
-      // The seasonal checkbox is unmounted when not registered; absence
-      // means false rather than "keep stored value".
+      // The seasonal switch stays mounted inside its reveal, but the
+      // employer_registered gate still forces false when not registered.
       employer_seasonal: employerRegistered && formData.get('employer_seasonal') === 'true',
       preliminary_tax_monthly: parseFloat(formData.get('preliminary_tax_monthly') as string) || null,
       kontrolluppgifter_enabled: formData.get('kontrolluppgifter_enabled') === 'true',
@@ -152,9 +155,11 @@ export function TaxSettingsContent() {
   const showSkatteverket = hasSkatteverketExtension && !settings.is_sandbox
 
   return (
-    <div className="space-y-8">
+    <div>
+      <SettingsSectionHeader title={tNav('tax')} intro={tIntro('tax')} />
+
       {/* Connection panel first: the skattekonto and momsdeklaration pages
-          send users here specifically to (re)connect — below the long tax
+          send users here specifically to (re)connect; below the long tax
           form it sat out of view. */}
       {showSkatteverket && <SkatteverketConnectPanel />}
 

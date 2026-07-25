@@ -2,10 +2,15 @@
 
 import { useTranslations } from 'next-intl'
 import { useState } from 'react'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
+import { HelpPopover } from '@/components/ui/help-popover'
+import {
+  SettingsGroup,
+  SettingsInput,
+  SettingsReveal,
+  SettingsRow,
+  SettingsSelect,
+} from '@/components/settings/SettingsRows'
 import type { CompanySettings } from '@/types'
 
 interface TaxSettingsFormProps {
@@ -16,6 +21,20 @@ interface TaxSettingsFormProps {
   kuSignalDetected?: boolean
   /** Invoice-derived signal: invoices with ROT/RUT deductions exist. */
   rotRutSignalDetected?: boolean
+}
+
+/**
+ * Ledger/invoice-derived suggestion (EU sales, KU, ROT/RUT) as one visible
+ * warning-tone sentence. The full body, including the legal deadlines and
+ * late-fee amounts, lives behind the "?" so the signal stays a single line.
+ */
+function SignalLine({ text, help }: { text: string; help: React.ReactNode }) {
+  return (
+    <p className="flex items-center gap-2 border-b border-border px-1 py-3 text-[12.5px] leading-relaxed text-attn">
+      <span>{text}</span>
+      <HelpPopover className="shrink-0">{help}</HelpPopover>
+    </p>
+  )
 }
 
 export function TaxSettingsForm({
@@ -59,320 +78,267 @@ export function TaxSettingsForm({
   ]
 
   return (
-    <div className="space-y-8">
-      {/* Entity type: read-only */}
-      <section className="space-y-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('entity_form_heading')}
-        </h2>
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-medium">
+    <div>
+      <SettingsGroup label={t('tax_vat_heading')}>
+        {/* Entity type: read-only. Changing it is a support operation. */}
+        <SettingsRow label={t('entity_form_heading')} help={t('entity_form_help')}>
+          <span className="text-sm">
             {settings.entity_type === 'aktiebolag' ? t('entity_aktiebolag') : t('entity_enskild_firma')}
           </span>
-          <p className="text-xs text-muted-foreground">
-            {t('entity_form_help')}
-          </p>
-        </div>
-      </section>
+        </SettingsRow>
 
-      {/* F-skatt */}
-      <section className="border-t border-border pt-8 space-y-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('tax_vat_heading')}
-        </h2>
+        <SettingsRow label={t('f_skatt_label')} htmlFor="f_skatt" help={t('f_skatt_help')}>
+          <Switch
+            id="f_skatt"
+            checked={fSkatt}
+            onCheckedChange={(v) => setFSkatt(v === true)}
+          />
+          <input type="hidden" name="f_skatt" value={fSkatt ? 'true' : 'false'} />
+        </SettingsRow>
 
-        <div className="space-y-4">
-          <div className="flex items-start space-x-3">
-            <Checkbox
-              id="f_skatt"
-              checked={fSkatt}
-              onCheckedChange={(v) => setFSkatt(v === true)}
+        <SettingsRow
+          label={t('vat_registered_label')}
+          htmlFor="vat_registered"
+          help={t('vat_registered_help')}
+          borderless={vatRegistered}
+        >
+          <Switch
+            id="vat_registered"
+            checked={vatRegistered}
+            onCheckedChange={(value) => {
+              const checked = value === true
+              setVatRegistered(checked)
+              if (checked && vatTaxableBaseOver40m) setMomsPeriod('monthly')
+            }}
+          />
+          <input type="hidden" name="vat_registered" value={vatRegistered ? 'true' : 'false'} />
+        </SettingsRow>
+
+        {euSalesDetected && vatRegistered && (!hasEuTrade || !psEnabled) && (
+          <SignalLine
+            text={t('eu_trade_suggestion_title')}
+            help={t('eu_trade_suggestion_help')}
+          />
+        )}
+
+        {/* The VAT sub-block. The reveal keeps the fields mounted while
+            hidden (inert): the handleSave gates on vat_registered in
+            TaxSettingsContent make the saved result identical to the old
+            unmount behavior. */}
+        <SettingsReveal open={vatRegistered} indent>
+          <SettingsRow
+            label={t('vat_number_label')}
+            htmlFor="vat_number"
+            help={t('vat_number_help')}
+            align="baseline"
+          >
+            <SettingsInput
+              id="vat_number"
+              name="vat_number"
+              placeholder="SE123456789001"
+              defaultValue={settings.vat_number || ''}
             />
-            <input type="hidden" name="f_skatt" value={fSkatt ? 'true' : 'false'} />
-            <div className="space-y-1">
-              <Label htmlFor="f_skatt" className="cursor-pointer">{t('f_skatt_label')}</Label>
-              <p className="text-xs text-muted-foreground">
-                {t('f_skatt_help')}
-              </p>
-            </div>
-          </div>
+          </SettingsRow>
 
-          <div className="flex items-start space-x-3">
-            <Checkbox
-              id="vat_registered"
-              checked={vatRegistered}
+          <SettingsRow
+            label={t('moms_period_label')}
+            htmlFor="moms_period"
+            help={t('moms_period_help')}
+          >
+            <SettingsSelect
+              id="moms_period"
+              name="moms_period"
+              value={momsPeriod}
+              onChange={(e) => setMomsPeriod(e.target.value)}
+            >
+              <option value="" disabled>
+                {t('select_period_placeholder')}
+              </option>
+              <option value="monthly">{t('period_monthly')}</option>
+              <option value="quarterly" disabled={vatTaxableBaseOver40m}>
+                {t('period_quarterly')}
+              </option>
+              <option value="yearly" disabled={vatTaxableBaseOver40m}>
+                {t('period_yearly')}
+              </option>
+            </SettingsSelect>
+          </SettingsRow>
+
+          <SettingsRow
+            label={t('vat_taxable_base_over_40m_label')}
+            htmlFor="vat_taxable_base_over_40m"
+            help={t('vat_taxable_base_over_40m_help')}
+          >
+            <Switch
+              id="vat_taxable_base_over_40m"
+              checked={vatTaxableBaseOver40m}
               onCheckedChange={(value) => {
                 const checked = value === true
-                setVatRegistered(checked)
-                if (checked && vatTaxableBaseOver40m) setMomsPeriod('monthly')
+                setVatTaxableBaseOver40m(checked)
+                // Over 40 MSEK forces monthly VAT reporting.
+                if (checked) setMomsPeriod('monthly')
               }}
             />
-            <input type="hidden" name="vat_registered" value={vatRegistered ? 'true' : 'false'} />
-            <div className="space-y-1">
-              <Label htmlFor="vat_registered" className="cursor-pointer">{t('vat_registered_label')}</Label>
-              <p className="text-xs text-muted-foreground">
-                {t('vat_registered_help')}
-              </p>
-            </div>
-          </div>
+            <input
+              type="hidden"
+              name="vat_taxable_base_over_40m"
+              value={vatTaxableBaseOver40m ? 'true' : 'false'}
+            />
+          </SettingsRow>
 
-          {euSalesDetected && vatRegistered && (!hasEuTrade || !psEnabled) && (
-            <div className="rounded-lg border border-border p-4">
-              <p className="text-sm">{t('eu_trade_suggestion_title')}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {t('eu_trade_suggestion_help')}
-              </p>
-            </div>
+          <SettingsRow
+            label={t('vat_has_eu_trade_label')}
+            htmlFor="vat_has_eu_trade"
+            help={t('vat_has_eu_trade_help')}
+            borderless={hasEuTrade}
+          >
+            <Switch
+              id="vat_has_eu_trade"
+              checked={hasEuTrade}
+              onCheckedChange={(value) => {
+                const checked = value === true
+                setHasEuTrade(checked)
+                // No EU trade means no periodisk sammanställning.
+                if (!checked) setPsEnabled(false)
+              }}
+            />
+            <input type="hidden" name="vat_has_eu_trade" value={hasEuTrade ? 'true' : 'false'} />
+          </SettingsRow>
+
+          {momsPeriod === 'yearly' && !hasEuTrade && !isEnskildFirma && (
+            <SettingsRow
+              label={t('vat_filing_method_label')}
+              htmlFor="vat_filing_method"
+              help={t('vat_filing_method_help')}
+              borderless
+            >
+              <SettingsSelect
+                id="vat_filing_method"
+                name="vat_filing_method"
+                defaultValue={settings.vat_filing_method || 'electronic'}
+              >
+                <option value="electronic">{t('filing_method_electronic')}</option>
+                <option value="paper">{t('filing_method_paper')}</option>
+              </SettingsSelect>
+            </SettingsRow>
           )}
 
-          {vatRegistered && (
-            <div className="space-y-4 pl-7">
-              <div className="max-w-xs space-y-2">
-                <Label htmlFor="vat_number">{t('vat_number_label')}</Label>
-                <Input
-                  id="vat_number"
-                  name="vat_number"
-                  placeholder="SE123456789001"
-                  defaultValue={settings.vat_number || ''}
-                />
-                <p className="text-xs text-muted-foreground">
-                  {t('vat_number_help')}
-                </p>
-              </div>
+          <SettingsReveal open={hasEuTrade}>
+            <SettingsRow
+              label={t('periodisk_enabled_label')}
+              htmlFor="periodisk_sammanstallning_enabled"
+              help={t('periodisk_enabled_help')}
+              borderless={psEnabled}
+            >
+              <Switch
+                id="periodisk_sammanstallning_enabled"
+                checked={psEnabled}
+                onCheckedChange={(value) => setPsEnabled(value === true)}
+              />
+              <input
+                type="hidden"
+                name="periodisk_sammanstallning_enabled"
+                value={psEnabled ? 'true' : 'false'}
+              />
+            </SettingsRow>
 
-              <div className="max-w-xs space-y-2">
-                <Label>{t('moms_period_label')}</Label>
-                <Select
-                  name="moms_period"
-                  value={momsPeriod || undefined}
-                  onValueChange={setMomsPeriod}
+            <SettingsReveal open={psEnabled}>
+              <SettingsRow
+                label={t('periodisk_label')}
+                htmlFor="periodisk_sammanstallning_period"
+                help={t('periodisk_help')}
+              >
+                <SettingsSelect
+                  id="periodisk_sammanstallning_period"
+                  name="periodisk_sammanstallning_period"
+                  defaultValue={settings.periodisk_sammanstallning_period || 'monthly'}
                 >
-                  <SelectTrigger>
-                    <SelectValue placeholder={t('select_period_placeholder')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="monthly">{t('period_monthly')}</SelectItem>
-                    <SelectItem value="quarterly" disabled={vatTaxableBaseOver40m}>
-                      {t('period_quarterly')}
-                    </SelectItem>
-                    <SelectItem value="yearly" disabled={vatTaxableBaseOver40m}>
-                      {t('period_yearly')}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  {t('moms_period_help')}
-                </p>
-              </div>
+                  <option value="monthly">{t('period_monthly')}</option>
+                  <option value="quarterly">{t('period_quarterly')}</option>
+                </SettingsSelect>
+              </SettingsRow>
 
-              <div className="flex items-start space-x-3">
-                <Checkbox
-                  id="vat_taxable_base_over_40m"
-                  checked={vatTaxableBaseOver40m}
-                  onCheckedChange={(value) => {
-                    const checked = value === true
-                    setVatTaxableBaseOver40m(checked)
-                    if (checked) setMomsPeriod('monthly')
-                  }}
-                />
-                <input
-                  type="hidden"
-                  name="vat_taxable_base_over_40m"
-                  value={vatTaxableBaseOver40m ? 'true' : 'false'}
-                />
-                <div className="space-y-1">
-                  <Label htmlFor="vat_taxable_base_over_40m" className="cursor-pointer">
-                    {t('vat_taxable_base_over_40m_label')}
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    {t('vat_taxable_base_over_40m_help')}
-                  </p>
-                </div>
-              </div>
+              <SettingsRow
+                label={t('periodisk_filing_method_label')}
+                htmlFor="periodisk_sammanstallning_filing_method"
+                help={t('periodisk_filing_method_help')}
+                borderless
+              >
+                <SettingsSelect
+                  id="periodisk_sammanstallning_filing_method"
+                  name="periodisk_sammanstallning_filing_method"
+                  defaultValue={settings.periodisk_sammanstallning_filing_method || 'electronic'}
+                >
+                  <option value="electronic">{t('filing_method_electronic')}</option>
+                  <option value="paper">{t('filing_method_paper')}</option>
+                </SettingsSelect>
+              </SettingsRow>
+            </SettingsReveal>
+          </SettingsReveal>
+        </SettingsReveal>
+      </SettingsGroup>
 
-              <div className="flex items-start space-x-3">
-                <Checkbox
-                  id="vat_has_eu_trade"
-                  checked={hasEuTrade}
-                  onCheckedChange={(value) => {
-                    const checked = value === true
-                    setHasEuTrade(checked)
-                    if (!checked) setPsEnabled(false)
-                  }}
-                />
-                <input type="hidden" name="vat_has_eu_trade" value={hasEuTrade ? 'true' : 'false'} />
-                <div className="space-y-1">
-                  <Label htmlFor="vat_has_eu_trade" className="cursor-pointer">
-                    {t('vat_has_eu_trade_label')}
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    {t('vat_has_eu_trade_help')}
-                  </p>
-                </div>
-              </div>
-
-              {momsPeriod === 'yearly' && !hasEuTrade && !isEnskildFirma && (
-                <div className="max-w-xs space-y-2">
-                  <Label>{t('vat_filing_method_label')}</Label>
-                  <Select
-                    name="vat_filing_method"
-                    defaultValue={settings.vat_filing_method || 'electronic'}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="electronic">{t('filing_method_electronic')}</SelectItem>
-                      <SelectItem value="paper">{t('filing_method_paper')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">{t('vat_filing_method_help')}</p>
-                </div>
-              )}
-
-              {hasEuTrade && (
-                <div className="space-y-4">
-                  <div className="flex items-start space-x-3">
-                    <Checkbox
-                      id="periodisk_sammanstallning_enabled"
-                      checked={psEnabled}
-                      onCheckedChange={(value) => setPsEnabled(value === true)}
-                    />
-                    <input
-                      type="hidden"
-                      name="periodisk_sammanstallning_enabled"
-                      value={psEnabled ? 'true' : 'false'}
-                    />
-                    <div className="space-y-1">
-                      <Label htmlFor="periodisk_sammanstallning_enabled" className="cursor-pointer">
-                        {t('periodisk_enabled_label')}
-                      </Label>
-                      <p className="text-xs text-muted-foreground">{t('periodisk_enabled_help')}</p>
-                    </div>
-                  </div>
-
-                  {psEnabled && (
-                    <div className="grid max-w-2xl grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label>{t('periodisk_label')}</Label>
-                        <Select
-                          name="periodisk_sammanstallning_period"
-                          defaultValue={settings.periodisk_sammanstallning_period || 'monthly'}
-                        >
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="monthly">{t('period_monthly')}</SelectItem>
-                            <SelectItem value="quarterly">{t('period_quarterly')}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <p className="text-xs text-muted-foreground">{t('periodisk_help')}</p>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>{t('periodisk_filing_method_label')}</Label>
-                        <Select
-                          name="periodisk_sammanstallning_filing_method"
-                          defaultValue={settings.periodisk_sammanstallning_filing_method || 'electronic'}
-                        >
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="electronic">{t('filing_method_electronic')}</SelectItem>
-                            <SelectItem value="paper">{t('filing_method_paper')}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <p className="text-xs text-muted-foreground">
-                          {t('periodisk_filing_method_help')}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-        </div>
-      </section>
-
-      {/* Tax contact: required for SKV-filings */}
-      <section className="border-t border-border pt-8 space-y-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('tax_contact_heading')}
-        </h2>
-        <p className="text-xs text-muted-foreground -mt-2">
-          {t('tax_contact_help')}
-        </p>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl">
-          <div className="space-y-2">
-            <Label htmlFor="tax_contact_name">{t('tax_contact_name_label')}</Label>
-            <Input
-              id="tax_contact_name"
-              name="tax_contact_name"
-              defaultValue={settings.tax_contact_name || ''}
-              placeholder={t('tax_contact_name_placeholder')}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="tax_contact_phone">{t('tax_contact_phone_label')}</Label>
-            <Input
-              id="tax_contact_phone"
-              name="tax_contact_phone"
-              defaultValue={settings.tax_contact_phone || ''}
-              placeholder="08-123 45 67"
-            />
-          </div>
-          <div className="space-y-2 sm:col-span-2">
-            <Label htmlFor="tax_contact_email">{t('tax_contact_email_label')}</Label>
-            <Input
-              id="tax_contact_email"
-              name="tax_contact_email"
-              type="email"
-              defaultValue={settings.tax_contact_email || ''}
-              placeholder="anna@foretaget.se"
-            />
-          </div>
-        </div>
-      </section>
+      {/* Tax contact: required for SKV filings. */}
+      <SettingsGroup label={t('tax_contact_heading')} help={t('tax_contact_help')}>
+        <SettingsRow label={t('tax_contact_name_label')} htmlFor="tax_contact_name" align="baseline">
+          <SettingsInput
+            id="tax_contact_name"
+            name="tax_contact_name"
+            defaultValue={settings.tax_contact_name || ''}
+            placeholder={t('tax_contact_name_placeholder')}
+          />
+        </SettingsRow>
+        <SettingsRow label={t('tax_contact_phone_label')} htmlFor="tax_contact_phone" align="baseline">
+          <SettingsInput
+            id="tax_contact_phone"
+            name="tax_contact_phone"
+            defaultValue={settings.tax_contact_phone || ''}
+            placeholder="08-123 45 67"
+          />
+        </SettingsRow>
+        <SettingsRow label={t('tax_contact_email_label')} htmlFor="tax_contact_email" align="baseline">
+          <SettingsInput
+            id="tax_contact_email"
+            name="tax_contact_email"
+            type="email"
+            defaultValue={settings.tax_contact_email || ''}
+            placeholder="anna@foretaget.se"
+          />
+        </SettingsRow>
+      </SettingsGroup>
 
       {/* Fiscal year & salaries */}
-      <section className="border-t border-border pt-8 space-y-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('fiscal_year_salaries_heading')}
-        </h2>
-
-        <div className="max-w-xs space-y-2">
-          <Label>{t('fiscal_year_start_label')}</Label>
+      <SettingsGroup label={t('fiscal_year_salaries_heading')}>
+        <SettingsRow
+          label={t('fiscal_year_start_label')}
+          htmlFor="fiscal_year_start_month"
+          help={isEnskildFirma ? t('fiscal_year_ef_help') : t('fiscal_year_change_help')}
+        >
           {isEnskildFirma ? (
             <>
-              <Input value={t('month_jan')} disabled />
+              <SettingsInput
+                id="fiscal_year_start_month"
+                value={t('month_jan')}
+                disabled
+                className="max-w-32 flex-none"
+              />
               <input type="hidden" name="fiscal_year_start_month" value="1" />
-              <p className="text-xs text-muted-foreground">
-                {t('fiscal_year_ef_help')}
-              </p>
             </>
           ) : (
-            <>
-              <Select
-                name="fiscal_year_start_month"
-                defaultValue={String(settings.fiscal_year_start_month || 1)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {months.map((month, i) => (
-                    <SelectItem key={i + 1} value={String(i + 1)}>{month}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                {t('fiscal_year_change_help')}
-              </p>
-            </>
+            <SettingsSelect
+              id="fiscal_year_start_month"
+              name="fiscal_year_start_month"
+              defaultValue={String(settings.fiscal_year_start_month || 1)}
+            >
+              {months.map((month, i) => (
+                <option key={i + 1} value={String(i + 1)}>{month}</option>
+              ))}
+            </SettingsSelect>
           )}
-        </div>
+        </SettingsRow>
 
-        <div className="flex items-start space-x-3">
-          <Checkbox
+        <SettingsRow label={t('pays_salaries_label')} htmlFor="pays_salaries" help={t('pays_salaries_help')}>
+          <Switch
             id="pays_salaries"
             checked={paysSalaries}
             onCheckedChange={(v) => {
@@ -383,16 +349,15 @@ export function TaxSettingsForm({
             }}
           />
           <input type="hidden" name="pays_salaries" value={paysSalaries ? 'true' : 'false'} />
-          <div className="space-y-1">
-            <Label htmlFor="pays_salaries" className="cursor-pointer">{t('pays_salaries_label')}</Label>
-            <p className="text-xs text-muted-foreground">
-              {t('pays_salaries_help')}
-            </p>
-          </div>
-        </div>
+        </SettingsRow>
 
-        <div className="flex items-start space-x-3">
-          <Checkbox
+        <SettingsRow
+          label={t('employer_registered_label')}
+          htmlFor="employer_registered"
+          help={t('employer_registered_help')}
+          borderless={employerRegistered}
+        >
+          <Switch
             id="employer_registered"
             checked={employerRegistered}
             onCheckedChange={(v) => {
@@ -406,19 +371,16 @@ export function TaxSettingsForm({
             name="employer_registered"
             value={employerRegistered ? 'true' : 'false'}
           />
-          <div className="space-y-1">
-            <Label htmlFor="employer_registered" className="cursor-pointer">
-              {t('employer_registered_label')}
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              {t('employer_registered_help')}
-            </p>
-          </div>
-        </div>
+        </SettingsRow>
 
-        {employerRegistered && (
-          <div className="flex items-start space-x-3 pl-7">
-            <Checkbox
+        <SettingsReveal open={employerRegistered}>
+          <SettingsRow
+            label={t('employer_seasonal_label')}
+            htmlFor="employer_seasonal"
+            help={t('employer_seasonal_help')}
+            borderless
+          >
+            <Switch
               id="employer_seasonal"
               checked={employerSeasonal}
               onCheckedChange={(v) => setEmployerSeasonal(v === true)}
@@ -428,35 +390,22 @@ export function TaxSettingsForm({
               name="employer_seasonal"
               value={employerSeasonal ? 'true' : 'false'}
             />
-            <div className="space-y-1">
-              <Label htmlFor="employer_seasonal" className="cursor-pointer">
-                {t('employer_seasonal_label')}
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                {t('employer_seasonal_help')}
-              </p>
-            </div>
-          </div>
-        )}
-      </section>
+          </SettingsRow>
+        </SettingsReveal>
+      </SettingsGroup>
 
       {/* Kontrolluppgifter (KU) */}
-      <section className="border-t border-border pt-8 space-y-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('kontrolluppgifter_heading')}
-        </h2>
-
+      <SettingsGroup label={t('kontrolluppgifter_heading')}>
         {kuSignalDetected && !kuEnabled && (
-          <div className="rounded-lg border border-border p-4">
-            <p className="text-sm">{t('ku_suggestion_title')}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t('ku_suggestion_help')}
-            </p>
-          </div>
+          <SignalLine text={t('ku_suggestion_title')} help={t('ku_suggestion_help')} />
         )}
 
-        <div className="flex items-start space-x-3">
-          <Checkbox
+        <SettingsRow
+          label={t('kontrolluppgifter_label')}
+          htmlFor="kontrolluppgifter_enabled"
+          help={t('kontrolluppgifter_help')}
+        >
+          <Switch
             id="kontrolluppgifter_enabled"
             checked={kuEnabled}
             onCheckedChange={(v) => setKuEnabled(v === true)}
@@ -466,34 +415,21 @@ export function TaxSettingsForm({
             name="kontrolluppgifter_enabled"
             value={kuEnabled ? 'true' : 'false'}
           />
-          <div className="space-y-1">
-            <Label htmlFor="kontrolluppgifter_enabled" className="cursor-pointer">
-              {t('kontrolluppgifter_label')}
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              {t('kontrolluppgifter_help')}
-            </p>
-          </div>
-        </div>
-      </section>
+        </SettingsRow>
+      </SettingsGroup>
 
       {/* ROT/RUT */}
-      <section className="border-t border-border pt-8 space-y-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('rot_rut_heading')}
-        </h2>
-
+      <SettingsGroup label={t('rot_rut_heading')}>
         {rotRutSignalDetected && !rotRutEnabled && (
-          <div className="rounded-lg border border-border p-4">
-            <p className="text-sm">{t('rot_rut_suggestion_title')}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t('rot_rut_suggestion_help')}
-            </p>
-          </div>
+          <SignalLine text={t('rot_rut_suggestion_title')} help={t('rot_rut_suggestion_help')} />
         )}
 
-        <div className="flex items-start space-x-3">
-          <Checkbox
+        <SettingsRow
+          label={t('rot_rut_label')}
+          htmlFor="rot_rut_enabled"
+          help={t('rot_rut_help')}
+        >
+          <Switch
             id="rot_rut_enabled"
             checked={rotRutEnabled}
             onCheckedChange={(v) => setRotRutEnabled(v === true)}
@@ -503,78 +439,51 @@ export function TaxSettingsForm({
             name="rot_rut_enabled"
             value={rotRutEnabled ? 'true' : 'false'}
           />
-          <div className="space-y-1">
-            <Label htmlFor="rot_rut_enabled" className="cursor-pointer">
-              {t('rot_rut_label')}
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              {t('rot_rut_help')}
-            </p>
-          </div>
-        </div>
-      </section>
+        </SettingsRow>
+      </SettingsGroup>
 
       {/* Preliminary tax */}
-      <section className="border-t border-border pt-8 space-y-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('preliminary_tax_heading')}
-        </h2>
-
-        <div className="max-w-xs space-y-2">
-          <Label htmlFor="preliminary_tax_monthly">
-            {t('preliminary_tax_monthly_label')}
-          </Label>
-          <Input
+      <SettingsGroup label={t('preliminary_tax_heading')}>
+        <SettingsRow
+          label={t('preliminary_tax_monthly_label')}
+          htmlFor="preliminary_tax_monthly"
+          help={t('preliminary_tax_monthly_help')}
+          align="baseline"
+        >
+          <SettingsInput
             id="preliminary_tax_monthly"
             name="preliminary_tax_monthly"
             type="number"
             defaultValue={settings.preliminary_tax_monthly || ''}
+            className="max-w-32 flex-none tabular-nums"
           />
-          <p className="text-xs text-muted-foreground">
-            {t('preliminary_tax_monthly_help')}
-          </p>
-        </div>
-      </section>
+        </SettingsRow>
+      </SettingsGroup>
 
       {/* Long-tail deadlines: explicit opt-in only */}
-      <section className="border-t border-border pt-8 space-y-4">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('more_deadlines_heading')}
-        </h2>
-        <p className="text-xs text-muted-foreground -mt-2">
-          {t('more_deadlines_help')}
-        </p>
-
+      <SettingsGroup label={t('more_deadlines_heading')} help={t('more_deadlines_help')}>
         {vatRegistered && (
           <>
-            <div className="flex items-start space-x-3">
-              <Checkbox
+            <SettingsRow label={t('oss_label')} htmlFor="oss_enabled" help={t('oss_help')}>
+              <Switch
                 id="oss_enabled"
                 checked={ossEnabled}
                 onCheckedChange={(v) => setOssEnabled(v === true)}
               />
               <input type="hidden" name="oss_enabled" value={ossEnabled ? 'true' : 'false'} />
-              <div className="space-y-1">
-                <Label htmlFor="oss_enabled" className="cursor-pointer">{t('oss_label')}</Label>
-                <p className="text-xs text-muted-foreground">{t('oss_help')}</p>
-              </div>
-            </div>
+            </SettingsRow>
 
-            <div className="flex items-start space-x-3">
-              <Checkbox
+            <SettingsRow label={t('ioss_label')} htmlFor="ioss_enabled" help={t('ioss_help')}>
+              <Switch
                 id="ioss_enabled"
                 checked={iossEnabled}
                 onCheckedChange={(v) => setIossEnabled(v === true)}
               />
               <input type="hidden" name="ioss_enabled" value={iossEnabled ? 'true' : 'false'} />
-              <div className="space-y-1">
-                <Label htmlFor="ioss_enabled" className="cursor-pointer">{t('ioss_label')}</Label>
-                <p className="text-xs text-muted-foreground">{t('ioss_help')}</p>
-              </div>
-            </div>
+            </SettingsRow>
 
-            <div className="flex items-start space-x-3">
-              <Checkbox
+            <SettingsRow label={t('intrastat_label')} htmlFor="intrastat_enabled" help={t('intrastat_help')}>
+              <Switch
                 id="intrastat_enabled"
                 checked={intrastatEnabled}
                 onCheckedChange={(v) => setIntrastatEnabled(v === true)}
@@ -584,18 +493,12 @@ export function TaxSettingsForm({
                 name="intrastat_enabled"
                 value={intrastatEnabled ? 'true' : 'false'}
               />
-              <div className="space-y-1">
-                <Label htmlFor="intrastat_enabled" className="cursor-pointer">
-                  {t('intrastat_label')}
-                </Label>
-                <p className="text-xs text-muted-foreground">{t('intrastat_help')}</p>
-              </div>
-            </div>
+            </SettingsRow>
           </>
         )}
 
-        <div className="flex items-start space-x-3">
-          <Checkbox
+        <SettingsRow label={t('punktskatt_label')} htmlFor="punktskatt_enabled" help={t('punktskatt_help')}>
+          <Switch
             id="punktskatt_enabled"
             checked={punktskattEnabled}
             onCheckedChange={(v) => setPunktskattEnabled(v === true)}
@@ -605,16 +508,14 @@ export function TaxSettingsForm({
             name="punktskatt_enabled"
             value={punktskattEnabled ? 'true' : 'false'}
           />
-          <div className="space-y-1">
-            <Label htmlFor="punktskatt_enabled" className="cursor-pointer">
-              {t('punktskatt_label')}
-            </Label>
-            <p className="text-xs text-muted-foreground">{t('punktskatt_help')}</p>
-          </div>
-        </div>
+        </SettingsRow>
 
-        <div className="flex items-start space-x-3">
-          <Checkbox
+        <SettingsRow
+          label={t('fyllnadsinbetalning_label')}
+          htmlFor="fyllnadsinbetalning_enabled"
+          help={t('fyllnadsinbetalning_help')}
+        >
+          <Switch
             id="fyllnadsinbetalning_enabled"
             checked={fyllnadEnabled}
             onCheckedChange={(v) => setFyllnadEnabled(v === true)}
@@ -624,14 +525,8 @@ export function TaxSettingsForm({
             name="fyllnadsinbetalning_enabled"
             value={fyllnadEnabled ? 'true' : 'false'}
           />
-          <div className="space-y-1">
-            <Label htmlFor="fyllnadsinbetalning_enabled" className="cursor-pointer">
-              {t('fyllnadsinbetalning_label')}
-            </Label>
-            <p className="text-xs text-muted-foreground">{t('fyllnadsinbetalning_help')}</p>
-          </div>
-        </div>
-      </section>
+        </SettingsRow>
+      </SettingsGroup>
     </div>
   )
 }

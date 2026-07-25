@@ -3,17 +3,16 @@
 import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { AlertTriangle, CheckCircle, Loader2, Upload } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { CheckCircle, Loader2, Upload } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
+import { SettingsGroup, SettingsRow, SettingsSeg } from '@/components/settings/SettingsRows'
 import { BankSelector, type Bank } from './BankSelector'
 import { BankConnectionStatus } from './BankConnectionStatus'
 import { AccountPickerDialog } from './AccountPickerDialog'
@@ -431,23 +430,21 @@ export default function BankingSettingsPanel() {
   // keeps the already-loaded connections visible instead of wiping them.
   if (loadError && bankConnections.length === 0) {
     return (
-      <Card className="border-destructive/30">
-        <CardHeader>
-          <CardTitle>Kunde inte ladda bankanslutningar</CardTitle>
-          <CardDescription>
-            Något gick fel när dina bankanslutningar skulle hämtas. Dina anslutningar
-            och transaktioner är oförändrade.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-center gap-3">
+      <div className="px-1 pt-8">
+        <p className="text-sm font-medium">Kunde inte ladda bankanslutningar</p>
+        <p className="mt-1 max-w-[56ch] text-xs leading-relaxed text-muted-foreground">
+          Något gick fel när dina bankanslutningar skulle hämtas. Dina anslutningar
+          och transaktioner är oförändrade.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
           <Button variant="outline" size="sm" onClick={() => fetchConnections()}>
             Försök igen
           </Button>
           <Button variant="ghost" size="sm" asChild>
             <Link href="/import?mode=bank">Importera bankfil istället</Link>
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     )
   }
 
@@ -463,7 +460,7 @@ export default function BankingSettingsPanel() {
     : []
 
   return (
-    <div className="space-y-6">
+    <div>
       <DestructiveConfirmDialog {...dialogProps} />
 
       {pickerConnection && (
@@ -480,194 +477,146 @@ export default function BankingSettingsPanel() {
         />
       )}
 
-      {/* Persistent CSV fallback after connection/sync failure */}
+      {/* Persistent CSV fallback after connection/sync failure: a live hint,
+          kept visible as a compact line instead of a boxed strip. */}
       {showCsvFallback && (
-        <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/50 p-4">
-          <Upload className="h-5 w-5 shrink-0 text-muted-foreground" />
-          <p className="flex-1 text-sm text-muted-foreground">
-            Har du problem med bankanslutningen? Du kan importera transaktioner manuellt via bankfil.
+        <div className="flex items-start gap-2 px-1 pt-6">
+          <Upload className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+            Har du problem med bankanslutningen? Du kan{' '}
+            <Link href="/import?mode=bank" className="underline underline-offset-2 hover:text-foreground">
+              importera transaktioner manuellt via bankfil
+            </Link>
+            .
           </p>
-          <Button variant="outline" size="sm" asChild>
-            <Link href="/import?mode=bank">Importera bankfil</Link>
-          </Button>
         </div>
       )}
 
       {/* Pending account selection: new connections waiting for the user to pick accounts */}
       {pendingSelectionConnections.length > 0 && (
-        <Card className="border-warning/30">
-          <CardHeader>
-            <CardTitle>Välj konton att synka</CardTitle>
-            <CardDescription>
-              Banken har gett åtkomst till flera konton. Välj vilka du vill synka innan några transaktioner hämtas.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {pendingSelectionConnections.map((connection) => {
-              const accountsList = (connection.accounts_data as StoredAccount[] | null) || []
-              return (
-                <div
-                  key={connection.id}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/30 p-4"
-                >
-                  <div className="flex items-center gap-3">
-                    <AlertTriangle className="h-5 w-5 shrink-0 text-warning" />
-                    <div>
-                      <p className="font-medium">{connection.bank_name}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {accountsList.length} konton tillgängliga: inga transaktioner synkas ännu
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      onClick={() => setPickerConnectionId(connection.id)}
-                    >
-                      Välj konton
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDisconnectBank(connection.id)}
-                    >
-                      Avbryt
-                    </Button>
-                  </div>
-                </div>
-              )
-            })}
-          </CardContent>
-        </Card>
+        <SettingsGroup
+          label="Välj konton att synka"
+          help="Banken har gett åtkomst till flera konton. Välj vilka du vill synka innan några transaktioner hämtas."
+        >
+          {pendingSelectionConnections.map((connection) => {
+            const accountsList = (connection.accounts_data as StoredAccount[] | null) || []
+            return (
+              <div
+                key={connection.id}
+                className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-1 py-3"
+              >
+                <span className="text-sm font-medium">{connection.bank_name}</span>
+                <span className="text-xs text-muted-foreground">
+                  {accountsList.length} konton tillgängliga: inga transaktioner synkas ännu
+                </span>
+                <span className="ml-auto flex shrink-0 items-center gap-2">
+                  <Button size="sm" onClick={() => setPickerConnectionId(connection.id)}>
+                    Välj konton
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground hover:text-foreground"
+                    onClick={() => handleDisconnectBank(connection.id)}
+                  >
+                    Avbryt
+                  </Button>
+                </span>
+              </div>
+            )
+          })}
+        </SettingsGroup>
       )}
 
       {/* Action required: expired/error connections */}
       {actionRequiredConnections.length > 0 && (
-        <Card className="border-warning/30">
-          <CardHeader>
-            <CardTitle>Åtgärd krävs</CardTitle>
-            <CardDescription>
-              Dessa anslutningar behöver uppmärksamhet.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {actionRequiredConnections.map((connection) => (
-              <BankConnectionStatus
-                key={connection.id}
-                connection={connection}
-                onSync={handleSyncTransactions}
-                onDisconnect={handleDisconnectBank}
-                onReconnect={handleReconnect}
-                onManageAccounts={() => setPickerConnectionId(connection.id)}
-                isSyncing={syncingConnectionId === connection.id}
-              />
-            ))}
-          </CardContent>
-        </Card>
+        <SettingsGroup label="Åtgärd krävs" help="Dessa anslutningar behöver uppmärksamhet.">
+          {actionRequiredConnections.map((connection) => (
+            <BankConnectionStatus
+              key={connection.id}
+              connection={connection}
+              onSync={handleSyncTransactions}
+              onDisconnect={handleDisconnectBank}
+              onReconnect={handleReconnect}
+              onManageAccounts={() => setPickerConnectionId(connection.id)}
+              isSyncing={syncingConnectionId === connection.id}
+            />
+          ))}
+        </SettingsGroup>
       )}
 
       {/* Connected banks */}
       {activeConnections.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Anslutna banker</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {activeConnections.map((connection) => (
-              <BankConnectionStatus
-                key={connection.id}
-                connection={connection}
-                onSync={handleSyncTransactions}
-                onDisconnect={handleDisconnectBank}
-                onManageAccounts={() => setPickerConnectionId(connection.id)}
-                isSyncing={syncingConnectionId === connection.id}
-              />
-            ))}
-          </CardContent>
-        </Card>
+        <SettingsGroup label="Anslutna banker">
+          {activeConnections.map((connection) => (
+            <BankConnectionStatus
+              key={connection.id}
+              connection={connection}
+              onSync={handleSyncTransactions}
+              onDisconnect={handleDisconnectBank}
+              onManageAccounts={() => setPickerConnectionId(connection.id)}
+              isSyncing={syncingConnectionId === connection.id}
+            />
+          ))}
+        </SettingsGroup>
       )}
 
-      {/* Connect new bank. Non-payers keep seeing the card (conversion
+      {/* Connect new bank. Non-payers keep seeing the group (conversion
           surface) but the bank list is replaced by an upgrade note: the
-          server gate would 403 the connect anyway. */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Anslut ny bank</CardTitle>
-          <CardDescription>
-            Välj din bank nedan för att koppla ditt konto via PSD2.
-          </CardDescription>
-        </CardHeader>
+          server gate would 403 the connect anyway. The former "Om
+          bankintegration (PSD2)" card lives on as group-level help. */}
+      <SettingsGroup
+        label="Anslut ny bank"
+        help={
+          <div className="space-y-2">
+            <p>Välj din bank nedan för att koppla ditt konto via PSD2.</p>
+            <p className="font-medium">Om bankintegration (PSD2)</p>
+            <p>
+              Automatisk import av transaktioner via PSD2 open banking.
+              Samtycket gäller i 90 dagar och behöver sedan förnyas.
+            </p>
+            <p>
+              Vi använder säker bankintegration (PSD2). Vi kan endast läsa transaktioner,
+              aldrig flytta pengar. Du kan också importera transaktioner manuellt via
+              bankfiler på importsidan.
+            </p>
+          </div>
+        }
+      >
         {!hasBankSync ? (
-          <CardContent>
+          <div className="px-1 pt-3">
             <UpgradeNote>
               Automatisk banksynk kräver ett abonnemang. Du kan fortfarande importera
               transaktioner manuellt via bankfiler på importsidan.
             </UpgradeNote>
-          </CardContent>
-        ) : (
-        <CardContent className="space-y-4">
-          {/* Account type selector */}
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">Kontotyp:</span>
-            <div className="inline-flex rounded-lg border border-border p-0.5">
-              <button
-                type="button"
-                onClick={() => setPsuType('business')}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
-                  psuType === 'business'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                Företagskonto
-              </button>
-              <button
-                type="button"
-                onClick={() => setPsuType('personal')}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
-                  psuType === 'personal'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                )}
-              >
-                Privatkonto
-              </button>
-            </div>
           </div>
-          {psuType === 'personal' && (
-            <p className="text-xs text-muted-foreground">
-              Välj Privatkonto om du använder ditt personliga bankkonto för din verksamhet (vanligt för enskild firma).
-            </p>
-          )}
-          <BankSelector
-            onConnect={(bank) => handleConnectBank(bank, psuType)}
-            onPsuTypeDetected={setPsuType}
-            isConnecting={isConnecting}
-            connectingBankName={connectingBankName}
-          />
-        </CardContent>
+        ) : (
+          <>
+            <SettingsRow
+              label="Kontotyp"
+              help="Välj Privatkonto om du använder ditt personliga bankkonto för din verksamhet (vanligt för enskild firma)."
+            >
+              <SettingsSeg
+                value={psuType}
+                onChange={setPsuType}
+                aria-label="Kontotyp"
+                options={[
+                  { value: 'business', label: 'Företagskonto' },
+                  { value: 'personal', label: 'Privatkonto' },
+                ]}
+              />
+            </SettingsRow>
+            <div className="px-1 pt-4">
+              <BankSelector
+                onConnect={(bank) => handleConnectBank(bank, psuType)}
+                onPsuTypeDetected={setPsuType}
+                isConnecting={isConnecting}
+                connectingBankName={connectingBankName}
+              />
+            </div>
+          </>
         )}
-      </Card>
-
-      {/* Info about PSD2 */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Om bankintegration (PSD2)</CardTitle>
-          <CardDescription>
-            Automatisk import av transaktioner via PSD2 open banking.
-            Samtycket gäller i 90 dagar och behöver sedan förnyas.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            Vi använder säker bankintegration (PSD2). Vi kan endast läsa transaktioner,
-            aldrig flytta pengar. Du kan också importera transaktioner manuellt via
-            bankfiler på importsidan.
-          </p>
-        </CardContent>
-      </Card>
+      </SettingsGroup>
     </div>
   )
 }

@@ -2,12 +2,17 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import {
+  SettingsGroup,
+  SettingsInput,
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
+  SettingsSeg,
+  SettingsTextarea,
+} from '@/components/settings/SettingsRows'
 import {
   INVOICE_EMAIL_DEFAULT_TEXTS,
   INVOICE_EMAIL_PLACEHOLDER_KEYS,
@@ -86,6 +91,7 @@ export function InvoiceEmailTextsSettings({ settings, onUpdate }: InvoiceEmailTe
   const t = useTranslations('settings_email_texts')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const [lang, setLang] = useState<Lang>('sv')
   const [texts, setTexts] = useState<DisplayTexts>(() => buildDisplay(settings.invoice_email_texts))
   // Serialized last-persisted overrides: skips no-op PUTs on blur without
   // edits. toOverrides() builds keys in a fixed order, so comparison is stable.
@@ -98,7 +104,8 @@ export function InvoiceEmailTextsSettings({ settings, onUpdate }: InvoiceEmailTe
   }
 
   // Whole-object save: a JSONB column update replaces the stored value, and
-  // the inactive language tab is unmounted, so per-field PATCHes can't work.
+  // the inactive language's fields are unmounted (conditional render below),
+  // so per-field PATCHes can't work.
   const persist = useCallback(async (display: DisplayTexts) => {
     const overrides = toOverrides(display)
     const serialized = JSON.stringify(overrides)
@@ -133,78 +140,74 @@ export function InvoiceEmailTextsSettings({ settings, onUpdate }: InvoiceEmailTe
   }
 
   return (
-    <section className="space-y-6">
-      <div>
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          {t('heading')}
-        </h2>
-        <p className="mt-1 text-xs text-muted-foreground">{t('description')}</p>
-      </div>
-
-      <Tabs defaultValue="sv">
-        <TabsList>
-          <TabsTrigger value="sv">{t('tab_sv')}</TabsTrigger>
-          <TabsTrigger value="en">{t('tab_en')}</TabsTrigger>
-        </TabsList>
-        {LANGS.map((lang) => (
-          <TabsContent key={lang} value={lang} className="mt-4 space-y-4">
-            {lang === 'en' && (
-              <p className="text-xs text-muted-foreground">{t('en_tab_hint')}</p>
-            )}
-            {FIELD_CONFIG.map(({ field, labelKey, multiline }) => {
-              const id = `invoice-email-${field}-${lang}`
-              const modified =
-                texts[lang][field].trim() !== INVOICE_EMAIL_DEFAULT_TEXTS[lang][field]
-              const common = {
-                id,
-                value: texts[lang][field],
-                onBlur: handleBlur,
-                disabled: !canWrite,
-              }
-              return (
-                <div key={field} className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor={id}>{t(labelKey)}</Label>
-                    {modified && canWrite && (
-                      <button
-                        type="button"
-                        onClick={() => resetField(lang, field)}
-                        className="text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
-                      >
-                        {t('reset_label')}
-                      </button>
-                    )}
-                  </div>
-                  {multiline ? (
-                    <Textarea
-                      {...common}
-                      rows={4}
-                      onChange={(e) => setField(lang, field, e.target.value)}
-                    />
-                  ) : (
-                    <Input
-                      {...common}
-                      onChange={(e) => setField(lang, field, e.target.value)}
-                    />
-                  )}
-                </div>
-              )
-            })}
-          </TabsContent>
-        ))}
-      </Tabs>
-
-      <div className="space-y-1">
-        {/* Legend is rendered from code, not messages/*.json: ICU message
-            syntax treats literal braces as interpolation. */}
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span>{t('placeholders_help')}</span>
-          {INVOICE_EMAIL_PLACEHOLDER_KEYS.map((key) => (
-            <code key={key} className="rounded bg-muted px-1 text-xs">{`{${key}}`}</code>
-          ))}
+    <SettingsGroup
+      label={t('heading')}
+      help={
+        <div className="space-y-2">
+          <p>{t('description')}</p>
+          {/* Legend is rendered from code, not messages/*.json: ICU message
+              syntax treats literal braces as interpolation. */}
+          <p>
+            {t('placeholders_help')}{' '}
+            {INVOICE_EMAIL_PLACEHOLDER_KEYS.map((key) => (
+              <code key={key} className="mr-1 rounded bg-muted px-1 text-xs">{`{${key}}`}</code>
+            ))}
+          </p>
+          <p>{t('firstname_note')}</p>
         </div>
-        <p className="text-xs text-muted-foreground">{t('firstname_note')}</p>
+      }
+    >
+      <div className="flex flex-wrap items-center gap-3 border-b border-border px-1 py-3">
+        <SettingsSeg
+          value={lang}
+          onChange={setLang}
+          options={[
+            { value: 'sv', label: t('tab_sv') },
+            { value: 'en', label: t('tab_en') },
+          ]}
+          aria-label={t('heading')}
+        />
+        {lang === 'en' && <SettingsRowNote>{t('en_tab_hint')}</SettingsRowNote>}
       </div>
-    </section>
+
+      {FIELD_CONFIG.map(({ field, labelKey, multiline }) => {
+        const id = `invoice-email-${field}-${lang}`
+        const modified =
+          texts[lang][field].trim() !== INVOICE_EMAIL_DEFAULT_TEXTS[lang][field]
+        const common = {
+          id,
+          value: texts[lang][field],
+          onBlur: handleBlur,
+          disabled: !canWrite,
+        }
+        return (
+          <SettingsRow key={`${lang}-${field}`} label={t(labelKey)} htmlFor={id} align="baseline">
+            {multiline ? (
+              <SettingsTextarea
+                {...common}
+                rows={4}
+                onChange={(e) => setField(lang, field, e.target.value)}
+              />
+            ) : (
+              <SettingsInput
+                {...common}
+                onChange={(e) => setField(lang, field, e.target.value)}
+              />
+            )}
+            {modified && canWrite && (
+              <SettingsRowEnd>
+                <button
+                  type="button"
+                  onClick={() => resetField(lang, field)}
+                  className="text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                >
+                  {t('reset_label')}
+                </button>
+              </SettingsRowEnd>
+            )}
+          </SettingsRow>
+        )
+      })}
+    </SettingsGroup>
   )
 }

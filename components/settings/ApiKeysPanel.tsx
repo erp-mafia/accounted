@@ -2,7 +2,6 @@
 
 import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -18,9 +17,16 @@ import {
 import { Checkbox } from '@/components/ui/checkbox'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { EmptyState } from '@/components/ui/empty-state'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
+import {
+  SettingsGroup,
+  SettingsReveal,
+  SettingsRow,
+  SettingsRowNote,
+} from '@/components/settings/SettingsRows'
 import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown, AlertTriangle } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, formatDateLong } from '@/lib/utils'
 import { getBranding } from '@/lib/branding/service'
 import { STAGING_SCOPES } from '@/lib/auth/api-keys'
 import type { ApiKeyScope } from '@/lib/auth/api-keys'
@@ -366,15 +372,6 @@ export function ApiKeysPanel() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  function formatDate(iso: string | null) {
-    if (!iso) return '-'
-    return new Date(iso).toLocaleDateString('sv-SE', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
-  }
-
   const mcpBase = typeof window !== 'undefined'
     ? `${window.location.origin}/api/extensions/ext/mcp-server/mcp`
     : '/api/extensions/ext/mcp-server/mcp'
@@ -383,140 +380,137 @@ export function ApiKeysPanel() {
   const mcpUrl = (client: string) => `${mcpBase}?client=${client}`
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-base">{t('title')}</CardTitle>
-              <CardDescription>
-                {t('description')}
-              </CardDescription>
-            </div>
-            <Button
-              size="sm"
-              onClick={() => setShowCreateDialog(true)}
-              disabled={keys.length >= 10}
-            >
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              {t('create_key')}
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : keys.length === 0 ? (
-            <EmptyState
-              icon={Key}
-              title={t('empty_title')}
-              description={t('empty_help')}
-            />
-          ) : (
-            <div className="space-y-3">
-              {keys.map((key) => {
-                const scopeCount = key.scopes?.length ?? 0
-                return (
-                  <div
-                    key={key.id}
-                    className="flex items-center justify-between rounded-md border px-4 py-3"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-medium truncate">{key.name}</p>
-                        {key.mode === 'test' && (
-                          <Badge variant="secondary" className="shrink-0 text-[10px] font-normal px-1.5 py-0">
-                            {t('badge_test')}
-                          </Badge>
-                        )}
-                        <span className="text-xs text-muted-foreground">
-                          {scopeCount === ALL_SCOPES.length
-                            ? t('all_permissions')
-                            : scopeCount === 0
-                              ? t('no_permissions')
-                              : t('permissions_count', { count: scopeCount })}
-                        </span>
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-                        <code className="text-xs text-muted-foreground font-mono">
-                          {key.key_prefix}...
-                        </code>
-                        <span className="text-xs text-muted-foreground">
-                          {t('created')} {formatDate(key.created_at)}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {key.last_used_at
-                            ? t('used_on', { date: formatDate(key.last_used_at) })
-                            : t('never_used')}
-                        </span>
-                      </div>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleRevoke(key.id, key.name)}
-                      aria-label={t('revoke_aria', { name: key.name })}
-                      className="text-destructive hover:text-destructive"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+    <>
+      <SettingsGroup>
+        {/* Group eyebrow with the group's primary action on the right. Styling
+            mirrors SettingsGroup's label line; the "?" holds the old panel
+            description. */}
+        <div className="flex items-center justify-between gap-4 px-1">
+          <p className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            <span>{t('title')}</span>
+            <HelpPopover className="shrink-0">{t('description')}</HelpPopover>
+          </p>
+          <Button
+            size="sm"
+            onClick={() => setShowCreateDialog(true)}
+            disabled={keys.length >= 10}
+          >
+            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            {t('create_key')}
+          </Button>
+        </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('connect_mcp_title')}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <p className="text-sm font-medium">Claude.ai</p>
-              <span className="text-xs text-muted-foreground">{t('recommended_badge')}</span>
-            </div>
-            <p className="text-xs text-muted-foreground mb-2">
-              {t.rich('claude_ai_instructions', {
-                connectorName,
-                path: (chunks) => <strong>{chunks}</strong>,
-              })}
-            </p>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : keys.length === 0 ? (
+          <EmptyState
+            icon={Key}
+            title={t('empty_title')}
+            description={t('empty_help')}
+          />
+        ) : (
+          keys.map((key) => {
+            const scopeCount = key.scopes?.length ?? 0
+            const permissionSummary =
+              scopeCount === ALL_SCOPES.length
+                ? t('all_permissions')
+                : scopeCount === 0
+                  ? t('no_permissions')
+                  : t('permissions_count', { count: scopeCount })
+            return (
+              <div
+                key={key.id}
+                className="flex items-center gap-3 border-b border-border px-1 py-3"
+              >
+                <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-sm">{key.name}</span>
+                    {key.mode === 'test' && (
+                      <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[10px] font-normal">
+                        {t('badge_test')}
+                      </Badge>
+                    )}
+                  </span>
+                  <span className="min-w-0 truncate text-xs text-muted-foreground">
+                    {permissionSummary}
+                    {' · '}
+                    <span className="font-mono">{key.key_prefix}...</span>
+                  </span>
+                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                    {t('created')} {formatDateLong(key.created_at)}
+                    {' · '}
+                    {key.last_used_at
+                      ? t('used_on', { date: formatDateLong(key.last_used_at) })
+                      : t('never_used')}
+                  </span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                  onClick={() => handleRevoke(key.id, key.name)}
+                  aria-label={t('revoke_aria', { name: key.name })}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )
+          })
+        )}
+      </SettingsGroup>
+
+      <SettingsGroup label={t('connect_mcp_title')}>
+        <SettingsRow
+          label="Claude.ai"
+          align="baseline"
+          help={t.rich('claude_ai_instructions', {
+            connectorName,
+            path: (chunks) => <strong>{chunks}</strong>,
+          })}
+        >
+          <SettingsRowNote>{t('recommended_badge')}</SettingsRowNote>
+          <div className="w-full min-w-0">
             <CopyBlock text={mcpUrl('claude-connector')} copyAriaLabel={t('copy_aria')} />
           </div>
+        </SettingsRow>
 
-          <div>
-            <p className="text-sm font-medium mb-2">{t('claude_code_cursor')}</p>
-            <p className="text-xs text-muted-foreground mb-2">
-              {t('terminal_runs_browser_login')}
-            </p>
-            {/* URL is quoted: unquoted `?` in the query string trips zsh globbing. */}
+        <SettingsRow
+          label={t('claude_code_cursor')}
+          align="baseline"
+          help={t('terminal_runs_browser_login')}
+        >
+          {/* URL is quoted: unquoted `?` in the query string trips zsh globbing. */}
+          <div className="w-full min-w-0">
             <CopyBlock text={`claude mcp add ${connectorName} --transport http "${mcpUrl('claude-code')}"`} copyAriaLabel={t('copy_aria')} />
           </div>
+        </SettingsRow>
 
-          <div className="border-t pt-4">
-            <button
-              type="button"
-              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-              onClick={() => setShowApiKeyMethods(!showApiKeyMethods)}
-            >
-              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showApiKeyMethods ? '' : '-rotate-90'}`} />
-              {t('connect_with_api_key')}
-            </button>
-            {showApiKeyMethods && (
-              <div className="space-y-6 pt-4 animate-in slide-in-from-top-1 duration-150">
-                <div>
-                  <p className="text-sm font-medium mb-1">Claude Desktop</p>
-                  <p className="text-xs text-muted-foreground mb-2">
-                    {t.rich('claude_desktop_instructions', {
-                      code: (chunks) => <code className="text-xs">{chunks}</code>,
-                    })}
-                  </p>
-                  <CopyBlock text={`{
+        <button
+          type="button"
+          aria-expanded={showApiKeyMethods}
+          onClick={() => setShowApiKeyMethods(!showApiKeyMethods)}
+          className="flex items-center gap-2 px-1 py-3 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
+        >
+          <ChevronDown
+            className={cn(
+              'h-3.5 w-3.5 transition-transform duration-150',
+              !showApiKeyMethods && '-rotate-90',
+            )}
+          />
+          {t('connect_with_api_key')}
+        </button>
+        <SettingsReveal open={showApiKeyMethods}>
+          <div className="space-y-6 pb-3 pt-1">
+            <div>
+              <p className="mb-1 text-sm">Claude Desktop</p>
+              <p className="mb-2 text-xs text-muted-foreground">
+                {t.rich('claude_desktop_instructions', {
+                  code: (chunks) => <code className="text-xs">{chunks}</code>,
+                })}
+              </p>
+              <CopyBlock text={`{
   "mcpServers": {
     "${connectorName}": {
       "command": "npx",
@@ -528,22 +522,20 @@ export function ApiKeysPanel() {
     }
   }
 }`} copyAriaLabel={t('copy_aria')} />
-                </div>
+            </div>
 
-                <div>
-                  <p className="text-sm font-medium mb-1">{t('claude_code_cursor')}</p>
-                  <p className="text-xs text-muted-foreground mb-2">
-                    {t('terminal_with_api_key')}
-                  </p>
-                  <CopyBlock text={`claude mcp add ${connectorName} --transport http \\
+            <div>
+              <p className="mb-1 text-sm">{t('claude_code_cursor')}</p>
+              <p className="mb-2 text-xs text-muted-foreground">
+                {t('terminal_with_api_key')}
+              </p>
+              <CopyBlock text={`claude mcp add ${connectorName} --transport http \\
   --url "${mcpUrl('claude-code')}" \\
   --header "Authorization: Bearer gnubok_sk_..."`} copyAriaLabel={t('copy_aria')} />
-                </div>
-              </div>
-            )}
+            </div>
           </div>
-        </CardContent>
-      </Card>
+        </SettingsReveal>
+      </SettingsGroup>
 
       {/* Create key dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
@@ -697,6 +689,7 @@ export function ApiKeysPanel() {
               size="sm"
               className="absolute right-2 top-2"
               onClick={handleCopy}
+              aria-label={t('copy_aria')}
             >
               {copied ? (
                 <Check className="h-4 w-4 text-success" />
@@ -716,6 +709,6 @@ export function ApiKeysPanel() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   )
 }

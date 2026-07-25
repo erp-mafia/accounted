@@ -7,10 +7,14 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { CompanyProfileView } from '@/components/settings/CompanyProfileView'
 import { refreshCompanyProfileAction } from '@/lib/company/tic-refresh'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  SettingsGroup,
+  SettingsInput,
+  SettingsRow,
+  SettingsRowNote,
+} from '@/components/settings/SettingsRows'
+import { formatDateLong } from '@/lib/utils'
 
 type Snapshot = Parameters<typeof CompanyProfileView>[0]['snapshot']
 
@@ -24,9 +28,9 @@ const ERROR_MESSAGES: Record<string, string> = {
 // Företagsprofil: the cached TIC company snapshot (Bolagsuppgifter), rendered
 // as a read-only section on the Företag tab. Fetched client-side (low-traffic
 // settings) so it sits alongside the client-rendered company form. RLS scopes
-// the read to the user's own company. The "Hämta" form lets the user (re)fetch
-// live when the snapshot is missing or wrong: the recovery path for an enskild
-// firma whose personnummer previously resolved to the wrong entity.
+// the read to the user's own company. The trailing "Hämta" row lets the user
+// (re)fetch live when the snapshot is missing or wrong: the recovery path for
+// an enskild firma whose personnummer previously resolved to the wrong entity.
 export function CompanyProfileSection() {
   const { company } = useCompany()
   const [snapshot, setSnapshot] = useState<Snapshot>(null)
@@ -76,49 +80,44 @@ export function CompanyProfileSection() {
   if (loading) return <Skeleton className="h-48 w-full rounded-lg" />
 
   return (
-    <div className="space-y-4">
-      <CompanyProfileView snapshot={snapshot} fetchedAt={fetchedAt} />
+    <SettingsGroup label="Bolagsuppgifter">
+      <CompanyProfileView snapshot={snapshot} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            {snapshot ? 'Uppdatera bolagsuppgifter' : 'Hämta bolagsuppgifter'}
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleFetch} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="tic_org_number">Organisationsnummer eller personnummer</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="tic_org_number"
-                  value={orgInput}
-                  onChange={(e) => setOrgInput(e.target.value)}
-                  placeholder="XXXXXX-XXXX"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  className="max-w-xs tabular-nums"
-                />
-                <Button type="submit" disabled={submitting || !orgInput.trim()}>
-                  {submitting ? (
-                    <>
-                      <Loader2 className="animate-spin" />
-                      Hämtar…
-                    </>
-                  ) : (
-                    'Hämta'
-                  )}
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Uppgifterna hämtas från Bolagsverket. För enskild firma anges
-                personnumret.
-              </p>
-              {error && <p className="text-sm text-destructive">{error}</p>}
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-    </div>
+      <SettingsRow
+        label={snapshot ? 'Uppdatera bolagsuppgifter' : 'Hämta bolagsuppgifter'}
+        help="Uppgifterna hämtas från Bolagsverket. För enskild firma anges personnumret."
+        borderless
+      >
+        <form
+          onSubmit={handleFetch}
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1"
+        >
+          <SettingsInput
+            id="tic_org_number"
+            aria-label="Organisationsnummer eller personnummer"
+            value={orgInput}
+            onChange={(e) => setOrgInput(e.target.value)}
+            placeholder="XXXXXX-XXXX"
+            inputMode="numeric"
+            autoComplete="off"
+            className="max-w-xs tabular-nums"
+          />
+          <Button type="submit" size="sm" disabled={submitting || !orgInput.trim()}>
+            {submitting ? (
+              <>
+                <Loader2 className="animate-spin" />
+                Hämtar…
+              </>
+            ) : (
+              'Hämta'
+            )}
+          </Button>
+          {fetchedAt && (
+            <SettingsRowNote>Uppdaterad {formatDateLong(fetchedAt)}</SettingsRowNote>
+          )}
+          {error && <span className="basis-full text-xs text-destructive">{error}</span>}
+        </form>
+      </SettingsRow>
+    </SettingsGroup>
   )
 }

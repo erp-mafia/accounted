@@ -10,21 +10,10 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import { getDaysUntilExpiry, isConsentExpiringSoon } from '../lib/api-client'
 import Link from 'next/link'
-import {
-  CreditCard,
-  AlertTriangle,
-  RefreshCw,
-  Settings,
-  Trash2,
-  Loader2,
-  CheckCircle,
-  ChevronDown,
-  XCircle,
-  Upload,
-} from 'lucide-react'
+import { ChevronDown, Loader2 } from 'lucide-react'
 import type { BankConnection } from '@/types'
 
 interface BankConnectionStatusProps {
@@ -36,6 +25,13 @@ interface BankConnectionStatusProps {
   isSyncing?: boolean
 }
 
+/**
+ * One bank connection as a flat hairline row (Fönster settings language):
+ * bank name + state on one line with quiet actions on the right, live
+ * warnings as compact warning-tone lines underneath, and the accounts as an
+ * indented sub-list. Normal state (Aktiv) is muted text; a Badge appears
+ * only when the row deviates (expired/error/pending).
+ */
 export function BankConnectionStatus({
   connection,
   onSync,
@@ -47,48 +43,19 @@ export function BankConnectionStatus({
   const daysUntilExpiry = getDaysUntilExpiry(connection.consent_expires)
   const isExpiring = isConsentExpiringSoon(connection.consent_expires)
 
-  type StatusEntry = {
-    icon: typeof CheckCircle
-    color: string
-    label: string
-    variant: 'success' | 'warning' | 'destructive' | 'secondary'
-  }
+  type StatusEntry =
+    | { kind: 'text'; label: string }
+    | { kind: 'badge'; label: string; variant: 'warning' | 'destructive' | 'secondary' }
 
   const statusConfig: Record<string, StatusEntry> = {
-    active: {
-      icon: CheckCircle,
-      color: 'text-success',
-      label: 'Aktiv',
-      variant: 'success',
-    },
-    pending: {
-      icon: Loader2,
-      color: 'text-warning',
-      label: 'Väntar',
-      variant: 'warning',
-    },
-    expired: {
-      icon: AlertTriangle,
-      color: 'text-warning',
-      label: 'Utgånget samtycke',
-      variant: 'warning',
-    },
-    error: {
-      icon: XCircle,
-      color: 'text-destructive',
-      label: 'Fel',
-      variant: 'destructive',
-    },
-    revoked: {
-      icon: XCircle,
-      color: 'text-gray-600',
-      label: 'Bortkopplad',
-      variant: 'secondary',
-    },
+    active: { kind: 'text', label: 'Aktiv' },
+    pending: { kind: 'badge', label: 'Väntar', variant: 'warning' },
+    expired: { kind: 'badge', label: 'Utgånget samtycke', variant: 'warning' },
+    error: { kind: 'badge', label: 'Fel', variant: 'destructive' },
+    revoked: { kind: 'badge', label: 'Bortkopplad', variant: 'secondary' },
   }
 
   const status = statusConfig[connection.status] || statusConfig.error
-  const StatusIcon = status.icon
 
   // Parse accounts from connection
   const accounts = (connection.accounts_data as Array<{
@@ -118,32 +85,32 @@ export function BankConnectionStatus({
   const errorMessage = connection.error_message ?? ''
 
   return (
-    <div className="border rounded-lg p-4 space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
-            <CreditCard className="h-5 w-5 text-primary" />
-          </div>
-          <div>
-            <p className="font-medium">{connection.bank_name}</p>
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <StatusIcon className={`h-3 w-3 ${status.color}`} />
-              <span>{status.label}</span>
-              {connection.last_synced_at && (
-                <>
-                  <span>-</span>
-                  <span>Synkad {formatDate(connection.last_synced_at)}</span>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="border-b border-border px-1 py-3">
+      {/* Main line: identity + state left, quiet actions right */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="text-sm font-medium">{connection.bank_name}</span>
+        {status.kind === 'badge' ? (
+          <Badge variant={status.variant}>{status.label}</Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">{status.label}</span>
+        )}
+        {connection.last_synced_at && (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            Synkad {formatDate(connection.last_synced_at)}
+          </span>
+        )}
+        {/* Consent renewal date as quiet metadata; the expired state already
+            carries its own warning line below. */}
+        {connection.consent_expires && !isConnectionExpired && (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            Samtycke till {formatDate(connection.consent_expires)}
+          </span>
+        )}
+        <span className="ml-auto flex shrink-0 flex-wrap items-center gap-1">
           {(isConnectionExpired || isConnectionError) && onReconnect && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="gap-1.5">
+                <Button variant="ghost" size="sm" className="gap-1 text-muted-foreground hover:text-foreground">
                   Förnya anslutning
                   <ChevronDown className="h-3.5 w-3.5" />
                 </Button>
@@ -170,98 +137,81 @@ export function BankConnectionStatus({
             <Button
               variant="ghost"
               size="sm"
+              className="text-muted-foreground hover:text-foreground"
               onClick={() => onSync(connection.id)}
               disabled={isSyncing}
             >
-              {isSyncing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <>
-                  <RefreshCw className="h-4 w-4 mr-1" />
-                  Försök igen
-                </>
-              )}
+              {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+              Försök igen
             </Button>
           )}
           {connection.status === 'active' && (
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
+              className="text-muted-foreground hover:text-foreground"
               onClick={() => onSync(connection.id)}
               disabled={isSyncing}
             >
-              {isSyncing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
+              {isSyncing ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+              Synka
             </Button>
           )}
           {onManageAccounts && (
             <Button
               variant="ghost"
               size="sm"
+              className="text-muted-foreground hover:text-foreground"
               onClick={() => onManageAccounts(connection.id)}
-              title="Hantera konton"
             >
-              <Settings className="h-4 w-4" />
+              Välj konton
             </Button>
           )}
           <Button
             variant="ghost"
             size="sm"
+            className="text-muted-foreground hover:text-destructive"
             onClick={() => onDisconnect(connection.id)}
           >
-            <Trash2 className="h-4 w-4 text-destructive" />
+            Koppla från
           </Button>
-        </div>
+        </span>
       </div>
 
-      {/* Error message */}
+      {/* Error message: live warning, compact warning-tone lines */}
       {isConnectionError && errorMessage && (
         <>
-          <div className="flex items-center gap-2 p-3 bg-destructive/10 rounded-lg">
-            <XCircle className="h-4 w-4 text-destructive flex-shrink-0" />
-            <span className="text-sm text-destructive">
-              {errorMessage}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 p-3 bg-muted/50 rounded-lg border border-border">
-            <Upload className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-            <span className="text-sm text-muted-foreground">
-              Du kan också <Link href="/import?mode=bank" className="underline hover:text-foreground">importera transaktioner via bankfil</Link>
-            </span>
-          </div>
+          <p className="mt-1 text-[12.5px] leading-relaxed text-attn">{errorMessage}</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Du kan också{' '}
+            <Link href="/import?mode=bank" className="underline underline-offset-2 hover:text-foreground">
+              importera transaktioner via bankfil
+            </Link>
+          </p>
         </>
       )}
 
       {/* Expired consent notice */}
       {isConnectionExpired && (
         <>
-          <div className="flex items-center gap-2 p-3 bg-warning/10 rounded-lg">
-            <AlertTriangle className="h-4 w-4 text-warning flex-shrink-0" />
-            <span className="text-sm">
-              PSD2-samtycket har löpt ut. Förnya anslutningen för att återuppta synkroniseringen.
-            </span>
-          </div>
-          <div className="flex items-center gap-2 p-3 bg-muted/50 rounded-lg border border-border">
-            <Upload className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-            <span className="text-sm text-muted-foreground">
-              Medan du väntar kan du <Link href="/import?mode=bank" className="underline hover:text-foreground">importera transaktioner via bankfil</Link>
-            </span>
-          </div>
+          <p className="mt-1 text-[12.5px] leading-relaxed text-attn">
+            PSD2-samtycket har löpt ut. Förnya anslutningen för att återuppta synkroniseringen.
+          </p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Medan du väntar kan du{' '}
+            <Link href="/import?mode=bank" className="underline underline-offset-2 hover:text-foreground">
+              importera transaktioner via bankfil
+            </Link>
+          </p>
         </>
       )}
 
       {/* Consent expiry warning (for active connections) */}
       {!isConnectionExpired && isExpiring && daysUntilExpiry !== null && (
-        <div className="flex items-center gap-2 p-3 bg-warning/10 rounded-lg">
-          <AlertTriangle className="h-4 w-4 text-warning" />
-          <span className="text-sm">
-            Samtycket går ut om {daysUntilExpiry} {daysUntilExpiry === 1 ? 'dag' : 'dagar'}.
-            Förnya genom att ansluta igen.
-          </span>
-        </div>
+        <p className="mt-1 text-[12.5px] leading-relaxed text-attn">
+          Samtycket går ut om {daysUntilExpiry} {daysUntilExpiry === 1 ? 'dag' : 'dagar'}.
+          Förnya genom att ansluta igen.
+        </p>
       )}
 
       {/* Initial backfill summary: shows what the bank actually returned vs what we asked for. */}
@@ -278,7 +228,7 @@ export function BankConnectionStatus({
           truncated = (minTime - requestedTime) > 7 * 24 * 60 * 60 * 1000
         }
         return (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span>
               Initial historik:{' '}
               <span className="tabular-nums">
@@ -295,59 +245,58 @@ export function BankConnectionStatus({
         )
       })()}
 
-      {/* Accounts list */}
+      {/* Accounts: indented flat sub-list instead of boxed rows */}
       {accounts.length > 0 && (
-        <div className="space-y-2">
+        <div className="ml-3 mt-3 border-l border-border pl-4">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-muted-foreground">Konton</p>
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              Konton
+            </p>
             <p className="text-xs text-muted-foreground tabular-nums">
               {enabledCount} av {accounts.length} synkas
             </p>
           </div>
-          <div className="space-y-2">
-            {accounts.map((account) => {
-              const isDisabled = account.enabled === false
-              return (
-                <div
-                  key={account.uid}
-                  className={`flex items-center justify-between p-3 rounded-lg ${isDisabled ? 'bg-muted/20 opacity-60' : 'bg-muted/50'}`}
-                >
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium">
-                        {account.name || account.iban || 'Okänt konto'}
-                      </p>
-                      {isDisabled && (
-                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground border border-border rounded px-1.5 py-0.5">
-                          Synkas ej
-                        </span>
-                      )}
-                    </div>
-                    {account.iban && (
-                      <p className="text-xs text-muted-foreground">
-                        {account.iban.replace(/(.{4})/g, '$1 ').trim()}
-                      </p>
+          {accounts.map((account) => {
+            const isDisabled = account.enabled === false
+            return (
+              <div
+                key={account.uid}
+                className={cn(
+                  'flex flex-wrap items-center gap-x-3 gap-y-1 py-2',
+                  isDisabled && 'opacity-60',
+                )}
+              >
+                <span className="text-sm">
+                  {account.name || account.iban || 'Okänt konto'}
+                </span>
+                {isDisabled && (
+                  <Badge variant="outline" className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Synkas ej
+                  </Badge>
+                )}
+                {account.iban && (
+                  <span className="text-xs text-muted-foreground">
+                    {account.iban.replace(/(.{4})/g, '$1 ').trim()}
+                  </span>
+                )}
+                {account.balance !== undefined && (
+                  <span className="ml-auto inline-flex shrink-0 items-baseline gap-2">
+                    {account.balance_updated_at && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {formatBalanceAge(account.balance_updated_at)}
+                      </span>
                     )}
-                  </div>
-                  {account.balance !== undefined && (
-                    <div className="text-right">
-                      <p className="text-sm font-medium tabular-nums">
-                        {new Intl.NumberFormat('sv-SE', {
-                          style: 'currency',
-                          currency: account.currency,
-                        }).format(account.balance)}
-                      </p>
-                      {account.balance_updated_at && (
-                        <p className="text-[10px] text-muted-foreground">
-                          {formatBalanceAge(account.balance_updated_at)}
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
+                    <span className="text-sm tabular-nums">
+                      {new Intl.NumberFormat('sv-SE', {
+                        style: 'currency',
+                        currency: account.currency,
+                      }).format(account.balance)}
+                    </span>
+                  </span>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

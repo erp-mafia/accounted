@@ -85,6 +85,7 @@ export function HelpPopover({ children, className }: HelpPopoverProps) {
           <div
             ref={panelRef}
             role="note"
+            data-help-popover=""
             className="fixed z-[60] w-[300px] rounded-lg border border-border bg-popover p-4 text-[13px] leading-relaxed text-foreground shadow-lg animate-in fade-in slide-in-from-top-1 duration-150"
             style={{ top: pos.top, left: pos.left }}
           >

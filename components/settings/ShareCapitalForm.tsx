@@ -2,8 +2,13 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import {
+  SettingsGroup,
+  SettingsInput,
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
+} from '@/components/settings/SettingsRows'
 import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
 
@@ -40,49 +45,52 @@ export function ShareCapitalForm({ settings }: ShareCapitalFormProps) {
       : null
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        {t('share_capital_heading')}
-      </h2>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="aktiekapital">{t('aktiekapital_label')}</Label>
-          <Input
-            id="aktiekapital"
-            name="aktiekapital"
-            type="number"
-            inputMode="numeric"
-            min="1"
-            step="1"
-            value={aktiekapital}
-            onChange={(e) => setAktiekapital(e.target.value)}
-            required={antalAktier.trim() !== ''}
-          />
-          <p className="text-xs text-muted-foreground">{t('aktiekapital_help')}</p>
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="antal_aktier">{t('antal_aktier_label')}</Label>
-          <Input
-            id="antal_aktier"
-            name="antal_aktier"
-            type="number"
-            inputMode="numeric"
-            min="1"
-            step="1"
-            value={antalAktier}
-            onChange={(e) => setAntalAktier(e.target.value)}
-            required={aktiekapital.trim() !== ''}
-          />
-          <p className="text-xs text-muted-foreground">{t('antal_aktier_help')}</p>
-        </div>
-      </div>
-
-      {kvotvarde !== null && (
-        <p className="text-xs text-muted-foreground tabular-nums">
-          {t('kvotvarde_display', { value: formatCurrency(kvotvarde) })}
-        </p>
-      )}
-    </section>
+    <SettingsGroup label={t('share_capital_heading')}>
+      <SettingsRow
+        label={t('aktiekapital_label')}
+        htmlFor="aktiekapital"
+        help={t('aktiekapital_help')}
+        align="baseline"
+      >
+        <SettingsInput
+          id="aktiekapital"
+          name="aktiekapital"
+          type="number"
+          inputMode="numeric"
+          min="1"
+          step="1"
+          value={aktiekapital}
+          onChange={(e) => setAktiekapital(e.target.value)}
+          required={antalAktier.trim() !== ''}
+          className="max-w-32 flex-none tabular-nums"
+        />
+      </SettingsRow>
+      <SettingsRow
+        label={t('antal_aktier_label')}
+        htmlFor="antal_aktier"
+        help={t('antal_aktier_help')}
+        align="baseline"
+      >
+        <SettingsInput
+          id="antal_aktier"
+          name="antal_aktier"
+          type="number"
+          inputMode="numeric"
+          min="1"
+          step="1"
+          value={antalAktier}
+          onChange={(e) => setAntalAktier(e.target.value)}
+          required={aktiekapital.trim() !== ''}
+          className="max-w-32 flex-none tabular-nums"
+        />
+        {kvotvarde !== null && (
+          <SettingsRowEnd>
+            <SettingsRowNote className="tabular-nums">
+              {t('kvotvarde_display', { value: formatCurrency(kvotvarde) })}
+            </SettingsRowNote>
+          </SettingsRowEnd>
+        )}
+      </SettingsRow>
+    </SettingsGroup>
   )
 }

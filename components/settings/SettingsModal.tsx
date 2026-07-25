@@ -11,7 +11,6 @@ import {
 } from '@/components/ui/dialog'
 import { SETTINGS_SECTIONS } from './sections'
 import { SettingsShell } from './SettingsShell'
-import { ActiveCompanyBadge } from './ActiveCompanyBadge'
 
 /**
  * The settings popup. Rendered only by the intercepting route
@@ -20,6 +19,9 @@ import { ActiveCompanyBadge } from './ActiveCompanyBadge'
  * returning the user to the page they came from (which stayed mounted in the
  * `children` slot behind the scrim). On hard load / refresh / deep-link the
  * interceptor doesn't fire and the real full-page settings render instead.
+ *
+ * Chrome follows the Fönster concept: company kicker over a serif title,
+ * fixed-height window so the rail never jumps between sections.
  */
 export function SettingsModal({ sectionId }: { sectionId?: string }) {
   const router = useRouter()
@@ -54,16 +56,25 @@ export function SettingsModal({ sectionId }: { sectionId?: string }) {
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
+      {/* Escape with an open "?" help popover closes the popover (its own
+          listener), not the whole settings window. */}
       <DialogContent
-        className="flex h-[100dvh] max-h-[100dvh] max-w-none flex-col gap-0 overflow-hidden rounded-none p-0 md:h-auto md:max-h-[85dvh] md:max-w-4xl md:rounded-lg"
+        className="flex h-[100dvh] max-h-[100dvh] max-w-none flex-col gap-0 overflow-hidden rounded-none p-0 md:h-[min(680px,88dvh)] md:max-h-[88dvh] md:max-w-[920px] md:rounded-xl"
+        onEscapeKeyDown={(e) => {
+          if (document.querySelector('[data-help-popover]')) e.preventDefault()
+        }}
       >
-        <div className="flex shrink-0 items-center gap-3 border-b border-border px-6 py-4">
-          <DialogTitle className="font-display text-lg tracking-tight">
-            {t('title')}
-          </DialogTitle>
-          {/* The modal covers the sidebar's CompanySwitcher, so the active
-              company must stay visible here (mr-6 clears the close button). */}
-          <ActiveCompanyBadge className="ml-auto mr-6" />
+        <div className="flex shrink-0 items-center gap-3 border-b border-border px-6 py-3">
+          <div className="min-w-0">
+            {/* The modal covers the sidebar's CompanySwitcher, so the active
+                company must stay visible here as the kicker over the title. */}
+            {company ? (
+              <p className="truncate text-xs text-muted-foreground">{company.name}</p>
+            ) : null}
+            <DialogTitle className="font-display text-lg tracking-tight">
+              {t('title')}
+            </DialogTitle>
+          </div>
         </div>
         <DialogDescription className="sr-only">{t('description')}</DialogDescription>
         <SettingsShell variant="modal" activeSection={resolved} />

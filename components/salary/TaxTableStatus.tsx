@@ -74,13 +74,21 @@ export function TaxTableStatus({ year, compact = false }: Props) {
     )
   }
 
+  // Flat row presentation (Fönster settings language): muted status line
+  // with a quiet right-aligned recheck, no box.
   return (
-    <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2">
-      <div className="flex items-center gap-2 text-sm">
-        <Icon className={`h-4 w-4 ${iconColor}`} />
-        <span>{label}</span>
-      </div>
-      <Button variant="ghost" size="sm" onClick={check} disabled={loading} aria-label={t('recheck')}>
+    <div className="flex w-full min-w-0 items-center gap-2">
+      <Icon className={`h-3.5 w-3.5 shrink-0 ${iconColor}`} />
+      <span className="min-w-0 text-xs text-muted-foreground">{label}</span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={check}
+        disabled={loading}
+        aria-label={t('recheck')}
+        className="ml-auto shrink-0"
+      >
         {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
       </Button>
     </div>

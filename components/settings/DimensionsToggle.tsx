@@ -5,10 +5,14 @@ import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { ExternalLink } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
-import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
+import {
+  SettingsRow,
+  SettingsRowEnd,
+} from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 /**
@@ -88,36 +92,33 @@ export function DimensionsToggle() {
     }
   }
 
+  const locked = isSaving || !canWrite
+
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        {t('settings_heading')}
-      </h2>
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-1">
-          <Label htmlFor="dimensions-enabled" className="text-sm">
-            {t('settings_toggle_label')}
-          </Label>
-          <p className="text-xs text-muted-foreground max-w-md">
-            {t('settings_toggle_help')}
-          </p>
-        </div>
-        <Switch
-          id="dimensions-enabled"
-          checked={enabled}
-          onCheckedChange={(next) => void handleChange(next)}
-          disabled={isSaving || !canWrite}
-        />
-      </div>
+    <SettingsRow label={t('settings_heading')} help={t('settings_toggle_help')}>
+      <Switch
+        id="dimensions-enabled"
+        checked={enabled}
+        onCheckedChange={(next) => void handleChange(next)}
+        disabled={locked}
+      />
+      <label
+        htmlFor="dimensions-enabled"
+        className={cn('text-sm', locked ? 'text-muted-foreground' : 'cursor-pointer')}
+      >
+        {t('settings_toggle_label')}
+      </label>
       {enabled && (
-        <Link
-          href="/dimensions"
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          {t('settings_open_register')}
-        </Link>
+        <SettingsRowEnd>
+          <Link
+            href="/dimensions"
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            {t('settings_open_register')}
+          </Link>
+        </SettingsRowEnd>
       )}
-    </section>
+    </SettingsRow>
   )
 }

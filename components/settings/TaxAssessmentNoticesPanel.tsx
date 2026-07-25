@@ -2,18 +2,16 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { CalendarClock, Pencil, Trash2 } from 'lucide-react'
+import { Pencil, Trash2 } from 'lucide-react'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+  SettingsGroup,
+  SettingsInput,
+  SettingsRow,
+  SettingsRowNote,
+  SettingsSelect,
+} from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
 import type {
@@ -142,102 +140,98 @@ export function TaxAssessmentNoticesPanel() {
   }
 
   return (
-    <section className="border-t border-border pt-8" aria-labelledby="tax-assessment-notices-title">
-      <div className="max-w-3xl">
-        <div className="flex items-start gap-3">
-          <CalendarClock className="mt-0.5 h-5 w-5" />
-          <div>
-            <h2 id="tax-assessment-notices-title" className="font-display text-xl tracking-tight">
-              {t('title')}
-            </h2>
-            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-              {t('description')}
-            </p>
-          </div>
-        </div>
-
-        <form onSubmit={saveNotice} className="mt-6 grid gap-4 rounded-lg border border-border p-4 sm:grid-cols-2 sm:p-6">
+    // What this panel is for ("enter the exact payment date from the
+    // slutskattebesked") is static guidance: it lives behind the group "?".
+    <SettingsGroup label={t('title')} help={t('description')}>
+      <form onSubmit={saveNotice}>
+        <SettingsRow label={t('fiscal_period')}>
           <FiscalYearSelector
             value={selectedPeriodId}
             onChange={(periodId) => setSelectedPeriodId(periodId)}
             includeAllOption={false}
-            label={t('fiscal_period')}
-            className="sm:col-span-2"
+            label={null}
+            className="w-full max-w-72"
           />
-          <div className="space-y-1.5">
-            <Label htmlFor="tax-assessment-decision-type">{t('decision_type')}</Label>
-            <Select value={decisionType} onValueChange={(value) => setDecisionType(value as TaxAssessmentDecisionType)}>
-              <SelectTrigger id="tax-assessment-decision-type">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="final">{t('decision_final')}</SelectItem>
-                <SelectItem value="reassessment">{t('decision_reassessment')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="tax-assessment-decision-date">{t('decision_date')}</Label>
-            <Input
-              id="tax-assessment-decision-date"
-              type="date"
-              required
-              value={decisionDate}
-              onChange={(event) => setDecisionDate(event.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="tax-assessment-payment-due-date">{t('payment_due_date')}</Label>
-            <Input
-              id="tax-assessment-payment-due-date"
-              type="date"
-              required
-              min={decisionDate}
-              value={paymentDueDate}
-              onChange={(event) => setPaymentDueDate(event.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">{t('payment_due_date_help')}</p>
-          </div>
-          <div className="flex flex-wrap gap-2 sm:col-span-2">
-            <Button type="submit" disabled={saving || !selectedPeriodId || !paymentDueDate}>
-              {saving ? t('saving') : t(editingId ? 'update_action' : 'save_action')}
+        </SettingsRow>
+        <SettingsRow label={t('decision_type')} htmlFor="tax-assessment-decision-type">
+          <SettingsSelect
+            id="tax-assessment-decision-type"
+            value={decisionType}
+            onChange={(event) => setDecisionType(event.target.value as TaxAssessmentDecisionType)}
+          >
+            <option value="final">{t('decision_final')}</option>
+            <option value="reassessment">{t('decision_reassessment')}</option>
+          </SettingsSelect>
+        </SettingsRow>
+        <SettingsRow
+          label={t('decision_date')}
+          htmlFor="tax-assessment-decision-date"
+          align="baseline"
+        >
+          <SettingsInput
+            id="tax-assessment-decision-date"
+            type="date"
+            required
+            value={decisionDate}
+            onChange={(event) => setDecisionDate(event.target.value)}
+            className="max-w-40 flex-none tabular-nums"
+          />
+        </SettingsRow>
+        <SettingsRow
+          label={t('payment_due_date')}
+          htmlFor="tax-assessment-payment-due-date"
+          help={t('payment_due_date_help')}
+          align="baseline"
+        >
+          <SettingsInput
+            id="tax-assessment-payment-due-date"
+            type="date"
+            required
+            min={decisionDate}
+            value={paymentDueDate}
+            onChange={(event) => setPaymentDueDate(event.target.value)}
+            className="max-w-40 flex-none tabular-nums"
+          />
+        </SettingsRow>
+        <div className="flex flex-wrap gap-2 px-1 py-3">
+          <Button type="submit" size="sm" disabled={saving || !selectedPeriodId || !paymentDueDate}>
+            {saving ? t('saving') : t(editingId ? 'update_action' : 'save_action')}
+          </Button>
+          {editingId && (
+            <Button type="button" variant="ghost" size="sm" onClick={resetForm} disabled={saving}>
+              {t('cancel')}
             </Button>
-            {editingId && (
-              <Button type="button" variant="ghost" onClick={resetForm} disabled={saving}>
-                {t('cancel')}
-              </Button>
-            )}
-          </div>
-        </form>
+          )}
+        </div>
+      </form>
 
-        {!loading && notices.length > 0 && (
-          <div className="mt-6 divide-y divide-border border-y border-border">
-            {notices.map((notice) => (
-              <div key={notice.id} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-medium">
-                    {notice.decision_type === 'final' ? t('decision_final') : t('decision_reassessment')}
-                    {notice.fiscal_period?.name ? `: ${notice.fiscal_period.name}` : ''}
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t('due_summary', { date: notice.payment_due_date })}
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <Button type="button" variant="ghost" size="sm" onClick={() => editNotice(notice)} disabled={saving}>
-                    <Pencil className="mr-2 h-4 w-4" />
-                    {t('edit')}
-                  </Button>
-                  <Button type="button" variant="ghost" size="sm" onClick={() => void archiveNotice(notice)} disabled={saving}>
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    {t('archive')}
-                  </Button>
-                </div>
-              </div>
-            ))}
+      {/* Registered notices continue as flat hairline rows under the form. */}
+      {!loading && notices.length > 0 && notices.map((notice) => (
+        <div
+          key={notice.id}
+          className="flex flex-col gap-3 border-t border-border px-1 py-3 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div className="min-w-0">
+            <p className="text-sm">
+              {notice.decision_type === 'final' ? t('decision_final') : t('decision_reassessment')}
+              {notice.fiscal_period?.name ? `: ${notice.fiscal_period.name}` : ''}
+            </p>
+            <SettingsRowNote className="tabular-nums">
+              {t('due_summary', { date: notice.payment_due_date })}
+            </SettingsRowNote>
           </div>
-        )}
-      </div>
-    </section>
+          <div className="flex shrink-0 gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={() => editNotice(notice)} disabled={saving}>
+              <Pencil className="mr-2 h-4 w-4" />
+              {t('edit')}
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={() => void archiveNotice(notice)} disabled={saving}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              {t('archive')}
+            </Button>
+          </div>
+        </div>
+      ))}
+    </SettingsGroup>
   )
 }

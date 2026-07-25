@@ -4,11 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChevronDown, GraduationCap, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
+import { SettingsGroup, SettingsRowNote } from '@/components/settings/SettingsRows'
+import { cn } from '@/lib/utils'
 
 type Tier = 'horizontal' | 'vertical' | 'modifier'
 
@@ -53,7 +55,7 @@ const PROSE =
   '[&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top'
 
 // The API returns errors either as a plain string (legacy/validation) or as
-// the canonical { code, message } envelope — extract something renderable.
+// the canonical { code, message } envelope; extract something renderable.
 function apiErrorText(error: unknown): string | undefined {
   if (typeof error === 'string') return error
   if (error && typeof error === 'object' && 'message' in error) {
@@ -118,112 +120,107 @@ export function AgentSkillsPanel() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Vad min assistent kan</CardTitle>
-        <CardDescription>
-          Utöver vad den minns om ditt företag bygger assistenten på en uppsättning kunskapsområden
-          om svensk bokföring och skatt. Kärnkompetensen gäller alla; bransch- och bolagsanpassningen
-          väljs utifrån ditt företag. Klicka för att läsa hela kunskapen.
-        </CardDescription>
-      </CardHeader>
-
-      <CardContent className="space-y-8">
-        {atoms && (
-          <div className="text-xs text-muted-foreground tabular-nums">
+    <div>
+      {/* Dynamic status stays visible; the static "what this is" copy sits
+          behind the "?" next to it. */}
+      {atoms && (
+        <div className="flex items-center gap-2 px-1">
+          <SettingsRowNote className="tabular-nums">
             {counts.total} kunskapsområden · {counts.active} aktiva för ditt företag
-          </div>
-        )}
+          </SettingsRowNote>
+          <HelpPopover className="shrink-0">
+            Utöver vad den minns om ditt företag bygger assistenten på en uppsättning
+            kunskapsområden om svensk bokföring och skatt. Kärnkompetensen gäller alla;
+            bransch- och bolagsanpassningen väljs utifrån ditt företag. Klicka på ett
+            område för att läsa hela kunskapen.
+          </HelpPopover>
+        </div>
+      )}
 
-        {atoms === null && (
-          <div className="space-y-3">
-            {[0, 1, 2, 3].map((i) => (
-              <Skeleton key={i} className="h-16 w-full rounded-lg" />
-            ))}
-          </div>
-        )}
+      {atoms === null && (
+        <div className="space-y-3">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-12 w-full" />
+          ))}
+        </div>
+      )}
 
-        {atoms && atoms.length === 0 && (
-          <EmptyState
-            icon={GraduationCap}
-            title="Inga kunskapsområden ännu"
-            description="När din assistent har komponerats dyker dess kunskapsområden upp här."
-          />
-        )}
+      {atoms && atoms.length === 0 && (
+        <EmptyState
+          icon={GraduationCap}
+          title="Inga kunskapsområden ännu"
+          description="När din assistent har komponerats dyker dess kunskapsområden upp här."
+        />
+      )}
 
-        {atoms && atoms.length > 0 &&
-          TIER_ORDER.filter((tier) => grouped[tier].length > 0).map((tier) => (
-            <section key={tier} className="space-y-3">
-              <div className="space-y-1">
-                <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-                  {TIER_SECTION[tier].title}
-                </h2>
-                <p className="text-xs text-muted-foreground">{TIER_SECTION[tier].blurb}</p>
-              </div>
-
-              <ul className="space-y-2">
-                {grouped[tier].map((atom) => {
-                  const isOpen = expandedId === atom.id
-                  const isLoading = loadingBody === atom.id
-                  const body = bodies[atom.id]
-                  const dormant = !atom.active
-                  return (
-                    <li
-                      key={atom.id}
-                      className={`rounded-lg border border-border transition-colors ${
-                        dormant ? 'bg-muted/30' : 'bg-card'
-                      }`}
-                    >
-                      <button
-                        onClick={() => toggle(atom)}
-                        aria-expanded={isOpen}
-                        className="flex w-full items-start gap-3 p-4 text-left"
+      {atoms && atoms.length > 0 &&
+        TIER_ORDER.filter((tier) => grouped[tier].length > 0).map((tier) => (
+          <SettingsGroup key={tier} label={TIER_SECTION[tier].title} help={TIER_SECTION[tier].blurb}>
+            {grouped[tier].map((atom) => {
+              const isOpen = expandedId === atom.id
+              const isLoading = loadingBody === atom.id
+              const body = bodies[atom.id]
+              const dormant = !atom.active
+              return (
+                <div key={atom.id} className="border-b border-border">
+                  <button
+                    onClick={() => toggle(atom)}
+                    aria-expanded={isOpen}
+                    className="flex w-full items-start gap-3 px-1 py-3 text-left"
+                  >
+                    <ChevronDown
+                      className={cn(
+                        'mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform',
+                        !isOpen && '-rotate-90',
+                      )}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className={cn(
+                          'block text-sm font-medium',
+                          dormant ? 'text-muted-foreground' : 'text-foreground',
+                        )}
                       >
-                        <ChevronDown
-                          className={`mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform ${
-                            isOpen ? '' : '-rotate-90'
-                          }`}
-                        />
-                        <div className="flex-1 min-w-0 space-y-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-medium text-foreground">{atom.title}</span>
-                            {tier !== 'horizontal' && (
-                              <Badge variant={atom.active ? 'success' : 'secondary'}>
-                                {atom.active ? 'Aktiv' : 'Vilande'}
-                              </Badge>
-                            )}
-                          </div>
-                          <p className="text-xs text-muted-foreground">{atom.description}</p>
-                        </div>
-                      </button>
+                        {atom.title}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">{atom.description}</span>
+                    </span>
+                    {/* Chips mark exceptions: active is the normal state and
+                        renders as muted text, only dormant gets a Badge. */}
+                    {tier !== 'horizontal' && (
+                      atom.active ? (
+                        <span className="mt-0.5 shrink-0 text-xs text-muted-foreground">Aktiv</span>
+                      ) : (
+                        <Badge variant="outline" className="mt-0.5 shrink-0">Vilande</Badge>
+                      )
+                    )}
+                  </button>
 
-                      {isOpen && (
-                        <div className="border-t border-border px-4 py-4 pl-11">
-                          {isLoading && (
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              Läser in…
-                            </div>
-                          )}
-                          {!isLoading && body !== undefined && body.length > 0 && (
-                            <div className={PROSE}>
-                              <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
-                            </div>
-                          )}
-                          {!isLoading && body !== undefined && body.length === 0 && (
-                            <p className="text-xs text-muted-foreground">
-                              Innehållet kunde inte läsas in.
-                            </p>
-                          )}
+                  {isOpen && (
+                    <div className="px-1 pb-4 pl-8">
+                      {isLoading && (
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Läser in…
                         </div>
                       )}
-                    </li>
-                  )
-                })}
-              </ul>
-            </section>
-          ))}
-      </CardContent>
-    </Card>
+                      {!isLoading && body !== undefined && body.length > 0 && (
+                        <div className={PROSE}>
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+                        </div>
+                      )}
+                      {!isLoading && body !== undefined && body.length === 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          Innehållet kunde inte läsas in.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </SettingsGroup>
+        ))}
+    </div>
   )
 }

@@ -2,9 +2,9 @@
 
 import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
 import {
   Dialog,
@@ -13,10 +13,12 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { Loader2, Trash2, Plus, ChevronDown, Download, Upload, Building2, Users, Globe, Pencil, Copy } from 'lucide-react'
+import { SettingsGroup } from '@/components/settings/SettingsRows'
+import { Loader2, Trash2, Plus, ChevronDown, Download, Upload, Pencil, Copy } from 'lucide-react'
 import { TEMPLATE_CATEGORY_LABELS, convertLibraryToBookingTemplate } from '@/lib/bookkeeping/template-library'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { TemplateForm } from '@/components/settings/TemplateForm'
+import { cn } from '@/lib/utils'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 
 export function BookingTemplatesPanel() {
@@ -125,124 +127,131 @@ export function BookingTemplatesPanel() {
 
   return (
     <>
-    <Card>
-      <CardHeader>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <CardTitle className="text-base">{t('title')}</CardTitle>
-            <CardDescription>
-              {t('description')}
-            </CardDescription>
-          </div>
-          {canWrite && (
-            <div className="flex gap-2 shrink-0">
-              <Button variant="outline" size="sm" onClick={handleExport}>
-                <Download className="h-3.5 w-3.5 mr-1.5" />
-                {t('export')}
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => importRef.current?.click()}>
-                <Upload className="h-3.5 w-3.5 mr-1.5" />
-                {t('import')}
-              </Button>
-              <input
-                ref={importRef}
-                type="file"
-                accept=".json"
-                className="hidden"
-                onChange={handleImport}
-              />
-              <Dialog open={showCreate} onOpenChange={setShowCreate}>
-                <DialogTrigger asChild>
-                  <Button size="sm">
-                    <Plus className="h-3.5 w-3.5 mr-1.5" />
-                    {t('new_template')}
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="max-w-lg">
-                  <DialogHeader>
-                    <DialogTitle>{t('create_dialog_title')}</DialogTitle>
-                  </DialogHeader>
-                  <TemplateForm
-                    mode="create"
-                    entityLabels={ENTITY_LABELS}
-                    duplicateNamePool={companyTemplateNames}
-                    onSaved={() => {
-                      setShowCreate(false)
-                      fetchTemplates()
-                    }}
-                  />
-                </DialogContent>
-              </Dialog>
-            </div>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-          </div>
-        ) : templates.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center py-12">
-            {t('empty_state')}
-          </p>
-        ) : (
-          <div className="space-y-6">
-            {/* System templates */}
-            {systemTemplates.length > 0 && (
-              <TemplateSection
-                title={t('section_system')}
-                icon={Globe}
-                templates={systemTemplates}
-                expandedId={expandedId}
-                onToggle={setExpandedId}
-                deletingId={deletingId}
-                onDelete={handleDelete}
-                canDelete={false}
-                canEdit={false}
-                canCustomize={canWrite}
-                onCustomize={setActiveTemplate}
-                entityLabels={ENTITY_LABELS}
-              />
-            )}
-
-            {/* Team templates */}
-            {teamTemplates.length > 0 && (
-              <TemplateSection
-                title={t('section_team')}
-                icon={Users}
-                templates={teamTemplates}
-                expandedId={expandedId}
-                onToggle={setExpandedId}
-                deletingId={deletingId}
-                onDelete={handleDelete}
-                canDelete={canWrite}
-                canEdit={canWrite}
-                onEdit={setActiveTemplate}
-                entityLabels={ENTITY_LABELS}
-              />
-            )}
-
-            {/* Company templates */}
-            {companyTemplates.length > 0 && (
-              <TemplateSection
-                title={t('section_company')}
-                icon={Building2}
-                templates={companyTemplates}
-                expandedId={expandedId}
-                onToggle={setExpandedId}
-                deletingId={deletingId}
-                onDelete={handleDelete}
-                canDelete={canWrite}
-                canEdit={canWrite}
-                onEdit={setActiveTemplate}
-                entityLabels={ENTITY_LABELS}
-              />
-            )}
+    <SettingsGroup>
+      {/* Group eyebrow with the panel's actions on the right: export/import as
+          quiet buttons, "Ny mall" as the one pill. The old card description
+          lives behind the "?". */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-1">
+        <p className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <span>{t('title')}</span>
+          <HelpPopover className="shrink-0">{t('description')}</HelpPopover>
+        </p>
+        {canWrite && (
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleExport}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Download className="mr-1.5 h-3.5 w-3.5" />
+              {t('export')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => importRef.current?.click()}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Upload className="mr-1.5 h-3.5 w-3.5" />
+              {t('import')}
+            </Button>
+            <input
+              ref={importRef}
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={handleImport}
+            />
+            <Dialog open={showCreate} onOpenChange={setShowCreate}>
+              <DialogTrigger asChild>
+                <Button size="sm">
+                  <Plus className="mr-1.5 h-3.5 w-3.5" />
+                  {t('new_template')}
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>{t('create_dialog_title')}</DialogTitle>
+                </DialogHeader>
+                <TemplateForm
+                  mode="create"
+                  entityLabels={ENTITY_LABELS}
+                  duplicateNamePool={companyTemplateNames}
+                  onSaved={() => {
+                    setShowCreate(false)
+                    fetchTemplates()
+                  }}
+                />
+              </DialogContent>
+            </Dialog>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : templates.length === 0 ? (
+        <p className="py-12 text-center text-sm text-muted-foreground">
+          {t('empty_state')}
+        </p>
+      ) : null}
+    </SettingsGroup>
+
+    {!isLoading && templates.length > 0 && (
+      <>
+        {/* System templates */}
+        {systemTemplates.length > 0 && (
+          <TemplateSection
+            title={t('section_system')}
+            templates={systemTemplates}
+            expandedId={expandedId}
+            onToggle={setExpandedId}
+            deletingId={deletingId}
+            onDelete={handleDelete}
+            canDelete={false}
+            canEdit={false}
+            canCustomize={canWrite}
+            onCustomize={setActiveTemplate}
+            entityLabels={ENTITY_LABELS}
+          />
+        )}
+
+        {/* Team templates */}
+        {teamTemplates.length > 0 && (
+          <TemplateSection
+            title={t('section_team')}
+            templates={teamTemplates}
+            expandedId={expandedId}
+            onToggle={setExpandedId}
+            deletingId={deletingId}
+            onDelete={handleDelete}
+            canDelete={canWrite}
+            canEdit={canWrite}
+            onEdit={setActiveTemplate}
+            entityLabels={ENTITY_LABELS}
+          />
+        )}
+
+        {/* Company templates */}
+        {companyTemplates.length > 0 && (
+          <TemplateSection
+            title={t('section_company')}
+            templates={companyTemplates}
+            expandedId={expandedId}
+            onToggle={setExpandedId}
+            deletingId={deletingId}
+            onDelete={handleDelete}
+            canDelete={canWrite}
+            canEdit={canWrite}
+            onEdit={setActiveTemplate}
+            entityLabels={ENTITY_LABELS}
+          />
+        )}
+      </>
+    )}
 
     {/* Shared edit / customize dialog. Editing a company or team template uses
         PUT; customizing a read-only system template creates a company-scoped
@@ -276,7 +285,6 @@ export function BookingTemplatesPanel() {
 
 function TemplateSection({
   title,
-  icon: Icon,
   templates,
   expandedId,
   onToggle,
@@ -290,7 +298,6 @@ function TemplateSection({
   entityLabels,
 }: {
   title: string
-  icon: React.ComponentType<{ className?: string }>
   templates: BookingTemplateLibrary[]
   expandedId: string | null
   onToggle: (id: string | null) => void
@@ -304,52 +311,54 @@ function TemplateSection({
   entityLabels: Record<string, string>
 }) {
   const t = useTranslations('settings_booking_templates')
+  const tCommon = useTranslations('common')
   return (
-    <div>
-      <div className="flex items-center gap-2 mb-2">
-        <Icon className="h-4 w-4 text-muted-foreground" />
-        <h3 className="text-sm font-medium">{title}</h3>
-        <span className="text-xs text-muted-foreground tabular-nums">{templates.length}</span>
-      </div>
-      <div className="space-y-1">
+    <SettingsGroup>
+      {/* Origin eyebrow with count; mirrors SettingsGroup's label line. */}
+      <p className="flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        <span>{title}</span>
+        <span className="tabular-nums">{templates.length}</span>
+      </p>
+      <div>
         {templates.map((tt) => {
           const isExpanded = expandedId === tt.id
           const isConvertible = convertLibraryToBookingTemplate(tt) !== null
           return (
-            <div
-              key={tt.id}
-              className="rounded-lg border"
-            >
-              <div className="flex items-center gap-3 p-3 hover:bg-muted/50 transition-colors">
+            <div key={tt.id} className="border-b border-border">
+              <div className="flex items-center gap-3 px-1 py-3 transition-colors duration-150 hover:bg-secondary/60">
                 <button
                   type="button"
                   onClick={() => onToggle(isExpanded ? null : tt.id)}
-                  className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                  aria-expanded={isExpanded}
+                  className="flex min-w-0 flex-1 items-center gap-3 text-left"
                 >
-                  <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${isExpanded ? 'rotate-0' : '-rotate-90'}`} />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium">{tt.name}</span>
-                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                      <span className="text-xs text-muted-foreground">
-                        {TEMPLATE_CATEGORY_LABELS[tt.category]}
-                        {tt.entity_type !== 'all' && ` · ${entityLabels[tt.entity_type]}`}
-                      </span>
-                      {!isConvertible && (
-                        <Badge variant="warning" className="text-[10px] px-1.5 py-0">
-                          {t('unconvertible_badge')}
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
+                  <ChevronDown
+                    className={cn(
+                      'h-4 w-4 shrink-0 text-muted-foreground transition-transform',
+                      !isExpanded && '-rotate-90',
+                    )}
+                  />
+                  <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
+                    <span className="truncate text-sm">{tt.name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {TEMPLATE_CATEGORY_LABELS[tt.category]}
+                      {tt.entity_type !== 'all' && ` · ${entityLabels[tt.entity_type]}`}
+                    </span>
+                    {!isConvertible && (
+                      <Badge variant="warning" className="px-1.5 py-0 text-[10px]">
+                        {t('unconvertible_badge')}
+                      </Badge>
+                    )}
+                  </span>
                 </button>
                 {canCustomize && onCustomize && (
                   <Button
                     variant="ghost"
-                    size="sm"
+                    size="icon"
                     onClick={() => onCustomize(tt)}
                     aria-label={t('customize')}
                     title={t('customize')}
-                    className="h-8 w-8 p-0 shrink-0"
+                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
                   >
                     <Copy className="h-3.5 w-3.5" />
                   </Button>
@@ -357,11 +366,11 @@ function TemplateSection({
                 {canEdit && onEdit && (
                   <Button
                     variant="ghost"
-                    size="sm"
+                    size="icon"
                     onClick={() => onEdit(tt)}
                     aria-label={t('edit')}
                     title={t('edit')}
-                    className="h-8 w-8 p-0 shrink-0"
+                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
                   >
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
@@ -369,10 +378,12 @@ function TemplateSection({
                 {canDelete && (
                   <Button
                     variant="ghost"
-                    size="sm"
+                    size="icon"
                     onClick={() => onDelete(tt.id)}
                     disabled={deletingId === tt.id}
-                    className="h-8 w-8 p-0 shrink-0"
+                    aria-label={tCommon('delete')}
+                    title={tCommon('delete')}
+                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
                   >
                     {deletingId === tt.id ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -383,23 +394,23 @@ function TemplateSection({
                 )}
               </div>
               {isExpanded && (
-                <div className="px-3 pb-3 pt-0">
+                <div className="px-1 pb-3">
                   {tt.description && (
-                    <p className="text-xs text-muted-foreground mb-2">{tt.description}</p>
+                    <p className="mb-2 text-xs text-muted-foreground">{tt.description}</p>
                   )}
                   <table className="w-full text-xs">
                     <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                      <tr className="border-b">
-                        <th className="text-left py-1 w-14">{t('th_account')}</th>
-                        <th className="text-left py-1">{t('th_description')}</th>
-                        <th className="text-center py-1 w-16">{t('th_type')}</th>
-                        <th className="text-right py-1 w-12">{t('th_debit')}</th>
-                        <th className="text-right py-1 w-12">{t('th_credit')}</th>
+                      <tr className="border-b border-border">
+                        <th className="w-14 py-1 text-left">{t('th_account')}</th>
+                        <th className="py-1 text-left">{t('th_description')}</th>
+                        <th className="w-16 py-1 text-center">{t('th_type')}</th>
+                        <th className="w-12 py-1 text-right">{t('th_debit')}</th>
+                        <th className="w-12 py-1 text-right">{t('th_credit')}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {tt.lines.map((line: BookingTemplateLibraryLine, i: number) => (
-                        <tr key={i} className="border-b last:border-0">
+                        <tr key={i} className="border-b border-border last:border-0">
                           <td className="py-1 font-mono">{line.account}</td>
                           <td className="py-1">{line.label}</td>
                           <td className="py-1 text-center">
@@ -419,6 +430,6 @@ function TemplateSection({
           )
         })}
       </div>
-    </div>
+    </SettingsGroup>
   )
 }

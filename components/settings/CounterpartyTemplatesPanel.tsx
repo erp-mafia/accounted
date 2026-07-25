@@ -2,10 +2,10 @@
 
 import { useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
+import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { Loader2, Trash2, Users, ChevronDown } from 'lucide-react'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
@@ -92,166 +92,150 @@ export function CounterpartyTemplatesPanel() {
   }
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('title')}</CardTitle>
-          <CardDescription>
-            {t('description')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
-          ) : templates.length === 0 ? (
-            <EmptyState
-              icon={Users}
-              title={t('empty_title')}
-              description={t('empty_help')}
-            />
-          ) : (
-            <div className="space-y-1">
-              {templates.map((tt) => {
-                const isExpanded = expandedId === tt.id
-                const isMultiLine = tt.line_pattern && tt.line_pattern.length > 0
+    <SettingsGroup label={t('title')} help={t('description')}>
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : templates.length === 0 ? (
+        <EmptyState
+          icon={Users}
+          title={t('empty_title')}
+          description={t('empty_help')}
+        />
+      ) : (
+        templates.map((tt) => {
+          const isExpanded = expandedId === tt.id
+          const isMultiLine = tt.line_pattern && tt.line_pattern.length > 0
 
-                return (
-                  <div key={tt.id} className="rounded-md border overflow-hidden">
-                    {/* Clickable summary row */}
-                    <button
-                      type="button"
-                      onClick={() => setExpandedId(isExpanded ? null : tt.id)}
-                      className="w-full text-left px-4 py-3 flex items-center gap-3 hover:bg-muted/50 transition-colors"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-medium truncate">{formatCounterpartyName(tt.counterparty_name)}</p>
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-0.5 text-xs text-muted-foreground">
-                          {isMultiLine ? (
-                            <span className="font-mono">
-                              {tt.line_pattern!.filter(lp => lp.type === 'business').map(lp => lp.account).join(', ')}
+          return (
+            <div key={tt.id} className="border-b border-border">
+              {/* Clickable summary row: flat hairline, one line. */}
+              <button
+                type="button"
+                onClick={() => setExpandedId(isExpanded ? null : tt.id)}
+                aria-expanded={isExpanded}
+                className="flex w-full items-center gap-3 px-1 py-3 text-left transition-colors duration-150 hover:bg-secondary/60"
+              >
+                <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <span className="truncate text-sm">{formatCounterpartyName(tt.counterparty_name)}</span>
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                    {isMultiLine ? (
+                      <span className="font-mono">
+                        {tt.line_pattern!.filter(lp => lp.type === 'business').map(lp => lp.account).join(', ')}
+                      </span>
+                    ) : (
+                      <span className="font-mono">
+                        {tt.debit_account}
+                        <span className="text-muted-foreground/50"> → </span>
+                        {tt.credit_account}
+                      </span>
+                    )}
+                    {tt.vat_treatment && (
+                      <span>· {VAT_LABELS[tt.vat_treatment] || tt.vat_treatment}</span>
+                    )}
+                    <span>· {t('times_count', { count: tt.occurrence_count })}</span>
+                    <span className={`tabular-nums ${confidenceColor(Number(tt.confidence))}`}>
+                      {Math.round(Number(tt.confidence) * 100)}%
+                    </span>
+                    <span>· {SOURCE_LABELS[tt.source] || tt.source}</span>
+                  </span>
+                </div>
+                <ChevronDown
+                  className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                />
+              </button>
+
+              {/* Expanded detail */}
+              {isExpanded && (
+                <div className="space-y-3 px-1 pb-3">
+                  {/* Account lines */}
+                  <div>
+                    <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">{t('booking_label')}</p>
+                    {isMultiLine ? (
+                      <div className="space-y-1">
+                        {tt.line_pattern!.map((lp, i) => (
+                          <div key={i} className="flex items-center gap-2 text-xs">
+                            <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
+                              {lp.side === 'debit' ? t('debit_label') : t('credit_label')}
                             </span>
-                          ) : (
-                            <>
-                              <span className="font-mono">{tt.debit_account}</span>
-                              <span className="text-muted-foreground/50">→</span>
-                              <span className="font-mono">{tt.credit_account}</span>
-                            </>
-                          )}
-                          {tt.vat_treatment && (
-                            <>
-                              <span className="text-muted-foreground/30">·</span>
-                              <span>{VAT_LABELS[tt.vat_treatment] || tt.vat_treatment}</span>
-                            </>
-                          )}
-                          <span className="text-muted-foreground/30">·</span>
-                          <span>{t('times_count', { count: tt.occurrence_count })}</span>
-                          <span className={`tabular-nums ${confidenceColor(Number(tt.confidence))}`}>
-                            {Math.round(Number(tt.confidence) * 100)}%
-                          </span>
-                          <span className="text-muted-foreground/30">·</span>
-                          <span>{SOURCE_LABELS[tt.source] || tt.source}</span>
-                        </div>
-                      </div>
-                      <ChevronDown className={`h-4 w-4 text-muted-foreground shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                    </button>
-
-                    {/* Expanded detail */}
-                    {isExpanded && (
-                      <div className="border-t bg-muted/30 px-4 py-3 space-y-3">
-                        {/* Account lines */}
-                        <div>
-                          <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-1.5">{t('booking_label')}</p>
-                          {isMultiLine ? (
-                            <div className="space-y-1">
-                              {tt.line_pattern!.map((lp, i) => (
-                                <div key={i} className="flex items-center gap-2 text-xs">
-                                  <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
-                                    {lp.side === 'debit' ? t('debit_label') : t('credit_label')}
-                                  </span>
-                                  <span className="font-mono">{formatAccountWithName(lp.account)}</span>
-                                  {lp.type === 'vat' && lp.vat_rate && (
-                                    <span className="text-muted-foreground">{t('vat_paren', { rate: Math.round(lp.vat_rate * 100) })}</span>
-                                  )}
-                                  {lp.ratio !== undefined && (
-                                    <span className="text-muted-foreground">({Math.round(lp.ratio * 100)}%)</span>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="space-y-1">
-                              <div className="flex items-center gap-2 text-xs">
-                                <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">{t('debit_label')}</span>
-                                <span className="font-mono">{formatAccountWithName(tt.debit_account)}</span>
-                              </div>
-                              <div className="flex items-center gap-2 text-xs">
-                                <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">{t('credit_label')}</span>
-                                <span className="font-mono">{formatAccountWithName(tt.credit_account)}</span>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Metadata */}
-                        <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-                          {tt.vat_treatment && (
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">{t('vat_label')}</span>
-                              <span>{VAT_LABELS[tt.vat_treatment] || tt.vat_treatment}</span>
-                            </div>
-                          )}
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">{t('occurrence_count_label')}</span>
-                            <span className="tabular-nums">{tt.occurrence_count}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">{t('confidence_label')}</span>
-                            <span className={`tabular-nums ${confidenceColor(Number(tt.confidence))}`}>
-                              {Math.round(Number(tt.confidence) * 100)}%
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">{t('last_seen_label')}</span>
-                            <span>{formatDate(tt.last_seen_date)}</span>
-                          </div>
-                          {tt.counterparty_aliases && tt.counterparty_aliases.length > 1 && (
-                            <div className="col-span-2 flex justify-between">
-                              <span className="text-muted-foreground">{t('aliases_label')}</span>
-                              <span className="text-right truncate ml-4">{tt.counterparty_aliases.slice(0, 3).join(', ')}{tt.counterparty_aliases.length > 3 ? ` +${tt.counterparty_aliases.length - 3}` : ''}</span>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Delete */}
-                        <div className="flex justify-end pt-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDelete(tt.id)}
-                            disabled={deletingId === tt.id}
-                            className="text-destructive hover:text-destructive text-xs h-7"
-                          >
-                            {deletingId === tt.id ? (
-                              <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                            ) : (
-                              <Trash2 className="mr-1.5 h-3 w-3" />
+                            <span className="font-mono">{formatAccountWithName(lp.account)}</span>
+                            {lp.type === 'vat' && lp.vat_rate && (
+                              <span className="text-muted-foreground">{t('vat_paren', { rate: Math.round(lp.vat_rate * 100) })}</span>
                             )}
-                            {t('delete_button')}
-                          </Button>
+                            {lp.ratio !== undefined && (
+                              <span className="text-muted-foreground">({Math.round(lp.ratio * 100)}%)</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">{t('debit_label')}</span>
+                          <span className="font-mono">{formatAccountWithName(tt.debit_account)}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="w-14 shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">{t('credit_label')}</span>
+                          <span className="font-mono">{formatAccountWithName(tt.credit_account)}</span>
                         </div>
                       </div>
                     )}
                   </div>
-                )
-              })}
+
+                  {/* Metadata */}
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
+                    {tt.vat_treatment && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">{t('vat_label')}</span>
+                        <span>{VAT_LABELS[tt.vat_treatment] || tt.vat_treatment}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">{t('occurrence_count_label')}</span>
+                      <span className="tabular-nums">{tt.occurrence_count}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">{t('confidence_label')}</span>
+                      <span className={`tabular-nums ${confidenceColor(Number(tt.confidence))}`}>
+                        {Math.round(Number(tt.confidence) * 100)}%
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">{t('last_seen_label')}</span>
+                      <span>{formatDate(tt.last_seen_date)}</span>
+                    </div>
+                    {tt.counterparty_aliases && tt.counterparty_aliases.length > 1 && (
+                      <div className="col-span-2 flex justify-between">
+                        <span className="text-muted-foreground">{t('aliases_label')}</span>
+                        <span className="ml-4 truncate text-right">{tt.counterparty_aliases.slice(0, 3).join(', ')}{tt.counterparty_aliases.length > 3 ? ` +${tt.counterparty_aliases.length - 3}` : ''}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Delete */}
+                  <div className="flex justify-end pt-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDelete(tt.id)}
+                      disabled={deletingId === tt.id}
+                      className="h-7 text-xs text-destructive hover:text-destructive"
+                    >
+                      {deletingId === tt.id ? (
+                        <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                      ) : (
+                        <Trash2 className="mr-1.5 h-3 w-3" />
+                      )}
+                      {t('delete_button')}
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+          )
+        })
+      )}
+    </SettingsGroup>
   )
 }

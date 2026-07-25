@@ -3,9 +3,12 @@
 import { useState, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Upload, Trash2 } from 'lucide-react'
+import {
+  SettingsGroup,
+  SettingsRow,
+} from '@/components/settings/SettingsRows'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
 
@@ -109,32 +112,26 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
   }
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-        {t('logo_heading')}
-      </h2>
-      <p className="text-xs text-muted-foreground -mt-2">
-        {t('logo_help')}
-      </p>
-
-      {preview ? (
-        <div className="space-y-3">
-          <div className="inline-block rounded-lg border border-border bg-muted/30 p-4">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={preview}
-              alt={t('logo_alt')}
-              className="max-h-16 max-w-[200px] object-contain"
-            />
-          </div>
-          <div className="flex gap-2">
+    <SettingsGroup>
+      <SettingsRow label={t('logo_heading')} help={t('logo_help')}>
+        {preview ? (
+          <>
+            <span className="inline-flex rounded-lg border border-border bg-muted/30 p-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={preview}
+                alt={t('logo_alt')}
+                className="max-h-10 max-w-32 object-contain"
+              />
+            </span>
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
               onClick={() => inputRef.current?.click()}
               disabled={isUploading}
+              className="text-muted-foreground hover:text-foreground"
             >
-              {isUploading ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Upload className="mr-2 h-3.5 w-3.5" />}
+              {isUploading ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
               {t('logo_change')}
             </Button>
             <Button
@@ -147,31 +144,29 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
               {isDeleting ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Trash2 className="mr-2 h-3.5 w-3.5" />}
               {t('logo_remove')}
             </Button>
-          </div>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onDragEnter={handleDragOver}
-          onDragLeave={handleDragLeave}
-          disabled={isUploading}
-          className={`flex flex-col items-center justify-center w-full max-w-xs rounded-lg border-2 border-dashed py-8 px-4 text-center transition-colors disabled:opacity-50 ${
-            isDragging ? 'border-foreground bg-muted/40' : 'border-border hover:border-border hover:bg-muted/20'
-          }`}
-        >
-          {isUploading ? (
-            <Loader2 className="h-6 w-6 text-muted-foreground animate-spin mb-2" />
-          ) : (
-            <Upload className="h-6 w-6 text-muted-foreground/50 mb-2" />
-          )}
-          <Label className="text-sm text-muted-foreground cursor-pointer">
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            onDragEnter={handleDragOver}
+            onDragLeave={handleDragLeave}
+            disabled={isUploading}
+            className={`inline-flex min-h-10 items-center gap-2 rounded-lg border border-dashed px-4 py-2 text-sm text-muted-foreground transition-colors duration-150 disabled:opacity-50 ${
+              isDragging ? 'border-foreground bg-muted/40' : 'border-border hover:bg-muted/20'
+            }`}
+          >
+            {isUploading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Upload className="h-4 w-4 text-muted-foreground/60" />
+            )}
             {isUploading ? t('logo_uploading') : t('logo_pick_or_drop')}
-          </Label>
-        </button>
-      )}
+          </button>
+        )}
+      </SettingsRow>
 
       <input
         ref={inputRef}
@@ -180,6 +175,6 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
         className="hidden"
         onChange={handleFileChange}
       />
-    </section>
+    </SettingsGroup>
   )
 }

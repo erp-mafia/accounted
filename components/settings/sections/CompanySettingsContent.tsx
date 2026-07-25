@@ -1,6 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { CompanyDangerZone } from '@/components/settings/CompanyDangerZone'
 import { CompanyInfoForm } from '@/components/settings/CompanyInfoForm'
 import { CompanyMembersSection } from '@/components/settings/CompanyMembersSection'
@@ -10,12 +11,15 @@ import { LogoUpload } from '@/components/settings/LogoUpload'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
+import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { ShareCapitalForm } from '@/components/settings/ShareCapitalForm'
 import { useSettings } from '@/components/settings/useSettings'
 import type { CompanySettings } from '@/types'
 
 export function CompanySettingsContent() {
   const router = useRouter()
+  const tNav = useTranslations('settings_nav')
+  const tIntro = useTranslations('settings_intro')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
 
   if (isLoading) return <SettingsLoadingSkeleton />
@@ -56,8 +60,10 @@ export function CompanySettingsContent() {
   }
 
   return (
-    <div className="space-y-8">
-      <SettingsFormWrapper onSave={handleSave} className="space-y-8">
+    <div>
+      <SettingsSectionHeader title={tNav('company')} intro={tIntro('company')} />
+
+      <SettingsFormWrapper onSave={handleSave}>
         <CompanyInfoForm settings={settings} />
         {settings.entity_type === 'aktiebolag' && (
           <ShareCapitalForm
@@ -66,16 +72,12 @@ export function CompanySettingsContent() {
         )}
       </SettingsFormWrapper>
 
-      <div className="border-t border-border pt-8">
-        <LogoUpload
-          logoUrl={settings.logo_url}
-          onUpdate={(url) => updateSettings({ logo_url: url })}
-        />
-      </div>
+      <LogoUpload
+        logoUrl={settings.logo_url}
+        onUpdate={(url) => updateSettings({ logo_url: url })}
+      />
 
-      <div className="border-t border-border pt-8">
-        <CompanyMembersSection />
-      </div>
+      <CompanyMembersSection />
 
       <FiscalPeriodEditor />
 

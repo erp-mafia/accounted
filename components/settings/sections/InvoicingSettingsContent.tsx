@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { InvoiceSettingsForm } from '@/components/settings/InvoiceSettingsForm'
 import { InvoicePaymentLinkSettings } from '@/components/settings/InvoicePaymentLinkSettings'
 import { InvoicePaymentAccountsSettings } from '@/components/settings/InvoicePaymentAccountsSettings'
@@ -10,10 +11,13 @@ import { PdfPrintSettings } from '@/components/settings/PdfPrintSettings'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
+import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
 import type { CompanySettings } from '@/types'
 
 export function InvoicingSettingsContent() {
+  const tNav = useTranslations('settings_nav')
+  const tIntro = useTranslations('settings_intro')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
 
   if (isLoading) return <SettingsLoadingSkeleton />
@@ -43,36 +47,31 @@ export function InvoicingSettingsContent() {
   }
 
   return (
-    <div className="space-y-8">
-      <div className="flex justify-end">
-        <InvoicePreviewCard settings={settings} />
-      </div>
+    <div>
+      <SettingsSectionHeader
+        title={tNav('invoicing')}
+        intro={tIntro('invoicing')}
+        action={<InvoicePreviewCard settings={settings} />}
+      />
 
+      {/* Owner/admin only: the component gates itself on role. */}
       <InvoicePaymentAccountsSettings settings={settings} onUpdate={updateSettings} />
 
-      <SettingsFormWrapper onSave={handleSave} className="space-y-8">
+      <SettingsFormWrapper onSave={handleSave}>
         <InvoiceSettingsForm settings={settings} />
       </SettingsFormWrapper>
 
       {/* Payment link opt-in: saves individually via toggle switch */}
-      <div className="border-t border-border pt-8">
-        <InvoicePaymentLinkSettings settings={settings} onUpdate={updateSettings} />
-      </div>
+      <InvoicePaymentLinkSettings settings={settings} onUpdate={updateSettings} />
 
       {/* PDF settings: saves individually via toggle switches */}
-      <div className="border-t border-border pt-8">
-        <PdfPrintSettings settings={settings} onUpdate={updateSettings} />
-      </div>
+      <PdfPrintSettings settings={settings} onUpdate={updateSettings} />
 
-      {/* Fixed invoice email recipients: explicit save */}
-      <div className="border-t border-border pt-8">
-        <InvoiceEmailRecipientsSettings settings={settings} onUpdate={updateSettings} />
-      </div>
+      {/* Fixed invoice email recipients: explicit save (owner/admin only) */}
+      <InvoiceEmailRecipientsSettings settings={settings} onUpdate={updateSettings} />
 
       {/* Invoice email texts: autosaves on blur */}
-      <div className="border-t border-border pt-8">
-        <InvoiceEmailTextsSettings settings={settings} onUpdate={updateSettings} />
-      </div>
+      <InvoiceEmailTextsSettings settings={settings} onUpdate={updateSettings} />
     </div>
   )
 }
