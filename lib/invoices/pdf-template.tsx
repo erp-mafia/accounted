@@ -754,6 +754,16 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                   marginBottom: 6,
                   alignSelf: 'flex-start',
                   objectFit: 'contain',
+                  // Any logo bigger than the reserved area is clamped to the
+                  // full 240x80pt box, so the box never hugs the image and the
+                  // image is placed *inside* it. Anchor it top-left: with the
+                  // default centering, a near-square logo scaled down to the
+                  // 80pt height cap is only ~117pt wide and gets pushed ~60pt
+                  // in from the left margin, while a wide banner logo fills the
+                  // width and looks correctly aligned. Left-anchoring makes
+                  // every aspect ratio start at the margin instead, so a
+                  // company doesn't have to reshape its logo to fit the layout.
+                  objectPosition: 'left top',
                 }}
               />
             )}

@@ -125,7 +125,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
               />
             </span>
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
               onClick={() => inputRef.current?.click()}
               disabled={isUploading}

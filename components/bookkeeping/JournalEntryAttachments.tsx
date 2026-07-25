@@ -13,6 +13,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import {
   FileText,
   ImageIcon,
@@ -70,6 +71,7 @@ export default function JournalEntryAttachments({
   onCountChange,
 }: JournalEntryAttachmentsProps) {
   const t = useTranslations('journal_attachments')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
   const [documents, setDocuments] = useState<DocumentRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -154,14 +156,23 @@ export default function JournalEntryAttachments({
   }, [uploadFiles, fetchDocuments])
 
   const handleDownload = async (docId: string) => {
+    // Pre-open inside the click's user activation: a window.open after the
+    // await is popup-blocked when the signed-URL fetch is slow.
+    const tab = openDeferredTab(tCommon('loading'))
     try {
       const res = await fetch(`/api/documents/${docId}`)
       const { data } = await res.json()
-      if (data?.download_url) {
-        window.open(data.download_url, '_blank')
+      if (!data?.download_url || !tab.navigate(data.download_url)) {
+        tab.close()
+        toast({
+          title: t('download_failed'),
+          description: tab.blocked ? tCommon('popup_blocked_description') : undefined,
+          variant: 'destructive',
+        })
       }
     } catch {
-      // Non-critical: silently ignore
+      tab.close()
+      toast({ title: t('download_failed'), variant: 'destructive' })
     }
   }
 

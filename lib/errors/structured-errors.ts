@@ -1839,8 +1839,10 @@ const ARTICLE: Record<string, StructuredErrorEntry> = {
   },
   ARTICLE_IN_USE: {
     httpStatus: 409,
-    message_sv: 'Artikeln har använts på en faktura och kan därför inte tas bort.',
-    message_en: 'The article has been used on an invoice and cannot be deleted.',
+    message_sv:
+      'Artikeln har använts på en faktura och kan därför inte tas bort. Inaktivera den i stället om du inte vill kunna välja den på nya fakturor.',
+    message_en:
+      'The article has been used on an invoice and cannot be deleted. Deactivate it instead if you no longer want it selectable on new invoices.',
   },
   ARTICLE_REVENUE_ACCOUNT_INVALID: {
     httpStatus: 400,

@@ -41,6 +41,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { InvoiceReviewContent } from '@/components/invoices/InvoiceReviewContent'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import CustomerForm from '@/components/customers/CustomerForm'
 import { BankDetailsSetupDialog } from '@/components/invoices/BankDetailsSetupDialog'
@@ -129,6 +130,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const t = useTranslations('invoice_editor')
   const ts = useTranslations('self_billing')
   const ta = useTranslations('accruals')
+  const tCommon = useTranslations('common')
   // Toggle between a normal customer invoice (default) and registering a
   // self-billing invoice we received (mottagen självfaktura, ML 17 kap 15§).
   // Self-billing is never available when editing an existing draft.
@@ -344,7 +346,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     setValue,
     setError,
     getValues,
-    formState: { errors, isDirty, dirtyFields },
+    formState: { errors, isDirty, dirtyFields, isSubmitting: isFormSubmitting },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
     // Edit mode pre-fills from the existing draft (header + every line incl.
@@ -1020,12 +1022,29 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       await handleSelfBilledSubmit(data)
       return
     }
+    // The review dialog only mounts once the picked customer resolves against
+    // the loaded customers list. Without this guard a click while the list is
+    // still loading (or failed to load) set showReview on an unmounted dialog:
+    // the button then silently did nothing (support: cbysea.se).
+    if (!selectedCustomer) {
+      toast({
+        title: t('review_customer_missing_title'),
+        description: t('review_customer_missing_description'),
+        variant: 'destructive',
+      })
+      return
+    }
     setPendingData(data)
     // Re-fetch the preview right before review so the displayed number
     // reflects any concurrent invoice creations. Skip for delivery notes.
+    // Bounded: this blocks the review dialog from opening, and a hung fetch
+    // must not be able to freeze the flow (the catch below eats the abort).
     if (data.document_type !== 'delivery_note') {
       try {
-        const r = await fetch(`/api/invoices/next-number?document_type=${encodeURIComponent(data.document_type)}`)
+        const r = await fetch(
+          `/api/invoices/next-number?document_type=${encodeURIComponent(data.document_type)}`,
+          { signal: AbortSignal.timeout(5000) },
+        )
         if (r.ok) {
           const json = await r.json()
           setNumberPreview(json?.data?.preview ?? null)
@@ -1300,6 +1319,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     if (!pendingData) return
     setIsPreviewing(true)
 
+    // Open the tab synchronously inside the click's user activation. A
+    // window.open after the awaits below is popup-blocked whenever generation
+    // outlives the activation window (~5s): exactly the slow cold-start case,
+    // where the preview then silently did nothing (support: cbysea.se).
+    const tab = openDeferredTab(t('preview_pdf_generating'))
+
     try {
       const response = await fetch('/api/invoices/preview-pdf', {
         method: 'POST',
@@ -1326,8 +1351,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
       const blob = await response.blob()
       const url = window.URL.createObjectURL(blob)
-      window.open(url, '_blank')
+      if (!tab.navigate(url)) {
+        tab.close()
+        window.URL.revokeObjectURL(url)
+        toast({
+          title: t('preview_pdf_failed'),
+          description: tCommon('popup_blocked_description'),
+          variant: 'destructive',
+        })
+        return
+      }
+      // The blob URL must outlive the tab's load; revoke on a generous delay
+      // instead of leaking it for the page's lifetime.
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000)
     } catch (error) {
+      tab.close()
       toast({
         title: t('preview_pdf_failed'),
         description: getErrorMessage(error, { context: 'invoice' }),
@@ -2393,11 +2431,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 type="submit"
                 className="w-full"
                 size="lg"
-                disabled={isSubmitting || isSavingDraft || !canWrite}
+                disabled={isSubmitting || isSavingDraft || isFormSubmitting || !canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
-                {isEditMode && isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {isFormSubmitting && !isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {isEditMode ? t('save_changes') : isSelfBilled ? ts('register') : t('review_and_create')}
               </Button>
               {!isEditMode && !isSelfBilled && watchDocumentType === 'invoice' && (
@@ -2406,7 +2444,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   variant="outline"
                   className="w-full"
                   size="lg"
-                  disabled={isSubmitting || isSavingDraft || !canWrite}
+                  disabled={isSubmitting || isSavingDraft || isFormSubmitting || !canWrite}
                   title={!canWrite ? t('viewer_disabled_tooltip') : t('save_as_draft_tooltip')}
                   onClick={handleSubmit(saveDraftData)}
                 >
@@ -2435,7 +2473,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={isSubmitting || isSavingDraft || !canWrite}
+                  disabled={isSubmitting || isSavingDraft || isFormSubmitting || !canWrite}
                   onClick={handleSubmit(saveDraftData)}
                 >
                   {isSavingDraft ? <Loader2 className="h-4 w-4 animate-spin" /> : t('save_as_draft_short')}
@@ -2443,11 +2481,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               )}
               <Button
                 type="submit"
-                disabled={isSubmitting || isSavingDraft || !canWrite}
+                disabled={isSubmitting || isSavingDraft || isFormSubmitting || !canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
-                {isEditMode && isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {isFormSubmitting && !isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {isEditMode ? t('save_changes') : isSelfBilled ? ts('register') : t('review_and_create')}
               </Button>
             </div>

@@ -114,6 +114,30 @@ async function insertPendingEmailDelivery(params: {
   return deliveryId
 }
 
+/**
+ * A delivery that has already been handed to the provider: this is the only
+ * state a provider delivery report can attach to, and the provider message id
+ * is the key the report is matched on.
+ */
+async function insertSentEmailDelivery(params: {
+  userId: string
+  companyId: string
+  invoiceId: string
+  documentId: string
+  retentionExpiresAt?: string
+}): Promise<{ deliveryId: string; providerMessageId: string }> {
+  const deliveryId = await insertPendingEmailDelivery(params)
+  const providerMessageId = `provider-${randomUUID()}`
+  await getPool().query(
+    `UPDATE public.invoice_deliveries
+        SET status = 'sent', provider = 'resend',
+            provider_message_id = $2, sent_at = now()
+      WHERE id = $1`,
+    [deliveryId, providerMessageId],
+  )
+  return { deliveryId, providerMessageId }
+}
+
 describe('invoice_deliveries.pg: immutable delivery evidence', () => {
   it('allows only a pending to terminal transition and then locks the row', async () => {
     const { userId, companyId } = await seedCompany()
@@ -725,5 +749,259 @@ describe('invoice_deliveries.pg: immutable delivery evidence', () => {
       { conname: 'invoice_deliveries_company_id_fkey', confdeltype: 'r' },
       { conname: 'invoice_deliveries_user_id_fkey', confdeltype: 'r' },
     ])
+  })
+})
+
+describe('invoice_deliveries.pg: provider delivery outcome', () => {
+  it('records the provider outcome on a sent email and keeps the rest locked', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const { deliveryId, providerMessageId } = await insertSentEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+    })
+
+    await withServiceRoleContext(userId, async (client) => {
+      const applied = await client.query<{ id: string | null }>(
+        `SELECT public.apply_invoice_delivery_provider_status(
+                  'resend', $1, 'bounced', '2026-07-24T08:00:00Z'::timestamptz, $2
+                )::text AS id`,
+        [providerMessageId, '550 5.1.1 <customer@example.com>: Recipient address rejected'],
+      )
+      expect(applied.rows[0].id).toBe(deliveryId)
+
+      const row = await client.query<{
+        provider_status: string
+        provider_status_detail: string
+        body_text: string
+        subject: string
+      }>(
+        `SELECT provider_status, provider_status_detail, body_text, subject
+           FROM public.invoice_deliveries
+          WHERE id = $1`,
+        [deliveryId],
+      )
+      expect(row.rows[0]).toMatchObject({
+        provider_status: 'bounced',
+        provider_status_detail: '550 5.1.1 <customer@example.com>: Recipient address rejected',
+        body_text: 'Exact plain text',
+        subject: 'Faktura F-1001',
+      })
+    })
+  })
+
+  it('never downgrades an observed failure on a late or repeated report', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const { deliveryId, providerMessageId } = await insertSentEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+    })
+
+    await withServiceRoleContext(userId, async (client) => {
+      const apply = (status: string, occurredAt: string) =>
+        client.query(
+          `SELECT public.apply_invoice_delivery_provider_status(
+                    'resend', $1, $2, $3::timestamptz, NULL
+                  )`,
+          [providerMessageId, status, occurredAt],
+        )
+      const currentStatus = async () => {
+        const row = await client.query<{ provider_status: string }>(
+          `SELECT provider_status FROM public.invoice_deliveries WHERE id = $1`,
+          [deliveryId],
+        )
+        return row.rows[0].provider_status
+      }
+
+      await apply('delayed', '2026-07-24T08:00:00Z')
+      expect(await currentStatus()).toBe('delayed')
+
+      await apply('delivered', '2026-07-24T08:01:00Z')
+      expect(await currentStatus()).toBe('delivered')
+
+      await apply('bounced', '2026-07-24T08:02:00Z')
+      expect(await currentStatus()).toBe('bounced')
+
+      // Retried and out-of-order events must not undo the bounce.
+      await apply('delayed', '2026-07-24T08:03:00Z')
+      await apply('delivered', '2026-07-24T08:04:00Z')
+      expect(await currentStatus()).toBe('bounced')
+    })
+  })
+
+  it('ignores reports for messages that are not tracked invoice deliveries', async () => {
+    const { userId } = await seedCompany()
+
+    await withServiceRoleContext(userId, async (client) => {
+      const applied = await client.query<{ id: string | null }>(
+        `SELECT public.apply_invoice_delivery_provider_status(
+                  'resend', 'payslip-message-id', 'delivered', now(), NULL
+                )::text AS id`,
+      )
+      expect(applied.rows[0].id).toBeNull()
+    })
+  })
+
+  it('rejects an unsupported outcome and non-service callers', async () => {
+    const { userId, companyId } = await seedCompany()
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+
+    await expect(
+      withServiceRoleContext(userId, (client) => client.query(
+        `SELECT public.apply_invoice_delivery_provider_status(
+                  'resend', 'msg-1', 'opened', now(), NULL
+                )`,
+      )),
+    ).rejects.toThrow(/unsupported invoice delivery provider status/i)
+
+    await expect(
+      withUserContext(memberId, (client) => client.query(
+        `SELECT public.apply_invoice_delivery_provider_status(
+                  'resend', 'msg-1', 'delivered', now(), NULL
+                )`,
+      )),
+    ).rejects.toThrow(/permission denied/i)
+  })
+
+  it('blocks a provider outcome from smuggling in other changes', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const { deliveryId } = await insertSentEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+    })
+
+    await expect(
+      getPool().query(
+        `UPDATE public.invoice_deliveries
+            SET provider_status = 'delivered', provider_status_at = now(),
+                subject = 'tampered'
+          WHERE id = $1`,
+        [deliveryId],
+      ),
+    ).rejects.toThrow(/terminal invoice delivery.*immutable/i)
+
+    await getPool().query(
+      `UPDATE public.invoice_deliveries
+          SET provider_status = 'bounced', provider_status_at = now()
+        WHERE id = $1`,
+      [deliveryId],
+    )
+
+    await expect(
+      getPool().query(
+        `UPDATE public.invoice_deliveries
+            SET provider_status = NULL, provider_status_at = NULL,
+                provider_status_detail = NULL
+          WHERE id = $1`,
+        [deliveryId],
+      ),
+    ).rejects.toThrow(/terminal invoice delivery.*immutable/i)
+  })
+
+  it('refuses a provider outcome before the send is terminal', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const deliveryId = await insertPendingEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+    })
+
+    await expect(
+      getPool().query(
+        `UPDATE public.invoice_deliveries
+            SET status = 'sent', sent_at = now(),
+                provider_status = 'delivered', provider_status_at = now()
+          WHERE id = $1`,
+        [deliveryId],
+      ),
+    ).rejects.toThrow(/invoice delivery payload is immutable/i)
+  })
+
+  it('redacts the provider reason text with the rest of the expired PII', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const { deliveryId } = await insertSentEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+      retentionExpiresAt: '2000-01-01',
+    })
+    await getPool().query(
+      `UPDATE public.invoice_deliveries
+          SET provider_status = 'bounced', provider_status_at = now(),
+              provider_status_detail = '550 5.1.1 <customer@example.com> rejected'
+        WHERE id = $1`,
+      [deliveryId],
+    )
+
+    await getPool().query(`SELECT public.redact_expired_invoice_delivery_pii()`)
+
+    const delivery = await getPool().query<{
+      provider_status: string
+      provider_status_detail: string | null
+      pii_redacted_at: string | null
+    }>(
+      `SELECT provider_status, provider_status_detail, pii_redacted_at
+         FROM public.invoice_deliveries
+        WHERE id = $1`,
+      [deliveryId],
+    )
+    expect(delivery.rows[0].provider_status).toBe('bounced')
+    expect(delivery.rows[0].provider_status_detail).toBeNull()
+    expect(delivery.rows[0].pii_redacted_at).toBeTruthy()
+  })
+
+  it('masks recipient addresses quoted in the reason text of a summary', async () => {
+    const { userId, companyId } = await seedCompany()
+    const memberId = await insertAuthUser()
+    await insertCompanyMember({ companyId, userId: memberId, role: 'member' })
+    const invoiceId = await insertInvoice(userId, companyId)
+    const documentId = await insertDocument(userId, companyId)
+    const { deliveryId } = await insertSentEmailDelivery({
+      userId,
+      companyId,
+      invoiceId,
+      documentId,
+    })
+    await getPool().query(
+      `UPDATE public.invoice_deliveries
+          SET provider_status = 'bounced', provider_status_at = now(),
+              provider_status_detail = '550 5.1.1 <customer@example.com> unknown'
+        WHERE id = $1`,
+      [deliveryId],
+    )
+
+    const summary = await withUserContext(memberId, (client) => client.query<{
+      id: string
+      provider_status: string
+      provider_status_detail: string
+    }>(
+      `SELECT id::text, provider_status, provider_status_detail
+         FROM public.list_invoice_delivery_summaries($1, $2)`,
+      [companyId, invoiceId],
+    ))
+
+    expect(summary.rows[0]).toEqual({
+      id: deliveryId,
+      provider_status: 'bounced',
+      provider_status_detail: '550 5.1.1 <***@example.com> unknown',
+    })
   })
 })

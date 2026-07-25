@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { ExternalLink, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
+import { openDeferredTab } from '@/lib/browser/deferred-tab'
 
 interface DocumentViewButtonProps {
   documentId: string
@@ -35,10 +36,14 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
       return
     }
     setLoading(true)
+    // Pre-open inside the click's user activation: a window.open after the
+    // await is popup-blocked when the signed-URL fetch is slow.
+    const tab = openDeferredTab('Laddar...')
     try {
       const res = await fetch(`/api/documents/${documentId}`)
       const json = await res.json().catch(() => ({}))
       if (!res.ok || !json?.data?.download_url) {
+        tab.close()
         toast({
           title: 'Kunde inte öppna dokumentet',
           description: json?.error || 'Försök igen om en stund.',
@@ -46,7 +51,19 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
         })
         return
       }
-      window.open(json.data.download_url as string, '_blank', 'noopener,noreferrer')
+      if (!tab.navigate(json.data.download_url as string)) {
+        tab.close()
+        toast({
+          title: 'Kunde inte öppna dokumentet',
+          description: tab.blocked
+            ? 'Tillåt popupfönster för Accounted i webbläsaren och försök igen.'
+            : 'Försök igen om en stund.',
+          variant: 'destructive',
+        })
+      }
+    } catch {
+      tab.close()
+      toast({ title: 'Kunde inte öppna dokumentet', variant: 'destructive' })
     } finally {
       setLoading(false)
     }

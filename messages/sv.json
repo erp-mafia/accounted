@@ -64,7 +64,9 @@
       "matched": "Matchad",
       "unmatched": "Omatchad"
     },
-    "more_options": "Fler alternativ"
+    "more_options": "Fler alternativ",
+    "popup_blocked_title": "Webbläsaren blockerade fliken",
+    "popup_blocked_description": "Tillåt popupfönster för Accounted i webbläsaren och försök igen."
   },
   "nav": {
     "dashboard": "Översikt",
@@ -336,7 +338,7 @@
   },
   "settings_payments": {
     "title": "Stripe",
-    "description": "Koppla företagets Stripe-konto så skapas en betalningslänk automatiskt när du skickar en faktura. Betalningar prickas av mot rätt faktura och utbetalningar bokförs med avgifter.",
+    "description": "Koppla företagets Stripe-konto så hämtas dina Stripe-transaktioner till transaktionsinkorgen, som ett bankflöde för ditt Stripe-saldo. Dessutom skapas en betalningslänk automatiskt när du skickar en faktura.",
     "not_configured": "Stripe-integrationen är inte konfigurerad på den här installationen. Kontakta administratören.",
     "coming_soon_title": "Stripe-betalningar kommer snart",
     "coming_soon_description": "Koppla företagets Stripe-konto så skapas en betalningslänk automatiskt när du skickar en faktura, betalningar prickas av mot rätt faktura och utbetalningar bokförs med avgifter och moms. Funktionen aktiveras inom kort.",
@@ -354,7 +356,7 @@
     "connected_since": "Ansluten {date}",
     "unnamed_account": "Stripe-konto",
     "connected_toast_title": "Stripe anslutet",
-    "connected_toast_description": "Betalningslänkar skapas nu automatiskt när du skickar fakturor.",
+    "connected_toast_description": "Dina Stripe-transaktioner hämtas nu varje natt, och betalningslänkar skapas automatiskt när du skickar fakturor.",
     "disconnected_toast_title": "Stripe frånkopplat",
     "connect_failed_title": "Anslutningen misslyckades",
     "disconnect_failed_title": "Frånkopplingen misslyckades",
@@ -378,14 +380,16 @@
     "reason_non_sek_invoice": "Faktura i utländsk valuta (bokförs manuellt)",
     "reason_unknown": "Okänd orsak",
     "transaction_sync_title": "Transaktioner från Stripe",
-    "transaction_sync_description": "Hämta alla Stripe-transaktioner (betalningar, avgifter, återbetalningar och utbetalningar) till transaktionsinkorgen varje natt, som ett bankflöde för ditt Stripe-saldo. Redan bokförda betalningar länkas till sina verifikat; övriga bokför du som vanligt.",
+    "transaction_sync_description": "Hämta alla Stripe-transaktioner (betalningar, avgifter, återbetalningar och utbetalningar) till transaktionsinkorgen varje natt, som ett bankflöde för ditt Stripe-saldo. Du bokför raderna som vanligt från inkorgen.",
     "transaction_sync_backfill_note": "Vid första synkningen hämtas upp till 90 dagars historik, dock inte före bokföringslåset.",
     "transaction_sync_last_synced": "Senast synkad {date}",
     "transaction_sync_never_synced": "Inte synkad ännu",
     "transaction_sync_enabled_toast": "Transaktionssynk aktiverad. Historiken hämtas vid nästa synkning.",
     "transaction_sync_disabled_toast": "Transaktionssynk avaktiverad.",
     "transaction_sync_toggle_failed": "Kunde inte spara inställningen. Försök igen.",
-    "sync_done_transactions": "{imported} transaktion(er) importerade, {linked} länkade till verifikat."
+    "sync_done_transactions": "{imported} transaktion(er) importerade, {linked} länkade till verifikat.",
+    "sync_done_feed": "{fetched} transaktion(er) hämtade: {imported} nya i inkorgen, {linked} länkade till verifikat.",
+    "sync_done_empty": "Stripe returnerade inga transaktioner för perioden. Kontrollera att rätt konto är anslutet om du väntade dig transaktioner."
   },
   "settings_modal": {
     "title": "Inställningar",
@@ -2951,7 +2955,9 @@
     "deduction_cap_check": "Kunden behöver kontrollera sitt återstående utrymme själv.",
     "deduction_summary_label": "Skattereduktion ROT/RUT",
     "to_pay_label": "Att betala",
-    "total_incl_vat_label": "Totalt inkl. moms"
+    "total_incl_vat_label": "Totalt inkl. moms",
+    "review_customer_missing_title": "Kunduppgifterna kunde inte laddas",
+    "review_customer_missing_description": "Ladda om sidan och försök igen. Kontakta support om det inte hjälper."
   },
   "invoice_review": {
     "assigned_number_prefix": "Tilldelas fakturanummer",
@@ -3189,7 +3195,22 @@
     "cancelled_draft": "Utkastet har makulerats.",
     "cancel_failed_title": "Kunde inte makulera fakturan",
     "paid_toast_title": "Betald",
-    "paid_toast_description": "Faktura {number} har markerats som betald och bokförts"
+    "paid_toast_description": "Faktura {number} har markerats som betald och bokförts",
+    "delivery_status_delivered": "Levererad",
+    "delivery_status_delayed": "Fördröjd",
+    "delivery_status_complained": "Spam-anmäld",
+    "delivery_status_bounced": "Studsade",
+    "delivery_status_suppressed": "Blockerad",
+    "delivery_status_explanation_sent": "Mailet är accepterat av e-posttjänsten. Besked om att mottagarens server tagit emot det har inte kommit in ännu.",
+    "delivery_status_explanation_delivered": "Mottagarens server tog emot mailet. Hittar kunden det ändå inte: be dem titta i skräpposten. Karantän hos mottagarens IT-avdelning syns aldrig för avsändaren.",
+    "delivery_status_explanation_delayed": "Mottagarens server har inte tagit emot mailet ännu, men nya försök pågår. Kommer inget besked inom några timmar: hör av dig till kunden.",
+    "delivery_status_explanation_complained": "Mottagaren markerade mailet som skräppost. Fortsatta utskick till adressen kan komma att blockeras.",
+    "delivery_status_explanation_bounced": "Mottagarens server avvisade mailet. Fakturan kom inte fram.",
+    "delivery_status_explanation_failed": "Mailet kunde inte skickas ut. Fakturan kom inte fram.",
+    "delivery_status_explanation_suppressed": "Adressen är spärrad hos e-posttjänsten efter tidigare studs eller spam-anmälan, så mailet skickades aldrig.",
+    "delivery_status_whole_send_note": "Beskedet gäller hela utskicket, inte enskilda mottagare.",
+    "delivery_provider_status_label": "Leveransstatus",
+    "delivery_provider_reason_label": "Besked från mottagaren"
   },
   "invoice_credit": {
     "back": "Tillbaka",
@@ -3969,7 +3990,8 @@
     "picker_preview": "Förhandsgranska",
     "picker_attach": "Koppla underlag",
     "picker_close": "Stäng",
-    "picker_preview_unavailable": "Förhandsgranskning kunde inte visas."
+    "picker_preview_unavailable": "Förhandsgranskning kunde inte visas.",
+    "download_failed": "Kunde inte öppna dokumentet"
   },
   "journal_status": {
     "status_draft": "Utkast",
@@ -4770,7 +4792,7 @@
     "update_failed_title": "Kunde inte uppdatera artikel",
     "retry": "Försök igen.",
     "deactivate_confirm_title": "Inaktivera {name}",
-    "deactivate_confirm_description": "Artikeln döljs i listor och fakturaval men historiken bevaras. Du kan aktivera den igen senare.",
+    "deactivate_confirm_description": "Artikeln går inte längre att välja på nya fakturor. Befintliga fakturor påverkas inte, och du kan aktivera artikeln igen när du vill.",
     "deactivate_confirm_label": "Inaktivera",
     "deactivated_title": "Artikel inaktiverad",
     "activated_title": "Artikel aktiverad",

@@ -57,8 +57,8 @@ export default function ArticleDetailPage({
   const [isLoading, setIsLoading] = useState(true)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
-  const [isDeleting, setIsDeleting] = useState(false)
   const [isTogglingActive, setIsTogglingActive] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()
 
   useEffect(() => {
@@ -131,17 +131,21 @@ export default function ArticleDetailPage({
     }
   }
 
-  // Soft retire/restore: the only path for articles already used on invoices,
-  // where hard delete is refused (ARTICLE_IN_USE) to keep invoice history.
+  // Soft deactivation is the answer for an article that has already been used
+  // on an invoice: the delete path refuses those (ARTICLE_IN_USE), while
+  // active=false hides it from the invoice picker, the export and the MCP
+  // listing without touching invoice history. Reactivation is not destructive,
+  // so only the deactivate direction confirms.
   async function handleToggleActive() {
     if (!article) return
-    const deactivating = article.active
-    if (deactivating) {
+    const nextActive = !article.active
+
+    if (!nextActive) {
       const ok = await confirmAction({
         title: t('deactivate_confirm_title', { name: article.name }),
         description: t('deactivate_confirm_description'),
         confirmLabel: t('deactivate_confirm_label'),
-        variant: 'destructive',
+        variant: 'warning',
       })
       if (!ok) return
     }
@@ -151,18 +155,19 @@ export default function ArticleDetailPage({
       const response = await fetch(`/api/articles/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ active: !article.active }),
+        body: JSON.stringify({ active: nextActive }),
       })
-      await throwOnStructuredError(response)
+      const { data } = (await throwOnStructuredError(response)) as { data: Article }
+
+      setArticle(data)
       toast({
-        title: deactivating ? t('deactivated_title') : t('activated_title'),
+        title: nextActive ? t('activated_title') : t('deactivated_title'),
         description: article.name,
       })
-      fetchArticle()
     } catch (err) {
       const body = (err as { body?: unknown }).body
       toast({
-        title: deactivating ? t('deactivate_failed_title') : t('activate_failed_title'),
+        title: nextActive ? t('activate_failed_title') : t('deactivate_failed_title'),
         description: getErrorMessage(body ?? err, { context: 'article', locale: errorLocale }),
         variant: 'destructive',
       })
@@ -264,6 +269,7 @@ export default function ArticleDetailPage({
             variant="outline"
             size="sm"
             onClick={handleToggleActive}
+            className="min-h-10"
             disabled={isTogglingActive || !canWrite}
             title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
           >

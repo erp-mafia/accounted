@@ -1897,6 +1897,17 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
     setIsLoading(true)
     setSelectedProvider(provider)
 
+    // Pre-open the OAuth popup inside the click's user activation: opening it
+    // after the fetch below is popup-blocked when the response is slow (the
+    // activation expires after ~5s). Kept open only for OAuth providers; the
+    // token path and every failure path close it again. The opener reference
+    // stays intact: the provider popup posts back via postMessage.
+    const w = 600
+    const h = 700
+    const left = window.screenX + (window.outerWidth - w) / 2
+    const top = window.screenY + (window.outerHeight - h) / 2
+    const popup = window.open('', 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
+
     try {
       const res = await fetch('/api/extensions/ext/arcim-migration/connect', {
         method: 'POST',
@@ -1913,19 +1924,24 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
       setAuthType(data.authType)
 
       if (data.authType === 'oauth' && data.authUrl) {
-        // Open immediately: this runs inside the button's click handler, so
-        // the popup is a trusted user gesture and won't be blocked.
-        const w = 600
-        const h = 700
-        const left = window.screenX + (window.outerWidth - w) / 2
-        const top = window.screenY + (window.outerHeight - h) / 2
-        window.open(data.authUrl, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
+        if (popup && !popup.closed) {
+          popup.location.href = data.authUrl
+        } else {
+          // The pre-opened popup was blocked or closed; retrying here is a
+          // long shot (the activation may be gone) but strictly better than
+          // dropping the flow.
+          window.open(data.authUrl, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
+        }
         setAuthUrl(data.authUrl)
-      } else if (data.authType === 'token') {
-        // Re-enter credentials for token-based providers
-        setStep('connect')
+      } else {
+        popup?.close()
+        if (data.authType === 'token') {
+          // Re-enter credentials for token-based providers
+          setStep('connect')
+        }
       }
     } catch (err) {
+      popup?.close()
       setError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte återansluta')
       setAuthExpired(true)
     } finally {

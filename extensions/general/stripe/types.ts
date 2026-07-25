@@ -21,16 +21,6 @@ export interface StripeConnection {
   updated_at: string
 }
 
-/** Row shape of public.stripe_payment_events (needs_review projection). */
-export interface StripeReviewEvent {
-  id: string
-  reason: string | null
-  amount: number | null
-  currency: string | null
-  invoice_id: string | null
-  event_created_at: string | null
-}
-
 /** Status payload returned by GET /api/extensions/ext/stripe/status. */
 export interface StripeStatusResponse {
   configured: boolean
@@ -47,6 +37,4 @@ export interface StripeStatusResponse {
     | 'transaction_sync_enabled'
     | 'last_balance_txn_synced_at'
   > | null
-  needs_review_count?: number
-  needs_review?: StripeReviewEvent[]
 }

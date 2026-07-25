@@ -64,6 +64,7 @@ Resolution order (last wins): **defaults → env vars → extension override**.
 | `RESEND_FROM_EMAIL` | Default `From` address (e.g. `noreply@your-brand.se`); also used as the address you From-spoof through Resend |
 | `RESEND_INBOUND_DOMAIN` | Domain used to compose per-company invoice-inbox addresses: `{local-part}@{RESEND_INBOUND_DOMAIN}` |
 | `RESEND_INBOUND_WEBHOOK_SECRET` | Verifies the `/inbound` webhook signature from Resend |
+| `RESEND_DELIVERY_WEBHOOK_SECRET` | Verifies the `/delivery-status` webhook signature from Resend. Optional: without it, invoice delivery history shows "sent" but never the delivery outcome |
 
 ## Things you MUST NOT change
 

@@ -34,6 +34,7 @@ const SAMPLE_ARTICLE = {
   type: 'tjanst',
   unit: 'tim',
   price_excl_vat: 850,
+  currency: 'SEK',
   vat_rate: 25,
   revenue_account: null,
   cost_price: null,
@@ -109,6 +110,26 @@ describe('GET /api/v1/companies/:companyId/articles', () => {
     expect(body.data.articles[0].housework_type).toBe('BYGG')
     // Default: inactive articles filtered out.
     expect(client.eqCalls).toContainEqual(['articles', 'active', true])
+  })
+
+  it('exposes the article currency so a caller can tell a non-SEK price apart', async () => {
+    // price_excl_vat alone is ambiguous: without currency an agent copies a EUR
+    // price onto a SEK invoice line with no FX conversion.
+    const client = makeSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      articles: { data: [{ ...SAMPLE_ARTICLE, price_excl_vat: 95, currency: 'EUR' }], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await listArticles(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/articles`),
+      routeParams,
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.articles[0].currency).toBe('EUR')
+    expect(body.data.articles[0].price_excl_vat).toBe(95)
   })
 
   it('includes inactive articles with ?include_inactive=true', async () => {

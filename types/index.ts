@@ -1040,6 +1040,20 @@ export interface Invoice {
 export type InvoiceDeliveryChannel = 'email' | 'manual'
 export type InvoiceDeliveryStatus = 'preparing' | 'pending' | 'sent' | 'failed' | 'marked_sent'
 
+/**
+ * Delivery outcome reported by the email provider after the send itself
+ * succeeded. Reported per message, never per recipient: a message with several
+ * recipients gets one outcome, and the reason text names the address that
+ * failed. `null` means no report has arrived yet.
+ */
+export type InvoiceDeliveryProviderStatus =
+  | 'delayed'
+  | 'delivered'
+  | 'complained'
+  | 'bounced'
+  | 'failed'
+  | 'suppressed'
+
 export interface InvoiceDelivery {
   id: string
   company_id: string
@@ -1057,6 +1071,9 @@ export interface InvoiceDelivery {
   body_html: string | null
   provider: string | null
   provider_message_id: string | null
+  provider_status: InvoiceDeliveryProviderStatus | null
+  provider_status_at: string | null
+  provider_status_detail: string | null
   error_code: string | null
   document_attachment_id: string | null
   attachment_filename: string | null

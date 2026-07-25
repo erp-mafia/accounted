@@ -15,7 +15,6 @@ import {
   handleCreditNoteCreated,
   handleInvoicePaid,
 } from './lib/payment-links'
-import { syncStripeConnection } from './lib/sync'
 import { syncStripeBalanceTransactions } from './lib/transaction-sync'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import type { StripeConnection, StripeStatusResponse } from './types'
@@ -38,9 +37,11 @@ const NOT_CONFIGURED_MESSAGE =
  * Stripe Connect extension
  *
  * Connects a company's Stripe account via Connect OAuth (Standard accounts).
- * Auto-creates a Stripe Payment Link when an invoice is sent, marks invoices
- * paid from Stripe checkout events, and books payouts (gross/fees/net) against
- * the 1686 clearing account.
+ * Auto-creates a Stripe Payment Link when an invoice is sent, and imports the
+ * account's balance transactions into the transactions inbox as a bank feed
+ * for the Stripe balance (1686). Feed-only by decision 2026-07-24: nothing is
+ * auto-booked; the event/settlement sync (lib/sync.ts, lib/payouts.ts) is
+ * retained in the repo but not wired to any cron or route.
  *
  * Required environment variables:
  * - STRIPE_SECRET_KEY (the platform account key, shared with billing)
@@ -97,35 +98,9 @@ export const stripeExtension: Extension = {
         const connection =
           rows?.find((r) => r.status === 'active') ?? rows?.[0] ?? null
 
-        // Events + payouts the deterministic matcher refused to auto-apply.
-        // Members can read both ledgers under RLS; the panel lists them for
-        // manual handling.
-        const { data: reviewRows, count: reviewCount } = await supabase
-          .from('stripe_payment_events')
-          .select('id, reason, amount, currency, invoice_id, event_created_at', {
-            count: 'exact',
-          })
-          .eq('company_id', ctx.companyId)
-          .eq('status', 'needs_review')
-          .order('event_created_at', { ascending: false })
-          .limit(5)
-
-        const { data: payoutRows, count: payoutCount } = await supabase
-          .from('stripe_payouts')
-          .select('id, reason, amount, currency, event_created_at', { count: 'exact' })
-          .eq('company_id', ctx.companyId)
-          .eq('status', 'needs_review')
-          .order('event_created_at', { ascending: false })
-          .limit(5)
-
         const payload: StripeStatusResponse = {
           configured: isStripeConnectConfigured(),
           connection,
-          needs_review_count: (reviewCount ?? 0) + (payoutCount ?? 0),
-          needs_review: [
-            ...(reviewRows ?? []),
-            ...(payoutRows ?? []).map((p) => ({ ...p, invoice_id: null })),
-          ],
         }
         return NextResponse.json(payload)
       },
@@ -175,14 +150,15 @@ export const stripeExtension: Extension = {
         try {
           const serviceClient = createServiceClientNoCookies()
           const typedConnection = connection as StripeConnection
-          const summary = await syncStripeConnection(serviceClient, typedConnection)
-          // The manual button covers both feeds: when the balance-transaction
-          // feed is enabled, "Synka nu" also pulls it (same module as the
-          // nightly cron, no separate rate limit needed: one user action).
-          const transactions = typedConnection.transaction_sync_enabled
-            ? await syncStripeBalanceTransactions(serviceClient, typedConnection)
-            : undefined
-          return NextResponse.json({ success: true, ...summary, transactions })
+          // Feed-only (2026-07-24): Stripe sync imports balance transactions
+          // into the inbox, nothing more. The event/settlement sync
+          // (syncStripeConnection in lib/sync.ts) stays in the repo but is
+          // deliberately not called: booking is a user decision in the inbox,
+          // like any bank feed. The manual button ignores
+          // transaction_sync_enabled (that flag gates the nightly cron):
+          // pressing it IS the opt-in.
+          const transactions = await syncStripeBalanceTransactions(serviceClient, typedConnection)
+          return NextResponse.json({ success: true, transactions })
         } catch (error) {
           log.error('[stripe] Manual sync failed', {
             message: error instanceof Error ? error.message : String(error),

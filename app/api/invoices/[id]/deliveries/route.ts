@@ -2,7 +2,11 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import type { InvoiceDeliveryChannel, InvoiceDeliveryStatus } from '@/types'
+import type {
+  InvoiceDeliveryChannel,
+  InvoiceDeliveryProviderStatus,
+  InvoiceDeliveryStatus,
+} from '@/types'
 
 interface InvoiceDeliverySummaryRow {
   id: string
@@ -11,6 +15,9 @@ interface InvoiceDeliverySummaryRow {
   to_addresses: string[]
   cc_addresses: string[]
   provider: string | null
+  provider_status: InvoiceDeliveryProviderStatus | null
+  provider_status_at: string | null
+  provider_status_detail: string | null
   error_code: string | null
   document_attachment_id: string | null
   attachment_filename: string | null
@@ -35,8 +42,12 @@ interface MaskedInvoiceDeliverySummaryRow
  * addresses stay server-side. The attachment filename passes through: it is
  * derived from data the invoice already exposes to every company member. The
  * database allow-list and masking boundary is defined by
- * list_invoice_delivery_summaries in migration 20260723150000; this route
+ * list_invoice_delivery_summaries in migration 20260724160000; this route
  * masks returned addresses again as defense in depth.
+ *
+ * The provider delivery outcome is message-level, never per recipient: the
+ * provider reports one result for the whole send, and its reason text can
+ * quote the failing address, so that text is masked the same way.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.deliveries.list',
@@ -79,6 +90,9 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       to_addresses: delivery.to_addresses.map(maskRecipientDomain),
       cc_addresses: delivery.cc_addresses.map(maskRecipientDomain),
       provider: delivery.provider,
+      provider_status: delivery.provider_status,
+      provider_status_at: delivery.provider_status_at,
+      provider_status_detail: maskAddressesInText(delivery.provider_status_detail),
       error_code: delivery.error_code,
       document_attachment_id: delivery.document_attachment_id,
       attachment_filename: delivery.attachment_filename,
@@ -93,6 +107,27 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     )
   },
 )
+
+/**
+ * Provider reason texts routinely quote the address that failed
+ * ("550 5.1.1 <anna@example.se>: user unknown"). Keep the diagnostic value,
+ * drop the local part, matching how the recipient list itself is masked.
+ *
+ * The local part is matched by exclusion, not by an allow-list of ASCII mail
+ * characters: an allow-list stops at the first character it does not know, so
+ * it leaks the head of every address it cannot spell. `anna.bergström@` would
+ * mask only the `m`, and a quoted local part ("anna berg"@example.com) would
+ * not match at all. Anything up to the delimiters that genuinely cannot sit
+ * inside an address (whitespace, the angle brackets and punctuation providers
+ * wrap addresses in) is treated as local part, so over-masking is the failure
+ * mode rather than a partial disclosure.
+ */
+const ADDRESS_LOCAL_PART = /"[^"]*"@|[^\s<>()[\],;:"@]+@/gu
+
+function maskAddressesInText(text: string | null): string | null {
+  if (!text) return null
+  return text.replace(ADDRESS_LOCAL_PART, '***@')
+}
 
 function maskRecipientDomain(address: string): MaskedRecipientAddress {
   const separator = address.lastIndexOf('@')

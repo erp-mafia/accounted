@@ -23,6 +23,7 @@ const ArticleShape = z.object({
   type: z.enum(['vara', 'tjanst']),
   unit: z.string(),
   price_excl_vat: z.number(),
+  currency: z.string(),
   vat_rate: z.number(),
   revenue_account: z.string().nullable(),
   cost_price: z.number().nullable(),
@@ -36,7 +37,7 @@ const ArticleShape = z.object({
 
 // Explicit projection: excludes user_id, company_id (internal scoping).
 const ARTICLE_COLUMNS =
-  'id, article_number, name, name_en, type, unit, price_excl_vat, vat_rate, revenue_account, cost_price, ean, housework_type, notes, active, created_at, updated_at'
+  'id, article_number, name, name_en, type, unit, price_excl_vat, currency, vat_rate, revenue_account, cost_price, ean, housework_type, notes, active, created_at, updated_at'
 
 registerEndpoint({
   operation: 'articles.list',
@@ -52,6 +53,7 @@ registerEndpoint({
   pitfalls: [
     'Linking article_id does NOT auto-fill the invoice line: send description, unit_price, vat_rate etc. explicitly on the item (copy them from this response).',
     'price_excl_vat always excludes VAT.',
+    'price_excl_vat is denominated in the article\'s own currency, which is NOT always SEK. Check currency before copying the price onto an invoice line: the invoice carries a single currency for all its lines and there is no FX conversion here.',
     'housework_type is an arbetstypskod hint (e.g. BYGG, STAD); the invoice line still needs deduction_type + labor_hours + work_type set explicitly for ROT/RUT.',
     'Inactive articles (active=false) are hidden by default but remain linkable for historical reads.',
   ],
@@ -67,6 +69,7 @@ registerEndpoint({
             type: 'tjanst',
             unit: 'tim',
             price_excl_vat: 850,
+            currency: 'SEK',
             vat_rate: 25,
             revenue_account: null,
             cost_price: null,

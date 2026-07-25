@@ -118,6 +118,10 @@ export async function GET(request: Request) {
         connected_at: new Date().toISOString(),
         error_message: null,
         oauth_state: null, // Clear to prevent replay
+        // Feed-only product: connecting Stripe means fetching its
+        // transactions, so the nightly feed starts on by default. The panel
+        // toggle remains as the opt-out.
+        transaction_sync_enabled: true,
       })
       .eq('id', pendingConnection.id)
       .select('id, company_id, user_id, stripe_account_id, livemode')

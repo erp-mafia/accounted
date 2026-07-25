@@ -7,6 +7,7 @@ import { Paperclip, Loader2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
+import { openDeferredTab } from '@/lib/browser/deferred-tab'
 
 interface Props {
   documentId: string | null | undefined
@@ -47,6 +48,7 @@ export function TransactionAttachmentIndicator({
   className,
 }: Props) {
   const t = useTranslations('tx_underlag')
+  const tCommon = useTranslations('common')
   const { toast } = useToast()
   const [isLoading, setIsLoading] = useState(false)
 
@@ -55,16 +57,28 @@ export function TransactionAttachmentIndicator({
     e.preventDefault()
     if (isLoading || !documentId) return
     setIsLoading(true)
+    // Pre-open inside the click's user activation: a window.open after the
+    // await is popup-blocked when the signed-URL fetch is slow.
+    const tab = openDeferredTab(tCommon('loading'))
     try {
       const res = await fetch(`/api/documents/${documentId}`)
       if (!res.ok) {
+        tab.close()
         toast({ title: t('open_failed'), variant: 'destructive' })
         return
       }
       const { data } = await res.json()
-      if (data?.download_url) {
-        window.open(data.download_url, '_blank', 'noopener,noreferrer')
+      if (!data?.download_url || !tab.navigate(data.download_url)) {
+        tab.close()
+        toast({
+          title: t('open_failed'),
+          description: tab.blocked ? tCommon('popup_blocked_description') : undefined,
+          variant: 'destructive',
+        })
       }
+    } catch {
+      tab.close()
+      toast({ title: t('open_failed'), variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }

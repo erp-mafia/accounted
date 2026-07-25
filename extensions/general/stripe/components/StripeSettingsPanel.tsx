@@ -10,19 +10,10 @@ import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { useFormat } from '@/lib/hooks/use-format'
-import { formatCurrency, formatDate } from '@/lib/utils'
 import { CreditCard, Link2, Loader2, RefreshCw, Unlink } from 'lucide-react'
-import type { StripeReviewEvent, StripeStatusResponse } from '../types'
+import type { StripeStatusResponse } from '../types'
 
 type ConnectionInfo = NonNullable<StripeStatusResponse['connection']>
-
-const KNOWN_REVIEW_REASONS = new Set([
-  'invoice_not_found',
-  'invoice_already_paid',
-  'amount_mismatch',
-  'currency_mismatch',
-  'non_sek_invoice',
-])
 
 const STATUS_VARIANT: Record<ConnectionInfo['status'], 'success' | 'secondary' | 'destructive' | 'warning'> = {
   active: 'success',
@@ -46,8 +37,6 @@ export default function StripeSettingsPanel() {
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [togglingTransactionSync, setTogglingTransactionSync] = useState(false)
-  const [needsReviewCount, setNeedsReviewCount] = useState(0)
-  const [needsReview, setNeedsReview] = useState<StripeReviewEvent[]>([])
 
   const loadStatus = useCallback(async () => {
     try {
@@ -56,8 +45,6 @@ export default function StripeSettingsPanel() {
       const data = (await res.json()) as StripeStatusResponse
       setConfigured(data.configured)
       setConnection(data.connection)
-      setNeedsReviewCount(data.needs_review_count ?? 0)
-      setNeedsReview(data.needs_review ?? [])
     } finally {
       setLoading(false)
     }
@@ -128,9 +115,7 @@ export default function StripeSettingsPanel() {
         body: JSON.stringify({}),
       })
       const data = (await res.json().catch(() => ({}))) as {
-        settled?: number
-        needsReview?: number
-        transactions?: { imported?: number; linked?: number }
+        transactions?: { fetched?: number; imported?: number; linked?: number }
         error?: string
       }
       if (!res.ok) {
@@ -141,18 +126,20 @@ export default function StripeSettingsPanel() {
         })
         return
       }
-      const paymentsLine = t('sync_done_description', {
-        settled: data.settled ?? 0,
-        review: data.needsReview ?? 0,
-      })
+      // Honest summary: report what Stripe actually returned. An all-zero
+      // run is a real answer ("the account had nothing in the window"), not
+      // a silent success.
+      const fetched = data.transactions?.fetched ?? 0
       toast({
         title: t('sync_done_title'),
-        description: data.transactions
-          ? `${paymentsLine} ${t('sync_done_transactions', {
-              imported: data.transactions.imported ?? 0,
-              linked: data.transactions.linked ?? 0,
-            })}`
-          : paymentsLine,
+        description:
+          fetched === 0
+            ? t('sync_done_empty')
+            : t('sync_done_feed', {
+                fetched,
+                imported: data.transactions?.imported ?? 0,
+                linked: data.transactions?.linked ?? 0,
+              }),
       })
       await loadStatus()
     } finally {
@@ -362,40 +349,6 @@ export default function StripeSettingsPanel() {
           </div>
         )}
 
-        {isActive && needsReviewCount > 0 && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-                {t('needs_review_title')}
-              </h2>
-              <Badge variant="warning">{needsReviewCount}</Badge>
-            </div>
-            <p className="text-sm text-muted-foreground">{t('needs_review_hint')}</p>
-            <ul className="divide-y divide-border rounded-lg border border-border">
-              {needsReview.map((event) => (
-                <li key={event.id} className="flex items-center justify-between gap-4 px-4 py-3">
-                  <div className="min-w-0">
-                    <p className="text-sm">
-                      {event.reason && KNOWN_REVIEW_REASONS.has(event.reason)
-                        ? t(`reason_${event.reason}`)
-                        : event.reason || t('reason_unknown')}
-                    </p>
-                    {event.event_created_at && (
-                      <p className="text-xs text-muted-foreground tabular-nums">
-                        {formatDate(event.event_created_at)}
-                      </p>
-                    )}
-                  </div>
-                  {event.amount != null && (
-                    <span className="shrink-0 text-sm tabular-nums">
-                      {formatCurrency(event.amount, event.currency ?? 'SEK')}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
       </CardContent>
     </Card>
   )

@@ -52,6 +52,8 @@ processing_activities:
       - exact_sent_pdf_worm_protection
       - metadata_only_immutable_audit_log
       - daily_post_retention_pii_redaction
+      - signed_provider_delivery_webhook_only
+      - masked_recipient_addresses_in_provider_reason_text
 
   - id: customer.private_identity
     name: Personnummer för privatkund

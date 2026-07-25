@@ -14,6 +14,7 @@ import { RecaptHideWidget } from "@/components/RecaptHideWidget";
 import { ScrollbarReveal } from "@/components/ScrollbarReveal";
 import { ensureInitialized } from "@/lib/init";
 import { getBranding } from "@/lib/branding/service";
+import { APP_TIME_ZONE } from "@/i18n/config";
 import "./globals.css";
 
 // Load extensions before metadata/viewport functions read the branding service.
@@ -81,7 +82,9 @@ export default async function RootLayout({
       <body
         className="antialiased"
       >
-        <NextIntlClientProvider locale={locale} messages={messages}>
+        {/* timeZone is passed explicitly: client components must format in the
+            same zone the server rendered with, or timestamps shift on hydration. */}
+        <NextIntlClientProvider locale={locale} messages={messages} timeZone={APP_TIME_ZONE}>
           <ThemeProvider
             attribute="class"
             defaultTheme="light"

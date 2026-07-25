@@ -64,7 +64,9 @@
       "matched": "Matched",
       "unmatched": "Unmatched"
     },
-    "more_options": "More options"
+    "more_options": "More options",
+    "popup_blocked_title": "The browser blocked the tab",
+    "popup_blocked_description": "Allow pop-ups for Accounted in your browser and try again."
   },
   "nav": {
     "dashboard": "Overview",
@@ -336,7 +338,7 @@
   },
   "settings_payments": {
     "title": "Stripe",
-    "description": "Connect your company Stripe account and a payment link is created automatically when you send an invoice. Payments are matched to the right invoice and payouts are booked with fees.",
+    "description": "Connect your company Stripe account and your Stripe transactions are imported into the transactions inbox, like a bank feed for your Stripe balance. A payment link is also created automatically when you send an invoice.",
     "not_configured": "The Stripe integration is not configured on this installation. Contact your administrator.",
     "coming_soon_title": "Stripe payments coming soon",
     "coming_soon_description": "Connect your company Stripe account and a payment link is created automatically when you send an invoice, payments are matched to the right invoice, and payouts are booked with fees and VAT. The feature will be enabled shortly.",
@@ -354,7 +356,7 @@
     "connected_since": "Connected {date}",
     "unnamed_account": "Stripe account",
     "connected_toast_title": "Stripe connected",
-    "connected_toast_description": "Payment links are now created automatically when you send invoices.",
+    "connected_toast_description": "Your Stripe transactions are now fetched nightly, and payment links are created automatically when you send invoices.",
     "disconnected_toast_title": "Stripe disconnected",
     "connect_failed_title": "Connection failed",
     "disconnect_failed_title": "Disconnect failed",
@@ -378,14 +380,16 @@
     "reason_non_sek_invoice": "Foreign-currency invoice (book manually)",
     "reason_unknown": "Unknown reason",
     "transaction_sync_title": "Transactions from Stripe",
-    "transaction_sync_description": "Import all Stripe transactions (payments, fees, refunds and payouts) into the transactions inbox every night, like a bank feed for your Stripe balance. Already-booked payments are linked to their vouchers; you book the rest as usual.",
+    "transaction_sync_description": "Import all Stripe transactions (payments, fees, refunds and payouts) into the transactions inbox every night, like a bank feed for your Stripe balance. You book the rows from the inbox as usual.",
     "transaction_sync_backfill_note": "The first sync fetches up to 90 days of history, but never before the bookkeeping lock date.",
     "transaction_sync_last_synced": "Last synced {date}",
     "transaction_sync_never_synced": "Not synced yet",
     "transaction_sync_enabled_toast": "Transaction sync enabled. History is fetched on the next sync.",
     "transaction_sync_disabled_toast": "Transaction sync disabled.",
     "transaction_sync_toggle_failed": "Could not save the setting. Please try again.",
-    "sync_done_transactions": "{imported} transaction(s) imported, {linked} linked to vouchers."
+    "sync_done_transactions": "{imported} transaction(s) imported, {linked} linked to vouchers.",
+    "sync_done_feed": "{fetched} transaction(s) fetched: {imported} new in the inbox, {linked} linked to vouchers.",
+    "sync_done_empty": "Stripe returned no transactions for the period. If you expected transactions, check that the right account is connected."
   },
   "settings_modal": {
     "title": "Settings",
@@ -2951,7 +2955,9 @@
     "deduction_cap_check": "The customer needs to check their remaining allowance themselves.",
     "deduction_summary_label": "Tax reduction ROT/RUT",
     "to_pay_label": "Amount to pay",
-    "total_incl_vat_label": "Total incl. VAT"
+    "total_incl_vat_label": "Total incl. VAT",
+    "review_customer_missing_title": "Customer details could not be loaded",
+    "review_customer_missing_description": "Reload the page and try again. Contact support if the problem persists."
   },
   "invoice_review": {
     "assigned_number_prefix": "Will be assigned invoice number",
@@ -3189,7 +3195,22 @@
     "cancelled_draft": "The draft has been cancelled.",
     "cancel_failed_title": "Could not cancel the invoice",
     "paid_toast_title": "Paid",
-    "paid_toast_description": "Invoice {number} has been marked as paid and posted"
+    "paid_toast_description": "Invoice {number} has been marked as paid and posted",
+    "delivery_status_delivered": "Delivered",
+    "delivery_status_delayed": "Delayed",
+    "delivery_status_complained": "Marked as spam",
+    "delivery_status_bounced": "Bounced",
+    "delivery_status_suppressed": "Blocked",
+    "delivery_status_explanation_sent": "The email provider accepted the message. No word yet on whether the recipient's server took it.",
+    "delivery_status_explanation_delivered": "The recipient's server accepted the message. If the customer still cannot find it, ask them to check their spam folder. Quarantine on the recipient's side is never visible to the sender.",
+    "delivery_status_explanation_delayed": "The recipient's server has not accepted the message yet, but delivery is still being retried. If nothing changes within a few hours, contact the customer.",
+    "delivery_status_explanation_complained": "The recipient marked the message as spam. Further sends to this address may be blocked.",
+    "delivery_status_explanation_bounced": "The recipient's server rejected the message. The invoice did not arrive.",
+    "delivery_status_explanation_failed": "The message could not be sent. The invoice did not arrive.",
+    "delivery_status_explanation_suppressed": "The email provider has blocked this address after an earlier bounce or spam complaint, so the message was never sent.",
+    "delivery_status_whole_send_note": "This applies to the whole send, not to individual recipients.",
+    "delivery_provider_status_label": "Delivery status",
+    "delivery_provider_reason_label": "Reason from the recipient"
   },
   "invoice_credit": {
     "back": "Back",
@@ -3969,7 +3990,8 @@
     "picker_preview": "Preview",
     "picker_attach": "Attach document",
     "picker_close": "Close",
-    "picker_preview_unavailable": "Preview could not be displayed."
+    "picker_preview_unavailable": "Preview could not be displayed.",
+    "download_failed": "Could not open the document"
   },
   "journal_status": {
     "status_draft": "Draft",
@@ -4770,7 +4792,7 @@
     "update_failed_title": "Could not update article",
     "retry": "Please try again.",
     "deactivate_confirm_title": "Deactivate {name}",
-    "deactivate_confirm_description": "The article is hidden from lists and invoice pickers but its history is kept. You can reactivate it later.",
+    "deactivate_confirm_description": "The article can no longer be picked on new invoices. Existing invoices are unaffected, and you can activate it again whenever you want.",
     "deactivate_confirm_label": "Deactivate",
     "deactivated_title": "Article deactivated",
     "activated_title": "Article activated",

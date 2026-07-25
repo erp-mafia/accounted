@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
-import type { InvoiceDelivery } from '@/types'
+import type { InvoiceDelivery, InvoiceDeliveryProviderStatus } from '@/types'
 
 export type InvoiceDeliveryView = Pick<
   InvoiceDelivery,
@@ -15,6 +15,9 @@ export type InvoiceDeliveryView = Pick<
   | 'to_addresses'
   | 'cc_addresses'
   | 'provider'
+  | 'provider_status'
+  | 'provider_status_at'
+  | 'provider_status_detail'
   | 'error_code'
   | 'document_attachment_id'
   | 'attachment_filename'
@@ -30,12 +33,37 @@ interface InvoiceDeliveryHistoryProps {
   showLegacyEmptyState: boolean
 }
 
-const statusVariant = {
+/**
+ * What the row actually says happened. The send status alone stops at
+ * "handed to the provider", which is why an accepted-but-bounced invoice used
+ * to read as a plain success. When the provider has reported back, its
+ * outcome is what the row shows.
+ */
+type DeliveryOutcome =
+  | 'pending'
+  | 'sent'
+  | 'failed'
+  | 'marked_sent'
+  | InvoiceDeliveryProviderStatus
+
+function outcomeOf(delivery: InvoiceDeliveryView): DeliveryOutcome {
+  if (delivery.status === 'sent' && delivery.provider_status) return delivery.provider_status
+  return delivery.status
+}
+
+// Green is reserved for a confirmed arrival. "Skickad" without a delivery
+// report is a neutral, honest in-between state.
+const outcomeVariant: Record<DeliveryOutcome, 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
   pending: 'secondary',
-  sent: 'success',
+  sent: 'secondary',
+  delivered: 'success',
+  delayed: 'warning',
+  complained: 'warning',
+  bounced: 'destructive',
   failed: 'destructive',
+  suppressed: 'destructive',
   marked_sent: 'outline',
-} as const
+}
 
 export function InvoiceDeliveryHistory({
   deliveries,
@@ -76,6 +104,10 @@ export function InvoiceDeliveryHistory({
             {deliveries.map((delivery) => {
               const occurredAt = delivery.sent_at || delivery.failed_at || delivery.created_at
               const isManual = delivery.channel === 'manual'
+              const outcome = outcomeOf(delivery)
+              const isEmailSend = !isManual && delivery.status === 'sent'
+              const recipientCount =
+                delivery.to_addresses.length + delivery.cc_addresses.length
 
               return (
                 <details key={delivery.id} className="group rounded-lg border bg-card">
@@ -91,8 +123,8 @@ export function InvoiceDeliveryHistory({
                         {formatTimestamp(occurredAt)}
                       </span>
                     </span>
-                    <Badge variant={statusVariant[delivery.status]}>
-                      {t(`delivery_status_${delivery.status}`)}
+                    <Badge variant={outcomeVariant[outcome]}>
+                      {t(`delivery_status_${outcome}`)}
                     </Badge>
                   </summary>
 
@@ -114,6 +146,35 @@ export function InvoiceDeliveryHistory({
                             </>
                           )}
                         </dl>
+
+                        {isEmailSend && (
+                          <div className="rounded-lg border bg-muted/30 p-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium">
+                                {t('delivery_provider_status_label')}
+                              </span>
+                              <span>{t(`delivery_status_${outcome}`)}</span>
+                              {delivery.provider_status_at && (
+                                <span className="text-xs text-muted-foreground tabular-nums">
+                                  {formatTimestamp(delivery.provider_status_at)}
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {t(`delivery_status_explanation_${outcome}`)}
+                            </p>
+                            {delivery.provider_status_detail && (
+                              <p className="mt-2 break-words text-xs text-muted-foreground">
+                                {t('delivery_provider_reason_label')}: {delivery.provider_status_detail}
+                              </p>
+                            )}
+                            {recipientCount > 1 && delivery.provider_status && (
+                              <p className="mt-2 text-xs text-muted-foreground">
+                                {t('delivery_status_whole_send_note')}
+                              </p>
+                            )}
+                          </div>
+                        )}
 
                         {delivery.document_attachment_id && (
                           <Button asChild variant="outline" size="sm" className="max-w-full">

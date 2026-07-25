@@ -63,6 +63,27 @@ describe('GET/PATCH/DELETE /api/articles/[id]', () => {
     expect(body.data.price_excl_vat).toBe(1500)
   })
 
+  // The article detail page's Inaktivera/Aktivera button sends nothing but the
+  // flag, so an active-only body must be a valid sparse update on its own.
+  it('PATCH toggles active on its own without any other field', async () => {
+    enqueue({ data: { id: 'a1', name: 'Konsulttimme', active: false } })
+
+    const request = createMockRequest('/api/articles/a1', {
+      method: 'PATCH',
+      body: { active: false },
+    })
+
+    const response = await PATCH(request, createMockRouteParams({ id: 'a1' }))
+    const { status, body } = await parseJsonResponse<{ data: { active: boolean } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.active).toBe(false)
+    // Only the articles update: no revenue-account lookup is triggered by a
+    // body that carries nothing but the flag.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+    expect(supabase.from).toHaveBeenCalledWith('articles')
+  })
+
   it('PATCH answers ACCOUNTS_NOT_IN_CHART for a BAS class-3 account missing from the chart', async () => {
     // chart_of_accounts lookup: no row, but 3999 is a known BAS class-3
     // account → activatable via the activate-and-retry dialog flow.

@@ -5,7 +5,7 @@
   "entryPoint": "@/extensions/general/email",
   "workspace": null,
   "requiredEnvVars": ["RESEND_API_KEY", "RESEND_FROM_EMAIL"],
-  "optionalEnvVars": [],
+  "optionalEnvVars": ["RESEND_DELIVERY_WEBHOOK_SECRET"],
   "npmDependencies": ["resend"],
   "definition": {
     "name": "E-post (Resend)",
