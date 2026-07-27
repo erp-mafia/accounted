@@ -43,13 +43,25 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: compliance-input
+          # Unpacked OUTSIDE the checkout, not into the workspace root.
+          #
+          # This artifact is built from a fork's PR head, so its contents are
+          # attacker-influenced. Extracted over the workspace, an entry named
+          # `scripts/swedish-compliance-review.mjs` would overwrite the trusted
+          # script this job is about to run, with the AWS secrets and a write
+          # token already in scope. Stage 1 only ever writes three fixed
+          # filenames, and its workflow definition comes from the base repo even
+          # for fork PRs, so that is not reachable today: this keeps it
+          # unreachable if stage 1 ever grows a filename derived from PR
+          # content. Flagged by CodeQL as actions/artifact-poisoning.
+          path: ${{ runner.temp }}/compliance-input
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Resolve PR number
         id: pr
         run: |
           set -euo pipefail
-          NUM=$(cat pr-number.txt)
+          NUM=$(cat "$RUNNER_TEMP/compliance-input/pr-number.txt")
           # Guard: pr-number.txt must be a plain integer (artifact is untrusted input).
           if ! [[ "$NUM" =~ ^[0-9]+$ ]]; then
             echo "Refusing to continue: pr-number.txt is not a number" >&2
@@ -81,8 +93,8 @@ jobs:
           AWS_REGION: ${{ secrets.AWS_REGION || 'eu-north-1' }}
           REVIEW_MODEL: eu.anthropic.claude-sonnet-5
           # Two-stage mode: read the diff from the artifact instead of git-diffing.
-          DIFF_FILE: diff.patch
-          FILES_FILE: files.txt
+          DIFF_FILE: ${{ runner.temp }}/compliance-input/diff.patch
+          FILES_FILE: ${{ runner.temp }}/compliance-input/files.txt
         run: node scripts/swedish-compliance-review.mjs
       - name: Assert review produced output
         # This job once produced no compliance signal for 10 consecutive PR
