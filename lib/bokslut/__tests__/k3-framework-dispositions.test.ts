@@ -42,6 +42,11 @@ function makeSupabase(opts: {
       return {
         select: () => ({
           eq: () => ({
+            // sumPostedYearEndDispositions reads closing_entry_id with a
+            // single .eq('id', ...) + maybeSingle to exclude the final
+            // bokslutsverifikation from the add-back (#1051).
+            maybeSingle: () =>
+              Promise.resolve({ data: { closing_entry_id: null }, error: null }),
             eq: () => ({
               single: () =>
                 Promise.resolve({

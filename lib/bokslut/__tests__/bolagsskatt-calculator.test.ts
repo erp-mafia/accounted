@@ -137,15 +137,20 @@ describe('calculateBolagsskatt', () => {
     >[0]
   }
 
-  it('sumPostedYearEndDispositions adds back periodiseringsfond + överavskrivning (class-88) + SLP, ignores tax/liability', async () => {
+  it('sumPostedYearEndDispositions adds back periodiseringsfond + överavskrivning (class-88) + SLP + planenlig avskrivning (78xx), ignores tax/liability', async () => {
     // Commit path: bolagsskatt is computed after the other dispositions are
     // posted. They carry source_type='year_end' (excluded from the income
-    // statement), so the tax base must add their P&L effect back.
+    // statement), so the tax base must add their P&L effect back. Planenlig
+    // avskrivning booked from the bokslut flow carries the same source_type
+    // and must be added back on the same grounds (#1051); its 12xx
+    // ack.-avskrivning counter-leg is a balance-sheet account and must not.
     const rows = [
       { account_number: '8811', debit_amount: 150_000, credit_amount: 0 }, // avsättning      -150k
       { account_number: '8819', debit_amount: 0, credit_amount: 20_000 },  // återföring       +20k
       { account_number: '8853', debit_amount: 39_000, credit_amount: 0 },  // överavskrivning  -39k
       { account_number: '7533', debit_amount: 5_000, credit_amount: 0 },   // SLP               -5k
+      { account_number: '7833', debit_amount: 3_716, credit_amount: 0 },   // avskrivning    -3716
+      { account_number: '1229', debit_amount: 0, credit_amount: 3_716 },   // ack. avskr.: ignored
       { account_number: '8910', debit_amount: 123_600, credit_amount: 0 }, // skatt   : ignored
       { account_number: '2124', debit_amount: 0, credit_amount: 150_000 }, // skuld   : ignored
     ]
@@ -158,9 +163,100 @@ describe('calculateBolagsskatt', () => {
     })
 
     const effect = await sumPostedYearEndDispositions(client, 'co', 'fp')
-    expect(effect.total).toBe(-174_000) // -150k + 20k - 39k - 5k
+    expect(effect.total).toBe(-177_716) // -150k + 20k - 39k - 5k - 3 716
     expect(effect.slpPortion).toBe(-5_000)
     expect(effect.taxProvisionPortion).toBe(123_600)
+  })
+
+  it('sumPostedYearEndDispositions ignores the 12xx counter-leg of a depreciation voucher', async () => {
+    // Only the 78xx cost leg belongs in the tax base. If the 1229 credit were
+    // summed too the voucher would net to zero and the add-back would vanish.
+    const client = makeQueuedClient({
+      journal_entries: [
+        { data: [{ id: 'ye-depr-1' }], error: null },
+        { data: [], error: null },
+      ],
+      journal_entry_lines: [
+        {
+          data: [
+            { account_number: '7832', debit_amount: 12_500, credit_amount: 0 },
+            { account_number: '1229', debit_amount: 0, credit_amount: 12_500 },
+          ],
+          error: null,
+        },
+      ],
+    })
+
+    const effect = await sumPostedYearEndDispositions(client, 'co', 'fp')
+    expect(effect.total).toBe(-12_500)
+    expect(effect.slpPortion).toBe(0)
+    expect(effect.taxProvisionPortion).toBe(0)
+  })
+
+  it('sumPostedYearEndDispositions excludes the final closing verifikat from the fetch', async () => {
+    // The bokslutsverifikation is source_type='year_end' as well and reverses
+    // every P&L account (verified on production: closing entries do carry
+    // 78xx, 88xx and 7533 lines). Counting it would cancel the add-back once
+    // the year is closed, so it must be filtered out at the entry level.
+    const calls: Array<[string, unknown[]]> = []
+    const makeRecorder = (table: string) => {
+      const handler: ProxyHandler<object> = {
+        get(_t, prop) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) =>
+              resolve(
+                table === 'fiscal_periods'
+                  ? { data: { closing_entry_id: 'closing-1' }, error: null }
+                  : { data: [], error: null },
+              )
+          }
+          return (...args: unknown[]) => {
+            if (table === 'journal_entries') calls.push([String(prop), args])
+            return new Proxy({}, handler)
+          }
+        },
+      }
+      return new Proxy({}, handler)
+    }
+    const client = { from: (table: string) => makeRecorder(table) } as unknown as Parameters<
+      typeof sumPostedYearEndDispositions
+    >[0]
+
+    await sumPostedYearEndDispositions(client, 'co', 'fp')
+
+    expect(calls).toContainEqual(['neq', ['id', 'closing-1']])
+  })
+
+  it('sumPostedYearEndDispositions applies no closing-entry filter for an unclosed period', async () => {
+    // fiscal_periods.closing_entry_id is null until the year is closed; the
+    // fetch must then run unfiltered rather than with a null-id predicate.
+    const calls: Array<[string, unknown[]]> = []
+    const makeRecorder = (table: string) => {
+      const handler: ProxyHandler<object> = {
+        get(_t, prop) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) =>
+              resolve(
+                table === 'fiscal_periods'
+                  ? { data: { closing_entry_id: null }, error: null }
+                  : { data: [], error: null },
+              )
+          }
+          return (...args: unknown[]) => {
+            if (table === 'journal_entries') calls.push([String(prop), args])
+            return new Proxy({}, handler)
+          }
+        },
+      }
+      return new Proxy({}, handler)
+    }
+    const client = { from: (table: string) => makeRecorder(table) } as unknown as Parameters<
+      typeof sumPostedYearEndDispositions
+    >[0]
+
+    await sumPostedYearEndDispositions(client, 'co', 'fp')
+
+    expect(calls.some(([method]) => method === 'neq')).toBe(false)
   })
 
   it('sumPostedYearEndDispositions counts the replacement of a corrected year_end entry', async () => {

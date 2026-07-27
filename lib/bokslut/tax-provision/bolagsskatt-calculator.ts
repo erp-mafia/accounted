@@ -53,8 +53,9 @@ export interface BolagsskattComputation {
 }
 
 export interface PostedDispositionsEffect {
-  /** Signed P&L effect of every effective posted disposition (class 88 +
-   *  7533): avsättning lowers it, återföring raises it. */
+  /** Signed P&L effect of every effective posted year-end P&L booking (class
+   *  88 + 7533 + 78xx planenlig avskrivning): a cost lowers it, a återföring
+   *  raises it. */
   total: number
   /** The 7533 (särskild löneskatt) portion of `total`. Callers use it to
    *  detect an already-posted SLP so it is neither re-proposed nor
@@ -66,14 +67,28 @@ export interface PostedDispositionsEffect {
 }
 
 /**
- * Sum the P&L effect of bokslutsdispositioner already posted in this period.
+ * Sum the P&L effect of bokslut-flow postings already made in this period.
  *
  * Dispositioner (periodiseringsfond avsättning/återföring, SLP, över-
- * avskrivningar) are booked with source_type='year_end', which
- * generateIncomeStatement EXCLUDES: so net_result alone overstates resultat
- * före skatt. The tax base must add them back. We sum class 88
- * (bokslutsdispositioner) plus 7533 (SLP); tax (89xx) and the closing entry
- * (8999/2099) are intentionally left out.
+ * avskrivningar) AND planenlig avskrivning are booked with
+ * source_type='year_end', which generateIncomeStatement EXCLUDES: so
+ * net_result alone overstates resultat före skatt. The tax base must add them
+ * back. We sum class 88 (bokslutsdispositioner), 7533 (SLP) and class 78
+ * (planenlig avskrivning, posted by lib/bokslut/assets/depreciation-engine.ts);
+ * tax (89xx) is intentionally left out because the base is resultat FÖRE
+ * skatt, and the final closing entry is excluded outright (see below).
+ *
+ * 78xx is included since #1051: without it the bolagsskatt base and the
+ * periodiseringsfond 25 % cap are computed on a resultat före skatt that
+ * silently omits every depreciation krona booked from the bokslut flow.
+ * Only the 78xx cost leg moves the base; its 12xx ack.-avskrivning
+ * counter-leg is a balance-sheet account and is ignored here.
+ *
+ * The period's final bokslutsverifikation (fiscal_periods.closing_entry_id)
+ * is excluded from the fetch. It also carries source_type='year_end' and it
+ * reverses every P&L account, 78xx / 88xx / 7533 included, so counting it
+ * would cancel the very add-back this function exists to produce once the
+ * year is closed.
  *
  * A corrected year_end entry is counted through its replacement: the
  * original is status='reversed' (skipped here) and the income statement
@@ -98,15 +113,28 @@ export async function sumPostedYearEndDispositions(
   // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
   let data: Row[]
   try {
+    // The final bokslutsverifikation is source_type='year_end' too and
+    // reverses every P&L account. Excluding it keeps the add-back intact
+    // after the year is closed (see docstring).
+    const { data: period } = await supabase
+      .from('fiscal_periods')
+      .select('closing_entry_id')
+      .eq('id', fiscalPeriodId)
+      .maybeSingle()
+    const closingEntryId = (period as { closing_entry_id?: string | null } | null)
+      ?.closing_entry_id ?? null
+
     data = await fetchEntryLines<Row>({
       supabase,
       lineColumns: 'account_number, debit_amount, credit_amount',
-      filterEntries: (q: EntryLinesQuery) =>
-        q
+      filterEntries: (q: EntryLinesQuery) => {
+        const base = q
           .eq('company_id', companyId)
           .eq('fiscal_period_id', fiscalPeriodId)
           .eq('status', 'posted')
-          .eq('source_type', 'year_end'),
+          .eq('source_type', 'year_end')
+        return closingEntryId ? base.neq('id', closingEntryId) : base
+      },
       attachEntriesAs: null,
     })
 
@@ -156,7 +184,10 @@ export async function sumPostedYearEndDispositions(
   for (const row of data) {
     const acc = row.account_number
     const delta = (Number(row.credit_amount) || 0) - (Number(row.debit_amount) || 0)
-    if (acc.startsWith('88') || acc === '7533') {
+    // Deliberately NOT a class 3-8 sweep: a correction entry pulled in below
+    // can carry any account, and only these three groups are bokslut-flow
+    // P&L postings the income statement dropped.
+    if (acc.startsWith('88') || acc.startsWith('78') || acc === '7533') {
       effect += delta
       if (acc === '7533') slp += delta
     }
