@@ -6589,7 +6589,16 @@ export const tools: McpTool[] = [
           // searches the ENTRY description only (documented in the
           // schema); the two-leg line+entry union query_journal runs is
           // overkill for a write filter.
-          const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
+          //
+          // Backslash is escaped FIRST, and the order matters: `\` is LIKE's
+          // own escape character, so an unescaped one in the search term
+          // swallows the character after it (searching `a\b` matched rows
+          // containing `ab`). Escaping it last would instead double the
+          // backslashes the % / _ rules just added.
+          const escaped = text
+            .replace(/\\/g, '\\\\')
+            .replace(/%/g, '\\%')
+            .replace(/_/g, '\\_')
           e = e.ilike('description', `%${escaped}%`)
         }
         return e
@@ -7262,7 +7271,16 @@ export const tools: McpTool[] = [
         // separator. The .ilike() path passes the pattern as a parameterised
         // filter operand where `,` is a literal: stripping would mangle
         // searches for real commas in line descriptions.
-        const escaped = text.replace(/[%]/g, '\\%').replace(/_/g, '\\_')
+        //
+        // Backslash is escaped FIRST, and the order matters: `\` is LIKE's own
+        // escape character, so an unescaped one in the search term swallows the
+        // character after it (searching `a\b` matched rows containing `ab`).
+        // Escaping it last would instead double the backslashes the % / _ rules
+        // just added.
+        const escaped = text
+          .replace(/\\/g, '\\\\')
+          .replace(/%/g, '\\%')
+          .replace(/_/g, '\\_')
         const pattern = `%${escaped}%`
 
         // Fetch up to 2× limit per leg to reduce global-ordering loss when

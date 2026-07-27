@@ -517,6 +517,38 @@ describe('gnubok_query_journal: free-text search', () => {
     expect(ilikeCalls[0].pattern).toBe('%2\\_441\\%foo%')
   })
 
+  it('escapes a literal backslash so it does not swallow the next character', async () => {
+    // `\` is LIKE's own escape character. Before this was handled, a search for
+    // `a\b` reached Postgres as `%a\b%`, where `\b` means "literal b", so the
+    // filter silently matched rows containing `ab` and missed the ones the user
+    // actually asked for. Flagged by CodeQL as js/incomplete-sanitization.
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const { supabase, ilikeCalls } = makeQueueMock([
+      { data: [], count: 0 },
+      { data: [], count: 0 },
+    ])
+
+    await tool.execute({ text: 'a\\b', limit: 50 }, 'company-1', 'user-1', supabase)
+
+    expect(new Set(ilikeCalls.map((c) => c.pattern)).size).toBe(1)
+    expect(ilikeCalls[0].pattern).toBe('%a\\\\b%')
+  })
+
+  it('escapes backslash before the wildcard rules, not after', async () => {
+    // Order matters: escaping `\` last would also double the backslashes the
+    // % / _ rules just introduced, turning `50%` into `50\\%` (a literal
+    // backslash followed by a wildcard) instead of `50\%` (a literal percent).
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const { supabase, ilikeCalls } = makeQueueMock([
+      { data: [], count: 0 },
+      { data: [], count: 0 },
+    ])
+
+    await tool.execute({ text: '50%', limit: 50 }, 'company-1', 'user-1', supabase)
+
+    expect(ilikeCalls[0].pattern).toBe('%50\\%%')
+  })
+
   it('does NOT flag truncated when an overlap row is hit by both legs and merged set fits limit', async () => {
     // Greptile / Compliance V2.3 regression: previously, dbMatched = sum of
     // leg counts and a row matching both legs would inflate the count and
