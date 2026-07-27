@@ -65,6 +65,69 @@ export function decryptPersonalNumber(data: Buffer): string {
 }
 
 // ---------------------------------------------------------------------------
+// Storage codec (bankid_identities.personal_number_enc)
+// ---------------------------------------------------------------------------
+
+/**
+ * Encrypt a personnummer and encode it for a PostgREST bytea insert.
+ *
+ * Passing a raw Buffer to supabase-js serializes it as JSON
+ * ('{"type":"Buffer","data":[...]}'), storing that literal text in the
+ * column instead of the bytes. PostgREST's bytea input format is a
+ * '\x'-prefixed hex string, which is what this returns.
+ */
+export function encryptPersonalNumberForStorage(personalNumber: string): string {
+  return '\\x' + encryptPersonalNumber(personalNumber).toString('hex')
+}
+
+/** Legacy shape written by supabase-js Buffer serialization before 2026-07. */
+type SerializedBuffer = { type: 'Buffer'; data: number[] }
+
+function isSerializedBuffer(value: unknown): value is SerializedBuffer {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as SerializedBuffer).type === 'Buffer' &&
+    Array.isArray((value as SerializedBuffer).data)
+  )
+}
+
+/**
+ * Decode and decrypt a personal_number_enc value as read back through
+ * PostgREST (a '\x'-prefixed hex string) or a raw Buffer.
+ *
+ * Tolerates rows written before migration 20260727170000, where the column
+ * holds the UTF-8 text of a JSON-serialized Buffer rather than the raw
+ * iv|tag|ciphertext bytes.
+ */
+export function decryptStoredPersonalNumber(stored: string | Buffer | SerializedBuffer): string {
+  let raw: Buffer
+  if (Buffer.isBuffer(stored)) {
+    raw = stored
+  } else if (typeof stored === 'string') {
+    raw = stored.startsWith('\\x')
+      ? Buffer.from(stored.slice(2), 'hex')
+      : Buffer.from(stored, 'utf8')
+  } else if (isSerializedBuffer(stored)) {
+    raw = Buffer.from(stored.data)
+  } else {
+    throw new Error('Unsupported personal_number_enc value')
+  }
+
+  // Legacy JSON-serialized Buffer stored as text: unwrap to the real bytes.
+  if (raw[0] === 0x7b) {
+    try {
+      const parsed: unknown = JSON.parse(raw.toString('utf8'))
+      if (isSerializedBuffer(parsed)) raw = Buffer.from(parsed.data)
+    } catch {
+      // Not JSON after all: treat as raw ciphertext.
+    }
+  }
+
+  return decryptPersonalNumber(raw)
+}
+
+// ---------------------------------------------------------------------------
 // Display helpers
 // ---------------------------------------------------------------------------
 

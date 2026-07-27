@@ -27,7 +27,7 @@ import { TICAPIError } from './lib/tic-types'
 import type { TICCompanyProfile, TICFinancialReportSummary } from './lib/tic-types'
 import type { BankIdCompleteRequest } from './lib/bankid-types'
 import type { CompanyLookupResult } from '@/lib/company-lookup/types'
-import { hashPersonalNumber, encryptPersonalNumber } from '@/lib/auth/bankid'
+import { hashPersonalNumber, encryptPersonalNumberForStorage } from '@/lib/auth/bankid'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
@@ -1046,7 +1046,7 @@ export const ticExtension: Extension = {
             .insert({
               user_id: userId,
               personal_number_hash: pnrHash,
-              personal_number_enc: encryptPersonalNumber(personalNumber),
+              personal_number_enc: encryptPersonalNumberForStorage(personalNumber),
               given_name: givenName,
               surname,
             })
@@ -1190,7 +1190,7 @@ export const ticExtension: Extension = {
             .insert({
               user_id: userId,
               personal_number_hash: pnrHash,
-              personal_number_enc: encryptPersonalNumber(personalNumber),
+              personal_number_enc: encryptPersonalNumberForStorage(personalNumber),
               given_name: givenName,
               surname,
             })

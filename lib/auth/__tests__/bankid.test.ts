@@ -4,6 +4,8 @@ import {
   hashPersonalNumber,
   encryptPersonalNumber,
   decryptPersonalNumber,
+  encryptPersonalNumberForStorage,
+  decryptStoredPersonalNumber,
   maskPersonalNumber,
 } from '../bankid'
 
@@ -76,6 +78,40 @@ describe('bankid helpers', () => {
     it('throws when BANKID_ENCRYPTION_KEY is missing', () => {
       vi.stubEnv('BANKID_ENCRYPTION_KEY', '')
       expect(() => encryptPersonalNumber('199001011234')).toThrow('BANKID_ENCRYPTION_KEY')
+    })
+  })
+
+  describe('storage codec', () => {
+    const pnr = '199001011234'
+
+    it('encodes for storage as a \\x-prefixed hex string and round-trips', () => {
+      const stored = encryptPersonalNumberForStorage(pnr)
+      expect(stored).toMatch(/^\\x[0-9a-f]+$/)
+      expect(decryptStoredPersonalNumber(stored)).toBe(pnr)
+    })
+
+    it('decrypts a raw Buffer', () => {
+      expect(decryptStoredPersonalNumber(encryptPersonalNumber(pnr))).toBe(pnr)
+    })
+
+    it('decrypts a legacy JSON-serialized Buffer read back as \\x-hex text', () => {
+      // supabase-js Buffer insert stored the JSON text of buf.toJSON();
+      // PostgREST returns that bytea as '\x' + hex of the UTF-8 JSON bytes.
+      const legacyText = JSON.stringify(encryptPersonalNumber(pnr).toJSON())
+      const readBack = '\\x' + Buffer.from(legacyText, 'utf8').toString('hex')
+      expect(decryptStoredPersonalNumber(readBack)).toBe(pnr)
+    })
+
+    it('decrypts a legacy JSON-serialized Buffer passed as plain text or object', () => {
+      const encrypted = encryptPersonalNumber(pnr)
+      expect(decryptStoredPersonalNumber(JSON.stringify(encrypted.toJSON()))).toBe(pnr)
+      expect(decryptStoredPersonalNumber(encrypted.toJSON())).toBe(pnr)
+    })
+
+    it('rejects tampered ciphertext (GCM auth)', () => {
+      const stored = encryptPersonalNumberForStorage(pnr)
+      const tampered = stored.slice(0, -2) + (stored.endsWith('00') ? '01' : '00')
+      expect(() => decryptStoredPersonalNumber(tampered)).toThrow()
     })
   })
 
