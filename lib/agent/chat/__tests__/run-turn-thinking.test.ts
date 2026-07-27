@@ -19,10 +19,12 @@ vi.mock('@/lib/agent/composer/client', () => ({
     },
   }),
   SONNET_MODEL: 'claude-sonnet-5',
+  MAX_TOKENS_NO_THINKING: 5400,
   MAX_TOKENS_STANDARD: 16000,
   MAX_TOKENS_DEEP: 24000,
 }))
 
+const MAX_TOKENS_NO_THINKING = 5400
 const MAX_TOKENS_STANDARD = 16000
 const MAX_TOKENS_DEEP = 24000
 
@@ -123,7 +125,11 @@ describe('runChatTurn: extended thinking wiring', () => {
     const args = await runWith(baseIntent())
     expect(args.thinking).toBeUndefined()
     expect(args.output_config).toBeUndefined()
-    expect(args.max_tokens).toBe(MAX_TOKENS_STANDARD)
+    // A non-thinking intent keeps its own reply-sized ceiling: max_tokens now
+    // covers thinking too, so inheriting the reasoning tier's 16000 would let a
+    // plain answer run several times longer than it ever did before.
+    expect(args.max_tokens).toBe(MAX_TOKENS_NO_THINKING)
+    expect(args.max_tokens).toBeLessThan(MAX_TOKENS_STANDARD)
   })
 })
 

@@ -22,6 +22,7 @@ vi.mock('@/lib/agent/composer/client', () => ({
     },
   }),
   SONNET_MODEL: 'claude-sonnet-5',
+  MAX_TOKENS_NO_THINKING: 5400,
   MAX_TOKENS_STANDARD: 16000,
   MAX_TOKENS_DEEP: 24000,
 }))

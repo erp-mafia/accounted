@@ -86,9 +86,14 @@ export const SONNET_MODEL = process.env.BEDROCK_SONNET_MODEL_ID || 'eu.anthropic
 export const EFFORT_STANDARD = 'high' as const
 export const EFFORT_DEEP = 'xhigh' as const
 
-// Output ceilings per tier. Previously derived as budget + 4096; with no
-// budget to derive from these are explicit. Sized with headroom for Sonnet 5's
-// new tokenizer, which produces roughly 30% more tokens for the same text, and
-// because max_tokens now caps thinking AND the visible reply together.
+// Output ceilings per tier. Previously derived as budget + 4096; with no budget
+// to derive from these are explicit, and there are now three of them because
+// max_tokens caps thinking AND the visible reply together: an intent that does
+// not think must not inherit a ceiling sized for one that does.
+//
+// NO_THINKING is the old 4096 reply cap scaled by ~30% for Sonnet 5's new
+// tokenizer, which spends that much more on the same Swedish text, so the
+// effective reply length is unchanged rather than quietly cut.
+export const MAX_TOKENS_NO_THINKING = 5400
 export const MAX_TOKENS_STANDARD = 16000
 export const MAX_TOKENS_DEEP = 24000

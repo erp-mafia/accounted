@@ -61,16 +61,17 @@ jobs:
           AWS_REGION_NAME: ${{ secrets.PR_AGENT_AWS_REGION }}
           AWS_REGION: ${{ secrets.PR_AGENT_AWS_REGION }}
 
-          # ── Model: Claude Opus 4.8 via the EU Bedrock inference profile, with
-          #    Sonnet 4.6 as fallback if the Opus profile isn't enabled for these
-          #    creds. custom_model_max_tokens is required because these ids are not
-          #    in PR-Agent's built-in token map.
+          # ── Model: Claude Sonnet 5 via the EU Bedrock inference profile. The
+          #    strong and weak slots both point at it: this account has no larger
+          #    model enabled, so a second id would only be the same model under
+          #    another name. No FALLBACK_MODELS for the same reason: a fallback
+          #    list naming the primary is not a fallback. custom_model_max_tokens
+          #    is required because this id is not in PR-Agent's built-in map.
           CONFIG.MODEL: "bedrock/eu.anthropic.claude-sonnet-5"
           CONFIG.MODEL_WEAK: "bedrock/eu.anthropic.claude-sonnet-5"
-          CONFIG.FALLBACK_MODELS: '["bedrock/eu.anthropic.claude-sonnet-5"]'
           CONFIG.CUSTOM_MODEL_MAX_TOKENS: "200000"
           # Input window PR-Agent prunes the diff to fit. Default (~32k) truncated
-          # large PRs; raise it so the whole diff is reviewed (Sonnet 4.6 = 200k ctx).
+          # large PRs; raise it so the whole diff is reviewed (Sonnet 5 = 1M ctx).
           CONFIG.MAX_MODEL_TOKENS: "64000"
           LITELLM.DROP_PARAMS: "true"
 

@@ -11,7 +11,7 @@ import path from 'node:path';
 
 const SKILLS_DIR = '.claude/skills';
 const ALWAYS_LOAD = 'swedish-accounting-compliance';
-const MODEL = process.env.REVIEW_MODEL || 'eu.anthropic.claude-sonnet-4-6';
+const MODEL = process.env.REVIEW_MODEL || 'eu.anthropic.claude-sonnet-5';
 const MAX_DIFF_CHARS = 180_000;
 const OUTPUT_FILE = 'review.md';
 const COMMENT_MARKER = '<!-- swedish-compliance-review-bot -->';
