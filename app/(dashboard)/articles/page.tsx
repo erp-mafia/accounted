@@ -20,9 +20,16 @@ import {
   throwOnStructuredError,
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ContextPicker } from '@/components/common/ContextPicker'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { cn, formatCurrency } from '@/lib/utils'
 import { compareArticles } from '@/lib/articles/sort'
+import {
+  ALL_CURRENCIES,
+  listArticleCurrencies,
+  matchesCurrencyScope,
+  resolveCurrencyScope,
+} from '@/lib/articles/currency-scope'
 import Link from 'next/link'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -84,6 +91,9 @@ function ArticlesPageInner() {
 
   const sortParam = searchParams.get('sort')
   const dirParam = searchParams.get('dir')
+  // Currency scope (#1189). In the URL like the sort, so a filtered register
+  // survives opening an article and coming back, and can be linked to.
+  const currencyParam = searchParams.get('currency')
   // Default to the user's own article numbering (numeric-aware), issue #1053.
   const sortColumn: SortColumn = (SORTABLE_COLUMNS as ReadonlyArray<string>).includes(sortParam ?? '')
     ? (sortParam as SortColumn)
@@ -176,17 +186,34 @@ function ArticlesPageInner() {
     }
   }
 
+  const availableCurrencies = useMemo(() => listArticleCurrencies(articles), [articles])
+  const currencyFilter = resolveCurrencyScope(currencyParam, availableCurrencies)
+
+  const updateCurrencyFilter = useCallback(
+    (next: string) => {
+      setVisibleCount(INITIAL_VISIBLE_ROWS)
+      const params = new URLSearchParams(searchParams.toString())
+      if (next === ALL_CURRENCIES) params.delete('currency')
+      else params.set('currency', next)
+      const query = params.toString()
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false })
+    },
+    [searchParams, router, pathname],
+  )
+
   const filteredArticles = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
-    if (!term) return articles
+    if (!term && currencyFilter === ALL_CURRENCIES) return articles
     return articles.filter((a) => {
+      if (!matchesCurrencyScope(a, currencyFilter)) return false
+      if (!term) return true
       return (
         a.name.toLowerCase().includes(term) ||
         a.name_en?.toLowerCase().includes(term) ||
         a.article_number?.toLowerCase().includes(term)
       )
     })
-  }, [articles, searchTerm])
+  }, [articles, searchTerm, currencyFilter])
 
   const sortedArticles = useMemo(() => {
     const arr = [...filteredArticles]
@@ -286,7 +313,7 @@ function ArticlesPageInner() {
         </div>
       </div>
 
-      {/* Toolbar: search */}
+      {/* Toolbar: search, plus the currency scope far right (convention 8) */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[190px] max-w-xs flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -300,6 +327,25 @@ function ArticlesPageInner() {
             className="h-9 pl-10"
           />
         </div>
+        {/* A single-currency register needs no scope: the chip would be a
+            control with one meaningful position. */}
+        {availableCurrencies.length > 1 && (
+          <ContextPicker
+            className="ml-auto"
+            ariaLabel={t('currency_filter_aria')}
+            value={currencyFilter}
+            onChange={updateCurrencyFilter}
+            triggerLabel={
+              currencyFilter === ALL_CURRENCIES
+                ? t('currency_filter_all')
+                : t('currency_filter_selected', { currency: currencyFilter })
+            }
+            items={[
+              { id: ALL_CURRENCIES, label: t('currency_filter_all') },
+              ...availableCurrencies.map((code) => ({ id: code, label: code })),
+            ]}
+          />
+        )}
       </div>
 
       {isLoading ? (
@@ -313,7 +359,17 @@ function ArticlesPageInner() {
           <EmptyState
             icon={Package}
             title={t('no_search_results_title')}
-            description={t('no_search_results_description', { term: searchTerm })}
+            description={
+              // The currency scope is part of why nothing matched, so it has to
+              // be named: otherwise the register reads as empty of the term
+              // when it is only empty inside the active scope.
+              currencyFilter === ALL_CURRENCIES
+                ? t('no_search_results_description', { term: searchTerm })
+                : t('no_search_results_in_currency_description', {
+                    term: searchTerm,
+                    currency: currencyFilter,
+                  })
+            }
           />
         ) : (
           <EmptyState
