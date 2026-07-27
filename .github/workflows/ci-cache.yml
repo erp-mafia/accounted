@@ -34,8 +34,10 @@ jobs:
     name: Warm npm cache
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 20
 
@@ -46,7 +48,7 @@ jobs:
       # A no-op when the key already exists, which is the intent: one entry per
       # lockfile state, not one per push.
       - name: Save npm cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-node20-${{ hashFiles('package-lock.json') }}

@@ -1,0 +1,81 @@
+name: Workflow audit (zizmor)
+
+# Static analysis for the workflows themselves. Every other scanner in this repo
+# looks at application code or container contents; nothing looked at CI, which is
+# where the credentials live.
+#
+# The motivating incident is concrete: in March 2026 attackers exploited a
+# pull_request_target misconfiguration in aquasecurity/trivy-action (an action
+# this repo uses in three places) to exfiltrate org and repo secrets, then used
+# them to backdoor LiteLLM on PyPI. zizmor's dangerous-triggers and
+# unpinned-uses audits cover exactly that class.
+#
+# Installed from PyPI at a pinned version rather than via zizmorcore/zizmor-action:
+# a workflow whose job is to check the supply chain should not widen it.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, off the hour to dodge cron congestion on GitHub. New audits ship
+    # regularly, so a repo that stopped changing can still start failing here.
+    - cron: '41 5 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zizmor-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Audit workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # SARIF upload to the repo's "Security" tab.
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # pipx is preinstalled on GitHub's ubuntu runners. Exact pin, because an
+      # unpinned install here would be the same mistake this workflow exists to
+      # catch.
+      - name: Install zizmor
+        run: pipx install zizmor==1.28.0
+
+      - name: Audit workflows (SARIF)
+        env:
+          # Lets zizmor run its online audits (resolving `uses:` refs against
+          # the forge) instead of falling back to offline-only checks.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # zizmor suppresses its findings-based exit codes under --format=sarif,
+        # so this step reports and never gates. The gate is the separate step
+        # below, which is why the audit is run twice.
+        run: zizmor --format=sarif . > zizmor.sarif
+
+      - name: Upload zizmor results to GitHub Security tab
+        # if: always() so findings still reach the Security tab when the gate
+        # below fails the run. Distinct category from the Trivy uploads so
+        # workflow findings stay separately traceable.
+        if: always()
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+        with:
+          sarif_file: zizmor.sarif
+          category: zizmor
+
+      - name: Gate on high-severity, high-confidence findings
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Deliberately narrower than the SARIF report above. Everything zizmor
+        # finds is visible in the Security tab; only findings it is confident are
+        # high severity block a merge. Tighten by lowering --min-severity once
+        # the backlog is clear.
+        run: zizmor --min-severity=high --min-confidence=high --format=plain .

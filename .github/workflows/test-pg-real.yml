@@ -2,6 +2,12 @@ name: pg-real tests
 
 on: [pull_request]
 
+# Neither job writes anything back: they read the repo, stand up a throwaway
+# Postgres, and run tests. Without this block both inherit the repository's
+# default token permissions, which are broader than that.
+permissions:
+  contents: read
+
 concurrency:
   group: pg-real-${{ github.ref }}
   cancel-in-progress: true
@@ -14,11 +20,12 @@ jobs:
     # (<reason>)` comments inside the migration.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Full history so the merge-base with the PR base branch exists.
           fetch-depth: 0
-      - uses: actions/setup-node@v6
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 20
       - name: Require pg-real coverage for trigger/RPC/RLS migrations
@@ -50,7 +57,9 @@ jobs:
       PGPASSWORD: postgres
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       # Deliberately no `cache: npm` here. This workflow runs on pull_request
       # only, so the cache is never written on main, and GitHub scopes caches
@@ -59,7 +68,7 @@ jobs:
       # the repo quota) accumulated in a single day. If this is ever worth
       # caching again, it has to be actions/cache/save on main plus
       # actions/cache/restore here, which is the only shape that gets hits.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 20
 

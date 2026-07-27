@@ -3,7 +3,7 @@ name: Core Build (no extensions)
 # Split out of a single serial job that took 7m43s wall-clock: npm ci 24s, lint
 # ratchet 1m29s, build 2m00s, unit tests 3m31s, ratchets ~10s. None of those
 # stages needed the previous one's output, so they were serial only by
-# accident. Running them as independent jobs (and sharding the 716-file unit
+# accident. Running them as independent jobs (and sharding the 897-file unit
 # suite four ways) puts the critical path on `build` at roughly 2m30s.
 #
 # The prologue each job needs is in .github/actions/setup-core.
@@ -24,7 +24,11 @@ jobs:
     name: Checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Nothing here pushes, so leaving the token in .git/config only widens
+          # what a compromised dependency in the build could reach.
+          persist-credentials: false
       - uses: ./.github/actions/setup-core
 
       - name: Verify skill bodies are in sync with the seed migration
@@ -71,7 +75,11 @@ jobs:
     name: Build (zero extensions)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Nothing here pushes, so leaving the token in .git/config only widens
+          # what a compromised dependency in the build could reach.
+          persist-credentials: false
       - uses: ./.github/actions/setup-core
       - run: npm run build
 
@@ -90,9 +98,18 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Nothing here pushes, so leaving the token in .git/config only widens
+          # what a compromised dependency in the build could reach.
+          persist-credentials: false
       - uses: ./.github/actions/setup-core
-      - run: npm test -- --shard=${{ matrix.shard }}/4
+      # Via env rather than interpolated straight into the shell body: the value
+      # is a static matrix integer and harmless, but keeping every `run:` free of
+      # ${{ }} is the rule that makes the template-injection audit meaningful.
+      - run: npm test -- --shard="$SHARD/4"
+        env:
+          SHARD: ${{ matrix.shard }}
 
   core-build:
     # One stable check name covering all six jobs above, so the PR checks list

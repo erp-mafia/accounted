@@ -1,0 +1,71 @@
+name: CodeQL
+
+# Semantic code scanning. The repo already had `security-events: write` and
+# uploaded Trivy SARIF, but Trivy only reports known CVEs in dependencies and
+# base images: nothing analysed the application's own code. For a multi-tenant
+# accounting SaaS holding personnummer, bank data and money, that was the gap.
+#
+# Two languages:
+#   javascript-typescript - the app itself (injection, path traversal, unsafe
+#     deserialization, missing authorization checks, hardcoded credentials).
+#   actions - GitHub's own workflow analysis. It overlaps zizmor.yml without
+#     replacing it: CodeQL follows dataflow into composite actions, zizmor knows
+#     Actions-specific misconfigurations CodeQL has no notion of. Two cheap
+#     scanners with different blind spots beat one.
+#
+# The default query suite is used deliberately. `security-extended` finds more
+# but roughly doubles the runtime, and this already runs on every PR; revisit
+# once the default suite's findings are triaged.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Weekly. CodeQL ships new queries continuously, so an unchanged repo can
+    # still acquire findings.
+    - cron: '19 3 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # Required to upload the analysis results.
+      security-events: write
+      # Required by the `actions` language pack to read workflow metadata.
+      actions: read
+    strategy:
+      # A failure in one language should not hide the other's results.
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+        with:
+          languages: ${{ matrix.language }}
+
+      # No build step. javascript-typescript and actions are both interpreted
+      # languages to CodeQL, extracted straight from source, so `npm ci` and
+      # `next build` would add minutes and change nothing about the database.
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4
+        with:
+          category: /language:${{ matrix.language }}
