@@ -110,6 +110,42 @@ describe('GET /api/mcp-oauth/authorize: CSP', () => {
     expect(csp).not.toContain('env=prod')
   })
 
+  it('HTML-escapes the reflected query string in the form action', async () => {
+    // The consent form posts back to the same URL, so url.search is echoed into
+    // an HTML attribute, and only redirect_uri/client_id/scope are validated:
+    // any extra parameter reaches that attribute.
+    //
+    // Two layers, and it is worth being precise about which does what. WHATWG
+    // URL parsing already percent-encodes " < > in the query component, so an
+    // injected tag arrives inert and CodeQL's js/reflected-xss report is not a
+    // live exploit. But `&` is NOT in that encode set, so without escaping the
+    // attribute carries raw ampersands, which is invalid HTML and leaves the
+    // page one refactor (a raw header, a non-WHATWG parser) away from a real
+    // breakout. This asserts the escaping layer, independent of the parser.
+    const request = new Request(
+      buildAuthorizeUrl({
+        response_type: 'code',
+        redirect_uri: 'https://claude.com/api/oauth/callback',
+        code_challenge: 'abc',
+        code_challenge_method: 'S256',
+        scope: 'mcp',
+      }) + '&evil=%22%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E'
+    )
+    const response = await GET(request)
+    expect(response.status).toBe(200)
+
+    const html = await response.text()
+    const action = html.match(/<form method="POST" action="([^"]*)"/)?.[1]
+    expect(action).toBeDefined()
+
+    // Separators are entity-encoded: proof escapeHtml ran over the whole thing.
+    expect(action).toContain('&amp;evil=')
+    expect(action).not.toMatch(/&(?!amp;|quot;|lt;|gt;)/)
+    // The attribute is never closed early, so no raw markup escapes into the page.
+    expect(html).not.toContain('"><script>')
+    expect(html).not.toContain('<script>alert(1)</script>')
+  })
+
   it('renders both read and write rows when client passes only the legacy `mcp` scope marker', async () => {
     // Claude's connector sends scope=mcp today. The consent UI must render
     // every scope group so the user can opt into write/approval rows if they

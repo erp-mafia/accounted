@@ -556,7 +556,7 @@ export async function GET(request: Request) {
       <span class="account-name">${escapeHtml(companyName)}</span>
     </div>
 
-    <form method="POST" action="${url.pathname}${url.search}" id="consent-form">
+    <form method="POST" action="${escapeHtml(url.pathname + url.search)}" id="consent-form">
       <input type="hidden" name="scope_binding" value="${escapeHtml(scopeBindingValue)}">
       <input type="hidden" name="scope_binding_sig" value="${escapeHtml(scopeBindingSignature)}">
 
@@ -832,6 +832,21 @@ function scopeRow(scope: ApiKeyScope, checked: boolean, kind: 'read' | 'write'):
   `
 }
 
+/**
+ * Every interpolation into the consent-page template goes through this,
+ * including the form's own action attribute (url.pathname + url.search).
+ *
+ * On that one: only redirect_uri/client_id/scope are validated upstream, so any
+ * extra query parameter a caller appends is reflected into the attribute.
+ * CodeQL reports it as js/reflected-xss. It was not a live exploit, because
+ * WHATWG URL parsing already percent-encodes " < > in the query component and
+ * an injected tag therefore arrives inert. It is escaped anyway for two
+ * reasons: & is NOT in that encode set, so the unescaped form emitted raw
+ * ampersands in an attribute (invalid HTML), and the safety of the page
+ * otherwise rests on a parser normalisation invariant that nothing in this file
+ * states or tests. Escaping & as &amp; is correct here: the browser decodes it
+ * back on submit, so the query string round-trips intact.
+ */
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
