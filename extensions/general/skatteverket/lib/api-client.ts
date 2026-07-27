@@ -217,6 +217,42 @@ async function refreshTokenForUser(
 }
 
 /**
+ * MuleSoft APIGW contract enforcement, observed verbatim in production:
+ *
+ *   { "error": "The required scopes are not authorized" }
+ *
+ * The gateway emits this when OUR APIGW client (SKATTEVERKET_APIGW_CLIENT_ID)
+ * has no subscription for the API being called (#973). It is decided before
+ * the bearer is ever evaluated, so it says nothing about the user's token.
+ *
+ * It has to be ruled out explicitly because it contains the substring
+ * "required scope", which is how the SKV token-scope rejection used to be
+ * detected: that collision classified every gateway 403 as MISSING_SCOPE, and
+ * MISSING_SCOPE is in RECONSENT_ERROR_CODES, so a successful reconnect
+ * (runPostConnectRefresh -> syncSkattekonto -> 403) instantly re-flagged the
+ * token row and the reconnect banner perpetuated itself (#1155).
+ */
+function isApigwScopeContractError(body: string): boolean {
+  return /required scopes?\s+are\s+not\s+authorized/i.test(body)
+}
+
+/**
+ * A genuine token-scope rejection: the stored access token predates a scope
+ * the service now requires, and only a fresh consent can widen it.
+ *
+ * Matches the two documented shapes and nothing else: the OAuth `invalid_scope`
+ * error code (RFC 6749), and the sentence from SKV's AGI service description
+ * (Tjänstebeskrivning v1.7 §4.1.2.2), "The required scope agd has been
+ * requested for that access token."
+ */
+function isTokenScopeRejection(body: string): boolean {
+  return (
+    /invalid_scope/i.test(body) ||
+    /required scope\s+\S+\s+has been requested/i.test(body)
+  )
+}
+
+/**
  * Make an authenticated request to the Skatteverket API with the user's
  * personal BankID token. Thin wrapper kept for the ~40 existing call sites;
  * new auth-aware code calls skvRequestWithAuth directly.
@@ -403,6 +439,7 @@ export async function skvRequestWithAuth(
     // before the bearer is ever evaluated. The user reconnecting won't help
     // here: it's an Utvecklarportalen / APIGW configuration issue.
     const looksLikeApigwIssue =
+      isApigwScopeContractError(text) ||
       lower.includes('client_id') ||
       lower.includes('client id') ||
       lower.includes('subscription') ||
@@ -469,7 +506,18 @@ export async function skvRequestWithAuth(
     })
 
     if (auth.mode === 'system') {
-      if (text.includes('invalid_scope') || text.includes('required scope')) {
+      // Both cases are run-level configuration problems (SYSTEM_AUTH_FAILED),
+      // but they are fixed with different knobs, so the message must not
+      // point at the scope list when the gateway is what refused.
+      if (isApigwScopeContractError(text)) {
+        throw new SkatteverketAuthError(
+          'Skatteverkets API-gateway nekade systemanropet: APIGW-klienten ' +
+          '(SKATTEVERKET_APIGW_CLIENT_ID) saknar prenumeration på denna ' +
+          'tjänst i Utvecklarportalen.',
+          'SYSTEM_AUTH_FAILED'
+        )
+      }
+      if (isTokenScopeRejection(text)) {
         throw new SkatteverketAuthError(
           'Systemtokenens scope räcker inte för denna tjänst. Kontrollera ' +
           'SKATTEVERKET_SYSTEM_SCOPES mot tjänstens krav.',
@@ -486,6 +534,18 @@ export async function skvRequestWithAuth(
         'OMBUD_GRANT_MISSING'
       )
     }
+    // Gateway contract failure, checked first: it wears scope wording but is
+    // our APIGW subscription, not the user's token. Reconnecting cannot fix
+    // it, and calling it MISSING_SCOPE made every reconnect re-flag the row
+    // (#1155). ACCESS_DENIED is deliberately not in RECONSENT_ERROR_CODES.
+    if (isApigwScopeContractError(text)) {
+      throw new SkatteverketAuthError(
+        'Skatteverkets API-gateway nekade anropet. Kontrollera att din ' +
+        'APIGW-klient (SKATTEVERKET_APIGW_CLIENT_ID) har prenumeration på ' +
+        'denna tjänst i Utvecklarportalen.',
+        'ACCESS_DENIED'
+      )
+    }
     // Missing scope on the access token: fires when an existing connection
     // pre-dates an extension that needed a new scope (the AGI/`agd` rollout
     // is the canonical example). The user has to disconnect + reconnect to
@@ -494,7 +554,7 @@ export async function skvRequestWithAuth(
     // Body shape per SKV's AGI service description (Tjänstebeskrivning v1.7
     // §4.1.2.2): { "error": "invalid_scope", "description": "The required
     // scope agd has been requested for that access token." }
-    if (text.includes('invalid_scope') || text.includes('required scope')) {
+    if (isTokenScopeRejection(text)) {
       throw new SkatteverketAuthError(
         'Anslutningen mot Skatteverket saknar nödvändig behörighet för denna ' +
         'tjänst. Koppla bort och anslut igen via Inställningar → Skatteverket ' +
@@ -547,8 +607,12 @@ export async function skvRequestWithAuth(
  *                        for this company at SKV (firmatecknare / ombud)
  *   MISSING_SCOPE      : 403 with "invalid_scope" body; the stored token
  *                        was issued before the required scope existed.
- *                        User must disconnect + reconnect.
- *   ACCESS_DENIED      : generic 403
+ *                        User must disconnect + reconnect. NOT emitted for
+ *                        the APIGW's "The required scopes are not authorized"
+ *                        contract error: that is our subscription gap, and
+ *                        treating it as a token problem made every reconnect
+ *                        re-flag the row (#1155).
+ *   ACCESS_DENIED      : generic 403, and the APIGW contract error above
  *   RATE_LIMITED       : 429 from SKV API gateway
  *   TOKEN_CORRUPTED    : stored tokens cannot be decrypted (key rotated
  *                        or row tampered with); user must reconnect
