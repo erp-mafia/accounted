@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { SONNET_MODEL, THINKING_BUDGET_STANDARD } from '@/lib/agent/composer/client'
+import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
 // invoice.draft: "Fråga om denna faktura" from the invoice form.
@@ -83,7 +83,7 @@ export const invoiceDraft = defineAgentIntent<InvoiceDraftArgs, CapturedInvoiceD
   // Draft the invoice lines + VAT in the thinking channel, so the visible reply
   // is one short confirmation after staging rather than a play-by-play that
   // repeats once before the tool call and once after it.
-  thinking: { budgetTokens: THINKING_BUDGET_STANDARD },
+  thinking: { effort: EFFORT_STANDARD },
 
   capture: async ({ customer_id, invoice_id }, { supabase, companyId }) => {
     // Resolve the effective customer_id. When the FAB lands here from

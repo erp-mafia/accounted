@@ -59,27 +59,36 @@ export function getAnthropic(): AnthropicBedrock {
   return cached
 }
 
-// Bedrock model IDs. Region prefix `eu.` keeps inference inside eu-north-1.
-// Both are env-overridable so ops can swap models without a code deploy.
+// Bedrock model IDs. Region prefix `eu.` keeps inference inside eu-north-1
+// (a bare `anthropic.claude-sonnet-5` is rejected: on-demand throughput needs
+// the cross-region inference profile). Both are env-overridable so ops can
+// swap models without a code deploy.
 //
-// Per plan §14 the composer's atom-selection call should run on Opus 4.7 for
-// the higher-stakes selection reasoning. Opus 4.7 is not yet enabled on this
-// AWS Bedrock account (403 "not available for this account": request access
-// on the AWS console under Bedrock → Model access). For now we point OPUS at
-// Sonnet 4.6 so the composer still works; atom selection on Sonnet is still
-// good: it's a structured-output call via tool_use forcing, not deep
-// reasoning. Flip BEDROCK_OPUS_MODEL_ID back to eu.anthropic.claude-opus-4-7
-// once Opus access lands.
-export const OPUS_MODEL = process.env.BEDROCK_OPUS_MODEL_ID || 'eu.anthropic.claude-sonnet-4-6'
-export const SONNET_MODEL = process.env.BEDROCK_SONNET_MODEL_ID || 'eu.anthropic.claude-sonnet-4-6'
+// Both point at Sonnet 5, verified enabled on this Bedrock account. The two
+// names are kept because the intents split on them: OPUS_MODEL marks the
+// heavy-reasoning intents (supplier-invoice review, VAT review, bokslut) so
+// that split survives if a genuinely larger model is enabled here later.
+export const OPUS_MODEL = process.env.BEDROCK_OPUS_MODEL_ID || 'eu.anthropic.claude-sonnet-5'
+export const SONNET_MODEL = process.env.BEDROCK_SONNET_MODEL_ID || 'eu.anthropic.claude-sonnet-5'
 
-// Extended-thinking budgets (budget_tokens) for the chat intents. These are
-// ceilings, not floors: the model spends only what a turn needs, so a generous
-// cap improves hard turns (multi-source VAT synthesis, anomaly detection)
-// without taxing simple ones. run-turn derives max_tokens = budget + 4096, so
-// raising these is safe: no manual max_tokens bookkeeping. Tiered to match the
-// model split: DEEP for the Opus / heavy-reasoning intents, STANDARD for the
-// rest. Early-stage default favours reasoning quality over token cost; dial
-// down here in one place if latency/cost ever bites.
-export const THINKING_BUDGET_STANDARD = 6000
-export const THINKING_BUDGET_DEEP = 12000
+// Reasoning depth for the chat intents.
+//
+// Sonnet 5 removed the fixed thinking budget: `thinking: {type:'enabled',
+// budget_tokens}` is rejected outright ("not supported for this model. Use
+// thinking.type.adaptive and output_config.effort"). Depth is now a qualitative
+// effort level and the model spends what a turn actually needs.
+//
+// Levels are `low | medium | high | xhigh | max`. Measured on this account:
+// at `medium` a multi-step Swedish VAT question produced no reasoning at all,
+// at `xhigh` it produced ~1k characters. Since the point of enabling thinking
+// on these intents is that the agent reasons BEFORE it answers rather than
+// narrating in the reply, DEEP uses xhigh and STANDARD high.
+export const EFFORT_STANDARD = 'high' as const
+export const EFFORT_DEEP = 'xhigh' as const
+
+// Output ceilings per tier. Previously derived as budget + 4096; with no
+// budget to derive from these are explicit. Sized with headroom for Sonnet 5's
+// new tokenizer, which produces roughly 30% more tokens for the same text, and
+// because max_tokens now caps thinking AND the visible reply together.
+export const MAX_TOKENS_STANDARD = 16000
+export const MAX_TOKENS_DEEP = 24000

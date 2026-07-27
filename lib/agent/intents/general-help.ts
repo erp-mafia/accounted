@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { SONNET_MODEL, THINKING_BUDGET_STANDARD } from '@/lib/agent/composer/client'
+import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
 // general.help: always-present "Fråga min assistent" from the top nav.
@@ -98,7 +98,7 @@ export const generalHelp = defineAgentIntent<GeneralHelpArgs, GeneralHelpCapture
   // answered regulatory questions from memory and narrated its steps. Thinking
   // moves the reasoning into its own channel so the visible reply is a single
   // consolidated answer.
-  thinking: { budgetTokens: THINKING_BUDGET_STANDARD },
+  thinking: { effort: EFFORT_STANDARD },
 
   capture: async ({ route }) => ({ route: route ?? null }),
 

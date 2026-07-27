@@ -18,8 +18,13 @@ vi.mock('@/lib/agent/composer/client', () => ({
       },
     },
   }),
-  SONNET_MODEL: 'claude-sonnet-4-6',
+  SONNET_MODEL: 'claude-sonnet-5',
+  MAX_TOKENS_STANDARD: 16000,
+  MAX_TOKENS_DEEP: 24000,
 }))
+
+const MAX_TOKENS_STANDARD = 16000
+const MAX_TOKENS_DEEP = 24000
 
 vi.mock('../system-prompt', () => ({
   buildSystemPrompt: vi.fn().mockResolvedValue({
@@ -84,7 +89,11 @@ async function runWith(intent: AgentIntent) {
     emit: () => true,
   })
   // The args object the stream was invoked with.
-  return messagesCreate.mock.calls[0][0] as { thinking?: unknown; max_tokens?: number }
+  return messagesCreate.mock.calls[0][0] as {
+    thinking?: unknown
+    output_config?: unknown
+    max_tokens?: number
+  }
 }
 
 beforeEach(() => {
@@ -92,17 +101,29 @@ beforeEach(() => {
 })
 
 describe('runChatTurn: extended thinking wiring', () => {
-  it('passes a thinking config and bumps max_tokens when the intent opts in', async () => {
-    const args = await runWith({ ...baseIntent(), thinking: { budgetTokens: 2000 } })
-    expect(args.thinking).toEqual({ type: 'enabled', budget_tokens: 2000 })
-    // budget must be strictly below max_tokens: we add the normal output budget.
-    expect(args.max_tokens).toBe(2000 + 4096)
+  it('requests adaptive thinking with a summarized display when the intent opts in', async () => {
+    const args = await runWith({ ...baseIntent(), thinking: { effort: 'high' } })
+    // Sonnet 5 rejects { type: 'enabled', budget_tokens } outright.
+    expect(args.thinking).toEqual({ type: 'adaptive', display: 'summarized' })
+    // display:'summarized' is what makes reasoning text actually arrive; the
+    // default 'omitted' streams empty thinking blocks and the chat's
+    // "Tänker …" block would never populate.
+    expect(args.output_config).toEqual({ effort: 'high' })
+    expect(args.max_tokens).toBe(MAX_TOKENS_STANDARD)
   })
 
-  it('omits thinking and keeps the default budget when the intent does not opt in', async () => {
+  it('raises the output ceiling for the deep-reasoning tier', async () => {
+    const args = await runWith({ ...baseIntent(), thinking: { effort: 'xhigh' } })
+    expect(args.output_config).toEqual({ effort: 'xhigh' })
+    // max_tokens now caps thinking AND the visible reply together.
+    expect(args.max_tokens).toBe(MAX_TOKENS_DEEP)
+  })
+
+  it('omits thinking and effort when the intent does not opt in', async () => {
     const args = await runWith(baseIntent())
     expect(args.thinking).toBeUndefined()
-    expect(args.max_tokens).toBe(4096)
+    expect(args.output_config).toBeUndefined()
+    expect(args.max_tokens).toBe(MAX_TOKENS_STANDARD)
   })
 })
 

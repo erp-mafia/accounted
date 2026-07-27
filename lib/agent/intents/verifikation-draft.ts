@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { SONNET_MODEL, THINKING_BUDGET_STANDARD } from '@/lib/agent/composer/client'
+import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 
@@ -102,7 +102,7 @@ export const verifikationDraft = defineAgentIntent<
   // analysis before the tool call and a near-identical answer after it. The
   // always-on prompt promises "resonemang sker i tankekanalen"; without this
   // that channel doesn't exist and the reasoning spills into the visible reply.
-  thinking: { budgetTokens: THINKING_BUDGET_STANDARD },
+  thinking: { effort: EFFORT_STANDARD },
 
   capture: async ({ journal_entry_id, description }, { supabase, companyId }) => {
     let entry: CapturedVerifikationDraft['entry'] = null

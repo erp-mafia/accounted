@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { SONNET_MODEL, THINKING_BUDGET_STANDARD } from '@/lib/agent/composer/client'
+import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
 
 // inbox.bulk-book: "Fråga assistenten" on a multi-selection in the Underlag
 // view (Dokumentinkorgen). Unlike transaction.categorization (which keys off the
@@ -116,7 +116,7 @@ export const inboxBulkBook = defineAgentIntent<InboxBulkBookArgs, CapturedInboxB
   // Reason before proposing: group the selection and work out category + VAT
   // treatment in the thinking channel, so the visible reply is one short
   // motivation, not a play-by-play.
-  thinking: { budgetTokens: THINKING_BUDGET_STANDARD },
+  thinking: { effort: EFFORT_STANDARD },
 
   capture: async ({ item_ids }, { supabase, companyId }) => {
     const ids = Array.isArray(item_ids) ? item_ids.filter((x): x is string => typeof x === 'string') : []

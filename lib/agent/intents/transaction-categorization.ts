@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { SONNET_MODEL, THINKING_BUDGET_STANDARD } from '@/lib/agent/composer/client'
+import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
 
 // transaction.categorization: "Fråga om denna transaktion" on a transaction
 // row.
@@ -78,7 +78,7 @@ export const transactionCategorization = defineAgentIntent<
   // Reason before proposing: read underlag + history and work out the VAT
   // treatment in the thinking channel, so the visible reply is one short
   // motivation, not a play-by-play of each tool call.
-  thinking: { budgetTokens: THINKING_BUDGET_STANDARD },
+  thinking: { effort: EFFORT_STANDARD },
 
   capture: async ({ transaction_id }, { supabase, companyId }) => {
     const { data: tx } = await supabase

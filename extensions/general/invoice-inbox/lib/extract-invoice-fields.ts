@@ -20,9 +20,9 @@ const log = createLogger('invoice-inbox-extract')
 
 // Both overridable via env vars so ops can swap models / raise token caps
 // without a code deploy. Defaults match what's expected to be set in
-// production (eu.anthropic.claude-sonnet-4-6 in eu-north-1, 8192 tokens:
+// production (eu.anthropic.claude-sonnet-5 in eu-north-1, 8192 tokens:
 // enough headroom for invoices with 20+ line items).
-const MODEL = process.env.BEDROCK_MODEL_ID || 'eu.anthropic.claude-sonnet-4-6'
+const MODEL = process.env.BEDROCK_MODEL_ID || 'eu.anthropic.claude-sonnet-5'
 const MAX_TOKENS = (() => {
   const parsed = Number(process.env.BEDROCK_MAX_TOKENS)
   // Use the env value only if it's a positive number: `||` would also

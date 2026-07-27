@@ -1,5 +1,5 @@
 import { defineAgentIntent } from './types'
-import { OPUS_MODEL, THINKING_BUDGET_DEEP } from '@/lib/agent/composer/client'
+import { OPUS_MODEL, EFFORT_DEEP } from '@/lib/agent/composer/client'
 import { renderAgentGroundRules } from './shared-rules'
 
 // supplier_invoice.review: "Fråga din assistent" from a supplier invoice
@@ -171,7 +171,7 @@ export const supplierInvoiceReview = defineAgentIntent<
   // so the visible reply is a single conclusion after the booking is staged:
   // not a pre-tool analysis echoed again post-tool. Matches the always-on
   // prompt's promise that reasoning happens in the (separately shown) tankekanal.
-  thinking: { budgetTokens: THINKING_BUDGET_DEEP },
+  thinking: { effort: EFFORT_DEEP },
 
   capture: async ({ supplier_invoice_id }, { supabase, companyId }) => {
     const { data: invoice } = await supabase

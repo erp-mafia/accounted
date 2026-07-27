@@ -23,7 +23,7 @@ const intent: AgentIntent = {
   sheetTitle: 'Fråga din assistent',
   atoms: { mode: 'progressive', horizontal: [], includeCompanyVertical: false, includeCompanyModifiers: false },
   tools: [],
-  model: 'claude-sonnet-4-6',
+  model: 'claude-sonnet-5',
   capture: async () => ({}),
   promptTemplate: () => '',
 }

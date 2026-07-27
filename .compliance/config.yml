@@ -15,7 +15,7 @@ asvs_level: L2
 soc2_categories: [security, confidentiality]
 severity_threshold_to_block: critical
 llm_provider: bedrock
-llm_model: eu.anthropic.claude-sonnet-4-6
+llm_model: eu.anthropic.claude-sonnet-5
 
 # Add suppressions here as triage progresses. Each rule needs a justification
 # and (for ISO/SOC 2 controls) a risk_id pointing at a Risk Register entry.

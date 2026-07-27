@@ -21,7 +21,9 @@ vi.mock('@/lib/agent/composer/client', () => ({
       },
     },
   }),
-  SONNET_MODEL: 'claude-sonnet-4-6',
+  SONNET_MODEL: 'claude-sonnet-5',
+  MAX_TOKENS_STANDARD: 16000,
+  MAX_TOKENS_DEEP: 24000,
 }))
 
 // system-prompt builder: return a minimal valid shape.
@@ -66,7 +68,7 @@ function makeIntent(): AgentIntent {
     sheetTitle: 'x',
     atoms: { mode: 'progressive', horizontal: [], includeCompanyVertical: false, includeCompanyModifiers: false },
     tools: ['gnubok_remember_fact'],
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-5',
     capture: async () => ({}),
     promptTemplate: () => '',
   }

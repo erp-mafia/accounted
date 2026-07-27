@@ -79,7 +79,7 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION || 'eu-north-1' }}
-          REVIEW_MODEL: eu.anthropic.claude-sonnet-4-6
+          REVIEW_MODEL: eu.anthropic.claude-sonnet-5
           # Two-stage mode: read the diff from the artifact instead of git-diffing.
           DIFF_FILE: diff.patch
           FILES_FILE: files.txt
