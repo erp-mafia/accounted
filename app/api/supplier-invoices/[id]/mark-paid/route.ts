@@ -8,7 +8,7 @@ import {
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { validateBody } from '@/lib/api/validate'
 import { MarkSupplierInvoicePaidSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -399,23 +399,14 @@ export const POST = withRouteContext(
     // Under kontantmetoden the cash payment entry is the ONLY booking of the
     // affärshändelse, so its underlag (the document from the inbox) must hang on
     // THIS verifikat per BFL 5 kap 6 §. Under faktureringsmetoden the document
-    // is already linked to the registration verifikat at receipt: re-linking
-    // here would move it off that primary booking, so we attach only for the
-    // cash entry. Non-fatal: the payment is already committed and immutable, so
-    // a link failure is logged and the invoice stays usable (mirrors the
-    // registration-time linking in commitCreateSupplierInvoiceFromInbox).
-    const invoiceDocumentId = (invoice as { document_id?: string | null }).document_id
-    if (useCashEntry && invoiceDocumentId && journalEntryId) {
-      try {
-        await linkToJournalEntry(supabase, companyId!, invoiceDocumentId, journalEntryId)
-      } catch (linkErr) {
-        opLog.warn('failed to link supplier invoice document to cash payment JE', {
-          documentId: invoiceDocumentId,
-          journalEntryId,
-          error: linkErr instanceof Error ? getUserErrorMessage(linkErr) : getUserErrorMessage(linkErr),
-        })
-      }
-    }
+    // is normally already linked to the registration verifikat at receipt, in
+    // which case anchorSupplierInvoiceDocument is a no-op (it never moves an
+    // anchored document). It only steps in when the document is floating, e.g.
+    // attached after registration or orphaned by a deleted rättelse: without an
+    // anchor every missing-underlag surface warns on a verifikat that plainly
+    // shows the invoice. Non-fatal by construction: the payment is already
+    // committed and immutable, so the helper logs and returns null on failure.
+    await anchorSupplierInvoiceDocument(supabase, companyId!, id)
 
     try {
       await eventBus.emit({

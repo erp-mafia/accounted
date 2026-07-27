@@ -28,6 +28,7 @@ import {
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { eventBus } from '@/lib/events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -504,6 +505,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         invoiceId,
       })
     }
+
+    // Anchor the invoice's retained source document to a posted verifikat if
+    // it is still floating. Under kontantmetoden the cash entry we just booked
+    // is the only booking of the affärshändelse, so its underlag belongs here
+    // (BFL 5 kap 6 §); under faktureringsmetoden the document is normally
+    // already on the registration verifikat and this is a no-op. Without it an
+    // API-key/MCP-driven payment leaves the document unanchored, which every
+    // missing-underlag surface reads as "Underlag saknas". Never throws.
+    await anchorSupplierInvoiceDocument(ctx.supabase, ctx.companyId!, invoiceId)
 
     try {
       await eventBus.emit({

@@ -57,8 +57,56 @@ describe('getJournalEntryUnderlagReferences', () => {
       { data: [] }, // 1. invoices direct
       { data: [] }, // 2. invoice_payments
       { data: [] }, // 4. supplier registration
-      { data: [{ id: 'si-1', supplier_invoice_number: 'LF-001', document_id: 'doc-1' }] }, // 5. supplier payment
+      { data: [{
+        id: 'si-1',
+        supplier_invoice_number: 'LF-001',
+        document_id: 'doc-1',
+        document: { journal_entry_id: 'je-9' },
+      }] }, // 5. supplier payment
       { data: [{ supplier_invoice_id: 'si-1' }] }, // 6. supplier_invoice_payments
+    ])
+
+    expect(refs).toEqual([{
+      type: 'supplier_invoice',
+      id: 'si-1',
+      number: 'LF-001',
+      document_id: 'doc-1',
+    }])
+  })
+
+  it('withholds a FLOATING supplier-invoice document but keeps the reference', async () => {
+    // An unanchored document (journal_entry_id IS NULL) sits outside the WORM
+    // deletion guards, so every missing-underlag surface refuses to count it.
+    // Handing it out here is what made the verifikat view show an underlag
+    // while the list warned "Underlag saknas" on the same row.
+    const refs = await run([
+      { data: [] }, // 1. invoices direct
+      { data: [] }, // 2. invoice_payments
+      { data: [] }, // 4. supplier registration
+      { data: [{
+        id: 'si-1',
+        supplier_invoice_number: 'LF-001',
+        document_id: 'doc-1',
+        document: { journal_entry_id: null },
+      }] }, // 5. supplier payment
+      { data: [{ supplier_invoice_id: 'si-1' }] }, // 6. supplier_invoice_payments
+    ])
+
+    expect(refs).toEqual([{ type: 'supplier_invoice', id: 'si-1', number: 'LF-001' }])
+  })
+
+  it('accepts the embedded document row in PostgREST array form', async () => {
+    const refs = await run([
+      { data: [] }, // 1. invoices direct
+      { data: [] }, // 2. invoice_payments
+      { data: [{
+        id: 'si-1',
+        supplier_invoice_number: 'LF-001',
+        document_id: 'doc-1',
+        document: [{ journal_entry_id: 'je-9' }],
+      }] }, // 4. supplier registration
+      { data: [] }, // 5. supplier payment
+      { data: [] }, // 6. supplier_invoice_payments
     ])
 
     expect(refs).toEqual([{

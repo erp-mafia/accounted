@@ -9,6 +9,7 @@ import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-en
 import { planSupplierPayment } from '@/lib/invoices/apply-supplier-payment'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
@@ -450,6 +451,13 @@ export const POST = withRouteContext(
         })
       }
     }
+
+    // Same requirement one table over: the SUPPLIER INVOICE's own retained
+    // document must sit on a posted verifikat, or the payment verifikat we
+    // just booked shows the invoice PDF while every missing-underlag surface
+    // (which only accepts an anchored doc) warns "Underlag saknas". No-op when
+    // it is already anchored, e.g. on the registration verifikat.
+    await anchorSupplierInvoiceDocument(supabase, companyId, supplier_invoice_id)
 
     logMatchEvent(supabase, user.id, transactionId, 'matched', {
       supplierInvoiceId: supplier_invoice_id,

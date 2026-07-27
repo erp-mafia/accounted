@@ -21,7 +21,20 @@ export interface UnderlagReference {
   id: string
   /** invoice_number / supplier_invoice_number: the UI builds the label from this. */
   number: string
-  /** Retained source document owned by a referenced supplier invoice, if any. */
+  /**
+   * Retained source document owned by a referenced supplier invoice, if any.
+   *
+   * Set ONLY when the document is anchored to a journal entry
+   * (document_attachments.journal_entry_id IS NOT NULL), because that is the
+   * exact condition every missing-underlag surface uses: the
+   * verifikat_without_documents / transactions_without_documents RPCs,
+   * /api/documents/counts and the transactions list all require an anchored
+   * doc, since only anchored docs sit behind the WORM deletion guards. Handing
+   * out a floating doc here made the verifikat view display an underlag while
+   * the list kept warning "Underlag saknas" on the same row (support case
+   * 2026-07-27). The reference itself is still returned either way, so the
+   * verifieringskedja stays followable; only the attachment claim is withheld.
+   */
   document_id?: string
 }
 
@@ -34,6 +47,24 @@ interface SupplierInvoiceRow {
   id: string
   supplier_invoice_number: string
   document_id?: string | null
+  /** Embedded document row; see UnderlagReference.document_id for why. */
+  document?: { journal_entry_id: string | null } | { journal_entry_id: string | null }[] | null
+}
+
+/** Columns every supplier-invoice lookup below needs, incl. the anchor check. */
+const SUPPLIER_INVOICE_COLUMNS =
+  'id, supplier_invoice_number, document_id, document:document_attachments(journal_entry_id)'
+
+/**
+ * A supplier invoice's document only counts as this verifikation's underlag
+ * when it is anchored to a journal entry: an unanchored doc is outside the WORM
+ * deletion guards, so the missing-underlag surfaces refuse to accept it and
+ * this resolver must refuse too.
+ */
+function anchoredDocumentId(row: SupplierInvoiceRow): string | undefined {
+  if (!row.document_id) return undefined
+  const document = Array.isArray(row.document) ? row.document[0] : row.document
+  return document?.journal_entry_id ? row.document_id : undefined
 }
 
 /**
@@ -94,29 +125,31 @@ export async function getJournalEntryUnderlagReferences(
 
   // Registration booking (accrual) on the invoice itself.
   const registrationLinks = await fetchAllRows<SupplierInvoiceRow>(({ from, to }) =>
-    supabase.from('supplier_invoices').select('id, supplier_invoice_number, document_id')
+    supabase.from('supplier_invoices').select(SUPPLIER_INVOICE_COLUMNS)
       .eq('company_id', companyId).eq('registration_journal_entry_id', journalEntryId)
       .order('id', { ascending: true }).range(from, to),
   )
 
   for (const si of (registrationLinks ?? []) as SupplierInvoiceRow[]) {
+    const documentId = anchoredDocumentId(si)
     supplierInvoices.set(si.id, {
       number: si.supplier_invoice_number,
-      ...(si.document_id ? { documentId: si.document_id } : {}),
+      ...(documentId ? { documentId } : {}),
     })
   }
 
   // Payment booking on the invoice itself.
   const paymentLinks = await fetchAllRows<SupplierInvoiceRow>(({ from, to }) =>
-    supabase.from('supplier_invoices').select('id, supplier_invoice_number, document_id')
+    supabase.from('supplier_invoices').select(SUPPLIER_INVOICE_COLUMNS)
       .eq('company_id', companyId).eq('payment_journal_entry_id', journalEntryId)
       .order('id', { ascending: true }).range(from, to),
   )
 
   for (const si of (paymentLinks ?? []) as SupplierInvoiceRow[]) {
+    const documentId = anchoredDocumentId(si)
     supplierInvoices.set(si.id, {
       number: si.supplier_invoice_number,
-      ...(si.document_id ? { documentId: si.document_id } : {}),
+      ...(documentId ? { documentId } : {}),
     })
   }
 
@@ -135,15 +168,16 @@ export async function getJournalEntryUnderlagReferences(
 
   if (supplierPaymentIds.size > 0) {
     const paidSupplierInvoices = await fetchAllRows<SupplierInvoiceRow>(({ from, to }) =>
-      supabase.from('supplier_invoices').select('id, supplier_invoice_number, document_id')
+      supabase.from('supplier_invoices').select(SUPPLIER_INVOICE_COLUMNS)
         .eq('company_id', companyId).in('id', Array.from(supplierPaymentIds))
         .order('id', { ascending: true }).range(from, to),
     )
 
     for (const si of (paidSupplierInvoices ?? []) as SupplierInvoiceRow[]) {
+      const documentId = anchoredDocumentId(si)
       supplierInvoices.set(si.id, {
         number: si.supplier_invoice_number,
-        ...(si.document_id ? { documentId: si.document_id } : {}),
+        ...(documentId ? { documentId } : {}),
       })
     }
   }

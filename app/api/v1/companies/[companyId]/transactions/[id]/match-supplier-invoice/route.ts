@@ -20,6 +20,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
+import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { eventBus } from '@/lib/events/bus'
@@ -502,6 +503,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         })
       }
     }
+
+    // Same requirement for the SUPPLIER INVOICE's own retained document: it
+    // must sit on a posted verifikat or the missing-underlag surfaces (which
+    // only accept an anchored doc) warn on a verifikat that plainly shows the
+    // invoice. No-op when it is already anchored. Never throws.
+    await anchorSupplierInvoiceDocument(ctx.supabase, ctx.companyId!, supplier_invoice_id)
 
     logMatchEvent(ctx.supabase, ctx.userId, txId, 'matched', {
       supplierInvoiceId: supplier_invoice_id,

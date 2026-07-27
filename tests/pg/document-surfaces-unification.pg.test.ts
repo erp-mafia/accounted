@@ -467,3 +467,210 @@ describe('transaction-pinned document backfill (migration 20260724090000 §4)', 
     expect(cRows[0].journal_entry_id).toBeNull()
   })
 })
+
+describe('floating supplier-invoice document backfill (migration 20260727180000)', () => {
+  // The DO-block body, verbatim from the migration: re-anchor a supplier
+  // invoice's retained document when it is floating (journal_entry_id NULL)
+  // even though the invoice still has a posted verifikat to hang on. Preference
+  // order: registration booking, payment booking, then partial payments.
+  const BACKFILL_SQL = `
+    WITH candidate AS (
+      SELECT
+        si.document_id,
+        si.company_id,
+        je.id AS journal_entry_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY si.document_id
+          ORDER BY rank_source, coalesce(sip.payment_date, je.entry_date), je.id
+        ) AS pick
+      FROM supplier_invoices si
+      JOIN document_attachments d
+        ON d.id = si.document_id
+       AND d.company_id = si.company_id
+       AND d.journal_entry_id IS NULL
+       AND d.is_current_version = true
+      CROSS JOIN LATERAL (
+        SELECT si.registration_journal_entry_id AS entry_id, 1 AS rank_source, NULL::uuid AS payment_id
+        UNION ALL
+        SELECT si.payment_journal_entry_id, 2, NULL::uuid
+        UNION ALL
+        SELECT p.journal_entry_id, 3, p.id
+        FROM supplier_invoice_payments p
+        WHERE p.supplier_invoice_id = si.id
+          AND p.company_id = si.company_id
+          AND p.journal_entry_id IS NOT NULL
+      ) AS src(entry_id, rank_source, payment_id)
+      LEFT JOIN supplier_invoice_payments sip ON sip.id = src.payment_id
+      JOIN journal_entries je
+        ON je.id = src.entry_id
+       AND je.company_id = si.company_id
+       AND je.status = 'posted'
+      JOIN fiscal_periods fp
+        ON fp.id = je.fiscal_period_id
+       AND fp.is_closed = false
+       AND fp.locked_at IS NULL
+    )
+    UPDATE document_attachments d
+    SET journal_entry_id = candidate.journal_entry_id
+    FROM candidate
+    WHERE candidate.pick = 1
+      AND d.id = candidate.document_id
+      AND d.company_id = candidate.company_id
+      AND d.journal_entry_id IS NULL
+      AND d.is_current_version = true`
+
+  const anchorOf = async (documentId: string): Promise<string | null> => {
+    const { rows } = await getPool().query<{ journal_entry_id: string | null }>(
+      `SELECT journal_entry_id FROM public.document_attachments WHERE id = $1`,
+      [documentId],
+    )
+    return rows[0].journal_entry_id
+  }
+
+  it('anchors a floating doc to the payment verifikat when registration was reversed', async () => {
+    // The reported shape: the invoice PDF was orphaned when the rättelse it
+    // had been relinked onto was deleted (delete_last_voucher has to clear
+    // journal_entry_id), leaving the posted payment verifikat flagged while
+    // the verifikat view still displayed the PDF.
+    const s = await seedCompany()
+    const mkJe = async (n: number, status: 'posted' | 'reversed', sourceType: string) => {
+      const id = await insertDraftJournalEntry({
+        userId: s.userId,
+        companyId: s.companyId,
+        fiscalPeriodId: s.fiscalPeriodId,
+        status,
+        voucherNumber: n,
+        entryDate: '2026-06-15',
+        description: `anchor ${n}`,
+        sourceType,
+      })
+      await insertBalancedLines(id, 100 * n)
+      return id
+    }
+
+    const jeReg = await mkJe(1, 'reversed', 'supplier_invoice_registered')
+    const jePay = await mkJe(2, 'posted', 'supplier_invoice_paid')
+    const supplierId = await insertSupplier({ userId: s.userId, companyId: s.companyId })
+    const doc = await attachDocument({
+      userId: s.userId,
+      companyId: s.companyId,
+      journalEntryId: null,
+    })
+    await insertSupplierInvoice({
+      userId: s.userId,
+      companyId: s.companyId,
+      supplierId,
+      arrivalNumber: 1,
+      registrationJournalEntryId: jeReg,
+      paymentJournalEntryId: jePay,
+      documentId: doc,
+    })
+
+    // Before: the payment verifikat is flagged even though the PDF is retained.
+    const before = await verifikatSurface(s.companyId)
+    expect((before.verifikat ?? []).map((v) => v.journal_entry_id)).toContain(jePay)
+
+    await getPool().query(BACKFILL_SQL)
+
+    expect(await anchorOf(doc)).toBe(jePay)
+    const after = await verifikatSurface(s.companyId)
+    expect((after.verifikat ?? []).map((v) => v.journal_entry_id)).not.toContain(jePay)
+  })
+
+  it('prefers the registration verifikat and never steals an anchored doc', async () => {
+    const s = await seedCompany()
+    const mkJe = async (n: number, sourceType: string) => {
+      const id = await insertDraftJournalEntry({
+        userId: s.userId,
+        companyId: s.companyId,
+        fiscalPeriodId: s.fiscalPeriodId,
+        status: 'posted',
+        voucherNumber: n,
+        entryDate: '2026-06-15',
+        description: `prefer ${n}`,
+        sourceType,
+      })
+      await insertBalancedLines(id, 100 * n)
+      return id
+    }
+
+    const jeReg = await mkJe(1, 'supplier_invoice_registered')
+    const jePay = await mkJe(2, 'supplier_invoice_paid')
+    const jeOther = await mkJe(3, 'manual')
+    const supplierId = await insertSupplier({ userId: s.userId, companyId: s.companyId })
+
+    const floating = await attachDocument({
+      userId: s.userId,
+      companyId: s.companyId,
+      journalEntryId: null,
+    })
+    await insertSupplierInvoice({
+      userId: s.userId,
+      companyId: s.companyId,
+      supplierId,
+      arrivalNumber: 1,
+      registrationJournalEntryId: jeReg,
+      paymentJournalEntryId: jePay,
+      documentId: floating,
+    })
+
+    // Already serving another verifikat: must stay put (BFL 5 kap 6 §).
+    const anchored = await attachDocument({
+      userId: s.userId,
+      companyId: s.companyId,
+      journalEntryId: jeOther,
+    })
+    await insertSupplierInvoice({
+      userId: s.userId,
+      companyId: s.companyId,
+      supplierId,
+      arrivalNumber: 2,
+      paymentJournalEntryId: jePay,
+      documentId: anchored,
+    })
+
+    await getPool().query(BACKFILL_SQL)
+
+    expect(await anchorOf(floating)).toBe(jeReg)
+    expect(await anchorOf(anchored)).toBe(jeOther)
+  })
+
+  it('skips closed periods: the period-lock trigger would reject the write anyway', async () => {
+    const s = await seedCompany()
+    const je = await insertDraftJournalEntry({
+      userId: s.userId,
+      companyId: s.companyId,
+      fiscalPeriodId: s.fiscalPeriodId,
+      status: 'posted',
+      voucherNumber: 1,
+      entryDate: '2026-06-15',
+      description: 'closed period',
+      sourceType: 'supplier_invoice_paid',
+    })
+    await insertBalancedLines(je, 100)
+    const supplierId = await insertSupplier({ userId: s.userId, companyId: s.companyId })
+    const doc = await attachDocument({
+      userId: s.userId,
+      companyId: s.companyId,
+      journalEntryId: null,
+    })
+    await insertSupplierInvoice({
+      userId: s.userId,
+      companyId: s.companyId,
+      supplierId,
+      arrivalNumber: 1,
+      paymentJournalEntryId: je,
+      documentId: doc,
+    })
+    // Close AFTER the fixtures exist: inserting into a closed period is itself
+    // blocked by enforce_period_lock.
+    await getPool().query(
+      `UPDATE public.fiscal_periods SET is_closed = true, closed_at = now() WHERE id = $1`,
+      [s.fiscalPeriodId],
+    )
+
+    await getPool().query(BACKFILL_SQL)
+
+    expect(await anchorOf(doc)).toBeNull()
+  })
+})

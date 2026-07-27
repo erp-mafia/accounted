@@ -35,18 +35,12 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
     mockCreateSupplierInvoiceCashEntry(...args),
 }))
 
-vi.mock('@/lib/core/documents/document-service', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/core/documents/document-service')>(
-    '@/lib/core/documents/document-service'
-  )
-  return {
-    ...actual,
-    linkToJournalEntry: vi.fn(),
-  }
-})
+vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({
+  anchorSupplierInvoiceDocument: vi.fn().mockResolvedValue(null),
+}))
 
 import { eventBus } from '@/lib/events'
-import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 
 import { POST } from '../route'
 
@@ -252,7 +246,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
   })
 
-  it('cash method: links the inbox document to the cash payment verifikat (BFL 5 kap 6 §)', async () => {
+  it('cash method: anchors the invoice document to a posted verifikat (BFL 5 kap 6 §)', async () => {
     const supplier = makeSupplier()
     const invoice = makeSupplierInvoice({
       id: 'si-1',
@@ -286,16 +280,17 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
 
     expect(status).toBe(200)
     expect(body.journal_entry_id).toBe('je-cash')
-    // The cash entry is the ONLY booking, so its underlag must hang on it.
-    expect(linkToJournalEntry).toHaveBeenCalledWith(
+    // The cash entry is the ONLY booking, so its underlag must hang on a
+    // posted verifikat of this invoice. Which one it picks (and that it never
+    // moves an already-anchored doc) is pinned in the helper's own tests.
+    expect(anchorSupplierInvoiceDocument).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
-      'doc-1',
-      'je-cash',
+      'si-1',
     )
   })
 
-  it('accrual method: does NOT re-link the document at payment (stays on the registration verifikat)', async () => {
+  it('accrual method: still delegates the anchor check (a no-op once the doc sits on the registration verifikat)', async () => {
     const supplier = makeSupplier()
     const invoice = makeSupplierInvoice({
       id: 'si-1',
@@ -329,9 +324,15 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     const { status } = await parseJsonResponse(response)
 
     expect(status).toBe(200)
-    // The document already lives on the registration verifikat: re-linking
-    // here would move it off the primary booking.
-    expect(linkToJournalEntry).not.toHaveBeenCalled()
+    // The document already lives on the registration verifikat, so the helper
+    // leaves it there: it only ever anchors a FLOATING doc, which is the case
+    // this route previously skipped entirely (leaving the payment verifikat
+    // warning "Underlag saknas" with no way out).
+    expect(anchorSupplierInvoiceDocument).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'si-1',
+    )
   })
 
   it('returns 500 when journal entry creation fails (blocking: GL must succeed for payment)', async () => {

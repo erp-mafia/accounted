@@ -9,6 +9,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
 import { updateDraftEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
+import { reanchorOrphanedSupplierInvoiceDocuments } from '@/lib/core/documents/supplier-invoice-underlag'
 
 const logger = createLogger('journal-entries')
 
@@ -56,6 +57,19 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     .eq('company_id', companyId)
     .single()
 
+  // delete_last_voucher clears journal_entry_id on every document hanging on
+  // the voucher (the FK is ON DELETE RESTRICT, so it has no choice). Capture
+  // them first: a document that is a supplier invoice's retained source
+  // document must be re-anchored to another posted verifikat of that invoice
+  // afterwards, or the invoice's remaining verifikat is left showing the PDF
+  // while every missing-underlag surface (which requires an anchored doc)
+  // keeps warning "Underlag saknas" with no way for the user to resolve it.
+  const { data: linkedDocs } = await supabase
+    .from('document_attachments')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', id)
+
   const { data, error } = await supabase.rpc('delete_last_voucher', {
     p_company_id: companyId,
     p_entry_id: id,
@@ -75,6 +89,19 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     } catch (syncError) {
       logger.warn('payment status sync failed after delete', { entryId: id, error: syncError })
     }
+  }
+
+  const orphanedDocIds = ((linkedDocs ?? []) as { id: string }[]).map((doc) => doc.id)
+  const reanchored = await reanchorOrphanedSupplierInvoiceDocuments(
+    supabase,
+    companyId,
+    orphanedDocIds,
+  )
+  if (reanchored > 0) {
+    logger.info('re-anchored supplier invoice documents after voucher delete', {
+      entryId: id,
+      count: reanchored,
+    })
   }
 
   await eventBus.emit({
