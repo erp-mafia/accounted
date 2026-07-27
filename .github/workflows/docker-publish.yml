@@ -1,24 +1,55 @@
 name: Build and Push Docker Image
 
+# Builds each platform on its own native runner, then stitches the two into one
+# manifest list.
+#
+# This was a single amd64 job emulating arm64 through QEMU and took ~31 minutes:
+# QEMU translates every Arm instruction into x86, so the arm64 half ran several
+# times slower than the amd64 half it shared a runner with. GitHub's free
+# `ubuntu-24.04-arm` runners (public repos) remove the emulation entirely, and
+# the two halves now run concurrently on their own hardware.
+#
+# The cost is a second job. A native single-platform build cannot produce a
+# multi-platform manifest by itself, so each build pushes an untagged,
+# digest-addressed image and `merge` composes the tag list from those digests
+# with `imagetools create`. Tagging, signing, and scanning all belong to `merge`,
+# because the digest consumers actually resolve is the manifest list's, not
+# either platform's.
+#
+# workflow_dispatch is deliberate: it makes this runnable from a branch before
+# merge. On a non-default branch the is_default_branch guard below disables the
+# `latest` tag, so a dispatch run publishes only the immutable commit-sha tag and
+# cannot move what production pulls.
+
 on:
   push:
     branches: [main]
     tags: ['v*.*.*']
+  workflow_dispatch: {}
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: erp-mafia/gnubok
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # Publishing one architecture and silently dropping the other is worse
+      # than publishing neither: the merge below needs both digests.
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
       packages: write
-      # OIDC token used by cosign keyless signing.
-      id-token: write
-      # SARIF upload to the repo's "Security" tab from the Trivy scan.
-      security-events: write
 
     steps:
       - uses: actions/checkout@v7
@@ -30,34 +61,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Labels only. Tags are applied once, to the manifest list, in `merge`.
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          # On main: push `latest` + commit-sha tags.
-          # On v*.*.* tags: push semver tags (1.2.3, 1.2, 1) for production pinning.
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=sha,prefix=
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build and push
+      # No setup-qemu-action. That was the whole point: each runner now builds
+      # its own architecture natively.
+      - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             EXTENSIONS_PRESET=self-hosted
@@ -65,6 +86,10 @@ jobs:
           # OCI attestations, queryable via `docker buildx imagetools inspect`.
           provenance: mode=max
           sbom: true
+          # push-by-digest publishes without a tag; `merge` collects the digests
+          # and builds the tag list from them. name-canonical records the
+          # repository name in the config so the merged manifest resolves.
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           # Layer cache lives in GHCR, not the GitHub Actions cache. Two
           # platforms x mode=max is ~7 GB, which alone ate 70% of the repo's
           # 10 GB Actions cache quota and, because buildx refreshes every blob's
@@ -74,23 +99,137 @@ jobs:
           # would drop the deps/builder stages and make every push redo
           # `npm ci` + `next build`.
           #
-          # A single stable cache tag is safe here: this workflow only runs on
-          # main and v*.*.* tags, and tags are cut from main, so there is no
-          # untrusted ref that could poison the layers.
+          # The cache tag is now per-architecture. Each runner builds a single
+          # platform, so a shared tag would leave the two jobs racing to
+          # overwrite a cache manifest describing layers the other cannot use.
+          #
+          # A stable cache tag is safe here: this workflow runs only on main,
+          # on v*.*.* tags (cut from main), and on manual dispatch, so there is
+          # no untrusted ref that could poison the layers.
           #
           # image-manifest=true,oci-mediatypes=true is required by GHCR, which
           # rejects buildkit's default cache manifest media type.
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }},mode=max,image-manifest=true,oci-mediatypes=true
+
+      # Digests reach `merge` as artifact filenames: the file content is
+      # irrelevant, only the name carries information.
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          # A silently empty artifact would surface later as an imagetools
+          # invocation with no source digests, which is a much worse error.
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge, sign and scan
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+      # OIDC token used by cosign keyless signing.
+      id-token: write
+      # SARIF upload to the repo's "Security" tab from the Trivy scan.
+      security-events: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # On main: push `latest` + commit-sha tags.
+          # On v*.*.* tags: push semver tags (1.2.3, 1.2, 1) for production pinning.
+          # A workflow_dispatch run from a branch gets the sha tag only, because
+          # is_default_branch gates `latest`.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+
+      - name: Create and push manifest list
+        working-directory: /tmp/digests
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "${REGISTRY}/${IMAGE_NAME}@sha256:%s " *)
+
+      # Cosign and Trivy must address the manifest list, not either platform's
+      # image: the list digest is what `docker pull` resolves for consumers, so
+      # it is the thing worth signing and the thing worth scanning.
+      - name: Resolve manifest list digest
+        id: manifest
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          DIGEST=$(docker buildx imagetools inspect \
+            "${REGISTRY}/${IMAGE_NAME}:${VERSION}" \
+            --format '{{json .Manifest}}' | jq -r '.digest')
+          echo "Resolved ${REGISTRY}/${IMAGE_NAME}:${VERSION} -> ${DIGEST}"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify both platforms are present
+        # A merge that quietly produced a single-arch manifest would ship a
+        # broken image to every arm64 self-hoster, and nothing downstream checks
+        # architecture. Assert it here while the digest is still in hand.
+        env:
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          PLATFORMS=$(docker buildx imagetools inspect \
+            "${REGISTRY}/${IMAGE_NAME}@${DIGEST}" --raw \
+            | jq -r '[.manifests[]
+                      | select(.platform.os != "unknown")
+                      | "\(.platform.os)/\(.platform.architecture)"]
+                     | sort | unique | join(",")')
+          echo "Manifest platforms: ${PLATFORMS}"
+          [ "$PLATFORMS" = "linux/amd64,linux/arm64" ] || {
+            echo "::error::Expected linux/amd64,linux/arm64 but got ${PLATFORMS}"
+            exit 1
+          }
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v4.1.2
 
       - name: Sign the image (keyless OIDC)
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.manifest.outputs.digest }}
         run: |
-          cosign sign --yes "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
+          set -euo pipefail
+          cosign sign --yes "${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
 
       - name: Scan image with Trivy (report-only)
         id: trivy
@@ -110,7 +249,7 @@ jobs:
         continue-on-error: true
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.manifest.outputs.digest }}
           severity: CRITICAL,HIGH
           exit-code: '0'
           ignore-unfixed: true
