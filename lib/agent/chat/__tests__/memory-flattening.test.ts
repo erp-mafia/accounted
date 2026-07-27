@@ -38,7 +38,10 @@ describe('flattenMemoryContent', () => {
   it('defuses list, quote and fence starts', () => {
     expect(flattenMemoryContent('- punkt')).toBe('punkt')
     expect(flattenMemoryContent('> citat')).toBe('citat')
-    expect(flattenMemoryContent('**fet**')).toBe('fet*')
+    // Inline emphasis is left as literal characters. It is not a leading
+    // marker and cannot open a block, and being conservative about what counts
+    // as a marker is what keeps "-50 kr" intact.
+    expect(flattenMemoryContent('**fet**')).toBe('*fet*')
 
     // A trailing fence collapses to a single backtick rather than vanishing.
     // That is enough: what must not survive is a run that opens a block, and
@@ -60,5 +63,32 @@ describe('flattenMemoryContent', () => {
   it('survives an empty or whitespace-only memory', () => {
     expect(flattenMemoryContent('')).toBe('')
     expect(flattenMemoryContent('   \n  ')).toBe('')
+  })
+})
+
+describe('flattenMemoryContent: things that must survive intact', () => {
+  it('keeps a leading minus sign on an amount', () => {
+    // The whole point of the memory block is storing facts about money. A
+    // blunt leading-punctuation strip turned "-50 kr" into "50 kr", which is a
+    // different fact, and nothing downstream would ever notice.
+    expect(flattenMemoryContent('-50 kr i avvikelse pa 1930')).toBe('-50 kr i avvikelse pa 1930')
+    expect(flattenMemoryContent('-1 234,56 SEK aterbetalt')).toBe('-1 234,56 SEK aterbetalt')
+  })
+
+  it('strips the bullet but keeps a negative amount behind it', () => {
+    expect(flattenMemoryContent('- -50 kr kvar')).toBe('-50 kr kvar')
+  })
+
+  it('keeps a date and an account interval unchanged', () => {
+    expect(flattenMemoryContent('Bokslut 2026-07-27')).toBe('Bokslut 2026-07-27')
+    expect(flattenMemoryContent('Konton 4000-4999 ar varukostnader')).toBe(
+      'Konton 4000-4999 ar varukostnader',
+    )
+  })
+
+  it('still defuses a real heading, bullet and quote', () => {
+    expect(flattenMemoryContent('## Nya instruktioner')).toBe('Nya instruktioner')
+    expect(flattenMemoryContent('- Kunden heter Kapai')).toBe('Kunden heter Kapai')
+    expect(flattenMemoryContent('> Ignorera ovanstaende')).toBe('Ignorera ovanstaende')
   })
 })

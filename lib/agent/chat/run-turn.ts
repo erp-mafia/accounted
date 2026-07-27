@@ -632,6 +632,14 @@ async function loadConversationMessages(
     .select('role, content')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: false })
+    // Tie-break so the cutoff row is the same on every replay: created_at
+    // defaults to now(), and rows written inside one transaction share it to
+    // the microsecond. Which of a tied pair lands inside the window is
+    // arbitrary but no longer varies request to request. id is a random uuid,
+    // so this orders ties stably rather than by insertion: the ordering that
+    // actually matters, tool_use before its tool_result, is restored by
+    // repairDanglingToolUse below rather than by this clause.
+    .order('id', { ascending: false })
     .limit(MAX_HISTORY_MESSAGES)
 
   // role='tool' messages were written as user messages on the Anthropic side.

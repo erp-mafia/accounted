@@ -63,7 +63,11 @@ export function flattenMemoryContent(content: string): string {
   return content
     .replace(/\s+/g, ' ')
     .replace(/[#>`*_|-]{2,}/g, (run) => run[0] ?? '')
-    .replace(/^[#>`*_|\s-]+/, '')
+    // Leading markers only, and only real ones. A Markdown bullet is a dash,
+    // star or plus FOLLOWED BY whitespace, so "-50 kr" is not a bullet: a blunt
+    // ^[-...]+ strip turned that into "50 kr" and silently flipped the sign of
+    // a stored money fact.
+    .replace(/^(?:[#>|`]+\s*|[-*+]\s+)+/, '')
     .trim()
 }
 
