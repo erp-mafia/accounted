@@ -27,9 +27,17 @@ ModuleCtor._load = function (request: string, ...rest: unknown[]) {
   return originalLoad.call(this, request, ...rest)
 }
 
-const errors = await import('@/lib/docs/content/errors')
-const reference = await import('@/lib/docs/content/reference')
-const connectClaude = await import('@/lib/docs/content/connect-claude')
+let errors, reference, connectClaude
+try {
+  errors = await import('@/lib/docs/content/errors')
+  reference = await import('@/lib/docs/content/reference')
+  connectClaude = await import('@/lib/docs/content/connect-claude')
+} finally {
+  // Scope the stub to the imports that need it: leaving a global loader hook
+  // patched for the rest of the process would silently disarm the guard for
+  // anything imported later (compliance swarm, ISO 27001 A.8.28).
+  ModuleCtor._load = originalLoad
+}
 
 const buildErrorReferenceMd = errors.buildErrorReferenceMd ?? (errors as { default?: typeof errors }).default?.buildErrorReferenceMd
 const buildResourcePages = reference.buildResourcePages ?? (reference as { default?: typeof reference }).default?.buildResourcePages
