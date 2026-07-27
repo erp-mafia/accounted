@@ -1,0 +1,65 @@
+-- Close a client-side DELETE hole in the `documents` storage bucket.
+--
+-- THE HOLE
+--
+-- 20240101000024_storage_bucket_policies.sql documents the bucket as WORM:
+-- "No UPDATE or DELETE policies - WORM compliance". That comment describes
+-- the repo, not production. Production carries a DELETE policy on
+-- storage.objects that exists in NO migration file:
+--
+--   users_delete_own_documents
+--     FOR DELETE TO authenticated
+--     USING (bucket_id = 'documents'
+--            AND (storage.foldername(name))[2] = auth.uid()::text)
+--
+-- It was created outside the migration stream (dashboard drift), alongside
+-- `users_read_own_documents` and `users_upload_own_documents`, which likewise
+-- appear in no migration and which production has INSTEAD of this repo's
+-- `documents_select_own` / `documents_insert_own`.
+--
+-- Under that policy the uploading user, holding nothing but their normal
+-- browser token, can DELETE the storage bytes of every document they uploaded
+-- under the legacy `documents/{userId}/...` layout: including documents
+-- linked to a posted verifikat, i.e. rakenskapsinformation under the BFL
+-- 7 kap 2 § seven-year retention duty. None of the three guards we rely on
+-- reach that far: deleteDocument()'s linked-check and the
+-- block_document_deletion() trigger both protect the document_attachments
+-- ROW, and the row survives, still pointing at an object that is gone.
+--
+-- WHY DROPPING IT IS SAFE
+--
+-- Nothing in the application deletes a documents object with a user-bound
+-- client. Every remove() call on this bucket runs on the service role, which
+-- is covered by service_role_all_documents and unaffected by this drop:
+--   lib/core/documents/document-service.ts  uploadDocument cleanup,
+--                                           createNewVersion cleanup,
+--                                           deleteDocument
+--     -> all three on createServiceClientNoCookies() since #1215
+--   extensions/general/mcp-server/server.ts audit-package sign-failure cleanup
+--     -> MCP paths already hold a service-role client
+--   scripts/backfill-document-storage-paths.ts
+--     -> builds its own service-role client
+--
+-- SCOPE
+--
+-- Only the DELETE policy goes. `users_read_own_documents` and
+-- `users_upload_own_documents` stay: the Phase B backfill in
+-- 20260726092000_documents_bucket_company_scope.sql has not run, the large
+-- majority of document_attachments rows are still on the legacy key layout,
+-- and dropping the legacy SELECT policy now would make those documents
+-- unreadable. Retiring them is Phase C, gated on the backfill reporting zero
+-- legacy-prefix objects, and it is deliberately not bundled here.
+--
+-- IF EXISTS, because the policy is production-only: on a fresh install, a
+-- preview branch or a self-hosted database this is a no-op, which is the
+-- correct outcome. tests/pg/documents-bucket-worm.pg.test.ts pins the
+-- invariant so a DELETE policy over this bucket cannot come back through a
+-- migration unnoticed.
+--
+-- Refs: #1208, #1207, #1215, 20260726092000_documents_bucket_company_scope.sql
+
+DROP POLICY IF EXISTS users_delete_own_documents ON storage.objects;
+
+-- Defensive: the same hole under this repo's own naming convention. Never
+-- created by any migration here, but a dashboard edit could have used it.
+DROP POLICY IF EXISTS documents_delete_own ON storage.objects;
