@@ -8,7 +8,24 @@
  * changes.
  */
 import { writeFileSync, mkdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
+
+// `server-only` throws on import outside a Next.js server-component graph. The
+// reference builder pulls it in transitively (lib/api/v1/load-routes -> every
+// v1 route -> lib/init -> lib/analytics/posthog-observability ->
+// posthog-server), which broke this script the moment PostHog landed. Nothing
+// here executes request-time code: it only reads exported markdown builders,
+// so a no-op stub is the honest resolution.
+const require = createRequire(import.meta.url)
+const ModuleCtor = require('node:module') as {
+  _load: (request: string, ...rest: unknown[]) => unknown
+}
+const originalLoad = ModuleCtor._load
+ModuleCtor._load = function (request: string, ...rest: unknown[]) {
+  if (request === 'server-only') return {}
+  return originalLoad.call(this, request, ...rest)
+}
 
 const errors = await import('@/lib/docs/content/errors')
 const reference = await import('@/lib/docs/content/reference')
