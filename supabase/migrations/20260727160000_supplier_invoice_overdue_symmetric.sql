@@ -20,13 +20,18 @@ ALTER TABLE public.supplier_invoices
   ADD COLUMN IF NOT EXISTS approved_at timestamptz;
 
 COMMENT ON COLUMN public.supplier_invoices.approved_at IS
-  'When the invoice was attested (godkänd). Written by the approve paths; the overdue un-flip reads it to choose between ''registered'' and ''approved''.';
+  'When the invoice was attested (godkänd). Written by the approve paths; the overdue un-flip reads it to choose between ''registered'' and ''approved''. Workflow marker, not räkenskapsinformation: values on rows updated before 2026-07-27 were backfilled from updated_at (no approval log existed) and are therefore derived, not observed attestation moments. Do not use it as an audit fact for those rows; audit_log holds the actual transitions.';
 
 -- Backfill for rows that currently sit in 'approved': updated_at is the closest
 -- available proxy (there is no approval log), and the value only ever decides
 -- an un-flip target, never a money field. Rows already ON 'overdue' are
 -- deliberately left NULL: whether they were approved before the flip is
 -- unknowable, and 'registered' is the safe, re-approvable resting state.
+--
+-- These backfilled timestamps are derived, not observed: the column comment
+-- above says so, and audit_log (via the audit_supplier_invoices trigger) stays
+-- the record of what actually happened and when. Nothing reads approved_at as
+-- an audit fact; it is a workflow marker for the flip/un-flip decision.
 UPDATE public.supplier_invoices
 SET approved_at = updated_at
 WHERE approved_at IS NULL
