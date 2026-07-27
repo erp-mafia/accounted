@@ -55,12 +55,26 @@ export const POST = withRouteContext(
       })
       .eq('id', id)
       .eq('company_id', companyId)
+      // Optimistic concurrency on the pre-approval state, same guard as the v1
+      // route: the eligibility check above ran on a snapshot, so without this
+      // two concurrent approvals would both write (different) approved_at
+      // values and both emit supplier_invoice.approved.
+      .in('status', ['registered', 'overdue'])
+      .is('approved_at', null)
       .select()
-      .single()
+      .maybeSingle()
 
     if (error) {
       log.error('supplier_invoice update to approved failed', error)
       return errorResponseFromCode('SI_APPROVE_UPDATE_FAILED', log, { requestId })
+    }
+
+    if (!data) {
+      // Lost the race: another approval (or a status change) landed first.
+      return errorResponseFromCode('SI_APPROVE_NOT_REGISTERED', log, {
+        requestId,
+        details: { reason: 'race' },
+      })
     }
 
     // Event emission is non-blocking: the registration entry is created by

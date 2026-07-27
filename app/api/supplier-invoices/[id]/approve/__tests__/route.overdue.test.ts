@@ -29,6 +29,10 @@ const chain: any = {
     return chain
   },
   eq: () => chain,
+  // The write paths pin their compare-and-swap predicates with .in()/.is(),
+  // so the chain has to accept them too.
+  in: () => chain,
+  is: () => chain,
   single: () => Promise.resolve(singleResults.shift() ?? { data: null, error: null }),
   maybeSingle: () => Promise.resolve(singleResults.shift() ?? { data: null, error: null }),
 }
@@ -54,6 +58,8 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
+import { eventBus } from '@/lib/events'
+
 import { POST } from '../route'
 
 describe('POST /api/supplier-invoices/[id]/approve (aged invoices)', () => {
@@ -61,6 +67,9 @@ describe('POST /api/supplier-invoices/[id]/approve (aged invoices)', () => {
     vi.clearAllMocks()
     updatePayloads.length = 0
     singleResults.length = 0
+    // The approve path emits supplier_invoice.approved on the module-level bus;
+    // clear it so handlers registered elsewhere cannot leak into this suite.
+    eventBus.clear()
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
   })
 
@@ -115,6 +124,22 @@ describe('POST /api/supplier-invoices/[id]/approve (aged invoices)', () => {
     expect(response.status).toBe(200)
     expect(updatePayloads[0]).toMatchObject({ status: 'approved' })
     expect(updatePayloads[0].approved_at).toEqual(expect.any(String))
+  })
+
+  it('refuses when the optimistic-concurrency update matches no row', async () => {
+    // Two approvals in flight: the loser's update finds no row still in a
+    // pre-approval state, and must not emit a second approval event.
+    const invoice = makeSupplierInvoice({ id: 'inv-1', status: 'registered', due_date: FUTURE })
+    singleResults.push({ data: invoice, error: null })
+    singleResults.push({ data: null, error: null })
+
+    const emitSpy = vi.spyOn(eventBus, 'emit')
+    const response = await approveRequest()
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_APPROVE_NOT_REGISTERED')
+    expect(emitSpy).not.toHaveBeenCalled()
   })
 
   it('refuses a second approval of an already-attested overdue invoice', async () => {

@@ -78,16 +78,41 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
     getSwedishLocalDate(),
   )
 
-  const { data, error } = await supabase
+  const rewritesStatus = restingStatus !== existing.status
+
+  let update = supabase
     .from('supplier_invoices')
-    .update(restingStatus === existing.status ? body : { ...body, status: restingStatus })
+    .update(rewritesStatus ? { ...body, status: restingStatus } : body)
     .eq('id', id)
     .eq('company_id', companyId)
-    .select()
-    .single()
+
+  if (rewritesStatus) {
+    // Compare-and-swap, but only when this write derives a new status. The
+    // label is computed from facts read a moment ago, so writing it back
+    // unconditionally would let this request overwrite a concurrent cron flip
+    // or approval with a status derived from what those changed. Pinning the
+    // three inputs turns that into zero matched rows, i.e. a conflict the
+    // caller can retry, instead of a silently stale label. Metadata-only
+    // updates need no pin: they never touch status.
+    update = update
+      .eq('status', existing.status)
+      .eq('due_date', existing.due_date)
+    update = existing.approved_at
+      ? update.eq('approved_at', existing.approved_at)
+      : update.is('approved_at', null)
+  }
+
+  const { data, error } = await update.select().maybeSingle()
 
   if (error) {
     return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+  }
+
+  if (!data) {
+    return errorResponseFromCode('SI_EDIT_CONFLICT', log, {
+      requestId,
+      details: { expectedStatus: existing.status, expectedDueDate: existing.due_date },
+    })
   }
 
   return NextResponse.json({ data })

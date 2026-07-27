@@ -3233,10 +3233,19 @@ async function commitApproveSupplierInvoice(
     .update({ status: nextStatus, approved_at: approvedAt })
     .eq('id', id)
     .eq('company_id', companyId)
+    // Optimistic concurrency on the pre-approval state, same guard as the web
+    // and v1 approve routes. Staged operations can be committed twice (retry,
+    // two approvers): without this both writes would land and both would emit
+    // supplier_invoice.approved.
+    .in('status', ['registered', 'overdue'])
+    .is('approved_at', null)
     .select()
-    .single()
+    .maybeSingle()
 
   if (error) return { error: error.message, status: 500 }
+  if (!data) {
+    return { error: 'Fakturan godkändes av någon annan medan operationen väntade', status: 409 }
+  }
 
   try {
     await eventBus.emit({

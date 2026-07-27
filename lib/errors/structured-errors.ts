@@ -1154,6 +1154,13 @@ const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan är redan godkänd eller kan inte godkännas i nuvarande status.',
     message_en: 'The invoice is already approved, or cannot be approved in its current status.',
   },
+  SI_EDIT_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'Leverantörsfakturan ändrades av någon annan (eller av den dagliga förfallokontrollen) medan du redigerade. Ladda om fakturan och försök igen.',
+    message_en:
+      'The supplier invoice changed elsewhere (or in the daily overdue check) while you were editing. Reload the invoice and try again.',
+  },
   SI_EDIT_INVALID_STATUS: {
     httpStatus: 400,
     message_sv:

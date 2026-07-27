@@ -33,6 +33,10 @@ const chain: any = {
     return chain
   },
   eq: () => chain,
+  // The write paths pin their compare-and-swap predicates with .in()/.is(),
+  // so the chain has to accept them too.
+  in: () => chain,
+  is: () => chain,
   single: () => Promise.resolve(singleResults.shift() ?? { data: null, error: null }),
   maybeSingle: () => Promise.resolve(singleResults.shift() ?? { data: null, error: null }),
 }
@@ -176,6 +180,20 @@ describe('PUT /api/supplier-invoices/[id]', () => {
 
     expect(response.status).toBe(200)
     expect(updatePayloads[0]).toEqual({ payment_reference: '1234567890' })
+  })
+
+  it('reports a conflict when the compare-and-swap matches no row', async () => {
+    // The status is derived from facts read a moment ago, so the write pins
+    // them. Zero matched rows means the cron (or another writer) changed the row
+    // in between: better a retryable 409 than a silently stale label.
+    singleResults.push(existingRow({ status: 'overdue', due_date: PAST }))
+    singleResults.push({ data: null, error: null })
+
+    const response = await putRequest({ due_date: FUTURE })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_EDIT_CONFLICT')
   })
 
   it('does not un-flip a credit note into a payable label', async () => {

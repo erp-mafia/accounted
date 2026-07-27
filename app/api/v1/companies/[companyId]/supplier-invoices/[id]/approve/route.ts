@@ -135,6 +135,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .eq('id', invoiceId)
       .in('status', ['registered', 'overdue'])
       .is('approved_at', null)
+      // nextStatus was derived from the due date read above, so pin that too:
+      // a concurrent due-date edit must not be papered over with a label
+      // computed from the pre-edit date.
+      .eq('due_date', invoice.due_date)
       .select(SI_RESPONSE_COLUMNS)
       .maybeSingle()
 

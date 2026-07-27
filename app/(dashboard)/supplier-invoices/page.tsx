@@ -162,16 +162,18 @@ export default function SupplierInvoicesPage() {
       } else {
         toast({ title: t('approved_title'), description: t('approved_description') })
         // Trust the server's status: an attested invoice that is still past due
-        // stays labelled 'overdue' rather than flipping to 'approved'.
+        // stays labelled 'overdue' rather than flipping to 'approved'. An
+        // incomplete payload is not an excuse to invent either field: the row an
+        // operator is about to pay must show real state, so re-read instead.
         const approved = result?.data as Partial<SupplierInvoice> | undefined
+        if (!approved?.status || !approved.approved_at) {
+          fetchInvoices()
+          return
+        }
         setInvoices((prev) =>
           prev.map((inv) =>
             inv.id === id
-              ? {
-                  ...inv,
-                  status: approved?.status ?? 'approved',
-                  approved_at: approved?.approved_at ?? new Date().toISOString(),
-                }
+              ? { ...inv, status: approved.status!, approved_at: approved.approved_at! }
               : inv,
           ),
         )
