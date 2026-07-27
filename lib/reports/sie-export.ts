@@ -307,7 +307,27 @@ function formatAmount(amount: number): string {
 }
 
 /**
- * Escape double quotes in SIE strings
+ * Escape double quotes in SIE strings.
+ *
+ * Quotes only. A literal backslash is deliberately NOT doubled, and it must stay
+ * that way. SIE 4B defines the backslash purely as a marker placed before a
+ * quotation mark and defines no `\\` sequence at all: "Quotation marks in export
+ * fields are to be preceded by a backslash (ASCII 92)", and for the checksum,
+ * "Quotation marks within fields are marked with a 'backslash'. However, only
+ * the quotation marks are to be included in the calculation of the control
+ * total" -- the marker is excluded from #KSUMMA, which is only coherent if it is
+ * not itself data.
+ *
+ * Emitting `\\` for a literal backslash would invent a sequence the format does
+ * not define, land as a doubled backslash in every reader that implements the
+ * spec's single rule (Fortnox, Visma, BL), and skew #KSUMMA. That corrupts a
+ * file kept under BFL 7-year retention.
+ *
+ * Round-tripping is already correct: `a\"b` exports as `a\\"b`, and the parser's
+ * /\\"/g rule (lib/import/sie-parser.ts) recovers `a\"b`.
+ *
+ * CodeQL flags this as js/incomplete-sanitization; it is a false positive here,
+ * because the rule assumes a grammar in which backslash escapes itself.
  */
 function escapeQuotes(str: string): string {
   return str.replace(/"/g, '\\"')

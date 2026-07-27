@@ -378,6 +378,23 @@ export function generateApiKey(mode: ApiKeyMode = 'live'): { key: string; hash: 
   return { key, hash, prefix }
 }
 
+/**
+ * SHA-256, deliberately, and NOT a slow KDF like bcrypt/argon2.
+ *
+ * CodeQL flags this as js/insufficient-password-hash. That rule exists for
+ * user-chosen passwords, which are low-entropy and brute-forceable, so the
+ * defence is to make each guess expensive. This input is not a password: keys
+ * come from generateApiKey as 32 CSPRNG bytes (`gnubok_sk_<base64url>`), and no
+ * work factor moves the needle on a 256-bit random secret.
+ *
+ * A slow KDF would also be actively worse here: this runs on the hot path of
+ * every MCP request, where the hash is the primary-key lookup used to find the
+ * row, so per-request cost is real latency for zero security gain.
+ *
+ * Do NOT "fix" this by changing the algorithm. The hash IS the stored
+ * credential, so a different function invalidates every live `gnubok_sk_` key,
+ * breaking existing MCP connections with no migration path.
+ */
 export function hashApiKey(key: string): string {
   return crypto.createHash('sha256').update(key).digest('hex')
 }
