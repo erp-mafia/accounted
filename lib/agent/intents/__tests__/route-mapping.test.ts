@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { routeToIntent } from '../route-mapping'
+import { routeToIntent, contextRefToTarget } from '../route-mapping'
 
 describe('routeToIntent', () => {
   it('falls back to general.help when pathname is null/undefined/empty', () => {
@@ -108,5 +108,66 @@ describe('routeToIntent', () => {
   it('routes bare /settings without a panel slug to general.help', () => {
     const out = routeToIntent('/settings')
     expect(out.intentId).toBe('general.help')
+  })
+})
+
+describe('contextRefToTarget', () => {
+  /**
+   * Every shape the app actually writes. Collected by grepping the call sites
+   * rather than invented, so a new intent that writes a ref this cannot read
+   * shows up as a chip that never renders, not as a wrong link.
+   */
+  it('resolves each ref the app writes today', () => {
+    expect(contextRefToTarget('invoice:abc-123')).toEqual({
+      label: 'Faktura',
+      href: '/invoices/abc-123',
+    })
+    expect(contextRefToTarget('supplier_invoice:abc-123')).toEqual({
+      label: 'Leverantörsfaktura',
+      href: '/supplier-invoices/abc-123',
+    })
+    expect(contextRefToTarget('transaction:abc-123')).toEqual({
+      label: 'Transaktion',
+      href: '/transactions',
+    })
+    expect(contextRefToTarget('verifikation:new')).toEqual({
+      label: 'Verifikation',
+      href: '/bookkeeping',
+    })
+    expect(contextRefToTarget('bokslut:overview')).toEqual({
+      label: 'Bokslut',
+      href: '/bookkeeping/year-end',
+    })
+    expect(contextRefToTarget('kpi:översikt')).toEqual({ label: 'Nyckeltal', href: '/kpi' })
+  })
+
+  it('names the document inbox without linking it', () => {
+    // It is an extension route under /e/[sector]; core cannot hardcode a path
+    // that only exists when the extension is enabled.
+    expect(contextRefToTarget('inbox:bulk')).toEqual({
+      label: 'Dokumentinkorgen',
+      href: null,
+    })
+  })
+
+  it('returns nothing rather than a broken chip for refs it cannot read', () => {
+    expect(contextRefToTarget(null)).toBeNull()
+    expect(contextRefToTarget(undefined)).toBeNull()
+    expect(contextRefToTarget('')).toBeNull()
+    expect(contextRefToTarget('invoice')).toBeNull()
+    expect(contextRefToTarget('invoice:')).toBeNull()
+    expect(contextRefToTarget(':abc')).toBeNull()
+    expect(contextRefToTarget('flow_run:abc')).toBeNull()
+  })
+
+  it('keeps ids that need escaping out of the path', () => {
+    // Ids reach this from the database, not from the router.
+    expect(contextRefToTarget('invoice:a b/c')?.href).toBe('/invoices/a%20b%2Fc')
+  })
+
+  it('keeps the id intact when it contains a colon', () => {
+    // Split on the FIRST colon: a ref like kpi:översikt:2026 must not lose its
+    // tail or be read as an unknown kind.
+    expect(contextRefToTarget('kpi:översikt:2026')).toEqual({ label: 'Nyckeltal', href: '/kpi' })
   })
 })

@@ -113,3 +113,56 @@ export function routeToIntent(pathname: string | null | undefined): RouteIntent 
 
   return GENERAL_HELP(pathname)
 }
+
+/**
+ * The reverse direction: what a stored `context_ref` was about.
+ *
+ * `agent_conversations.context_ref` has been written since the first intents
+ * landed and has never been read by anything. Resuming a thread from three days
+ * ago therefore showed the messages with no indication of which invoice, which
+ * verifikat, which bokslut it concerned, even though the row knew. That matters
+ * more now the panel docks beside the page: "what is this conversation anchored
+ * to" is a question the surface should answer, not the user's memory.
+ *
+ * A data map rather than a switch in a component (plan seam 8.5), so flows can
+ * add their own ref kinds here and every surface picks them up at once.
+ */
+export interface ContextRefTarget {
+  /** Human noun for the thing, already in Swedish. */
+  label: string
+  /** Where to go to look at it, or null when there is no stable page. */
+  href: string | null
+}
+
+export function contextRefToTarget(ref: string | null | undefined): ContextRefTarget | null {
+  if (!ref) return null
+  const separator = ref.indexOf(':')
+  if (separator <= 0) return null
+  const kind = ref.slice(0, separator)
+  const id = ref.slice(separator + 1)
+  if (!id) return null
+
+  switch (kind) {
+    case 'invoice':
+      return { label: 'Faktura', href: `/invoices/${encodeURIComponent(id)}` }
+    case 'supplier_invoice':
+      return { label: 'Leverantörsfaktura', href: `/supplier-invoices/${encodeURIComponent(id)}` }
+    // No /transactions/[id] route exists: the list is the only page that can
+    // show it, so that is where the chip goes rather than a link that 404s.
+    case 'transaction':
+      return { label: 'Transaktion', href: '/transactions' }
+    case 'verifikation':
+      return { label: 'Verifikation', href: '/bookkeeping' }
+    case 'bokslut':
+      return { label: 'Bokslut', href: '/bookkeeping/year-end' }
+    case 'kpi':
+      return { label: 'Nyckeltal', href: '/kpi' }
+    // The document inbox is an extension, mounted under /e/[sector]. Core must
+    // not import from @/extensions or hardcode a route that only exists when
+    // the extension is enabled, so this names the context without linking it.
+    case 'inbox':
+      return { label: 'Dokumentinkorgen', href: null }
+    default:
+      return null
+  }
+}

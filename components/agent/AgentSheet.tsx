@@ -1,7 +1,16 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { X, Expand, Shrink, PanelRightClose, Eraser, History, ChevronLeft, Loader2 } from 'lucide-react'
+import {
+  X,
+  Expand,
+  Shrink,
+  PanelRightClose,
+  Eraser,
+  History,
+  ChevronLeft,
+  Loader2,
+} from 'lucide-react'
 import AgentChat, {
   attachStagedOperations,
   normalizeStoredMessages,
@@ -9,6 +18,7 @@ import AgentChat, {
 } from './AgentChat'
 import type { StoredStagedOperation } from '@/types'
 import type { AgentStatusEvent } from './agent-status'
+import ContextChip from './ContextChip'
 import AgentAvatar from './AgentAvatar'
 import AgentSessionList from './AgentSessionList'
 import SandboxAgentPreview from './SandboxAgentPreview'
@@ -98,6 +108,10 @@ export default function AgentSheet({
   const sheetTitle = intentToTitle(intentId, agentName)
   const displayTitle = loaded ? (loaded.title ?? intentToTitle(loaded.intentId, agentName)) : sheetTitle
   const activeConversationId = loaded?.id ?? conversationId
+  // A resumed thread's stored ref wins: it says what THAT conversation was
+  // about, which is the whole reason to show this. Falls back to the ref the
+  // panel was opened with for a thread that has not been persisted yet.
+  const activeContextRef = loaded ? loaded.contextRef : (contextRef ?? null)
   const sheetRef = useRef<HTMLDivElement | null>(null)
   // Monotonic counter so a slow conversation fetch can't clobber a newer pick.
   const selectSeqRef = useRef(0)
@@ -257,7 +271,16 @@ export default function AgentSheet({
             </button>
           )}
           <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName ?? 'Assistent'} />
-          <h2 className="font-display text-lg tracking-tight truncate">{displayTitle}</h2>
+          <div className="min-w-0 flex-1">
+            <h2 className="font-display text-lg leading-tight tracking-tight truncate">
+              {displayTitle}
+            </h2>
+            {/* What this conversation is anchored to. context_ref has been
+                stored since the first intents shipped and read by nothing, so a
+                thread resumed days later gave no clue which invoice it was
+                about. Matters more now the panel sits BESIDE the page. */}
+            <ContextChip contextRef={activeContextRef} className="mt-0.5" />
+          </div>
           <div className="ml-auto flex items-center gap-1">
             {/* Grow/shrink the panel in place: NEVER navigates away, so the
                 user stays on the current page. Hidden on mobile where the sheet
