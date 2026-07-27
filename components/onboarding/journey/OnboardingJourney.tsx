@@ -93,6 +93,7 @@ export default function OnboardingJourney({
   const [narration, setNarration] = useState<string | null>(null)
   const [monogram, setMonogram] = useState<string | null>(null)
   const [dupName, setDupName] = useState<string | null>(null)
+  const [dupElsewhere, setDupElsewhere] = useState(false)
 
   const station = stationOfStep(state.step)
   const entity = state.settings.entity_type
@@ -128,6 +129,7 @@ export default function OnboardingJourney({
         return
       }
       setDupName(null)
+      setDupElsewhere(false)
       dispatch({ type: 'ORG_SUBMITTED', orgNumber: raw })
       fetchCompanyLookup(raw, { ticEnabled }).then((outcome) => {
         dispatch({ type: 'LOOKUP_RESULT', outcome })
@@ -137,6 +139,7 @@ export default function OnboardingJourney({
           if (!res.ok) return
           const { data } = await res.json()
           setDupName(data?.companies?.[0]?.name ?? null)
+          setDupElsewhere(Boolean(data?.exists_elsewhere))
         })
         .catch(() => {})
     },
@@ -693,6 +696,16 @@ export default function OnboardingJourney({
                   <span className="jny-f is-on" style={{ transitionDelay: `${lookupFacts.length * 150}ms` }}>
                     {lookupFacts.length > 0 ? ' · ' : ''}
                     {t('journey_dup_note', { name: dupName })}
+                  </span>
+                ) : null}
+                {!dupName && dupElsewhere && station === 0 ? (
+                  // Cross-account duplicate (#1231): the same org number
+                  // already exists under another Accounted account. Shown
+                  // only when there is no own-account match, which is the
+                  // more specific hint.
+                  <span className="jny-f is-on is-warn" style={{ transitionDelay: `${lookupFacts.length * 150}ms` }}>
+                    {lookupFacts.length > 0 ? ' · ' : ''}
+                    {t('journey_dup_elsewhere_note')}
                   </span>
                 ) : null}
               </div>

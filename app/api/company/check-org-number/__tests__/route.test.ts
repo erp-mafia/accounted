@@ -2,13 +2,26 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
+  createServiceClient: vi.fn(),
 }))
 
-import { createClient } from '@/lib/supabase/server'
+import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { GET } from '../route'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
 const mockCreateClient = vi.mocked(createClient)
+const mockCreateServiceClient = vi.mocked(createServiceClient)
+
+/** Service-client mock for the cross-account probe: one companies query. */
+function buildServiceClient(result: { data?: unknown; error?: unknown }) {
+  const resolved = { data: result.data ?? null, error: result.error ?? null }
+  const chain: Record<string, unknown> = {}
+  for (const m of ['select', 'eq', 'is', 'limit']) {
+    chain[m] = () => chain
+  }
+  ;(chain as { then?: unknown }).then = (resolve: (v: unknown) => void) => resolve(resolved)
+  return { from: vi.fn(() => chain) }
+}
 
 /**
  * Minimal authenticated-client mock. `companies.data` seeds what the RLS-scoped
@@ -37,6 +50,8 @@ function buildSupabase(opts: {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Default: nothing exists anywhere else. Individual tests override.
+  mockCreateServiceClient.mockReturnValue(buildServiceClient({ data: [] }) as never)
 })
 
 describe('GET /api/company/check-org-number', () => {
@@ -92,6 +107,52 @@ describe('GET /api/company/check-org-number', () => {
     const { status, body } = await parseJsonResponse<{ data: { exists: boolean } }>(res)
     expect(status).toBe(200)
     expect(body.data.exists).toBe(false)
+  })
+
+  it('reports exists_elsewhere when the org number lives in another account', async () => {
+    mockCreateClient.mockResolvedValue(
+      buildSupabase({ user: { id: 'u1' }, companies: { data: [] } }) as never,
+    )
+    mockCreateServiceClient.mockReturnValue(
+      buildServiceClient({ data: [{ id: 'other-account-co' }] }) as never,
+    )
+    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=5560125790'))
+    const { status, body } = await parseJsonResponse<{
+      data: { exists: boolean; companies: unknown[]; exists_elsewhere: boolean }
+    }>(res)
+    expect(status).toBe(200)
+    expect(body.data.exists).toBe(false)
+    // Existence only: the other account's company is never listed.
+    expect(body.data.companies).toEqual([])
+    expect(body.data.exists_elsewhere).toBe(true)
+  })
+
+  it('does not report exists_elsewhere when all matches are the caller’s own', async () => {
+    mockCreateClient.mockResolvedValue(
+      buildSupabase({
+        user: { id: 'u1' },
+        companies: { data: [{ id: 'c1', name: 'Acme AB' }] },
+      }) as never,
+    )
+    mockCreateServiceClient.mockReturnValue(
+      buildServiceClient({ data: [{ id: 'c1' }] }) as never,
+    )
+    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=5560125790'))
+    const { body } = await parseJsonResponse<{ data: { exists_elsewhere: boolean } }>(res)
+    expect(body.data.exists_elsewhere).toBe(false)
+  })
+
+  it('fails soft to exists_elsewhere:false when the probe errors', async () => {
+    mockCreateClient.mockResolvedValue(
+      buildSupabase({ user: { id: 'u1' }, companies: { data: [] } }) as never,
+    )
+    mockCreateServiceClient.mockReturnValue(
+      buildServiceClient({ error: { message: 'probe boom' } }) as never,
+    )
+    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=5560125790'))
+    const { status, body } = await parseJsonResponse<{ data: { exists_elsewhere: boolean } }>(res)
+    expect(status).toBe(200)
+    expect(body.data.exists_elsewhere).toBe(false)
   })
 
   it('returns 500 when the query errors', async () => {

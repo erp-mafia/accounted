@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import DashboardContent from '@/components/dashboard/DashboardContent'
 import { getWorklistCounts, listSuggestedMatches } from '@/lib/worklist'
 import { listResumeItems } from '@/lib/worklist/resume'
+import { shouldShowOtherAccountHint } from '@/lib/company/other-account-hint'
 import type { OnboardingProgress } from '@/types'
 import {
   getDashboardAuthContext,
@@ -48,6 +49,7 @@ export default async function DashboardPage() {
     worklist,
     suggestedMatches,
     resumeItems,
+    otherAccountHint,
   ] = await Promise.all([
     getDashboardSettings(),
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -68,6 +70,10 @@ export default async function DashboardPage() {
     listSuggestedMatches(supabase, companyId, 5),
     // In-progress work for the Fortsätt pane: pure draft-state derivation.
     listResumeItems(supabase, companyId, now),
+    // Wrong-account hint (#1231): true only when this account has zero
+    // journal entries while a same-orgnr company with real bookkeeping
+    // exists in another account. Common case costs one existence probe.
+    shouldShowOtherAccountHint(supabase),
   ])
 
   // A FAILED settings read must not masquerade as "onboarding not done":
@@ -122,6 +128,7 @@ export default async function DashboardPage() {
       worklist={worklist}
       suggestedMatches={suggestedMatches}
       resumeItems={resumeItems}
+      otherAccountHint={otherAccountHint}
       onboardingProgress={onboardingProgress}
       initialSetup={{
         path: settings.initial_setup_path ?? null,

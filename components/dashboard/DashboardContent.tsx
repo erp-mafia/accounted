@@ -2,7 +2,10 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
+import { createClient } from '@/lib/supabase/client'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useCapability, useCompany } from '@/contexts/CompanyContext'
@@ -30,6 +33,12 @@ interface DashboardContentProps {
   suggestedMatches: SuggestedMatch[]
   /** In-progress work for the Fortsätt pane (lib/worklist/resume). */
   resumeItems: ResumeItem[]
+  /**
+   * True when this account looks bookkeeping-empty while a same-orgnr
+   * company with real bookkeeping exists in another account (#1231): the
+   * user probably signed in with the wrong login (stale BankID account).
+   */
+  otherAccountHint?: boolean
   onboardingProgress?: OnboardingProgress
   initialSetup: InitialSetupState
   /**
@@ -55,6 +64,7 @@ export default function DashboardContent({
   worklist,
   suggestedMatches,
   resumeItems,
+  otherAccountHint = false,
   onboardingProgress,
   initialSetup,
   agentBuilt = true,
@@ -62,6 +72,15 @@ export default function DashboardContent({
   const t = useTranslations('dashboard')
   const hasAi = useCapability(CAPABILITY.ai)
   const { company } = useCompany()
+  const router = useRouter()
+
+  // Wrong-account hint action: sign out so the user can come back in with
+  // their other login (email+password). Same flow as SandboxBanner.
+  async function handleSwitchAccount() {
+    const supabase = createClient()
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
 
   // Time-of-day greeting (concept: "God morgon, Jakob."). Client-side clock
   // on purpose (the user's local morning, not the server's), captured once
@@ -89,6 +108,14 @@ export default function DashboardContent({
           {dateLine}
           {company?.name ? ` · ${company.name}` : ''}
         </p>
+        {otherAccountHint && (
+          <AttnLine
+            className="mt-3"
+            action={{ label: t('other_account_hint_action'), onClick: handleSwitchAccount }}
+          >
+            {t('other_account_hint')}
+          </AttnLine>
+        )}
       </section>
 
       <NewUserChecklist
