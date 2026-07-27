@@ -123,6 +123,11 @@ interface RunTurnArgs {
 // run away forever. Real conversations rarely use more than 5-6 round trips.
 const MAX_TOOL_ITERATIONS = 12
 
+// How many stored messages replay into a turn. Generous enough that no real
+// conversation notices (a long working session is tens of messages, not
+// hundreds) while bounding what a thread costs to continue.
+export const MAX_HISTORY_MESSAGES = 200
+
 // Bound a tool result before it enters the model context. Read tools (above
 // all gnubok_get_document_content, which returns full OCR/PDF text) can return
 // arbitrarily large payloads. Unbounded, that payload is re-sent on every later
@@ -613,14 +618,24 @@ async function loadConversationMessages(
   supabase: SupabaseClient,
   conversationId: string,
 ): Promise<{ role: 'user' | 'assistant'; content: ContentBlock }[]> {
+  // Newest-first with a cap, then flipped back: an unbounded load replays every
+  // persisted tool result (each up to MAX_TOOL_RESULT_CHARS) on every turn, so
+  // cost grows linearly with thread age and a long-lived pinned conversation
+  // eventually exceeds the context window. Past that point every turn fails and
+  // the store is append-only, so the thread is unusable for good.
+  //
+  // Slicing a tail can orphan a tool_result whose tool_use fell off the top, or
+  // strand a tool_use whose result did: repairDanglingToolUse below normalizes
+  // both, which is what makes the cap safe.
   const { data } = await supabase
     .from('agent_messages')
     .select('role, content')
     .eq('conversation_id', conversationId)
-    .order('created_at', { ascending: true })
+    .order('created_at', { ascending: false })
+    .limit(MAX_HISTORY_MESSAGES)
 
   // role='tool' messages were written as user messages on the Anthropic side.
-  const messages = (data ?? []).map((m: { role: string; content: ContentBlock }) => {
+  const messages = (data ?? []).slice().reverse().map((m: { role: string; content: ContentBlock }) => {
     if (m.role === 'assistant') {
       return { role: 'assistant' as const, content: m.content as ContentBlock }
     }

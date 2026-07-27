@@ -216,7 +216,10 @@ describe('runChatTurn: memory_captured emission', () => {
     const messagesQueryChain = {
       select: () => messagesQueryChain,
       eq: () => messagesQueryChain,
-      order: () => Promise.resolve({ data: [], error: null }),
+      order: () => messagesQueryChain,
+      // History is capped (MAX_HISTORY_MESSAGES) so a long thread cannot grow
+      // past the context window; the load ends on .limit().
+      limit: () => Promise.resolve({ data: [], error: null }),
     }
     const profileChain = {
       select: () => profileChain,
