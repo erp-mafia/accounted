@@ -9,15 +9,17 @@
  * live BankID session), it just frees the personnummer.
  *
  * What it does on --execute:
- * 1. deletes the bankid_identities row for the user,
- * 2. clears app_metadata.bankid_linked (read-merge-write: updateUserById
- *    replaces app_metadata wholesale, see app/api/account/password/route.ts),
- * 3. writes an append-only audit_log row (SECURITY_EVENT) carrying the full
- *    old row so the action is traceable and restorable.
+ * 1. writes an append-only audit_log row (SECURITY_EVENT) carrying the full
+ *    old row FIRST: if the audit insert fails nothing is deleted, and if the
+ *    delete fails the audit row merely over-records (the safe direction),
+ * 2. deletes the bankid_identities row for the user,
+ * 3. clears app_metadata.bankid_linked (read-merge-write: updateUserById
+ *    replaces app_metadata wholesale, see app/api/account/password/route.ts).
  *
- * The dry run prints the row snapshot and account context so you can verify
- * you have the right user BEFORE anything changes. Save that output: it is
- * also your restore path.
+ * The dry run prints only non-sensitive account context (never the
+ * personnummer hash or ciphertext: the unsalted hash is brute-forceable
+ * over the small personnummer space). The restore path is the audit_log
+ * row's old_state, readable with the service key.
  *
  * Usage:
  *   npx tsx scripts/support/unlink-bankid.ts --email user@example.se --reason "GH-1234"            # dry run
@@ -94,7 +96,7 @@ async function main() {
 
   const { data: identity, error: identityError } = await sb
     .from('bankid_identities')
-    .select('user_id, personal_number_hash, personal_number_enc, given_name, surname, created_at, updated_at')
+    .select('id, user_id, personal_number_hash, personal_number_enc, given_name, surname, linked_at, created_at, updated_at')
     .eq('user_id', userId)
     .maybeSingle()
   if (identityError) {
@@ -107,25 +109,34 @@ async function main() {
   }
 
   // Account context so the operator can confirm this is the STALE account
-  // (the expected shape: few companies, no journal entries).
-  const { data: memberships } = await sb
+  // (the expected shape: few companies, no journal entries). Fail closed:
+  // a failed context query must never make an unknown account look empty.
+  const { data: memberships, error: membershipsError } = await sb
     .from('company_members')
     .select('company_id, companies:company_id(name, org_number)')
     .eq('user_id', userId)
+  if (membershipsError) {
+    console.error('company_members lookup failed, aborting:', membershipsError.message)
+    process.exit(1)
+  }
   const companyIds = (memberships ?? []).map((m) => m.company_id)
   let entryCount = 0
   if (companyIds.length > 0) {
-    const { count } = await sb
+    const { count, error: entriesError } = await sb
       .from('journal_entries')
       .select('*', { count: 'exact', head: true })
       .in('company_id', companyIds)
-    entryCount = count ?? 0
+    if (entriesError || count === null) {
+      console.error('journal_entries count failed, aborting:', entriesError?.message ?? 'null count')
+      process.exit(1)
+    }
+    entryCount = count
   }
 
   console.log('-- BankID unlink ------------------------------------------')
   console.log('account:        ', authUser.user.email, `(${userId})`)
   console.log('bankid holder:  ', [identity.given_name, identity.surname].filter(Boolean).join(' '))
-  console.log('linked since:   ', identity.created_at)
+  console.log('linked since:   ', identity.linked_at)
   console.log('companies:      ', (memberships ?? []).map((m) => {
     const c = m.companies as unknown as { name?: string; org_number?: string } | null
     return `${c?.name ?? '?'} (${c?.org_number ?? 'no orgnr'})`
@@ -135,8 +146,7 @@ async function main() {
     console.log('WARNING: this account has real bookkeeping. Unlinking BankID from an')
     console.log('ACTIVE account is unusual: double-check you have the right one.')
   }
-  console.log('row snapshot (KEEP THIS: restore = re-insert):')
-  console.log(JSON.stringify(identity))
+  console.log('identity row id: ', identity.id)
   console.log('-----------------------------------------------------------')
 
   if (!EXECUTE) {
@@ -144,13 +154,32 @@ async function main() {
     return
   }
 
+  // Append-only audit trail FIRST, so a partial failure can never leave a
+  // deletion without a trace. The full old row (including hash + ciphertext)
+  // lives only here, RLS-protected; user_id = the affected user, so the
+  // entry is visible to them under the audit_log RLS select policy.
+  const { error: auditError } = await sb.from('audit_log').insert({
+    user_id: userId,
+    action: 'SECURITY_EVENT',
+    table_name: 'bankid_identities',
+    record_id: identity.id,
+    old_state: identity,
+    description: `support unlink-bankid (delete follows this entry): ${REASON}`,
+  })
+  if (auditError) {
+    console.error('audit_log insert failed, aborting BEFORE delete. Nothing changed.')
+    console.error('Error:', auditError.message)
+    process.exit(1)
+  }
+
   const { error: deleteError } = await sb
     .from('bankid_identities')
     .delete()
-    .eq('user_id', userId)
-    .eq('personal_number_hash', identity.personal_number_hash)
+    .eq('id', identity.id)
   if (deleteError) {
-    console.error('DELETE failed, nothing changed:', deleteError.message)
+    console.error('DELETE failed AFTER the audit row was written: the audit entry')
+    console.error(`(record_id ${identity.id}) over-records; the identity row still exists.`)
+    console.error('Error:', deleteError.message)
     process.exit(1)
   }
 
@@ -163,23 +192,8 @@ async function main() {
     console.error('app_metadata update failed (unlink itself succeeded):', metaError.message)
   }
 
-  // Append-only audit trail. user_id = the affected user, so the entry is
-  // visible to them under the audit_log RLS select policy.
-  const { error: auditError } = await sb.from('audit_log').insert({
-    user_id: userId,
-    action: 'SECURITY_EVENT',
-    table_name: 'bankid_identities',
-    record_id: userId,
-    old_state: identity,
-    description: `support unlink-bankid: ${REASON}`,
-  })
-  if (auditError) {
-    console.error('audit_log insert failed. The unlink went through; file the printed')
-    console.error('snapshot above manually. Error:', auditError.message)
-    process.exit(1)
-  }
-
-  console.log('Unlinked. The user can now link BankID from their other account:')
+  console.log('Unlinked. Restore path: audit_log old_state for record_id', identity.id)
+  console.log('The user can now link BankID from their other account:')
   console.log('password login there, then Inställningar → Konto → koppla BankID.')
 }
 

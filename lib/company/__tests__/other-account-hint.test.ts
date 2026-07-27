@@ -22,7 +22,7 @@ function buildClient(resultsByTable: Record<string, { data?: unknown; error?: un
         error: resultsByTable[table]?.error ?? null,
       }
       const chain: Record<string, unknown> = {}
-      for (const m of ['select', 'eq', 'in', 'is', 'limit']) {
+      for (const m of ['select', 'eq', 'in', 'is', 'limit', 'order', 'range']) {
         chain[m] = () => chain
       }
       ;(chain as { then?: unknown }).then = (resolve: (v: unknown) => void) => resolve(result)

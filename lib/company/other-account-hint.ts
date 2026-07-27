@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Should the Hem page hint that the user may be signed in to the wrong
@@ -21,15 +22,25 @@ import { createServiceClient } from '@/lib/supabase/server'
  */
 export async function shouldShowOtherAccountHint(supabase: SupabaseClient): Promise<boolean> {
   try {
-    // RLS scopes both reads to the caller's memberships.
-    const [{ data: ownCompanies, error: companiesError }, { data: ownEntries, error: entriesError }] =
-      await Promise.all([
-        supabase.from('companies').select('id, org_number').is('archived_at', null),
-        supabase.from('journal_entries').select('id').limit(1),
-      ])
+    // RLS scopes both reads to the caller's memberships. Company lists are
+    // paginated with fetchAllRows (PostgREST caps at 1000 rows; a byrå user
+    // can belong to many companies); it throws on error, which the outer
+    // catch turns into false. The journal_entries read stays a bare
+    // limit(1): it is an existence probe, not a listing.
+    const [ownCompanies, { data: ownEntries, error: entriesError }] = await Promise.all([
+      fetchAllRows<{ id: string; org_number: string | null }>(({ from, to }) =>
+        supabase
+          .from('companies')
+          .select('id, org_number')
+          .is('archived_at', null)
+          .order('id')
+          .range(from, to),
+      ),
+      supabase.from('journal_entries').select('id').limit(1),
+    ])
 
-    if (companiesError || entriesError) return false
-    if (!ownCompanies || ownCompanies.length === 0) return false
+    if (entriesError) return false
+    if (ownCompanies.length === 0) return false
     if ((ownEntries ?? []).length > 0) return false
 
     const ownIds = new Set(ownCompanies.map((c) => c.id))
@@ -39,14 +50,17 @@ export async function shouldShowOtherAccountHint(supabase: SupabaseClient): Prom
     if (orgNumbers.length === 0) return false
 
     const service = createServiceClient()
-    const { data: sameOrgCompanies, error: sameOrgError } = await service
-      .from('companies')
-      .select('id')
-      .in('org_number', orgNumbers)
-      .is('archived_at', null)
+    const sameOrgCompanies = await fetchAllRows<{ id: string }>(({ from, to }) =>
+      service
+        .from('companies')
+        .select('id')
+        .in('org_number', orgNumbers)
+        .is('archived_at', null)
+        .order('id')
+        .range(from, to),
+    )
 
-    if (sameOrgError) return false
-    const otherIds = (sameOrgCompanies ?? []).map((c) => c.id).filter((id) => !ownIds.has(id))
+    const otherIds = sameOrgCompanies.map((c) => c.id).filter((id) => !ownIds.has(id))
     if (otherIds.length === 0) return false
 
     const { data: otherEntries, error: otherEntriesError } = await service
