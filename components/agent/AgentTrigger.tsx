@@ -2,7 +2,9 @@
 
 import { useAgentSheet } from './AgentSheetProvider'
 import { usePathname, useRouter } from 'next/navigation'
+import { Loader2 } from 'lucide-react'
 import AgentAvatar from './AgentAvatar'
+import { collapsedStatusLabel } from './agent-status'
 import { routeToIntent } from '@/lib/agent/intents/route-mapping'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -27,7 +29,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 // "Fråga assistenten" in Dokumentinkorgen: both passing a transaction_id the
 // pathname-only FAB can't know.)
 export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
-  const { openAgentSheet, expandAgentSheet, isOpen, collapsed, identity } = useAgentSheet()
+  const { openAgentSheet, expandAgentSheet, isOpen, collapsed, status, identity } = useAgentSheet()
   const pathname = usePathname()
   const router = useRouter()
   const hasAi = useCapability(CAPABILITY.ai)
@@ -71,13 +73,22 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   // AI assistant runs on a paid cloud service. Without the capability, opening
   // the sheet would land the user in a chat whose send is dead. Keep the FAB
   // visible (it's the conversion surface) but route it to billing instead.
-  const labelText = collapsed
-    ? `Fortsätt med ${name}`
-    : !hasAi
-      ? `Uppgradera för att använda ${name}`
-      : dispatch.labelSuffix
-        ? `Fråga ${name} ${dispatch.labelSuffix}`
-        : `Fråga ${name}`
+  // A minimized session used to be silent: the agent could be three tool calls
+  // into a booking, or finished ten minutes ago, and the pill said "Fortsätt
+  // med Anna" either way. While hidden, the status channel does the talking.
+  const statusText = collapsed ? collapsedStatusLabel(status, name) : null
+  const working = status.activity === 'working' || status.activity === 'detached'
+  const finished = collapsed && status.activity === 'done'
+
+  const labelText =
+    statusText ??
+    (collapsed
+      ? `Fortsätt med ${name}`
+      : !hasAi
+        ? `Uppgradera för att använda ${name}`
+        : dispatch.labelSuffix
+          ? `Fråga ${name} ${dispatch.labelSuffix}`
+          : `Fråga ${name}`)
 
   const handleClick = () => {
     // Collapsed → bring the existing session back, don't start a new one.
@@ -104,13 +115,26 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // no mobile nav to worry about.
       className="fixed right-4 z-30 flex h-12 max-w-[calc(100vw-2rem)] items-center gap-2 rounded-full bg-foreground pl-2 pr-4 text-background shadow-lg hover:bg-foreground/90 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] md:bottom-4"
       aria-label={labelText}
+      // The label changes on its own while the panel is hidden, so it has to be
+      // announced rather than only redrawn. Polite: it never interrupts.
+      aria-live="polite"
     >
-      <AgentAvatar
-        avatarId={identity.avatarId}
-        size="sm"
-        className="ring-2 ring-background/20 shrink-0"
-        alt={name}
-      />
+      <span className="relative shrink-0">
+        <AgentAvatar
+          avatarId={identity.avatarId}
+          size="sm"
+          className="ring-2 ring-background/20"
+          alt={name}
+        />
+        {/* An answer waiting behind a hidden panel is the one thing worth a
+            dot: it is unread, not in progress. */}
+        {finished && (
+          <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-foreground" />
+        )}
+      </span>
+      {working && collapsed && (
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" />
+      )}
       <span className="text-sm font-medium truncate">{labelText}</span>
     </button>
   )

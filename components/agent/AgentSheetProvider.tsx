@@ -1,7 +1,21 @@
 'use client'
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useReducer,
+  useState,
+} from 'react'
 import dynamic from 'next/dynamic'
+import {
+  INITIAL_AGENT_STATUS,
+  reduceAgentStatus,
+  type AgentStatus,
+  type AgentStatusEvent,
+} from './agent-status'
 
 // The sheet is a lazy chunk, and it used to have no loading state at all: a
 // click on the launcher produced NOTHING until the chunk arrived, then the
@@ -134,6 +148,14 @@ interface AgentSheetContextValue {
   isOpen: boolean
   // True while a session exists but is minimized off-screen.
   collapsed: boolean
+  // What the assistant is doing, for surfaces outside the panel (today the
+  // floating trigger). See agent-status.ts: one channel, so a durable
+  // background run can publish to it later without a second one.
+  status: AgentStatus
+  publishAgentStatus: (event: AgentStatusEvent) => void
+  // Width in px the docked panel is claiming from the page, or null when it is
+  // overlaying instead. Set by the panel, read by the frame layout.
+  setDockWidth: (px: number | null) => void
   // Agent name + avatar: set once from the server-loaded agent_profile
   // and exposed through context so the trigger / chat headers can render
   // them without their own fetches. Null when the user hasn't verified a
@@ -157,6 +179,33 @@ export function AgentSheetProvider({ children, identity }: AgentSheetProviderPro
   // Bumped by restartAgentSheet to force a fresh AgentChat mount (a new thread)
   // on the same intent, without closing the sheet.
   const [restartNonce, setRestartNonce] = useState(0)
+  const [status, publishAgentStatus] = useReducer(reduceAgentStatus, INITIAL_AGENT_STATUS)
+  const [dockWidth, setDockWidth] = useState<number | null>(null)
+
+  // Visibility drives whether a finished turn is news or not, so it is derived
+  // from the session state rather than reported by the panel: closing counts as
+  // hidden just like collapsing, and a panel that never opened is neither.
+  const panelVisible = activeArgs !== null && !collapsed
+  useEffect(() => {
+    publishAgentStatus({ type: 'visibility', visible: panelVisible })
+  }, [panelVisible])
+
+  // Dock the panel into the frame instead of over it: the page panel gives up
+  // its right margin so the content the user is asking about stays readable
+  // beside the answer. Written as a CSS variable rather than a class on <main>
+  // because the frame layout is a server component; globals.css seeds the
+  // default so the first paint is not a jump.
+  useEffect(() => {
+    const root = document.documentElement
+    if (dockWidth === null) {
+      root.style.removeProperty('--agent-dock-w')
+      return
+    }
+    root.style.setProperty('--agent-dock-w', `${dockWidth}px`)
+    return () => {
+      root.style.removeProperty('--agent-dock-w')
+    }
+  }, [dockWidth])
 
   const openAgentSheet = useCallback((args: OpenAgentSheetArgs) => {
     setActiveArgs(args)
@@ -166,6 +215,8 @@ export function AgentSheetProvider({ children, identity }: AgentSheetProviderPro
   const closeAgentSheet = useCallback(() => {
     setActiveArgs(null)
     setCollapsed(false)
+    setDockWidth(null)
+    publishAgentStatus({ type: 'reset' })
   }, [])
 
   const collapseAgentSheet = useCallback(() => setCollapsed(true), [])
@@ -189,6 +240,9 @@ export function AgentSheetProvider({ children, identity }: AgentSheetProviderPro
       restartAgentSheet,
       isOpen: activeArgs !== null,
       collapsed,
+      status,
+      publishAgentStatus,
+      setDockWidth,
       identity: resolvedIdentity,
     }),
     [
@@ -199,6 +253,7 @@ export function AgentSheetProvider({ children, identity }: AgentSheetProviderPro
       restartAgentSheet,
       activeArgs,
       collapsed,
+      status,
       resolvedIdentity,
     ],
   )
@@ -214,6 +269,8 @@ export function AgentSheetProvider({ children, identity }: AgentSheetProviderPro
           contextRef={activeArgs.contextRef}
           seedUserMessage={activeArgs.seedUserMessage}
           collapsed={collapsed}
+          onStatus={publishAgentStatus}
+          onDockWidthChange={setDockWidth}
           onCollapse={collapseAgentSheet}
           onRestart={restartAgentSheet}
           onClose={closeAgentSheet}

@@ -19,6 +19,11 @@
      variable so they stay in lockstep. */
   --nav-w: 248px;
 
+  /* Width the docked assistant panel claims from the page panel. Default is
+     the plain frame gutter, so the layout is correct before any JS runs; the
+     agent provider raises it while the panel is docked and clears it again. */
+  --agent-dock-w: 10px;
+
   /* Grayscale Chrome Palette: paper white + warm beige */
 
   --background: 0 0% 100%;

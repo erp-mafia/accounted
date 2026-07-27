@@ -24,6 +24,7 @@ import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import ApprovalCard from './ApprovalCard'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { StoredStagedOperation } from '@/types'
+import type { AgentStatusEvent } from './agent-status'
 
 // Markdown parser loads separately from the chat surface: react-markdown +
 // remark-gfm pull in the whole unified/remark tree.
@@ -166,6 +167,9 @@ export interface AgentChatProps {
   // Optional vertical padding override: defaults to py-6 inside the
   // scroller. The full-page chat uses py-8 for breathing room.
   scrollerClassName?: string
+  // Publishes turn boundaries and the current tool to the shared status
+  // channel. Optional: /chat is its own surface and has nothing to notify.
+  onStatus?: (event: AgentStatusEvent) => void
   // Pre-baked first user message. When set, the mount effect fires the first
   // turn with this verbatim (skipping the intent's promptTemplate path) AND
   // renders it as a user-side message in the timeline. Used by /chat empty
@@ -183,6 +187,7 @@ export default function AgentChat({
   onFirstTurnComplete,
   scrollerClassName,
   seedUserMessage,
+  onStatus,
 }: AgentChatProps) {
   const [conversationId, setConversationId] = useState<string | null>(initialConversationId ?? null)
   // Track whether the first-turn callback has fired so the bootstrap
@@ -194,6 +199,20 @@ export default function AgentChat({
   const hasAi = useCapability(CAPABILITY.ai)
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
+  // Turn boundaries for the status channel are derived from the streaming flag
+  // rather than published at each call site: a turn can end by completing,
+  // erroring, aborting or being stopped, and a channel that misses one of
+  // those leaves the trigger claiming the agent is still working forever.
+  const turnOpenRef = useRef(false)
+  useEffect(() => {
+    if (streaming) {
+      turnOpenRef.current = true
+      onStatus?.({ type: 'turn_start' })
+    } else if (turnOpenRef.current) {
+      turnOpenRef.current = false
+      onStatus?.({ type: 'turn_end' })
+    }
+  }, [streaming, onStatus])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const scrollerRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -565,6 +584,9 @@ export default function AgentChat({
       case 'tool_use':
         // Next text_delta should open a fresh paragraph.
         breakBeforeNextTextRef.current = true
+        // Same label the in-thread chip shows, so a hidden panel and a visible
+        // one describe the step identically.
+        onStatus?.({ type: 'step', label: prettyToolName(ev.name as string) })
         setMessages((prev) =>
           updateLastAssistant(prev, (m) => ({
             ...m,

@@ -8,6 +8,7 @@ import AgentChat, {
   type ChatMessage,
 } from './AgentChat'
 import type { StoredStagedOperation } from '@/types'
+import type { AgentStatusEvent } from './agent-status'
 import AgentAvatar from './AgentAvatar'
 import AgentSessionList from './AgentSessionList'
 import SandboxAgentPreview from './SandboxAgentPreview'
@@ -30,10 +31,22 @@ interface Props {
   // Hidden (display:none) but still mounted so the conversation survives. The
   // provider keeps rendering this component; we just visually remove it.
   collapsed: boolean
+  // Publishes what the agent is doing to the one status channel, so the
+  // floating trigger can say "arbetar" / "är klar" while the panel is hidden.
+  onStatus?: (event: AgentStatusEvent) => void
+  // How much width the panel is claiming from the page, or null while it
+  // overlays. Docking is what makes the panel a second column instead of a
+  // curtain over the thing being discussed.
+  onDockWidthChange?: (px: number | null) => void
   onCollapse: () => void
   onRestart: () => void
   onClose: () => void
 }
+
+// The panel is max-w-[480px]; the page gives up that plus the frame's own
+// 10px gutter, so the two panels float side by side on the frame with the
+// same seam as everywhere else instead of butting their borders together.
+const DOCKED_WIDTH = 490
 
 interface LoadedConversation {
   id: string
@@ -49,6 +62,8 @@ export default function AgentSheet({
   contextRef,
   seedUserMessage,
   collapsed,
+  onStatus,
+  onDockWidthChange,
   onCollapse,
   onRestart,
   onClose,
@@ -66,6 +81,16 @@ export default function AgentSheet({
   // Enlarge the panel IN PLACE (no navigation): the user stays on the current
   // page (e.g. /bookkeeping) with a wider reading/verifying surface.
   const [expanded, setExpanded] = useState(false)
+  // Dock at the compact width only. Expanded is a deliberate focus mode: at
+  // 1100px there is no page left to read beside it, so it goes back to
+  // overlaying. Collapsed and mobile claim nothing (below md the panel is
+  // full-width and the frame layout ignores the variable anyway).
+  const dockWidth = collapsed || expanded ? null : DOCKED_WIDTH
+  useEffect(() => {
+    onDockWidthChange?.(dockWidth)
+  }, [dockWidth, onDockWidthChange])
+  useEffect(() => () => onDockWidthChange?.(null), [onDockWidthChange])
+
   const { identity } = useAgentSheet()
   const companyCtx = useCompanyOptional()
   const isSandbox = companyCtx?.isSandbox ?? false
@@ -310,6 +335,7 @@ export default function AgentSheet({
           initialConversationId={loaded.id}
           initialMessages={loaded.messages}
           onConversationIdChange={(id) => setConversationId(id)}
+          onStatus={onStatus}
         />
       ) : (
         <AgentChat
@@ -318,6 +344,7 @@ export default function AgentSheet({
           contextRef={contextRef}
           seedUserMessage={seedUserMessage}
           onConversationIdChange={(id) => setConversationId(id)}
+          onStatus={onStatus}
         />
       )}
     </div>
