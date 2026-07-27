@@ -3654,6 +3654,7 @@
     "illegal_vat_rate_title": "Invalid VAT rate",
     "illegal_vat_rate_description": "Line {row} has VAT rate {rate} %. The legal Swedish VAT rates are 25, 12, 6 or 0 %.",
     "rc_account_warning": "Reverse charge: {count, plural, =1 {line {rows} uses an account starting with 1 or 6} other {lines {rows} use accounts starting with 1 or 6}}. Reverse charge purchases are normally booked on cost accounts (4xxx/5xxx). Double-check the account choice.",
+    "foreign_zero_vat_warning": "Foreign supplier with no VAT: {count, plural, =1 {line {rows} has} other {lines {rows} have}} 0 % VAT while reverse charge is switched off. For a service bought from abroad, reverse charge should be on; otherwise boxes 20-24, 30-32 and 48 stay empty in the VAT return. If the invoice is VAT-free for another reason, such as a goods import handled by customs, you can ignore this.",
     "expense_registered_title": "Expense registered",
     "invoice_registered_title": "Invoice registered",
     "arrival_number_label": "Arrival number: {number}",

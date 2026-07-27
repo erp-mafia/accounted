@@ -35,6 +35,7 @@ import {
   LEGAL_VAT_RATES,
   findIllegalVatRateRow,
   findReverseChargeAccountWarningRows,
+  findUnflaggedForeignZeroVatRows,
 } from '@/lib/vat/supplier-invoice-line-checks'
 import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, Link2, CalendarClock, Tags, Paperclip } from 'lucide-react'
 import type { Supplier, BASAccount, VatTreatment, EntityType, InvoiceExtractionResult, FiscalPeriod } from '@/types'
@@ -455,6 +456,18 @@ export default function NewSupplierInvoiceForm({
   const rcAccountWarningRows = watchedReverseCharge
     ? findReverseChargeAccountWarningRows(watchedItems ?? [])
     : []
+
+  // Advisory nudge (#1042): a foreign supplier charging no Swedish VAT is
+  // normally omvand skattskyldighet. With the switch off no 26x4 leg and no
+  // 44xx/45xx basis is booked, so ruta 20-24, 30-32 and 48 stay empty. Silent
+  // for Swedish suppliers, where 0 % is a genuine exemption. Never blocks:
+  // a non-EU goods purchase cleared at customs is legitimately 0 % without
+  // reverse charge, and forcing the switch there would book a wrong verifikat.
+  const foreignZeroVatRows = findUnflaggedForeignZeroVatRows(
+    watchedItems ?? [],
+    watchedReverseCharge,
+    suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type,
+  )
 
   useEffect(() => {
     fetchSuppliers()
@@ -1800,6 +1813,24 @@ export default function NewSupplierInvoiceForm({
                   {t('rc_account_warning', {
                     count: rcAccountWarningRows.length,
                     rows: rcAccountWarningRows.map((i) => i + 1).join(', '),
+                  })}
+                </p>
+              </div>
+            )}
+
+            {/* Non-blocking omvand-skattskyldighet hint for foreign suppliers
+                invoiced at 0 % VAT (#1042). Mutually exclusive with the banner
+                above: that one needs the switch on, this one needs it off. */}
+            {foreignZeroVatRows.length > 0 && (
+              <div
+                role="status"
+                className="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3"
+              >
+                <AlertTriangle className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
+                <p className="text-sm text-warning-foreground">
+                  {t('foreign_zero_vat_warning', {
+                    count: foreignZeroVatRows.length,
+                    rows: foreignZeroVatRows.map((i) => i + 1).join(', '),
                   })}
                 </p>
               </div>

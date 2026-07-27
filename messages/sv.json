@@ -3654,6 +3654,7 @@
     "illegal_vat_rate_title": "Ogiltig momssats",
     "illegal_vat_rate_description": "Rad {row} har momssats {rate} %. Tillåtna momssatser är 25, 12, 6 eller 0 %.",
     "rc_account_warning": "Omvänd skattskyldighet: {count, plural, =1 {rad {rows} använder ett konto som börjar på 1 eller 6} other {raderna {rows} använder konton som börjar på 1 eller 6}}. Inköp med omvänd skattskyldighet bokförs normalt på kostnadskonton (4xxx/5xxx). Kontrollera kontovalet.",
+    "foreign_zero_vat_warning": "Utländsk leverantör utan moms: {count, plural, =1 {rad {rows} har} other {raderna {rows} har}} 0 % moms medan omvänd skattskyldighet är avstängd. Är det ett tjänsteköp från utlandet ska omvänd skattskyldighet vara på, annars blir ruta 20-24, 30-32 och 48 tomma i momsdeklarationen. Är fakturan momsfri av annat skäl, till exempel en varuimport som tullen hanterar, kan du bortse från detta.",
     "expense_registered_title": "Utlägg registrerat",
     "invoice_registered_title": "Faktura registrerad",
     "arrival_number_label": "Ankomstnummer: {number}",

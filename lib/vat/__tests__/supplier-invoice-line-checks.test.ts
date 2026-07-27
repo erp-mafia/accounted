@@ -5,6 +5,7 @@ import {
   normalizeVatRateToDecimal,
   findIllegalVatRateRow,
   findReverseChargeAccountWarningRows,
+  findUnflaggedForeignZeroVatRows,
 } from '@/lib/vat/supplier-invoice-line-checks'
 
 describe('LEGAL_VAT_RATES', () => {
@@ -113,5 +114,51 @@ describe('findReverseChargeAccountWarningRows', () => {
         { account_number: '7010' },
       ]),
     ).toEqual([0, 1])
+  })
+})
+
+describe('findUnflaggedForeignZeroVatRows', () => {
+  const zero = [{ vat_rate: 0 }]
+
+  it('flags every 0 % line on an EU supplier invoice with reverse charge off', () => {
+    const items = [{ vat_rate: 0 }, { vat_rate: 0.25 }, { vat_rate: 0 }]
+    expect(findUnflaggedForeignZeroVatRows(items, false, 'eu_business')).toEqual([0, 2])
+  })
+
+  it('flags a 0 % line on a non-EU supplier invoice', () => {
+    // The form auto-ticks reverse charge for eu_business but not for
+    // non_eu_business, so this is the case that actually slips through.
+    expect(findUnflaggedForeignZeroVatRows(zero, false, 'non_eu_business')).toEqual([0])
+  })
+
+  it('stays silent for a Swedish supplier at 0 %', () => {
+    // Bankavgift, forsakring, hyra: a genuine exemption that belongs in no
+    // ruta at all. Flagging it would be noise, not a finding.
+    expect(findUnflaggedForeignZeroVatRows(zero, false, 'swedish_business')).toEqual([])
+  })
+
+  it('stays silent when reverse charge is already on', () => {
+    const items = [{ vat_rate: 0 }, { vat_rate: 0 }]
+    expect(findUnflaggedForeignZeroVatRows(items, true, 'eu_business')).toEqual([])
+    expect(findUnflaggedForeignZeroVatRows(items, true, 'non_eu_business')).toEqual([])
+  })
+
+  it('stays silent before a supplier is picked', () => {
+    expect(findUnflaggedForeignZeroVatRows(zero, false, undefined)).toEqual([])
+    expect(findUnflaggedForeignZeroVatRows(zero, false, null)).toEqual([])
+    expect(findUnflaggedForeignZeroVatRows(zero, false, '')).toEqual([])
+  })
+
+  it('stays silent when the foreign supplier charged VAT on every line', () => {
+    const items = [{ vat_rate: 0.25 }, { vat_rate: 0.12 }, { vat_rate: 0.06 }]
+    expect(findUnflaggedForeignZeroVatRows(items, false, 'eu_business')).toEqual([])
+  })
+
+  it('returns an empty list for no items', () => {
+    expect(findUnflaggedForeignZeroVatRows([], false, 'eu_business')).toEqual([])
+  })
+
+  it('ignores an unknown supplier type rather than guessing it is foreign', () => {
+    expect(findUnflaggedForeignZeroVatRows(zero, false, 'private_person')).toEqual([])
   })
 })
