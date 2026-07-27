@@ -3,8 +3,9 @@
  *
  * Subscribes to every CoreEventType the v1 API surface emits and converts
  * each emission into N rows in `webhook_deliveries`: one per active webhook
- * subscribed to (company_id, event_type). The dispatcher cron picks them
- * up at next-minute boundary and POSTs to the receiver.
+ * subscribed to (company_id, event_type). A dispatch cycle is then scheduled
+ * immediately (see dispatch-kick.ts); the per-minute cron stays as the retry
+ * and sweep path.
  *
  * Wired from lib/init.ts via registerWebhookHandler() so every API route
  * that calls ensureInitialized() gets the subscription wired exactly once.
@@ -26,6 +27,7 @@ import type { CoreEventType } from '@/lib/events/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import { API_V1_VERSION } from '@/lib/api/v1/version'
+import { kickWebhookDispatch } from './dispatch-kick'
 
 const log = createLogger('webhooks/handler')
 
@@ -184,5 +186,11 @@ async function fanOutToWebhooks(args: {
       eventType: args.eventType,
       webhookCount: rows.length,
     })
+    return
   }
+
+  // Deliver now instead of waiting for the next cron tick (#1201). Scheduled,
+  // never awaited: see lib/webhooks/dispatch-kick.ts for why the emitter must
+  // not block on a receiver's HTTP endpoint.
+  kickWebhookDispatch()
 }

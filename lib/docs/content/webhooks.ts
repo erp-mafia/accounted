@@ -8,7 +8,7 @@ If you've used [Stripe webhooks](https://docs.stripe.com/webhooks), the model is
 
 1. **Register a receiver** with [\`POST /api/v1/companies/{companyId}/webhooks\`](/docs/api/reference/webhooks#post-webhooks-create). The response includes an HMAC signing secret returned **exactly once**: store it on the receiver side immediately. If you lose it, rotate it with [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/rotate-secret\`](/docs/api/reference/webhooks#post-webhooks-rotate_secret): a fresh secret is issued in place and the old one is invalidated immediately, with no change to the webhook's id or delivery history.
 2. **Accounted emits events** internally (e.g. an invoice is marked paid via the dashboard or another API call). The webhook handler enqueues a delivery row.
-3. **The dispatcher cron runs every minute**, signs the payload with HMAC-SHA256, and POSTs to your URL with a 10-second timeout.
+3. **The dispatcher runs immediately after the event**, signs the payload with HMAC-SHA256, and POSTs to your URL with a 10-second timeout. A cron sweep every minute picks up anything the immediate pass did not get to, so first-attempt latency is normally a second or two but is never guaranteed to be: treat delivery as prompt, not synchronous.
 4. **Your receiver verifies the signature**, processes the event idempotently, and returns 2xx.
 5. **Failed deliveries retry** at \`1m / 5m / 30m / 2h / 12h / 24h / 48h\` (7 retries, ~87 hours total, about 3.6 days). After all attempts the delivery is marked \`dead\`. HTTP 410 from your receiver short-circuits to \`dead\` immediately and **auto-disables** the webhook.
 
@@ -219,7 +219,7 @@ Use [\`GET /api/v1/companies/{companyId}/webhooks/{webhookId}/deliveries\`](/doc
 
 To replay a \`dead\` or \`delivered\` delivery, call [\`POST /api/v1/webhook-deliveries/{deliveryId}/retry\`](/docs/api/reference/webhooks#post-webhook_deliveries-retry). The retry creates a fresh delivery row pointing at the same payload: the original audit row stays in place. Receivers must be idempotent on the \`X-Gnubok-Delivery\` header.
 
-To send a synthetic test event without driving real state, call [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/test\`](/docs/api/reference/webhooks#post-webhooks-test). The dispatcher delivers a \`webhook.test\` event with a static payload on the next per-minute tick.
+To send a synthetic test event without driving real state, call [\`POST /api/v1/companies/{companyId}/webhooks/{webhookId}/test\`](/docs/api/reference/webhooks#post-webhooks-test). The dispatcher delivers a \`webhook.test\` event with a static payload immediately, so the outcome is normally visible within a second or two.
 
 ## Auto-disable behaviour
 

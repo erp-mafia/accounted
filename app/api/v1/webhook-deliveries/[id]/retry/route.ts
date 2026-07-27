@@ -23,6 +23,7 @@ import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { kickWebhookDispatch } from '@/lib/webhooks/dispatch-kick'
 import { minimisePayload } from '@/lib/webhooks/handler'
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 import { hasScope } from '@/lib/auth/api-keys'
@@ -212,6 +213,11 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
         requestId: ctx.requestId,
       })
     }
+
+    // Deliver now rather than on the next cron tick (#1201). A manual retry
+    // is someone watching a failed delivery and asking for it again; the
+    // cron stays the path for the automatic backoff retries.
+    kickWebhookDispatch()
 
     return ok(
       { webhook_delivery_id: (replay as { id: string }).id, status: 'pending' as const },

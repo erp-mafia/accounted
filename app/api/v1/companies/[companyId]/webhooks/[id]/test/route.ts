@@ -2,14 +2,15 @@
  * /api/v1/companies/{companyId}/webhooks/{id}/test: POST :test verb.
  *
  * Enqueues a synthetic `webhook.test` delivery against the configured
- * receiver. The dispatcher cron picks it up at next-minute boundary
- * exactly as it would a real event. The response returns the
+ * receiver and kicks a dispatch cycle immediately, exactly as a real event
+ * does (#1201); the cron remains the retry path. The response returns the
  * webhook_delivery_id so the caller can poll
  * GET /webhooks/{id}/deliveries?delivery_id=... to see the outcome.
  */
 
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
+import { kickWebhookDispatch } from '@/lib/webhooks/dispatch-kick'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
@@ -26,7 +27,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/webhooks/:id/test',
   summary: 'Send a synthetic test event to a webhook.',
   description:
-    'Enqueues a webhook.test delivery against the configured receiver. The dispatcher delivers it on the next per-minute cron tick. Use the returned webhook_delivery_id to poll GET /webhooks/{id}/deliveries for the outcome.',
+    'Enqueues a webhook.test delivery against the configured receiver and dispatches it immediately, so the outcome is normally available within a second or two rather than on the next per-minute cron tick. Use the returned webhook_delivery_id to poll GET /webhooks/{id}/deliveries for the outcome.',
   useWhen:
     'After creating or modifying a webhook, before relying on it in production: to validate that the receiver is reachable and that signature verification works on the receiver side.',
   doNotUseFor:
@@ -110,6 +111,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         requestId: ctx.requestId,
       })
     }
+
+    // Deliver now rather than on the next cron tick. This verb exists to tell
+    // someone whether their receiver works; making them wait up to a minute
+    // for that answer is the whole complaint in #1201.
+    kickWebhookDispatch()
 
     return ok(
       { webhook_delivery_id: (delivery as { id: string }).id, status: 'pending' as const },
