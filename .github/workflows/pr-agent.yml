@@ -64,11 +64,18 @@ jobs:
           # ── Model: Claude Sonnet 5 via the EU Bedrock inference profile. The
           #    strong and weak slots both point at it: this account has no larger
           #    model enabled, so a second id would only be the same model under
-          #    another name. No FALLBACK_MODELS for the same reason: a fallback
-          #    list naming the primary is not a fallback. custom_model_max_tokens
-          #    is required because this id is not in PR-Agent's built-in map.
+          #    another name. custom_model_max_tokens is required because this id
+          #    is not in PR-Agent's built-in map.
           CONFIG.MODEL: "bedrock/eu.anthropic.claude-sonnet-5"
           CONFIG.MODEL_WEAK: "bedrock/eu.anthropic.claude-sonnet-5"
+          # Emptied explicitly. This block previously said it set no fallback
+          # list, but "unset" is not "none": PR-Agent's own default is
+          # ["gpt-5.6-terra"], visible in the resolved config it logs on every
+          # run. Only AWS credentials reach this container, so that fallback
+          # could never have authenticated, but a silent third-party model in
+          # the path of every PR diff should be absent by intent, not by a
+          # missing key.
+          CONFIG.FALLBACK_MODELS: "[]"
           CONFIG.CUSTOM_MODEL_MAX_TOKENS: "1000000"
           # Input window PR-Agent prunes the diff to fit. Default (~32k) truncated
           # large PRs; raise it so the whole diff is reviewed (Sonnet 5 = 1M ctx).
