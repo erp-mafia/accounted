@@ -5,9 +5,8 @@
  * and an emit-triggered kick right after deliveries are enqueued
  * (lib/webhooks/dispatch-kick.ts), which is what keeps first-attempt latency
  * off the cron interval. Picks up pending + retry-due deliveries (FOR UPDATE
- * SKIP LOCKED, so a kick racing the cron claims disjoint rows and neither
- * double-delivers), POSTs each one with HMAC signature, and updates the row
- * to one of:
+ * SKIP LOCKED, so a kick racing the cron claims disjoint rows), POSTs each one
+ * with HMAC signature, and updates the row to one of:
  *
  *   - delivered (2xx response)         : terminal
  *   - failed   (5xx / network / 4xx    : non-terminal until attempts

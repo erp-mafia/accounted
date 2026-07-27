@@ -29,9 +29,18 @@
  *    unhandled rejection would surface as a failed emit on a route that has
  *    already done its real work.
  *
- * Double delivery is not a risk: claim_due_webhook_deliveries claims rows with
- * FOR UPDATE SKIP LOCKED and flips them to in_flight in the same statement, so
- * a kick racing the cron sees no overlap.
+ * claim_due_webhook_deliveries claims with FOR UPDATE SKIP LOCKED and flips
+ * rows to in_flight in the same statement, so a kick and the cron never claim
+ * the same row at the same moment. That is a claim-time guarantee only, and it
+ * is worth being precise about what it does NOT buy: the RPC autocommits, so
+ * its locks are gone before any POST is issued, and from then on ownership is
+ * just status='in_flight'. A later cycle's recoverStuckInFlight sweep can
+ * re-arm a row that is still queued behind an earlier cycle's serial loop.
+ * Delivery therefore stays at-least-once, exactly as the public docs promise
+ * ("the same delivery id may arrive more than once ... idempotency is on
+ * you"). The kick does not change that contract: the cron already claims 50
+ * rows serially against the same 20 s stuck threshold, which is a wider window
+ * than this batch of 5 can open.
  */
 
 import { after } from 'next/server'
