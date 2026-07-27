@@ -11,6 +11,7 @@ Verify the connection, learn who this company is, and surface what needs attenti
 
 1. Call `accounted_get_agent_briefing`. This is the single source for company facts: entity type (aktiebolag or enskild firma), accounting method (faktureringsmetoden or kontantmetoden), VAT period, employees, and ledger context. Never assume these; the flows below behave differently depending on them.
    - If the call fails with an auth error, the MCP server is not connected yet: tell the user to run `/mcp` and authenticate with Accounted (OAuth consent screen; read-only scopes by default, write scopes are ticked explicitly). Self-hosted users: see the plugin README.
+   - If the user has no Accounted account at all, say so plainly and point them at https://app.accounted.se to create one. The plugin drives an existing ledger; it cannot bookkeep without one. Do not attempt any other flow until a company is connected.
 2. Read `Accounted://attention` and `Accounted://period/active`.
 3. Present a short orientation in the user's language: company name and form, active fiscal period and its lock status, and the top 3 items needing attention.
 4. Point at the flows, matched to what attention showed:

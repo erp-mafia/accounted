@@ -42,4 +42,4 @@ This plugin is not legal, tax, or audit advice. Output is underlag for you and y
 
 ## License
 
-MIT (the plugin). The Accounted platform itself is AGPL-3.0.
+The plugin in this directory is MIT licensed; see [LICENSE](./LICENSE). The Accounted platform it connects to is a separate work, licensed AGPL-3.0 under the [LICENSE](../LICENSE) at the repository root.
