@@ -11,14 +11,13 @@ interface Props {
   alt?: string
 }
 
-// Renders the agent's avatar: either the chosen dicebear SVG from the
-// AVATAR_OPTIONS registry, or a fallback MessageCircle glyph on a dark circle
-// when no avatar is set yet (free tier / older profiles).
+// Renders the agent's avatar: either the chosen SVG from the AVATAR_OPTIONS
+// registry, or a fallback MessageCircle glyph on a dark circle when no avatar
+// is set yet (free tier / older profiles).
 //
-// `next/image` is intentionally NOT used: avatars are tiny remote SVGs from
-// the dicebear CDN, and adding the domain to next.config just to render a
-// 28px image is overkill. Browser caches the SVG forever via the seed-keyed
-// URL.
+// `next/image` is intentionally NOT used: these are tiny static SVGs served
+// from our own /public, and the optimizer does not process SVG anyway, so it
+// would add a round trip through /_next/image for nothing.
 export default function AgentAvatar({ avatarId, size = 'sm', className, alt }: Props) {
   const url = getAvatarUrl(avatarId)
   const dim = SIZES[size]
