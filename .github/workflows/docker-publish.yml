@@ -216,6 +216,7 @@ jobs:
           PLATFORMS=$(docker buildx imagetools inspect \
             "${REGISTRY}/${IMAGE_NAME}@${DIGEST}" --raw \
             | jq -r '[.manifests[]
+                      | select(.platform != null)
                       | select(.platform.os != "unknown")
                       | "\(.platform.os)/\(.platform.architecture)"]
                      | sort | unique | join(",")')
