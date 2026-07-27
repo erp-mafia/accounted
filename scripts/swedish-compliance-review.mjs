@@ -12,6 +12,13 @@ import path from 'node:path';
 const SKILLS_DIR = '.claude/skills';
 const ALWAYS_LOAD = 'swedish-accounting-compliance';
 const MODEL = process.env.REVIEW_MODEL || 'eu.anthropic.claude-sonnet-5';
+// Budgets thinking AND response text together. Sonnet 4.6 ran this script with
+// thinking off (that was what omitting the parameter meant), so 4096 was all
+// prose. Sonnet 5 runs adaptive thinking by default, so the same number is now
+// shared with reasoning the script never renders (it filters to text blocks) and
+// the review silently truncates. 16000 restores prose headroom; the job's
+// 10-minute timeout has ample room (runs land in ~30s).
+const MAX_TOKENS = Number(process.env.REVIEW_MAX_TOKENS || 16_000);
 const MAX_DIFF_CHARS = 180_000;
 const OUTPUT_FILE = 'review.md';
 const COMMENT_MARKER = '<!-- swedish-compliance-review-bot -->';
@@ -207,20 +214,37 @@ async function main() {
 
   const resp = await client.messages.create({
     model: MODEL,
-    max_tokens: 4096,
+    max_tokens: MAX_TOKENS,
     system,
     messages: [{ role: 'user', content: user }],
   });
 
+  // `thinking` is deliberately not passed. On Sonnet 5 an omitted thinking
+  // parameter already means adaptive thinking, so sending it explicitly would
+  // add request surface (this runs on the pinned legacy Bedrock SDK 0.29.1)
+  // for no behaviour change. What DID change at #1218: on Sonnet 4.6 an
+  // omitted parameter meant no thinking at all, and max_tokens caps thinking
+  // plus response text together. See MAX_TOKENS above.
   const text = resp.content
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
     .join('\n')
     .trim();
 
+  // A truncated review is worse than a failed one: it reads as a clean bill of
+  // health with the findings cut off. The workflow's "Assert review produced
+  // output" step only catches an empty file, so catch the truncation here.
+  if (resp.stop_reason === 'max_tokens') {
+    throw new Error(
+      `Review truncated: hit max_tokens (${MAX_TOKENS}). Thinking and response text share this budget on Sonnet 5; raise MAX_TOKENS.`,
+    );
+  }
+
   const body = text.startsWith(COMMENT_MARKER) ? text : `${COMMENT_MARKER}\n\n${text}`;
   writeFileSync(OUTPUT_FILE, body + '\n');
-  console.log(`Wrote ${OUTPUT_FILE} (${body.length} chars, model=${MODEL}).`);
+  console.log(
+    `Wrote ${OUTPUT_FILE} (${body.length} chars, model=${MODEL}, stop_reason=${resp.stop_reason}).`,
+  );
 }
 
 main().catch((err) => {

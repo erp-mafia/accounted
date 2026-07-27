@@ -69,10 +69,13 @@ jobs:
           #    is required because this id is not in PR-Agent's built-in map.
           CONFIG.MODEL: "bedrock/eu.anthropic.claude-sonnet-5"
           CONFIG.MODEL_WEAK: "bedrock/eu.anthropic.claude-sonnet-5"
-          CONFIG.CUSTOM_MODEL_MAX_TOKENS: "200000"
+          CONFIG.CUSTOM_MODEL_MAX_TOKENS: "1000000"
           # Input window PR-Agent prunes the diff to fit. Default (~32k) truncated
           # large PRs; raise it so the whole diff is reviewed (Sonnet 5 = 1M ctx).
-          CONFIG.MAX_MODEL_TOKENS: "64000"
+          # 64000 was tuned against Sonnet 4.6's tokenizer. Sonnet 5 tokenizes the
+          # same text into roughly 30% more tokens, so that budget silently held
+          # ~30% less real diff after #1218; 96000 restores parity with headroom.
+          CONFIG.MAX_MODEL_TOKENS: "96000"
           LITELLM.DROP_PARAMS: "true"
 
           # ── pr_actions = which GitHub PR *event actions* trigger the bot

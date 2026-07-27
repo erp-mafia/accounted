@@ -53,5 +53,9 @@ jobs:
           AWS_REGION: eu-north-1
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          # Override default model if desired:
-          # COMPLIANCE_BEDROCK_MODEL: 'eu.anthropic.claude-sonnet-5'
+          # Pin the audit model explicitly rather than leaving this commented
+          # out. compliancemaxx defaults to `eu.anthropic.claude-sonnet-4-6`
+          # when it is unset (packages/cli/src/llm/bedrock.ts), which quietly
+          # kept the nightly audit a generation behind after #1218. Keep in
+          # sync with compliance-pr.yml and lib/agent/composer/client.ts.
+          COMPLIANCE_BEDROCK_MODEL: eu.anthropic.claude-sonnet-5
