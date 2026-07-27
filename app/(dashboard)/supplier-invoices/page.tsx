@@ -21,6 +21,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import type { FiscalPeriod, SupplierInvoice } from '@/types'
 
 const NewSupplierInvoiceDialog = dynamic(
@@ -160,7 +161,20 @@ export default function SupplierInvoicesPage() {
         fetchInvoices()
       } else {
         toast({ title: t('approved_title'), description: t('approved_description') })
-        setInvoices((prev) => prev.map((inv) => (inv.id === id ? { ...inv, status: 'approved' as const } : inv)))
+        // Trust the server's status: an attested invoice that is still past due
+        // stays labelled 'overdue' rather than flipping to 'approved'.
+        const approved = result?.data as Partial<SupplierInvoice> | undefined
+        setInvoices((prev) =>
+          prev.map((inv) =>
+            inv.id === id
+              ? {
+                  ...inv,
+                  status: approved?.status ?? 'approved',
+                  approved_at: approved?.approved_at ?? new Date().toISOString(),
+                }
+              : inv,
+          ),
+        )
       }
     } catch {
       toast({ title: t('approve_failed_title'), description: getErrorMessage(null, { context: 'supplier_invoice' }), variant: 'destructive' })
@@ -291,8 +305,10 @@ export default function SupplierInvoicesPage() {
                     : STATUS_LABEL_KEYS[inv.status]
                       ? t(STATUS_LABEL_KEYS[inv.status])
                       : inv.status
+                // Aged-but-unapproved invoices sit on 'overdue' (the cron flips
+                // them there), so attest keys off approved_at, not the status.
                 const canApprove =
-                  inv.status === 'registered' && !inv.is_credit_note && canWrite
+                  canApproveSupplierInvoice(inv) && !inv.is_credit_note && canWrite
                 return (
                   <tr
                     key={inv.id}

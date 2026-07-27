@@ -3,6 +3,11 @@ import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
+import {
+  canApproveSupplierInvoice,
+  resolveUnsettledStatus,
+} from '@/lib/supplier-invoices/lifecycle'
 import type { SupplierInvoice } from '@/types'
 
 ensureInitialized()
@@ -24,16 +29,30 @@ export const POST = withRouteContext(
       return errorResponseFromCode('SI_NOT_FOUND', log, { requestId })
     }
 
-    if (invoice.status !== 'registered') {
+    // 'overdue' is approvable too: the daily cron puts unbooked invoices there
+    // just by aging, and a registered-only gate left an aged invoice with no
+    // way through attest at all (#1206). approved_at, not the status, is what
+    // makes approval idempotent.
+    if (!canApproveSupplierInvoice(invoice)) {
       return errorResponseFromCode('SI_APPROVE_NOT_REGISTERED', log, {
         requestId,
         details: { currentStatus: invoice.status },
       })
     }
 
+    // An invoice that is both attested and past due stays labelled 'overdue':
+    // that is what the cron would do on its next run, and approving is not a
+    // reason to hide that money is late.
+    const approvedAt = new Date().toISOString()
     const { data, error } = await supabase
       .from('supplier_invoices')
-      .update({ status: 'approved' })
+      .update({
+        status: resolveUnsettledStatus(
+          { ...invoice, approved_at: approvedAt },
+          getSwedishLocalDate(),
+        ),
+        approved_at: approvedAt,
+      })
       .eq('id', id)
       .eq('company_id', companyId)
       .select()

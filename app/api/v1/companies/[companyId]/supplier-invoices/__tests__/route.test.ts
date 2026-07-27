@@ -1099,11 +1099,40 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/approve', () =
     expect(body.data.status).toBe('approved')
   })
 
-  it('refuses on already-approved SI (400 SI_APPROVE_NOT_REGISTERED)', async () => {
+  it('attests an overdue SI, which stays overdue while it is still late (#1206)', async () => {
+    // The daily cron flips unbooked payables past due_date to 'overdue'. Attest
+    // must stay reachable there, and it does not make late money on time.
+    const overdue = { ...SAMPLE_SI, status: 'overdue', due_date: '2000-01-01', approved_at: null }
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        supplier_invoices: { data: { ...SAMPLE_SI, status: 'approved' }, error: null },
+        supplier_invoices: [
+          { data: overdue, error: null },
+          { data: { ...overdue, approved_at: '2026-07-27T08:00:00Z' }, error: null },
+        ],
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    const res = await approveSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/approve`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.status).toBe('overdue')
+    expect(body.data.approved_at).toBe('2026-07-27T08:00:00Z')
+  })
+
+  it('refuses on an already-attested SI (400 SI_APPROVE_NOT_REGISTERED)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: {
+          data: { ...SAMPLE_SI, status: 'overdue', approved_at: '2026-07-01T08:00:00Z' },
+          error: null,
+        },
         idempotency_keys: { data: null, error: null },
       }),
     )

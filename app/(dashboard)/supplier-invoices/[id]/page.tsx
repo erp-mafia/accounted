@@ -26,6 +26,7 @@ import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { formatAmount, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment, BASAccount } from '@/types'
 
 interface EditableLine {
@@ -490,7 +491,10 @@ export default function SupplierInvoiceDetailPage() {
             contextRef={`supplier_invoice:${invoice.id}`}
             size="default"
           />
-          {invoice.status === 'registered' && !invoice.is_credit_note && (
+          {/* Attest keys off approved_at, not the status: the overdue cron
+              flips unbooked invoices to 'overdue' just by aging, and gating on
+              'registered' alone left them with no way through attest (#1206). */}
+          {canApproveSupplierInvoice(invoice) && !invoice.is_credit_note && (
             <Button
               onClick={handleApprove}
               disabled={isProcessing || !canWrite}

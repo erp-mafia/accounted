@@ -472,6 +472,7 @@ export function makeSupplierInvoice(
     received_date: '2024-06-02',
     delivery_date: null,
     status: 'registered',
+    approved_at: null,
     currency: 'SEK',
     exchange_rate: null,
     exchange_rate_date: null,

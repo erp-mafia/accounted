@@ -33,7 +33,11 @@ import {
 } from '@/lib/bookkeeping/invoice-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
-import { createJournalEntry, findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import {
+  canApproveSupplierInvoice,
+  resolveUnsettledStatus,
+} from '@/lib/supplier-invoices/lifecycle'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
@@ -3206,13 +3210,27 @@ async function commitApproveSupplierInvoice(
     .from('supplier_invoices').select('*').eq('id', id).eq('company_id', companyId).single()
 
   if (!invoice) return { error: 'Supplier invoice not found', status: 404 }
-  if (invoice.status !== 'registered') {
-    return { error: 'Kan bara godkänna registrerade fakturor', status: 400 }
+  // 'overdue' is approvable: the daily cron flips unbooked invoices there just
+  // by aging, and a registered-only gate left an aged invoice with no way
+  // through attest (#1206). approved_at makes the approval idempotent.
+  if (!canApproveSupplierInvoice(invoice)) {
+    return {
+      error: 'Fakturan är redan godkänd eller kan inte godkännas i nuvarande status',
+      status: 400,
+    }
   }
+
+  // A still-past-due invoice keeps the 'overdue' label after attest: that is
+  // what the cron would do on its next run.
+  const approvedAt = new Date().toISOString()
+  const nextStatus = resolveUnsettledStatus(
+    { ...invoice, approved_at: approvedAt },
+    getSwedishLocalDate(),
+  )
 
   const { data, error } = await supabase
     .from('supplier_invoices')
-    .update({ status: 'approved' })
+    .update({ status: nextStatus, approved_at: approvedAt })
     .eq('id', id)
     .eq('company_id', companyId)
     .select()
@@ -3227,7 +3245,7 @@ async function commitApproveSupplierInvoice(
     })
   } catch { /* non-blocking */ }
 
-  return { data: { supplier_invoice_id: id, status: 'approved' } }
+  return { data: { supplier_invoice_id: id, status: nextStatus, approved_at: approvedAt } }
 }
 
 async function commitCreateSupplierInvoiceFromInbox(

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { seedCompany } from '@/tests/pg/fixtures'
 import { getPool } from '@/tests/pg/setup'
 
@@ -38,6 +38,20 @@ const MIGRATION_SQL = readFileSync(
   'utf8',
 )
 
+/**
+ * Re-running MIGRATION_SQL also CREATE OR REPLACEs the function with its
+ * pre-#1206, flip-only definition, and that replacement outlives the describe
+ * block in the shared test database. Keep the current definition on hand so the
+ * backfill block can put it back.
+ */
+const SYMMETRIC_MIGRATION_SQL = readFileSync(
+  join(process.cwd(), 'supabase/migrations/20260727160000_supplier_invoice_overdue_symmetric.sql'),
+  'utf8',
+)
+const SYMMETRIC_FUNCTION_SQL = SYMMETRIC_MIGRATION_SQL.slice(
+  SYMMETRIC_MIGRATION_SQL.indexOf('CREATE OR REPLACE FUNCTION'),
+)
+
 async function insertSupplier(userId: string, companyId: string): Promise<string> {
   const id = randomUUID()
   await getPool().query(
@@ -60,6 +74,7 @@ async function insertSupplierInvoice(params: {
   paidAmount?: number
   isCreditNote?: boolean
   paidAt?: string | null
+  approvedAt?: string | null
 }): Promise<string> {
   const id = randomUUID()
   const arrivalNumber = (Date.now() % 1_000_000_000) + Math.floor(Math.random() * 100_000)
@@ -68,9 +83,9 @@ async function insertSupplierInvoice(params: {
        (id, user_id, company_id, supplier_id, arrival_number, supplier_invoice_number,
         invoice_date, due_date, received_date, status, currency,
         subtotal, vat_amount, total, paid_amount, remaining_amount, paid_at,
-        vat_treatment, reverse_charge, is_credit_note)
+        vat_treatment, reverse_charge, is_credit_note, approved_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $7, $8, 'SEK',
-             $9, 0, $9, $10, $11, $12, 'standard_25', false, $13)`,
+             $9, 0, $9, $10, $11, $12, 'standard_25', false, $13, $14)`,
     [
       id,
       params.userId,
@@ -85,6 +100,7 @@ async function insertSupplierInvoice(params: {
       params.remaining,
       params.paidAt ?? null,
       params.isCreditNote ?? false,
+      params.approvedAt ?? null,
     ],
   )
   return id
@@ -155,7 +171,86 @@ describe('update_overdue_supplier_invoices()', () => {
   })
 })
 
+/**
+ * Symmetry, added by 20260727160000_supplier_invoice_overdue_symmetric.sql
+ * (#1206): before it, the label was one-way. Extending an unbooked invoice's
+ * due date left it "Förfallen" forever, which also made it read-only.
+ */
+describe('update_overdue_supplier_invoices() un-flip', () => {
+  it('returns an overdue invoice to registered once the due date is no longer past', async () => {
+    const { userId, companyId } = await seedCompany()
+    const supplierId = await insertSupplier(userId, companyId)
+    const id = await insertSupplierInvoice({
+      userId, companyId, supplierId,
+      status: 'overdue', dueDate: FUTURE, total: 1000, remaining: 1000,
+    })
+
+    await getPool().query('SELECT public.update_overdue_supplier_invoices()')
+
+    expect(await statusOf(id)).toBe('registered')
+  })
+
+  it('returns it to approved when it had been attested (approved_at set)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const supplierId = await insertSupplier(userId, companyId)
+    const id = await insertSupplierInvoice({
+      userId, companyId, supplierId,
+      status: 'overdue', dueDate: FUTURE, total: 1000, remaining: 1000,
+      approvedAt: '2026-01-01T08:00:00Z',
+    })
+
+    await getPool().query('SELECT public.update_overdue_supplier_invoices()')
+
+    expect(await statusOf(id)).toBe('approved')
+  })
+
+  it('leaves a still-past-due invoice on overdue', async () => {
+    const { userId, companyId } = await seedCompany()
+    const supplierId = await insertSupplier(userId, companyId)
+    const id = await insertSupplierInvoice({
+      userId, companyId, supplierId,
+      status: 'overdue', dueDate: PAST, total: 1000, remaining: 1000,
+    })
+
+    await getPool().query('SELECT public.update_overdue_supplier_invoices()')
+
+    expect(await statusOf(id)).toBe('overdue')
+  })
+
+  it('does not resurrect a settled invoice: paid stays paid', async () => {
+    const { userId, companyId } = await seedCompany()
+    const supplierId = await insertSupplier(userId, companyId)
+    const id = await insertSupplierInvoice({
+      userId, companyId, supplierId,
+      status: 'paid', dueDate: FUTURE, total: 1000, remaining: 0, paidAmount: 1000,
+    })
+
+    await getPool().query('SELECT public.update_overdue_supplier_invoices()')
+
+    expect(await statusOf(id)).toBe('paid')
+  })
+
+  it('is a no-op on an overdue row with nothing left to pay (repaired once by 20260607120000)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const supplierId = await insertSupplier(userId, companyId)
+    const id = await insertSupplierInvoice({
+      userId, companyId, supplierId,
+      status: 'overdue', dueDate: FUTURE, total: 1000, remaining: 0, paidAmount: 1000,
+    })
+
+    await getPool().query('SELECT public.update_overdue_supplier_invoices()')
+
+    expect(await statusOf(id)).toBe('overdue')
+  })
+})
+
 describe('overdue backfill (migration 20260607120000)', () => {
+  // Replaying the old migration downgrades the function definition; restore the
+  // current (symmetric) one so nothing later in the run sees a stale version.
+  afterAll(async () => {
+    await getPool().query(SYMMETRIC_FUNCTION_SQL)
+  })
+
   it('reverts a credit note wrongly stuck on overdue back to registered', async () => {
     const { userId, companyId } = await seedCompany()
     const supplierId = await insertSupplier(userId, companyId)

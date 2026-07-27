@@ -4,6 +4,11 @@ import { validateBody } from '@/lib/api/validate'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
+import {
+  isUnsettledSupplierInvoiceStatus,
+  resolveUnsettledStatus,
+} from '@/lib/supplier-invoices/lifecycle'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'supplier_invoice.get',
@@ -29,13 +34,18 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
 export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
   'supplier_invoice.update',
-  async (request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId, log, requestId }, { params }) => {
   const { id } = await params
 
-  // Only allow editing registered invoices
+  // Editing is allowed while the invoice is unsettled. 'overdue' is included
+  // because the daily cron flips unbooked invoices there just by aging, and a
+  // registered-only gate then made them permanently read-only: you could not
+  // even extend the due date to un-overdue them (#1206). The update body only
+  // carries metadata (numbers, dates, reference, notes), never amounts or
+  // accounts, so a posted registration verifikat cannot be desynced by money.
   const { data: existing } = await supabase
     .from('supplier_invoices')
-    .select('status')
+    .select('status, due_date, remaining_amount, is_credit_note, approved_at')
     .eq('id', id)
     .eq('company_id', companyId)
     .single()
@@ -44,20 +54,33 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
-  if (existing.status !== 'registered') {
-    return NextResponse.json(
-      { error: 'Kan bara redigera registrerade fakturor' },
-      { status: 400 }
-    )
+  if (!isUnsettledSupplierInvoiceStatus(existing.status)) {
+    return errorResponseFromCode('SI_EDIT_INVALID_STATUS', log, {
+      requestId,
+      details: { currentStatus: existing.status },
+    })
   }
 
   const validation = await validateBody(request, UpdateSupplierInvoiceSchema)
   if (!validation.success) return validation.response
   const body = validation.data
 
+  // Keep the overdue label in step with the due date this update lands on
+  // instead of waiting for the next cron run: extending the due date should
+  // clear "Förfallen" immediately, and moving it into the past should set it.
+  const restingStatus = resolveUnsettledStatus(
+    {
+      due_date: body.due_date ?? existing.due_date,
+      remaining_amount: existing.remaining_amount,
+      is_credit_note: existing.is_credit_note,
+      approved_at: existing.approved_at,
+    },
+    getSwedishLocalDate(),
+  )
+
   const { data, error } = await supabase
     .from('supplier_invoices')
-    .update(body)
+    .update(restingStatus === existing.status ? body : { ...body, status: restingStatus })
     .eq('id', id)
     .eq('company_id', companyId)
     .select()

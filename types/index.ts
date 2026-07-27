@@ -788,6 +788,12 @@ export interface SupplierInvoice {
   delivery_date: string | null
 
   status: SupplierInvoiceStatus
+  /**
+   * When the invoice was attested. The overdue cron collapses 'registered' and
+   * 'approved' into 'overdue', so this is the only durable attest marker: use
+   * it, not the status, to tell whether approval has happened.
+   */
+  approved_at: string | null
 
   currency: string
   exchange_rate: number | null
