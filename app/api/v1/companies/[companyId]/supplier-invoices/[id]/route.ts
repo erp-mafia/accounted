@@ -20,6 +20,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
+import { findLockedVerifikatFields } from '@/lib/supplier-invoices/lifecycle'
 
 // V1-only strict variant. The shared `UpdateSupplierInvoiceSchema` is also
 // consumed by the dashboard, where unknown keys are silently stripped, fine
@@ -177,12 +178,13 @@ registerEndpoint({
   description:
     'Patches a supplier invoice with the supplied fields. Only allowed on `registered` status: once approved, paid, or credited, the record is effectively immutable from the API\'s perspective. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
   useWhen:
-    'You need to fix a typo in supplier_invoice_number, adjust dates, or attach a payment reference / notes to a registered SI before approval. Use dry-run to confirm the merged state first.',
+    'You need to adjust due_date, or attach a payment reference / notes to a registered SI before approval. Use dry-run to confirm the merged state first.',
   doNotUseFor:
-    'Editing line items (immutable: credit the SI and register a new one). Changing status (use action verbs). Approved/paid/credited SIs (returns 400 SI_NOT_DRAFT).',
+    'Editing line items (immutable: credit the SI and register a new one). Changing status (use action verbs). Approved/paid/credited SIs (returns 400 SI_NOT_DRAFT). invoice_date / supplier_invoice_number on an SI that already has a registration verifikat (returns 400 SI_EDIT_VERIFIKAT_LOCKED).',
   pitfalls: [
     'Returns 400 SI_NOT_DRAFT when current status !== "registered".',
-    'invoice_date / due_date changes do not re-post the registration JE; if the entry date needs to change, credit the SI and re-register.',
+    'invoice_date and supplier_invoice_number are on the posted registration verifikat (entry_date and description). Once registration_journal_entry_id is set, patching them returns 400 SI_EDIT_VERIFIKAT_LOCKED: correct the entry via a rättelse (gnubok_correct_entry) or credit the SI and re-register. Resending the unchanged value is accepted.',
+    'Patching a field never re-posts the registration JE.',
   ],
   example: {
     request: { payment_reference: 'OCR-1234567890' },
@@ -273,6 +275,31 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       return v1ErrorResponseFromCode('SI_NOT_DRAFT', ctx.log, {
         requestId: ctx.requestId,
         details: { current_status: (existing as { status: string }).status },
+      })
+    }
+
+    // For a company without defer_invoice_booking the registration verifikat is
+    // posted at create time, so a 'registered' SI is normally already booked.
+    // invoice_date is that entry's entry_date and supplier_invoice_number is in
+    // its description: patching either here would desync the verifikat outside
+    // both sanctioned rättelse paths (#1230). Dry-run is gated too, so the
+    // preview never promises a write the real call refuses.
+    const lockedFields = findLockedVerifikatFields(
+      body,
+      existing as {
+        registration_journal_entry_id: string | null
+        invoice_date: string | null
+        supplier_invoice_number: string | null
+      },
+    )
+    if (lockedFields.length > 0) {
+      return v1ErrorResponseFromCode('SI_EDIT_VERIFIKAT_LOCKED', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          fields: lockedFields,
+          journal_entry_id: (existing as { registration_journal_entry_id: string | null })
+            .registration_journal_entry_id,
+        },
       })
     }
 

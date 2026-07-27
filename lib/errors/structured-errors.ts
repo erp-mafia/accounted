@@ -1168,6 +1168,22 @@ const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'Only unsettled supplier invoices can be edited. Paid, credited and reversed invoices are corrected with a credit note or a storno.',
   },
+  SI_EDIT_VERIFIKAT_LOCKED: {
+    httpStatus: 400,
+    message_sv:
+      'Fakturadatum och fakturanummer står på det bokförda verifikatet och kan inte ändras här. ' +
+      'Rätta verifikatet (rättelse i öppen period, annars storno + ny bokföring) eller kreditera fakturan. ' +
+      'Förfallodatum, betalningsreferens och anteckningar går fortfarande att ändra.',
+    message_en:
+      'Invoice date and invoice number are part of the posted verifikat and cannot be changed here. ' +
+      'Correct the entry instead (inline rättelse in an open period, otherwise storno + re-book), or credit the invoice. ' +
+      'due_date, payment_reference and notes remain editable.',
+    remediation: {
+      description:
+        'Correct the registration verifikat through a sanctioned rättelse path, or credit the supplier invoice and register a corrected one.',
+      tool: 'gnubok_correct_entry',
+    },
+  },
   SI_APPROVE_UPDATE_FAILED: {
     httpStatus: 500,
     message_sv: 'Kunde inte godkänna leverantörsfakturan.',

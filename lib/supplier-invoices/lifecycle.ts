@@ -94,3 +94,55 @@ export function canApproveSupplierInvoice(invoice: {
   if (invoice.approved_at) return false
   return invoice.status === 'registered' || invoice.status === 'overdue'
 }
+
+/**
+ * Fields that are copied onto the registration verifikat when it is posted:
+ *
+ *   - invoice_date   -> journal_entries.entry_date (and the fiscal period the
+ *                       entry was filed in), lib/bookkeeping/supplier-invoice-entries.ts
+ *   - supplier_invoice_number -> the verifikat description ("Leverantörsfaktura
+ *                       <nr>, <leverantör>") and every line_description built
+ *                       from it
+ *
+ * BFL 5 kap 6-7 § makes "datum för affärshändelsen" and the identification of
+ * the underlying verifikation mandatory verifikat content, and 5 kap 5 §
+ * requires a correction to leave the original visible. Rewriting either field
+ * on the invoice row after the entry is posted satisfies neither: the entry
+ * keeps its original values, nothing lands in journal_entry_rattelse_log, and
+ * the invoice and its verifikat silently disagree (#1230).
+ */
+export const VERIFIKAT_CRITICAL_SUPPLIER_INVOICE_FIELDS = [
+  'invoice_date',
+  'supplier_invoice_number',
+] as const
+
+export type VerifikatCriticalSupplierInvoiceField =
+  (typeof VERIFIKAT_CRITICAL_SUPPLIER_INVOICE_FIELDS)[number]
+
+/**
+ * The verifikat-critical fields an update would actually change on an invoice
+ * whose registration entry is already posted. Empty means the update is safe.
+ *
+ * Only a *differing* value is reported: clients that PUT the whole form back
+ * (the dashboard edit dialog resends every field it rendered) must keep
+ * working, and resending the stored value changes nothing on the verifikat.
+ * Amounts and accounts are not listed because the update schema cannot reach
+ * them; the damage this guards against is metadata drift, not entry balance.
+ */
+export function findLockedVerifikatFields(
+  // Callers hand over the whole validated update body, so unrelated keys
+  // (due_date, notes, ...) have to be accepted rather than stripped first.
+  update: Partial<Record<VerifikatCriticalSupplierInvoiceField, string | null | undefined>> & {
+    [key: string]: unknown
+  },
+  existing: {
+    registration_journal_entry_id?: string | null
+  } & Partial<Record<VerifikatCriticalSupplierInvoiceField, string | null>>,
+): VerifikatCriticalSupplierInvoiceField[] {
+  if (!existing.registration_journal_entry_id) return []
+  return VERIFIKAT_CRITICAL_SUPPLIER_INVOICE_FIELDS.filter((field) => {
+    const next = update[field]
+    if (next === undefined) return false
+    return next !== (existing[field] ?? null)
+  })
+}

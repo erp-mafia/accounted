@@ -84,6 +84,9 @@ describe('PUT /api/supplier-invoices/[id]', () => {
         remaining_amount: 1000,
         is_credit_note: false,
         approved_at: null,
+        invoice_date: '2026-06-30',
+        supplier_invoice_number: 'F-1001',
+        registration_journal_entry_id: null,
         ...overrides,
       },
       error: null,
@@ -194,6 +197,68 @@ describe('PUT /api/supplier-invoices/[id]', () => {
 
     expect(status).toBe(409)
     expect(body.error.code).toBe('SI_EDIT_CONFLICT')
+  })
+
+  // #1230: invoice_date is the registration verifikat's entry_date and
+  // supplier_invoice_number is in its description. Once that entry exists, a
+  // metadata PUT must not move them: nothing would land in
+  // journal_entry_rattelse_log and the row and its verifikat would disagree.
+  it('refuses to move the invoice date once the registration entry is posted', async () => {
+    singleResults.push(existingRow({ registration_journal_entry_id: 'je-1' }))
+
+    const response = await putRequest({ invoice_date: '2026-07-15' })
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { fields?: string[] } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_EDIT_VERIFIKAT_LOCKED')
+    expect(body.error.details?.fields).toEqual(['invoice_date'])
+    expect(updatePayloads).toHaveLength(0)
+  })
+
+  it('refuses to rewrite the invoice number once the registration entry is posted', async () => {
+    singleResults.push(existingRow({ registration_journal_entry_id: 'je-1' }))
+
+    const response = await putRequest({ supplier_invoice_number: 'F-2002' })
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { fields?: string[] } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_EDIT_VERIFIKAT_LOCKED')
+    expect(body.error.details?.fields).toEqual(['supplier_invoice_number'])
+    expect(updatePayloads).toHaveLength(0)
+  })
+
+  it('still allows those fields while the invoice is unbooked', async () => {
+    singleResults.push(existingRow({ registration_journal_entry_id: null }))
+    singleResults.push({ data: { id: 'si-1', status: 'registered' }, error: null })
+
+    const response = await putRequest({ invoice_date: '2026-07-15' })
+
+    expect(response.status).toBe(200)
+    expect(updatePayloads[0]).toEqual({ invoice_date: '2026-07-15' })
+  })
+
+  it('lets a booked invoice keep editing due date and notes, and resend unchanged values', async () => {
+    // The aged-invoice flow (#1206) has to keep working on booked invoices:
+    // only the two verifikat fields are frozen, and resending them unchanged
+    // (as a full-form PUT does) changes nothing on the verifikat.
+    singleResults.push(
+      existingRow({ status: 'overdue', due_date: PAST, registration_journal_entry_id: 'je-1' }),
+    )
+    singleResults.push({ data: { id: 'si-1', status: 'registered' }, error: null })
+
+    const response = await putRequest({
+      due_date: FUTURE,
+      invoice_date: '2026-06-30',
+      supplier_invoice_number: 'F-1001',
+      notes: 'Uppgörelse om ny förfallodag',
+    })
+
+    expect(response.status).toBe(200)
+    expect(updatePayloads[0]).toMatchObject({ due_date: FUTURE, status: 'registered' })
   })
 
   it('does not un-flip a credit note into a payable label', async () => {

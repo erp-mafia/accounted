@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   canApproveSupplierInvoice,
+  findLockedVerifikatFields,
   isOverduePayable,
   isUnsettledSupplierInvoiceStatus,
   resolveUnsettledStatus,
@@ -98,5 +99,75 @@ describe('canApproveSupplierInvoice', () => {
   it('refuses settled statuses', () => {
     expect(canApproveSupplierInvoice({ status: 'paid' })).toBe(false)
     expect(canApproveSupplierInvoice({ status: 'credited' })).toBe(false)
+  })
+})
+
+/**
+ * #1230: the two fields that are copied onto the registration verifikat
+ * (entry_date and the description) must stop being freely writable once that
+ * verifikat exists, on every update path that shares the schema.
+ */
+describe('findLockedVerifikatFields', () => {
+  const BOOKED = {
+    registration_journal_entry_id: 'je-1',
+    invoice_date: '2026-06-30',
+    supplier_invoice_number: 'F-1001',
+  }
+
+  it('locks nothing while the invoice is unbooked', () => {
+    expect(
+      findLockedVerifikatFields(
+        { invoice_date: '2026-07-15', supplier_invoice_number: 'F-2002' },
+        { ...BOOKED, registration_journal_entry_id: null },
+      ),
+    ).toEqual([])
+  })
+
+  it('locks the invoice date once the registration entry is posted', () => {
+    expect(findLockedVerifikatFields({ invoice_date: '2026-07-15' }, BOOKED)).toEqual([
+      'invoice_date',
+    ])
+  })
+
+  it('locks the invoice number too: it is part of the verifikat description', () => {
+    expect(findLockedVerifikatFields({ supplier_invoice_number: 'F-2002' }, BOOKED)).toEqual([
+      'supplier_invoice_number',
+    ])
+  })
+
+  it('reports every changed field so the error can name them', () => {
+    expect(
+      findLockedVerifikatFields(
+        { invoice_date: '2026-07-15', supplier_invoice_number: 'F-2002' },
+        BOOKED,
+      ),
+    ).toEqual(['invoice_date', 'supplier_invoice_number'])
+  })
+
+  it('accepts a resent identical value: a full-form PUT changes nothing', () => {
+    expect(
+      findLockedVerifikatFields(
+        { invoice_date: '2026-06-30', supplier_invoice_number: 'F-1001', due_date: '2026-08-31' },
+        BOOKED,
+      ),
+    ).toEqual([])
+  })
+
+  it('leaves due_date, payment_reference and notes alone', () => {
+    expect(
+      findLockedVerifikatFields(
+        { due_date: '2026-09-30', payment_reference: 'OCR-1', notes: 'ny not' },
+        BOOKED,
+      ),
+    ).toEqual([])
+  })
+
+  it('treats a first-time delivery/invoice value against a null column as a change', () => {
+    expect(
+      findLockedVerifikatFields(
+        { supplier_invoice_number: 'F-2002' },
+        { ...BOOKED, supplier_invoice_number: null },
+      ),
+    ).toEqual(['supplier_invoice_number'])
   })
 })
