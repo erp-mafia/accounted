@@ -395,6 +395,20 @@ export async function skvRequestWithAuth(
 
     const lower = text.toLowerCase()
 
+    // Gateway signature first, mirroring the 403 path. MuleSoft can pair its
+    // contract-enforcement body with an OAuth-shaped challenge header, and the
+    // scope branch below would then claim a token problem that reconnecting
+    // cannot fix: SESSION_EXPIRED and MISSING_SCOPE are both reconsent codes,
+    // so either verdict re-arms the banner the user just tried to clear.
+    if (isApigwScopeContractError(text)) {
+      throw new SkatteverketAuthError(
+        'Skatteverkets API-gateway nekade anropet. Kontrollera att din ' +
+        'APIGW-klient (SKATTEVERKET_APIGW_CLIENT_ID) har prenumeration på ' +
+        'denna tjänst i Utvecklarportalen.',
+        'ACCESS_DENIED'
+      )
+    }
+
     // OAuth's standard insufficient_scope marker. SKV sometimes emits this
     // as 401 (rather than 403) when the AGI APIGW evaluates scope before
     // the application sees the token. The remedy is the same as MISSING_SCOPE:
@@ -438,8 +452,8 @@ export async function skvRequestWithAuth(
     // APIGW subscription / client-credential problems: the gateway responds
     // before the bearer is ever evaluated. The user reconnecting won't help
     // here: it's an Utvecklarportalen / APIGW configuration issue.
+    // (the APIGW scope-contract body is already handled above)
     const looksLikeApigwIssue =
-      isApigwScopeContractError(text) ||
       lower.includes('client_id') ||
       lower.includes('client id') ||
       lower.includes('subscription') ||

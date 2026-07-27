@@ -150,10 +150,13 @@ describe('skvRequest: error mapping', () => {
     }
   })
 
-  it('treats the APIGW contract wording on a 401 as a gateway issue too', async () => {
-    // SESSION_EXPIRED is also a reconsent code, so the same self-perpetuation
-    // would appear if the gateway ever returned this as 401.
-    mockFetchStatus(401, '{"error": "The required scopes are not authorized"}')
+  it('treats the APIGW contract wording on a 401 as a gateway issue, even with an OAuth challenge header', async () => {
+    // SESSION_EXPIRED and MISSING_SCOPE are both reconsent codes, so either
+    // verdict would re-arm the banner. The gateway signature wins over the
+    // WWW-Authenticate scope marker when both are present.
+    mockFetchStatus(401, '{"error": "The required scopes are not authorized"}', {
+      'WWW-Authenticate': 'Bearer error="invalid_scope"',
+    })
     try {
       await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
       expect.fail('expected throw')
