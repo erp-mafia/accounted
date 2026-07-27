@@ -1104,6 +1104,33 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
     expect(body.data.due_date).toBe('2026-07-31')
   })
 
+  it('reports the lock, not a generic race, when a registration entry lands mid-flight', async () => {
+    // Queue: pre-flight read (unbooked) -> pinned update matches nothing ->
+    // re-read shows the entry that landed in between.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        supplier_invoices: [
+          { data: SAMPLE_SI, error: null },
+          { data: null, error: null },
+          { data: { ...SAMPLE_SI, registration_journal_entry_id: JE_ID }, error: null },
+        ],
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    const res = await updateSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ invoice_date: '2026-06-01' }),
+      }),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SI_EDIT_VERIFIKAT_LOCKED')
+    expect(body.error.details.reason).toBe('race')
+  })
+
   it('rejects unknown body keys (V4.5 strict schema)', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

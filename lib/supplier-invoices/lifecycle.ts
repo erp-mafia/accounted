@@ -120,8 +120,8 @@ export type VerifikatCriticalSupplierInvoiceField =
   (typeof VERIFIKAT_CRITICAL_SUPPLIER_INVOICE_FIELDS)[number]
 
 /**
- * The verifikat-critical fields an update would actually change on an invoice
- * whose registration entry is already posted. Empty means the update is safe.
+ * The verifikat-critical fields an update would actually move, ignoring
+ * whether an entry has been posted yet.
  *
  * Only a *differing* value is reported: clients that PUT the whole form back
  * (the dashboard edit dialog resends every field it rendered) must keep
@@ -129,9 +129,33 @@ export type VerifikatCriticalSupplierInvoiceField =
  * Amounts and accounts are not listed because the update schema cannot reach
  * them; the damage this guards against is metadata drift, not entry balance.
  */
-export function findLockedVerifikatFields(
+export function findChangedVerifikatFields(
   // Callers hand over the whole validated update body, so unrelated keys
   // (due_date, notes, ...) have to be accepted rather than stripped first.
+  update: Partial<Record<VerifikatCriticalSupplierInvoiceField, string | null | undefined>> & {
+    [key: string]: unknown
+  },
+  existing: Partial<Record<VerifikatCriticalSupplierInvoiceField, string | null>>,
+): VerifikatCriticalSupplierInvoiceField[] {
+  return VERIFIKAT_CRITICAL_SUPPLIER_INVOICE_FIELDS.filter((field) => {
+    const next = update[field]
+    if (next === undefined) return false
+    return next !== (existing[field] ?? null)
+  })
+}
+
+/**
+ * The verifikat-critical fields an update would change on an invoice whose
+ * registration entry is already posted. Empty means the update is safe.
+ *
+ * An empty result on an as-yet unbooked invoice is only true as of the read it
+ * was computed from: a registration entry can be posted between that read and
+ * the write. Callers must therefore pin `registration_journal_entry_id is null`
+ * on the update itself whenever findChangedVerifikatFields() is non-empty and
+ * this returns empty, so a concurrent posting turns into zero matched rows
+ * rather than the very drift this guards against.
+ */
+export function findLockedVerifikatFields(
   update: Partial<Record<VerifikatCriticalSupplierInvoiceField, string | null | undefined>> & {
     [key: string]: unknown
   },
@@ -140,9 +164,5 @@ export function findLockedVerifikatFields(
   } & Partial<Record<VerifikatCriticalSupplierInvoiceField, string | null>>,
 ): VerifikatCriticalSupplierInvoiceField[] {
   if (!existing.registration_journal_entry_id) return []
-  return VERIFIKAT_CRITICAL_SUPPLIER_INVOICE_FIELDS.filter((field) => {
-    const next = update[field]
-    if (next === undefined) return false
-    return next !== (existing[field] ?? null)
-  })
+  return findChangedVerifikatFields(update, existing)
 }

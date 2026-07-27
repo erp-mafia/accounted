@@ -22,6 +22,8 @@ const FUTURE = '2999-01-01'
 
 const updatePayloads: Record<string, unknown>[] = []
 const singleResults: { data: unknown; error: unknown }[] = []
+/** Columns pinned with .is(col, null) on the write, so CAS guards are assertable. */
+const isPredicates: string[] = []
 
 // Capturing chain: .single() walks a queue (first the existing-row read, then
 // the update's returning row) and .update() records the exact payload written.
@@ -36,7 +38,10 @@ const chain: any = {
   // The write paths pin their compare-and-swap predicates with .in()/.is(),
   // so the chain has to accept them too.
   in: () => chain,
-  is: () => chain,
+  is: (column: string) => {
+    isPredicates.push(column)
+    return chain
+  },
   single: () => Promise.resolve(singleResults.shift() ?? { data: null, error: null }),
   maybeSingle: () => Promise.resolve(singleResults.shift() ?? { data: null, error: null }),
 }
@@ -65,6 +70,7 @@ describe('PUT /api/supplier-invoices/[id]', () => {
     vi.clearAllMocks()
     updatePayloads.length = 0
     singleResults.length = 0
+    isPredicates.length = 0
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
   })
 
@@ -231,7 +237,7 @@ describe('PUT /api/supplier-invoices/[id]', () => {
     expect(updatePayloads).toHaveLength(0)
   })
 
-  it('still allows those fields while the invoice is unbooked', async () => {
+  it('still allows those fields while the invoice is unbooked, pinned against a concurrent posting', async () => {
     singleResults.push(existingRow({ registration_journal_entry_id: null }))
     singleResults.push({ data: { id: 'si-1', status: 'registered' }, error: null })
 
@@ -239,6 +245,31 @@ describe('PUT /api/supplier-invoices/[id]', () => {
 
     expect(response.status).toBe(200)
     expect(updatePayloads[0]).toEqual({ invoice_date: '2026-07-15' })
+    // The lock check read an unbooked row; the write must stay conditional on
+    // that, or a registration entry posted in between slips past the guard.
+    expect(isPredicates).toContain('registration_journal_entry_id')
+  })
+
+  it('reports a conflict when a registration entry lands mid-flight', async () => {
+    singleResults.push(existingRow({ registration_journal_entry_id: null }))
+    singleResults.push({ data: null, error: null }) // pinned update matched nothing
+
+    const response = await putRequest({ invoice_date: '2026-07-15' })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_EDIT_CONFLICT')
+  })
+
+  it('does not pin the entry column for a metadata-only update', async () => {
+    // Pinning unconditionally would break editing a booked invoice's due date.
+    singleResults.push(existingRow({ registration_journal_entry_id: 'je-1' }))
+    singleResults.push({ data: { id: 'si-1', status: 'registered' }, error: null })
+
+    const response = await putRequest({ notes: 'Autogiro' })
+
+    expect(response.status).toBe(200)
+    expect(isPredicates).not.toContain('registration_journal_entry_id')
   })
 
   it('lets a booked invoice keep editing due date and notes, and resend unchanged values', async () => {

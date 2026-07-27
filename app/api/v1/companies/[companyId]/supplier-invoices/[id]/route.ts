@@ -20,7 +20,10 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
-import { findLockedVerifikatFields } from '@/lib/supplier-invoices/lifecycle'
+import {
+  findChangedVerifikatFields,
+  findLockedVerifikatFields,
+} from '@/lib/supplier-invoices/lifecycle'
 
 // V1-only strict variant. The shared `UpdateSupplierInvoiceSchema` is also
 // consumed by the dashboard, where unknown keys are silently stripped, fine
@@ -307,7 +310,17 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       return dryRunPreview({ ...existing, ...updateData }, { requestId: ctx.requestId, log: ctx.log })
     }
 
-    const { data, error } = await ctx.supabase
+    // The lock check read a row that was still unbooked. If this patch moves a
+    // verifikat-critical field, the write stays conditional on that: a
+    // registration entry posted in between must lose the race rather than end
+    // up disagreeing with the invoice it was built from.
+    const movesVerifikatFields =
+      findChangedVerifikatFields(
+        body,
+        existing as { invoice_date: string | null; supplier_invoice_number: string | null },
+      ).length > 0
+
+    let write = ctx.supabase
       .from('supplier_invoices')
       .update(updateData)
       .eq('company_id', ctx.companyId!)
@@ -315,13 +328,46 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       // Race guard: another request may have approved / paid between the
       // pre-flight status check and this update.
       .eq('status', 'registered')
-      .select(SI_DETAIL_COLUMNS)
-      .maybeSingle()
+    if (movesVerifikatFields) {
+      write = write.is('registration_journal_entry_id', null)
+    }
+
+    const { data, error } = await write.select(SI_DETAIL_COLUMNS).maybeSingle()
 
     if (error) {
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }
     if (!data) {
+      // Either the status moved or a registration entry landed. Re-read so the
+      // caller gets the reason that actually applies instead of a guess.
+      const { data: current } = await ctx.supabase
+        .from('supplier_invoices')
+        .select('status, registration_journal_entry_id, invoice_date, supplier_invoice_number')
+        .eq('company_id', ctx.companyId!)
+        .eq('id', invoiceId)
+        .maybeSingle()
+
+      const nowLocked = current
+        ? findLockedVerifikatFields(
+            body,
+            current as {
+              registration_journal_entry_id: string | null
+              invoice_date: string | null
+              supplier_invoice_number: string | null
+            },
+          )
+        : []
+      if (nowLocked.length > 0) {
+        return v1ErrorResponseFromCode('SI_EDIT_VERIFIKAT_LOCKED', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            fields: nowLocked,
+            journal_entry_id: (current as { registration_journal_entry_id: string | null })
+              .registration_journal_entry_id,
+            reason: 'race',
+          },
+        })
+      }
       return v1ErrorResponseFromCode('SI_NOT_DRAFT', ctx.log, {
         requestId: ctx.requestId,
         details: { reason: 'race' },

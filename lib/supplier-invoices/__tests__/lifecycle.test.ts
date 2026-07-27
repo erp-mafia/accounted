@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   canApproveSupplierInvoice,
+  findChangedVerifikatFields,
   findLockedVerifikatFields,
   isOverduePayable,
   isUnsettledSupplierInvoiceStatus,
@@ -169,5 +170,26 @@ describe('findLockedVerifikatFields', () => {
         { ...BOOKED, supplier_invoice_number: null },
       ),
     ).toEqual(['supplier_invoice_number'])
+  })
+})
+
+describe('findChangedVerifikatFields', () => {
+  const ROW = { invoice_date: '2026-06-30', supplier_invoice_number: 'F-1001' }
+
+  it('reports the moving fields regardless of whether an entry is posted', () => {
+    // This is what the routes pin their write on: an unbooked invoice can be
+    // booked between the lock check and the update, so "would this change a
+    // verifikat field" has to be answerable without the booked flag.
+    expect(findChangedVerifikatFields({ invoice_date: '2026-07-15' }, ROW)).toEqual([
+      'invoice_date',
+    ])
+  })
+
+  it('is empty when the update only resends stored values', () => {
+    expect(findChangedVerifikatFields({ ...ROW, notes: 'x' }, ROW)).toEqual([])
+  })
+
+  it('is empty for a metadata-only update', () => {
+    expect(findChangedVerifikatFields({ due_date: '2026-09-30' }, ROW)).toEqual([])
   })
 })

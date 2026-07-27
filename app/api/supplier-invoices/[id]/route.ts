@@ -6,6 +6,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import {
+  findChangedVerifikatFields,
   findLockedVerifikatFields,
   isUnsettledSupplierInvoiceStatus,
   resolveUnsettledStatus,
@@ -84,6 +85,10 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
   }
 
+  // Unbooked, but the update does move a verifikat-critical field: the write
+  // below has to stay conditional on the invoice still being unbooked.
+  const movesVerifikatFields = findChangedVerifikatFields(body, existing).length > 0
+
   // Keep the overdue label in step with the due date this update lands on
   // instead of waiting for the next cron run: extending the due date should
   // clear "Förfallen" immediately, and moving it into the past should set it.
@@ -104,6 +109,15 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
     .update(rewritesStatus ? { ...body, status: restingStatus } : body)
     .eq('id', id)
     .eq('company_id', companyId)
+
+  if (movesVerifikatFields) {
+    // The lock check above read a row that was still unbooked. A registration
+    // entry posted between that read and this write would let exactly the
+    // drift this guards against slip through, so pin the column: a concurrent
+    // posting then matches zero rows and the caller is told to reload (the
+    // retry hits the lock with the right message).
+    update = update.is('registration_journal_entry_id', null)
+  }
 
   if (rewritesStatus) {
     // Compare-and-swap, but only when this write derives a new status. The
