@@ -1,0 +1,52 @@
+name: CI cache warm
+
+# The save half of the npm cache that .github/actions/setup-core restores.
+#
+# It has to live in its own main-branch workflow. GitHub scopes a cache entry to
+# the ref that wrote it, with one exception: entries written on the default
+# branch are readable from every branch and PR. core-build.yml runs on
+# pull_request only, so anything it saved would be readable by exactly one PR
+# and dead the moment that PR merged. That is not hypothetical here: a naive
+# `cache: npm` on the pg-real workflow once put fourteen 284 MB copies (4 GB,
+# 40% of the repo quota) on disk in a day, none of them ever restorable.
+#
+# So: main saves, PRs restore-only. Keyed on the lockfile hash, so this runs
+# only when dependencies actually move and each entry is read many times before
+# it is replaced.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - package-lock.json
+      - package.json
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-cache
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  warm:
+    name: Warm npm cache
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+
+      # Populates ~/.npm. `npm ci` deletes node_modules first, so this measures
+      # a cold install the same way a PR job will.
+      - run: npm ci
+
+      # A no-op when the key already exists, which is the intent: one entry per
+      # lockfile state, not one per push.
+      - name: Save npm cache
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-node20-${{ hashFiles('package-lock.json') }}

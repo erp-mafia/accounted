@@ -1,44 +1,59 @@
 name: Core Build (no extensions)
 
+# Split out of a single serial job that took 7m43s wall-clock: npm ci 24s, lint
+# ratchet 1m29s, build 2m00s, unit tests 3m31s, ratchets ~10s. None of those
+# stages needed the previous one's output, so they were serial only by
+# accident. Running them as independent jobs (and sharding the 716-file unit
+# suite four ways) puts the critical path on `build` at roughly 2m30s.
+#
+# The prologue each job needs is in .github/actions/setup-core.
+
 on: [pull_request]
 
+# Six concurrent jobs per push makes stale runs far more expensive than they
+# were when this was one job, and a superseded push has nothing worth finishing.
+concurrency:
+  group: core-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  core-only:
+  checks:
+    name: Checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 20
-      - run: npm ci
+      - uses: ./.github/actions/setup-core
+
       - name: Verify skill bodies are in sync with the seed migration
         # Fails if a .claude/skills/**/SKILL.md changed without regenerating the
         # seed migration (npm run skills:generate). Keeps prod skill content from
         # silently drifting out of sync. No DB needed: reads files + manifest.
         run: npm run skills:check
+
       - name: Verify taxonomy registry is in sync with the element lists
         # Fails if dev_docs/bokslut/taxonomi/** changed without regenerating
         # lib/bokslut/ixbrl/taxonomy/generated/ (npm run taxonomy:generate).
         # The iXBRL generator emits facts strictly from the generated registry,
         # so drift here means filings tagged against a stale concept set.
         run: npm run taxonomy:check
-      - name: Reset extensions config
-        run: echo '{"extensions":[]}' > extensions.config.json
-      - run: npm run setup:extensions
+
       - name: Lint ratchet (no new ESLint errors)
         # `npm run lint` was never wired into CI, so ~60 legacy errors
         # accumulated. This ratchet (sibling of check:guards) fails only when
         # a PR ADDS an error beyond scripts/checks/eslint-baseline.json; the
         # baseline ratchets down as legacy errors get fixed.
         run: npm run check:lint
-      - run: npm run build
-      - run: npm test
+
       - name: Antipattern ratchet (no new MFA-bypassing routes / naive öre-rounding)
         # Fails only if a PR ADDS a route that hand-rolls supabase.auth.getUser()
         # instead of the MFA-enforcing guard, or a new Math.round(x*100)/100.
         # Baseline lives in scripts/checks/antipatterns-baseline.json and ratchets
         # down as the A1 (route auth) and D1 (rounding) migrations land.
         run: npm run check:guards
+
       - name: Check no core imports from extensions
         run: |
           VIOLATIONS=$(grep -r "from '@/extensions/" lib/ app/api/ components/ --include="*.ts" --include="*.tsx" \
@@ -49,5 +64,60 @@ jobs:
           if [ -n "$VIOLATIONS" ]; then
             echo "ERROR: Core code imports from @/extensions/:"
             echo "$VIOLATIONS"
+            exit 1
+          fi
+
+  build:
+    name: Build (zero extensions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-core
+      - run: npm run build
+
+  test:
+    # 897 unit test files (11,341 tests) take 3m31s in one process. Measured
+    # locally, four shards split them 225/224/224/224 with the slowest at 64s,
+    # which puts this comfortably under the build job so it stops being the
+    # critical path. Vitest hard-errors when the shard count exceeds the
+    # resolved file count, which is nowhere near a concern at this size.
+    name: Unit tests (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      # One shard failing should not hide failures in the other three: a red PR
+      # is more useful when it lists every broken test, not just the first.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-core
+      - run: npm test -- --shard=${{ matrix.shard }}/4
+
+  core-build:
+    # One stable check name covering all six jobs above, so the PR checks list
+    # (and any future required-status-check rule) has a single thing to read
+    # rather than a shard-numbered matrix. `needs` alone would not be enough:
+    # a needed job that is skipped or cancelled does not fail its dependents,
+    # so the results are asserted explicitly.
+    name: Core Build
+    if: always()
+    needs: [checks, build, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert every core job succeeded
+        env:
+          CHECKS: ${{ needs.checks.result }}
+          BUILD: ${{ needs.build.result }}
+          TEST: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+          echo "checks=$CHECKS build=$BUILD test=$TEST"
+          failed=0
+          for r in "$CHECKS" "$BUILD" "$TEST"; do
+            [ "$r" = "success" ] || failed=1
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::One or more core-build jobs did not succeed"
             exit 1
           fi

@@ -1,0 +1,43 @@
+name: Set up core toolchain
+description: >-
+  Node, dependencies, and a zero-extension registry: the prologue every
+  core-build job needs before it can lint, build, or test. The caller must check
+  the repository out first, because a local composite action cannot be resolved
+  until the workspace containing it exists.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v6
+      with:
+        node-version: 20
+
+    # Restore-only, deliberately never `save`. A cache written from a
+    # pull_request run is scoped to that PR's ref, so no other run can ever read
+    # it: PR-side saves are pure quota burn. Fourteen dead 284 MB copies (4 GB,
+    # 40% of the repo quota) accumulated in a single day the last time a naive
+    # `cache: npm` was left on, which is why test-pg-real.yml still runs
+    # uncached. The entries read here are written on main by ci-cache.yml, and
+    # default-branch entries are restorable from every PR.
+    - name: Restore npm cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ~/.npm
+        key: npm-${{ runner.os }}-node20-${{ hashFiles('package-lock.json') }}
+        restore-keys: |
+          npm-${{ runner.os }}-node20-
+
+    - name: Install dependencies
+      shell: bash
+      run: npm ci
+
+    # CI builds core with zero extensions enabled: that property is the entire
+    # reason this workflow exists, so every job that compiles or runs code needs
+    # the registry regenerated from an empty config first.
+    - name: Reset extensions config
+      shell: bash
+      run: echo '{"extensions":[]}' > extensions.config.json
+
+    - name: Generate extension registry
+      shell: bash
+      run: npm run setup:extensions
