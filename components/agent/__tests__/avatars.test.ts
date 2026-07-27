@@ -31,15 +31,31 @@ describe('AVATAR_OPTIONS', () => {
   })
 
   it('ships avatars that make no network requests of their own', () => {
-    // Self-hosting the file is pointless if the file then phones home: an
-    // <image href>, a url(https://…) or an xlink:href would reintroduce
-    // exactly the third-party request this replaced.
+    // Self-hosting the file is pointless if the file then phones home. This
+    // asserts the PROPERTY (nothing points off-origin) rather than a list of
+    // elements: an allowlist of <image> and xlink:href would still let a
+    // future asset through via <use href>, <feImage href>, or a
+    // scheme-relative //host, which is how this sort of guard rots.
     for (const option of AVATAR_OPTIONS) {
       const svg = readFileSync(join(PUBLIC_DIR, option.url), 'utf8')
-      expect(svg).not.toMatch(/<image[^>]*href=/i)
-      expect(svg).not.toMatch(/url\(\s*['"]?https?:/i)
-      expect(svg).not.toMatch(/xlink:href\s*=\s*['"]https?:/i)
-      expect(svg).not.toMatch(/<script/i)
+
+      // Namespace declarations and the licence metadata legitimately contain
+      // URLs and are never fetched, so they are removed before the check
+      // rather than special-cased inside it.
+      const referencing = svg
+        .replace(/<metadata[\s\S]*?<\/metadata>/gi, '')
+        .replace(/xmlns(:[a-z0-9-]+)?\s*=\s*"[^"]*"/gi, '')
+        .replace(/xsi:type\s*=\s*"[^"]*"/gi, '')
+
+      expect(referencing, `${option.id} references an absolute URL`).not.toMatch(/https?:\/\//i)
+      // Scheme-relative: "//host/x" inherits the page's scheme and still
+      // leaves the origin.
+      expect(referencing, `${option.id} references a scheme-relative URL`).not.toMatch(
+        /(href|src)\s*=\s*"\/\//i,
+      )
+      expect(referencing).not.toMatch(/url\(\s*['"]?\/\//i)
+      expect(referencing, `${option.id} contains a script`).not.toMatch(/<script/i)
+      expect(referencing, `${option.id} contains a foreignObject`).not.toMatch(/<foreignObject/i)
     }
   })
 
