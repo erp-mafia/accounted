@@ -15,6 +15,17 @@ import {
 
 const PRIVATE_NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' }
 
+/**
+ * `?disposition=inline` serves the PDF for in-browser review instead of forcing
+ * a download (#1190): reviewing an invoice should not mean opening a file from
+ * the Downloads folder. Anything else, including a missing or malformed value,
+ * keeps the download behaviour every existing caller relies on.
+ */
+function resolveDisposition(request: Request): 'inline' | 'attachment' {
+  const requested = new URL(request.url).searchParams.get('disposition')
+  return requested === 'inline' ? 'inline' : 'attachment'
+}
+
 function privateNoStore(response: NextResponse): NextResponse {
   response.headers.set('Cache-Control', 'private, no-store')
   return response
@@ -127,9 +138,13 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       status: 200,
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': contentDisposition('attachment', filename),
+        'Content-Disposition': contentDisposition(resolveDisposition(request), filename),
         'Content-Length': pdfBuffer.length.toString(),
         'Cache-Control': 'private, no-store',
+        // The filename is derived from company/customer/invoice data, so the
+        // Content-Type must not be re-sniffed from the bytes when the browser
+        // renders this inline.
+        'X-Content-Type-Options': 'nosniff',
       },
     })
   } catch (error) {

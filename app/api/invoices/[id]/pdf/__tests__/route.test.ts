@@ -95,6 +95,52 @@ describe('GET /api/invoices/[id]/pdf', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
   })
 
+  it('forces a download by default', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+
+    const response = await GET(
+      createMockRequest('/api/invoices/invoice-1/pdf'),
+      createMockRouteParams({ id: 'invoice-1' }),
+    )
+
+    expect(response.headers.get('Content-Disposition')).toMatch(/^attachment;/)
+  })
+
+  it('serves the PDF inline for in-browser review on ?disposition=inline (#1190)', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+
+    const response = await GET(
+      createMockRequest('/api/invoices/invoice-1/pdf', {
+        searchParams: { disposition: 'inline' },
+      }),
+      createMockRouteParams({ id: 'invoice-1' }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Content-Disposition')).toMatch(/^inline;/)
+    // The filename still travels with it, so the browser viewer's own save
+    // action produces the same name as the download button would.
+    expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
+      .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
+    expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff')
+  })
+
+  it('keeps the download behaviour for an unknown disposition value', async () => {
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: company, error: null })
+
+    const response = await GET(
+      createMockRequest('/api/invoices/invoice-1/pdf', {
+        searchParams: { disposition: 'evil' },
+      }),
+      createMockRouteParams({ id: 'invoice-1' }),
+    )
+
+    expect(response.headers.get('Content-Disposition')).toMatch(/^attachment;/)
+  })
+
   it('returns 400 before rendering when a foreign payment account is missing', async () => {
     enqueue({ data: { ...invoice, currency: 'EUR' }, error: null })
     enqueue({ data: { ...company, invoice_payment_accounts: {} }, error: null })

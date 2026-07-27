@@ -33,6 +33,7 @@ import {
   CheckCircle,
   FileText,
   Download,
+  Eye,
   XCircle,
   Mail,
   ReceiptText,
@@ -126,6 +127,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Set when the archived copy could not be produced, so the user is asked
   // instead of being handed a substitute that looks like the original.
   const [pdfArchiveIssue, setPdfArchiveIssue] = useState<'history' | 'document' | null>(null)
+  // Which action raised that question: the dialog's fallback must do what the
+  // user originally asked for (open in the browser vs save the file), not
+  // silently switch mechanism (#1190).
+  const [pdfIntent, setPdfIntent] = useState<'download' | 'preview'>('download')
   // Payment history backing the new Betalningsstatus card. Fetched alongside
   // the invoice itself so the card stays in sync with paid_amount /
   // remaining_amount on the invoice row.
@@ -483,6 +488,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     if (!invoice) return
 
     if (source.kind === 'unavailable') {
+      setPdfIntent('download')
       setPdfArchiveIssue('history')
       return
     }
@@ -496,6 +502,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         // A missing archive is not a generation failure and must not offer a
         // silent substitute: hand the choice back to the user.
         if (source.kind === 'archived') {
+          setPdfIntent('download')
           setPdfArchiveIssue('document')
           return
         }
@@ -551,6 +558,60 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     )
   }
 
+  /**
+   * Show one specific document in the browser instead of saving it (#1190):
+   * granskning should not require leaving the app for the Downloads folder.
+   *
+   * Which document may be shown is the same question as for the download, and
+   * gets the same answer: the archived delivery when it exists, a re-render only
+   * with the caveat spelled out, and a question rather than a guess when the
+   * delivery history could not be read. Only the mechanism differs, so a tab is
+   * opened synchronously (before any await) to keep the click's user activation
+   * and stay clear of the popup blocker.
+   */
+  function runInvoicePreview(source: InvoicePdfSource) {
+    if (!invoice) return
+
+    if (source.kind === 'unavailable') {
+      setPdfIntent('preview')
+      setPdfArchiveIssue('history')
+      return
+    }
+
+    const url =
+      source.kind === 'archived' ? source.url : invoiceRerenderUrl(invoice.id, { inline: true })
+
+    if (!window.open(url, '_blank', 'noopener,noreferrer')) {
+      toast({
+        title: t('pdf_preview_blocked_title'),
+        description: t('pdf_preview_blocked_description'),
+        variant: 'destructive',
+      })
+      return
+    }
+
+    const caveat = invoiceDocumentCaveat(source)
+    if (caveat) {
+      toast({
+        title: t('pdf_rerender_preview_title'),
+        description: t(RERENDER_CAVEAT_KEYS[caveat]),
+      })
+    }
+  }
+
+  function previewPDF() {
+    if (!invoice) return
+    setPdfArchiveIssue(null)
+    runInvoicePreview(
+      resolveInvoicePdfSource({
+        invoiceId: invoice.id,
+        invoiceStatus: invoice.status,
+        deliveriesLoaded: !deliveriesUnreadable,
+        deliveries,
+      }),
+    )
+  }
+
   // "Försök igen" from the archive dialog. Re-reads the delivery history first
   // so a transient list failure resolves back to the archived copy instead of
   // getting stuck on the stale empty state.
@@ -560,14 +621,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     const result = await retryLoadDeliveries()
     setIsDownloading(false)
     setPdfArchiveIssue(null)
-    await runInvoiceDownload(
-      resolveInvoicePdfSource({
-        invoiceId: invoice.id,
-        invoiceStatus: invoice.status,
-        deliveriesLoaded: result.ok,
-        deliveries: result.deliveries,
-      }),
-    )
+    const source = resolveInvoicePdfSource({
+      invoiceId: invoice.id,
+      invoiceStatus: invoice.status,
+      deliveriesLoaded: result.ok,
+      deliveries: result.deliveries,
+    })
+    // The retry is a second attempt at what the user asked for, not a switch to
+    // the other mechanism. A preview retry re-resolves the source first, so the
+    // tab it opens is no longer inside the original click's activation window;
+    // a blocked popup is reported rather than swallowed.
+    if (pdfIntent === 'preview') {
+      runInvoicePreview(source)
+      return
+    }
+    await runInvoiceDownload(source)
   }
 
   // The user explicitly accepted a re-render after being told it is not the
@@ -575,11 +643,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   async function downloadRerenderAnyway() {
     if (!invoice) return
     setPdfArchiveIssue(null)
-    await runInvoiceDownload({
-      kind: 'rerender',
+    const source = {
+      kind: 'rerender' as const,
       url: invoiceRerenderUrl(invoice.id),
-      reason: 'archive_unreachable',
-    })
+      reason: 'archive_unreachable' as const,
+    }
+    if (pdfIntent === 'preview') {
+      runInvoicePreview(source)
+      return
+    }
+    await runInvoiceDownload(source)
   }
 
   // Open the finalize dialog and peek the next F-number so the user can see
@@ -896,14 +969,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
           {/* No own PDF for a received self-billing invoice: the verifikationsunderlag is the document the customer sent us. */}
           {!isSelfBilled && (
-            <Button variant="outline" onClick={downloadPDF} disabled={isDownloading}>
-              {isDownloading ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="mr-2 h-4 w-4" />
-              )}
-              {t('download_pdf')}
-            </Button>
+            <>
+              {/* Review in the browser (#1190); the download stays for keeping a copy. */}
+              <Button variant="outline" onClick={previewPDF}>
+                <Eye className="mr-2 h-4 w-4" />
+                {t('preview_pdf')}
+              </Button>
+              <Button variant="outline" onClick={downloadPDF} disabled={isDownloading}>
+                {isDownloading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="mr-2 h-4 w-4" />
+                )}
+                {t('download_pdf')}
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -1702,7 +1782,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               onClick={downloadRerenderAnyway}
               disabled={isDownloading}
             >
-              {t('pdf_archive_issue_rerender')}
+              {pdfIntent === 'preview'
+                ? t('pdf_archive_issue_rerender_preview')
+                : t('pdf_archive_issue_rerender')}
             </Button>
             <Button onClick={retryArchivedDownload} disabled={isDownloading}>
               {isDownloading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

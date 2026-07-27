@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   invoiceDocumentCaveat,
+  invoiceRerenderUrl,
   resolveInvoicePdfSource,
   type InvoicePdfDelivery,
 } from '@/lib/invoices/invoice-pdf-source'
@@ -207,5 +208,26 @@ describe('invoiceDocumentCaveat', () => {
     expect(
       invoiceDocumentCaveat({ kind: 'unavailable', reason: 'delivery_history_unreadable' }),
     ).toBeNull()
+  })
+})
+
+describe('invoiceRerenderUrl', () => {
+  it('defaults to the download endpoint', () => {
+    expect(invoiceRerenderUrl(INVOICE_ID)).toBe(`/api/invoices/${INVOICE_ID}/pdf`)
+  })
+
+  // #1190: previewing must not silently become a download, and the archived
+  // delivery URL above is already an inline proxy, so both source kinds can be
+  // opened in the browser the same way.
+  it('asks for an inline response when previewing', () => {
+    expect(invoiceRerenderUrl(INVOICE_ID, { inline: true })).toBe(
+      `/api/invoices/${INVOICE_ID}/pdf?disposition=inline`,
+    )
+  })
+
+  it('encodes the invoice id', () => {
+    expect(invoiceRerenderUrl('a/b', { inline: true })).toBe(
+      '/api/invoices/a%2Fb/pdf?disposition=inline',
+    )
   })
 })

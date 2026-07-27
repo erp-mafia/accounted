@@ -86,8 +86,14 @@ export type InvoicePdfSource =
       reason: 'delivery_history_unreadable'
     }
 
-export function invoiceRerenderUrl(invoiceId: string): string {
-  return `/api/invoices/${encodeURIComponent(invoiceId)}/pdf`
+/**
+ * The re-render endpoint. `inline` asks it to serve the PDF for in-browser
+ * review instead of a download (#1190); the archived-delivery URL below is
+ * already an inline proxy, so both source kinds can be previewed the same way.
+ */
+export function invoiceRerenderUrl(invoiceId: string, options?: { inline?: boolean }): string {
+  const base = `/api/invoices/${encodeURIComponent(invoiceId)}/pdf`
+  return options?.inline ? `${base}?disposition=inline` : base
 }
 
 /**
