@@ -390,3 +390,161 @@ describe('gnubok_update_recurring_schedule: validation and staging', () => {
     expect(supabase.from).toHaveBeenNthCalledWith(2, 'customers')
   })
 })
+
+describe('recurring schedule tools: dimension bags', () => {
+  const PROJEKT_DIM = {
+    id: 'dim-6',
+    sie_dim_no: 6,
+    name: 'Projekt',
+    resets_annually: false,
+    is_system: true,
+    is_active: true,
+    sort_order: 2,
+  }
+  const PROJEKT_VALUE = {
+    id: 'dv-1',
+    dimension_id: 'dim-6',
+    code: 'P001',
+    name: 'Villa Almgren',
+    is_active: true,
+    start_date: null,
+    end_date: null,
+  }
+
+  /**
+   * The queued mock's chain proxy discards call args by design, so capture
+   * .insert payloads per table with a thin wrapper around the original
+   * implementation. Lets the tests assert what actually lands in
+   * pending_operations.params.
+   */
+  function captureInserts(supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) {
+    const inserted: Record<string, unknown[]> = {}
+    const originalFrom = supabase.from.getMockImplementation()!
+    supabase.from.mockImplementation((table: string) => {
+      const chain = originalFrom(table) as object
+      return new Proxy(chain, {
+        get(target, prop, receiver) {
+          if (prop === 'insert') {
+            return (rows: unknown) => {
+              ;(inserted[table] ??= []).push(rows)
+              return (Reflect.get(target, prop, receiver) as (r: unknown) => unknown)(rows)
+            }
+          }
+          return Reflect.get(target, prop, receiver)
+        },
+      })
+    })
+    return inserted
+  }
+
+  it('create: stages schedule + item bags verbatim while dimensions are disabled (free-text passthrough)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const inserted = captureInserts(supabase)
+    enqueue({ data: { dimensions_enabled: false } }) // company_settings (resolver)
+    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
+    enqueue({ data: { id: 'op-dims-1' } }) // pending_operations insert
+
+    const result = (await createTool().execute(
+      {
+        customer_id: CUSTOMER_ID,
+        name: 'Projekt-retainer',
+        day_of_month: 25,
+        default_dimensions: { '1': 'KS1' },
+        items: [
+          { description: 'Support', quantity: 1, unit: 'st', unit_price: 5000, dimensions: { '6': 'P001' } },
+          { description: 'Timmar', quantity: 2, unit: 'tim', unit_price: 1000 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const opRow = inserted['pending_operations'][0] as { params: Record<string, unknown> }
+    expect(opRow.params.default_dimensions).toEqual({ '1': 'KS1' })
+    const items = opRow.params.items as Array<Record<string, unknown>>
+    expect(items[0].dimensions).toEqual({ '6': 'P001' })
+    // Untagged template items stage without the key: the commit executor and
+    // the cron both treat a missing bag as {}.
+    expect(items[1]).not.toHaveProperty('dimensions')
+    expect(result.preview.default_dimensions).toEqual({ '1': 'KS1' })
+  })
+
+  it('create: resolves a value NAME to its registry code and echoes the resolution', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const inserted = captureInserts(supabase)
+    enqueue({ data: { dimensions_enabled: true } }) // company_settings
+    enqueue({ data: null }) // ensure_company_dimensions rpc
+    enqueue({ data: [PROJEKT_DIM] }) // dimensions
+    enqueue({ data: [PROJEKT_VALUE] }) // dimension_values
+    enqueue({ data: { id: CUSTOMER_ID, name: 'Test Customer AB', email: 'billing@example.test' } })
+    enqueue({ data: { id: 'op-dims-2' } })
+
+    const result = (await createTool().execute(
+      {
+        customer_id: CUSTOMER_ID,
+        name: 'Villaprojektet',
+        day_of_month: 25,
+        default_dimensions: { '6': 'Villa Almgren' },
+        items: [{ description: 'Support', quantity: 1, unit: 'st', unit_price: 5000 }],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const opRow = inserted['pending_operations'][0] as { params: Record<string, unknown> }
+    expect(opRow.params.default_dimensions).toEqual({ '6': 'P001' })
+    const resolutions = result.preview.dimension_resolutions as Array<Record<string, unknown>>
+    expect(resolutions.length).toBeGreaterThan(0)
+  })
+
+  it('create: rejects an unknown dimension value instead of auto-creating it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { dimensions_enabled: true } })
+    enqueue({ data: null })
+    enqueue({ data: [PROJEKT_DIM] })
+    enqueue({ data: [PROJEKT_VALUE] })
+
+    await expect(
+      createTool().execute(
+        {
+          customer_id: CUSTOMER_ID,
+          name: 'X',
+          day_of_month: 25,
+          default_dimensions: { '6': 'Helt Okänt Projekt' },
+          items: [{ description: 'S', quantity: 1, unit: 'st', unit_price: 100 }],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toThrow(/matcha|Kandidater|gnubok_create_dimension_value/i)
+  })
+
+  it('update: stages {} as the clear-all-tags bag replace', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: currentSchedule() })
+    enqueue({ data: { id: 'op-dims-3' } })
+
+    const result = (await updateTool().execute(
+      { schedule_id: SCHEDULE_ID, default_dimensions: {} },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      staged: boolean
+      preview: {
+        current: Record<string, unknown>
+        changes: Record<string, unknown>
+        proposed: Record<string, unknown>
+      }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes.default_dimensions).toEqual({})
+    expect(result.preview.proposed.default_dimensions).toEqual({})
+  })
+})

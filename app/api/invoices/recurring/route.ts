@@ -110,6 +110,7 @@ export const POST = withRouteContext(
         our_reference: input.our_reference ?? null,
         notes: input.notes ?? null,
         auto_send: input.auto_send,
+        default_dimensions: input.default_dimensions ?? {},
         next_run_date: nextRunDate,
         status: 'active',
       })
@@ -129,6 +130,7 @@ export const POST = withRouteContext(
       unit: item.unit,
       unit_price: item.unit_price,
       vat_rate: item.vat_rate ?? null,
+      dimensions: item.dimensions ?? {},
     }))
 
     const { error: itemsError } = await supabase

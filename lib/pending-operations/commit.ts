@@ -548,6 +548,7 @@ async function commitCreateRecurringSchedule(
       our_reference: validated.our_reference ?? null,
       notes: validated.notes ?? null,
       auto_send: validated.auto_send,
+      default_dimensions: validated.default_dimensions ?? {},
       next_run_date: nextRunDate,
       status: 'active',
     })
@@ -566,6 +567,7 @@ async function commitCreateRecurringSchedule(
     unit: item.unit,
     unit_price: item.unit_price,
     vat_rate: item.vat_rate ?? null,
+    dimensions: item.dimensions ?? {},
   }))
 
   const { error: itemsError } = await supabase
@@ -707,7 +709,7 @@ async function commitUpdateRecurringSchedule(
     // and silently skip billing dates.
     const { data: previousItems } = await supabase
       .from('recurring_invoice_schedule_items')
-      .select('sort_order, description, quantity, unit, unit_price, vat_rate')
+      .select('sort_order, description, quantity, unit, unit_price, vat_rate, dimensions')
       .eq('schedule_id', scheduleId)
 
     await supabase
@@ -723,6 +725,7 @@ async function commitUpdateRecurringSchedule(
       unit: item.unit,
       unit_price: item.unit_price,
       vat_rate: item.vat_rate ?? null,
+      dimensions: item.dimensions ?? {},
     }))
 
     const { error: itemsError } = await supabase
@@ -740,6 +743,7 @@ async function commitUpdateRecurringSchedule(
           unit: row.unit,
           unit_price: row.unit_price,
           vat_rate: row.vat_rate,
+          dimensions: row.dimensions ?? {},
         }))
         const { error: restoreError } = await supabase
           .from('recurring_invoice_schedule_items')

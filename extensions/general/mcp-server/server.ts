@@ -14799,6 +14799,10 @@ export const tools: McpTool[] = [
         last_run_warning: { type: ['string', 'null'] },
         generated_count: { type: 'number' },
         monthly_total_excl_vat: { type: 'number' },
+        default_dimensions: {
+          type: 'object',
+          description: 'Dims bag {sie_dim_no: code} copied onto every generated invoice',
+        },
         items: {
           type: 'array',
           items: {
@@ -14809,6 +14813,7 @@ export const tools: McpTool[] = [
               unit: { type: 'string' },
               unit_price: { type: 'number' },
               vat_rate: { type: ['number', 'null'], description: 'null = customer default at spawn time' },
+              dimensions: { type: 'object', description: 'Per-item dims bag; wins per key over default_dimensions' },
             },
           },
         },
@@ -14828,7 +14833,7 @@ export const tools: McpTool[] = [
       let query = supabase
         .from('recurring_invoice_schedules')
         .select(
-          'id, name, status, customer_id, day_of_month, send_hour, payment_terms_days, currency, auto_send, next_run_date, last_run_at, last_invoice_id, last_run_warning, generated_count, customer:customers(name), items:recurring_invoice_schedule_items(description, quantity, unit, unit_price, vat_rate, sort_order)',
+          'id, name, status, customer_id, day_of_month, send_hour, payment_terms_days, currency, auto_send, default_dimensions, next_run_date, last_run_at, last_invoice_id, last_run_warning, generated_count, customer:customers(name), items:recurring_invoice_schedule_items(description, quantity, unit, unit_price, vat_rate, dimensions, sort_order)',
           { count: 'exact' },
         )
         .eq('company_id', companyId)
@@ -14853,6 +14858,7 @@ export const tools: McpTool[] = [
             unit: it.unit,
             unit_price: it.unit_price,
             vat_rate: it.vat_rate ?? null,
+            dimensions: it.dimensions ?? {},
           }))
         const monthlyTotalExclVat =
           Math.round(items.reduce((sum, it) => sum + Number(it.quantity) * Number(it.unit_price), 0) * 100) / 100
@@ -14873,6 +14879,7 @@ export const tools: McpTool[] = [
           last_run_warning: row.last_run_warning ?? null,
           generated_count: row.generated_count,
           monthly_total_excl_vat: monthlyTotalExclVat,
+          default_dimensions: row.default_dimensions ?? {},
           items,
         }
       })
@@ -14918,6 +14925,11 @@ export const tools: McpTool[] = [
           description: 'Default false: invoices are created as drafts for manual review. true emails every generated invoice to the customer with no further approval; requires the customer to have an email address.',
         },
         start_date: { type: 'string', description: 'YYYY-MM-DD first run date. Omit to run on the next occurrence of day_of_month.' },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dims bag keyed by SIE dim no, value = code OR name, e.g. {"6":"P001"}. Copied onto every generated invoice. Unknown values rejected: never auto-created.',
+        },
         items: {
           type: 'array',
           minItems: 1,
@@ -14933,6 +14945,11 @@ export const tools: McpTool[] = [
                 type: ['number', 'null'],
                 enum: [0, 6, 12, 25, null],
                 description: 'Omit or null to use the customer default VAT rate at spawn time.',
+              },
+              dimensions: {
+                type: 'object',
+                additionalProperties: { type: 'string' },
+                description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
               },
             },
             required: ['description', 'quantity', 'unit_price'],
@@ -14951,6 +14968,27 @@ export const tools: McpTool[] = [
     },
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
+      // Resolve-don't-select: parse the schedule-level default bag + each
+      // item's own bag, then resolve codes AND natural-language names against
+      // the registry in ONE pass (mirrors gnubok_create_invoice). The staged
+      // params carry only resolved codes; the cron copies them verbatim onto
+      // every generated invoice.
+      const rawItems = Array.isArray(args.items)
+        ? (args.items as Array<Record<string, unknown>>)
+        : []
+      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        [defaultDimensions, ...rawItems.map((item, i) => parseDimensionsArg(item.dimensions, `items[${i}].dimensions`))],
+      )
+      const resolvedDefaultDimensions = resolvedDimBags[0]
+      const stagedItems = rawItems.map((item, i) => {
+        const { dimensions: _rawDimensions, ...rest } = item
+        const bag = resolvedDimBags[i + 1]
+        return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
+      })
+
       const candidate: Record<string, unknown> = {}
       for (const key of [
         'customer_id',
@@ -14964,9 +15002,16 @@ export const tools: McpTool[] = [
         'notes',
         'auto_send',
         'start_date',
-        'items',
       ]) {
         if (args[key] !== undefined) candidate[key] = args[key]
+      }
+      if (args.items !== undefined) {
+        // Non-array garbage passes through verbatim so the schema error below
+        // names the real problem instead of a synthetic empty list.
+        candidate.items = Array.isArray(args.items) ? stagedItems : args.items
+      }
+      if (resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0) {
+        candidate.default_dimensions = resolvedDefaultDimensions
       }
 
       const parsed = CreateRecurringScheduleParamsSchema.safeParse(candidate)
@@ -15007,6 +15052,12 @@ export const tools: McpTool[] = [
         projected_first_run_date: computeInitialRunDate(new Date(), params.day_of_month, params.start_date),
         monthly_total_excl_vat: monthlyTotalExclVat,
         items: params.items,
+        ...(params.default_dimensions && Object.keys(params.default_dimensions).length > 0
+          ? { default_dimensions: params.default_dimensions }
+          : {}),
+        // Echoed for every non-exact dimension resolution (resolve-don't-
+        // select) so the agent can verify what a name attached to.
+        ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
       }
 
       return stagePendingOperation(supabase, companyId, userId, 'create_recurring_schedule',
@@ -15059,6 +15110,11 @@ export const tools: McpTool[] = [
           enum: ['active', 'paused'],
           description: 'paused stops generating invoices; active resumes. Reactivating from a stale date rolls next_run_date to the next future occurrence, never today.',
         },
+        default_dimensions: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Dims bag {sie_dim_no: kod eller namn} copied onto every generated invoice. Replaces the whole bag; {} clears all tags. Omit to keep.',
+        },
         items: {
           type: 'array',
           minItems: 1,
@@ -15074,6 +15130,11 @@ export const tools: McpTool[] = [
                 type: ['number', 'null'],
                 enum: [0, 6, 12, 25, null],
                 description: 'Omit or null to use the customer default VAT rate at spawn time.',
+              },
+              dimensions: {
+                type: 'object',
+                additionalProperties: { type: 'string' },
+                description: 'Dims bag {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}. Wins per key over default_dimensions.',
               },
             },
             required: ['description', 'quantity', 'unit_price'],
@@ -15092,6 +15153,24 @@ export const tools: McpTool[] = [
     },
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
+      // Resolve-don't-select for both the replacement default bag and any
+      // per-item bags (mirrors gnubok_create_recurring_schedule). An explicit
+      // {} default_dimensions passes through as the clear-all-tags update.
+      const rawItems = Array.isArray(args.items)
+        ? (args.items as Array<Record<string, unknown>>)
+        : []
+      const defaultDimensions = parseDimensionsArg(args.default_dimensions, 'default_dimensions')
+      const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
+        supabase,
+        companyId,
+        [defaultDimensions, ...rawItems.map((item, i) => parseDimensionsArg(item.dimensions, `items[${i}].dimensions`))],
+      )
+      const stagedItems = rawItems.map((item, i) => {
+        const { dimensions: _rawDimensions, ...rest } = item
+        const bag = resolvedDimBags[i + 1]
+        return bag && Object.keys(bag).length > 0 ? { ...rest, dimensions: bag } : rest
+      })
+
       const changes: Record<string, unknown> = {}
       for (const key of [
         'customer_id',
@@ -15105,9 +15184,16 @@ export const tools: McpTool[] = [
         'notes',
         'auto_send',
         'status',
-        'items',
       ]) {
         if (args[key] !== undefined) changes[key] = args[key]
+      }
+      if (args.default_dimensions !== undefined) {
+        changes.default_dimensions = resolvedDimBags[0] ?? {}
+      }
+      if (args.items !== undefined) {
+        // Non-array garbage passes through verbatim so the schema error below
+        // names the real problem instead of a synthetic empty list.
+        changes.items = Array.isArray(args.items) ? stagedItems : args.items
       }
 
       const parsed = UpdateRecurringScheduleParamsSchema.safeParse({
@@ -15123,7 +15209,7 @@ export const tools: McpTool[] = [
       const { data: current, error } = await supabase
         .from('recurring_invoice_schedules')
         .select(
-          'id, name, status, customer_id, day_of_month, send_hour, payment_terms_days, currency, your_reference, our_reference, notes, auto_send, next_run_date, customer:customers(name, email), items:recurring_invoice_schedule_items(description, quantity, unit, unit_price, vat_rate, sort_order)',
+          'id, name, status, customer_id, day_of_month, send_hour, payment_terms_days, currency, your_reference, our_reference, notes, auto_send, default_dimensions, next_run_date, customer:customers(name, email), items:recurring_invoice_schedule_items(description, quantity, unit, unit_price, vat_rate, dimensions, sort_order)',
         )
         .eq('id', parsed.data.schedule_id)
         .eq('company_id', companyId)
@@ -15165,6 +15251,7 @@ export const tools: McpTool[] = [
           unit: it.unit,
           unit_price: it.unit_price,
           vat_rate: it.vat_rate ?? null,
+          dimensions: it.dimensions ?? {},
         }))
 
       const currentPreview = {
@@ -15181,6 +15268,7 @@ export const tools: McpTool[] = [
         our_reference: current.our_reference ?? null,
         notes: current.notes ?? null,
         auto_send: current.auto_send,
+        default_dimensions: current.default_dimensions ?? {},
         next_run_date: current.next_run_date,
         items: currentItems,
       }
@@ -15202,6 +15290,9 @@ export const tools: McpTool[] = [
             ...fieldChanges,
             ...(newItems ? { items: newItems } : {}),
           },
+          // Echoed for every non-exact dimension resolution (resolve-don't-
+          // select) so the agent can verify what a name attached to.
+          ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
         },
         actor,
         undefined,

@@ -1242,6 +1242,10 @@ export interface RecurringInvoiceSchedule {
   our_reference: string | null
   notes: string | null
 
+  // Dimension bag {sie_dim_no: code} copied onto every generated invoice's
+  // default_dimensions at spawn time.
+  default_dimensions?: Record<string, string>
+
   auto_send: boolean
   status: RecurringInvoiceScheduleStatus
 
@@ -1269,6 +1273,9 @@ export interface RecurringInvoiceScheduleItem {
   unit_price: number
   // null = inherit customer's default VAT rate at spawn time
   vat_rate: number | null
+  // Per-item bag copied onto the generated invoice_items.dimensions; merges
+  // over the schedule default on that item's revenue line.
+  dimensions?: Record<string, string>
   created_at: string
 }
 

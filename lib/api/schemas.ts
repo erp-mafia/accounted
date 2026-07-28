@@ -706,6 +706,9 @@ export const RecurringScheduleItemSchema = z.object({
     .union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)])
     .nullable()
     .optional(),
+  // Copied onto the generated invoice_items.dimensions; merges over the
+  // schedule's default_dimensions on that item's revenue line.
+  dimensions: DimensionsBagSchema.optional(),
 })
 
 export const CreateRecurringScheduleSchema = z.object({
@@ -720,6 +723,8 @@ export const CreateRecurringScheduleSchema = z.object({
   our_reference: z.string().optional(),
   notes: z.string().optional(),
   auto_send: z.boolean().default(false),
+  // Copied onto invoices.default_dimensions for every generated invoice.
+  default_dimensions: DimensionsBagSchema.optional(),
   // Optional: when to first run. Defaults to next occurrence of day_of_month
   // (today if day_of_month === today, otherwise next month).
   start_date: isoDate.optional(),
@@ -738,6 +743,8 @@ export const UpdateRecurringScheduleSchema = z.object({
   notes: z.string().nullable().optional(),
   auto_send: z.boolean().optional(),
   status: z.enum(['active', 'paused']).optional(),
+  // Replaces the whole bag if provided ({} clears all tags). Omit to keep.
+  default_dimensions: DimensionsBagSchema.optional(),
   // Replace all items if provided. Omit to keep existing items unchanged.
   items: z.array(RecurringScheduleItemSchema).min(1).optional(),
 })

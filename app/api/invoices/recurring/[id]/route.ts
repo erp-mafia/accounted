@@ -198,7 +198,7 @@ export const PATCH = withRouteContext(
       // items", silently skipping billing dates.
       const { data: previousItems } = await supabase
         .from('recurring_invoice_schedule_items')
-        .select('sort_order, description, quantity, unit, unit_price, vat_rate')
+        .select('sort_order, description, quantity, unit, unit_price, vat_rate, dimensions')
         .eq('schedule_id', id)
 
       await supabase
@@ -214,6 +214,7 @@ export const PATCH = withRouteContext(
         unit: item.unit,
         unit_price: item.unit_price,
         vat_rate: item.vat_rate ?? null,
+        dimensions: item.dimensions ?? {},
       }))
       const { error: itemsError } = await supabase
         .from('recurring_invoice_schedule_items')
@@ -230,6 +231,7 @@ export const PATCH = withRouteContext(
             unit: row.unit,
             unit_price: row.unit_price,
             vat_rate: row.vat_rate,
+            dimensions: row.dimensions ?? {},
           }))
           const { error: restoreError } = await supabase
             .from('recurring_invoice_schedule_items')

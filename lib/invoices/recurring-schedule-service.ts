@@ -291,6 +291,10 @@ export async function executeRecurringSchedule(
       your_reference: schedule.your_reference,
       our_reference: schedule.our_reference,
       notes: schedule.notes,
+      // Carried verbatim so cron-spawned invoices book with the same
+      // dimension tags a manually created invoice would (PR7 propagation
+      // in lib/bookkeeping/invoice-entries.ts reads these columns).
+      default_dimensions: schedule.default_dimensions ?? {},
       document_type: 'invoice',
     })
     .select()
@@ -320,6 +324,7 @@ export async function executeRecurringSchedule(
       line_total: lineTotal,
       vat_rate: itemRate,
       vat_amount: itemVat,
+      dimensions: item.dimensions ?? {},
     }
   })
   const { error: itemsError } = await supabase.from('invoice_items').insert(itemRows)
