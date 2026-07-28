@@ -76,30 +76,83 @@ describe('documents bucket: WORM (no client-side DELETE)', () => {
     await sweep(`DELETE FROM auth.users WHERE id = $1`, [owner])
   })
 
-  it('no DELETE policy over the documents bucket exists, under any name', async () => {
-    const res = await getPool().query<{ polname: string; qual: string | null }>(
-      `SELECT polname, pg_get_expr(polqual, polrelid) AS qual
-         FROM pg_policy
-        WHERE polrelid = 'storage.objects'::regclass
-          AND polcmd = 'd'`,
+  /**
+   * Every policy on storage.objects that can destroy or rewrite an object,
+   * with both its USING and WITH CHECK expressions and its grantee roles.
+   *
+   * polcmd '*' (FOR ALL) is included deliberately: it grants DELETE and
+   * UPDATE just as effectively as 'd' and 'w', and it is the shape the one
+   * legitimate policy here (service_role_all_documents) already uses, so a
+   * hostile FOR ALL policy would look unremarkable in the catalogue.
+   *
+   * WITH CHECK is read as well as USING: an UPDATE policy can carry its
+   * bucket restriction in either, and a policy whose USING is permissive
+   * would be invisible to a polqual-only check.
+   */
+  async function destructivePoliciesOverDocuments(): Promise<string[]> {
+    const res = await getPool().query<{
+      polname: string
+      cmd: string
+      expr: string
+      roles: string[]
+    }>(
+      `SELECT p.polname,
+              p.polcmd::text AS cmd,
+              coalesce(pg_get_expr(p.polqual, p.polrelid), '')
+                || ' ' || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '') AS expr,
+              -- ::text is load-bearing: rolname is of type name, and
+              -- node-postgres hands back a raw "{authenticated}" string for a
+              -- name[] column instead of parsing it into a JS array.
+              ARRAY(SELECT rolname::text FROM pg_roles WHERE oid = ANY (p.polroles)) AS roles
+         FROM pg_policy p
+        WHERE p.polrelid = 'storage.objects'::regclass
+          AND p.polcmd IN ('d', 'w', '*')`,
     )
+
+    return res.rows
+      .filter((r) => {
+        // Substring match on the bucket name rather than the exact
+        // `bucket_id = 'documents'` shape pg_get_expr happens to emit today:
+        // a policy written as `bucket_id::text = 'documents'` or with the
+        // comparison reversed would slip past a stricter match. For a WORM
+        // ratchet, a false alarm is cheap and a silent hole is not.
+        if (!r.expr.includes('documents')) return false
+        // An empty role array means the policy is granted to PUBLIC (oid 0
+        // has no pg_roles row), which is the most permissive case there is,
+        // so it must NOT be read as "no client roles".
+        if (r.roles.length === 0) return true
+        // service_role bypasses RLS anyway and is how the application does
+        // its authorized deletes; every other grantee is client-reachable.
+        return r.roles.some((role) => role !== 'service_role')
+      })
+      .map((r) => `${r.polname} (${r.cmd})`)
+  }
+
+  it('no client-reachable DELETE, UPDATE or FOR ALL policy covers the documents bucket', async () => {
     // receipts_delete is a different bucket and is intentionally deletable:
-    // receipts are pre-bookkeeping scratch, not rakenskapsinformation.
-    const overDocuments = res.rows.filter((r) => (r.qual ?? '').includes("bucket_id = 'documents'"))
-    expect(overDocuments.map((r) => r.polname)).toEqual([])
+    // receipts are pre-bookkeeping scratch, not rakenskapsinformation. An
+    // UPDATE policy would be as damaging as a DELETE one: it lets a user
+    // rewrite an object in place, defeating the version chain.
+    expect(await destructivePoliciesOverDocuments()).toEqual([])
   })
 
-  it('no UPDATE policy over the documents bucket exists either', async () => {
-    // An UPDATE policy would let a user repoint or overwrite an object in
-    // place, which defeats the version chain just as thoroughly as a delete.
-    const res = await getPool().query<{ polname: string; qual: string | null }>(
-      `SELECT polname, pg_get_expr(polqual, polrelid) AS qual
-         FROM pg_policy
-        WHERE polrelid = 'storage.objects'::regclass
-          AND polcmd = 'w'`,
+  it('the ratchet sees a FOR ALL policy, which is how the real hole could return', async () => {
+    // Proves the assertion above is not vacuous. The dropped policy was
+    // FOR DELETE, but nothing stops the next dashboard edit from being
+    // FOR ALL, and that is the shape a polcmd IN ('d','w') check misses.
+    await getPool().query(
+      `CREATE POLICY worm_ratchet_probe ON storage.objects
+         FOR ALL TO authenticated
+         USING (bucket_id = 'documents')
+         WITH CHECK (bucket_id = 'documents')`,
     )
-    const overDocuments = res.rows.filter((r) => (r.qual ?? '').includes("bucket_id = 'documents'"))
-    expect(overDocuments.map((r) => r.polname)).toEqual([])
+    try {
+      expect(await destructivePoliciesOverDocuments()).toEqual(['worm_ratchet_probe (*)'])
+    } finally {
+      await getPool().query(`DROP POLICY IF EXISTS worm_ratchet_probe ON storage.objects`)
+    }
+    // ... and the catalogue is clean again once the probe is gone.
+    expect(await destructivePoliciesOverDocuments()).toEqual([])
   })
 
   it('the uploader cannot delete their own legacy-layout object', async () => {
