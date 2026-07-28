@@ -1359,6 +1359,10 @@ export const BulkBookInboxSchema = z.object({
   vat_amount: z.number().positive().nullish().transform((v) => v ?? undefined),
   notes: z.string().max(2000).nullish().transform((v) => v ?? undefined),
   allow_duplicate: z.boolean().nullish().transform((v) => v ?? undefined),
+  // Shared dimensions bag applied to the business lines of every generated
+  // verifikat (same semantics as single categorize). nullish for the same
+  // staged-params reason as the fields above.
+  dimensions: DimensionsBagSchema.nullish().transform((v) => v ?? undefined),
 })
 export type BulkBookInboxInput = z.infer<typeof BulkBookInboxSchema>
 

@@ -325,6 +325,27 @@ describe('gnubok_create_employee', () => {
     expect(inserted.title).not.toContain(SAMPLE_PERSONNUMMER)
   })
 
+  it('stages default_dimensions on the employee (free-text passthrough while dims are off)', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      // Serves BOTH the dimensions resolver (dimensions_enabled undefined →
+      // passthrough) and the entity-type preflight.
+      company_settings: { data: { entity_type: 'ab' } },
+      fiscal_periods: { data: null },
+      pending_operations: { data: { id: 'op-dims-emp' }, error: null },
+    })
+
+    const result = (await createEmployee.execute(
+      { ...validArgs, default_dimensions: { '1': 'KS1' } },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as {
+      params: Record<string, unknown>
+    }
+    expect(inserted.params.default_dimensions).toEqual({ '1': 'KS1' })
+  })
+
   it('rejects invalid input via CreateEmployeeSchema (missing salary)', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(
@@ -375,6 +396,28 @@ describe('gnubok_update_employee', () => {
     expect(result.preview.bank_details_changed).toBe(true)
     const salaryChange = result.preview.changes.find((c) => c.field === 'monthly_salary')
     expect(salaryChange).toEqual({ field: 'monthly_salary', from: 35000, to: 38000 })
+  })
+
+  it('stages a default_dimensions patch, with {} as the clear-all-tags update', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, default_dimensions: { '1': 'KS1' } } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-dims-emp2' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', default_dimensions: {} },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean; preview: { changes: Array<{ field: string; from: unknown; to: unknown }> } }
+
+    expect(result.staged).toBe(true)
+    const dimChange = result.preview.changes.find((c) => c.field === 'default_dimensions')
+    expect(dimChange).toEqual({ field: 'default_dimensions', from: { '1': 'KS1' }, to: {} })
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as {
+      params: { patch: Record<string, unknown> }
+    }
+    expect(inserted.params.patch.default_dimensions).toEqual({})
   })
 
   it('rejects personnummer changes at the tool boundary', async () => {

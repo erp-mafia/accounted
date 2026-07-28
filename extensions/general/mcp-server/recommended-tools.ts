@@ -45,6 +45,9 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       'gnubok_suggest_categories',
       'gnubok_categorize_transaction',
       'gnubok_match_transaction_to_invoice',
+      // Tagging: check the registry before writing dimensions bags on
+      // categorize calls (resolve-don't-select needs real codes/names).
+      'gnubok_list_dimensions',
       'gnubok_load_skill',
       'gnubok_approve_pending_operation',
     ],
@@ -71,6 +74,9 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       'gnubok_list_customers',
       'gnubok_create_customer',
       'gnubok_list_articles',
+      // Tagging: invoices carry default_dimensions + per-item bags; check the
+      // registry before setting them on gnubok_create_invoice.
+      'gnubok_list_dimensions',
       'gnubok_create_invoice',
       'gnubok_send_invoice',
       'gnubok_mark_invoice_as_sent',

@@ -405,6 +405,97 @@ describe('gnubok_query_journal: execute', () => {
     expect(result.applied_filters.group_by_dimension).toBe('6')
   })
 
+  it('include_dimensions returns each line\'s bag with an empty-object fallback', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const rows = [
+      { ...makeLineRow({ id: 'l1', account_number: '4010', debit_amount: 100 }), dimensions: { '6': 'P001' } },
+      { ...makeLineRow({ id: 'l2', account_number: '5010', debit_amount: 50 }), dimensions: null },
+    ]
+    const { supabase } = makeEntryLinesMock(rows)
+
+    const result = (await tool.execute(
+      { include_dimensions: true, limit: 100 },
+      'company-1',
+      'user-1',
+      supabase,
+    )) as { lines: Array<{ line_id: string; dimensions?: Record<string, string> }> }
+
+    const byId = new Map(result.lines.map((l) => [l.line_id, l]))
+    expect(byId.get('l1')?.dimensions).toEqual({ '6': 'P001' })
+    expect(byId.get('l2')?.dimensions).toEqual({})
+  })
+
+  it('omits the dimensions key from lines by default (width guard)', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    const rows = [
+      { ...makeLineRow({ id: 'l1', account_number: '4010', debit_amount: 100 }), dimensions: { '6': 'P001' } },
+    ]
+    const { supabase } = makeEntryLinesMock(rows)
+
+    const result = (await tool.execute(
+      { limit: 100 },
+      'company-1',
+      'user-1',
+      supabase,
+    )) as { lines: Array<Record<string, unknown>> }
+
+    expect(result.lines[0]).not.toHaveProperty('dimensions')
+  })
+
+  it('applies the dimensions bag filter via jsonb containment and echoes it', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
+    // Table-aware chain mock recording .contains calls: company_settings
+    // (resolver, dimensions disabled → free-text passthrough), then the
+    // two-step entry-lines fetch.
+    const containsCalls: Array<{ column: string; value: unknown }> = []
+    const row = { ...makeLineRow({ id: 'l1', debit_amount: 100 }), dimensions: { '6': 'P001' } }
+    const entryParent = row.journal_entries
+    const bareLine = { ...row, journal_entries: undefined, journal_entry_id: entryParent.id }
+    const chain = (data: unknown): unknown =>
+      new Proxy(
+        {},
+        {
+          get(_t, prop) {
+            if (prop === 'then') {
+              return (resolve: (v: unknown) => void) =>
+                resolve({ data, error: null, count: Array.isArray(data) ? data.length : null })
+            }
+            if (prop === 'range') return () => ({ data, error: null, count: Array.isArray(data) ? data.length : null })
+            if (prop === 'contains') {
+              return (column: string, value: unknown) => {
+                containsCalls.push({ column, value })
+                return chain(data)
+              }
+            }
+            return () => chain(data)
+          },
+        },
+      )
+    const supabase = {
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'company_settings') return chain({ dimensions_enabled: false })
+        if (table === 'journal_entries') return chain([entryParent])
+        return chain([bareLine])
+      }),
+    } as never
+
+    const result = (await tool.execute(
+      { dimensions: { '6': 'P001' }, limit: 100 },
+      'company-1',
+      'user-1',
+      supabase,
+    )) as {
+      dimension_filter?: Record<string, string>
+      applied_filters: { dimensions: Record<string, string> | null }
+      lines: Array<{ line_id: string }>
+    }
+
+    expect(containsCalls).toContainEqual({ column: 'dimensions', value: { '6': 'P001' } })
+    expect(result.dimension_filter).toEqual({ '6': 'P001' })
+    expect(result.applied_filters.dimensions).toEqual({ '6': 'P001' })
+    expect(result.lines).toHaveLength(1)
+  })
+
   it('rejects a non-numeric group_by_dimension', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_query_journal')!
     const supabase = makeChainMock([], 0)

@@ -447,6 +447,11 @@ export interface BulkBookInboxInput {
   vat_amount?: number
   notes?: string
   allow_duplicate?: boolean
+  /**
+   * Shared dimensions bag applied to the business lines of every generated
+   * verifikat in the batch (same semantics as single categorize).
+   */
+  dimensions?: Record<string, string>
 }
 
 export interface BulkBookInboxResult {
@@ -471,7 +476,7 @@ export async function bulkBookMatchedInboxItems(
   companyId: string,
   input: BulkBookInboxInput,
 ): Promise<BulkBookInboxResult> {
-  const { item_ids, category, vat_treatment, vat_amount, notes, allow_duplicate } = input
+  const { item_ids, category, vat_treatment, vat_amount, notes, allow_duplicate, dimensions } = input
 
   const booked: BulkBookInboxResult['booked'] = []
   const skipped: BulkBookInboxResult['skipped'] = []
@@ -516,7 +521,7 @@ export async function bulkBookMatchedInboxItems(
         userId,
         companyId,
         item.matched_transaction_id as string,
-        { category, vatTreatment: vat_treatment, vatAmount: vat_amount, notes, allowDuplicate: allow_duplicate },
+        { category, vatTreatment: vat_treatment, vatAmount: vat_amount, notes, allowDuplicate: allow_duplicate, dimensions },
         // Snapshot copies so the guard sees only the prior bookings of this batch.
         { excludeTransactionIds: [...bookedTransactionIds], excludeJournalEntryIds: [...bookedJournalEntryIds] },
       )
