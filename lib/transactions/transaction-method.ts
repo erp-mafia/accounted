@@ -167,11 +167,16 @@ const CODE_KEYWORD_METHODS: ReadonlyArray<readonly [RegExp, TransactionMethod]> 
 ]
 
 function methodFromCodes(codes: string[]): TransactionMethod | null {
-  for (const raw of codes) {
-    const parts = raw.toUpperCase().split(/[/\-_.\s]+/).filter(Boolean)
+  // Two passes so a subfamily refinement on EITHER code beats a family match
+  // on the other: with one combined pass, a family hit on the ISO code would
+  // short-circuit before the proprietary code's subfamily is inspected.
+  const partsList = codes.map((raw) => raw.toUpperCase().split(/[/\-_.\s]+/).filter(Boolean))
+  for (const parts of partsList) {
     if (parts.length >= 3 && ISO_SUBFAMILY_METHODS[parts[2]]) {
       return ISO_SUBFAMILY_METHODS[parts[2]]
     }
+  }
+  for (const parts of partsList) {
     if (parts.length >= 2) {
       const family = ISO_FAMILY_METHODS[`${parts[0]}/${parts[1]}`]
       if (family) return family

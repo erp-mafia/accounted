@@ -272,6 +272,23 @@ describe('mapBalanceTransaction', () => {
     })
   })
 
+  it("maps the SDK-unmodeled 'tax' type to a fee", () => {
+    // Live Stripe sends type 'tax' for automatic-tax deductions even though
+    // this SDK's BalanceTransaction union does not model it.
+    const rows = mapBalanceTransaction('acct_1', {
+      id: 'txn_tax_1',
+      type: 'tax' as BalanceTxnLike['type'],
+      amount: -1_374,
+      fee: 0,
+      currency: 'sek',
+      created: CREATED,
+      description: 'Automatic Taxes (2026-07-26)',
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].description).toBe('Stripe: Automatic Taxes (2026-07-26)')
+    expect(rows[0].transaction_method).toBe('fee')
+  })
+
   it('dates rows on created, not available_on semantics', () => {
     // created is the only date input: a mapped row for a txn created on the
     // 10th must land on the 10th even though Stripe settles days later.

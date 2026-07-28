@@ -102,6 +102,17 @@ describe('classifyTransactionMethod', () => {
     ).toBe('international')
   })
 
+  it('lets a subfamily on the second code beat a family match on the first', () => {
+    // The ISO code carries only DOMAIN/FAMILY while the proprietary code
+    // carries the full triple: the SALA refinement must still win.
+    const r = classifyTransactionMethod({
+      description: 'Payroll run',
+      bankTransactionCode: 'PMNT/ICDT',
+      proprietaryBankTransactionCode: 'PMNT-ICDT-SALA',
+    })
+    expect(r.method).toBe('salary')
+  })
+
   it('prefers the bank-authored phrase over the generic ISO family', () => {
     // A Bankgiro payment travels as an issued credit transfer (ICDT): the
     // phrase is the more specific truth.

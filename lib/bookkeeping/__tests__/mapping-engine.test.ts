@@ -77,6 +77,115 @@ describe('mapping-engine', () => {
   })
 
   describe('evaluateMappingRules', () => {
+    // Full mapping_rules row for pattern-matching tests; override per case.
+    const makeRule = (overrides: Record<string, unknown>) => ({
+      id: 'rule-1',
+      user_id: null,
+      rule_name: 'Pattern rule',
+      rule_type: 'description',
+      priority: 100,
+      mcc_codes: null,
+      merchant_pattern: null,
+      description_pattern: null,
+      amount_min: null,
+      amount_max: null,
+      debit_account: '6540',
+      credit_account: '1930',
+      vat_treatment: null,
+      vat_debit_account: null,
+      vat_credit_account: null,
+      risk_level: 'LOW',
+      default_private: false,
+      requires_review: false,
+      confidence_score: 0.9,
+      capitalization_threshold: null,
+      capitalized_debit_account: null,
+      is_active: true,
+      source: 'system',
+      user_description: null,
+      template_id: null,
+      created_at: '2024-01-01',
+      updated_at: '2024-01-01',
+      ...overrides,
+    })
+
+    it('matches a description_pattern that only appears in original_description', async () => {
+      // The ingest boundary strips the trailing channel phrase off the working
+      // title; a rule written against the bank's full text must keep firing
+      // via the immutable original.
+      const { evaluateMappingRules } = await import('../mapping-engine')
+
+      const tx = makeTransaction({
+        amount: -100,
+        merchant_name: null,
+        description: 'Vercel Jul',
+        original_description: 'Vercel Jul Överföring via internet',
+      })
+      mockResult({
+        data: [makeRule({ description_pattern: 'Överföring via internet' })],
+        error: null,
+      })
+
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      expect(result.debit_account).toBe('6540')
+    })
+
+    it('matches a merchant_pattern that only appears in original_description', async () => {
+      const { evaluateMappingRules } = await import('../mapping-engine')
+
+      const tx = makeTransaction({
+        amount: -100,
+        merchant_name: null,
+        description: 'SPOTIFY AB',
+        original_description: 'SPOTIFY AB Kortköp',
+      })
+      mockResult({
+        data: [makeRule({ rule_type: 'merchant_name', merchant_pattern: 'Kortköp' })],
+        error: null,
+      })
+
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      expect(result.debit_account).toBe('6540')
+    })
+
+    it('invalid-regex substring fallback also scans original_description', async () => {
+      const { evaluateMappingRules } = await import('../mapping-engine')
+
+      // 'fee (2026' is an invalid regex (unclosed group) and a literal
+      // substring of the original only.
+      const tx = makeTransaction({
+        amount: -100,
+        merchant_name: null,
+        description: 'Stripe: Billing - Usage Fee',
+        original_description: 'Stripe: Billing - Usage Fee (2026-07-26)',
+      })
+      mockResult({
+        data: [makeRule({ description_pattern: 'fee (2026' })],
+        error: null,
+      })
+
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      expect(result.debit_account).toBe('6540')
+    })
+
+    it('does not match when the pattern appears in neither description nor original', async () => {
+      const { evaluateMappingRules } = await import('../mapping-engine')
+
+      const tx = makeTransaction({
+        amount: -100,
+        merchant_name: null,
+        description: 'Vercel Jul',
+        original_description: 'Vercel Jul Överföring via internet',
+      })
+      mockResult({
+        data: [makeRule({ description_pattern: 'Kortköp' })],
+        error: null,
+      })
+
+      const result = await evaluateMappingRules(mockSupabase as never, 'user-1', tx)
+      expect(result.debit_account).toBe('6991') // default expense fallback
+    })
+
     it('returns default result when no rules match (expense)', async () => {
       const { evaluateMappingRules } = await import('../mapping-engine')
 
