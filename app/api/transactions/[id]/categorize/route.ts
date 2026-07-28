@@ -382,6 +382,14 @@ export const POST = withRouteContext(
       }
     }
 
+    // Dimensions: an explicitly picked bag tags the business lines of the
+    // generated verifikat (bank/VAT legs stay untagged, see
+    // buildTransactionEntryLines). It wins over a learned counterparty-
+    // template bag; omitted = the learned bag (if any) applies unchanged.
+    if (body.dimensions && Object.keys(body.dimensions).length > 0) {
+      mappingResult.dimensions = body.dimensions
+    }
+
     if (!mappingResult.debit_account || !mappingResult.credit_account) {
       return errorResponseFromCode('TX_CATEGORIZE_INVALID_MAPPING', txLog, {
         requestId,

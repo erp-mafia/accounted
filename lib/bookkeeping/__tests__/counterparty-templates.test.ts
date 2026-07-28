@@ -1576,3 +1576,159 @@ describe('learning-loop repair (issue #865)', () => {
     })
   })
 })
+
+// ── Runtime dimension learning (default_dimensions) ─────────────────────────
+
+describe('counterparty template default_dimensions', () => {
+  /**
+   * The queued mock's chain proxy discards call args by design, so capture
+   * .insert/.update payloads with a thin wrapper around the original
+   * implementation.
+   */
+  function captureWrites(supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) {
+    const writes: { insert: unknown[]; update: unknown[] } = { insert: [], update: [] }
+    const originalFrom = supabase.from.getMockImplementation()!
+    supabase.from.mockImplementation((table: string) => {
+      const chain = originalFrom(table) as object
+      return new Proxy(chain, {
+        get(target, prop, receiver) {
+          if (prop === 'insert' || prop === 'update') {
+            return (rows: unknown) => {
+              writes[prop].push(rows)
+              return (Reflect.get(target, prop, receiver) as (r: unknown) => unknown)(rows)
+            }
+          }
+          return Reflect.get(target, prop, receiver)
+        },
+      })
+    })
+    return writes
+  }
+
+  const baseMappingResult = {
+    rule: null,
+    debit_account: '5410',
+    credit_account: '1930',
+    risk_level: 'NONE' as const,
+    confidence: 0.9,
+    requires_review: false,
+    default_private: false,
+    vat_lines: [],
+    description: 'Test',
+  }
+
+  it('learns the booked bag on a fresh template insert', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const writes = captureWrites(supabase)
+    const tx = makeTransaction({ merchant_name: 'Spotify AB', date: '2026-07-01' })
+
+    enqueue({ data: null }) // no existing template
+    enqueue({ data: null }) // insert ok
+
+    await upsertCounterpartyTemplate(
+      supabase as never,
+      'company-1',
+      tx,
+      { ...baseMappingResult, dimensions: { '6': 'P001' } },
+      'user_approved',
+    )
+
+    expect(writes.insert).toHaveLength(1)
+    expect(writes.insert[0]).toMatchObject({ default_dimensions: { '6': 'P001' } })
+  })
+
+  it('replaces the stored bag when a re-approval carries a new one', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const writes = captureWrites(supabase)
+    const existing = makeCategorizationTemplate({
+      debit_account: '5410',
+      credit_account: '1930',
+      occurrence_count: 3,
+    })
+    const tx = makeTransaction({ merchant_name: 'telia', date: '2026-07-01' })
+
+    enqueue({ data: existing })
+    enqueue({ data: null }) // update ok
+
+    await upsertCounterpartyTemplate(
+      supabase as never,
+      'company-1',
+      tx,
+      { ...baseMappingResult, dimensions: { '6': 'P002' } },
+      'user_approved',
+    )
+
+    expect(writes.update).toHaveLength(1)
+    expect(writes.update[0]).toMatchObject({ default_dimensions: { '6': 'P002' } })
+  })
+
+  it('an untagged booking never erases the learned bag', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const writes = captureWrites(supabase)
+    const existing = makeCategorizationTemplate({
+      debit_account: '5410',
+      credit_account: '1930',
+      occurrence_count: 3,
+    })
+    const tx = makeTransaction({ merchant_name: 'telia', date: '2026-07-01' })
+
+    enqueue({ data: existing })
+    enqueue({ data: null }) // update ok
+
+    await upsertCounterpartyTemplate(
+      supabase as never,
+      'company-1',
+      tx,
+      baseMappingResult, // no dimensions
+      'user_approved',
+    )
+
+    expect(writes.update).toHaveLength(1)
+    expect(writes.update[0]).not.toHaveProperty('default_dimensions')
+  })
+
+  it('legacy single-line template match applies the learned bag', () => {
+    const template = makeCategorizationTemplate({
+      debit_account: '6200',
+      credit_account: '1930',
+      vat_treatment: 'standard_25',
+      default_dimensions: { '1': 'KS1', '6': 'P001' },
+    })
+    const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.85 }
+    const tx = makeTransaction({ amount: -1250 })
+
+    const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+    expect(result.dimensions).toEqual({ '1': 'KS1', '6': 'P001' })
+  })
+
+  it('a template without a learned bag sets no dimensions', () => {
+    const template = makeCategorizationTemplate({
+      debit_account: '6200',
+      credit_account: '1930',
+    })
+    const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.85 }
+    const tx = makeTransaction({ amount: -1250 })
+
+    const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+    expect(result).not.toHaveProperty('dimensions')
+  })
+
+  it('a mirrored refund keeps the learned bag so the reversal reduces the same project', () => {
+    const template = makeCategorizationTemplate({
+      debit_account: '6200',
+      credit_account: '1930',
+      vat_treatment: 'standard_25',
+      default_dimensions: { '6': 'P001' },
+    })
+    const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.85 }
+    // Expense-learned template, incoming money: mirrored, review-gated.
+    const tx = makeTransaction({ amount: 1250 })
+
+    const result = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma')
+
+    expect(result.direction_mismatch).toBe(true)
+    expect(result.dimensions).toEqual({ '6': 'P001' })
+  })
+})

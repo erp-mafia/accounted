@@ -1280,6 +1280,10 @@ export const CategorizeTransactionSchema = z
     vat_treatment: VatTreatmentSchema.optional(),
     account_override: accountNumber.optional(),
     counterparty_template_id: z.string().uuid().optional(),
+    // Dimensions bag {sie_dim_no: code} applied to the business lines of the
+    // generated verifikat (bank/VAT legs stay untagged). Wins over a learned
+    // counterparty-template bag when both are present.
+    dimensions: DimensionsBagSchema.optional(),
     user_description: z.string().max(500).optional(),
     inbox_item_id: z.string().uuid().optional(),
     confirm_no_match: z.boolean().optional(),

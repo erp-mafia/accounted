@@ -20,7 +20,9 @@ export type CategorizeHandler = (
   vatTreatment?: VatTreatment,
   accountOverride?: string,
   templateId?: string,
-  inboxItemId?: string
+  inboxItemId?: string,
+  // Dimensions bag {sie_dim_no: code} for the business lines of the booking.
+  dimensions?: Record<string, string>
 ) => Promise<string | null>
 
 export type MatchInvoiceHandler = (

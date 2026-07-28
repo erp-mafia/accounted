@@ -187,6 +187,11 @@ async function categorizeOne(
       input.vat_treatment,
     )
   }
+  // Dimensions: an explicitly supplied bag tags the business lines of the
+  // generated verifikat (bank/VAT legs stay untagged).
+  if (input.dimensions && Object.keys(input.dimensions).length > 0) {
+    mappingResult.dimensions = input.dimensions
+  }
   if (!mappingResult.debit_account || !mappingResult.credit_account) {
     return {
       ok: false,

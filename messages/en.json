@@ -2411,6 +2411,7 @@
     "change_template": "Change template",
     "reverse_charge_warning": "Reverse charge requires the supplier's VAT registration number and country.",
     "label_account": "Account",
+    "label_dimensions": "Dimensions",
     "label_vat_treatment": "VAT treatment",
     "no_vat_liability_account": "No VAT for liability/equity accounts",
     "no_vat_default": "No VAT",

@@ -1813,6 +1813,10 @@ export interface CategorizationTemplate {
   vat_account: string | null
   category: TransactionCategory | null
   line_pattern: LinePatternEntry[] | null
+  // Bag {sie_dim_no: code} learned from the latest tagged booking; applied to
+  // the business line on the legacy single-line template path (line_pattern
+  // entries carry their own bags on the multi-line path).
+  default_dimensions?: Record<string, string>
   occurrence_count: number
   confidence: number
   last_seen_date: string | null

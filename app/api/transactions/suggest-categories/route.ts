@@ -100,6 +100,10 @@ export const POST = withRouteContext(
         risk_level: 'NONE',
         requires_review: false,
         line_pattern: tmpl.line_pattern ?? null,
+        default_dimensions:
+          tmpl.default_dimensions && Object.keys(tmpl.default_dimensions).length > 0
+            ? tmpl.default_dimensions
+            : null,
       }
 
       const existing = template_suggestions[tx.id] || []

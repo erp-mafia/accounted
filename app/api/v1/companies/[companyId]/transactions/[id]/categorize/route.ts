@@ -295,6 +295,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
+    // Dimensions: an explicitly supplied bag tags the business lines of the
+    // generated verifikat (bank/VAT legs stay untagged). Wins over a learned
+    // counterparty-template bag; omitted = the learned bag (if any) applies.
+    if (body.dimensions && Object.keys(body.dimensions).length > 0) {
+      mappingResult.dimensions = body.dimensions
+    }
+
     if (!mappingResult.debit_account || !mappingResult.credit_account) {
       return v1ErrorResponseFromCode('TX_CATEGORIZE_INVALID_MAPPING', txLog, {
         requestId: ctx.requestId,

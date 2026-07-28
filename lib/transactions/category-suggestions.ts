@@ -247,6 +247,10 @@ export interface SuggestedTemplate {
   risk_level: string
   requires_review: boolean
   line_pattern?: LinePatternEntry[] | null
+  // Learned {sie_dim_no: code} bag on counterparty suggestions: prefills the
+  // review dialog's dimension picker (the server applies it at booking anyway;
+  // surfacing it keeps the user in the loop).
+  default_dimensions?: Record<string, string> | null
 }
 
 /**

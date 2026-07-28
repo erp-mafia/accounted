@@ -282,6 +282,61 @@ describe('POST /api/transactions/[id]/categorize', () => {
     )
   })
 
+  it('passes body.dimensions onto the mapping result the engine books', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      merchant_name: 'GitHub',
+      journal_entry_id: null,
+    })
+    // Fresh copy: the route mutates the mapping result in place, and the
+    // shared defaultMappingResult object would leak dimensions across tests.
+    mockBuildMappingResultFromCategory.mockReturnValue({ ...defaultMappingResult })
+
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // fiscal period check
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // tx update (CAS matched)
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: {
+        is_business: true,
+        category: 'expense_software',
+        dimensions: { '1': 'KS1', '6': 'P001' },
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockCreateTransactionJournalEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ id: 'tx-1' }),
+      expect.objectContaining({ dimensions: { '1': 'KS1', '6': 'P001' } }),
+    )
+  })
+
+  it('rejects a malformed dimensions bag with 400', async () => {
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: {
+        is_business: true,
+        category: 'expense_software',
+        // Key must be a SIE dim number: 'projekt' is not.
+        dimensions: { projekt: 'P001' },
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('flags an inbox underlag matched to the transaction as booked', async () => {
     // A document was attached to this transaction in the inbox
     // (matched_transaction_id) but not booked from there. Booking the

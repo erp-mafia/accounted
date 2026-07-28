@@ -2411,6 +2411,7 @@
     "change_template": "Byt mall",
     "reverse_charge_warning": "Omvänd skattskyldighet kräver leverantörens momsregistreringsnummer och land.",
     "label_account": "Konto",
+    "label_dimensions": "Dimensioner",
     "label_vat_treatment": "Momsbehandling",
     "no_vat_liability_account": "Ingen moms för skuld-/eget kapital-konton",
     "no_vat_default": "Ingen moms",
