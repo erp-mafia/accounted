@@ -2555,7 +2555,24 @@
     "edit_title_original_hint": "Original bank name: {name}.",
     "edit_title_restore": "Restore",
     "edit_title_cancel": "Cancel",
-    "edit_title_save": "Save"
+    "edit_title_save": "Save",
+    "method_line": "Payment method: {method}"
+  },
+  "tx_method": {
+    "card": "Card purchase",
+    "transfer": "Transfer",
+    "bankgiro": "Bankgiro payment",
+    "plusgiro": "Plusgiro payment",
+    "swish": "Swish",
+    "autogiro": "Direct debit",
+    "e_invoice": "E-invoice",
+    "international": "International payment",
+    "deposit": "Deposit",
+    "withdrawal": "Withdrawal",
+    "salary": "Salary",
+    "fee": "Fee",
+    "interest": "Interest",
+    "adjustment": "Adjustment"
   },
   "tx_quick_review": {
     "open_attached_failed": "Could not open the receipt",

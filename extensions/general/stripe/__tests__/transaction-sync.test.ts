@@ -194,6 +194,7 @@ describe('mapBalanceTransaction', () => {
       external_id: 'stripe_acct_1_txn_charge_1',
       import_source: STRIPE_IMPORT_SOURCE,
       description: 'Stripe-betalning Anna Andersson',
+      transaction_method: 'card',
     })
     expect(rows[1]).toMatchObject({
       date: CREATED_DATE,
@@ -201,6 +202,7 @@ describe('mapBalanceTransaction', () => {
       currency: 'SEK',
       external_id: 'stripe_acct_1_txn_charge_1_fee',
       description: 'Stripe-avgift (Stripe-betalning Anna Andersson)',
+      transaction_method: 'fee',
     })
   })
 
@@ -234,6 +236,7 @@ describe('mapBalanceTransaction', () => {
       amount: -200,
       description: 'Stripe-återbetalning',
       external_id: 'stripe_acct_1_txn_refund_1',
+      transaction_method: 'card',
     })
   })
 
@@ -244,6 +247,7 @@ describe('mapBalanceTransaction', () => {
       amount: -485.5,
       description: 'Stripe-utbetalning po_1',
       external_id: 'stripe_acct_1_txn_payout_1',
+      transaction_method: 'transfer',
     })
   })
 
@@ -260,9 +264,11 @@ describe('mapBalanceTransaction', () => {
     })
     expect(rows).toHaveLength(2)
     expect(rows[0].description).toBe('Stripe-tvist')
+    expect(rows[0].transaction_method).toBe('adjustment')
     expect(rows[1]).toMatchObject({
       amount: -15,
       external_id: 'stripe_acct_1_txn_adj_1_fee',
+      transaction_method: 'fee',
     })
   })
 
