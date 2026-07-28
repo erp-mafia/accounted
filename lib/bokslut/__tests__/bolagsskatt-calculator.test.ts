@@ -227,6 +227,68 @@ describe('calculateBolagsskatt', () => {
     expect(calls).toContainEqual(['neq', ['id', 'closing-1']])
   })
 
+  it('sumPostedYearEndDispositions scopes the closing-entry lookup to the company', async () => {
+    // Every sibling query in this function carries the tenant scope and
+    // service-role paths have no RLS to fall back on, so the fiscal_periods
+    // read must filter company_id even though id is the primary key.
+    const calls: Array<[string, unknown[]]> = []
+    const makeRecorder = (table: string) => {
+      const handler: ProxyHandler<object> = {
+        get(_t, prop) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) =>
+              resolve(
+                table === 'fiscal_periods'
+                  ? { data: { closing_entry_id: null }, error: null }
+                  : { data: [], error: null },
+              )
+          }
+          return (...args: unknown[]) => {
+            if (table === 'fiscal_periods') calls.push([String(prop), args])
+            return new Proxy({}, handler)
+          }
+        },
+      }
+      return new Proxy({}, handler)
+    }
+    const client = { from: (table: string) => makeRecorder(table) } as unknown as Parameters<
+      typeof sumPostedYearEndDispositions
+    >[0]
+
+    await sumPostedYearEndDispositions(client, 'co', 'fp')
+
+    expect(calls).toContainEqual(['eq', ['company_id', 'co']])
+    expect(calls).toContainEqual(['eq', ['id', 'fp']])
+  })
+
+  it('sumPostedYearEndDispositions throws when the closing-entry lookup fails', async () => {
+    // Swallowing the error would fall through to closingEntryId = null, which
+    // silently re-admits the closing entry's 78xx/88xx reversals and
+    // understates the tax base. A wrong bolagsskatt is worse than a failure.
+    const client = {
+      from: (table: string) => {
+        const handler: ProxyHandler<object> = {
+          get(_t, prop) {
+            if (prop === 'then') {
+              return (resolve: (v: unknown) => void) =>
+                resolve(
+                  table === 'fiscal_periods'
+                    ? { data: null, error: { message: 'permission denied' } }
+                    : { data: [], error: null },
+                )
+            }
+            return () => new Proxy({}, handler)
+          },
+        }
+        return new Proxy({}, handler)
+      },
+    } as unknown as Parameters<typeof sumPostedYearEndDispositions>[0]
+
+    await expect(sumPostedYearEndDispositions(client, 'co', 'fp')).rejects.toThrow(
+      /Failed to read posted dispositions/,
+    )
+  })
+
   it('sumPostedYearEndDispositions applies no closing-entry filter for an unclosed period', async () => {
     // fiscal_periods.closing_entry_id is null until the year is closed; the
     // fetch must then run unfiltered rather than with a null-id predicate.

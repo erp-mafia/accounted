@@ -116,11 +116,21 @@ export async function sumPostedYearEndDispositions(
     // The final bokslutsverifikation is source_type='year_end' too and
     // reverses every P&L account. Excluding it keeps the add-back intact
     // after the year is closed (see docstring).
-    const { data: period } = await supabase
+    //
+    // company_id is filtered even though id is the primary key: every sibling
+    // query in this function carries the tenant scope, and service-role paths
+    // have no RLS to fall back on. A read failure must NOT fall through to
+    // closingEntryId = null either: that silently re-admits the closing
+    // entry's 78xx/88xx reversals and understates the tax base, which is the
+    // exact failure this fetch exists to prevent. Fail loudly instead; the
+    // surrounding catch turns it into 'Failed to read posted dispositions'.
+    const { data: period, error: periodError } = await supabase
       .from('fiscal_periods')
       .select('closing_entry_id')
       .eq('id', fiscalPeriodId)
+      .eq('company_id', companyId)
       .maybeSingle()
+    if (periodError) throw periodError
     const closingEntryId = (period as { closing_entry_id?: string | null } | null)
       ?.closing_entry_id ?? null
 
