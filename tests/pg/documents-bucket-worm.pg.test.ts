@@ -31,9 +31,14 @@ describe('documents bucket: WORM (no client-side DELETE)', () => {
   let companyScopedKey: string
 
   async function seedObject(name: string): Promise<void> {
+    // owner is populated deliberately: storage-api stamps the uploader there
+    // in production, and an owner-based policy (`USING (auth.uid() = owner)`,
+    // Supabase's stock delete template) matches nothing when it is NULL. A
+    // fixture without an owner would let that policy shape pass this suite by
+    // comparing against NULL rather than by being absent.
     await getPool().query(
-      `INSERT INTO storage.objects (bucket_id, name) VALUES ('documents', $1)`,
-      [name],
+      `INSERT INTO storage.objects (bucket_id, name, owner) VALUES ('documents', $1, $2)`,
+      [name, owner],
     )
     objectNames.push(name)
   }
@@ -77,8 +82,9 @@ describe('documents bucket: WORM (no client-side DELETE)', () => {
   })
 
   /**
-   * Every policy on storage.objects that can destroy or rewrite an object,
-   * with both its USING and WITH CHECK expressions and its grantee roles.
+   * Every policy on storage.objects that can destroy or rewrite an object and
+   * is not demonstrably scoped away from the documents bucket, with both its
+   * USING and WITH CHECK expressions and its grantee roles.
    *
    * polcmd '*' (FOR ALL) is included deliberately: it grants DELETE and
    * UPDATE just as effectively as 'd' and 'w', and it is the shape the one
@@ -111,12 +117,20 @@ describe('documents bucket: WORM (no client-side DELETE)', () => {
 
     return res.rows
       .filter((r) => {
-        // Substring match on the bucket name rather than the exact
-        // `bucket_id = 'documents'` shape pg_get_expr happens to emit today:
-        // a policy written as `bucket_id::text = 'documents'` or with the
-        // comparison reversed would slip past a stricter match. For a WORM
-        // ratchet, a false alarm is cheap and a silent hole is not.
-        if (!r.expr.includes('documents')) return false
+        // In scope unless the policy provably cannot reach this bucket. Only
+        // a bucket_id predicate naming some OTHER bucket exempts it: an
+        // expression that never mentions bucket_id covers every bucket,
+        // documents included. That is exactly Supabase's stock "Enable delete
+        // for users based on user_id" template, `USING (auth.uid() = owner)`,
+        // which carries no bucket clause at all, so gating on the bucket name
+        // alone would wave through the widest possible hole.
+        //
+        // The bucket check is a substring rather than the exact
+        // `bucket_id = 'documents'` shape pg_get_expr emits today, since
+        // `bucket_id::text = 'documents'` or a reversed comparison would slip
+        // past a stricter match. For a WORM ratchet a false alarm is cheap and
+        // a silent hole is not.
+        if (!r.expr.includes('documents') && r.expr.includes('bucket_id')) return false
         // An empty role array means the policy is granted to PUBLIC (oid 0
         // has no pg_roles row), which is the most permissive case there is,
         // so it must NOT be read as "no client roles".
@@ -153,6 +167,52 @@ describe('documents bucket: WORM (no client-side DELETE)', () => {
     }
     // ... and the catalogue is clean again once the probe is gone.
     expect(await destructivePoliciesOverDocuments()).toEqual([])
+  })
+
+  it('the ratchet sees a bucketless policy, which covers documents by omission', async () => {
+    // Supabase's stock "Enable delete for users based on user_id" template is
+    // `USING (auth.uid() = owner)` with no bucket clause, so it grants delete
+    // over EVERY bucket. Naming no bucket must not read as naming a safe one.
+    await getPool().query(
+      `CREATE POLICY worm_ratchet_bucketless ON storage.objects
+         FOR DELETE TO authenticated
+         USING (auth.uid() = owner)`,
+    )
+    try {
+      expect(await destructivePoliciesOverDocuments()).toEqual([
+        'worm_ratchet_bucketless (d)',
+      ])
+
+      // And it is not merely reported: it really would let the uploader
+      // destroy their own rakenskapsinformation, which is why the catalogue
+      // assertion has to catch it.
+      await withUserContext(owner, async (client) => {
+        const res = await client.query(
+          `DELETE FROM storage.objects WHERE bucket_id = 'documents' AND name = $1`,
+          [legacyKey],
+        )
+        expect(res.rowCount).toBe(1)
+      })
+    } finally {
+      await getPool().query(`DROP POLICY IF EXISTS worm_ratchet_bucketless ON storage.objects`)
+    }
+    expect(await destructivePoliciesOverDocuments()).toEqual([])
+  })
+
+  it('a policy scoped to another bucket is not flagged', async () => {
+    // The counterweight to the rule above: receipts_delete is real, lives in
+    // migration 20260710102000, and must not trip this ratchet. A ratchet
+    // that cries wolf on unrelated buckets gets switched off.
+    await getPool().query(
+      `CREATE POLICY worm_ratchet_other_bucket ON storage.objects
+         FOR DELETE TO authenticated
+         USING (bucket_id = 'sie-files')`,
+    )
+    try {
+      expect(await destructivePoliciesOverDocuments()).toEqual([])
+    } finally {
+      await getPool().query(`DROP POLICY IF EXISTS worm_ratchet_other_bucket ON storage.objects`)
+    }
   })
 
   it('the uploader cannot delete their own legacy-layout object', async () => {
