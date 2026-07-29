@@ -15460,6 +15460,23 @@ const SERVER_CAPABILITIES = {
   extensions: { 'io.modelcontextprotocol/ui': {} },
 }
 
+/**
+ * Decode a standard-header value per the 2026-07-28 Value Encoding rules:
+ * values outside plain ASCII arrive as =?base64?<data>?= and MUST be decoded
+ * before comparing against the request body. Returns null for an absent
+ * header so callers can distinguish "not sent" from "sent empty".
+ */
+function decodeMcpHeaderValue(value: string | null): string | null {
+  if (value === null) return null
+  const match = /^=\?base64\?(.*)\?=$/.exec(value)
+  if (!match) return value
+  try {
+    return Buffer.from(match[1], 'base64').toString('utf8')
+  } catch {
+    return value
+  }
+}
+
 function jsonRpc(id: string | number | null, result: unknown): JsonRpcResponse {
   return { jsonrpc: '2.0', id, result }
 }
@@ -15835,8 +15852,24 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     typeof metaVersion === 'string' && metaVersion >= STATELESS_PROTOCOL_VERSION
 
   // Standard request headers (2026-07-28): when present they must agree with
-  // the JSON-RPC body. Absence stays accepted: handshake-era clients and the
-  // stdio bridges do not send them.
+  // the JSON-RPC body. Absence stays accepted: this server supports
+  // handshake-era clients (the spec sanctions that leniency), and the stdio
+  // bridges do not send the headers.
+  const headerProtocolVersion = request.headers.get('mcp-protocol-version')
+  if (
+    headerProtocolVersion &&
+    typeof metaVersion === 'string' &&
+    headerProtocolVersion !== metaVersion
+  ) {
+    return NextResponse.json(
+      jsonRpcError(
+        body.id ?? null,
+        JSONRPC_HEADER_MISMATCH,
+        `Header mismatch: MCP-Protocol-Version "${headerProtocolVersion}" does not match _meta protocol version "${metaVersion}"`
+      ),
+      { status: 400 }
+    )
+  }
   const headerMethod = request.headers.get('mcp-method')
   if (headerMethod && headerMethod !== body.method) {
     return NextResponse.json(
@@ -15848,14 +15881,17 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       { status: 400 }
     )
   }
-  const headerName = request.headers.get('mcp-name')
-  const bodyParamName = body.params?.name
-  if (headerName && typeof bodyParamName === 'string' && headerName !== bodyParamName) {
+  // Mcp-Name mirrors params.name (tools/call, prompts/get) or params.uri
+  // (resources/read); non-ASCII values arrive base64-wrapped and are decoded
+  // before comparison.
+  const headerName = decodeMcpHeaderValue(request.headers.get('mcp-name'))
+  const bodyParamName = body.params?.name ?? body.params?.uri
+  if (headerName !== null && typeof bodyParamName === 'string' && headerName !== bodyParamName) {
     return NextResponse.json(
       jsonRpcError(
         body.id ?? null,
         JSONRPC_HEADER_MISMATCH,
-        `Header mismatch: Mcp-Name "${headerName}" does not match params.name "${bodyParamName}"`
+        `Header mismatch: Mcp-Name "${headerName}" does not match the request body name/uri "${bodyParamName}"`
       ),
       { status: 400 }
     )

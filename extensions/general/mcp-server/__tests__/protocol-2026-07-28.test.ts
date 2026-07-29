@@ -189,6 +189,55 @@ describe('MCP spec revision 2026-07-28', () => {
       const { result } = await readBody(mcpRequest('tools/list'))
       expect((result?.tools as unknown[]).length).toBeGreaterThan(0)
     })
+
+    it('validates Mcp-Name against params.uri on resources/read', async () => {
+      const mismatch = await readBody(
+        mcpRequest(
+          'resources/read',
+          { uri: 'ui://receipt-matcher/app.html' },
+          { 'Mcp-Name': 'ui://vat-review/app.html' }
+        )
+      )
+      expect(mismatch.status).toBe(400)
+      expect(mismatch.error?.code).toBe(-32020)
+
+      const match = await readBody(
+        mcpRequest(
+          'resources/read',
+          { uri: 'ui://receipt-matcher/app.html' },
+          { 'Mcp-Name': 'ui://receipt-matcher/app.html' }
+        )
+      )
+      expect(match.error).toBeUndefined()
+      expect(match.result?.contents).toBeDefined()
+    })
+
+    it('decodes the base64 sentinel form of Mcp-Name before comparing', async () => {
+      const encoded = `=?base64?${Buffer.from('gnubok_search_tools', 'utf8').toString('base64')}?=`
+      const { result } = await readBody(
+        mcpRequest(
+          'tools/call',
+          {
+            name: 'gnubok_search_tools',
+            arguments: { query: 'list companies', detail: 'name', limit: 5 },
+          },
+          { 'Mcp-Name': encoded }
+        )
+      )
+      expect(result?.structuredContent).toBeDefined()
+    })
+
+    it('rejects an MCP-Protocol-Version header that disagrees with _meta', async () => {
+      const { status, error } = await readBody(
+        mcpRequest(
+          'tools/list',
+          { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } },
+          { 'MCP-Protocol-Version': '2025-06-18' }
+        )
+      )
+      expect(status).toBe(400)
+      expect(error?.code).toBe(-32020)
+    })
   })
 
   describe('stateless tool results', () => {
