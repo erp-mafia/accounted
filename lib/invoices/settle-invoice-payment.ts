@@ -111,8 +111,6 @@ export async function settleInvoicePayment(
     }
   }
 
-  const now = new Date().toISOString()
-
   // Drive the JE shape from the invoice's actual booking state, not from
   // the current accounting_method setting. If the invoice was booked at
   // send (Dr 1510 / Cr 30xx + VAT), the payment MUST clear 1510:
@@ -248,7 +246,7 @@ export async function settleInvoicePayment(
       status: newStatus,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
-      ...(newStatus === 'paid' ? { paid_at: now } : {}),
+      ...(newStatus === 'paid' ? { paid_at: paymentDate } : {}),
     })
     .eq('id', invoice.id)
     .eq('company_id', companyId)
@@ -297,7 +295,7 @@ export async function settleInvoicePayment(
           status: newStatus,
           paid_amount: newPaidAmount,
           remaining_amount: newRemaining,
-          paid_at: newStatus === 'paid' ? now : invoice.paid_at,
+          paid_at: newStatus === 'paid' ? paymentDate : invoice.paid_at,
         } as Invoice,
         companyId,
         userId,
@@ -315,6 +313,6 @@ export async function settleInvoicePayment(
     newPaidAmount,
     newRemaining,
     journalEntryId,
-    paidAt: newStatus === 'paid' ? now : null,
+    paidAt: newStatus === 'paid' ? paymentDate : null,
   }
 }

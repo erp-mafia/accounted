@@ -331,14 +331,12 @@ export async function linkTransactionToJournalEntry(
     }
   }
 
-  const now = new Date().toISOString()
-
   if (invoice && invoiceId) {
     const { data: updatedRows, error: updateInvError } = await supabase
       .from('invoices')
       .update({
         status: newStatus,
-        paid_at: isFullyPaid ? now : null,
+        paid_at: isFullyPaid ? transaction.date : null,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
       })

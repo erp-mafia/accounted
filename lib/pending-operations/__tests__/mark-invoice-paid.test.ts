@@ -97,7 +97,7 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
   })
 
   it('zeroes remaining_amount and emits invoice.paid on full payment (issue #825)', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
       data: {
@@ -135,5 +135,10 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
         invoice: expect.objectContaining({ id: 'inv-1', status: 'paid', remaining_amount: 0, paid_amount: 525 }),
       }),
     )
+
+    // paid_at must be the caller-selected payment_date, not the moment the
+    // agent/MCP op happened to be committed.
+    const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0] as { paid_at?: string }
+    expect(invoiceUpdate?.paid_at).toBe('2026-03-30')
   })
 })

@@ -454,6 +454,20 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
     expect(body.remaining_amount).toBe(0)
   })
 
+  it('stamps paid_at with the transaction date, not the processing time', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -1000, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 1000 },
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+
+    const siUpdate = findCalls('supplier_invoices', 'update').at(-1)?.[0] as { paid_at?: string }
+    // enqueueHappyPath's mocked transaction row is dated 2026-05-12; that is
+    // the actual payment date, not "now" (when the match was confirmed).
+    expect(siUpdate?.paid_at).toBe('2026-05-12')
+  })
+
   // The suggestion pointer must not survive the match that consumes it: this
   // request marks the invoice paid, so a surviving hint would point at a
   // settled invoice. The customer-invoice route has always cleared its own

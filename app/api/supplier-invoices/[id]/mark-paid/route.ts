@@ -65,7 +65,6 @@ export const POST = withRouteContext(
 
     const paymentDate = body.payment_date || new Date().toISOString().split('T')[0]
     const paymentAmount = body.amount || invoice.remaining_amount
-    const now = new Date().toISOString()
 
     if (body.force) {
       opLog.warn('duplicate-payment guard bypassed', {
@@ -316,7 +315,7 @@ export const POST = withRouteContext(
         status: newStatus,
         remaining_amount: Math.max(0, newRemaining),
         paid_amount: newPaidAmount,
-        paid_at: isFullyPaid ? now : null,
+        paid_at: isFullyPaid ? paymentDate : null,
         payment_journal_entry_id: journalEntryId,
       })
       .eq('id', id)

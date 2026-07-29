@@ -213,8 +213,6 @@ export const POST = withRouteContext(
     // as paymentAmountSek - exchangeRateDifference internally.
     const paymentAmountSek = exchangeRateDifference !== 0 ? originalBookedSek : actualBankSek
 
-    const now = new Date().toISOString()
-
     // A full settlement pays off the whole remaining balance. Cross-currency
     // matches always do (paymentAmountInvoiceCurrency is clamped to
     // invoice.remaining_amount above); same-currency does when the bank amount
@@ -367,7 +365,7 @@ export const POST = withRouteContext(
         status: newStatus,
         remaining_amount: newRemaining,
         paid_amount: newPaidAmount,
-        paid_at: isFullyPaid ? now : null,
+        paid_at: isFullyPaid ? transaction.date : null,
         payment_journal_entry_id: journalEntryId,
         transaction_id: transactionId,
       })

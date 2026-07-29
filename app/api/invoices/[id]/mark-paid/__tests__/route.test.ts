@@ -214,6 +214,35 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     )
   })
 
+  it('stamps paid_at with the selected payment_date, not the processing time', async () => {
+    const customer = makeCustomer()
+    const invoice = makeInvoice({
+      id: 'inv-1',
+      status: 'sent',
+      total: 12500,
+      customer,
+    })
+
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [{ id: 'inv-1' }], error: null })
+
+    mockCreateInvoicePaymentJournalEntry.mockResolvedValue({ id: 'je-1' })
+
+    const backdatedPaymentDate = '2026-05-01'
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: backdatedPaymentDate },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+    const { status, body } = await parseJsonResponse<{ paid_at: string | null }>(response)
+
+    expect(status).toBe(200)
+    expect(body.paid_at).toBe(backdatedPaymentDate)
+  })
+
   it('refuses to mark paid (INVOICE_PAID_BOOK_FAILED) when no payment journal entry is produced', async () => {
     const customer = makeCustomer()
     const invoice = makeInvoice({ id: 'inv-1', status: 'sent', total: 12500, customer })

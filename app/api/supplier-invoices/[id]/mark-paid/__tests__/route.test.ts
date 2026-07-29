@@ -8,7 +8,7 @@ import {
   makeSupplier,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -148,6 +148,40 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(body.remaining_amount).toBe(0)
     expect(body.journal_entry_id).toBe('je-1')
     expect(mockCreateSupplierInvoicePaymentEntry).toHaveBeenCalled()
+  })
+
+  it('stamps paid_at with the selected payment_date, not the processing time', async () => {
+    const supplier = makeSupplier()
+    const invoice = makeSupplierInvoice({
+      id: 'si-1',
+      status: 'approved',
+      total: 10000,
+      remaining_amount: 10000,
+      paid_amount: 0,
+      supplier,
+      items: [],
+    })
+
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+
+    mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
+
+    enqueue({ data: [{ id: 'si-1' }], error: null })
+    enqueue({ data: null, error: null })
+
+    const backdatedPaymentDate = '2026-05-01'
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: backdatedPaymentDate },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const updateArgs = findCall('supplier_invoices', 'update')
+    expect((updateArgs?.[0] as { paid_at?: string })?.paid_at).toBe(backdatedPaymentDate)
   })
 
   it('marks as partially paid', async () => {

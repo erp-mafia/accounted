@@ -8,7 +8,7 @@ import {
   makeInvoice,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -250,6 +250,11 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     expect(body.invoice_status).toBe('paid')
     expect(body.paid_amount).toBe(1000)
     expect(body.remaining_amount).toBe(0)
+
+    // paid_at must be the transaction's own date (the actual payment date),
+    // not the moment this link operation happened to be performed.
+    const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0] as { paid_at?: string }
+    expect(invoiceUpdate?.paid_at).toBe('2026-05-15')
   })
 
   it('returns 404 when invoice_id supplied but invoice not found', async () => {

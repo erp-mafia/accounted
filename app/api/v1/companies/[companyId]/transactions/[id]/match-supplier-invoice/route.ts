@@ -265,8 +265,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
-    const now = new Date().toISOString()
-
     const { data: settings } = await ctx.supabase
       .from('company_settings')
       .select('accounting_method')
@@ -413,7 +411,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         status: newStatus,
         remaining_amount: newRemaining,
         paid_amount: newPaidAmount,
-        paid_at: isFullyPaid ? now : null,
+        paid_at: isFullyPaid ? transaction.date : null,
         payment_journal_entry_id: journalEntryId,
         transaction_id: txId,
       })

@@ -501,6 +501,45 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     )
   })
 
+  it('stamps paid_at with the transaction date, not the processing time', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null, date: '2024-06-15' })
+    const customer = makeCustomer()
+    const invoice = makeInvoice({
+      id: VALID_UUID,
+      status: 'sent',
+      total: 12500,
+      remaining_amount: 12500,
+      subtotal: 10000,
+      vat_amount: 2500,
+      invoice_number: 'F-2024001',
+      customer,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
+
+    enqueue({ data: [{ id: VALID_UUID }], error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ paid_at: string | null }>(response)
+
+    expect(status).toBe(200)
+    // The transaction's own date is the actual payment date; must not be
+    // "now" (when the match happened to be confirmed in the app).
+    expect(body.paid_at).toBe('2024-06-15')
+  })
+
   it('stornos conflicting journal entry before matching', async () => {
     const tx = makeTransaction({
       id: 'tx-1',

@@ -356,7 +356,6 @@ export const POST = withRouteContext(
       }
     }
 
-    const now = new Date().toISOString()
     // paidAmountInInvoiceCurrency is what gets accumulated into
     // invoice.paid_amount / remaining_amount and stored on the
     // invoice_payments row. For same-currency it's just tx.amount; for
@@ -621,7 +620,7 @@ export const POST = withRouteContext(
       .from('invoices')
       .update({
         status: newStatus,
-        paid_at: isFullyPaid ? now : null,
+        paid_at: isFullyPaid ? transaction.date : null,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
       })
@@ -739,7 +738,7 @@ export const POST = withRouteContext(
     return NextResponse.json({
       success: true,
       invoice_status: newStatus,
-      paid_at: isFullyPaid ? now : null,
+      paid_at: isFullyPaid ? transaction.date : null,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
       journal_entry_id: journalEntryId,

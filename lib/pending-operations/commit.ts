@@ -2034,7 +2034,6 @@ async function commitMarkInvoicePaid(
     }
   }
 
-  const now = new Date().toISOString()
   // CAS guard: only flip from a payable status so a concurrently-settled
   // invoice no-ops here instead of double-booking the payment.
   const { data: updateResult, error: updateError } = await supabase
@@ -2043,7 +2042,7 @@ async function commitMarkInvoicePaid(
       status: newStatus,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
-      ...(newStatus === 'paid' ? { paid_at: now } : {}),
+      ...(newStatus === 'paid' ? { paid_at: paymentDate } : {}),
     })
     .eq('id', invoiceId)
     .eq('company_id', companyId)
@@ -2091,7 +2090,7 @@ async function commitMarkInvoicePaid(
           status: newStatus,
           paid_amount: newPaidAmount,
           remaining_amount: newRemaining,
-          paid_at: newStatus === 'paid' ? now : (invoice as Invoice).paid_at,
+          paid_at: newStatus === 'paid' ? paymentDate : (invoice as Invoice).paid_at,
         } as Invoice,
         companyId,
         userId,
@@ -2512,8 +2511,6 @@ async function commitMatchTransactionInvoice(
   }
   const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
 
-  const now = new Date().toISOString()
-
   // Read-only prevalidation, deliberately hoisted ABOVE the irreversible
   // storno below (issue #842): resolveSettlementAccount can throw
   // (BookkeepingDatabaseError on a failed cash_accounts lookup), and a throw
@@ -2588,7 +2585,7 @@ async function commitMatchTransactionInvoice(
     .from('invoices')
     .update({
       status: newStatus,
-      paid_at: isFullyPaid ? now : null,
+      paid_at: isFullyPaid ? transaction.date : null,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
     })
