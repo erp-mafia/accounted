@@ -244,7 +244,7 @@ export function RunProgressBar(props: RunProgressBarProps) {
       <div className="md:hidden space-y-3">
         <div className="flex gap-1">
           {steps.map(step => (
-            <span key={step.key} className={`h-1 flex-1 rounded-full ${segClass(step.state)}`} />
+            <span key={step.key} className={`h-1 flex-1 rounded-full transition-colors duration-150 ${segClass(step.state)}`} />
           ))}
         </div>
         <div className="flex items-center justify-between gap-3">
@@ -275,7 +275,7 @@ export function RunProgressBar(props: RunProgressBarProps) {
         <ol className="flex gap-2">
           {steps.map(step => (
             <li key={step.key} className="flex-1 min-w-0 space-y-2">
-              <span className={`block h-1 rounded-full ${segClass(step.state)}`} aria-hidden />
+              <span className={`block h-1 rounded-full transition-colors duration-150 ${segClass(step.state)}`} aria-hidden />
               <p
                 className={`text-[11px] truncate ${
                   step.state === 'active'

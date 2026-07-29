@@ -81,6 +81,13 @@ export default function AgentSheet({
 }: Props) {
   // Live conversation id from the active AgentChat (fresh sessions report it via
   // onConversationIdChange; resumed ones we set directly on select).
+  // Drops the enter class once the slide has played, so re-expanding a
+  // collapsed session is instant rather than sliding in again.
+  const [entering, setEntering] = useState(true)
+  useEffect(() => {
+    const t = setTimeout(() => setEntering(false), 320)
+    return () => clearTimeout(t)
+  }, [])
   const [conversationId, setConversationId] = useState<string | null>(null)
   // 'chat' shows the conversation; 'list' shows the session picker.
   const [view, setView] = useState<'chat' | 'list'>('chat')
@@ -227,7 +234,13 @@ export default function AgentSheet({
       // conversation state in AgentChat survives) while removing it from view
       // and layout entirely (no stray horizontal scroll from an off-screen box).
       className={cn(
-        'fixed inset-y-0 right-0 z-[60] flex w-full flex-col border-l border-border bg-background shadow-lg transition-[max-width] duration-200 ease-out',
+        'fixed inset-y-0 right-0 z-[60] flex w-full flex-col border-l border-border bg-background shadow-lg transition-[max-width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]',
+        // Arrive along the same edge, on the same curve and duration, as the
+        // page panel that animates its margin to make room (layout.tsx). Gated
+        // on first mount only: the panel stays mounted while collapsed, and
+        // display:none -> visible would otherwise replay the slide every time
+        // the user re-expands the same session.
+        entering && 'animate-in slide-in-from-right-full fade-in-0',
         collapsed && 'hidden',
         // Expanded grows the panel leftward over the page (still non-modal: the
         // page stays interactive); normal is the compact side sheet.

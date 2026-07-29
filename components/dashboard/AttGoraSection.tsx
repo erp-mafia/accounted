@@ -168,7 +168,7 @@ export default function AttGoraSection({
           next.delete(match.transaction_id)
           return next
         })
-      }, 300)
+      }, 200)
       void refetchCounts()
     } catch {
       toast({ title: t('suggested_failed_toast'), variant: 'destructive' })
@@ -237,7 +237,7 @@ export default function AttGoraSection({
                         <p className="text-xs text-muted-foreground mb-2">
                           {t('suggested_title')}
                         </p>
-                        <div className="space-y-1">
+                        <div>
                           {matches.map((match) => {
                             const isLeaving = leavingIds.has(match.transaction_id)
                             const isConfirming = confirmingId === match.transaction_id
@@ -245,10 +245,12 @@ export default function AttGoraSection({
                               <div
                                 key={match.transaction_id}
                                 className={cn(
-                                  'flex items-center gap-3 rounded bg-secondary/40 px-3 py-2 transition-opacity duration-300',
-                                  isLeaving && 'opacity-0',
+                                  'grid transition-[grid-template-rows,opacity] duration-200 motion-reduce:transition-none',
+                                  isLeaving ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr]',
                                 )}
                               >
+                                <div className="overflow-hidden pb-1">
+                                  <div className="flex items-center gap-3 rounded bg-secondary/40 px-3 py-2">
                                 <div className="flex-1 min-w-0">
                                   <p className="text-sm truncate">
                                     {match.transaction_description}
@@ -294,6 +296,8 @@ export default function AttGoraSection({
                                     t('suggested_confirm')
                                   )}
                                 </Button>
+                                  </div>
+                                </div>
                               </div>
                             )
                           })}

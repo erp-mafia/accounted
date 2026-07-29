@@ -343,7 +343,7 @@ export default function AccrualSchedulesPage() {
                         </td>
                       </tr>
                       {isOpen && (
-                        <tr className="hover:bg-transparent">
+                        <tr data-no-stagger className="hover:bg-transparent">
                           <td colSpan={7} className="border-b border-border bg-muted/30 p-0">
                             <RowFoldout>
                               <div className="px-6 py-4">

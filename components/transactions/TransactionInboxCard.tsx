@@ -453,7 +453,7 @@ export default function TransactionInboxCard({
         </td>
       </tr>
       {expanded && (
-        <tr>
+        <tr data-no-stagger>
           <td colSpan={5} className="border-b border-border p-0">
             <RowFoldout>
               <div className="pb-6 pt-1">

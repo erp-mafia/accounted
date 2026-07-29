@@ -91,6 +91,12 @@
 
   /* Animation */
   --ease-out: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  /* Strong ease-out for content entry. The --ease-out above is easeOutQuad,
+     the weak built-in shape; it is deliberately left alone because this :root
+     block is unlayered and therefore shadows Tailwind's own `ease-out` token,
+     so retiming it would retime every ease-out utility in the app. New entry
+     animations should use this one. */
+  --ease-emphasized: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --duration-fast: 150ms;
   --duration-base: 300ms;
@@ -374,20 +380,32 @@ body {
 @utility slide-out-to-right { --tw-exit-translate-x: 100%; }
 @utility slide-out-to-right-full { --tw-exit-translate-x: 100%; }
 
-/* Staggered entrance animation */
-.stagger-enter > * {
-  animation: slideUp var(--duration-slow) var(--ease-out) both;
+/* Staggered entrance animation (convention 11). This is the standard content
+   entry on every migrated page, so its budget matters more than any single
+   surface: 300ms per item on the emphasized curve, in 40ms steps.
+   It used to be 500ms per item in 80ms steps, which put the 10th row at
+   1220ms, and it only defined delays for children 1-10, so on any list longer
+   than ten rows children 11+ inherited delay 0 and arrived BEFORE the middle
+   of the list.
+   The cap is on the delay, never on the animation: `both` holds a child at
+   opacity 0 until its delay elapses, so excluding rows 11+ from the animation
+   (nth-child(-n+10)) would paint them at full opacity while rows 1-10 were
+   still invisible. Rows carrying data-no-stagger opt out entirely, for the
+   case of a foldout <tr> that runs its own transition inside a staggered
+   tbody and would otherwise animate twice. */
+.stagger-enter > *:not([data-no-stagger]) {
+  animation: slideUp var(--duration-base) var(--ease-emphasized) both;
 }
 .stagger-enter > *:nth-child(1) { animation-delay: 0ms; }
-.stagger-enter > *:nth-child(2) { animation-delay: 80ms; }
-.stagger-enter > *:nth-child(3) { animation-delay: 160ms; }
-.stagger-enter > *:nth-child(4) { animation-delay: 240ms; }
-.stagger-enter > *:nth-child(5) { animation-delay: 320ms; }
-.stagger-enter > *:nth-child(6) { animation-delay: 400ms; }
-.stagger-enter > *:nth-child(7) { animation-delay: 480ms; }
-.stagger-enter > *:nth-child(8) { animation-delay: 560ms; }
-.stagger-enter > *:nth-child(9) { animation-delay: 640ms; }
-.stagger-enter > *:nth-child(10) { animation-delay: 720ms; }
+.stagger-enter > *:nth-child(2) { animation-delay: 40ms; }
+.stagger-enter > *:nth-child(3) { animation-delay: 80ms; }
+.stagger-enter > *:nth-child(4) { animation-delay: 120ms; }
+.stagger-enter > *:nth-child(5) { animation-delay: 160ms; }
+.stagger-enter > *:nth-child(6) { animation-delay: 200ms; }
+.stagger-enter > *:nth-child(7) { animation-delay: 240ms; }
+.stagger-enter > *:nth-child(8) { animation-delay: 280ms; }
+.stagger-enter > *:nth-child(9) { animation-delay: 320ms; }
+.stagger-enter > *:nth-child(n+10) { animation-delay: 360ms; }
 
 /* Utility animations */
 .animate-fade-in {

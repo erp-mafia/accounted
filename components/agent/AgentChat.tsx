@@ -27,6 +27,13 @@ import type { StoredStagedOperation } from '@/types'
 import type { AgentStatusEvent } from './agent-status'
 import { sendFeedback, type FeedbackSentiment } from './feedback-client'
 
+// New messages arrive one at a time, so they enter on the short bubble curve.
+// The whole loaded history must NOT: `.animate-slide-up` is the 500ms
+// once-per-navigation page-entry animation, so resuming a 20-message thread
+// used to fire 20 simultaneous 500ms slides.
+const MESSAGE_ENTER_CLASS =
+  'animate-in fade-in-0 slide-in-from-bottom-2 duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]'
+
 // Markdown parser loads separately from the chat surface: react-markdown +
 // remark-gfm pull in the whole unified/remark tree.
 //
@@ -197,6 +204,9 @@ export default function AgentChat({
   const firstTurnFiredRef = useRef(false)
   const conversationIdRef = useRef<string | null>(initialConversationId ?? null)
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? [])
+  // How many messages were already on screen when this thread mounted. Anything
+  // at or past this index is new and animates in; the resumed history does not.
+  const historyBaselineRef = useRef((initialMessages ?? []).length)
   // Read by the announcement effect, which must not re-run on every token: a
   // `messages` dependency would fire it hundreds of times per turn. Written in
   // an effect rather than during render: React may replay a render, and a
@@ -774,7 +784,7 @@ export default function AgentChat({
         {messages.length === 0 && streaming && <SkeletonBubble />}
 
         {messages.map((m, i) => (
-          <div key={i} className="animate-slide-up">
+          <div key={i} className={i >= historyBaselineRef.current ? MESSAGE_ENTER_CLASS : undefined}>
             <MessageBubble
               message={m}
               streamingTail={streaming && i === messages.length - 1}
