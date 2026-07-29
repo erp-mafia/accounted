@@ -7,6 +7,7 @@ import { shouldEnforceMfa } from '@/lib/auth/mfa'
 import { requireCompanyId } from '@/lib/company/context'
 import { getBranding } from '@/lib/branding/service'
 import { isAllowedRedirectUri } from '@/lib/auth/oauth-allowlist'
+import { resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
 import {
   ALL_SCOPES,
   API_KEY_SCOPES,
@@ -132,11 +133,15 @@ async function requireAal2(
   return null
 }
 
-function errorRedirect(redirectUri: string, state: string | null, error: string, desc: string): Response {
+function errorRedirect(request: Request, redirectUri: string, state: string | null, error: string, desc: string): Response {
   const url = new URL(redirectUri)
   url.searchParams.set('error', error)
   url.searchParams.set('error_description', desc)
   if (state) url.searchParams.set('state', state)
+  // RFC 9207: identify the issuer in every authorization response so clients
+  // can detect mix-up attacks. Must equal the issuer that discovery
+  // advertised for the host the client connected through.
+  url.searchParams.set('iss', resolveDiscoveryBaseUrl(request))
   return NextResponse.redirect(url.toString(), 303)
 }
 
@@ -683,7 +688,7 @@ export async function POST(request: Request) {
   const consent = formData.get('consent')
 
   if (consent !== 'allow') {
-    return errorRedirect(redirectUri, state, 'access_denied', 'User denied the request')
+    return errorRedirect(request, redirectUri, state, 'access_denied', 'User denied the request')
   }
 
   // Verify the scope binding signed at consent display matches what was
@@ -702,6 +707,7 @@ export async function POST(request: Request) {
     !verifyScopeBinding(presentedScopeStr, presentedSigStr)
   ) {
     return errorRedirect(
+      request,
       redirectUri,
       state,
       'invalid_request',
@@ -714,7 +720,7 @@ export async function POST(request: Request) {
   // selection below, not from this querystring.
   const parsed = parseRequestedScopes(querystringScopeParam)
   if (parsed.kind === 'invalid_scope') {
-    return errorRedirect(redirectUri, state, 'invalid_scope', parsed.description)
+    return errorRedirect(request, redirectUri, state, 'invalid_scope', parsed.description)
   }
 
   // The user selects scopes via checkboxes on the consent page. Two upper
@@ -755,6 +761,9 @@ export async function POST(request: Request) {
   const callbackUrl = new URL(redirectUri)
   callbackUrl.searchParams.set('code', code)
   if (state) callbackUrl.searchParams.set('state', state)
+  // RFC 9207: issuer identification in the authorization response. Must match
+  // the issuer discovery advertises for the host the client connected through.
+  callbackUrl.searchParams.set('iss', resolveDiscoveryBaseUrl(request))
 
   // 303 See Other: forces browser to GET the callback URL, even though this
   // handler was reached via POST. NextResponse.redirect() defaults to 307,

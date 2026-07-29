@@ -145,9 +145,16 @@ describe('tools/list payload size guard', () => {
     //     trimmed to the floor first (agi_status, lock_period, list_employees
     //     gave back ~100 tokens); the ~90-token remainder is the contract
     //     agents read the filing state through.
+    //   * 58K → 58.5K with the approval-queue widget: render_ui on
+    //     gnubok_list_pending_operations opens the MCP Apps queue where
+    //     approve/reject (and the high-risk BFL acknowledgment) are first-party
+    //     human clicks instead of agent-asserted confirmed=true. The property +
+    //     hint prose was trimmed to the floor first (~30 tokens recovered);
+    //     headroom before the change was ~14 tokens, so even the trimmed wire
+    //     contract crossed.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(58_000)
+    expect(approxTokens).toBeLessThan(58_500)
   })
 })

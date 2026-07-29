@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import crypto from 'crypto'
 
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
   isAllowedRedirectUri: vi.fn(),
   requireCompanyId: vi.fn(),
   getBranding: vi.fn(),
+}))
+
+vi.mock('@/lib/auth/oauth-codes', () => ({
+  createAuthCode: vi.fn(() => 'test-auth-code'),
 }))
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -319,5 +324,68 @@ describe('MFA step-up on /api/mcp-oauth/authorize', () => {
 
     const response = await GET(new Request(buildAuthorizeUrl(authorizeParams)))
     expect(response.status).toBe(200)
+  })
+})
+
+describe('RFC 9207 iss parameter on authorization responses', () => {
+  const authorizeParams = {
+    response_type: 'code',
+    redirect_uri: 'https://claude.ai/api/mcp/auth_callback',
+    code_challenge: 'abc',
+    code_challenge_method: 'S256',
+    scope: 'mcp',
+    state: 'xyz',
+  }
+
+  // Mirrors getScopeSigningKey/signScopeBinding in the route so the POST can
+  // present a scope binding that verifies against the test service key.
+  function signScope(scopeParam: string): string {
+    const key = crypto.createHash('sha256').update('oauth-scope:test-service-key').digest()
+    return crypto.createHmac('sha256', key).update(scopeParam).digest('base64url')
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'test-service-key'
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.test.example')
+    mocks.createClient.mockResolvedValue(buildSupabase({ id: 'user-1' }))
+    mocks.isAllowedRedirectUri.mockResolvedValue(true)
+    mocks.requireCompanyId.mockResolvedValue('company-1')
+    mocks.getBranding.mockReturnValue({ appName: 'gnubok' })
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('includes iss alongside code and state on the success redirect', async () => {
+    const formData = new FormData()
+    formData.set('consent', 'allow')
+    formData.set('scope_binding', 'mcp')
+    formData.set('scope_binding_sig', signScope('mcp'))
+
+    const response = await POST(
+      new Request(buildAuthorizeUrl(authorizeParams), { method: 'POST', body: formData }),
+    )
+
+    expect(response.status).toBe(303)
+    const location = new URL(response.headers.get('location')!)
+    expect(location.searchParams.get('code')).toBe('test-auth-code')
+    expect(location.searchParams.get('state')).toBe('xyz')
+    expect(location.searchParams.get('iss')).toBe('https://app.test.example')
+  })
+
+  it('includes iss on error redirects (access_denied)', async () => {
+    const formData = new FormData()
+    formData.set('consent', 'deny')
+
+    const response = await POST(
+      new Request(buildAuthorizeUrl(authorizeParams), { method: 'POST', body: formData }),
+    )
+
+    expect(response.status).toBe(303)
+    const location = new URL(response.headers.get('location')!)
+    expect(location.searchParams.get('error')).toBe('access_denied')
+    expect(location.searchParams.get('iss')).toBe('https://app.test.example')
   })
 })
