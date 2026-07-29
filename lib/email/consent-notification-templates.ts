@@ -4,8 +4,27 @@ export interface ConsentExpiryEmailData {
   bankName: string
   daysUntilExpiry: number
   renewalUrl: string
+  /** The company the bank connection belongs to. Shown so the recipient knows
+   * which of their companies the email concerns; never used as the sender. */
   companyName: string
   isExpired: boolean
+}
+
+/**
+ * Consent expiry notification emails.
+ *
+ * Tone and layout are deliberately calm: a PSD2 consent running out is
+ * routine, not an incident. No red, no urgency chrome; the email is signed
+ * by the app (never the recipient's own company), states plainly why the
+ * recipient got it, and shows the destination URL in plain text next to the
+ * button so it does not pattern-match phishing.
+ */
+
+const SERIF = `Georgia, 'Times New Roman', serif`
+const SANS = `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`
+
+function dagar(n: number): string {
+  return `${n} ${n === 1 ? 'dag' : 'dagar'}`
 }
 
 /**
@@ -13,11 +32,22 @@ export interface ConsentExpiryEmailData {
  */
 export function generateConsentExpiryEmailHtml(data: ConsentExpiryEmailData): string {
   const { bankName, daysUntilExpiry, renewalUrl, companyName, isExpired } = data
-  const { appName } = getBranding()
-  const headerColor = isExpired ? '#dc2626' : '#ea580c'
+  const { appName, supportEmail } = getBranding()
+
   const title = isExpired
-    ? 'Banksynkronisering har stoppats'
-    : `Samtycket för ${bankName} löper ut snart`
+    ? 'Bankkopplingen behöver förnyas'
+    : `Bankkopplingen löper ut om ${dagar(daysUntilExpiry)}`
+
+  const intro = isExpired
+    ? `Banksamtycket för <strong>${bankName}</strong> har löpt ut och den automatiska hämtningen av nya transaktioner är pausad.`
+    : `Banksamtycket för <strong>${bankName}</strong> löper ut om ${dagar(daysUntilExpiry)}.`
+
+  const explanation =
+    'Det här är väntat: av säkerhetsskäl gäller ett banksamtycke (PSD2) bara en begränsad tid, och därefter behöver det godkännas på nytt hos banken.'
+
+  const consequence = isExpired
+    ? 'Ingenting har försvunnit. Redan hämtade transaktioner och din bokföring påverkas inte, och när kopplingen är förnyad hämtas mellanliggande transaktioner ikapp.'
+    : 'Förnya gärna i förväg så fortsätter transaktionerna att hämtas utan avbrott. Din bokföring påverkas inte.'
 
   return `
 <!DOCTYPE html>
@@ -27,47 +57,54 @@ export function generateConsentExpiryEmailHtml(data: ConsentExpiryEmailData): st
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title}</title>
 </head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f9fafb;">
-  <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-    <div style="background: white; border-radius: 12px; padding: 40px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-      <div style="text-align: center; margin-bottom: 30px;">
-        <div style="display: inline-block; background: ${headerColor}15; color: ${headerColor}; padding: 8px 16px; border-radius: 20px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
-          ${isExpired ? 'Åtgärd krävs' : 'Påminnelse'}
-        </div>
+<body style="margin: 0; padding: 0; font-family: ${SANS}; line-height: 1.6; color: #374151; background-color: #f5f4f1;">
+  <div style="max-width: 560px; margin: 0 auto; padding: 40px 20px;">
+    <div style="background: #ffffff; border: 1px solid #e7e5e0; border-radius: 12px; padding: 40px;">
+
+      <div style="font-family: ${SERIF}; font-size: 19px; color: #111111; margin-bottom: 28px;">
+        ${appName}
       </div>
 
-      <h1 style="margin: 0 0 20px 0; font-size: 22px; font-weight: 600; color: #111; text-align: center;">
+      <h1 style="margin: 0 0 16px 0; font-family: ${SERIF}; font-size: 23px; font-weight: 400; color: #111111; line-height: 1.3;">
         ${title}
       </h1>
 
-      <div style="margin-bottom: 30px;">
-        ${isExpired ? `
-        <p style="margin: 0 0 15px 0; color: #dc2626; font-weight: 500;">
-          PSD2-samtycket för ${bankName} har löpt ut. Automatisk transaktionssynkronisering är stoppad.
-        </p>
-        <p style="margin: 0 0 15px 0;">
-          Förnya anslutningen för att återuppta synkroniseringen.
-        </p>
-        ` : `
-        <p style="margin: 0 0 15px 0;">
-          Samtycket för ${bankName} löper ut om ${daysUntilExpiry} ${daysUntilExpiry === 1 ? 'dag' : 'dagar'}.
-        </p>
-        <p style="margin: 0 0 15px 0;">
-          Förnya anslutningen innan samtycket löper ut för att undvika avbrott i transaktionssynkroniseringen.
-        </p>
-        `}
-      </div>
+      <p style="margin: 0 0 14px 0; font-size: 15px;">${intro}</p>
+      <p style="margin: 0 0 14px 0; font-size: 15px;">${explanation}</p>
+      <p style="margin: 0 0 28px 0; font-size: 15px;">${consequence}</p>
 
-      <div style="text-align: center; margin-bottom: 30px;">
-        <a href="${renewalUrl}" style="display: inline-block; background: ${headerColor}; color: white; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: 500; font-size: 14px;">
-          ${isExpired ? 'Förnya anslutning' : 'Hantera bankanslutningar'}
+      <table role="presentation" style="width: 100%; border-collapse: collapse; margin-bottom: 28px; font-size: 14px;">
+        <tr>
+          <td style="padding: 8px 0; border-top: 1px solid #ececea; color: #9ca3af; width: 90px;">Bank</td>
+          <td style="padding: 8px 0; border-top: 1px solid #ececea; color: #111111;">${bankName}</td>
+        </tr>
+        ${companyName ? `
+        <tr>
+          <td style="padding: 8px 0; border-top: 1px solid #ececea; border-bottom: 1px solid #ececea; color: #9ca3af;">Företag</td>
+          <td style="padding: 8px 0; border-top: 1px solid #ececea; border-bottom: 1px solid #ececea; color: #111111;">${companyName}</td>
+        </tr>
+        ` : ''}
+      </table>
+
+      <div style="margin-bottom: 12px;">
+        <a href="${renewalUrl}" style="display: inline-block; background: #1a1a1a; color: #ffffff; padding: 12px 26px; border-radius: 99px; text-decoration: none; font-weight: 500; font-size: 14px;">
+          Förnya bankkopplingen
         </a>
       </div>
 
-      <div style="padding-top: 20px; border-top: 1px solid #e5e7eb;">
-        <p style="margin: 0; color: #666; font-size: 14px;">
+      <p style="margin: 0 0 32px 0; font-size: 13px; color: #9ca3af;">
+        Knappen leder till ${renewalUrl}.<br>
+        Du kan också logga in som vanligt och gå till Inställningar och sedan Bank.
+      </p>
+
+      <div style="padding-top: 20px; border-top: 1px solid #ececea;">
+        <p style="margin: 0 0 12px 0; font-size: 14px; color: #374151;">
           Med vänliga hälsningar,<br>
-          <strong>${companyName || appName.toLowerCase()}</strong>
+          <strong>${appName}</strong>
+        </p>
+        <p style="margin: 0; font-size: 12.5px; color: #9ca3af;">
+          Du får det här mejlet eftersom det finns en bankkoppling i ${appName}${companyName ? ` för ${companyName}` : ''}.
+          Undrar du något? Mejla <a href="mailto:${supportEmail}" style="color: #6b7280;">${supportEmail}</a>.
         </p>
       </div>
     </div>
@@ -82,26 +119,33 @@ export function generateConsentExpiryEmailHtml(data: ConsentExpiryEmailData): st
  */
 export function generateConsentExpiryEmailText(data: ConsentExpiryEmailData): string {
   const { bankName, daysUntilExpiry, renewalUrl, companyName, isExpired } = data
-  const { appName } = getBranding()
+  const { appName, supportEmail } = getBranding()
 
   let text = ''
 
   if (isExpired) {
-    text += `BANKSYNKRONISERING HAR STOPPATS\n`
-    text += `=`.repeat(40) + `\n\n`
-    text += `PSD2-samtycket för ${bankName} har löpt ut.\n`
-    text += `Automatisk transaktionssynkronisering är stoppad.\n\n`
-    text += `Förnya anslutningen för att återuppta synkroniseringen.\n\n`
+    text += `Bankkopplingen behöver förnyas\n\n`
+    text += `Banksamtycket för ${bankName} har löpt ut och den automatiska hämtningen av nya transaktioner är pausad.\n\n`
   } else {
-    text += `SAMTYCKET FÖR ${bankName.toUpperCase()} LÖPER UT SNART\n`
-    text += `=`.repeat(40) + `\n\n`
-    text += `Samtycket för ${bankName} löper ut om ${daysUntilExpiry} ${daysUntilExpiry === 1 ? 'dag' : 'dagar'}.\n\n`
-    text += `Förnya anslutningen innan samtycket löper ut för att undvika avbrott.\n\n`
+    text += `Bankkopplingen löper ut om ${dagar(daysUntilExpiry)}\n\n`
+    text += `Banksamtycket för ${bankName} löper ut om ${dagar(daysUntilExpiry)}.\n\n`
   }
 
-  text += `Hantera bankanslutningar: ${renewalUrl}\n\n`
+  text += `Det här är väntat: av säkerhetsskäl gäller ett banksamtycke (PSD2) bara en begränsad tid, och därefter behöver det godkännas på nytt hos banken.\n\n`
+
+  if (isExpired) {
+    text += `Ingenting har försvunnit. Redan hämtade transaktioner och din bokföring påverkas inte, och när kopplingen är förnyad hämtas mellanliggande transaktioner ikapp.\n\n`
+  } else {
+    text += `Förnya gärna i förväg så fortsätter transaktionerna att hämtas utan avbrott. Din bokföring påverkas inte.\n\n`
+  }
+
+  text += `Bank: ${bankName}\n`
+  if (companyName) text += `Företag: ${companyName}\n`
+  text += `\nFörnya bankkopplingen: ${renewalUrl}\n`
+  text += `Du kan också logga in som vanligt och gå till Inställningar och sedan Bank.\n\n`
   text += `Med vänliga hälsningar,\n`
-  text += `${companyName || appName.toLowerCase()}\n`
+  text += `${appName}\n\n`
+  text += `Du får det här mejlet eftersom det finns en bankkoppling i ${appName}${companyName ? ` för ${companyName}` : ''}. Undrar du något? Mejla ${supportEmail}.\n`
 
   return text
 }
@@ -110,8 +154,9 @@ export function generateConsentExpiryEmailText(data: ConsentExpiryEmailData): st
  * Generate email subject for consent expiry notification
  */
 export function generateConsentExpiryEmailSubject(data: ConsentExpiryEmailData): string {
+  const suffix = data.companyName ? ` - ${data.companyName}` : ''
   if (data.isExpired) {
-    return `Banksynkronisering stoppad - ${data.bankName}`
+    return `Förnya bankkopplingen till ${data.bankName}${suffix}`
   }
-  return `Banksamtycke löper ut om ${data.daysUntilExpiry} ${data.daysUntilExpiry === 1 ? 'dag' : 'dagar'} - ${data.bankName}`
+  return `Bankkopplingen till ${data.bankName} löper ut om ${dagar(data.daysUntilExpiry)}${suffix}`
 }

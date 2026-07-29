@@ -465,7 +465,7 @@ async function sendConsentExpiryNotification(
       bankName: connection.bank_name as string,
       daysUntilExpiry: daysLeft,
       renewalUrl: `${baseUrl}/settings/banking`,
-      companyName: companySettings?.company_name || getBranding().appName.toLowerCase(),
+      companyName: companySettings?.company_name || '',
       isExpired,
     }
 
@@ -474,6 +474,7 @@ async function sendConsentExpiryNotification(
       subject: generateConsentExpiryEmailSubject(emailData),
       html: generateConsentExpiryEmailHtml(emailData),
       text: generateConsentExpiryEmailText(emailData),
+      replyTo: getBranding().supportEmail,
     })
 
     // Update last notification timestamp
