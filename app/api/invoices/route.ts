@@ -11,6 +11,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Logger } from '@/lib/logger'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { maskEmbeddedCustomer } from '@/lib/customers/protect-personal-number'
 
 ensureInitialized()
 
@@ -42,7 +43,9 @@ export const GET = withRouteContext(
       return errorResponse(error, log, { requestId })
     }
 
-    return NextResponse.json({ data, count })
+    // Mask the embedded customer's personnummer: the customers(*) join
+    // carries the stored ciphertext, which has no business reaching a client.
+    return NextResponse.json({ data: (data ?? []).map(maskEmbeddedCustomer), count })
   },
 )
 
@@ -240,7 +243,7 @@ export const POST = withRouteContext(
       })
     }
 
-    return NextResponse.json({ data: completeInvoice })
+    return NextResponse.json({ data: maskEmbeddedCustomer(completeInvoice) })
   },
   { requireWrite: true },
 )
@@ -346,9 +349,9 @@ async function createCreditNote(
           requestId,
         })
       }
-      return NextResponse.json({ data: reopenedCreditNote })
+      return NextResponse.json({ data: maskEmbeddedCustomer(reopenedCreditNote) })
     }
-    return NextResponse.json({ data: existingCreditNote })
+    return NextResponse.json({ data: maskEmbeddedCustomer(existingCreditNote) })
   }
 
   const creditNoteNumber = `KR-${originalInvoice.invoice_number}`
@@ -403,7 +406,7 @@ async function createCreditNote(
         .eq('company_id', companyId)
         .eq('creation_complete', true)
         .maybeSingle()
-      if (racedCreditNote) return NextResponse.json({ data: racedCreditNote })
+      if (racedCreditNote) return NextResponse.json({ data: maskEmbeddedCustomer(racedCreditNote) })
     }
     log.error('credit note insert failed', creditNoteError)
     return errorResponseFromCode('INVOICE_CREATE_INSERT_FAILED', log, {
@@ -469,5 +472,5 @@ async function createCreditNote(
   // A credit note is only issued when the user sends it or marks it as sent.
   // Until then it is a non-editable draft: no journal entry is created and
   // the original invoice remains in its current state.
-  return NextResponse.json({ data: completeCreditNote })
+  return NextResponse.json({ data: maskEmbeddedCustomer(completeCreditNote) })
 }

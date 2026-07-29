@@ -63,6 +63,12 @@ export interface SessionResponse {
     country: string
   }
   psu_type: string
+  /**
+   * Lifecycle state of the PSD2 session as Enable Banking sees it. Present on
+   * GET /sessions/{id}; used by probeSessionHealth to detect a consent that
+   * died bank-side without us attempting a transaction fetch.
+   */
+  status?: string
 }
 
 export interface AccountInfo {
@@ -545,6 +551,73 @@ export async function getSession(sessionId: string): Promise<SessionResponse> {
   }
 
   return response.json()
+}
+
+/**
+ * Session lifecycle values that mean the consent can no longer be used. Kept
+ * deliberately narrow: an unrecognized status resolves to 'unknown' and leaves
+ * the stored connection state untouched, because wrongly flipping a live
+ * connection to 'expired' costs the user a full BankID re-authorization.
+ */
+const SESSION_DEAD_STATUSES = new Set([
+  'CANCELLED',
+  'CLOSED',
+  'EXPIRED',
+  'INVALID',
+  'REJECTED',
+  'REVOKED',
+])
+
+/**
+ * Session lifecycle values that mean the consent is usable. Anything outside
+ * both sets (including a response carrying no status at all) is 'unknown':
+ * claiming 'alive' for a value we do not recognize would be asserting more
+ * than the probe actually established.
+ */
+const SESSION_ALIVE_STATUSES = new Set(['AUTHORIZED', 'VALID', 'ACTIVE'])
+
+export type SessionHealth = 'alive' | 'dead' | 'unknown'
+
+/**
+ * Ask Enable Banking whether a PSD2 session is still usable, without fetching
+ * any account data.
+ *
+ * Until this existed, a connection only ever learned its session was dead by
+ * TRYING to sync: a bank that invalidates a consent server-side (several
+ * ASPSPs drop the previous session when the same PSU authorizes again) left
+ * the row sitting at status 'active' with a stale last_synced_at, so the UI
+ * kept presenting old balances as current. Never throws: probing is a
+ * best-effort health signal, and 'unknown' is always a safe answer.
+ */
+export async function probeSessionHealth(sessionId: string): Promise<SessionHealth> {
+  try {
+    const response = await authenticatedFetchWithRetry(`/sessions/${sessionId}`)
+    const body = await response.text()
+
+    if (!response.ok) {
+      if (isSessionExpiredResponse(response.status, body)) return 'dead'
+      // The session record itself is gone: nothing left to sync with.
+      if (response.status === 404) return 'dead'
+      return 'unknown'
+    }
+
+    try {
+      const parsed = JSON.parse(body) as SessionResponse
+      const status = typeof parsed.status === 'string' ? parsed.status.toUpperCase() : null
+      if (status && SESSION_DEAD_STATUSES.has(status)) return 'dead'
+      if (status && SESSION_ALIVE_STATUSES.has(status)) return 'alive'
+    } catch {
+      // Unparseable body on a 200: treat as inconclusive, not as dead.
+      return 'unknown'
+    }
+    return 'unknown'
+  } catch (error) {
+    console.warn('[enable-banking] probeSessionHealth failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return 'unknown'
+  }
 }
 
 /**

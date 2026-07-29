@@ -27,23 +27,40 @@ interface SupabaseShape {
  */
 function buildSupabase(
   linesResult: { data: unknown; error: unknown },
-  fiscalPeriodResult: { data: unknown; error: unknown } = { data: null, error: null }
+  fiscalPeriodResult: { data: unknown; error: unknown } = { data: null, error: null },
+  chartAccounts: Array<{ account_number: string; default_vat_rate: number }> = []
 ): SupabaseShape {
+  const chartResult = { data: chartAccounts, error: null }
   return {
     rpc: vi.fn().mockResolvedValue(linesResult),
-    from: vi.fn().mockImplementation(() => ({
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      in: vi.fn().mockReturnThis(),
-      gte: vi.fn().mockReturnThis(),
-      lte: vi.fn().mockReturnThis(),
-      order: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockReturnThis(),
-      or: vi.fn().mockReturnThis(),
-      maybeSingle: vi.fn().mockResolvedValue(fiscalPeriodResult),
-      range: vi.fn().mockResolvedValue(linesResult),
-      then: (resolve: (v: unknown) => void) => resolve(linesResult),
-    })),
+    from: vi.fn().mockImplementation((table: string) => {
+      // Ruta 05 also collects the company's own momspliktiga intäktskonton,
+      // read off chart_of_accounts rather than the fixed ACCOUNT_RUTA map.
+      if (table === 'chart_of_accounts') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          in: vi.fn().mockReturnThis(),
+          not: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          range: vi.fn().mockResolvedValue(chartResult),
+          then: (resolve: (v: unknown) => void) => resolve(chartResult),
+        }
+      }
+      return {
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        in: vi.fn().mockReturnThis(),
+        gte: vi.fn().mockReturnThis(),
+        lte: vi.fn().mockReturnThis(),
+        order: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+        or: vi.fn().mockReturnThis(),
+        maybeSingle: vi.fn().mockResolvedValue(fiscalPeriodResult),
+        range: vi.fn().mockResolvedValue(linesResult),
+        then: (resolve: (v: unknown) => void) => resolve(linesResult),
+      }
+    }),
   }
 }
 
@@ -204,6 +221,50 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources', () => {
       'je-mid',
       'je-late',
     ])
+  })
+})
+
+describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources: ruta 05 accounts', () => {
+  /** The p_accounts array the route handed to get_vat_ruta_source_lines. */
+  function rpcAccounts(supabase: SupabaseShape): string[] {
+    return (supabase.rpc.mock.calls[0][1] as { p_accounts: string[] }).p_accounts
+  }
+
+  function get(ruta: string) {
+    const req = createMockRequest(
+      `/api/reports/vat-declaration/ruta/${ruta}/sources`,
+      { searchParams: { periodType: 'monthly', year: '2026', period: '5' } }
+    )
+    return GET(req, createMockRouteParams({ ruta }))
+  }
+
+  it('drills into the company own revenue accounts too (#1261)', async () => {
+    // Without this the drill-down would list a smaller sum than the ruta 05
+    // figure it drills into: the konto feeds the total but not the source list.
+    const supabase = buildSupabase({ data: [], error: null }, { data: null, error: null }, [
+      { account_number: '3013', default_vat_rate: 0.06 },
+    ])
+    authOk(supabase)
+
+    expect((await get('05')).status).toBe(200)
+
+    const accounts = rpcAccounts(supabase)
+    expect(accounts).toContain('3013')
+    expect(accounts).toContain('3001') // static mapping still there
+  })
+
+  it('leaves other rutor on the static mapping alone', async () => {
+    const supabase = buildSupabase({ data: [], error: null }, { data: null, error: null }, [
+      { account_number: '3013', default_vat_rate: 0.06 },
+    ])
+    authOk(supabase)
+
+    expect((await get('10')).status).toBe(200)
+
+    const accounts = rpcAccounts(supabase)
+    expect(accounts).toContain('2611')
+    expect(accounts).not.toContain('3013')
+    expect(supabase.from).not.toHaveBeenCalledWith('chart_of_accounts')
   })
 })
 

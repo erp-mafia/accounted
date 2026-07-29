@@ -18,9 +18,16 @@ import { encryptPersonnummer } from '@/lib/salary/personnummer'
 import {
   encryptCustomerPersonalNumber,
   maskCustomerRow,
+  maskEmbeddedCustomer,
   maskStoredCustomerPersonalNumber,
+  revealStoredCustomerPersonalNumber,
   UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
 } from '../protect-personal-number'
+import {
+  PERSONAL_NUMBER_INPUT_RE,
+  isMaskedPersonalNumber,
+  maskCustomerPersonalNumber,
+} from '../mask-personal-number'
 
 // Synthetic personnummer, never a real one.
 const PERSONAL_NUMBER = '19900101-1234'
@@ -65,12 +72,100 @@ describe('maskStoredCustomerPersonalNumber', () => {
     )
   })
 
-  it('placeholder mask carries no digits and cannot pass personnummer validation', () => {
-    // It must never read as a real suffix, and a client that blindly PATCHes
-    // it back must fail plaintext validation rather than store or clear
-    // anything (null here would let a round-trip DELETE the stored value).
+  it('placeholder mask carries no digits and is never a personnummer', () => {
+    // It must never read as a real suffix, and it must not be null: null here
+    // would let a blind read-modify-write round-trip DELETE the stored value.
     expect(UNDECRYPTABLE_PERSONAL_NUMBER_MASK).not.toMatch(/\d/)
     expect(UNDECRYPTABLE_PERSONAL_NUMBER_MASK).not.toMatch(/^(\d{6}|\d{8})[-+]?\d{4}$/)
+  })
+
+  it('recognizes the placeholder as a mask, so a round-trip means "unchanged"', () => {
+    // The property that makes an undecryptable row editable. When only
+    // '********-1234' counted as a mask, the placeholder failed validation in
+    // the schema, the route and the form at once, so the customer could not be
+    // edited at all: not the personnummer, not the name, not the address.
+    expect(isMaskedPersonalNumber(UNDECRYPTABLE_PERSONAL_NUMBER_MASK)).toBe(true)
+    expect(isMaskedPersonalNumber(MASKED)).toBe(true)
+    expect(PERSONAL_NUMBER_INPUT_RE.test(UNDECRYPTABLE_PERSONAL_NUMBER_MASK)).toBe(true)
+    expect(PERSONAL_NUMBER_INPUT_RE.test(MASKED)).toBe(true)
+  })
+
+  it('does not mistake a real personnummer for a mask', () => {
+    for (const plaintext of ['9001011234', '900101-1234', '199001011234', '19900101-1234']) {
+      expect(isMaskedPersonalNumber(plaintext)).toBe(false)
+      expect(PERSONAL_NUMBER_INPUT_RE.test(plaintext)).toBe(true)
+    }
+    expect(isMaskedPersonalNumber(null)).toBe(false)
+    expect(isMaskedPersonalNumber('')).toBe(false)
+    expect(isMaskedPersonalNumber('********-12345')).toBe(false)
+    expect(isMaskedPersonalNumber('****-1234')).toBe(false)
+    expect(PERSONAL_NUMBER_INPUT_RE.test('not-a-personal-number')).toBe(false)
+  })
+})
+
+describe('maskCustomerPersonalNumber', () => {
+  it('is idempotent, so masking an already-masked API value is safe', () => {
+    // The detail view re-masks what the API already masked. Re-masking used to
+    // turn the placeholder into null via the digit-stripping path, which
+    // rendered a row that HAS a personnummer as having none.
+    expect(maskCustomerPersonalNumber(MASKED)).toBe(MASKED)
+    expect(maskCustomerPersonalNumber(UNDECRYPTABLE_PERSONAL_NUMBER_MASK)).toBe(
+      UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
+    )
+  })
+
+  it('still masks a plaintext personnummer down to the last four digits', () => {
+    expect(maskCustomerPersonalNumber('19900101-1234')).toBe(MASKED)
+    expect(maskCustomerPersonalNumber(null)).toBeNull()
+  })
+})
+
+describe('revealStoredCustomerPersonalNumber', () => {
+  it('returns the full personnummer for stored ciphertext', () => {
+    // The drill-in behind the mask. Without it the field is write-only: a user
+    // can save a personnummer and never verify what was actually stored.
+    const stored = encryptPersonnummer(PERSONAL_NUMBER)
+    expect(revealStoredCustomerPersonalNumber(stored)).toBe(PERSONAL_NUMBER)
+  })
+
+  it('passes a legacy plaintext row through unchanged', () => {
+    expect(revealStoredCustomerPersonalNumber('900101-1234')).toBe('900101-1234')
+  })
+
+  it('returns null when nothing is stored', () => {
+    expect(revealStoredCustomerPersonalNumber(null)).toBeNull()
+    expect(revealStoredCustomerPersonalNumber(undefined)).toBeNull()
+    expect(revealStoredCustomerPersonalNumber('')).toBeNull()
+  })
+
+  it('throws on an undecryptable value rather than inventing a number', () => {
+    // Deliberately unlike the masking helpers, which must never throw: here a
+    // wrong-but-plausible answer would be worse than an error the caller can
+    // turn into "retype it".
+    expect(() => revealStoredCustomerPersonalNumber(GARBAGE_HEX)).toThrow()
+  })
+})
+
+describe('maskEmbeddedCustomer', () => {
+  it('masks the personnummer on an embedded customer join', () => {
+    const stored = encryptPersonnummer(PERSONAL_NUMBER)
+    const invoice = {
+      id: 'i1',
+      total: 1250,
+      customer: { id: 'c1', name: 'Anna Andersson', personal_number: stored },
+    }
+    const masked = maskEmbeddedCustomer(invoice)
+    expect(masked.customer.personal_number).toBe(MASKED)
+    // Everything else survives untouched.
+    expect(masked.id).toBe('i1')
+    expect(masked.total).toBe(1250)
+    expect(masked.customer.name).toBe('Anna Andersson')
+  })
+
+  it('leaves rows without an embedded customer alone', () => {
+    expect(maskEmbeddedCustomer({ id: 'i1', customer: null })).toEqual({ id: 'i1', customer: null })
+    expect(maskEmbeddedCustomer({ id: 'i1' })).toEqual({ id: 'i1' })
+    expect(maskEmbeddedCustomer(null)).toBeNull()
   })
 })
 

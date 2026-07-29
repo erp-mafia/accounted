@@ -7,6 +7,7 @@ import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
+import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
 import type { AuditAction } from '@/types'
 
 // ============================================================
@@ -848,14 +849,19 @@ export const UpdateCustomerSchema = z.object({
   org_number: z.string().optional(),
   vat_number: z.string().optional(),
   // Plaintext personnummer (validated here, then encrypted by the route), or
-  // the masked form '********-1234' that every read path returns. The route
-  // reads the mask as "leave the stored value alone" and never stores it, so
-  // a client echoing back what it read cannot wipe the personnummer.
+  // either masked form a read path returns: '********-1234' when the stored
+  // value decrypted, '********-????' when it did not. The route reads a mask
+  // as "leave the stored value alone" and never stores it, so a client echoing
+  // back what it read cannot wipe the personnummer.
+  // Both forms must pass. Accepting only the '-1234' one made an undecryptable
+  // row completely uneditable: the mask the API had just returned failed
+  // validation here, so PATCHing the customer's name or address 400'd on a
+  // field the user had no way to correct.
   // CreateCustomerSchema stays strict: on create there is no stored value to
   // preserve, so a mask there is a client error and earns a 400.
   personal_number: z
     .string()
-    .regex(/^(?:(\d{6}|\d{8})[-+]?\d{4}|\*{8}-\d{4})$/, 'Invalid personal number')
+    .regex(PERSONAL_NUMBER_INPUT_RE, 'Invalid personal number')
     .nullable()
     .optional(),
   language: z.enum(['sv', 'en']).optional(),

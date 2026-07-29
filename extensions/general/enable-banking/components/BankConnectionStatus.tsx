@@ -84,6 +84,19 @@ export function BankConnectionStatus({
   const isConnectionError = connection.status === 'error'
   const errorMessage = connection.error_message ?? ''
 
+  // "Aktiv" is a stored status, not a live fact: a session killed bank-side
+  // keeps the row at 'active' until something tries to use it. The nightly
+  // health probe catches most of those, but a connection that has gone quiet
+  // for days is worth saying out loud rather than presenting old balances as
+  // current. The cron runs daily, so 3 days is several missed runs.
+  const STALE_SYNC_DAYS = 3
+  const daysSinceSync = connection.last_synced_at
+    ? Math.floor((now - new Date(connection.last_synced_at).getTime()) / (1000 * 60 * 60 * 24))
+    : null
+  const isStale =
+    connection.status === 'active' && daysSinceSync !== null && daysSinceSync >= STALE_SYNC_DAYS
+  const neverSynced = connection.status === 'active' && !connection.last_synced_at
+
   return (
     <div className="border-b border-border px-1 py-3">
       {/* Main line: identity + state left, quiet actions right */}
@@ -204,6 +217,20 @@ export function BankConnectionStatus({
             </Link>
           </p>
         </>
+      )}
+
+      {/* Gone quiet: the row still says Aktiv, but nothing has confirmed the
+          session is alive for days. */}
+      {isStale && (
+        <p className="mt-1 text-[12.5px] leading-relaxed text-attn">
+          Ingen synkning på {daysSinceSync} dagar. Saldon och transaktioner kan vara inaktuella:
+          kör Synka för att kontrollera att anslutningen fortfarande fungerar.
+        </p>
+      )}
+      {neverSynced && (
+        <p className="mt-1 text-[12.5px] leading-relaxed text-attn">
+          Anslutningen har aldrig synkat. Kör Synka för att hämta transaktioner.
+        </p>
       )}
 
       {/* Consent expiry warning (for active connections) */}

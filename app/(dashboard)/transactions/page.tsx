@@ -43,6 +43,10 @@ import type {
   StoredSkattekontoTransaction,
 } from '@/types/skatteverket'
 import { findBankSkvCounterparts } from '@/lib/skatteverket/bank-counterpart'
+import {
+  MATCHABLE_INVOICE_STATUSES,
+  MATCHABLE_SUPPLIER_INVOICE_STATUSES,
+} from '@/lib/invoices/matchable-statuses'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -155,12 +159,27 @@ async function fetchPotentialMatches(
     .filter((t) => t.potential_supplier_invoice_id)
     .map((t) => t.potential_supplier_invoice_id)
 
+  // The hint columns are never revisited once written, so an invoice settled
+  // by a different transaction leaves a stale pointer behind. Revalidate here:
+  // an unmatchable candidate must not reach the row or the match dialog, which
+  // would otherwise compare the transaction against a 0 kr remaining balance
+  // and call it a partial payment.
   const [invoiceResult, supplierInvoiceResult] = await Promise.all([
     potentialInvoiceIds.length > 0
-      ? supabase.from('invoices').select('*, customer:customers(*)').in('id', potentialInvoiceIds)
+      ? supabase
+          .from('invoices')
+          .select('*, customer:customers(*)')
+          .in('id', potentialInvoiceIds)
+          .in('status', [...MATCHABLE_INVOICE_STATUSES])
+          .gt('remaining_amount', 0)
       : Promise.resolve({ data: null, error: null }),
     potentialSupplierInvoiceIds.length > 0
-      ? supabase.from('supplier_invoices').select('*, supplier:suppliers(*)').in('id', potentialSupplierInvoiceIds)
+      ? supabase
+          .from('supplier_invoices')
+          .select('*, supplier:suppliers(*)')
+          .in('id', potentialSupplierInvoiceIds)
+          .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
+          .gt('remaining_amount', 0)
       : Promise.resolve({ data: null, error: null }),
   ])
 

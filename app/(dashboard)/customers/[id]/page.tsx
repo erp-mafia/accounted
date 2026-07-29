@@ -10,7 +10,11 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
-import { maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
+import {
+  UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
+  maskCustomerPersonalNumber,
+} from '@/lib/customers/mask-personal-number'
+import { AttnLine } from '@/components/ui/attn-line'
 import CustomerForm from '@/components/customers/CustomerForm'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
@@ -26,8 +30,12 @@ import {
   Loader2,
   ReceiptText,
   Lock,
+  Eye,
+  EyeOff,
 } from 'lucide-react'
+import { useLocale } from 'next-intl'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
@@ -71,11 +79,49 @@ export default function CustomerDetailPage({
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('customer_detail')
+  const errorLocale = useLocale() as ErrorLocale
   const [customer, setCustomer] = useState<CustomerWithRelations | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
+  // Full personnummer, fetched on demand and held only for this view. Cleared
+  // whenever the customer is refetched so it can never outlive the row it
+  // belongs to.
+  const [revealedPersonalNumber, setRevealedPersonalNumber] = useState<string | null>(null)
+  const [isRevealing, setIsRevealing] = useState(false)
   const { dialogProps: confirmDialogProps, confirm: confirmAction } = useDestructiveConfirm()
+
+  const isUnreadablePersonalNumber =
+    customer?.personal_number === UNDECRYPTABLE_PERSONAL_NUMBER_MASK
+
+  async function togglePersonalNumber() {
+    if (revealedPersonalNumber) {
+      setRevealedPersonalNumber(null)
+      return
+    }
+    setIsRevealing(true)
+    try {
+      const response = await fetch(`/api/customers/${id}/personal-number`)
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: t('personal_number_reveal_failed_title'),
+          description: getErrorMessage(result, { context: 'customer', locale: errorLocale }),
+          variant: 'destructive',
+        })
+        return
+      }
+      setRevealedPersonalNumber(result.data.personal_number)
+    } catch {
+      toast({
+        title: t('personal_number_reveal_failed_title'),
+        description: t('retry'),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsRevealing(false)
+    }
+  }
 
   useEffect(() => {
     fetchCustomer()
@@ -83,6 +129,7 @@ export default function CustomerDetailPage({
 
   async function fetchCustomer() {
     setIsLoading(true)
+    setRevealedPersonalNumber(null)
     try {
       const response = await fetch(`/api/customers/${id}`)
       if (!response.ok) {
@@ -298,8 +345,38 @@ export default function CustomerDetailPage({
               <div className="text-sm">
                 <span className="text-muted-foreground">{t('label_personal_number')} </span>
                 <span className="tabular-nums">
-                  {maskCustomerPersonalNumber(customer.personal_number || customer.org_number)}
+                  {revealedPersonalNumber ??
+                    maskCustomerPersonalNumber(customer.personal_number || customer.org_number)}
                 </span>
+                {/* Viewers keep the mask: the endpoint refuses them anyway. */}
+                {canWrite && customer.personal_number && !isUnreadablePersonalNumber && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="ml-1 h-10 w-10 align-middle"
+                    onClick={togglePersonalNumber}
+                    disabled={isRevealing}
+                    aria-label={revealedPersonalNumber ? t('personal_number_hide') : t('personal_number_show')}
+                    title={revealedPersonalNumber ? t('personal_number_hide') : t('personal_number_show')}
+                  >
+                    {isRevealing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : revealedPersonalNumber ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                  </Button>
+                )}
+                {isUnreadablePersonalNumber && (
+                  <AttnLine
+                    className="mt-1"
+                    action={{ label: t('personal_number_unreadable_action'), onClick: () => setIsEditOpen(true) }}
+                  >
+                    {t('personal_number_unreadable')}
+                  </AttnLine>
+                )}
               </div>
             )}
             {customer.vat_number && (

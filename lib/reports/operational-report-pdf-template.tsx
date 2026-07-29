@@ -7,9 +7,11 @@ import {
 } from '@react-pdf/renderer'
 import type {
   CompanySettings,
+  LatestVoucherPerSeries,
   ResultatrapportReport,
   BalansrapportReport,
 } from '@/types'
+import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from './latest-vouchers'
 
 // Operational reports (Resultatrapport / Balansrapport) are löpande
 // bookkeeping documents, not draft årsredovisning per ÅRL 2:7 §, so this
@@ -254,13 +256,16 @@ interface CommonHeaderProps {
   period: { start: string; end: string }
   /** Partial-view disclosure (dimension-filtered exports, BFNAR 2013:2). */
   filterNote?: string
+  /** Highest posted voucher per series in the window. Reconciliation aid (#1267). */
+  latestVouchers?: LatestVoucherPerSeries[]
 }
 
-function HeaderBlock({ title, company, period, filterNote }: CommonHeaderProps) {
+function HeaderBlock({ title, company, period, filterNote, latestVouchers }: CommonHeaderProps) {
   const companyDisplayName = company.company_name || ''
   const periodLabel = period.start && period.end
     ? `${formatDateSv(period.start)}: ${formatDateSv(period.end)}`
     : ''
+  const vouchersLabel = formatLatestVouchers(latestVouchers)
   return (
     <View style={styles.header} fixed>
       <View style={styles.titleBlock}>
@@ -270,6 +275,9 @@ function HeaderBlock({ title, company, period, filterNote }: CommonHeaderProps) 
         )}
         {periodLabel && (
           <Text style={styles.period}>Period: {periodLabel}</Text>
+        )}
+        {vouchersLabel && (
+          <Text style={styles.period}>{LATEST_VOUCHERS_LABEL}: {vouchersLabel}</Text>
         )}
         {filterNote && (
           <Text style={styles.period}>{filterNote}</Text>
@@ -322,7 +330,13 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        <HeaderBlock title="Resultatrapport" company={company} period={report.period} filterNote={filterNote} />
+        <HeaderBlock
+          title="Resultatrapport"
+          company={company}
+          period={report.period}
+          filterNote={filterNote}
+          latestVouchers={report.latest_vouchers}
+        />
 
         <View style={styles.tableHeader}>
           <Text style={[styles.tableHeaderText, styles.colAccount]}>Konto</Text>
@@ -391,7 +405,12 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
   return (
     <Document>
       <Page size="A4" style={styles.page}>
-        <HeaderBlock title="Balansrapport" company={company} period={report.period} />
+        <HeaderBlock
+          title="Balansrapport"
+          company={company}
+          period={report.period}
+          latestVouchers={report.latest_vouchers}
+        />
 
         <View style={styles.tableHeader}>
           <Text style={[styles.tableHeaderText, styles.colAccount]}>Konto</Text>

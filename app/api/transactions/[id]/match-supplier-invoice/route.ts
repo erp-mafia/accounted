@@ -416,6 +416,11 @@ export const POST = withRouteContext(
       .from('transactions')
       .update({
         supplier_invoice_id,
+        // Clear the suggestion now that it is a confirmed link, mirroring the
+        // customer-invoice route. Leaving it set kept a pointer at an invoice
+        // this very request just marked paid, i.e. the stale-pointer state
+        // every read path now has to defend against.
+        potential_supplier_invoice_id: null,
         journal_entry_id: journalEntryId,
         is_business: true,
       })

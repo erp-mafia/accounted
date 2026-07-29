@@ -986,7 +986,12 @@
     "type_individual": "Privatperson",
     "type_swedish_business": "Svenskt företag eller organisation",
     "type_eu_business": "EU-företag",
-    "type_non_eu_business": "Utanför EU"
+    "type_non_eu_business": "Utanför EU",
+    "personal_number_show": "Visa personnummer",
+    "personal_number_hide": "Dölj personnummer",
+    "personal_number_reveal_failed_title": "Personnumret kunde inte visas",
+    "personal_number_unreadable": "Det sparade personnumret kan inte läsas.",
+    "personal_number_unreadable_action": "Skriv in det igen"
   },
   "form_customer": {
     "type_label": "Kundtyp *",
@@ -1043,7 +1048,8 @@
     "notes_placeholder": "Interna anteckningar om kunden...",
     "submit_save": "Spara kund",
     "submit_saving": "Sparar...",
-    "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag"
+    "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
+    "personal_number_unreadable": "Det sparade personnumret kan inte läsas. Skriv in det igen för att ersätta det."
   },
   "form_supplier": {
     "name_label": "Namn *",
@@ -2590,6 +2596,8 @@
     "different_currencies": " (olika valutor)",
     "partial_payment_note": ": fakturan blir delbetald.",
     "ore_rounding_note": "Differens {amount} bokförs som öresavrundning (konto 3740). Fakturan markeras som betald.",
+    "target_settled_title": "Fakturan är redan slutbetald",
+    "target_settled_description": "Matchningsförslaget är inaktuellt: fakturan har betalats av en annan transaktion och kan inte matchas igen. Stäng dialogen och matcha transaktionen mot rätt faktura, eller bokför den som vanligt.",
     "fx_title": "Valutaomräkning",
     "fx_rate_description": "Riksbankens mittkurs {date}: 1 {invoiceCurrency} = {rate} SEK",
     "fx_paid_in_invoice_currency": "Inbetalning motsvarar: {amount}",
@@ -4291,6 +4299,8 @@
     "tab_bas_catalog": "BAS-katalog",
     "add_own": "Eget konto",
     "hide_k2_excluded": "Dölj K2-undantagna",
+    "show_inactive": "Visa inaktiva",
+    "reactivate": "Aktivera",
     "search_placeholder": "Sök konto (nummer eller namn)...",
     "class_heading": "Klass {cls}: {label}",
     "col_account": "Konto",
@@ -4314,6 +4324,11 @@
     "toast_activate_failed": "Kunde inte aktivera kontot",
     "toast_activated_title": "Konto aktiverat",
     "toast_activated_description": "Konto {number} har lagts till i din kontoplan",
+    "toast_reactivated_title": "Konto aktiverat igen",
+    "toast_reactivated_description": "Konto {number} är aktivt i din kontoplan igen",
+    "deactivate_confirm_title": "Inaktivera konto {number}?",
+    "deactivate_confirm": "Kontot används i {count} bokförda verifikationer. Befintlig bokföring påverkas inte, men kontot döljs i kontoplanen och kan inte väljas i nya verifikat.",
+    "deactivate_confirm_action": "Inaktivera",
     "col_usage": "Verifikat",
     "own_badge": "Egen",
     "prune_button": "Ta bort konton",

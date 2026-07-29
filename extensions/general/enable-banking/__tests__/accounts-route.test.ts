@@ -14,8 +14,17 @@ const { mockUpsertFromPsd2, mockAllocate, mockGetRevokedConnectionIds } = vi.hoi
 }))
 vi.mock('@/lib/cash-accounts/service', () => ({
   upsertFromPsd2: (...args: unknown[]) => mockUpsertFromPsd2(...args),
-  allocatePsd2LedgerAccount: (...args: unknown[]) => mockAllocate(...args),
+  // See the callback route suite: mockAllocate stays the allocation stand-in
+  // and the wrapper wraps it in the resolver's envelope.
+  resolvePsd2LedgerAccount: async (...args: unknown[]) => {
+    const ledgerAccount = await mockAllocate(...args)
+    if (!ledgerAccount) return null
+    if (typeof ledgerAccount === 'object') return ledgerAccount
+    return { ledgerAccount, reuseCashAccountId: null, source: 'allocated' }
+  },
   getRevokedConnectionIds: (...args: unknown[]) => mockGetRevokedConnectionIds(...args),
+  normalizeIban: (iban: string | null | undefined) =>
+    iban ? iban.replace(/\s+/g, '').toUpperCase() || null : null,
 }))
 
 import { enableBankingExtension } from '../index'

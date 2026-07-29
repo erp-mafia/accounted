@@ -10,10 +10,16 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, CheckCircle, XCircle, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import {
+  PERSONAL_NUMBER_INPUT_RE,
+  UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
+  isMaskedPersonalNumber,
+} from '@/lib/customers/mask-personal-number'
 import type { CreateCustomerInput } from '@/types'
 
 interface CustomerFormProps {
@@ -49,9 +55,14 @@ export default function CustomerForm({
     country: z.string().optional(),
     org_number: z.string().optional(),
     vat_number: z.string().optional(),
+    // Accepts a plaintext personnummer or either mask the API returns. The
+    // '********-????' placeholder has to pass: it is what a row whose stored
+    // value cannot be decrypted renders as, and rejecting it here blocked the
+    // whole edit dialog, so the customer's name and address became unsavable
+    // over a field the user could not fix.
     personal_number: z
       .string()
-      .regex(/^(?:(\d{6}|\d{8})[-+]?\d{4}|\*{8}-\d{4})$/, t('personal_number_invalid'))
+      .regex(PERSONAL_NUMBER_INPUT_RE, t('personal_number_invalid'))
       .optional()
       .or(z.literal('')),
     language: z.enum(['sv', 'en']).optional(),
@@ -90,6 +101,10 @@ export default function CustomerForm({
 
   const customerType = watch('customer_type')
   const vatNumber = watch('vat_number')
+  // The stored value could not be decrypted. The field is editable (typing a
+  // fresh personnummer replaces it); say so, because the placeholder on its own
+  // reads like a rendering fault.
+  const personalNumberUnreadable = watch('personal_number') === UNDECRYPTABLE_PERSONAL_NUMBER_MASK
 
   const handleValidateVat = async () => {
     if (!vatNumber) return
@@ -151,7 +166,10 @@ export default function CustomerForm({
       email: data.email || undefined,
       personal_number: data.personal_number || null,
     }
-    if (data.personal_number?.startsWith('*') && data.personal_number === initialData?.personal_number) {
+    // A mask means "unchanged", whichever form it is. Sending it would be
+    // harmless (the route ignores masks too) but omitting it keeps the intent
+    // legible in the request body.
+    if (isMaskedPersonalNumber(data.personal_number)) {
       delete payload.personal_number
     }
     onSubmit(payload)
@@ -287,9 +305,11 @@ export default function CustomerForm({
               placeholder={t('personal_number_placeholder')}
               {...register('personal_number')}
             />
-            {errors.personal_number && (
+            {errors.personal_number ? (
               <p className="text-sm text-destructive">{errors.personal_number.message}</p>
-            )}
+            ) : personalNumberUnreadable ? (
+              <AttnLine>{t('personal_number_unreadable')}</AttnLine>
+            ) : null}
           </div>
         </div>
       ) : (

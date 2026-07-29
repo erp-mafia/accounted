@@ -5,18 +5,8 @@ import { validateVatNumber } from '@/lib/vat/vies-client'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
+import { isMaskedPersonalNumber } from '@/lib/customers/mask-personal-number'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-/**
- * Shape produced by maskCustomerPersonalNumber: no read path ever returns the
- * stored personnummer, only '********-1234'. A client that PATCHes back a
- * customer it just read therefore submits the mask, which must mean "leave the
- * stored value alone", never "store this literally" and never "clear it".
- * components/customers/CustomerForm.tsx strips it before sending, but that
- * guard belongs here too: any other client (script, agent, future UI) that
- * skips it would otherwise destroy the value.
- */
-const MASKED_PERSONAL_NUMBER = /^\*{8}-\d{4}$/
 
 export const GET = withRouteContext(
   'customer.get',
@@ -83,11 +73,22 @@ export const PATCH = withRouteContext(
       return errorResponseFromCode('CUSTOMER_UPDATE_FAILED', opLog, { requestId })
     }
 
-    // The masked sentinel counts as "field not supplied": it carries no new
+    // No ordinary read returns the stored personnummer, only '********-1234',
+    // or '********-????' when the stored value could not be decrypted. A
+    // client that PATCHes back a customer it just read therefore submits one
+    // of those, and it counts as "field not supplied": it carries no new
     // value, so it must not be validated, stored or treated as a clear.
+    // CustomerForm strips it before sending, but the guard belongs here too:
+    // any other client (script, agent, future UI) that skips it would
+    // otherwise destroy the value.
+    //
+    // Both forms are recognized via lib/customers/mask-personal-number.ts so
+    // this route, UpdateCustomerSchema and the form cannot disagree about what
+    // counts as a mask. They previously each carried their own '-1234'-only
+    // copy, which made an undecryptable row uneditable in every field, not
+    // just this one.
     const personalNumberSubmitted =
-      body.personal_number !== undefined &&
-      !(typeof body.personal_number === 'string' && MASKED_PERSONAL_NUMBER.test(body.personal_number))
+      body.personal_number !== undefined && !isMaskedPersonalNumber(body.personal_number)
 
     const effectiveType = body.customer_type ?? existing.customer_type
     if (personalNumberSubmitted && body.personal_number && effectiveType !== 'individual') {

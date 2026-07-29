@@ -733,11 +733,28 @@ export function createQueuedMockSupabase() {
     }
   }
 
+  /**
+   * Every chained builder call, in order: { table, method, args }. The proxy
+   * otherwise swallows its arguments, so filters and update payloads were
+   * invisible to assertions. Recording is passive: it changes nothing about
+   * what a chain resolves to.
+   */
+  const calls: { table: string; method: string; args: unknown[] }[] = []
+
+  /** Args of the first `method` call made against `table`, or undefined. */
+  const findCall = (table: string, method: string): unknown[] | undefined =>
+    calls.find((c) => c.table === table && c.method === method)?.args
+
+  /** Args of every `method` call made against `table`. */
+  const findCalls = (table: string, method: string): unknown[][] =>
+    calls.filter((c) => c.table === table && c.method === method).map((c) => c.args)
+
   const reset = () => {
     queue.length = 0
+    calls.length = 0
   }
 
-  const buildChain = (): unknown => {
+  const buildChain = (table: string): unknown => {
     // Capture the result at chain creation (when from/rpc is called)
     const result = queue.shift() || { data: null, error: null, count: null }
 
@@ -746,24 +763,33 @@ export function createQueuedMockSupabase() {
         if (prop === 'then') {
           return (resolve: (v: unknown) => void) => resolve(result)
         }
-        return (..._args: unknown[]) => buildChain2(result)
+        return (...args: unknown[]) => {
+          calls.push({ table, method: String(prop), args })
+          return buildChain2(table, result)
+        }
       },
     }
     return new Proxy({}, handler)
   }
 
   // Inner chain methods reuse the same result
-  const buildChain2 = (result: {
-    data: unknown
-    error: unknown
-    count?: number | null
-  }): unknown => {
+  const buildChain2 = (
+    table: string,
+    result: {
+      data: unknown
+      error: unknown
+      count?: number | null
+    },
+  ): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
           return (resolve: (v: unknown) => void) => resolve(result)
         }
-        return (..._args: unknown[]) => buildChain2(result)
+        return (...args: unknown[]) => {
+          calls.push({ table, method: String(prop), args })
+          return buildChain2(table, result)
+        }
       },
     }
     return new Proxy({}, handler)
@@ -788,15 +814,15 @@ export function createQueuedMockSupabase() {
   }
 
   const supabase = {
-    from: vi.fn().mockImplementation(() => buildChain()),
-    rpc: vi.fn().mockImplementation(() => buildChain()),
+    from: vi.fn().mockImplementation((table: string) => buildChain(table)),
+    rpc: vi.fn().mockImplementation((fn: string) => buildChain(`rpc:${fn}`)),
     storage: storageMock,
     auth: {
       getUser: vi.fn(),
     },
   }
 
-  return { supabase, enqueue, enqueueMany, reset }
+  return { supabase, enqueue, enqueueMany, reset, calls, findCall, findCalls }
 }
 
 export function makeCategorizationTemplate(

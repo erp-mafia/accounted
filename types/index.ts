@@ -1954,6 +1954,18 @@ export interface BalanceSheetReport {
   imbalance_diagnosis?: BalanceImbalanceDiagnosis
 }
 
+/**
+ * Highest POSTED voucher number per series inside a reported window.
+ *
+ * Reconciliation aid, not statutory (BFL does not require it). Deliberately the
+ * last posted number, not `voucher_sequences.last_number`: the sequence counter
+ * is an allocation high-water mark that can sit ahead of the books.
+ */
+export interface LatestVoucherPerSeries {
+  series: string
+  last_number: number
+}
+
 export interface ResultatrapportRow {
   account_number: string
   account_name: string
@@ -1975,6 +1987,8 @@ export interface ResultatrapportReport {
   net_result_prior: number
   period: { start: string; end: string }
   prior_period: { start: string; end: string } | null
+  /** Omitted when the window holds no posted vouchers, or the report is dimension-filtered. */
+  latest_vouchers?: LatestVoucherPerSeries[]
 }
 
 // Resultat per projekt/kostnadsställe: value-as-column P&L matrix over one
@@ -2035,6 +2049,8 @@ export interface BalansrapportReport {
   period: { start: string; end: string }
   /** Present only when the underlying trial balance does not balance. */
   imbalance_diagnosis?: BalanceImbalanceDiagnosis
+  /** Omitted when the window holds no posted vouchers. */
+  latest_vouchers?: LatestVoucherPerSeries[]
 }
 
 export interface SIEExportOptions {

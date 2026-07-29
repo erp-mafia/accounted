@@ -5,6 +5,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { CreateAccountSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 // Response shapes are legacy `{ data }` / `{ error: string }` — several pages
 // (import, supplier-invoices, article form) consume the list directly.
@@ -111,6 +112,27 @@ export const POST = withRouteContext(
 
     if (error) {
       if (error.code === '23505') {
+        // The unique constraint counts deactivated rows, so "already exists"
+        // covers two very different situations. Only look up which one it is
+        // on the failing path: the happy path stays a single insert.
+        const { data: existing } = await supabase
+          .from('chart_of_accounts')
+          .select('is_active')
+          .eq('company_id', companyId)
+          .eq('account_number', body.account_number)
+          .maybeSingle()
+
+        if (existing && existing.is_active === false) {
+          // Re-creating can never succeed here; the caller must reactivate
+          // instead. The distinct code is what AddAccountDialog keys on to
+          // offer that as a one-click action rather than a dead end.
+          return errorResponseFromCode('ACCOUNT_EXISTS_INACTIVE', log, {
+            status: 409,
+            messageSv: `Kontonummer ${body.account_number} finns redan i din kontoplan men är inaktiverat.`,
+            details: { account_number: body.account_number },
+          })
+        }
+
         return NextResponse.json(
           { error: `Kontonummer ${body.account_number} finns redan i din kontoplan.` },
           { status: 409 },

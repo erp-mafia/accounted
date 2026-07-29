@@ -484,6 +484,18 @@ export function AccountPickerDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {/* Which company's books this lands in. The connection is bound to the
+            company that was active when it was authorized, and the account
+            list below is that company's chart: without naming it here, a bank
+            authorized while the wrong company was active looks identical to
+            the right one. */}
+        {company?.name && (
+          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+            Kontona bokförs i <span className="font-medium text-foreground">{company.name}</span>
+            {' '}och bokföringskontona nedan kommer ur det bolagets kontoplan.
+          </p>
+        )}
+
         {isInitialSelection && (
           <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-4 text-sm">
             <div>
@@ -497,12 +509,18 @@ export function AccountPickerDialog({
 
             {bookedCoverage && (
               <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-background/60 p-3">
+                {/* Stated as a fact with an opt-in shortcut, not as "vi
+                    föreslår": the selected default below is the fiscal-year
+                    start, and a recommendation that contradicts the selected
+                    option reads as a broken prefill. Mid-year is the normal
+                    place for the last verifikat to sit, so this line must not
+                    push the user off a full-year backfill. */}
                 <p className="text-xs text-muted-foreground">
-                  Ditt senaste bokförda verifikat är daterat{' '}
+                  Din bokföring är bokförd till och med{' '}
                   <span className="font-medium tabular-nums text-foreground">{bookedCoverage.lastBookedDate}</span>.
-                  Vi föreslår{' '}
+                  Vill du hoppa över det som redan är bokfört kan du börja från{' '}
                   <span className="font-medium tabular-nums text-foreground">{bookedCoverage.suggestedStartDate}</span>{' '}
-                  som startdatum så inget överlappar din bokföring.
+                  i stället.
                 </p>
                 <button
                   type="button"

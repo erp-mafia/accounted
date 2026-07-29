@@ -8,6 +8,7 @@ import {
   currencyColumn,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
+import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from '@/lib/reports/latest-vouchers-format'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface FlatRow {
@@ -82,6 +83,21 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
       period_change: report.beraknat_resultat,
       ub: report.beraknat_resultat,
     })
+
+    // Reconciliation aid (#1267). reportToWorkbook has no preamble concept, so
+    // this rides as a first body row, the same way the dimension disclosure
+    // does on the other report exports.
+    const vouchersLabel = formatLatestVouchers(report.latest_vouchers)
+    if (vouchersLabel) {
+      rows.unshift({
+        group: `${LATEST_VOUCHERS_LABEL}: ${vouchersLabel}`,
+        account_number: '',
+        account_name: '',
+        ib: null as unknown as number,
+        period_change: null as unknown as number,
+        ub: null as unknown as number,
+      })
+    }
 
     const buffer = reportToWorkbook<FlatRow>([
       {
