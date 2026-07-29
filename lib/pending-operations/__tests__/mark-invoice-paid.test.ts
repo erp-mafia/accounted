@@ -132,7 +132,13 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
         companyId: 'company-1',
         userId: 'user-1',
         paymentAmount: 525,
-        invoice: expect.objectContaining({ id: 'inv-1', status: 'paid', remaining_amount: 0, paid_amount: 525 }),
+        invoice: expect.objectContaining({
+          id: 'inv-1',
+          status: 'paid',
+          remaining_amount: 0,
+          paid_amount: 525,
+          paid_at: '2026-03-30T00:00:00Z',
+        }),
       }),
     )
 

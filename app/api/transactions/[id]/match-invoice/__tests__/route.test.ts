@@ -9,7 +9,7 @@ import {
   makeCustomer,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -538,6 +538,9 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     // The transaction's own date is the actual payment date; must not be
     // "now" (when the match happened to be confirmed in the app).
     expect(body.paid_at).toBe('2024-06-15T00:00:00Z')
+
+    const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0] as { paid_at?: string }
+    expect(invoiceUpdate?.paid_at).toBe('2024-06-15T00:00:00Z')
   })
 
   it('stornos conflicting journal entry before matching', async () => {
