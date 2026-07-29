@@ -202,7 +202,7 @@ export default function QuickReviewDialog({
   const isIncome = tx.amount > 0
   const isCounterpartyTemplate = !!(counterpartyLinePattern && counterpartyLinePattern.length > 0)
   const isTemplateBooking = !!templateId || isCounterpartyTemplate
-  const isLiabilityAccount = accountOverride.startsWith('2')
+  const isLiabilityAccount = !!accountOverride?.startsWith('2')
   // For non-SEK transactions, the verifikation and the headline must show
   // the SEK-converted total: the mall/category booking always posts in SEK.
   const sekAmount = resolveSekAmount(

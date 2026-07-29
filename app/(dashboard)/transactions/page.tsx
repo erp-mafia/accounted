@@ -2163,7 +2163,12 @@ export default function TransactionsPage() {
         transaction,
         category: transaction.amount < 0 ? 'expense_other' : 'income_services',
         label: cpSuggestion.name_sv,
-        template: { id: templateId, name_sv: cpSuggestion.name_sv } as BookingTemplate,
+        template: {
+          id: templateId,
+          name_sv: cpSuggestion.name_sv,
+          debit_account: cpSuggestion.debit_account,
+          credit_account: cpSuggestion.credit_account,
+        } as BookingTemplate,
         templateId: undefined,
         linePattern: cpSuggestion.line_pattern ?? null,
         defaultDimensions: cpSuggestion.default_dimensions ?? null,
