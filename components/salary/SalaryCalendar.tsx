@@ -81,15 +81,27 @@ interface AbsenceTypeMeta {
   pillClass: string
 }
 
+// Absence tone comes from the semantic scale, never the raw Tailwind palette.
+// Every value is alpha-over-token, which is why none of these need a `dark:`
+// variant: the same class reads correctly on both grounds (the approach
+// components/ui/badge.tsx already takes). The eight types share four tones, so
+// fill carries a second axis: filled vs outlined separates the two types
+// inside a tone whose Lucide icon is identical (Heart is parental, pregnancy
+// and care_relative; Activity is study and other_leave).
+//
+//   terracotta = sick (karens, employer cost)
+//   ochre      = caring for someone else (vab, närstående)
+//   sage       = parental and pregnancy leave
+//   neutral    = the rest (study, unpaid, other)
 const TYPE_META: Record<AbsenceType, AbsenceTypeMeta> = {
-  sick:          { labelKey: 'type_sick',          shortLabelKey: 'type_sick_short',          icon: HeartPulse,   pillClass: 'bg-red-100 text-red-800' },
-  vab:           { labelKey: 'type_vab',           shortLabelKey: 'type_vab_short',           icon: Baby,         pillClass: 'bg-amber-100 text-amber-800' },
-  parental:      { labelKey: 'type_parental',      shortLabelKey: 'type_parental_short',      icon: Heart,        pillClass: 'bg-emerald-100 text-emerald-800' },
-  pregnancy:     { labelKey: 'type_pregnancy',     shortLabelKey: 'type_pregnancy_short',     icon: Heart,        pillClass: 'bg-pink-100 text-pink-800' },
-  care_relative: { labelKey: 'type_care_relative', shortLabelKey: 'type_care_relative_short', icon: Heart,        pillClass: 'bg-blue-100 text-blue-800' },
-  study:         { labelKey: 'type_study',         shortLabelKey: 'type_study_short',         icon: Activity,     pillClass: 'bg-indigo-100 text-indigo-800' },
-  unpaid_leave:  { labelKey: 'type_unpaid_leave',  shortLabelKey: 'type_unpaid_leave_short',  icon: MinusCircle,  pillClass: 'bg-slate-100 text-slate-800' },
-  other_leave:   { labelKey: 'type_other_leave',   shortLabelKey: 'type_other_leave_short',   icon: Activity,     pillClass: 'bg-zinc-100 text-zinc-800' },
+  sick:          { labelKey: 'type_sick',          shortLabelKey: 'type_sick_short',          icon: HeartPulse,   pillClass: 'bg-destructive/10 text-destructive' },
+  vab:           { labelKey: 'type_vab',           shortLabelKey: 'type_vab_short',           icon: Baby,         pillClass: 'bg-warning/15 text-warning-foreground' },
+  care_relative: { labelKey: 'type_care_relative', shortLabelKey: 'type_care_relative_short', icon: Heart,        pillClass: 'border border-warning/40 text-warning-foreground' },
+  parental:      { labelKey: 'type_parental',      shortLabelKey: 'type_parental_short',      icon: Heart,        pillClass: 'bg-success/10 text-success' },
+  pregnancy:     { labelKey: 'type_pregnancy',     shortLabelKey: 'type_pregnancy_short',     icon: Heart,        pillClass: 'border border-success/40 text-success' },
+  study:         { labelKey: 'type_study',         shortLabelKey: 'type_study_short',         icon: Activity,     pillClass: 'bg-secondary text-secondary-foreground' },
+  unpaid_leave:  { labelKey: 'type_unpaid_leave',  shortLabelKey: 'type_unpaid_leave_short',  icon: MinusCircle,  pillClass: 'bg-muted text-muted-foreground' },
+  other_leave:   { labelKey: 'type_other_leave',   shortLabelKey: 'type_other_leave_short',   icon: Activity,     pillClass: 'border border-border text-muted-foreground' },
 }
 
 const TYPE_ORDER: AbsenceType[] = ['sick', 'vab', 'parental', 'pregnancy', 'care_relative', 'study', 'unpaid_leave', 'other_leave']
@@ -422,7 +434,7 @@ export function SalaryCalendar({
               </span>
               <div className="mt-auto flex flex-col items-start gap-0.5">
                 {w && (
-                  <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-100 px-1.5 py-px text-[10px] font-medium text-emerald-800">
+                  <span className="inline-flex items-center gap-0.5 rounded-full bg-secondary px-1.5 py-px text-[10px] font-medium text-secondary-foreground">
                     <Clock className="h-2.5 w-2.5" aria-hidden />
                     <span className="tabular-nums">{w.hours}h</span>
                   </span>
@@ -472,8 +484,8 @@ export function SalaryCalendar({
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t px-3 py-2 text-[11px] text-muted-foreground">
         {isHourly && (
           <span className="inline-flex items-center gap-1">
-            <span className="inline-flex h-3 w-3 items-center justify-center rounded-full bg-emerald-100">
-              <Clock className="h-2 w-2 text-emerald-800" aria-hidden />
+            <span className="inline-flex h-3 w-3 items-center justify-center rounded-full bg-secondary">
+              <Clock className="h-2 w-2 text-secondary-foreground" aria-hidden />
             </span>
             <span>{t('worked_time')}</span>
           </span>
@@ -713,11 +725,11 @@ function BulkWorkedDialog({
           </div>
 
           {conflicts.length > 0 && (
-            <div className="space-y-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs">
-              <div className="font-medium text-amber-900">
+            <div className="space-y-1 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs">
+              <div className="font-medium text-warning-foreground">
                 {t('conflicts_worked', { count: conflicts.length })}
               </div>
-              <ul className="list-disc space-y-0.5 pl-4 text-amber-800 tabular-nums">
+              <ul className="list-disc space-y-0.5 pl-4 text-warning-foreground tabular-nums">
                 {conflicts.map(c => <li key={c.date}>{c.date}</li>)}
               </ul>
             </div>
@@ -866,11 +878,11 @@ function BulkAbsenceDialog({
           </div>
 
           {conflicts.length > 0 && (
-            <div className="space-y-1 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs">
-              <div className="font-medium text-amber-900">
+            <div className="space-y-1 rounded-md border border-warning/40 bg-warning/10 p-2 text-xs">
+              <div className="font-medium text-warning-foreground">
                 {t('conflicts_absence', { count: conflicts.length })}
               </div>
-              <ul className="list-disc space-y-0.5 pl-4 text-amber-800 tabular-nums">
+              <ul className="list-disc space-y-0.5 pl-4 text-warning-foreground tabular-nums">
                 {conflicts.map(c => <li key={c.date}>{c.date}</li>)}
               </ul>
             </div>
@@ -981,9 +993,9 @@ function DayInspectorDialog({
 
         <div className="space-y-2">
           {isHourly && worked && (
-            <div className="flex items-center justify-between rounded-md border bg-emerald-50 px-3 py-2">
+            <div className="flex items-center justify-between rounded-md border bg-secondary/50 px-3 py-2">
               <div className="flex items-center gap-2 text-sm">
-                <Clock className="h-4 w-4 text-emerald-700" />
+                <Clock className="h-4 w-4 text-muted-foreground" />
                 <div>
                   <div className="font-medium">{t('worked_time')}</div>
                   <div className="text-xs text-muted-foreground tabular-nums">{t('hours_count', { hours: String(worked.hours) })}</div>

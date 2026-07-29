@@ -18,7 +18,7 @@ export default async function ExtensionsPage() {
   return (
     <div>
       <div className="mb-8">
-        <h1 className="text-xl font-semibold tracking-tight">{t('page_title')}</h1>
+        <h1 className="font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
         <p className="text-sm text-muted-foreground mt-1">
           {t('page_description')}
         </p>

@@ -16,6 +16,7 @@ import {
   type AgentStatus,
   type AgentStatusEvent,
 } from './agent-status'
+import { Skeleton } from '@/components/ui/skeleton'
 
 // The sheet is a lazy chunk, and it used to have no loading state at all: a
 // click on the launcher produced NOTHING until the chunk arrived, then the
@@ -34,8 +35,8 @@ function AgentSheetSkeleton() {
       style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
     >
       <div className="flex items-center gap-2 border-b border-border px-4 py-4">
-        <div className="h-8 w-8 shrink-0 animate-pulse rounded-full bg-secondary" />
-        <div className="h-4 w-32 animate-pulse rounded bg-secondary" />
+        <Skeleton className="h-8 w-8 shrink-0 rounded-full" />
+        <Skeleton className="h-4 w-32" />
       </div>
     </div>
   )

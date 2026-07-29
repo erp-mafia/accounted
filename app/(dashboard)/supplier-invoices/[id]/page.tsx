@@ -588,7 +588,7 @@ export default function SupplierInvoiceDetailPage() {
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">{t('invoice_info_title')}</CardTitle>
+            <CardTitle className="text-base">{t('invoice_info_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
@@ -629,7 +629,7 @@ export default function SupplierInvoiceDetailPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">{t('amounts_title')}</CardTitle>
+            <CardTitle className="text-base">{t('amounts_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
@@ -666,7 +666,7 @@ export default function SupplierInvoiceDetailPage() {
       {invoice.supplier && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">{t('supplier_section_title')}</CardTitle>
+            <CardTitle className="text-base">{t('supplier_section_title')}</CardTitle>
           </CardHeader>
           <CardContent className="text-sm">
             <Link href={`/suppliers/${invoice.supplier.id}`} className="text-primary hover:underline font-medium">
@@ -683,7 +683,7 @@ export default function SupplierInvoiceDetailPage() {
       {/* Line items */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">{t('rows_title')}</CardTitle>
+          <CardTitle className="text-base">{t('rows_title')}</CardTitle>
         </CardHeader>
         <CardContent>
           {/* Desktop table */}
@@ -766,7 +766,7 @@ export default function SupplierInvoiceDetailPage() {
       {payments.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">{t('payment_history_title')}</CardTitle>
+            <CardTitle className="text-base">{t('payment_history_title')}</CardTitle>
           </CardHeader>
           <CardContent>
             {/* Desktop table */}
@@ -824,7 +824,7 @@ export default function SupplierInvoiceDetailPage() {
       {invoice.document_id && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">{t('document_title')}</CardTitle>
+            <CardTitle className="text-base">{t('document_title')}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -844,7 +844,7 @@ export default function SupplierInvoiceDetailPage() {
       {/* Journal entries (sambandskrav) */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">{t('vouchers_title')}</CardTitle>
+          <CardTitle className="text-base">{t('vouchers_title')}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           {invoice.registration_journal_entry_id ? (
@@ -895,7 +895,7 @@ export default function SupplierInvoiceDetailPage() {
       {invoice.notes && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">{t('notes_title')}</CardTitle>
+            <CardTitle className="text-base">{t('notes_title')}</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">{invoice.notes}</p>

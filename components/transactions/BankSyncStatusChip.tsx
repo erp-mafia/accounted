@@ -10,7 +10,6 @@ import { useCompany } from '@/contexts/CompanyContext'
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/info-tooltip'
 
@@ -140,7 +139,6 @@ export default function BankSyncStatusChip() {
 
   // healthy
   return (
-    <TooltipProvider delayDuration={300}>
       <Tooltip>
         <TooltipTrigger asChild>
           <span className="inline-flex cursor-help items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground">
@@ -160,6 +158,5 @@ export default function BankSyncStatusChip() {
           <div className="text-sm leading-relaxed">{t('bank_sync_latency_hint')}</div>
         </TooltipContent>
       </Tooltip>
-    </TooltipProvider>
   )
 }

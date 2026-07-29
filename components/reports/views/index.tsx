@@ -510,7 +510,7 @@ export function IncomeStatementView({ periodId, dateRange, dimensionFilter = nul
       {/* Revenue */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Rörelseintäkter</CardTitle>
+          <CardTitle className="text-base">Rörelseintäkter</CardTitle>
         </CardHeader>
         <CardContent>
           <ReportSectionTable sections={data.revenue_sections} onNavigateToAccount={onNavigateToAccount} />
@@ -524,7 +524,7 @@ export function IncomeStatementView({ periodId, dateRange, dimensionFilter = nul
       {/* Expenses */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Rörelsekostnader</CardTitle>
+          <CardTitle className="text-base">Rörelsekostnader</CardTitle>
         </CardHeader>
         <CardContent>
           <ReportSectionTable sections={data.expense_sections} negate onNavigateToAccount={onNavigateToAccount} />
@@ -551,7 +551,7 @@ export function IncomeStatementView({ periodId, dateRange, dimensionFilter = nul
       {data.financial_sections.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Finansiella poster</CardTitle>
+            <CardTitle className="text-base">Finansiella poster</CardTitle>
           </CardHeader>
           <CardContent>
             <ReportSectionTable sections={data.financial_sections} onNavigateToAccount={onNavigateToAccount} />
@@ -648,7 +648,7 @@ export function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: {
       {/* Assets */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Tillgångar</CardTitle>
+          <CardTitle className="text-base">Tillgångar</CardTitle>
         </CardHeader>
         <CardContent>
           <ReportSectionTable sections={data.asset_sections} onNavigateToAccount={onNavigateToAccount} />
@@ -662,7 +662,7 @@ export function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: {
       {/* Equity and liabilities */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Eget kapital och skulder</CardTitle>
+          <CardTitle className="text-base">Eget kapital och skulder</CardTitle>
         </CardHeader>
         <CardContent>
           <ReportSectionTable sections={data.equity_liability_sections} onNavigateToAccount={onNavigateToAccount} />

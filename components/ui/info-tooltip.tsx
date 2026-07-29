@@ -67,7 +67,6 @@ function InfoTooltip({
   const Icon = variant === 'help' ? HelpCircle : Info
 
   return (
-    <TooltipProvider delayDuration={300}>
       <Tooltip>
         <TooltipTrigger asChild>
           {children ? (
@@ -102,7 +101,6 @@ function InfoTooltip({
           <div className="text-sm leading-relaxed">{content}</div>
         </TooltipContent>
       </Tooltip>
-    </TooltipProvider>
   )
 }
 

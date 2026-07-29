@@ -26,6 +26,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import type { StoredStagedOperation } from '@/types'
 import type { AgentStatusEvent } from './agent-status'
 import { sendFeedback, type FeedbackSentiment } from './feedback-client'
+import { Skeleton } from '@/components/ui/skeleton'
 
 // Markdown parser loads separately from the chat surface: react-markdown +
 // remark-gfm pull in the whole unified/remark tree.
@@ -1197,9 +1198,9 @@ function SkeletonBubble() {
   return (
     <div className="flex flex-col gap-2 items-start animate-fade-in">
       <div className="max-w-[85%] rounded-lg border border-border bg-card px-4 py-3 space-y-2 w-72">
-        <div className="h-3 rounded bg-muted-foreground/15 animate-pulse w-full" />
-        <div className="h-3 rounded bg-muted-foreground/15 animate-pulse w-[85%]" />
-        <div className="h-3 rounded bg-muted-foreground/15 animate-pulse w-[60%]" />
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-[85%]" />
+        <Skeleton className="h-3 w-[60%]" />
       </div>
     </div>
   )

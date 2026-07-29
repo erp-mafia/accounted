@@ -44,7 +44,7 @@ export default async function SectorExtensionsPage({
           <Icon className="h-6 w-6 text-primary" />
         </div>
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">{sectorName}</h1>
+          <h1 className="font-display text-2xl leading-8 tracking-tight">{sectorName}</h1>
           <p className="text-sm text-muted-foreground mt-0.5">{sectorDescription}</p>
         </div>
       </div>

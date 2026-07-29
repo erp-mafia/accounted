@@ -2298,7 +2298,7 @@ function ImportRow({
       disabled={disabled}
       aria-expanded={expanded}
       className={cn(
-        'group flex w-full items-center justify-between gap-4 border-b border-border/60 px-1 py-3 text-left',
+        'group flex w-full items-center justify-between gap-4 border-b border-border px-1 py-3 text-left',
         'transition-colors duration-150 hover:bg-secondary/35',
         'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
       )}

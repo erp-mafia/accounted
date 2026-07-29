@@ -350,10 +350,10 @@ export default function HelpPage() {
         <button
           onClick={() => setSelectedCategory(null)}
           className={cn(
-            'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+            'rounded-full px-4 py-[7px] text-[13px] transition-colors duration-150',
             selectedCategory === null
               ? 'bg-primary text-primary-foreground'
-              : 'bg-secondary text-muted-foreground hover:text-foreground'
+              : 'bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground'
           )}
         >
           {t('filter_all')}
@@ -363,10 +363,10 @@ export default function HelpPage() {
             key={key}
             onClick={() => setSelectedCategory(selectedCategory === key ? null : key)}
             className={cn(
-              'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+              'rounded-full px-4 py-[7px] text-[13px] transition-colors duration-150',
               selectedCategory === key
                 ? 'bg-primary text-primary-foreground'
-                : 'bg-secondary text-muted-foreground hover:text-foreground'
+                : 'bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground'
             )}
           >
             {t(config.labelKey)}
@@ -400,7 +400,7 @@ export default function HelpPage() {
       {/* Document templates */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">{t('templates_title')}</CardTitle>
+          <CardTitle className="text-base">{t('templates_title')}</CardTitle>
           <CardDescription>{t('templates_subtitle')}</CardDescription>
         </CardHeader>
         <CardContent>
@@ -438,7 +438,7 @@ export default function HelpPage() {
       {/* External resources */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">{t('external_resources_title')}</CardTitle>
+          <CardTitle className="text-base">{t('external_resources_title')}</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid gap-3 sm:grid-cols-2">

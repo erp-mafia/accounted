@@ -13,7 +13,6 @@ import { useToast } from '@/components/ui/use-toast'
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/info-tooltip'
 import {
@@ -193,7 +192,6 @@ export function KassaflodesanalysClient() {
             )}
             Ladda ner PDF
           </Button>
-          <TooltipProvider delayDuration={300}>
             <Tooltip>
               <TooltipTrigger asChild>
                 <span>
@@ -205,7 +203,6 @@ export function KassaflodesanalysClient() {
               </TooltipTrigger>
               <TooltipContent>Snart tillgänglig</TooltipContent>
             </Tooltip>
-          </TooltipProvider>
         </div>
       </div>
 

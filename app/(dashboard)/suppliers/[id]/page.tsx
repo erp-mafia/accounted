@@ -126,9 +126,7 @@ export default function SupplierDetailPage() {
     return (
       <div className="space-y-8">
         <Skeleton className="h-8 w-48" />
-        <Card className="animate-pulse">
-          <CardContent className="h-48" />
-        </Card>
+        <Skeleton className="h-48 w-full" />
       </div>
     )
   }
@@ -240,7 +238,7 @@ export default function SupplierDetailPage() {
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">{t('contact_section_title')}</CardTitle>
+            <CardTitle className="text-base">{t('contact_section_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             {supplier.email && <p>{t('email_inline', { email: supplier.email })}</p>}
@@ -252,7 +250,7 @@ export default function SupplierDetailPage() {
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">{t('payment_section_title')}</CardTitle>
+            <CardTitle className="text-base">{t('payment_section_title')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             {supplier.bankgiro && <p>{t('bankgiro_inline', { value: supplier.bankgiro })}</p>}
@@ -269,7 +267,7 @@ export default function SupplierDetailPage() {
       {/* Invoices */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-lg">{t('invoices_section_title')}</CardTitle>
+          <CardTitle className="text-base">{t('invoices_section_title')}</CardTitle>
           <Link href="/supplier-invoices?new=1">
             <Button size="sm">
               <FileText className="mr-2 h-4 w-4" />

@@ -6,6 +6,7 @@ import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Toaster } from "@/components/ui/toaster";
+import { TooltipProvider } from "@/components/ui/tooltip-provider";
 import { DeployReloadPrompt } from "@/components/system/DeployReloadPrompt";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SWRProvider } from "@/components/providers/SWRProvider";
@@ -89,10 +90,12 @@ export default async function RootLayout({
             disableTransitionOnChange
           >
             <SWRProvider>
-              {children}
-              <Toaster />
-              <DeployReloadPrompt />
-              <ScrollbarReveal />
+              <TooltipProvider>
+                {children}
+                <Toaster />
+                <DeployReloadPrompt />
+                <ScrollbarReveal />
+              </TooltipProvider>
             </SWRProvider>
           </ThemeProvider>
         </NextIntlClientProvider>

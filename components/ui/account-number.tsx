@@ -5,7 +5,6 @@ import {
   Tooltip,
   TooltipTrigger,
   TooltipContent,
-  TooltipProvider,
 } from '@/components/ui/info-tooltip'
 import { cn } from '@/lib/utils'
 
@@ -69,7 +68,6 @@ export function AccountNumber({
   }
 
   return (
-    <TooltipProvider delayDuration={200}>
       <Tooltip>
         <TooltipTrigger asChild>
           <span
@@ -112,6 +110,5 @@ export function AccountNumber({
           </div>
         </TooltipContent>
       </Tooltip>
-    </TooltipProvider>
   )
 }

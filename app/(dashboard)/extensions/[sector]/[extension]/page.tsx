@@ -76,7 +76,7 @@ export default async function ExtensionDetailPage({
             <Icon className="h-7 w-7 text-primary" />
           </div>
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">{extensionName}</h1>
+            <h1 className="font-display text-2xl leading-8 tracking-tight">{extensionName}</h1>
             <p className="text-sm text-muted-foreground mt-0.5">{extensionDescription}</p>
             <div className="mt-2">
               <CategoryBadge category={definition.category} />

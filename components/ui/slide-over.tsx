@@ -33,7 +33,7 @@ const SlideOverContent = React.forwardRef<
         'fixed top-[18px] right-[18px] bottom-[18px] z-50 flex w-[480px] max-w-[calc(100vw-36px)] flex-col',
         'rounded-xl border border-border bg-background shadow-[var(--shadow-lg)]',
         'data-[state=open]:animate-in data-[state=open]:slide-in-from-right-full data-[state=open]:fade-in-0 data-[state=open]:duration-300 data-[state=open]:ease-[cubic-bezier(0.32,0.72,0,1)]',
-        'data-[state=closed]:animate-out data-[state=closed]:slide-out-to-right-full data-[state=closed]:fade-out-0 data-[state=closed]:duration-200 data-[state=closed]:ease-in',
+        'data-[state=closed]:animate-out data-[state=closed]:slide-out-to-right-full data-[state=closed]:fade-out-0 data-[state=closed]:duration-200 data-[state=closed]:ease-[cubic-bezier(0.32,0.72,0,1)]',
         className,
       )}
       {...props}

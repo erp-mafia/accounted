@@ -1019,7 +1019,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       {dryRunResults && dryRunResults.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">
+            <CardTitle className="text-base">
               Förhandsgranskning: {dryRunResults.length}{' '}
               {dryRunResults.length === 1 ? 'matchning hittad' : 'matchningar hittade'}
             </CardTitle>
@@ -1280,7 +1280,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
       {unmatchedGlLines.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">
+            <CardTitle className="text-base">
               Omatchade verifikationer på <AccountNumber number={accountNumber} /> ({unmatchedGlLines.length})
             </CardTitle>
           </CardHeader>
@@ -1362,7 +1362,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
               ) : (
                 <ChevronRight className="h-4 w-4" />
               )}
-              <CardTitle className="text-lg">
+              <CardTitle className="text-base">
                 Ignorerade transaktioner ({ignoredTx.length})
               </CardTitle>
             </div>
@@ -1427,7 +1427,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
               ) : (
                 <ChevronRight className="h-4 w-4" />
               )}
-              <CardTitle className="text-lg">
+              <CardTitle className="text-base">
                 Matchade transaktioner ({matchedTx.length})
               </CardTitle>
             </div>

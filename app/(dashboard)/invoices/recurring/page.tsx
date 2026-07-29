@@ -261,9 +261,9 @@ export default function RecurringInvoicesPage() {
                     <TableCell className="tabular-nums">{formatDate(s.next_run_date)}</TableCell>
                     <TableCell>
                       {s.status === 'active' ? (
-                        <Badge variant="success">{t('status_active')}</Badge>
+                        <span className="text-xs text-muted-foreground">{t('status_active')}</span>
                       ) : (
-                        <Badge variant="secondary">{t('status_paused')}</Badge>
+                        <Badge variant="outline" className="font-normal">{t('status_paused')}</Badge>
                       )}
                     </TableCell>
                     <TableCell className="tabular-nums text-right">

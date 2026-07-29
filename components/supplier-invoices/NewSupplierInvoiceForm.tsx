@@ -1552,7 +1552,7 @@ export default function NewSupplierInvoiceForm({
         {/* Section 1: Faktura */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">{t('section_invoice')}</CardTitle>
+            <CardTitle className="text-base">{t('section_invoice')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             {/* Eget utlägg-toggle. När den är på bokas verifikatet direkt mot
@@ -1718,7 +1718,7 @@ export default function NewSupplierInvoiceForm({
         {/* Section 2: Kontering */}
         <Card>
           <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <CardTitle className="text-lg">{t('section_accounting')}</CardTitle>
+            <CardTitle className="text-base">{t('section_accounting')}</CardTitle>
             <Button
               type="button"
               variant="outline"
@@ -2187,7 +2187,7 @@ export default function NewSupplierInvoiceForm({
             onClick={() => setAdvancedOpen(!advancedOpen)}
           >
             <div className="flex items-center justify-between">
-              <CardTitle className="text-lg">{t('section_other')}</CardTitle>
+              <CardTitle className="text-base">{t('section_other')}</CardTitle>
               <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
             </div>
           </CardHeader>

@@ -7,6 +7,7 @@ import { PaymentCalendar } from '@/extensions/general/calendar/components/Paymen
 import type { DeadlineFormValues } from '@/components/deadlines/DeadlineForm'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { Invoice, Deadline } from '@/types'
+import { Skeleton } from '@/components/ui/skeleton'
 
 export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
   const [invoices, setInvoices] = useState<Invoice[]>([])
@@ -107,9 +108,9 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
 
   if (isLoading) {
     return (
-      <div className="animate-pulse">
-        <div className="h-10 bg-muted rounded w-48 mb-4" />
-        <div className="h-96 bg-muted rounded" />
+      <div className="space-y-4">
+        <Skeleton className="h-10 w-48" />
+        <Skeleton className="h-96 w-full" />
       </div>
     )
   }
