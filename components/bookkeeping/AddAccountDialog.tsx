@@ -20,10 +20,18 @@ import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
 import type { BASAccount } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
+/**
+ * The create path hands back the full row the API inserted. The reactivate
+ * path only learns the account number back from /accounts/activate, and the
+ * stored account is deliberately left untouched, so the rest is unknown here.
+ * Every host refetches its own list and reads only account_number.
+ */
+type CreatedAccount = Partial<BASAccount> & { account_number: string }
+
 interface AddAccountDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onCreated: (account: BASAccount) => void
+  onCreated: (account: CreatedAccount) => void
   initialAccountNumber?: string
   initialAccountName?: string
 }
@@ -45,6 +53,10 @@ export function AddAccountDialog({
   const [normalBalance, setNormalBalance] = useState<'debit' | 'credit'>('debit')
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
+  // Set when the create failed because the number belongs to a deactivated
+  // account. Creating it can never succeed (the unique constraint counts
+  // inactive rows), so the dialog offers reactivation instead of a dead end.
+  const [inactiveConflict, setInactiveConflict] = useState(false)
 
   // Apply prefill values whenever the dialog opens. Resetting on close happens
   // implicitly after a successful create; here we only need to seed inputs so
@@ -55,6 +67,7 @@ export function AddAccountDialog({
     setAccountNumber(num)
     setAccountName(initialAccountName ?? '')
     setError('')
+    setInactiveConflict(false)
     if (num.length === 4) {
       setNormalBalance(classifyAccount(num).normal_balance)
     }
@@ -65,6 +78,7 @@ export function AddAccountDialog({
 
   async function handleCreate() {
     setError('')
+    setInactiveConflict(false)
 
     if (!/^\d{4}$/.test(accountNumber)) {
       setError('Kontonumret måste vara exakt 4 siffror')
@@ -100,6 +114,8 @@ export function AddAccountDialog({
         // route's own Swedish reason. Passing the parsed body plus the status
         // resolves all three shapes (envelope, bare string, no body).
         const body = await response.json().catch(() => null)
+        const code = (body as { error?: { code?: string } } | null)?.error?.code
+        setInactiveConflict(code === 'ACCOUNT_EXISTS_INACTIVE')
         setError(getUserErrorMessage(body, { statusCode: response.status }))
         return
       }
@@ -113,6 +129,41 @@ export function AddAccountDialog({
       setDefaultVatRate('none')
       setSruCode('')
       onCreated(createdAccount)
+      onOpenChange(false)
+    } catch (err) {
+      setError(err instanceof Error ? getUserErrorMessage(err) : 'Något gick fel')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  // Recovery for ACCOUNT_EXISTS_INACTIVE: flip the existing account back on
+  // instead of trying to insert a second row. The values typed into this form
+  // are intentionally dropped — the account comes back exactly as it was, and
+  // renaming it is the kontoplan's job, not a side effect of a failed create.
+  async function handleReactivate() {
+    setError('')
+    setIsSaving(true)
+    try {
+      const response = await fetch('/api/bookkeeping/accounts/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_numbers: [accountNumber] }),
+      })
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        setError(getUserErrorMessage(body, { statusCode: response.status }))
+        return
+      }
+
+      setInactiveConflict(false)
+      setAccountNumber('')
+      setAccountName('')
+      setDescription('')
+      setDefaultVatRate('none')
+      setSruCode('')
+      onCreated({ account_number: accountNumber })
       onOpenChange(false)
     } catch (err) {
       setError(err instanceof Error ? getUserErrorMessage(err) : 'Något gick fel')
@@ -149,6 +200,10 @@ export function AddAccountDialog({
                 onChange={(e) => {
                   const v = e.target.value.replace(/\D/g, '').slice(0, 4)
                   setAccountNumber(v)
+                  // The conflict is about a specific number; editing it makes
+                  // the reactivate offer stale.
+                  setInactiveConflict(false)
+                  setError('')
                   if (v.length === 4) {
                     setNormalBalance(classifyAccount(v).normal_balance)
                   }
@@ -220,6 +275,12 @@ export function AddAccountDialog({
                   <SelectItem value="0.06">6 %</SelectItem>
                 </SelectContent>
               </Select>
+              {accountNumber.length === 4 && accountNumber.startsWith('3') && (
+                <p className="text-xs text-muted-foreground">
+                  På intäktskonton avgör satsen också om kontot räknas som
+                  momspliktig försäljning i ruta 05 i momsdeklarationen.
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>SRU-kod <span className="text-muted-foreground">(valfritt)</span></Label>
@@ -231,8 +292,22 @@ export function AddAccountDialog({
             </div>
           </div>
 
-          {error && (
+          {error && !inactiveConflict && (
             <p className="text-sm text-destructive">{error}</p>
+          )}
+
+          {inactiveConflict && (
+            <div className="space-y-3 rounded-lg border border-border p-3">
+              <p className="text-sm text-foreground">{error}</p>
+              <Button
+                type="button"
+                onClick={() => void handleReactivate()}
+                disabled={isSaving}
+              >
+                {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Aktivera kontot istället
+              </Button>
+            </div>
           )}
         </div>
 
@@ -240,7 +315,10 @@ export function AddAccountDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Avbryt
           </Button>
-          <Button onClick={handleCreate} disabled={isSaving || accountNumber.length !== 4 || !accountName.trim()}>
+          <Button
+            onClick={handleCreate}
+            disabled={isSaving || inactiveConflict || accountNumber.length !== 4 || !accountName.trim()}
+          >
             {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Skapa konto
           </Button>

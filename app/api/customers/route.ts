@@ -8,6 +8,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Customer } from '@/types'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -17,18 +18,30 @@ export const GET = withRouteContext(
   async (_request, ctx) => {
     const { supabase, companyId, log, requestId } = ctx
 
-    const { data, error } = await supabase
-      .from('customers')
-      .select('*')
-      .eq('company_id', companyId)
-      .order('name', { ascending: true })
-
-    if (error) {
-      log.error('customer list failed', error)
+    // Paginated: PostgREST caps an unranged select at 1000 rows, which would
+    // hand the roster page a silently truncated customer list. Ordered on the
+    // PK because paging is only stable under a unique total order; the
+    // name sort callers expect is re-applied below.
+    let rows: Customer[]
+    try {
+      rows = await fetchAllRows<Customer>(
+        ({ from, to }) =>
+          supabase
+            .from('customers')
+            .select('*')
+            .eq('company_id', companyId)
+            .order('id', { ascending: true })
+            .range(from, to),
+        { dedupeBy: (row) => row.id },
+      )
+    } catch (error) {
+      log.error('customer list failed', error as Error)
       return errorResponse(error, log, { requestId })
     }
 
-    return NextResponse.json({ data: (data ?? []).map(maskCustomerRow) })
+    rows.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', 'sv'))
+
+    return NextResponse.json({ data: rows.map(maskCustomerRow) })
   },
 )
 

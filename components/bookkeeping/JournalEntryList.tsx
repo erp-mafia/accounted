@@ -38,7 +38,7 @@ import {
   QUIET_LINK_CLASS,
   RowFoldout,
 } from '@/components/ui/dry-table'
-import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
+import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
 import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -1196,6 +1196,29 @@ export default function JournalEntryList() {
                               {t('post')}
                             </Button>
                           )}
+                          {canWrite && (
+                            <button
+                              type="button"
+                              aria-label={t('copy_voucher_tooltip')}
+                              title={t('copy_voucher_tooltip')}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                router.push(`/bookkeeping?copy_from=${entry.id}`)
+                              }}
+                              className={cn(
+                                // p-2 grows the tap target to 30px without
+                                // changing row height (the row is ~40px from
+                                // the description cell).
+                                'inline-flex items-center rounded p-2 text-muted-foreground transition-opacity duration-150 hover:text-foreground',
+                                // Quiet at rest on desktop, but the table has no
+                                // mobile card to fall back on, so touch keeps the
+                                // icon visible.
+                                'opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100',
+                              )}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                           <ChevronRight
                             className={cn(
                               'h-3.5 w-3.5 text-muted-foreground transition-all duration-200',
@@ -1330,9 +1353,11 @@ export default function JournalEntryList() {
                                     {t('reverse_action')}
                                   </button>
                                 )}
-                                <button type="button" className={QUIET_LINK_CLASS} onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}>
-                                  {t('copy')}
-                                </button>
+                                {canWrite && (
+                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}>
+                                    {t('copy')}
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </RowFoldout>

@@ -1,23 +1,17 @@
 import { createLogger } from '@/lib/logger'
 import { decryptPersonnummer, encryptPersonnummer } from '@/lib/salary/personnummer'
-import { maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
+import {
+  UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
+  maskCustomerPersonalNumber,
+} from '@/lib/customers/mask-personal-number'
 
 const log = createLogger('customers/protect-personal-number')
 
-/**
- * Placeholder returned when a stored personal_number cannot be decrypted
- * (corrupted ciphertext, a value written under a different
- * PERSONNUMMER_ENCRYPTION_KEY, or pre-encryption garbage on a self-hosted DB).
- *
- * Shape rationale: it must be recognizably a mask (never mistakable for a real
- * suffix, so no fabricated digits) and it must NOT be null. Returning null
- * would render as "no personnummer", and worse: a client that reads the
- * customer and PATCHes the whole object back would send personal_number: null,
- * which the update route treats as "clear the column", destroying the stored
- * ciphertext. The placeholder fails the route's plaintext validation instead,
- * so a blind round-trip errors loudly rather than deleting data.
- */
-export const UNDECRYPTABLE_PERSONAL_NUMBER_MASK = '********-????'
+// Re-exported so server callers can keep importing the placeholder from the
+// module that produces it. The constant itself lives in mask-personal-number.ts
+// alongside the regex that recognizes it, which the client form and the Zod
+// schemas also need and which must not pull in this module's crypto imports.
+export { UNDECRYPTABLE_PERSONAL_NUMBER_MASK }
 
 export function encryptCustomerPersonalNumber(value: string | null | undefined): string | null {
   return value ? encryptPersonnummer(value) : null
@@ -46,9 +40,51 @@ export function maskStoredCustomerPersonalNumber(value: string | null | undefine
   }
 }
 
+/**
+ * Decrypt a stored customers.personal_number back to plaintext.
+ *
+ * The deliberate drill-in behind the mask, and the ONLY function that returns
+ * the full identifier. It mirrors the employee convention (v1 employee list
+ * masks, v1 employee detail returns all 12 digits): a value the user typed in
+ * has to be readable back, or the field is write-only and unverifiable.
+ *
+ * Callers own the access decision and the audit entry; this function only
+ * decrypts. Returns null when there is nothing stored, and throws when the
+ * value cannot be decrypted so the caller can answer with a specific error
+ * rather than a plausible-looking wrong number.
+ */
+export function revealStoredCustomerPersonalNumber(value: string | null | undefined): string | null {
+  if (!value) return null
+  // A legacy plaintext row (written before the 2026-07-15 encryption change,
+  // or on a self-hosted DB) is already the answer.
+  if (/^(\d{6}|\d{8})[-+]?\d{4}$/.test(value)) return value
+  return decryptPersonnummer(value)
+}
+
 export function maskCustomerRow<T extends { personal_number?: string | null }>(row: T): T {
   return {
     ...row,
     personal_number: maskStoredCustomerPersonalNumber(row.personal_number),
   }
+}
+
+/**
+ * Mask the personnummer on a row that EMBEDS a customer, e.g. the
+ * `customer:customers(*)` join every invoice endpoint selects.
+ *
+ * Those embeds carry the raw ciphertext out to the browser. Nothing renders
+ * it, so it produced no visible bug the way the customer list did, but it is
+ * the same value crossing the same wire for no reason. Masking at the response
+ * boundary rather than narrowing the projection keeps every other customer
+ * field available to the server-side consumers (PDF rendering, invoice email,
+ * ROT/RUT validation) that legitimately read the whole row.
+ *
+ * Null-safe on both the row and the embed: PostgREST returns `customer: null`
+ * for an invoice whose customer was removed.
+ */
+export function maskEmbeddedCustomer<T>(row: T): T {
+  if (!row || typeof row !== 'object') return row
+  const embedded = (row as { customer?: { personal_number?: string | null } | null }).customer
+  if (!embedded || typeof embedded !== 'object') return row
+  return { ...row, customer: maskCustomerRow(embedded) }
 }

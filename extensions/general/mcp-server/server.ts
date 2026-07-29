@@ -34,6 +34,7 @@ import {
   rcInputTotalsFromDeclaration,
   calculateVatDeclaration,
 } from '@/lib/reports/vat-declaration'
+import { fetchDynamicRuta05Accounts } from '@/lib/reports/vat-revenue-accounts'
 // The momsdeklaration completeness checks live in core (lib/reports) and are
 // shared with the web UI's "Kontroll av underlaget" gate. The MCP surface
 // imports them instead of mirroring them: a hand-rolled copy here is exactly
@@ -1162,10 +1163,17 @@ const SKV_AGI_STATUS_OUTPUT_SCHEMA = {
  *  rare case of taxable EU goods (momspliktig EU-leverans, e.g. when the
  *  buyer's VAT number is invalid).
  *
- *  Companies using non-standard charts must either book to one of these
- *  or extend the list: Accounted's BAS chart only ships 3001/3002/3003/3004
- *  by default, but 30xx alternates are common in custom charts. */
+ *  This hand-maintained widening predates #1261 and is kept so no company
+ *  loses a figure it already saw. It is no longer the only path: a company's
+ *  own class 3 konto marked with a moms-sats is resolved at runtime by
+ *  fetchDynamicRuta05Accounts and unioned in below, which is what actually
+ *  covers non-standard charts (Accounted's BAS chart ships no varugrupp
+ *  accounts at all). */
 const RUTA_05_ACCOUNTS = [
+  // The 30xx gruppkonto. ACCOUNT_RUTA maps it to ruta05, so leaving it out here
+  // made a balance on 3000 appear in the filed projection but not in
+  // report.rutor.ruta05.
+  '3000',
   // Domestic sales by VAT rate (canonical BAS)
   '3001', '3002', '3003', '3005', '3006', '3007', '3008',
   // Taxable EU goods (momspliktig, buyer's VAT number invalid or buyer is private)
@@ -1208,7 +1216,8 @@ export interface VatReportWithRutor {
    * The two also differ on ruta 05 by design: `report.rutor.ruta05` sums the
    * widened RUTA_05_ACCOUNTS list for display, while this one is the canonical
    * ACCOUNT_RUTA projection, i.e. what would actually be filed. Checks run on
-   * the filed shape, never on the display shape.
+   * the filed shape, never on the display shape. The company's own ruta 05
+   * accounts feed BOTH: they are part of the filing, not a display widening.
    */
   declarationRutor: VatDeclarationRutor
   /**
@@ -1344,7 +1353,12 @@ export async function computeVatReportWithRutor(
     return t ? Math.round((t.debit - t.credit) * 100) / 100 : 0
   }
 
-  const ruta05 = RUTA_05_ACCOUNTS.reduce((sum, acc) => sum + creditBalance(acc), 0)
+  // The company's own momspliktiga intäktskonton join the hand-maintained list.
+  // Deduped: an account can appear in both (e.g. 3041 with a moms-sats set),
+  // and counting it twice would inflate ruta 05.
+  const dynamicRuta05 = await fetchDynamicRuta05Accounts(supabase, companyId)
+  const ruta05Accounts = [...new Set([...RUTA_05_ACCOUNTS, ...dynamicRuta05.accounts])]
+  const ruta05 = ruta05Accounts.reduce((sum, acc) => sum + creditBalance(acc), 0)
   const ruta10 = creditBalance('2611')
   const ruta11 = creditBalance('2621')
   const ruta12 = creditBalance('2631')
@@ -1423,7 +1437,11 @@ export async function computeVatReportWithRutor(
   // Same `accountTotals` the report is built from, projected through core's
   // ACCOUNT_RUTA map so the completeness checks see the full declaration
   // (incl. rutor 20-24 and 50) instead of the trimmed report view.
-  return { report, declarationRutor: rutorFromTotals(accountTotals), accountTotals }
+  return {
+    report,
+    declarationRutor: rutorFromTotals(accountTotals, dynamicRuta05.accounts),
+    accountTotals,
+  }
 }
 
 /**

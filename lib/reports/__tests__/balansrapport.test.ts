@@ -9,18 +9,28 @@ vi.mock('../imbalance-diagnosis', () => ({
   buildImbalanceDiagnosis: vi.fn(),
 }))
 
+// Mocked rather than fed through the queued Supabase stub: the queue resolves
+// in strict call order, so an extra real query inside the engine would shift
+// every enqueued response in this file.
+vi.mock('../latest-vouchers', () => ({
+  getLatestPostedVouchers: vi.fn(),
+}))
+
 import { generateBalansrapport } from '../balansrapport'
 import { generateTrialBalance } from '../trial-balance'
 import { findUntransferredResults, buildImbalanceDiagnosis } from '../imbalance-diagnosis'
+import { getLatestPostedVouchers } from '../latest-vouchers'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { TrialBalanceRow } from '@/types'
 
 const mockTrialBalance = vi.mocked(generateTrialBalance)
 const mockFindUntransferred = vi.mocked(findUntransferredResults)
 const mockBuildDiagnosis = vi.mocked(buildImbalanceDiagnosis)
+const mockLatestVouchers = vi.mocked(getLatestPostedVouchers)
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockLatestVouchers.mockResolvedValue([])
 })
 
 function makeRow(overrides: Partial<TrialBalanceRow>): TrialBalanceRow {
@@ -409,5 +419,78 @@ describe('generateBalansrapport', () => {
     expect(report.total_equity_liabilities_ub).toBe(0)
     expect(report.beraknat_resultat).toBe(0)
     expect(report.is_balanced).toBe(true)
+  })
+
+  describe('latest_vouchers header line', () => {
+    function enqueuePeriod(q: ReturnType<typeof createQueuedMockSupabase>) {
+      q.enqueue({
+        data: { period_start: '2026-01-01', period_end: '2026-12-31' },
+        error: null,
+      })
+      mockTrialBalance.mockResolvedValueOnce(tb([]))
+    }
+
+    it('carries the last posted voucher per series', async () => {
+      const q = createQueuedMockSupabase()
+      enqueuePeriod(q)
+      mockLatestVouchers.mockResolvedValueOnce([
+        { series: 'A', last_number: 214 },
+        { series: 'B', last_number: 37 },
+      ])
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-1')
+
+      expect(report.latest_vouchers).toEqual([
+        { series: 'A', last_number: 214 },
+        { series: 'B', last_number: 37 },
+      ])
+    })
+
+    it('omits the field entirely when the period has no vouchers', async () => {
+      const q = createQueuedMockSupabase()
+      enqueuePeriod(q)
+      mockLatestVouchers.mockResolvedValueOnce([])
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-1')
+
+      expect('latest_vouchers' in report).toBe(false)
+    })
+
+    it('still returns the report when the lookup fails', async () => {
+      const q = createQueuedMockSupabase()
+      enqueuePeriod(q)
+      mockLatestVouchers.mockRejectedValueOnce(new Error('boom'))
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-1')
+
+      expect(report.latest_vouchers).toBeUndefined()
+      expect(report.is_balanced).toBe(true)
+    })
+
+    it('bounds the window at the as-of date with no lower bound (accumulating report)', async () => {
+      const q = createQueuedMockSupabase()
+      enqueuePeriod(q)
+
+      await generateBalansrapport(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        q.supabase as any,
+        'company-1',
+        'period-1',
+        { fromDate: '2026-02-01', toDate: '2026-03-31' }
+      )
+
+      // fromDate narrows the report's own period label, but a balansrapport
+      // accumulates from the fiscal-year start, so the voucher window must not
+      // inherit that lower bound.
+      expect(mockLatestVouchers).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        'period-1',
+        { toDate: '2026-03-31' }
+      )
+    })
   })
 })

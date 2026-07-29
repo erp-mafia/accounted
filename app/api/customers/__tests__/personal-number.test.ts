@@ -54,6 +54,8 @@ type CustomerWrite = { personal_number?: string | null }
 // Synthetic personnummer, never a real one.
 const PERSONAL_NUMBER = '19900101-1234'
 const MASKED = '********-1234'
+// What a row whose stored ciphertext cannot be decrypted reads back as.
+const UNDECRYPTABLE_MASK = '********-????'
 
 /**
  * The shape customers_personal_number_check accepts as of 20260726110000:
@@ -209,6 +211,88 @@ describe('personal_number on customer routes', () => {
     // Neither stored literally nor cleared: the column is left untouched.
     expect(captured.update[0]).not.toHaveProperty('personal_number')
     expect(body.data.personal_number).toBe(MASKED)
+  })
+
+  it('keeps the stored value when the undecryptable placeholder is sent back', async () => {
+    // A row whose ciphertext cannot be decrypted reads back as
+    // '********-????'. That is still a mask, so PATCHing it must leave the
+    // column alone. When only '********-1234' was recognized, this 400'd and
+    // took the whole edit with it: the customer's name and address could not
+    // be saved either, over a field the user had no way to correct.
+    queryResult = {
+      data: {
+        id: 'customer-1',
+        customer_type: 'individual',
+        name: 'Anna Andersson',
+        personal_number: 'ab'.repeat(40),
+      },
+      error: null,
+    }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: {
+          name: 'Anna Andersson',
+          city: 'Göteborg',
+          personal_number: UNDECRYPTABLE_MASK,
+        },
+      }),
+      routeParams,
+    )
+
+    const { status, body } = await parseJsonResponse<{ data: { personal_number: string } }>(response)
+    expect(status).toBe(200)
+    // The rest of the edit went through...
+    expect(captured.update[0]).toMatchObject({ name: 'Anna Andersson', city: 'Göteborg' })
+    // ...and the unreadable ciphertext was neither stored over nor cleared.
+    expect(captured.update[0]).not.toHaveProperty('personal_number')
+    expect(body.data.personal_number).toBe(UNDECRYPTABLE_MASK)
+  })
+
+  it('replaces an undecryptable value when the user types a real personnummer', async () => {
+    // The repair path, and the only "backfill" that can exist: nothing can
+    // recover the unreadable ciphertext, but the user can overwrite it.
+    queryResult = {
+      data: {
+        id: 'customer-1',
+        customer_type: 'individual',
+        personal_number: encryptPersonnummer(PERSONAL_NUMBER),
+      },
+      error: null,
+    }
+
+    const response = await PATCH(
+      createMockRequest('/api/customers/customer-1', {
+        method: 'PATCH',
+        body: { personal_number: PERSONAL_NUMBER },
+      }),
+      routeParams,
+    )
+
+    expect(response.status).toBe(200)
+    const written = (captured.update[0] as CustomerWrite).personal_number as string
+    expect(written).toMatch(CIPHERTEXT_SHAPE)
+    expect(decryptPersonnummer(written)).toBe(PERSONAL_NUMBER)
+  })
+
+  it('rejects the undecryptable placeholder on create', async () => {
+    // Same rule as the '-1234' mask: on create there is no stored value to
+    // preserve, so a mask is a client error.
+    const response = await POST(
+      createMockRequest('/api/customers', {
+        method: 'POST',
+        body: {
+          name: 'Anna Andersson',
+          customer_type: 'individual',
+          personal_number: UNDECRYPTABLE_MASK,
+        },
+      }),
+      { params: Promise.resolve({}) },
+    )
+
+    expect(response.status).toBe(400)
+    expect(captured.insert).toHaveLength(0)
   })
 
   it('does not treat a masked value as a personal number on a corporate customer', async () => {

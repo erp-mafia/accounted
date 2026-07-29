@@ -31,7 +31,7 @@ function createCapturingSupabase(results: { data?: unknown; error?: unknown }[])
     const result = results[idx++] ?? { data: null, error: null }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const b: any = {}
-    for (const m of ['select', 'eq', 'order', 'range', 'maybeSingle', 'single']) {
+    for (const m of ['select', 'eq', 'in', 'order', 'range', 'maybeSingle', 'single']) {
       b[m] = (...args: unknown[]) => {
         calls.push({ method: m, args })
         return b
@@ -85,9 +85,21 @@ describe('GET /api/bookkeeping/accounts/reference', () => {
   })
 })
 
+/**
+ * bas-lookup answers "can this number be activated at all?", which is what
+ * gates ActivateAccountsDialog's confirm button. It consults the company's own
+ * chart first, so a custom (non-BAS) account the company deactivated still
+ * comes back known — before that it read as unknown and the button stayed dead.
+ */
 describe('GET /api/bookkeeping/accounts/bas-lookup', () => {
+  function authWith(chartRows: unknown[]) {
+    const { supabase, calls } = createCapturingSupabase([{ data: chartRows }])
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+    return calls
+  }
+
   beforeEach(() => {
-    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: {}, error: null })
+    authWith([])
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -96,7 +108,10 @@ describe('GET /api/bookkeeping/accounts/bas-lookup', () => {
       supabase: {},
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
-    const res = await basLookupGET(createMockRequest('/api/bookkeeping/accounts/bas-lookup'))
+    const res = await basLookupGET(
+      createMockRequest('/api/bookkeeping/accounts/bas-lookup'),
+      routeParams
+    )
     expect(res.status).toBe(401)
   })
 
@@ -105,12 +120,74 @@ describe('GET /api/bookkeeping/accounts/bas-lookup', () => {
       searchParams: { numbers: '1930,0000' },
     })
     const { status, body } = await parseJsonResponse<{
-      data: Array<{ account_number: string; known: boolean }>
-    }>(await basLookupGET(req))
+      data: Array<{ account_number: string; known: boolean; in_chart: boolean }>
+    }>(await basLookupGET(req, routeParams))
 
     expect(status).toBe(200)
-    expect(body.data.find((a) => a.account_number === '1930')?.known).toBe(true)
+    const bas = body.data.find((a) => a.account_number === '1930')
+    expect(bas?.known).toBe(true)
+    // Known from the static catalog, not held by the company: activating it
+    // inserts a new row rather than reviving one.
+    expect(bas?.in_chart).toBe(false)
     expect(body.data.find((a) => a.account_number === '0000')?.known).toBe(false)
+  })
+
+  it('reports a deactivated custom account as known and in the chart', async () => {
+    const calls = authWith([
+      {
+        account_number: '3910',
+        account_name: 'Hyresintäkter egen',
+        account_class: 3,
+        account_type: 'revenue',
+        is_active: false,
+      },
+    ])
+    const req = createMockRequest('/api/bookkeeping/accounts/bas-lookup', {
+      searchParams: { numbers: '3910' },
+    })
+    const { status, body } = await parseJsonResponse<{
+      data: Array<{
+        account_number: string
+        account_name: string | null
+        known: boolean
+        in_chart: boolean
+        is_active: boolean
+      }>
+    }>(await basLookupGET(req, routeParams))
+
+    expect(status).toBe(200)
+    // 3910 is not in the BAS catalog: without the chart read this was known:false.
+    const row = body.data[0]
+    expect(row.known).toBe(true)
+    expect(row.in_chart).toBe(true)
+    expect(row.is_active).toBe(false)
+    expect(row.account_name).toBe('Hyresintäkter egen')
+    // Defense in depth alongside RLS: another company's chart must not answer.
+    expect(calls.filter((c) => c.method === 'eq').map((c) => c.args)).toContainEqual([
+      'company_id',
+      'company-1',
+    ])
+  })
+
+  it("prefers the company's own account name over the BAS catalog name", async () => {
+    authWith([
+      {
+        account_number: '1930',
+        account_name: 'Företagskonto SEB',
+        account_class: 1,
+        account_type: 'asset',
+        is_active: true,
+      },
+    ])
+    const req = createMockRequest('/api/bookkeeping/accounts/bas-lookup', {
+      searchParams: { numbers: '1930' },
+    })
+    const { body } = await parseJsonResponse<{
+      data: Array<{ account_name: string | null; in_chart: boolean }>
+    }>(await basLookupGET(req, routeParams))
+
+    expect(body.data[0].account_name).toBe('Företagskonto SEB')
+    expect(body.data[0].in_chart).toBe(true)
   })
 
   it('rejects an oversized numbers list with 400', async () => {
@@ -118,7 +195,7 @@ describe('GET /api/bookkeeping/accounts/bas-lookup', () => {
     const req = createMockRequest('/api/bookkeeping/accounts/bas-lookup', {
       searchParams: { numbers: many },
     })
-    const { status } = await parseJsonResponse(await basLookupGET(req))
+    const { status } = await parseJsonResponse(await basLookupGET(req, routeParams))
     expect(status).toBe(400)
   })
 })

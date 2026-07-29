@@ -520,19 +520,20 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                 {t('correct_opening_balances')}
               </Button>
             )}
-            {entry.status === 'posted' && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full sm:w-auto"
-                onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}
-                disabled={!canWrite}
-                title={!canWrite ? t('read_only_tooltip') : undefined}
-              >
-                {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
-                {t('copy_entry')}
-              </Button>
-            )}
+            {/* Copy is not status-gated: it only prefills a fresh manual draft
+                (no voucher number, date or attachments carried over), so it is
+                offered on drafts too, matching the list surfaces. */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full sm:w-auto"
+              onClick={() => router.push(`/bookkeeping?copy_from=${entry.id}`)}
+              disabled={!canWrite}
+              title={!canWrite ? t('read_only_tooltip') : undefined}
+            >
+              {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+              {t('copy_entry')}
+            </Button>
           </div>
         )}
       </div>

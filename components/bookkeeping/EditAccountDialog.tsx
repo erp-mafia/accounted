@@ -328,6 +328,12 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                   <SelectItem value="0.06">6 %</SelectItem>
                 </SelectContent>
               </Select>
+              {account.account_class === 3 && (
+                <p className="text-xs text-muted-foreground">
+                  På intäktskonton avgör satsen också om kontot räknas som
+                  momspliktig försäljning i ruta 05 i momsdeklarationen.
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label>SRU-kod</Label>

@@ -31,7 +31,18 @@ const CURRENCY_DEFAULTS: Record<string, string> = {
 
 vi.mock('@/lib/cash-accounts/service', () => ({
   upsertFromPsd2: (...args: unknown[]) => mockUpsertFromPsd2(...args),
-  allocatePsd2LedgerAccount: (...args: unknown[]) => mockAllocate(...args),
+  // The route resolves ledgers through resolvePsd2LedgerAccount (IBAN match
+  // first, allocation second). mockAllocate remains the allocation stand-in;
+  // the wrapper puts its answer in the resolver's envelope so the existing
+  // "did we allocate?" assertions keep their meaning. Tests that exercise the
+  // IBAN path override resolvePsd2LedgerAccount's outcome via mockAllocate's
+  // own implementation.
+  resolvePsd2LedgerAccount: async (...args: unknown[]) => {
+    const ledgerAccount = await mockAllocate(...args)
+    if (!ledgerAccount) return null
+    if (typeof ledgerAccount === 'object') return ledgerAccount
+    return { ledgerAccount, reuseCashAccountId: null, source: 'allocated' }
+  },
   defaultLedgerForCurrency: (currency: string) =>
     CURRENCY_DEFAULTS[currency.toUpperCase()] ?? '1930',
 }))
@@ -249,6 +260,70 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(
       (mockUpsertFromPsd2.mock.calls[0][2] as { ledger_account: string }).ledger_account,
     ).toBe('1935')
+  })
+
+  it('reuses the mapping of a known IBAN when the bank returns a new account uid', async () => {
+    // The reconnect case behind the reported bug: the ASPSP minted a fresh
+    // account uid, so the (connection, uid) lookup finds nothing and the old
+    // behavior allocated an overflow slot, silently moving the user's 1930
+    // mapping. Matching on IBAN has to bring both the ledger and the existing
+    // row along.
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'cash_accounts') {
+        // Nothing mirrored under the NEW uid.
+        return mockChain({ data: [], error: null })
+      }
+      const chain: Record<string, unknown> = {}
+      chain.update = vi.fn(() => chain)
+      chain.eq = vi.fn().mockReturnValue(chain)
+      chain.select = vi.fn().mockReturnValue(chain)
+      chain.in = vi.fn().mockReturnValue(chain)
+      chain.single = vi.fn().mockResolvedValue({
+        data: {
+          id: 'conn-1',
+          bank_name: 'TestBank',
+          company_id: 'company-1',
+          user_id: 'user-1',
+          status: 'expired',
+        },
+        error: null,
+      })
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+      return chain
+    })
+
+    mockAllocate.mockResolvedValue({
+      ledgerAccount: '1930',
+      reuseCashAccountId: 'cash-row-1',
+      source: 'iban',
+    })
+
+    mockCreateSession.mockResolvedValue({
+      session_id: 'sess-2',
+      accounts: [
+        { uid: 'acc-new', account_id: { iban: 'SE1234' }, name: 'Företagskonto', currency: 'SEK' },
+      ],
+      access: { valid_until: '2024-12-31T00:00:00Z' },
+      aspsp: { name: 'TestBank', country: 'SE' },
+    })
+
+    const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+    expect(response.status).toBe(200)
+    // Reading the body drives the stream, which is what awaits the finalize
+    // work the assertions below inspect.
+    await response.text()
+
+    expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
+    const mirrored = mockUpsertFromPsd2.mock.calls[0][2] as {
+      ledger_account: string
+      reuse_cash_account_id: string | null
+      external_uid: string
+    }
+    expect(mirrored.ledger_account).toBe('1930')
+    // The existing row is promoted, not duplicated: it keeps its linked
+    // transactions and picks up the new uid.
+    expect(mirrored.reuse_cash_account_id).toBe('cash-row-1')
+    expect(mirrored.external_uid).toBe('acc-new')
   })
 
   it('deletes the fresh row and streams an error redirect when the session exchange fails', async () => {

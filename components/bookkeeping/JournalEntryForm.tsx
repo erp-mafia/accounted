@@ -786,7 +786,11 @@ export default function JournalEntryForm({
   // After a new account is created, refresh the chart, auto-select it on the
   // line that initiated the create, and close the dialog. All other form
   // state is preserved: we never navigate away from the form.
-  const handleAccountCreated = async (account: BASAccount) => {
+  //
+  // Only the number is required: the dialog also reaches here after
+  // reactivating an existing account, where the rest of the row is whatever
+  // the company already had stored and is picked up by fetchAccounts.
+  const handleAccountCreated = async (account: { account_number: string }) => {
     await fetchAccounts()
     if (creatingAccountForLine != null) {
       updateLine(creatingAccountForLine, 'account_number', account.account_number)

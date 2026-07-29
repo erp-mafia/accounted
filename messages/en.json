@@ -986,7 +986,12 @@
     "type_individual": "Individual",
     "type_swedish_business": "Swedish company or organization",
     "type_eu_business": "EU business",
-    "type_non_eu_business": "Outside EU"
+    "type_non_eu_business": "Outside EU",
+    "personal_number_show": "Show personal number",
+    "personal_number_hide": "Hide personal number",
+    "personal_number_reveal_failed_title": "Could not show the personal number",
+    "personal_number_unreadable": "The stored personal number cannot be read.",
+    "personal_number_unreadable_action": "Enter it again"
   },
   "form_customer": {
     "type_label": "Customer type *",
@@ -1043,7 +1048,8 @@
     "notes_placeholder": "Internal notes about the customer...",
     "submit_save": "Save customer",
     "submit_saving": "Saving...",
-    "viewer_disabled_tooltip": "You only have viewer access in this company"
+    "viewer_disabled_tooltip": "You only have viewer access in this company",
+    "personal_number_unreadable": "The stored personal number cannot be read. Enter it again to replace it."
   },
   "form_supplier": {
     "name_label": "Name *",
@@ -2589,6 +2595,8 @@
     "different_currencies": " (different currencies)",
     "partial_payment_note": ": the invoice will become partially paid.",
     "ore_rounding_note": "The {amount} difference is booked as rounding (account 3740). The invoice is marked as paid.",
+    "target_settled_title": "This invoice is already fully paid",
+    "target_settled_description": "This match suggestion is out of date: the invoice was paid by another transaction and cannot be matched again. Close this dialog and match the transaction against the right invoice, or book it as usual.",
     "fx_title": "Currency conversion",
     "fx_rate_description": "Riksbanken mid-rate {date}: 1 {invoiceCurrency} = {rate} SEK",
     "fx_paid_in_invoice_currency": "Payment equals: {amount}",
@@ -4290,6 +4298,8 @@
     "tab_bas_catalog": "BAS catalog",
     "add_own": "Custom account",
     "hide_k2_excluded": "Hide K2-excluded",
+    "show_inactive": "Show inactive",
+    "reactivate": "Activate",
     "search_placeholder": "Search account (number or name)...",
     "class_heading": "Class {cls}: {label}",
     "col_account": "Account",
@@ -4313,6 +4323,11 @@
     "toast_activate_failed": "Could not activate the account",
     "toast_activated_title": "Account activated",
     "toast_activated_description": "Account {number} has been added to your chart of accounts",
+    "toast_reactivated_title": "Account activated again",
+    "toast_reactivated_description": "Account {number} is active in your chart of accounts again",
+    "deactivate_confirm_title": "Deactivate account {number}?",
+    "deactivate_confirm": "This account is used in {count} posted journal entries. Existing bookkeeping is unaffected, but the account is hidden from the chart of accounts and cannot be selected in new entries.",
+    "deactivate_confirm_action": "Deactivate",
     "col_usage": "Vouchers",
     "own_badge": "Custom",
     "prune_button": "Delete accounts",

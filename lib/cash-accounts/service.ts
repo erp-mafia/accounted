@@ -45,6 +45,27 @@ export interface UpsertFromPsd2Input {
   balance?: number | null
   balance_updated_at?: string | null
   enabled?: boolean
+  /**
+   * Existing cash_accounts row this PSD2 account was matched to by IBAN
+   * (see resolvePsd2LedgerAccount). The row is promoted in place: it keeps its
+   * id, its ledger_account and its linked transactions, and is re-pointed at
+   * this connection + external_uid. Without this the reconnect path would try
+   * to INSERT a second row on the same ledger and trip the
+   * (company_id, ledger_account) UNIQUE constraint.
+   */
+  reuse_cash_account_id?: string | null
+}
+
+/**
+ * Normalize an IBAN for comparison: ASPSPs format the same account both as
+ * "SE45 5000 0000 0583 9825 7466" and "SE4550000000058398257466", and a plain
+ * string compare would read those as two different accounts. Mirrors the
+ * normalization the sync path already applies when deriving external_ids.
+ */
+export function normalizeIban(iban: string | null | undefined): string | null {
+  if (!iban) return null
+  const normalized = iban.replace(/\s+/g, '').toUpperCase()
+  return normalized || null
 }
 
 export async function listForCompany(
@@ -183,6 +204,14 @@ export async function getRevokedConnectionIds(
  *     four currency defaults (reserved as suggestions for their currencies)
  *     and any slot held by ANY existing row — promoting an unrelated manual
  *     account (SIE-imported, kassa) would silently steal it.
+ *   - Overflow ALSO skips 19xx numbers that already exist in the company's
+ *     chart of accounts, even when no cash_accounts row holds them. A chart
+ *     imported from SIE carries the company's real bank accounts by name
+ *     ("1942 Nordnet", "1938 Danske eSett Settlement") without any PSD2 row
+ *     behind them, and handing one of those out as "free" is how a SEK
+ *     företagskonto ended up proposed as 1942 Nordnet. Only when every
+ *     chart-free slot is exhausted do we fall back to chart-occupied numbers,
+ *     so a company with a fully populated 19xx chart still gets an answer.
  *   - `exclude` carries slots already assigned earlier in the caller's loop
  *     but not yet visible in the table.
  *
@@ -207,6 +236,24 @@ export async function findFreeLedgerAccount(
     return null
   }
 
+  // Chart accounts are advisory here: a failed lookup must not block
+  // allocation, it just costs us the "don't steal a named bank account" guard.
+  const { data: chartRows, error: chartError } = await supabase
+    .from('chart_of_accounts')
+    .select('account_number')
+    .eq('company_id', companyId)
+    .like('account_number', '19%')
+
+  if (chartError) {
+    log.warn('findFreeLedgerAccount chart lookup failed', {
+      companyId,
+      error: chartError.message,
+    })
+  }
+  const chartTaken = new Set(
+    ((chartRows ?? []) as Array<{ account_number: string }>).map(r => r.account_number),
+  )
+
   const typedRows = (rows ?? []) as Array<{ ledger_account: string; bank_connection_id: string | null }>
   const revokedConnectionIds = await getRevokedConnectionIds(
     supabase,
@@ -226,11 +273,26 @@ export async function findFreeLedgerAccount(
   if (!exclude.has(preferred) && !connectedTaken.has(preferred)) return preferred
 
   const reserved = new Set(Object.values(CURRENCY_LEDGER_DEFAULTS))
+  const candidates: string[] = []
   for (let n = 1931; n <= 1959; n++) {
     const candidate = String(n)
     if (reserved.has(candidate)) continue
     if (exclude.has(candidate) || anyTaken.has(candidate)) continue
-    return candidate
+    candidates.push(candidate)
+  }
+
+  // First pass: slots the chart has never heard of, so we can create them
+  // cleanly. Second pass: chart-occupied slots, the pre-fix behavior, only
+  // once nothing unnamed is left.
+  const unnamed = candidates.find(c => !chartTaken.has(c))
+  if (unnamed) return unnamed
+  if (candidates.length > 0) {
+    log.warn('findFreeLedgerAccount fell back to a chart-occupied slot', {
+      companyId,
+      currency,
+      ledger: candidates[0],
+    })
+    return candidates[0]
   }
 
   log.warn('findFreeLedgerAccount exhausted 1931–1959', { companyId, currency })
@@ -281,6 +343,90 @@ export async function allocatePsd2LedgerAccount(
     return null
   }
   return ledger
+}
+
+export interface Psd2LedgerResolution {
+  ledgerAccount: string
+  /**
+   * Existing row to promote in place, when the IBAN was already known. Null
+   * when the ledger was freshly allocated.
+   */
+  reuseCashAccountId: string | null
+  source: 'iban' | 'allocated'
+}
+
+/**
+ * Decide which BAS account a PSD2 account should book to, IBAN first.
+ *
+ * The IBAN identifies the physical bank account; the provider's account `uid`
+ * does not survive a re-authorization at every ASPSP, and a fresh connect to
+ * an already-connected bank mints a new bank_connection row regardless. Both
+ * cases used to look like "an account we have never seen", so the allocator
+ * handed out the next free 19xx slot and the user's mapping (1930/1940/1941)
+ * silently moved to 1942-1946 on every consent renewal.
+ *
+ * Matching on the IBAN instead means a known account keeps its ledger, its
+ * cash_accounts row id and therefore its linked transactions. The previous
+ * holder's connection status is deliberately NOT considered: one IBAN is one
+ * physical account, so the connection that just authorized it is the one that
+ * owns it. This matters for the case that motivated the fix, where the old
+ * connection still reads 'active' because its session was killed bank-side
+ * without telling us.
+ *
+ * Returns null only when allocation itself fails; callers keep their existing
+ * fallback.
+ */
+export async function resolvePsd2LedgerAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: {
+    iban?: string | null
+    currency: string
+    accountName?: string | null
+    exclude?: ReadonlySet<string>
+  },
+): Promise<Psd2LedgerResolution | null> {
+  const exclude = input.exclude ?? new Set<string>()
+  const wanted = normalizeIban(input.iban)
+
+  if (wanted) {
+    const { data, error } = await supabase
+      .from('cash_accounts')
+      .select('id, iban, ledger_account')
+      .eq('company_id', companyId)
+      .not('iban', 'is', null)
+
+    if (error) {
+      // Fall through to allocation: a failed lookup must not block the
+      // connection, it just costs us the reuse.
+      log.warn('resolvePsd2LedgerAccount iban lookup failed', {
+        companyId,
+        error: error.message,
+      })
+    } else {
+      const match = ((data ?? []) as Array<{ id: string; iban: string | null; ledger_account: string }>)
+        .find(row => normalizeIban(row.iban) === wanted)
+      // A ledger already claimed earlier in the caller's loop cannot be handed
+      // out twice, even on an IBAN hit: two rows on one ledger violate the
+      // (company_id, ledger_account) UNIQUE constraint.
+      if (match && !exclude.has(match.ledger_account)) {
+        return {
+          ledgerAccount: match.ledger_account,
+          reuseCashAccountId: match.id,
+          source: 'iban',
+        }
+      }
+    }
+  }
+
+  const allocated = await allocatePsd2LedgerAccount(supabase, companyId, userId, {
+    currency: input.currency,
+    accountName: input.accountName,
+    exclude,
+  })
+  if (!allocated) return null
+  return { ledgerAccount: allocated, reuseCashAccountId: null, source: 'allocated' }
 }
 
 /**
@@ -342,7 +488,12 @@ export async function upsertFromPsd2(
   const typedHolder = holderRow as { id: string; bank_connection_id: string | null } | null
   let promotableRowId: string | null = null
   if (typedHolder) {
-    if (typedHolder.bank_connection_id === null) {
+    if (typedHolder.id === input.reuse_cash_account_id) {
+      // Matched by IBAN upstream: this row IS this account, whoever held it
+      // last. Promoting keeps its id (transactions.cash_account_id stays
+      // linked) and re-points it at the connection that just authorized.
+      promotableRowId = typedHolder.id
+    } else if (typedHolder.bank_connection_id === null) {
       promotableRowId = typedHolder.id
     } else if (typedHolder.bank_connection_id !== input.bank_connection_id) {
       const revoked = await getRevokedConnectionIds(supabase, companyId, [

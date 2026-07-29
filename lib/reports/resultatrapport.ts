@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
+import { getLatestPostedVouchers } from './latest-vouchers'
 import type {
+  LatestVoucherPerSeries,
   ResultatrapportReport,
   ResultatrapportRow,
   ResultatrapportGroup,
@@ -157,12 +159,31 @@ export async function generateResultatrapport(
   const netResultCurrent = sumNet(currentRows)
   const netResultPrior = sumNet(priorRows)
 
+  // Reconciliation aid for the header: which vouchers are actually in here.
+  // Scoped to the reported window, so a Q1 report says something true about Q1.
+  // Dimension filter: skipped entirely. The report already discloses that it is
+  // partial, and an unfiltered voucher range next to a filtered result invites
+  // exactly the wrong conclusion during avstämning.
+  // Best-effort: a header nicety never breaks the report.
+  let latestVouchers: LatestVoucherPerSeries[] = []
+  if (!options?.dimensions) {
+    try {
+      latestVouchers = await getLatestPostedVouchers(supabase, companyId, fiscalPeriodId, {
+        fromDate: effectiveFromDate,
+        toDate: effectiveToDate,
+      })
+    } catch {
+      // Best-effort header line only.
+    }
+  }
+
   return {
     groups,
     net_result_current: round2(netResultCurrent),
     net_result_prior: round2(netResultPrior),
     period: { start: effectiveFromDate, end: effectiveToDate },
     prior_period: priorPeriodInfo,
+    ...(latestVouchers.length > 0 ? { latest_vouchers: latestVouchers } : {}),
   }
 }
 

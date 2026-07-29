@@ -18,6 +18,7 @@ import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { cn, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
+import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from '@/lib/reports/latest-vouchers-format'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
@@ -772,6 +773,11 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
           { format: 'xlsx', href: `/api/reports/resultatrapport/xlsx?${reportQs}` },
         ]}
       />
+      {formatLatestVouchers(data.latest_vouchers) && (
+        <p className="text-sm text-muted-foreground">
+          {LATEST_VOUCHERS_LABEL}: {formatLatestVouchers(data.latest_vouchers)}
+        </p>
+      )}
 
       <Card>
         <CardContent className="p-0">
@@ -917,6 +923,11 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
           { format: 'xlsx', href: `/api/reports/balansrapport/xlsx?${reportQs}` },
         ]}
       />
+      {formatLatestVouchers(data.latest_vouchers) && (
+        <p className="text-sm text-muted-foreground">
+          {LATEST_VOUCHERS_LABEL}: {formatLatestVouchers(data.latest_vouchers)}
+        </p>
+      )}
 
       <Card>
         <CardContent className="p-0">

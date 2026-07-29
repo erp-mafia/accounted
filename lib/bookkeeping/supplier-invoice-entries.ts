@@ -1,6 +1,7 @@
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import { resolveBookingAccount } from './accruals/account-suggestions'
+import { buildSupplierDescription } from './supplier-invoice-description'
 import {
   generateReverseChargeLines,
   generateReverseChargeBasisLines,
@@ -80,19 +81,6 @@ function toSekOrThrow(
     throw new SupplierInvoiceFxRateMissingError(currency)
   }
   return resolveSekAmount(amount, null, currency, exchangeRate)
-}
-
-/**
- * Build a BFL-compliant verifikation description with event type, counterparty, and suffix.
- * Falls back to prefix + invoiceNumber + suffix if name is not provided (backward compat).
- */
-function buildSupplierDescription(
-  prefix: string, invoiceNumber: string, supplierName?: string, suffix?: string
-): string {
-  const base = supplierName
-    ? `${prefix} ${invoiceNumber}, ${supplierName}`
-    : `${prefix} ${invoiceNumber}`
-  return suffix ? `${base} ${suffix}` : base
 }
 
 /**

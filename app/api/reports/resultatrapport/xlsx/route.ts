@@ -9,6 +9,7 @@ import {
   currencyColumn,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
+import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from '@/lib/reports/latest-vouchers-format'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface FlatRow {
@@ -87,6 +88,20 @@ export const GET = withRouteContext('report.resultatrapport.xlsx', async (reques
       current_period: report.net_result_current,
       prior_period: report.net_result_prior,
     })
+
+    // Reconciliation aid (#1267). reportToWorkbook has no preamble concept, so
+    // this rides as a first body row, the same way the disclosure below does.
+    // Unshifted first so the disclosure, when present, still ends up on top.
+    const vouchersLabel = formatLatestVouchers(report.latest_vouchers)
+    if (vouchersLabel) {
+      rows.unshift({
+        group: `${LATEST_VOUCHERS_LABEL}: ${vouchersLabel}`,
+        account_number: '',
+        account_name: '',
+        current_period: null as unknown as number,
+        prior_period: null as unknown as number,
+      })
+    }
 
     // Partial-view disclosure survives the file boundary: a filtered export
     // must never be mistakable for the authoritative report (BFNAR 2013:2).

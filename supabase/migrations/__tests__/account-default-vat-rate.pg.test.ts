@@ -106,3 +106,71 @@ describe('chart_of_accounts.default_vat_rate', () => {
     ).rejects.toThrow()
   })
 })
+
+/**
+ * Migration 20260728120000 widened the insert default to the BAS revenue
+ * accounts whose sats is in their own name. The momsdeklaration reads
+ * default_vat_rate on class 3 to decide ruta 05 membership (#1261), so these
+ * shipping with an empty "Standard moms" made the rule look arbitrary in the
+ * account dialogs.
+ */
+describe('chart_of_accounts.default_vat_rate: BAS revenue seeds', () => {
+  it('ships 3001/3002/3003 with their own sats and 3004 as momsfri', async () => {
+    const { companyId, userId } = await seedCompany()
+    const expected: Array<[string, number]> = [
+      ['3001', 0.25],
+      ['3002', 0.12],
+      ['3003', 0.06],
+      ['3004', 0],
+    ]
+    for (const [number, rate] of expected) {
+      expect(
+        await insertAccount(companyId, userId, {
+          number,
+          name: `Försäljning ${number}`,
+          type: 'revenue',
+          balance: 'credit',
+        }),
+      ).toBe(rate)
+    }
+  })
+
+  it('still fills 3740 (the original momsfri case survives the rewrite)', async () => {
+    const { companyId, userId } = await seedCompany()
+    expect(
+      await insertAccount(companyId, userId, {
+        number: '3740',
+        name: 'Öres- och kronutjämning',
+        type: 'revenue',
+        balance: 'credit',
+      }),
+    ).toBe(0)
+  })
+
+  it('keeps an explicit sats on a seeded account', async () => {
+    const { companyId, userId } = await seedCompany()
+    expect(
+      await insertAccount(companyId, userId, {
+        number: '3001',
+        name: 'Försäljning inom Sverige, 25 % moms',
+        type: 'revenue',
+        balance: 'credit',
+        rate: 0,
+      }),
+    ).toBe(0)
+  })
+
+  it('leaves user-added revenue accounts unset (the user picks the sats)', async () => {
+    // 3013 is exactly the #1261 case: Accounted seeds no varugrupp accounts, so
+    // the company adds it and chooses the sats itself.
+    const { companyId, userId } = await seedCompany()
+    expect(
+      await insertAccount(companyId, userId, {
+        number: '3013',
+        name: 'Försäljning varugrupp 1, 6 % moms',
+        type: 'revenue',
+        balance: 'credit',
+      }),
+    ).toBeNull()
+  })
+})

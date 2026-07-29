@@ -153,6 +153,21 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       resource: 'Accounted://chart-of-accounts',
     },
   },
+  // Distinct from a plain duplicate: the account number is taken by a row the
+  // company deactivated. Creating it again can never succeed (the unique
+  // constraint counts inactive rows), so the only way forward is reactivation.
+  // Callers key on this code to offer that instead of a dead-end 409.
+  ACCOUNT_EXISTS_INACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Kontot finns redan i din kontoplan men är inaktiverat.',
+    message_en:
+      'The account number already exists in this company chart of accounts but is deactivated.',
+    remediation: {
+      description:
+        'Reactivate the existing account instead of creating it: POST /api/bookkeeping/accounts/activate with { account_numbers: [number] }.',
+      resource: 'Accounted://chart-of-accounts',
+    },
+  },
   JOURNAL_ENTRY_NOT_BALANCED: {
     httpStatus: 400,
     message_sv: 'Verifikationen balanserar inte.',
@@ -1942,6 +1957,22 @@ const CUSTOMER: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Kunden har fakturor och kan inte tas bort.',
     message_en: 'Customer cannot be deleted while invoices reference it.',
+  },
+  CUSTOMER_NO_PERSONAL_NUMBER: {
+    httpStatus: 404,
+    message_sv: 'Kunden har inget sparat personnummer.',
+    message_en: 'No personal number is stored for this customer.',
+  },
+  // The stored ciphertext could not be decrypted (written under a different
+  // PERSONNUMMER_ENCRYPTION_KEY, or corrupted). Deliberately not an
+  // INTERNAL_ERROR: it is not transient, retrying never helps, and the user
+  // can fix it in one step by typing the personnummer in again.
+  CUSTOMER_PERSONAL_NUMBER_UNREADABLE: {
+    httpStatus: 422,
+    message_sv:
+      'Det sparade personnumret kan inte läsas. Skriv in det igen för att ersätta det.',
+    message_en:
+      'The stored personal number cannot be read. Enter it again to replace it.',
   },
 }
 

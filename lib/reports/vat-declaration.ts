@@ -5,6 +5,7 @@ import type {
   VatPeriodType,
 } from '@/types'
 import type { VatCheckAccountTotals } from './vat-declaration-checks'
+import { fetchDynamicRuta05Accounts } from './vat-revenue-accounts'
 
 /**
  * Calculate VAT declaration (Momsdeklaration) for a given period.
@@ -33,7 +34,10 @@ import type { VatCheckAccountTotals } from './vat-declaration-checks'
  * Reverse charge output (2614/2624/2634) → ruta 30/31/32 (credit)
  * Import VAT (2615/2625/2635) → ruta 60/61/62 (credit)
  * Input VAT (2640-2649) → ruta 48 (debit), incl. parent 2640
- * Domestic taxable sales (3001-3003) → ruta 05 (credit)
+ * Domestic taxable sales (3000-3003) → ruta 05 (credit)
+ *   The company's OWN class 3 accounts marked with a moms-sats join ruta 05 on
+ *   top of this fixed list: see fetchDynamicRuta05Accounts (#1261). This map
+ *   only covers the accounts Accounted itself seeds.
  * Uttag (3401-3403) → ruta 06 (credit)
  * EU goods (3108) → ruta 35; EU services (3308) → ruta 39 (credit)
  * Export (3105/3305) → ruta 36/40; Exempt (3004/3100/3404/3994/3980) → ruta 42 (credit)
@@ -85,6 +89,7 @@ export const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side
   '2625': { box: 'ruta61', side: 'credit' },  // Import 12%
   '2635': { box: 'ruta62', side: 'credit' },  // Import 6%
   // Revenue: domestic taxable sales → ruta 05
+  '3000': { box: 'ruta05', side: 'credit' },  // Försäljning inom Sverige (summary/parent)
   '3001': { box: 'ruta05', side: 'credit' },
   '3002': { box: 'ruta05', side: 'credit' },
   '3003': { box: 'ruta05', side: 'credit' },
@@ -345,18 +350,28 @@ export async function fetchVatAccountTotals(
   supabase: SupabaseClient,
   companyId: string,
   start: string,
-  end: string
+  end: string,
+  dynamicRuta05Accounts: string[] = []
 ): Promise<VatAccountTotals> {
   // Aggregation, settlement-shape detection, and source_type counts all
   // happen in one SQL pass (get_vat_declaration_totals). The previous
   // implementation paged every entry + line for the period through PostgREST
   // and reduced in JS: dozens of round trips for a busy quarter. The account
   // lists are parameters so ACCOUNT_RUTA stays the single source of truth.
+  //
+  // The company's own ruta 05 accounts join p_accounts (they must be summed)
+  // but deliberately NOT p_ruta_accounts. That second list is the settlement
+  // SHAPE detector: an entry with a line on it plus a line on 2650/1650 is
+  // classified a momsredovisning and dropped from the totals entirely. A plain
+  // sale booked 1930 / 3013 / 2650 (a company clearing moms straight off the
+  // revenue voucher) would then vanish from its own declaration. The fixed
+  // ACCOUNT_RUTA list is what defines settlement shape; user accounts widen
+  // what is measured, never what counts as a momsredovisning.
   const { data, error } = await supabase.rpc('get_vat_declaration_totals', {
     p_company_id: companyId,
     p_start: start,
     p_end: end,
-    p_accounts: [...VAT_ACCOUNTS, ...VAT_SETTLEMENT_NET_ACCOUNTS],
+    p_accounts: [...VAT_ACCOUNTS, ...VAT_SETTLEMENT_NET_ACCOUNTS, ...dynamicRuta05Accounts],
     p_ruta_accounts: VAT_ACCOUNTS,
     p_net_accounts: VAT_SETTLEMENT_NET_ACCOUNTS,
   })
@@ -382,10 +397,16 @@ export async function fetchVatAccountTotals(
 
 /**
  * Map aggregated per-account totals to the momsdeklaration boxes, including
- * the recomputed ruta 49 net (FK009). Pure projection over ACCOUNT_RUTA.
+ * the recomputed ruta 49 net (FK009). Pure projection over ACCOUNT_RUTA plus
+ * the company's own ruta 05 accounts (fetchDynamicRuta05Accounts).
+ *
+ * `dynamicRuta05Accounts` is optional so callers that only need the 26xx boxes
+ * keep working untouched: ruta 05 is a beskattningsunderlag, not moms, so it
+ * never reaches ruta 49 and the settlement proposal nets the same either way.
  */
 export function rutorFromTotals(
-  totals: Map<string, { debit: number; credit: number }>
+  totals: Map<string, { debit: number; credit: number }>,
+  dynamicRuta05Accounts: string[] = []
 ): VatDeclarationRutor {
   const rutor: VatDeclarationRutor = {
     ruta05: 0, ruta06: 0, ruta07: 0, ruta08: 0,
@@ -405,6 +426,14 @@ export function rutorFromTotals(
       ? t.credit - t.debit
       : t.debit - t.credit
     rutor[mapping.box] = round(rutor[mapping.box] + balance)
+  }
+
+  // The company's own momspliktiga intäktskonton. Always credit-side: these are
+  // revenue accounts by construction (account_class 3).
+  for (const account of dynamicRuta05Accounts) {
+    const t = totals.get(account)
+    if (!t) continue
+    rutor.ruta05 = round(rutor.ruta05 + (t.credit - t.debit))
   }
 
   // FK009: summaMoms = (10 + 11 + 12 + 30 + 31 + 32 + 60 + 61 + 62) - 48
@@ -484,22 +513,58 @@ export async function calculateVatDeclaration(
     supabase, companyId, periodType, year, period, options.fiscalPeriodId
   )
 
+  // Which of the company's OWN class 3 accounts count as momspliktig
+  // försäljning. Resolved from their "Standard moms" rather than a fixed BAS
+  // list, because Accounted seeds no varugrupp accounts: every 3011/3013-style
+  // konto is user-added and would otherwise never be fetched at all (#1261).
+  const dynamicRuta05 = await fetchDynamicRuta05Accounts(supabase, companyId)
+
   // Fetch and aggregate posted VAT-account activity for the period. The same
   // RPC round trip carries the per-source_type entry counts for the metadata.
-  const { totals, sourceTypeCounts } = await fetchVatAccountTotals(supabase, companyId, start, end)
+  const { totals, sourceTypeCounts } = await fetchVatAccountTotals(
+    supabase, companyId, start, end, dynamicRuta05.accounts
+  )
 
   // Map account balances to momsdeklaration boxes
-  const rutor = rutorFromTotals(totals)
+  const rutor = rutorFromTotals(totals, dynamicRuta05.accounts)
 
-  // Compute per-rate base amounts from individual revenue accounts
+  // Compute per-rate base amounts from individual revenue accounts. The
+  // company's own accounts carry their rate on the konto itself, so they land
+  // in the same three buckets: without that, a 3013 company would show a
+  // ruta 05 base that none of base25/12/6 accounts for.
+  //
+  // These three are REPORTING metadata (breakdown.invoices), not check inputs:
+  // vat-declaration-checks.ts derives its expected base from the output-VAT
+  // rutor (ruta10/0.25 + ruta11/0.12 + ruta12/0.06) and never reads base25/12/6.
+  // So an incomplete split understates nothing that gets filed; it only makes
+  // the breakdown fail to add up to ruta 05.
   const revenueByRate = {
     base25: 0,  // 3001
     base12: 0,  // 3002
     base6: 0,   // 3003
   }
+  const RATE_BUCKET = { 0.25: 'base25', 0.12: 'base12', 0.06: 'base6' } as const
   for (const [account, rate] of [['3001', 'base25'], ['3002', 'base12'], ['3003', 'base6']] as const) {
     const t = totals.get(account)
     if (t) revenueByRate[rate] = round(t.credit - t.debit)
+  }
+  for (const [account, rate] of dynamicRuta05.rateByAccount) {
+    const t = totals.get(account)
+    if (!t) continue
+    const bucket = RATE_BUCKET[rate as keyof typeof RATE_BUCKET]
+    if (!bucket) continue
+    revenueByRate[bucket] = round(revenueByRate[bucket] + (t.credit - t.debit))
+  }
+  // Accounts the static map ALREADY sums into ruta 05 (3000, the 30xx
+  // gruppkonto) but whose rate only exists as the konto's "Standard moms".
+  // Rate-only on purpose: their balance is in ruta 05 either way, so adding
+  // them to dynamicRuta05.accounts would double the filed figure.
+  for (const [account, rate] of dynamicRuta05.staticRateByAccount) {
+    const t = totals.get(account)
+    if (!t) continue
+    const bucket = RATE_BUCKET[rate as keyof typeof RATE_BUCKET]
+    if (!bucket) continue
+    revenueByRate[bucket] = round(revenueByRate[bucket] + (t.credit - t.debit))
   }
 
   // Entry counts by source type for metadata: aggregated by the RPC in the
