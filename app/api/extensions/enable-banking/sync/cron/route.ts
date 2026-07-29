@@ -428,6 +428,11 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
 /**
  * Send consent expiry notification email.
  * Guards with last_expiry_notification_at to avoid spamming (2-day cooldown).
+ *
+ * Paused by default (founder call 2026-07-29, after the probe backlog drain
+ * mass-emailed 24 users at once): the settings panel and attention surfaces
+ * already flag a dead connection in-app. Set BANK_CONSENT_EXPIRY_EMAILS=true
+ * to resume sending; the status transitions below run either way.
  */
 async function sendConsentExpiryNotification(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -438,6 +443,8 @@ async function sendConsentExpiryNotification(
   baseUrl: string
 ): Promise<void> {
   try {
+    if (process.env.BANK_CONSENT_EXPIRY_EMAILS !== 'true') return
+
     // Check cooldown: skip if notified within last 2 days
     const lastNotified = connection.last_expiry_notification_at as string | null
     if (lastNotified) {
