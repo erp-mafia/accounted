@@ -336,7 +336,7 @@ export async function linkTransactionToJournalEntry(
       .from('invoices')
       .update({
         status: newStatus,
-        paid_at: isFullyPaid ? transaction.date : null,
+        paid_at: isFullyPaid ? `${transaction.date}T00:00:00Z` : null,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
       })

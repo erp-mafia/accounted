@@ -411,7 +411,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         status: newStatus,
         remaining_amount: newRemaining,
         paid_amount: newPaidAmount,
-        paid_at: isFullyPaid ? transaction.date : null,
+        paid_at: isFullyPaid ? `${transaction.date}T00:00:00Z` : null,
         payment_journal_entry_id: journalEntryId,
         transaction_id: txId,
       })

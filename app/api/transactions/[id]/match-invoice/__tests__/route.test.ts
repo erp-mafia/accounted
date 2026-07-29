@@ -537,7 +537,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(status).toBe(200)
     // The transaction's own date is the actual payment date; must not be
     // "now" (when the match happened to be confirmed in the app).
-    expect(body.paid_at).toBe('2024-06-15')
+    expect(body.paid_at).toBe('2024-06-15T00:00:00Z')
   })
 
   it('stornos conflicting journal entry before matching', async () => {

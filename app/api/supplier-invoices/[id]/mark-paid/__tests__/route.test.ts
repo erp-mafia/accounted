@@ -181,7 +181,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
 
     expect(status).toBe(200)
     const updateArgs = findCall('supplier_invoices', 'update')
-    expect((updateArgs?.[0] as { paid_at?: string })?.paid_at).toBe(backdatedPaymentDate)
+    expect((updateArgs?.[0] as { paid_at?: string })?.paid_at).toBe(`${backdatedPaymentDate}T00:00:00Z`)
   })
 
   it('marks as partially paid', async () => {

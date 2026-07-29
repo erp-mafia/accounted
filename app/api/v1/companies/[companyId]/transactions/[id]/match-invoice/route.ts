@@ -672,7 +672,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .from('invoices')
       .update({
         status: newStatus,
-        paid_at: isFullyPaid ? transaction.date : null,
+        paid_at: isFullyPaid ? `${transaction.date}T00:00:00Z` : null,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
       })
@@ -800,7 +800,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       {
         success: true,
         invoice_status: newStatus,
-        paid_at: isFullyPaid ? transaction.date : null,
+        paid_at: isFullyPaid ? `${transaction.date}T00:00:00Z` : null,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
         journal_entry_id: journalEntryId,

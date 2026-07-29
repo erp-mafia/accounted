@@ -2034,6 +2034,12 @@ async function commitMarkInvoicePaid(
     }
   }
 
+  // paid_at is timestamptz; paymentDate is a bare yyyy-MM-dd. Anchor it to an
+  // explicit UTC midnight rather than letting Postgres cast the bare string
+  // through the session's TimeZone GUC. Mirrors tax_paid_at in
+  // agi-tax-settlement.ts.
+  const paidAtTimestamp = `${paymentDate}T00:00:00Z`
+
   // CAS guard: only flip from a payable status so a concurrently-settled
   // invoice no-ops here instead of double-booking the payment.
   const { data: updateResult, error: updateError } = await supabase
@@ -2042,7 +2048,7 @@ async function commitMarkInvoicePaid(
       status: newStatus,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
-      ...(newStatus === 'paid' ? { paid_at: paymentDate } : {}),
+      ...(newStatus === 'paid' ? { paid_at: paidAtTimestamp } : {}),
     })
     .eq('id', invoiceId)
     .eq('company_id', companyId)
@@ -2090,7 +2096,7 @@ async function commitMarkInvoicePaid(
           status: newStatus,
           paid_amount: newPaidAmount,
           remaining_amount: newRemaining,
-          paid_at: newStatus === 'paid' ? paymentDate : (invoice as Invoice).paid_at,
+          paid_at: newStatus === 'paid' ? paidAtTimestamp : (invoice as Invoice).paid_at,
         } as Invoice,
         companyId,
         userId,
@@ -2585,7 +2591,7 @@ async function commitMatchTransactionInvoice(
     .from('invoices')
     .update({
       status: newStatus,
-      paid_at: isFullyPaid ? transaction.date : null,
+      paid_at: isFullyPaid ? `${transaction.date}T00:00:00Z` : null,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
     })

@@ -254,7 +254,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     // paid_at must be the transaction's own date (the actual payment date),
     // not the moment this link operation happened to be performed.
     const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0] as { paid_at?: string }
-    expect(invoiceUpdate?.paid_at).toBe('2026-05-15')
+    expect(invoiceUpdate?.paid_at).toBe('2026-05-15T00:00:00Z')
   })
 
   it('returns 404 when invoice_id supplied but invoice not found', async () => {

@@ -620,7 +620,7 @@ export const POST = withRouteContext(
       .from('invoices')
       .update({
         status: newStatus,
-        paid_at: isFullyPaid ? transaction.date : null,
+        paid_at: isFullyPaid ? `${transaction.date}T00:00:00Z` : null,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
       })
@@ -738,7 +738,7 @@ export const POST = withRouteContext(
     return NextResponse.json({
       success: true,
       invoice_status: newStatus,
-      paid_at: isFullyPaid ? transaction.date : null,
+      paid_at: isFullyPaid ? `${transaction.date}T00:00:00Z` : null,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
       journal_entry_id: journalEntryId,

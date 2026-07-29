@@ -315,7 +315,7 @@ export const POST = withRouteContext(
         status: newStatus,
         remaining_amount: Math.max(0, newRemaining),
         paid_amount: newPaidAmount,
-        paid_at: isFullyPaid ? paymentDate : null,
+        paid_at: isFullyPaid ? `${paymentDate}T00:00:00Z` : null,
         payment_journal_entry_id: journalEntryId,
       })
       .eq('id', id)

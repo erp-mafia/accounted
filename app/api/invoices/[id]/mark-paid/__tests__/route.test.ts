@@ -240,7 +240,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     const { status, body } = await parseJsonResponse<{ paid_at: string | null }>(response)
 
     expect(status).toBe(200)
-    expect(body.paid_at).toBe(backdatedPaymentDate)
+    expect(body.paid_at).toBe(`${backdatedPaymentDate}T00:00:00Z`)
   })
 
   it('refuses to mark paid (INVOICE_PAID_BOOK_FAILED) when no payment journal entry is produced', async () => {

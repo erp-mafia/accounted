@@ -139,6 +139,6 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
     // paid_at must be the caller-selected payment_date, not the moment the
     // agent/MCP op happened to be committed.
     const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0] as { paid_at?: string }
-    expect(invoiceUpdate?.paid_at).toBe('2026-03-30')
+    expect(invoiceUpdate?.paid_at).toBe('2026-03-30T00:00:00Z')
   })
 })

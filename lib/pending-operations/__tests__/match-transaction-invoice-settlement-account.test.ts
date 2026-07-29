@@ -153,7 +153,7 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
     // paid_at must be the transaction's own date (the actual payment date),
     // not the moment the agent/MCP op happened to be committed.
     const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0] as { paid_at?: string }
-    expect(invoiceUpdate?.paid_at).toBe('2026-05-12')
+    expect(invoiceUpdate?.paid_at).toBe('2026-05-12T00:00:00Z')
   })
 
   it('defaults to 1930 when the transaction has no linked cash account', async () => {

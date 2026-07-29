@@ -239,6 +239,12 @@ export async function settleInvoicePayment(
     }
   }
 
+  // paid_at is timestamptz; paymentDate is a bare yyyy-MM-dd. Anchor it to an
+  // explicit UTC midnight rather than letting Postgres cast the bare string
+  // through the session's TimeZone GUC (ambiguous, and the exact class of bug
+  // this fix corrects). Mirrors tax_paid_at in agi-tax-settlement.ts.
+  const paidAtTimestamp = `${paymentDate}T00:00:00Z`
+
   // CAS guard: only update if status is still in a payable state.
   const { data: updateResult, error: updateError } = await supabase
     .from('invoices')
@@ -246,7 +252,7 @@ export async function settleInvoicePayment(
       status: newStatus,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
-      ...(newStatus === 'paid' ? { paid_at: paymentDate } : {}),
+      ...(newStatus === 'paid' ? { paid_at: paidAtTimestamp } : {}),
     })
     .eq('id', invoice.id)
     .eq('company_id', companyId)
@@ -295,7 +301,7 @@ export async function settleInvoicePayment(
           status: newStatus,
           paid_amount: newPaidAmount,
           remaining_amount: newRemaining,
-          paid_at: newStatus === 'paid' ? paymentDate : invoice.paid_at,
+          paid_at: newStatus === 'paid' ? paidAtTimestamp : invoice.paid_at,
         } as Invoice,
         companyId,
         userId,
@@ -313,6 +319,6 @@ export async function settleInvoicePayment(
     newPaidAmount,
     newRemaining,
     journalEntryId,
-    paidAt: newStatus === 'paid' ? paymentDate : null,
+    paidAt: newStatus === 'paid' ? paidAtTimestamp : null,
   }
 }
