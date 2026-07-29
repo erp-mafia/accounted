@@ -126,11 +126,24 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
   const pending = new Map();
   let operations = [];
   let handled = 0;
+  // A host that never answers must not strand a row in "Arbetar..." with its
+  // buttons gone: time the RPC out so the catch path restores the row and
+  // the user can retry. 30s covers slow commits (journal posting, emails).
+  const RPC_TIMEOUT_MS = 30000;
 
   function sendRequest(method, params) {
     const id = rpcId++;
     return new Promise(function(resolve, reject) {
-      pending.set(id, { resolve: resolve, reject: reject });
+      const timer = setTimeout(function() {
+        if (pending.has(id)) {
+          pending.delete(id);
+          reject(new Error('Inget svar fr\\u00e5n v\\u00e4rden inom 30 sekunder. F\\u00f6rs\\u00f6k igen.'));
+        }
+      }, RPC_TIMEOUT_MS);
+      pending.set(id, {
+        resolve: function(v) { clearTimeout(timer); resolve(v); },
+        reject: function(e) { clearTimeout(timer); reject(e); }
+      });
       window.parent.postMessage({ jsonrpc: '2.0', id: id, method: method, params: params }, '*');
     });
   }

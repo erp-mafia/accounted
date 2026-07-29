@@ -102,6 +102,12 @@ describe('Pending operations widget', () => {
       expect(uris).toContain('ui://pending-operations/app.html')
     })
 
+    it('times out stranded RPCs so a silent host cannot freeze a row', () => {
+      const widget = findUiWidget('ui://pending-operations/app.html')!
+      expect(widget.html).toContain('RPC_TIMEOUT_MS')
+      expect(widget.html).toContain('clearTimeout(timer)')
+    })
+
     it('the widget calls the approve and reject tools and arms confirmed=true for high risk', () => {
       const widget = findUiWidget('ui://pending-operations/app.html')!
       expect(widget.html).toContain('gnubok_approve_pending_operation')
