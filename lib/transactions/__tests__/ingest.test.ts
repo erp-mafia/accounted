@@ -252,6 +252,27 @@ describe('ingestTransactions', () => {
     expect(payload.proprietary_bank_transaction_code).toBe('Överföring')
   })
 
+  it('never classifies or strips user-created sources (manual/mcp)', async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    // A user-authored title that WOULD classify+strip if it came from a feed.
+    const raw = makeRaw({ description: 'Egen insättning', import_source: 'manual' })
+    const inserted = makeTransaction({ id: 'tx-1', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    const payload = (inserts['transactions'] ?? [])[0] as Record<string, unknown>
+    expect(payload.description).toBe('Egen insättning')
+    expect(payload.original_description).toBe('Egen insättning')
+    expect(payload.transaction_method).toBeNull()
+  })
+
   it('leaves the title untouched and method null when nothing classifies', async () => {
     const { supabase, enqueue, inserts } = createQueueMockSupabase()
     const raw = makeRaw({ description: 'Test transaction' })

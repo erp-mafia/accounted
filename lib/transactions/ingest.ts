@@ -9,7 +9,7 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, shiftIsoDate } from '@/lib/transactions/external-id'
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
-import { isImportedTransaction } from '@/lib/transactions/origin'
+import { isImportedTransaction, USER_CREATED_IMPORT_SOURCES } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 
@@ -541,13 +541,22 @@ export async function ingestTransactions(
     // title is a PREFIX of the full string, so the prefix-containment dedup
     // bridge is unaffected.
     const description = normalizeImportedDescription(raw.description)
-    const { method: transactionMethod, displayTitle } = classifyTransactionMethod({
-      description,
-      bankTransactionCode: raw.bank_transaction_code ?? null,
-      proprietaryBankTransactionCode: raw.proprietary_bank_transaction_code ?? null,
-      mccCode: raw.mcc_code ?? null,
-      explicitMethod: raw.transaction_method ?? null,
-    })
+    // Classification is a FEED-row concept: a user-created row (manual UI,
+    // MCP, or a caller that set no source) carries a user-authored title, not
+    // bank channel vocabulary; classifying or stripping it would corrupt
+    // meaning ("Egen insättning" is a title, not a deposit label). Mirrors
+    // the scope of the 20260728160700 backfill.
+    const isUserCreatedSource =
+      !raw.import_source || USER_CREATED_IMPORT_SOURCES.has(raw.import_source)
+    const { method: transactionMethod, displayTitle } = isUserCreatedSource
+      ? { method: null, displayTitle: description }
+      : classifyTransactionMethod({
+          description,
+          bankTransactionCode: raw.bank_transaction_code ?? null,
+          proprietaryBankTransactionCode: raw.proprietary_bank_transaction_code ?? null,
+          mccCode: raw.mcc_code ?? null,
+          explicitMethod: raw.transaction_method ?? null,
+        })
 
     // 1. Check for duplicates via external_id (batch pre-fetched)
     if (existingExternalIds.has(raw.external_id)) {

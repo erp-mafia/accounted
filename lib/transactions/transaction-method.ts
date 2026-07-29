@@ -136,6 +136,17 @@ const LEADING_RULES: ReadonlyArray<readonly [RegExp, TransactionMethod]> = [
   [/^swish (?:till|från)(?:\s|$)/i, 'swish'],
 ]
 
+/**
+ * Possessive/scope adjectives whose meaning depends on the noun after them:
+ * "Egen insättning" must not become "Egen" (the phrase IS the meaning there).
+ * When the stripped title would END in one of these, the strip is skipped;
+ * the method classification still applies. Mirrored by the adjective guard in
+ * the 20260728160700 backfill.
+ */
+const ADJECTIVE_GUARD = new Set([
+  'egen', 'eget', 'egna', 'privat', 'privata', 'intern', 'interna', 'extern', 'externa',
+])
+
 /** ISO 20022 External Bank Transaction Codes, keyed by DOMAIN/FAMILY. */
 const ISO_FAMILY_METHODS: Record<string, TransactionMethod> = {
   'PMNT/RCDT': 'transfer', // ReceivedCreditTransfers
@@ -203,7 +214,10 @@ export function classifyTransactionMethod(
     if (rule.regex.test(description)) {
       phraseMethod = rule.method
       const stripped = description.replace(rule.regex, '').trim()
-      if (stripped.length > 0) displayTitle = stripped
+      const lastWord = stripped.toLowerCase().split(/\s+/).filter(Boolean).at(-1)
+      if (stripped.length > 0 && (!lastWord || !ADJECTIVE_GUARD.has(lastWord))) {
+        displayTitle = stripped
+      }
       break
     }
   }

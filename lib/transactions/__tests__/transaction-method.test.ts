@@ -76,6 +76,22 @@ describe('classifyTransactionMethod', () => {
     expect(r.displayTitle).toBe('Swish till Erik Andersson')
   })
 
+  it('adjective guard: classifies but never strips "Egen insättning" / "Eget uttag"', () => {
+    // The phrase IS the meaning when preceded by a possessive/scope adjective:
+    // stripping would leave a nonsense title ("Egen").
+    const deposit = classifyTransactionMethod({ description: 'Egen insättning' })
+    expect(deposit.method).toBe('deposit')
+    expect(deposit.displayTitle).toBe('Egen insättning')
+
+    const withdrawal = classifyTransactionMethod({ description: 'Eget uttag' })
+    expect(withdrawal.method).toBe('withdrawal')
+    expect(withdrawal.displayTitle).toBe('Eget uttag')
+
+    const transfer = classifyTransactionMethod({ description: 'Intern överföring' })
+    expect(transfer.method).toBe('transfer')
+    expect(transfer.displayTitle).toBe('Intern överföring')
+  })
+
   // ── ISO 20022 / proprietary codes ────────────────────────────────────────
 
   it('classifies from the ISO 20022 family when no phrase matches', () => {

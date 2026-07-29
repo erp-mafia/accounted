@@ -15,9 +15,12 @@ import { getPool } from '@/tests/pg/setup'
  *     its precedence (word-boundary: "Löneinsättning" is salary, never
  *     deposit), the MCC and Stripe-prefix fallbacks, and the NULL result for
  *     unclassifiable rows.
+ *   - FEED-ROW SCOPE: user-created rows (import_source NULL/manual/mcp) are
+ *     never classified and never rewritten ("Egen insättning" stays intact).
  *   - Title stripping: unedited titles lose the trailing channel phrase but
  *     are never emptied; user-edited titles are untouched even when the
- *     original carries a phrase (classification still fires off the original).
+ *     original carries a phrase (classification still fires off the original);
+ *     the adjective guard keeps "Egen insättning" whole even on feed rows.
  *   - Idempotence: a second run changes nothing.
  */
 
@@ -40,6 +43,7 @@ async function insertFeedRow(params: {
   description: string
   originalDescription?: string | null
   titleEditedAt?: string | null
+  /** Defaults to a bank feed; pass null/'manual'/'mcp' for user-created rows. */
   importSource?: string | null
   mccCode?: number | null
 }): Promise<string> {
@@ -59,7 +63,7 @@ async function insertFeedRow(params: {
       id,
       params.originalDescription === undefined ? params.description : params.originalDescription,
       params.titleEditedAt ?? null,
-      params.importSource ?? null,
+      params.importSource === undefined ? 'enable_banking' : params.importSource,
       params.mccCode ?? null,
     ],
   )
@@ -140,6 +144,48 @@ describe('transactions.transaction_method: backfill classification + title strip
       expect(row.transaction_method).toBe(cases[i].method)
       expect(row.description).toBe(cases[i].stripped)
     }
+  })
+
+  it('never touches user-created rows (import_source NULL, manual, mcp)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const cases = [null, 'manual', 'mcp']
+    const ids: string[] = []
+    for (const src of cases) {
+      // Titles that WOULD classify+strip if they came from a bank feed.
+      ids.push(
+        await insertFeedRow({ companyId, userId, description: 'Egen insättning', importSource: src }),
+      )
+    }
+
+    await runBackfill()
+
+    for (const id of ids) {
+      const row = await getRow(id)
+      expect(row.transaction_method).toBeNull()
+      expect(row.description).toBe('Egen insättning')
+    }
+  })
+
+  it('adjective guard: feed rows classify but keep "Egen insättning"-style titles', async () => {
+    const { userId, companyId } = await seedCompany()
+    const deposit = await insertFeedRow({ companyId, userId, description: 'Egen insättning' })
+    const withdrawal = await insertFeedRow({ companyId, userId, description: 'Eget uttag' })
+    const transfer = await insertFeedRow({ companyId, userId, description: 'Intern överföring' })
+
+    await runBackfill()
+
+    expect(await getRow(deposit)).toEqual({
+      description: 'Egen insättning',
+      transaction_method: 'deposit',
+    })
+    expect(await getRow(withdrawal)).toEqual({
+      description: 'Eget uttag',
+      transaction_method: 'withdrawal',
+    })
+    expect(await getRow(transfer)).toEqual({
+      description: 'Intern överföring',
+      transaction_method: 'transfer',
+    })
   })
 
   it('never empties a title that IS the phrase', async () => {
