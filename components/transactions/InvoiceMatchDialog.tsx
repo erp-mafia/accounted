@@ -9,6 +9,10 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { isInvoiceBookingRateMissing, previewedFxGainSek } from './invoice-match-fx'
+import {
+  isMatchableInvoice,
+  isMatchableSupplierInvoice,
+} from '@/lib/invoices/matchable-statuses'
 import { CheckCircle2, AlertTriangle, Trash2, Plus, Pencil } from 'lucide-react'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { BASAccount } from '@/types'
@@ -142,6 +146,21 @@ export default function InvoiceMatchDialog({
   const isSupplierInvoice = !!transaction?.potential_supplier_invoice
   const isCustomerInvoice = !!transaction?.potential_invoice
   const transactionId = transaction?.id ?? null
+
+  // The suggestion pointer is written once at import time and never revisited,
+  // so the invoice it names may since have been settled by a DIFFERENT
+  // transaction. The read paths filter those out, but the row in hand can
+  // still be stale (fetched before the other match, or settled in another
+  // tab), so re-check here rather than trust the pointer.
+  //
+  // This is not an advisory guard: both match routes reject a settled target
+  // outright (MATCH_INVOICE_ALREADY_PAID / MATCH_SI_ALREADY_PAID), so there is
+  // no "match anyway" that could succeed. Say so and block, instead of
+  // computing a diff against a 0 kr remaining balance and calling the result
+  // a partial payment.
+  const targetSettled =
+    (isSupplierInvoice && !isMatchableSupplierInvoice(transaction!.potential_supplier_invoice)) ||
+    (isCustomerInvoice && !isMatchableInvoice(transaction!.potential_invoice))
 
   const [candidate, setCandidate] = useState<DuplicateCandidate | null>(null)
   const [isCheckingDuplicate, setIsCheckingDuplicate] = useState(false)
@@ -447,10 +466,13 @@ export default function InvoiceMatchDialog({
               </div>
             </div>
 
-            {/* Invoice details. Shows remaining_amount (what the customer
-                still owes) rather than the original total, so a partially-
-                paid invoice displays the actual figure the user is matching
-                against. Mirrors the supplier-invoice block below. */}
+            {/* Invoice details. Both branches show remaining_amount (what is
+                still owed) rather than the original total, so a partially-paid
+                invoice displays the actual figure the user is matching against
+                and the card can never contradict the amount comparison below.
+                The supplier branch used to render .total while the comparison
+                measured against remaining_amount: on a partially-paid invoice
+                that put "1 250 kr" on screen next to "Differens: 1 250 kr". */}
             {isCustomerInvoice && (
               <div className="rounded-lg border p-4 space-y-2">
                 <p className="text-sm font-medium text-muted-foreground">{t('invoice_label')}</p>
@@ -489,7 +511,8 @@ export default function InvoiceMatchDialog({
                   </span>
                   <span className="font-medium">
                     {formatCurrency(
-                      transaction.potential_supplier_invoice!.total,
+                      transaction.potential_supplier_invoice!.remaining_amount ??
+                        transaction.potential_supplier_invoice!.total,
                       transaction.potential_supplier_invoice!.currency,
                     )}
                   </span>
@@ -505,6 +528,22 @@ export default function InvoiceMatchDialog({
                 The customer branch previously fell back to .total; both
                 branches now mirror the supplier branch's correct logic. */}
             {(() => {
+              // Settled target: the amount comparison below would be
+              // meaningless (it measures against a 0 kr remaining balance and
+              // reports the whole transaction as a "differens"), and no
+              // outcome it describes is reachable. Replace it outright.
+              if (targetSettled) {
+                return (
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-warning/10 text-warning-foreground">
+                    <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                    <div className="text-sm">
+                      <p className="font-medium">{t('target_settled_title')}</p>
+                      <p>{t('target_settled_description')}</p>
+                    </div>
+                  </div>
+                )
+              }
+
               const txAbs = Math.abs(transaction.amount)
               const invRemaining = isSupplierInvoice
                 ? transaction.potential_supplier_invoice!.remaining_amount ?? transaction.potential_supplier_invoice!.total
@@ -910,6 +949,9 @@ export default function InvoiceMatchDialog({
             disabled={
               isConfirming ||
               isCheckingDuplicate ||
+              // Settled target: the route rejects this unconditionally, so the
+              // button has no reachable success path.
+              targetSettled ||
               (isEditing && !editValidation.isValid) ||
               // Block confirm when cross-currency lookup failed and the user
               // hasn't typed a manual rate yet. Same-currency and auto-rate

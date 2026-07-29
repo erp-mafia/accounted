@@ -7,6 +7,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import type { Currency, CustomerType, ExchangeRate, SupplierType, VatTreatment } from '@/types'
 import type {
   CustomerDto,
@@ -429,6 +430,10 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
   // Privatperson's personnummer lands in org_number and is hidden by the
   // individual customer form, which renders personal_number for individuals.
   const isIndividual = customerType === 'individual'
+  // personal_number is an encrypted column: customers_personal_number_check
+  // (migration 20260726110000) accepts AES-256-GCM hex and nothing else, so
+  // writing the identity number in plaintext here aborts the whole import with
+  // 23514 the moment a Privatperson appears in the source data.
   return {
     user_id: userId,
     company_id: companyId,
@@ -438,7 +443,7 @@ export function mapCustomer(dto: CustomerDto, userId: string, companyId: string)
     phone: dto.party.contact?.telephone || null,
     ...addr,
     org_number: isIndividual ? null : number,
-    personal_number: isIndividual ? number : null,
+    personal_number: isIndividual ? encryptCustomerPersonalNumber(number) : null,
     vat_number: dto.vatNumber || null,
     vat_number_validated: false,
     default_payment_terms: dto.defaultPaymentTermsDays || 30,

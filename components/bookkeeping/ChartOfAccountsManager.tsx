@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -74,6 +74,10 @@ export default function ChartOfAccountsManager() {
   const [collapsedMyClasses, setCollapsedMyClasses] = useState<Set<number>>(new Set())
   const [expandedCatalogClasses, setExpandedCatalogClasses] = useState<Set<number>>(new Set())
   const [hideK2Excluded, setHideK2Excluded] = useState<boolean | null>(null)
+  // Off by default: the list endpoint's `?active=false` means "no filter", so
+  // leaving it off keeps first paint on the smaller active-only payload.
+  // A deactivated account is otherwise invisible everywhere and unrecoverable.
+  const [showInactive, setShowInactive] = useState(false)
 
   // Data state
   const [accounts, setAccounts] = useState<BASAccount[]>([])
@@ -99,8 +103,19 @@ export default function ChartOfAccountsManager() {
   // Data fetching
   // -------------------------------------------
 
+  // Read through a ref, not the state value: making fetchAccounts depend on
+  // showInactive would put it in the mount effect's dep list and re-run the
+  // whole blocking load on every toggle (the same double-fetch the comment
+  // below warns about for hideK2Excluded).
+  const showInactiveRef = useRef(showInactive)
+  showInactiveRef.current = showInactive
+
   const fetchAccounts = useCallback(async () => {
-    const res = await fetch('/api/bookkeeping/accounts')
+    // `?active=false` disables the filter entirely (active + inactive), it does
+    // not select inactive rows only — see list_company_accounts.
+    const res = await fetch(
+      showInactiveRef.current ? '/api/bookkeeping/accounts?active=false' : '/api/bookkeeping/accounts',
+    )
     const { data } = await res.json()
     setAccounts(data || [])
   }, [])
@@ -167,6 +182,18 @@ export default function ChartOfAccountsManager() {
     }
   }, [fetchAccounts, fetchUsage])
 
+  // Refetch when the inactive filter flips. Skips the first run (the mount
+  // effect above already fetched) and deliberately does not raise `loading`:
+  // swapping a filter should not blank the table back to the skeleton.
+  const showInactiveInitial = useRef(true)
+  useEffect(() => {
+    if (showInactiveInitial.current) {
+      showInactiveInitial.current = false
+      return
+    }
+    void fetchAccounts()
+  }, [showInactive, fetchAccounts])
+
   // Loads the BAS catalog and the K2 default on demand, once, the first time
   // the user opens the "BAS-katalog" tab.
   const ensureReferenceLoaded = useCallback(async () => {
@@ -211,6 +238,22 @@ export default function ChartOfAccountsManager() {
   // -------------------------------------------
 
   async function toggleActive(account: BASAccount) {
+    // Deactivating an account that carries postings hides it from the
+    // kontoplan and from new verifikat while its balances stay in the books.
+    // That is legal and reversible, but it should never happen silently: it is
+    // what made a used account unreachable in the first place. The count is
+    // already in memory from fetchUsage, so no extra request.
+    const usage = usageCounts.get(account.account_number) ?? 0
+    if (account.is_active && usage > 0) {
+      const confirmed = await confirm({
+        title: t('deactivate_confirm_title', { number: account.account_number }),
+        description: t('deactivate_confirm', { count: usage }),
+        confirmLabel: t('deactivate_confirm_action'),
+        variant: 'warning',
+      })
+      if (!confirmed) return
+    }
+
     setTogglingAccount(account.account_number)
     try {
       const res = await fetch(`/api/bookkeeping/accounts/${account.account_number}`, {
@@ -273,9 +316,13 @@ export default function ChartOfAccountsManager() {
         body: JSON.stringify({ account_numbers: [accountNumber] }),
       })
       if (!res.ok) throw new Error(t('toast_activate_failed'))
-      const { activated } = await res.json()
+      // `reactivated` covers an account the company already had but had turned
+      // off. Without it the catalog tab flipped the row back on in silence.
+      const { activated, reactivated } = await res.json()
       if (activated > 0) {
         toast({ title: t('toast_activated_title'), description: t('toast_activated_description', { number: accountNumber }) })
+      } else if (reactivated > 0) {
+        toast({ title: t('toast_reactivated_title'), description: t('toast_reactivated_description', { number: accountNumber }) })
       }
       await refreshAll()
     } catch {
@@ -458,6 +505,16 @@ export default function ChartOfAccountsManager() {
             className="h-9 pl-10"
           />
         </div>
+        {view === 'my-accounts' && (
+          <label className="ml-auto flex items-center gap-2 text-sm">
+            <Switch
+              checked={showInactive}
+              onCheckedChange={setShowInactive}
+              className="scale-75"
+            />
+            <span className="text-muted-foreground">{t('show_inactive')}</span>
+          </label>
+        )}
         {view === 'bas-catalog' && (
           <label className="ml-auto flex items-center gap-2 text-sm">
             <Switch
@@ -516,7 +573,10 @@ export default function ChartOfAccountsManager() {
                               key={account.id}
                               className={cn(
                                 'group transition-colors duration-150 hover:bg-secondary/35',
-                                !account.is_active && 'opacity-50',
+                                // Dim the text rather than the whole row: a
+                                // row-level opacity would drag the "Inaktiv"
+                                // chip below readable contrast with it.
+                                !account.is_active && 'text-muted-foreground',
                               )}
                             >
                               <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
@@ -534,6 +594,14 @@ export default function ChartOfAccountsManager() {
                                     <span className="shrink-0 text-[10px] uppercase tracking-wider text-muted-foreground">
                                       {t('own_badge')}
                                     </span>
+                                  )}
+                                  {/* Exception chip: only visible while the
+                                      "Visa inaktiva" filter is on, so it never
+                                      lands on every row. */}
+                                  {!account.is_active && (
+                                    <Badge variant="secondary" className="shrink-0">
+                                      {t('prune_inactive_badge')}
+                                    </Badge>
                                   )}
                                 </span>
                               </td>
@@ -625,7 +693,10 @@ export default function ChartOfAccountsManager() {
                     .map(([cls, classAccounts]) => {
                       const classNum = Number(cls)
                       const open = expandedCatalogClasses.has(classNum) || !!searchQuery
-                      const activatedCount = classAccounts.filter((a) => a.is_activated).length
+                      // Row existence alone is not activation: a deactivated
+                      // account is in the chart but not usable, so it must not
+                      // count as active here either.
+                      const activatedCount = classAccounts.filter((a) => a.is_activated && a.is_active).length
                       return (
                         <Fragment key={cls}>
                           {bandRow(
@@ -657,7 +728,11 @@ export default function ChartOfAccountsManager() {
                                   {typeLabel(account.account_type)}
                                 </td>
                                 <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
-                                  {account.is_activated ? (
+                                  {/* An account the company holds but has
+                                      deactivated is NOT activated: it falls
+                                      through to the button, relabelled so the
+                                      user sees it is coming back, not new. */}
+                                  {account.is_activated && account.is_active ? (
                                     <span className="inline-flex items-center gap-1 text-xs text-success">
                                       <CheckCircle2 className="h-3.5 w-3.5" />
                                       {t('activated')}
@@ -675,7 +750,7 @@ export default function ChartOfAccountsManager() {
                                       ) : (
                                         <Plus className="mr-1 h-3 w-3" />
                                       )}
-                                      {t('add')}
+                                      {account.is_activated ? t('reactivate') : t('add')}
                                     </Button>
                                   )}
                                 </td>

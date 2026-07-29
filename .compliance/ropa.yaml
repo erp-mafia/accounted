@@ -60,7 +60,12 @@ processing_activities:
     purpose: >-
       Identifiera en privatkund när företagets avtal, fakturering eller
       kundadministration kräver en entydig identitet. Personnumret får endast
-      sparas på kundtypen privatkund och exponeras endast maskerat i API och UI.
+      sparas på kundtypen privatkund. Samtliga listnings- och exportytor i API
+      och UI exponerar det endast maskerat (fyra sista siffrorna). Undantaget är
+      en enskild uppslagsyta (GET /api/customers/{id}/personal-number) som
+      returnerar hela värdet för en kund i taget, kräver skrivroll och loggas
+      med aktör men aldrig med värdet, så att den som registrerat ett
+      personnummer kan kontrollera vad som faktiskt sparats.
     lawful_basis: art_6_1_b
     special_category_basis: null
     controller: gnubok-tenant
@@ -88,7 +93,15 @@ processing_activities:
       - masked_api_and_ui_output_last4_only
       - write_role_required
       - rls_company_scoped
-      - no_full_value_read_endpoint
+      # Replaces the previous `no_full_value_read_endpoint`. A single explicit
+      # drill-in now exists (GET /api/customers/{id}/personal-number): the
+      # value was otherwise write-only, so a user could store a personnummer
+      # and never verify what had been stored. Every listing surface still
+      # masks; the drill-in requires the write role, returns one customer at a
+      # time, and logs actor + customer id without the value.
+      - full_value_read_only_via_single_customer_drill_in
+      - full_value_read_requires_write_role
+      - full_value_read_logged_with_actor_never_value
 
   - id: agi.submit
     name: AGI inlämning till Skatteverket

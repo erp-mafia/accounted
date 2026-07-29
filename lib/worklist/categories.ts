@@ -10,6 +10,10 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import {
+  MATCHABLE_INVOICE_STATUSES,
+  MATCHABLE_SUPPLIER_INVOICE_STATUSES,
+} from '@/lib/invoices/matchable-statuses'
 import type { SuggestedMatch } from './types'
 
 const log = createLogger('worklist')
@@ -260,6 +264,17 @@ interface SuggestedMatchTxRow {
  * one-click confirm row. Confirm endpoints:
  *   kind 'invoice'           → POST /api/transactions/{id}/match-invoice
  *   kind 'supplier_invoice'  → POST /api/transactions/{id}/match-supplier-invoice
+ *
+ * The hint columns are write-once suggestions: nothing revisits them when the
+ * invoice is later settled by a DIFFERENT transaction (or by mark-paid, MCP,
+ * bank reconciliation or a SIE import). So the candidate lookup revalidates
+ * against MATCHABLE_*_STATUSES instead of trusting the pointer: an invoice
+ * that has since been paid would otherwise render a one-click confirm row
+ * whose endpoint can only answer ALREADY_PAID.
+ *
+ * Revalidation is done here, at read time, rather than by cleaning up sibling
+ * pointers on settle: the settle paths are many and a missed one leaks, while
+ * this check covers every route into the list.
  */
 export async function listSuggestedMatches(
   supabase: SupabaseClient,
@@ -295,6 +310,8 @@ export async function listSuggestedMatches(
           .select('id, invoice_number, total, customer:customers(name)')
           .eq('company_id', companyId)
           .in('id', invoiceIds)
+          .in('status', [...MATCHABLE_INVOICE_STATUSES])
+          .gt('remaining_amount', 0)
       : Promise.resolve({ data: [], error: null }),
     supplierInvoiceIds.length > 0
       ? supabase
@@ -302,6 +319,8 @@ export async function listSuggestedMatches(
           .select('id, supplier_invoice_number, total, supplier:suppliers(name)')
           .eq('company_id', companyId)
           .in('id', supplierInvoiceIds)
+          .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
+          .gt('remaining_amount', 0)
       : Promise.resolve({ data: [], error: null }),
   ])
 
@@ -358,8 +377,8 @@ export async function listSuggestedMatches(
         candidate_total: supplierInvoice.total ?? null,
       })
     }
-    // Hint pointing at a deleted/foreign candidate → drop the row rather
-    // than render an unconfirmable suggestion.
+    // Hint pointing at a deleted, foreign or already-settled candidate → drop
+    // the row rather than render an unconfirmable suggestion.
   }
   return matches
 }

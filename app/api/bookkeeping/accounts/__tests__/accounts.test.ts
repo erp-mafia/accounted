@@ -193,6 +193,58 @@ describe('POST /api/bookkeeping/accounts', () => {
     expect(body.error).toContain('5010')
   })
 
+  it('keeps the plain 409 when the colliding account is active', async () => {
+    const { supabase } = createCapturingSupabase([
+      { error: { code: '23505', message: 'dup' } },
+      { data: { is_active: true } },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts', {
+      method: 'POST',
+      body: {
+        account_number: '5010',
+        account_name: 'Lokalhyra',
+        account_type: 'expense',
+        normal_balance: 'debit',
+      },
+    })
+    const { status, body } = await parseJsonResponse<{ error: string }>(
+      await createPOST(req, routeParams)
+    )
+    expect(status).toBe(409)
+    expect(typeof body.error).toBe('string')
+  })
+
+  it('returns ACCOUNT_EXISTS_INACTIVE when the colliding account is deactivated', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { error: { code: '23505', message: 'dup' } },
+      { data: { is_active: false } },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts', {
+      method: 'POST',
+      body: {
+        account_number: '3910',
+        account_name: 'Hyresintäkter egen',
+        account_type: 'revenue',
+        normal_balance: 'credit',
+      },
+    })
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details?: { account_number?: string } }
+    }>(await createPOST(req, routeParams))
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('ACCOUNT_EXISTS_INACTIVE')
+    expect(body.error.message).toContain('3910')
+    expect(body.error.details?.account_number).toBe('3910')
+    // The is_active lookup must be company-scoped, not a bare account_number
+    // match: the same number exists under every other company too.
+    const eqArgs = calls.filter((c) => c.method === 'eq').map((c) => c.args)
+    expect(eqArgs).toContainEqual(['company_id', 'company-1'])
+    expect(eqArgs).toContainEqual(['account_number', '3910'])
+  })
+
   it('forwards default_vat_rate into the insert', async () => {
     const { supabase, calls } = createCapturingSupabase([
       { data: { account_number: '3740', default_vat_rate: 0 } },
@@ -419,5 +471,55 @@ describe('POST /api/bookkeeping/accounts/activate', () => {
     expect(status).toBe(200)
     expect(body.activated).toBe(1)
     expect(body.unknown).toEqual(['0000'])
+  })
+
+  // The only route back for a deactivated account: it is in the chart, so the
+  // insert path would hit the unique constraint. It must be flipped back on
+  // instead, including for custom numbers the BAS reference has never heard of.
+  it('reactivates an existing inactive account instead of inserting it', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: [{ account_number: '3910', is_active: false }] }, // existing lookup
+      { data: [{ account_number: '3910' }] }, // update result
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/activate', {
+      method: 'POST',
+      body: { account_numbers: ['3910'] },
+    })
+    const { status, body } = await parseJsonResponse<{
+      activated: number
+      reactivated: number
+      skipped: number
+      unknown: string[]
+    }>(await activatePOST(req, routeParams))
+
+    expect(status).toBe(200)
+    expect(body.reactivated).toBe(1)
+    expect(body.activated).toBe(0)
+    expect(body.unknown).toEqual([])
+    expect(calls.find((c) => c.method === 'update')?.args[0]).toEqual({ is_active: true })
+    expect(calls.some((c) => c.method === 'insert')).toBe(false)
+  })
+
+  it('skips an account that is already active', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: [{ account_number: '1930', is_active: true }] },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/activate', {
+      method: 'POST',
+      body: { account_numbers: ['1930'] },
+    })
+    const { status, body } = await parseJsonResponse<{
+      activated: number
+      reactivated: number
+      skipped: number
+    }>(await activatePOST(req, routeParams))
+
+    expect(status).toBe(200)
+    expect(body.skipped).toBe(1)
+    expect(body.reactivated).toBe(0)
+    expect(calls.some((c) => c.method === 'update')).toBe(false)
+    expect(calls.some((c) => c.method === 'insert')).toBe(false)
   })
 })

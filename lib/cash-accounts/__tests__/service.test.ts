@@ -13,13 +13,20 @@ vi.mock('@/lib/import/account-sync', () => ({
 import {
   findFreeLedgerAccount,
   allocatePsd2LedgerAccount,
+  resolvePsd2LedgerAccount,
+  normalizeIban,
   defaultLedgerForCurrency,
   getRevokedConnectionIds,
   upsertFromPsd2,
   ensureManualCashAccount,
 } from '../service'
 
-type CashRow = { ledger_account: string; bank_connection_id: string | null }
+type CashRow = {
+  ledger_account: string
+  bank_connection_id: string | null
+  id?: string
+  iban?: string | null
+}
 type ConnRow = { id: string; status: string }
 
 interface MakeSupabaseOpts {
@@ -27,6 +34,26 @@ interface MakeSupabaseOpts {
   /** bank_connections rows for the status lookup. Missing ids = not revoked. */
   connections?: ConnRow[]
   connectionsError?: { message: string } | null
+  /** 19xx account numbers already present in the company's chart. */
+  chart?: string[]
+  chartError?: { message: string } | null
+}
+
+/**
+ * Thenable query stub: PostgREST chains terminate on await, not on a fixed
+ * method, so the same object has to answer .eq()/.not()/.like() and still
+ * resolve when awaited. Without this a chain that ends in .not() (the IBAN
+ * lookup) cannot share a mock with one that ends in .eq().
+ */
+function chainable(result: { data: unknown; error: unknown }) {
+  const chain: Record<string, unknown> = {}
+  for (const method of ['select', 'eq', 'neq', 'not', 'is', 'like', 'in', 'order', 'limit']) {
+    chain[method] = vi.fn(() => chain)
+  }
+  chain.then = (onFulfilled: (value: unknown) => unknown) =>
+    Promise.resolve(result).then(onFulfilled)
+  chain.maybeSingle = vi.fn(() => Promise.resolve(result))
+  return chain
 }
 
 function makeSupabase(rows: CashRow[], opts: MakeSupabaseOpts = {}) {
@@ -48,12 +75,17 @@ function makeSupabase(rows: CashRow[], opts: MakeSupabaseOpts = {}) {
           ),
         }
       }
-      return {
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn(() =>
-          Promise.resolve({ data: opts.error ? null : rows, error: opts.error ?? null }),
-        ),
+      if (table === 'chart_of_accounts') {
+        return chainable(
+          opts.chartError
+            ? { data: null, error: opts.chartError }
+            : { data: (opts.chart ?? []).map(n => ({ account_number: n })), error: null },
+        )
       }
+      return chainable({
+        data: opts.error ? null : rows,
+        error: opts.error ?? null,
+      })
     }),
   } as unknown as SupabaseClient
 }
@@ -264,6 +296,164 @@ describe('allocatePsd2LedgerAccount', () => {
   })
 })
 
+describe('findFreeLedgerAccount: chart awareness', () => {
+  it('skips an overflow slot that already names a bank account in the chart', async () => {
+    // A chart imported from SIE carries the company's real bank accounts
+    // ("1931 Nordnet") with no cash_accounts row behind them. Handing one out
+    // as free is how a SEK företagskonto got proposed as someone else's
+    // brokerage account.
+    const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: 'conn-1' }], {
+      chart: ['1930', '1931', '1935'],
+    })
+
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK')).toBe('1936')
+  })
+
+  it('still returns the currency default when the chart holds it', async () => {
+    // 1930 exists in every chart; that must not push the SEK account into
+    // overflow when no PSD2 row actually claims it.
+    const supabase = makeSupabase([], { chart: ['1930'] })
+
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK')).toBe('1930')
+  })
+
+  it('falls back to a chart-occupied slot when nothing unnamed is left', async () => {
+    const chart: string[] = []
+    for (let n = 1931; n <= 1959; n++) chart.push(String(n))
+    const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: 'conn-1' }], {
+      chart,
+    })
+
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK')).toBe('1931')
+  })
+
+  it('allocates normally when the chart lookup fails', async () => {
+    const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: 'conn-1' }], {
+      chartError: { message: 'boom' },
+    })
+
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK')).toBe('1931')
+  })
+})
+
+describe('normalizeIban', () => {
+  it('strips formatting so the same account compares equal', () => {
+    expect(normalizeIban('SE45 5000 0000 0583 9825 7466')).toBe('SE4550000000058398257466')
+    expect(normalizeIban('se4550000000058398257466')).toBe('SE4550000000058398257466')
+    expect(normalizeIban(null)).toBeNull()
+    expect(normalizeIban('   ')).toBeNull()
+  })
+})
+
+describe('resolvePsd2LedgerAccount', () => {
+  const IBAN = 'SE4550000000058398257466'
+
+  it('reuses the ledger of the row with the same IBAN instead of allocating', async () => {
+    // The reconnect case: the bank minted a new account uid (and possibly a
+    // whole new connection row), but it is the same physical account.
+    const supabase = makeSupabase([
+      { id: 'row-1', ledger_account: '1930', bank_connection_id: 'conn-old', iban: IBAN },
+    ])
+
+    const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', {
+      iban: IBAN,
+      currency: 'SEK',
+    })
+
+    expect(resolved).toEqual({
+      ledgerAccount: '1930',
+      reuseCashAccountId: 'row-1',
+      source: 'iban',
+    })
+    // No chart write: we are adopting an account that already exists.
+    expect(mockSyncMappedAccounts).not.toHaveBeenCalled()
+  })
+
+  it('matches on IBAN across formatting differences', async () => {
+    const supabase = makeSupabase([
+      {
+        id: 'row-1',
+        ledger_account: '1941',
+        bank_connection_id: 'conn-old',
+        iban: 'SE45 5000 0000 0583 9825 7466',
+      },
+    ])
+
+    const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', {
+      iban: 'se4550000000058398257466',
+      currency: 'EUR',
+    })
+
+    expect(resolved?.ledgerAccount).toBe('1941')
+    expect(resolved?.source).toBe('iban')
+  })
+
+  it('reuses even when the previous holder connection is still active', async () => {
+    // The bank killed the old session without telling us, so the old row still
+    // reads as a live claim. One IBAN is one account: the connection that just
+    // authorized owns it.
+    const supabase = makeSupabase(
+      [{ id: 'row-1', ledger_account: '1930', bank_connection_id: 'conn-old', iban: IBAN }],
+      { connections: [{ id: 'conn-old', status: 'active' }] },
+    )
+
+    const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', {
+      iban: IBAN,
+      currency: 'SEK',
+    })
+
+    expect(resolved?.ledgerAccount).toBe('1930')
+    expect(resolved?.reuseCashAccountId).toBe('row-1')
+  })
+
+  it('allocates when the IBAN is unknown', async () => {
+    const supabase = makeSupabase([
+      { id: 'row-1', ledger_account: '1930', bank_connection_id: 'conn-1', iban: 'SE9999' },
+    ])
+
+    const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', {
+      iban: IBAN,
+      currency: 'SEK',
+    })
+
+    expect(resolved?.source).toBe('allocated')
+    expect(resolved?.reuseCashAccountId).toBeNull()
+    expect(resolved?.ledgerAccount).toBe('1931')
+  })
+
+  it('allocates when the IBAN match was already claimed earlier in the loop', async () => {
+    // Two accounts cannot share a ledger: the UNIQUE (company_id,
+    // ledger_account) constraint would reject the second write.
+    const supabase = makeSupabase([
+      { id: 'row-1', ledger_account: '1930', bank_connection_id: null, iban: IBAN },
+    ])
+
+    const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', {
+      iban: IBAN,
+      currency: 'SEK',
+      exclude: new Set(['1930']),
+    })
+
+    expect(resolved?.source).toBe('allocated')
+    expect(resolved?.ledgerAccount).not.toBe('1930')
+  })
+
+  it('allocates for an account the bank gave no IBAN for', async () => {
+    const supabase = makeSupabase([])
+
+    const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', {
+      iban: null,
+      currency: 'SEK',
+    })
+
+    expect(resolved).toEqual({
+      ledgerAccount: '1930',
+      reuseCashAccountId: null,
+      source: 'allocated',
+    })
+  })
+})
+
 // ---------------------------------------------------------------------------
 // upsertFromPsd2: promote-in-place + duplicate merge (issue #916)
 // ---------------------------------------------------------------------------
@@ -441,6 +631,45 @@ describe('upsertFromPsd2', () => {
 
     // Falls through to the plain upsert; the DB unique constraint is the
     // final arbiter for a genuine conflict.
+    expect(stub.updates).toHaveLength(0)
+    expect(stub.upserts).toHaveLength(1)
+  })
+
+  it('promotes an IBAN-matched holder even when a live connection still holds it', async () => {
+    // The reconnect fix: resolvePsd2LedgerAccount matched this row by IBAN, so
+    // it is this account under a stale owner. Promoting keeps the row id (and
+    // its linked transactions) and re-points it at the new connection; without
+    // this the INSERT would trip the (company_id, ledger_account) constraint
+    // and the user's 1930 mapping would land on an overflow slot instead.
+    const stub = makeUpsertStub({
+      holder: { id: 'row-known', bank_connection_id: 'conn-old' },
+      connections: [{ id: 'conn-old', status: 'active' }],
+    })
+    await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', {
+      ...UPSERT_INPUT,
+      reuse_cash_account_id: 'row-known',
+    })
+
+    expect(stub.upserts).toHaveLength(0)
+    expect(stub.updates).toHaveLength(1)
+    expect(stub.updates[0].id).toBe('row-known')
+    expect(stub.updates[0].payload).toMatchObject({
+      bank_connection_id: 'conn-new',
+      external_uid: 'uid-1',
+      ledger_account: '1930',
+    })
+  })
+
+  it('ignores a reuse id that does not match the row holding the ledger', async () => {
+    const stub = makeUpsertStub({
+      holder: { id: 'row-other', bank_connection_id: 'conn-other' },
+      connections: [{ id: 'conn-other', status: 'active' }],
+    })
+    await upsertFromPsd2(makeUpsertSupabase(stub), 'c1', {
+      ...UPSERT_INPUT,
+      reuse_cash_account_id: 'row-stale',
+    })
+
     expect(stub.updates).toHaveLength(0)
     expect(stub.upserts).toHaveLength(1)
   })

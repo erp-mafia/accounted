@@ -55,6 +55,7 @@ export type MomsBox =
  */
 export const ACCOUNT_TO_BOX: Record<string, MomsBox> = {
   // Domestic revenue (taxable) → Box 05
+  '3000': '05',  // Försäljning inom Sverige (gruppkonto)
   '3001': '05',  // Försäljning varor/tjänster 25%
   '3002': '05',  // Försäljning varor/tjänster 12%
   '3003': '05',  // Försäljning varor/tjänster 6%

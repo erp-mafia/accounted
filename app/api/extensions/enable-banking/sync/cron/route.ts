@@ -8,6 +8,7 @@ import {
 import {
   isConsentExpiringSoon,
   getDaysUntilExpiry,
+  probeSessionHealth,
   SessionExpiredError,
   REAUTH_REQUIRED_MESSAGE,
   SYNC_FAILED_MESSAGE,
@@ -78,10 +79,9 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     return errorResponse(connError, ctx.log, { requestId: ctx.requestId })
   }
 
-  if (!connections || connections.length === 0) {
-    return NextResponse.json({ message: 'No active connections to sync', processed: 0 })
-  }
-
+  // No early return on an empty set: the health probe below still has work to
+  // do (a company whose only connection is parked in 'pending_selection' has
+  // nothing to sync but can absolutely have a dead session).
   const startTime = Date.now()
   const TIME_BUDGET_MS = 50_000 // 50s: leave 10s margin for Vercel timeout
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
@@ -93,11 +93,14 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     imported: number
     duplicates: number
     errors: number
-    status: 'synced' | 'expired' | 'expiring_soon' | 'error'
+    // 'skipped' = nothing was fetched from the bank (every account deselected),
+    // so this run proves nothing about whether the session is still alive. Kept
+    // distinct from 'synced' because the health probe below keys on it.
+    status: 'synced' | 'skipped' | 'expired' | 'expiring_soon' | 'error'
     daysUntilExpiry?: number | null
   }[] = []
 
-  for (const connection of connections) {
+  for (const connection of connections ?? []) {
     if (Date.now() - startTime > TIME_BUDGET_MS) {
       ctx.log.info('time budget reached', { processedSoFar: results.length })
       break
@@ -180,7 +183,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
           imported: 0,
           duplicates: 0,
           errors: 0,
-          status: 'synced',
+          status: 'skipped',
           daysUntilExpiry: daysLeft,
         })
         continue
@@ -321,6 +324,81 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     }
   }
 
+  // Health probe for connections this run did NOT prove alive by syncing them.
+  //
+  // A sync failure is the only thing that used to move a connection off
+  // 'active', which leaves two silent holes: connections the loop skipped
+  // (capability not entitled, every account deselected, time budget reached)
+  // and connections that never sync at all because they are still parked in
+  // 'pending_selection'. Both kept rendering as healthy with a stale
+  // last_synced_at while their PSD2 session was already dead bank-side, so the
+  // user read old balances as current. Probing costs one cheap session call
+  // per connection and only ever acts on a definite 'dead'.
+  const probeResults: { connectionId: string; bankName: string }[] = []
+  const PROBE_BUDGET_MS = 100_000
+  const provenAlive = new Set(
+    results.filter(r => r.status === 'synced' || r.status === 'expiring_soon').map(r => r.connectionId)
+  )
+
+  const { data: unverified, error: unverifiedError } = await supabase
+    .from('bank_connections')
+    .select('id, company_id, user_id, bank_name, session_id, status, last_expiry_notification_at')
+    .in('status', ['active', 'pending_selection'])
+    .not('session_id', 'is', null)
+    .order('last_synced_at', { ascending: true, nullsFirst: true })
+    .limit(100)
+
+  if (unverifiedError) {
+    ctx.log.error('failed to fetch connections for health probe', unverifiedError, {
+      message: unverifiedError.message,
+    })
+  }
+
+  for (const connection of unverified ?? []) {
+    if (Date.now() - startTime > PROBE_BUDGET_MS) {
+      ctx.log.info('probe budget reached', { probedSoFar: probeResults.length })
+      break
+    }
+    if (provenAlive.has(connection.id)) continue
+
+    // Per-connection isolation, matching the sync loop above: without it a
+    // single network blip aborts probing for every remaining candidate in the
+    // batch and the coverage gap stays silent until tomorrow's run.
+    try {
+      const health = await probeSessionHealth(connection.session_id as string)
+      if (health !== 'dead') continue
+
+      const { error: updateError } = await supabase
+        .from('bank_connections')
+        .update({ status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE })
+        .eq('id', connection.id)
+
+      // Only claim the connection was marked dead once the write landed.
+      // Notifying (and counting) on an unpersisted update would tell the user
+      // to re-authorize while the row still reads 'active'.
+      if (updateError) {
+        ctx.log.error('failed to mark probed-dead connection as expired', updateError, {
+          connectionId: connection.id,
+        })
+        continue
+      }
+
+      await sendConsentExpiryNotification(supabase, connection, 0, true, baseUrl)
+
+      ctx.log.info('health probe found a dead session', {
+        connectionId: connection.id,
+        bankName: connection.bank_name,
+        previousStatus: connection.status,
+      })
+      probeResults.push({ connectionId: connection.id, bankName: connection.bank_name })
+    } catch (err) {
+      ctx.log.error('health probe failed for connection', err as Error, {
+        connectionId: connection.id,
+        bankName: connection.bank_name,
+      })
+    }
+  }
+
   const totalImported = results.reduce((sum, r) => sum + r.imported, 0)
   const totalExpired = results.filter(r => r.status === 'expired').length
   const totalExpiringSoon = results.filter(r => r.status === 'expiring_soon').length
@@ -332,6 +410,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     totalExpired,
     totalExpiringSoon,
     totalFailed,
+    probedDead: probeResults.length,
   })
 
   return NextResponse.json({
@@ -340,6 +419,8 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     totalExpired,
     totalExpiringSoon,
     totalFailed,
+    probedDead: probeResults.length,
+    probeResults,
     results,
   })
 })

@@ -16,7 +16,7 @@ vi.mock('@/lib/logger', () => ({
   }),
 }))
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -452,6 +452,25 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
     expect(body.success).toBe(true)
     expect(body.paid_amount).toBe(1000)
     expect(body.remaining_amount).toBe(0)
+  })
+
+  // The suggestion pointer must not survive the match that consumes it: this
+  // request marks the invoice paid, so a surviving hint would point at a
+  // settled invoice. The customer-invoice route has always cleared its own
+  // field; this one did not.
+  it('clears potential_supplier_invoice_id when it links the matched transaction', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -1000, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 1000 },
+    })
+    await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+
+    const txUpdate = findCalls('transactions', 'update').at(-1)?.[0]
+    expect(txUpdate).toMatchObject({
+      supplier_invoice_id: SI_UUID,
+      potential_supplier_invoice_id: null,
+      is_business: true,
+    })
   })
 
   it('öresavrundning: a whole-krona Bankgiro payment settles an öre-bearing invoice in full via 3740', async () => {

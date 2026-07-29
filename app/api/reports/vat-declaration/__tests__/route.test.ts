@@ -47,6 +47,20 @@ function makeRequest(query: string) {
   return new Request(`http://localhost/api/reports/vat-declaration${query}`)
 }
 
+/**
+ * chart_of_accounts builder for fetchDynamicRuta05Accounts: which of the
+ * company's own class 3 accounts carry a "Standard moms" and therefore belong
+ * in ruta 05. Empty by default, i.e. a plain BAS chart.
+ */
+function chartBuilder(accounts: Array<{ account_number: string; default_vat_rate: number }> = []) {
+  const result = { data: accounts, error: null }
+  const b: Record<string, unknown> = {}
+  for (const m of ['select', 'eq', 'in', 'not', 'order']) b[m] = vi.fn().mockReturnValue(b)
+  b.range = vi.fn().mockResolvedValue(result)
+  b.then = (resolve: (v: unknown) => void) => resolve(result)
+  return b
+}
+
 describe('GET /api/reports/vat-declaration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -56,6 +70,7 @@ describe('GET /api/reports/vat-declaration', () => {
       error: null,
     })
     mockSupabase.rpc.mockResolvedValue({ data: rpcPayload(), error: null })
+    mockSupabase.from.mockImplementation(() => chartBuilder())
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -131,9 +146,10 @@ describe('GET /api/reports/vat-declaration', () => {
     expect(body.data.periodLabel).toBe('Kvartal 3 2026')
 
     // Regression guard: the dead company_settings round trip is gone and
-    // resolvePeriodDates makes no DB call for calendar quarters, so the
-    // handler issues exactly one PostgREST call: the totals RPC.
-    expect(mockSupabase.from).not.toHaveBeenCalled()
+    // resolvePeriodDates makes no DB call for calendar quarters. The only
+    // table read left is chart_of_accounts, for the company's own ruta 05
+    // accounts (#1261).
+    expect(mockSupabase.from.mock.calls.map(([t]) => t)).toEqual(['chart_of_accounts'])
     expect(mockSupabase.rpc).toHaveBeenCalledTimes(1)
     expect(mockSupabase.rpc).toHaveBeenCalledWith(
       'get_vat_declaration_totals',
@@ -145,7 +161,7 @@ describe('GET /api/reports/vat-declaration', () => {
     )
   })
 
-  it('happy path monthly: no table queries, one RPC', async () => {
+  it('happy path monthly: no period lookup, one RPC', async () => {
     const res = await GET(
       makeRequest('?periodType=monthly&year=2026&period=7'),
       { params: Promise.resolve({}) },
@@ -155,7 +171,7 @@ describe('GET /api/reports/vat-declaration', () => {
     expect(body.data.rutor.ruta49).toBe(21800)
     expect(body.data.periodLabel).toBe('Juli 2026')
 
-    expect(mockSupabase.from).not.toHaveBeenCalled()
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('fiscal_periods')
     expect(mockSupabase.rpc).toHaveBeenCalledTimes(1)
     expect(mockSupabase.rpc).toHaveBeenCalledWith(
       'get_vat_declaration_totals',

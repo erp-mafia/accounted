@@ -876,19 +876,41 @@ export const enableBankingExtension: Extension = {
         // cash_accounts, whose UNIQUE (company_id, ledger_account) constraint
         // would otherwise fail per-account and get swallowed, leaving accounts
         // silently unmirrored.
-        const { allocatePsd2LedgerAccount, upsertFromPsd2, getRevokedConnectionIds } = await import(
-          '@/lib/cash-accounts/service'
-        )
+        const { resolvePsd2LedgerAccount, upsertFromPsd2, getRevokedConnectionIds, normalizeIban } =
+          await import('@/lib/cash-accounts/service')
 
         const { data: companyCashRows } = await supabase
           .from('cash_accounts')
-          .select('external_uid, bank_connection_id, ledger_account')
+          .select('id, external_uid, bank_connection_id, ledger_account, iban')
           .eq('company_id', companyId)
         const cashRows = (companyCashRows ?? []) as Array<{
+          id: string
           external_uid: string | null
           bank_connection_id: string | null
           ledger_account: string
+          iban: string | null
         }>
+
+        // Rows that already represent one of THIS connection's accounts, matched
+        // on IBAN rather than on the provider uid. After a re-authorization (new
+        // uids) or a fresh connect to an already-connected bank (new connection
+        // row), these are the user's own mappings wearing a stale owner: they
+        // must not be treated as another bank's territory, and the mirror pass
+        // below promotes them in place instead of inserting a second row.
+        const rowByIban = new Map<string, { id: string; ledger_account: string }>()
+        for (const r of cashRows) {
+          const normalized = normalizeIban(r.iban)
+          if (normalized && !rowByIban.has(normalized)) {
+            rowByIban.set(normalized, { id: r.id, ledger_account: r.ledger_account })
+          }
+        }
+        const reuseRowByUid = new Map<string, { id: string; ledger_account: string }>()
+        for (const a of updatedAccounts) {
+          const normalized = normalizeIban(a.iban)
+          const row = normalized ? rowByIban.get(normalized) : undefined
+          if (row) reuseRowByUid.set(a.uid, row)
+        }
+        const ownIbanRowIds = new Set([...reuseRowByUid.values()].map(r => r.id))
         const existingLedgerByUid = new Map(
           cashRows
             .filter(r => r.bank_connection_id === connection.id && r.external_uid)
@@ -920,7 +942,10 @@ export const enableBankingExtension: Extension = {
               r =>
                 r.bank_connection_id !== null &&
                 r.bank_connection_id !== connection.id &&
-                !revokedConnectionIds.has(r.bank_connection_id)
+                !revokedConnectionIds.has(r.bank_connection_id) &&
+                // Same IBAN as one of this connection's accounts: the same
+                // physical account under a stale owner, not a foreign claim.
+                !ownIbanRowIds.has(r.id)
             )
             .map(r => r.ledger_account)
         )
@@ -970,11 +995,13 @@ export const enableBankingExtension: Extension = {
           if (effectiveLedgerByUid.has(a.uid)) continue
           let allocated: string | null = null
           try {
-            allocated = await allocatePsd2LedgerAccount(supabase, companyId, user.id, {
+            const resolved = await resolvePsd2LedgerAccount(supabase, companyId, user.id, {
+              iban: a.iban,
               currency: a.currency,
               accountName: a.name,
               exclude: usedLedgers,
             })
+            allocated = resolved?.ledgerAccount ?? null
           } catch (allocErr) {
             log.warn('[enable-banking] ledger allocation failed on selection save', {
               connectionId: connection.id,
@@ -1024,17 +1051,26 @@ export const enableBankingExtension: Extension = {
         // without reading the JSONB column.
         {
           for (const a of updatedAccounts) {
+            const ledgerAccount = a.ledger_account ?? '1930'
+            // Only reuse the IBAN-matched row when it already sits on the
+            // ledger we are about to write. If the user deliberately remapped
+            // the account to a different BAS number, promoting the old row
+            // would move a row out from under the ledger it still holds.
+            const reuseRow = reuseRowByUid.get(a.uid)
+            const reuseCashAccountId =
+              reuseRow && reuseRow.ledger_account === ledgerAccount ? reuseRow.id : null
             try {
               await upsertFromPsd2(supabase, companyId, {
                 bank_connection_id: connection.id,
                 external_uid: a.uid,
                 currency: a.currency,
-                ledger_account: a.ledger_account ?? '1930',
+                ledger_account: ledgerAccount,
                 iban: a.iban ?? null,
                 name: a.name ?? null,
                 balance: a.balance ?? null,
                 balance_updated_at: a.balance_updated_at ?? null,
                 enabled: a.enabled ?? true,
+                reuse_cash_account_id: reuseCashAccountId,
               })
             } catch (cashErr) {
               log.error('[enable-banking] Failed to mirror cash_account on selection save', {

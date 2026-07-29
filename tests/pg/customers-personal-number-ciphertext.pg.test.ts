@@ -104,12 +104,19 @@ describe('customers.personal_number ciphertext check.pg', () => {
     }
   })
 
-  it('rejects the masked display form', async () => {
+  it('rejects both masked display forms', async () => {
+    // The last of the three guards that keep a mask from ever being stored:
+    // CustomerForm strips it, the PATCH route reads it as "unchanged", and
+    // Postgres refuses it outright. '********-????' is what an undecryptable
+    // row renders as; the write paths now accept it as a no-op sentinel, so
+    // the DB backstop has to cover it too.
     const { userId, companyId } = await seedCompany()
 
-    await expect(
-      insertCustomer({ userId, companyId, personalNumber: '********-1234' }),
-    ).rejects.toThrow(/customers_personal_number_check/)
+    for (const mask of ['********-1234', '********-????']) {
+      await expect(
+        insertCustomer({ userId, companyId, personalNumber: mask }),
+      ).rejects.toThrow(/customers_personal_number_check/)
+    }
   })
 
   it('rejects hex that is too short to be ciphertext', async () => {

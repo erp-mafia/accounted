@@ -10,7 +10,9 @@ import {
   resolveReverseChargeRate,
   isReverseChargeBasisAccount,
   generateReverseChargeBasisLines,
+  generateReverseChargeLines,
 } from '@/lib/bookkeeping/vat-entries'
+import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
 import { resolveBookingAccount, itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { Supplier } from '@/types'
 
@@ -62,12 +64,6 @@ interface JournalPreviewLine {
   credit: number
 }
 
-function getOutputVatAccount(rate: number): string {
-  if (rate === 0.12) return '2624'
-  if (rate === 0.06) return '2634'
-  return '2614'
-}
-
 function buildJournalPreview(
   items: ReviewLineItem[],
   subtotal: number,
@@ -80,6 +76,12 @@ function buildJournalPreview(
   // resolveSekAmount(item.line_total, null, currency, exchange_rate), so the
   // saved verifikation is always in SEK, never in invoice currency.
   fxRate: number,
+  // The verifikat description the engine will write to EVERY line of this
+  // entry (createSupplierInvoiceRegistrationEntry builds one `desc` and reuses
+  // it). The preview showed the bare account number here instead, so a user
+  // reviewing "Verifikation som bokförs" saw "5615" where the books would say
+  // "Leverantörsfaktura 123, ACME AB".
+  desc: string,
 ): JournalPreviewLine[] {
   const lines: JournalPreviewLine[] = []
   const toSek = (n: number) => Math.round(n * fxRate * 100) / 100
@@ -99,7 +101,7 @@ function buildJournalPreview(
   for (const [accountNumber, amount] of expenseByAccount) {
     lines.push({
       account_number: accountNumber,
-      description: accountNumber,
+      description: desc,
       debit: amount,
       credit: 0,
     })
@@ -122,7 +124,6 @@ function buildJournalPreview(
     // prohibited (Skatteverket felkod FK004). Driving off the resolved rate (not
     // item.vat_rate) is what makes a 0%-rate RC line book its VAT at all.
     const isDomesticRC = supplierType === 'swedish_business'
-    const inputAccount = isDomesticRC ? '2647' : '2645'
     const rcSupplierType: 'eu_business' | 'non_eu_business' | 'swedish_business' =
       supplierType === 'non_eu_business' || supplierType === 'swedish_business'
         ? supplierType
@@ -145,20 +146,17 @@ function buildJournalPreview(
 
     for (const [rate, netAmount] of baseByRate) {
       if (netAmount <= 0) continue
-      const fiktivVat = Math.round(netAmount * rate * 100) / 100
-      const outputAccount = getOutputVatAccount(rate)
-      lines.push({
-        account_number: inputAccount,
-        description: inputAccount,
-        debit: fiktivVat,
-        credit: 0,
-      })
-      lines.push({
-        account_number: outputAccount,
-        description: outputAccount,
-        debit: 0,
-        credit: fiktivVat,
-      })
+      // Same generator the engine calls, so the account pair AND the
+      // "Fiktiv in-/utgående moms" wording come from one place instead of
+      // being re-derived here (they used to render as bare account numbers).
+      for (const rcLine of generateReverseChargeLines(netAmount, rate, isDomesticRC)) {
+        lines.push({
+          account_number: rcLine.account_number,
+          description: rcLine.line_description ?? rcLine.account_number,
+          debit: rcLine.debit_amount,
+          credit: rcLine.credit_amount,
+        })
+      }
       const nonBasisBase = nonBasisBaseByRate.get(rate) || 0
       if (nonBasisBase > 0) {
         for (const bl of generateReverseChargeBasisLines(nonBasisBase, rate, rcSupplierType)) {
@@ -175,7 +173,7 @@ function buildJournalPreview(
     // Credit: 2440 at subtotal (no real VAT for reverse charge)
     lines.push({
       account_number: '2440',
-      description: 'Leverantörsskulder',
+      description: desc,
       debit: 0,
       credit: toSek(subtotal),
     })
@@ -190,10 +188,10 @@ function buildJournalPreview(
           vatByRate.set(item.vat_rate, (vatByRate.get(item.vat_rate) || 0) + v)
         }
       }
-      for (const [, vat] of vatByRate) {
+      for (const [rate, vat] of vatByRate) {
         lines.push({
           account_number: '2641',
-          description: 'Ingående moms',
+          description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
           debit: toSek(vat),
           credit: 0,
         })
@@ -202,7 +200,7 @@ function buildJournalPreview(
     // Credit: 2440 at total incl. VAT
     lines.push({
       account_number: '2440',
-      description: 'Leverantörsskulder',
+      description: desc,
       debit: 0,
       credit: toSek(total),
     })
@@ -229,25 +227,35 @@ export function SupplierInvoiceReviewContent({
   const t = useTranslations('supplier_invoice_editor')
   const parsedRate = exchangeRate ? parseFloat(exchangeRate) : NaN
   const fxRate = currency !== 'SEK' && Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : 1
-  const journalLines = buildJournalPreview(items, subtotal, totalVat, total, reverseCharge, supplier.supplier_type, fxRate)
+  // The description the engine will stamp on every line of this verifikat.
+  // The ankomstnummer suffix the backend appends is deliberately absent: it is
+  // assigned on save, so it does not exist yet at preview time. Everything
+  // before it is byte-identical to what gets posted.
+  const voucherDescription = buildSupplierDescription(
+    'Leverantörsfaktura',
+    invoiceNumber,
+    supplier.name,
+  )
+  const journalLines = buildJournalPreview(
+    items,
+    subtotal,
+    totalVat,
+    total,
+    reverseCharge,
+    supplier.supplier_type,
+    fxRate,
+    voucherDescription,
+  )
   const totalDebit = journalLines.reduce((sum, l) => sum + l.debit, 0)
   const totalCredit = journalLines.reduce((sum, l) => sum + l.credit, 0)
   const showingSek = fxRate !== 1
 
-  const ACCOUNT_LABELS: Record<string, string> = {
-    '2440': t('account_2440'),
-    '2641': t('account_2641'),
-    '2645': t('account_2645'),
-    '2647': t('account_2647'),
-    '2614': t('account_2614'),
-    '2624': t('account_2624'),
-    '2634': t('account_2634'),
-    '1710': t('account_1710'),
-    '1720': t('account_1720'),
-    '1730': t('account_1730'),
-    '1740': t('account_1740'),
-    '1790': t('account_1790'),
-  }
+  // No account-label lookup any more: the BESKRIVNING column shows the
+  // line_description that will actually be posted. A hardcoded label map
+  // covering 11 accounts meant the column silently mixed "account label" (for
+  // those) with "raw account number" (for every expense account), and neither
+  // was the posted text. The account's own name stays available on the
+  // AccountNumber hover card.
 
   return (
     <div className="space-y-4">
@@ -424,7 +432,7 @@ export function SupplierInvoiceReviewContent({
                     <AccountNumber number={line.account_number} size="sm" />
                   </td>
                   <td className="py-1 text-xs">
-                    {ACCOUNT_LABELS[line.account_number] || line.description}
+                    {line.description}
                   </td>
                   <td className="py-1 text-right tabular-nums">
                     {line.debit > 0 ? formatAmount(line.debit) : ''}
@@ -451,7 +459,7 @@ export function SupplierInvoiceReviewContent({
                 <div className="flex items-center gap-1.5">
                   <AccountNumber number={line.account_number} size="sm" />
                   <span className="text-xs text-muted-foreground truncate">
-                    {ACCOUNT_LABELS[line.account_number] || line.description}
+                    {line.description}
                   </span>
                 </div>
               </div>

@@ -30,6 +30,10 @@ interface BasLookupRow {
   account_number: string
   account_name: string | null
   known: boolean
+  // Present since the lookup learned about the company's own chart: an account
+  // that is in_chart but not is_active is being reactivated, not added.
+  in_chart?: boolean
+  is_active?: boolean
 }
 
 export function ActivateAccountsDialog({
@@ -56,7 +60,15 @@ export function ActivateAccountsDialog({
       })
       .catch(() => {
         if (cancelled) return
-        setRows(accountNumbers.map((n) => ({ account_number: n, account_name: null, known: false })))
+        setRows(
+          accountNumbers.map((n) => ({
+            account_number: n,
+            account_name: null,
+            known: false,
+            in_chart: false,
+            is_active: false,
+          })),
+        )
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -107,6 +119,11 @@ export function ActivateAccountsDialog({
                 <li key={r.account_number} className="flex items-baseline gap-3 px-3 py-2">
                   <span className="font-mono text-foreground w-14 shrink-0">{r.account_number}</span>
                   <span className="truncate">{r.account_name}</span>
+                  {r.in_chart && !r.is_active && (
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                      Aktiveras igen
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>

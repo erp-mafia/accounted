@@ -46,14 +46,21 @@ function mockSupabaseWithLines(lines: MockLine[]) {
   const makeChain = (rows: unknown[]) => {
     const chain: Record<string, () => unknown> = {}
     chain.range = () => ({ data: rows, error: null })
-    for (const m of ['order', 'lte', 'gte', 'neq', 'in', 'eq', 'select', 'limit', 'contains', 'filter']) {
+    for (const m of ['order', 'lte', 'gte', 'neq', 'in', 'not', 'eq', 'select', 'limit', 'contains', 'filter']) {
       chain[m] = () => chain
     }
     return chain
   }
 
   return {
-    from: (table: string) => (table === 'journal_entries' ? makeChain(entries) : makeChain(bareLines)),
+    // chart_of_accounts feeds fetchDynamicRuta05Accounts (the company's own
+    // ruta 05 konton). Empty here: these fixtures are plain BAS charts, and the
+    // dynamic path has its own coverage in lib/reports/__tests__.
+    from: (table: string) => {
+      if (table === 'journal_entries') return makeChain(entries)
+      if (table === 'chart_of_accounts') return makeChain([])
+      return makeChain(bareLines)
+    },
   } as never
 }
 

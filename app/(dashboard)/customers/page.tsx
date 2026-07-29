@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo, useCallback, Suspense } from 'react'
 import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -18,7 +17,6 @@ import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { cn } from '@/lib/utils'
 import Link from 'next/link'
-import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
 
@@ -64,7 +62,6 @@ function compareStrings(a: string, b: string): number {
 }
 
 function CustomersPageInner() {
-  const { company } = useCompany()
   const { canWrite } = useCanWrite()
   const [customers, setCustomers] = useState<Customer[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -73,7 +70,6 @@ function CustomersPageInner() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const { toast } = useToast()
-  const supabase = createClient()
   const t = useTranslations('customers')
   const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
@@ -104,25 +100,38 @@ function CustomersPageInner() {
     [searchParams, sortColumn, sortDir, router, pathname]
   )
 
+  /**
+   * Read the roster through the API, not straight from Supabase.
+   *
+   * personal_number holds AES-256-GCM ciphertext (migration 20260726110000).
+   * A browser-side select('*') handed this page 76 to 82 hex characters and
+   * getIdentifier() rendered them into the nowrap identifier cell, which is
+   * what shredded the table layout for companies with private customers.
+   * GET /api/customers maps every row through maskCustomerRow, so the
+   * ciphertext now never leaves the server and the column shows the same
+   * '********-1234' the detail view does.
+   *
+   * No `company` guard: the route resolves the active company server-side, so
+   * the fetch no longer has to wait for CompanyContext to hydrate. The old
+   * guard could leave the list empty on a slow context load, because the
+   * effect below runs once and never retries.
+   */
   async function fetchCustomers() {
-    if (!company) return
     setIsLoading(true)
-    const { data, error } = await supabase
-      .from('customers')
-      .select('*')
-      .eq('company_id', company.id)
-      .order('name', { ascending: true })
-
-    if (error) {
+    try {
+      const response = await fetch('/api/customers')
+      if (!response.ok) throw new Error('Failed to load customers')
+      const { data } = await response.json()
+      setCustomers(data || [])
+    } catch {
       toast({
         title: t('load_failed_title'),
         description: t('load_failed_description'),
         variant: 'destructive',
       })
-    } else {
-      setCustomers(data || [])
+    } finally {
+      setIsLoading(false)
     }
-    setIsLoading(false)
   }
 
   useEffect(() => {
@@ -167,6 +176,9 @@ function CustomersPageInner() {
         c.name.toLowerCase().includes(term) ||
         c.email?.toLowerCase().includes(term) ||
         c.org_number?.includes(term) ||
+        // The masked form, so this matches the last four digits. Against the
+        // raw ciphertext it matched nothing, which read as "search is broken"
+        // for anyone looking up a private customer by personnummer.
         c.personal_number?.includes(term) ||
         c.city?.toLowerCase().includes(term) ||
         c.notes?.toLowerCase().includes(term)

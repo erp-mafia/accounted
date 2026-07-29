@@ -8,7 +8,7 @@ import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import { eventBus } from '@/lib/events/bus'
 import {
   upsertFromPsd2,
-  allocatePsd2LedgerAccount,
+  resolvePsd2LedgerAccount,
   defaultLedgerForCurrency,
 } from '@/lib/cash-accounts/service'
 import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
@@ -340,11 +340,13 @@ async function finalizeConnection(
   }
 
   // Mirror each PSD2 account into cash_accounts so routing decisions read
-  // from the canonical entity table. Accounts already mirrored (reconnect)
-  // keep their ledger_account — re-deriving it here would clobber the
-  // user's remaps. New accounts each get a free BAS class-19 slot: a bank
-  // returning N same-currency accounts must not collide on the UNIQUE
-  // (company_id, ledger_account) constraint by all defaulting to 1930.
+  // from the canonical entity table. Accounts already mirrored under the same
+  // (connection, uid) keep their ledger_account — re-deriving it here would
+  // clobber the user's remaps. Everything else goes through
+  // resolvePsd2LedgerAccount, which matches on IBAN before allocating: a
+  // re-authorization that mints new account uids, and a fresh connect that
+  // mints a whole new connection row, both have to land back on the mapping
+  // the user already chose instead of overflowing into the next free slots.
   const { data: mirroredRows } = await supabase
     .from('cash_accounts')
     .select('external_uid, ledger_account')
@@ -360,13 +362,28 @@ async function finalizeConnection(
 
   for (const account of accountsMetadata) {
     let targetLedger = existingLedgerByUid.get(account.uid)
+    let reuseCashAccountId: string | null = null
     if (!targetLedger) {
-      targetLedger =
-        (await allocatePsd2LedgerAccount(supabase, updatedConnection.company_id, updatedConnection.user_id, {
+      const resolved = await resolvePsd2LedgerAccount(
+        supabase,
+        updatedConnection.company_id,
+        updatedConnection.user_id,
+        {
+          iban: account.iban,
           currency: account.currency,
           accountName: account.name,
           exclude: assignedLedgers,
-        })) ?? defaultLedgerForCurrency(account.currency)
+        },
+      )
+      targetLedger = resolved?.ledgerAccount ?? defaultLedgerForCurrency(account.currency)
+      reuseCashAccountId = resolved?.reuseCashAccountId ?? null
+      if (resolved?.source === 'iban') {
+        console.log('[enable-banking] Reused existing ledger mapping for known IBAN', {
+          connectionId: updatedConnection.id,
+          uid: account.uid,
+          ledgerAccount: targetLedger,
+        })
+      }
     }
     assignedLedgers.add(targetLedger)
     if (account.ledger_account !== targetLedger) {
@@ -382,6 +399,7 @@ async function finalizeConnection(
         iban: account.iban ?? null,
         name: account.name ?? null,
         enabled: account.enabled ?? true,
+        reuse_cash_account_id: reuseCashAccountId,
       })
     } catch (cashErr) {
       const reason = cashErr instanceof Error ? cashErr.message : String(cashErr)

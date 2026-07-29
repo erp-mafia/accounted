@@ -80,6 +80,43 @@ describe('GET /api/invoices', () => {
     expect(body.count).toBe(2)
   })
 
+  it('masks the embedded customer personnummer in the list', async () => {
+    // The customer:customers(*) join carries the stored personal_number out to
+    // the browser. A legacy plaintext value is used here so the assertion does
+    // not depend on PERSONNUMMER_ENCRYPTION_KEY being set in the test env; the
+    // ciphertext path lands on the same masked shape.
+    const invoices = [
+      { ...makeInvoice(), customer: { id: 'cust-1', name: 'Test', personal_number: '19900101-1234' } },
+    ]
+    enqueue({ data: invoices, error: null, count: 1 })
+
+    const request = createMockRequest('/api/invoices')
+    const response = await GET(request)
+    const { status, body } = await parseJsonResponse<{
+      data: { customer: { personal_number: string | null; name: string } }[]
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data[0].customer.personal_number).toBe('********-1234')
+    expect(JSON.stringify(body)).not.toContain('19900101-1234')
+    // Masking must not strip the rest of the embed.
+    expect(body.data[0].customer.name).toBe('Test')
+  })
+
+  it('leaves an invoice without an embedded customer untouched', async () => {
+    // PostgREST returns customer: null when the customer was removed; the mask
+    // must be null-safe rather than 500 the whole list.
+    const invoices = [{ ...makeInvoice(), customer: null }]
+    enqueue({ data: invoices, error: null, count: 1 })
+
+    const request = createMockRequest('/api/invoices')
+    const response = await GET(request)
+    const { status, body } = await parseJsonResponse<{ data: { customer: null }[] }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data[0].customer).toBeNull()
+  })
+
   it('applies status filter', async () => {
     enqueue({ data: [], error: null, count: 0 })
 

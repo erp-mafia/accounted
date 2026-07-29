@@ -18,6 +18,7 @@ import {
   getAllTransactions,
   getAllTransactionsWithRaw,
   convertTransaction,
+  probeSessionHealth,
   type Transaction,
 } from '../api-client'
 
@@ -510,5 +511,63 @@ describe('convertTransaction', () => {
     const out = convertTransaction(tx, 'SEK')
     expect(out.bank_transaction_code).toBe('PMNT/RCDT')
     expect(out.proprietary_bank_transaction_code).toBe('XB')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// probeSessionHealth: nightly liveness check
+// ---------------------------------------------------------------------------
+
+describe('probeSessionHealth', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+  })
+
+  function respond(status: number, body: unknown) {
+    fetchSpy.mockResolvedValue(
+      new Response(typeof body === 'string' ? body : JSON.stringify(body), { status }),
+    )
+  }
+
+  it('reports alive for an authorized session', async () => {
+    respond(200, { session_id: 's1', status: 'AUTHORIZED' })
+    expect(await probeSessionHealth('s1')).toBe('alive')
+  })
+
+  it('reports dead for a session the bank closed', async () => {
+    respond(200, { session_id: 's1', status: 'CLOSED' })
+    expect(await probeSessionHealth('s1')).toBe('dead')
+  })
+
+  it('reports dead when the session record is gone', async () => {
+    respond(404, { message: 'Not found' })
+    expect(await probeSessionHealth('s1')).toBe('dead')
+  })
+
+  it('reports dead on a 401 carrying a session-expiry signal', async () => {
+    respond(401, { error: 'SESSION_EXPIRED' })
+    expect(await probeSessionHealth('s1')).toBe('dead')
+  })
+
+  it('reports unknown for an unrecognized status rather than expiring a live connection', async () => {
+    respond(200, { session_id: 's1', status: 'SOMETHING_NEW' })
+    expect(await probeSessionHealth('s1')).toBe('unknown')
+  })
+
+  it('reports unknown on a bare 401 (app credentials, not a dead consent)', async () => {
+    respond(401, 'Unauthorized')
+    expect(await probeSessionHealth('s1')).toBe('unknown')
+  })
+
+  it('reports unknown when the request itself fails', async () => {
+    fetchSpy.mockRejectedValue(new Error('network down'))
+    expect(await probeSessionHealth('s1')).toBe('unknown')
   })
 })
