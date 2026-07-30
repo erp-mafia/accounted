@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef, use } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -20,9 +19,6 @@ import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui
 import {
   Archive,
   ArchiveRestore,
-  ArrowLeft,
-  Package,
-  Wrench,
   Edit2,
   Trash2,
   Loader2,
@@ -31,15 +27,13 @@ import {
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
+import { PageHeader } from '@/components/ui/page-header'
+import { Skeleton } from '@/components/ui/skeleton'
+import { TableRowsSkeleton } from '@/components/ui/table-rows-skeleton'
 
 const ARTICLE_TYPE_KEY: Record<ArticleType, string> = {
   vara: 'type_vara',
   tjanst: 'type_tjanst',
-}
-
-const articleTypeIcons: Record<ArticleType, React.ElementType> = {
-  vara: Package,
-  tjanst: Wrench,
 }
 
 export default function ArticleDetailPage({
@@ -213,52 +207,31 @@ export default function ArticleDetailPage({
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <div className="space-y-8">
+        <Skeleton className="h-8 w-64" />
+        <TableRowsSkeleton rows={5} />
       </div>
     )
   }
 
   if (!article) return null
 
-  const Icon = articleTypeIcons[article.type]
-
   return (
     <div className="space-y-8">
-      {/* Header */}
-      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
-        <div>
-          <Link
-            href="/articles"
-            className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-2"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            {t('back')}
-          </Link>
-          <div className="flex items-center gap-3">
-            <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
-              <Icon className="h-6 w-6 text-primary" />
-            </div>
-            <div>
-              <h1 className="font-display text-2xl leading-8 tracking-tight">{article.name}</h1>
-              <div className="flex items-center gap-2 mt-1">
-                {article.active ? (
-                  <span className="text-sm text-muted-foreground">{t('status_active')}</span>
-                ) : (
-                  <Badge variant="outline" className="font-normal">
-                    {t('status_inactive')}
-                  </Badge>
-                )}
-                <span className="text-sm text-muted-foreground tabular-nums">
-                  {t(ARTICLE_TYPE_KEY[article.type])}
-                  {article.article_number ? ` · #${article.article_number}` : ''}
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-end gap-2">
+      <PageHeader
+        title={article.name}
+        backHref="/articles"
+        backLabel={t('back')}
+        badges={
+          article.active ? null : (
+            <Badge variant="outline" className="font-normal">
+              {t('status_inactive')}
+            </Badge>
+          )
+        }
+        description={`${t(ARTICLE_TYPE_KEY[article.type])}${article.article_number ? ` · #${article.article_number}` : ''}`}
+        action={
+          <div className="flex flex-wrap items-center justify-end gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -305,8 +278,9 @@ export default function ArticleDetailPage({
             )}
             {t('delete')}
           </Button>
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* Info cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

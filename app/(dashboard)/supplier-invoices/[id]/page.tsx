@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info, Pencil, Plus, CalendarClock, Paperclip } from 'lucide-react'
+import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Info, Pencil, Plus, CalendarClock, Paperclip } from 'lucide-react'
 import AgentSparkleButton from '@/components/agent/AgentSparkleButton'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -28,6 +28,7 @@ import { formatAmount, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment, BASAccount } from '@/types'
+import { PageHeader } from '@/components/ui/page-header'
 
 interface EditableLine {
   account_number: string
@@ -472,38 +473,29 @@ export default function SupplierInvoiceDetailPage() {
 
   return (
     <div className="space-y-8 max-w-4xl">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-          <Button variant="ghost" size="icon" className="shrink-0" onClick={() => router.push('/supplier-invoices')} aria-label={t('back_aria')}>
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-              <h1 className="font-display text-2xl leading-8 tracking-tight">
-                {t('arrival_header', { number: invoice.arrival_number })}
-              </h1>
-              <Badge variant={statusVariants[invoice.status] || 'secondary'}>
-                {statusLabels[invoice.status] || invoice.status}
+      <PageHeader
+        title={t('arrival_header', { number: invoice.arrival_number })}
+        backHref="/supplier-invoices"
+        backLabel={t('back_aria')}
+        description={t('header_subtitle', {
+          supplier: invoice.supplier?.name ?? '',
+          number: invoice.supplier_invoice_number,
+        })}
+        badges={
+          <>
+            <Badge variant={statusVariants[invoice.status] || 'secondary'}>
+              {statusLabels[invoice.status] || invoice.status}
+            </Badge>
+            {items.some(itemHasAccrual) && (
+              <Badge variant="outline" className="gap-1">
+                <CalendarClock className="h-3 w-3" />
+                {t('badge_accrued')}
               </Badge>
-              {items.some(itemHasAccrual) && (
-                <Badge variant="outline" className="gap-1">
-                  <CalendarClock className="h-3 w-3" />
-                  {t('badge_accrued')}
-                </Badge>
-              )}
-            </div>
-            <p className="text-muted-foreground text-sm sm:text-base truncate">
-              {t('header_subtitle', {
-                supplier: invoice.supplier?.name ?? '',
-                number: invoice.supplier_invoice_number,
-              })}
-            </p>
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="flex flex-wrap gap-2">
+            )}
+          </>
+        }
+        action={
+          <div className="flex flex-wrap gap-2">
           <AgentSparkleButton
             intentId="supplier_invoice.review"
             intentArgs={{ supplier_invoice_id: invoice.id }}
@@ -576,8 +568,9 @@ export default function SupplierInvoiceDetailPage() {
               {t('uncredit_button')}
             </Button>
           )}
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* Credit note banner: explain why this row has no edit/delete affordances and where to undo */}
       {invoice.is_credit_note && (

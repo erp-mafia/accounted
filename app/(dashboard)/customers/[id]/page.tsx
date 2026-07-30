@@ -18,10 +18,6 @@ import { AttnLine } from '@/components/ui/attn-line'
 import CustomerForm from '@/components/customers/CustomerForm'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
-  ArrowLeft,
-  Building,
-  Globe,
-  User,
   Mail,
   Phone,
   MapPin,
@@ -39,19 +35,15 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { cn, formatDate } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
+import { PageHeader } from '@/components/ui/page-header'
+import { Skeleton } from '@/components/ui/skeleton'
+import { TableRowsSkeleton } from '@/components/ui/table-rows-skeleton'
 
 const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
   individual: 'type_individual',
   swedish_business: 'type_swedish_business',
   eu_business: 'type_eu_business',
   non_eu_business: 'type_non_eu_business',
-}
-
-const customerTypeIcons: Record<CustomerType, React.ElementType> = {
-  individual: User,
-  swedish_business: Building,
-  eu_business: Globe,
-  non_eu_business: Globe,
 }
 
 interface RelatedInvoice {
@@ -224,40 +216,25 @@ export default function CustomerDetailPage({
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <div className="space-y-8">
+        <Skeleton className="h-8 w-64" />
+        <TableRowsSkeleton rows={5} />
       </div>
     )
   }
 
   if (!customer) return null
 
-  const Icon = customerTypeIcons[customer.customer_type]
 
   return (
     <div className="space-y-8">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <Link
-            href="/customers"
-            className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-2"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            {t('back')}
-          </Link>
-          <div className="flex items-center gap-3">
-            <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
-              <Icon className="h-6 w-6 text-primary" />
-            </div>
-            <div>
-              <h1 className="font-display text-2xl leading-8 tracking-tight">{customer.name}</h1>
-              <p className="text-sm text-muted-foreground">{t(CUSTOMER_TYPE_KEY[customer.customer_type])}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
+      <PageHeader
+        title={customer.name}
+        description={t(CUSTOMER_TYPE_KEY[customer.customer_type])}
+        backHref="/customers"
+        backLabel={t('back')}
+        action={
+          <div className="flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -279,8 +256,9 @@ export default function CustomerDetailPage({
             {canWrite ? <Trash2 className="h-4 w-4 mr-1" /> : <Lock className="h-4 w-4 mr-1" />}
             {t('delete')}
           </Button>
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* Info cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

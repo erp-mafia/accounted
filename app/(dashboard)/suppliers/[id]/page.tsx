@@ -11,13 +11,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, Edit, Trash2, FileText, Lock } from 'lucide-react'
+import { Edit, Trash2, FileText, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate } from '@/lib/utils'
 import SupplierForm from '@/components/suppliers/SupplierForm'
 import Link from 'next/link'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import type { Supplier, SupplierType, CreateSupplierInput, SupplierInvoice } from '@/types'
+import { PageHeader } from '@/components/ui/page-header'
+import { TableRowsSkeleton } from '@/components/ui/table-rows-skeleton'
 
 function formatAmount(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -146,8 +148,8 @@ export default function SupplierDetailPage() {
   if (isLoading) {
     return (
       <div className="space-y-8">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-48 w-full" />
+        <Skeleton className="h-8 w-64" />
+        <TableRowsSkeleton rows={5} />
       </div>
     )
   }
@@ -183,20 +185,13 @@ export default function SupplierDetailPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => router.push('/suppliers')} aria-label={t('back_aria')}>
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
-          <div>
-            <h1 className="font-display text-2xl leading-8 tracking-tight">{supplier.name}</h1>
-            <p className="text-muted-foreground">
-              {supplierTypeLabels[supplier.supplier_type]}
-              {supplier.org_number && t('org_number_inline', { number: supplier.org_number })}
-            </p>
-          </div>
-        </div>
-        <div className="flex gap-2">
+      <PageHeader
+        title={supplier.name}
+        backHref="/suppliers"
+        backLabel={t('back_aria')}
+        description={`${supplierTypeLabels[supplier.supplier_type]}${supplier.org_number ? t('org_number_inline', { number: supplier.org_number }) : ''}`}
+        action={
+          <div className="flex gap-2">
           <Button
             variant="outline"
             onClick={() => setIsEditOpen(true)}
@@ -216,8 +211,9 @@ export default function SupplierDetailPage() {
           >
             {canWrite ? <Trash2 className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
           </Button>
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* Stats */}
       <div className="grid gap-4 md:grid-cols-3">
