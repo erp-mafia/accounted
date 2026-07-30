@@ -532,13 +532,17 @@ export async function submitProviderToken(
       )
     }
 
-    // Label the consent with what the credentials actually opened.
+    // Label the consent with what the credentials actually opened. Written as
+    // an object literal (not a conditional spread) so the phantom-column guard
+    // can see which columns this touches. `undefined` is dropped by the JSON
+    // serialisation, so a field Bokio did not return is left alone rather than
+    // overwriting a value the user typed at connect time with null.
     if (bokioName || bokioOrgNumber) {
       await supabase
         .from('provider_consents')
         .update({
-          ...(bokioName ? { company_name: bokioName } : {}),
-          ...(bokioOrgNumber ? { org_number: bokioOrgNumber } : {}),
+          company_name: bokioName || undefined,
+          org_number: bokioOrgNumber || undefined,
         })
         .eq('id', consentId)
     }
