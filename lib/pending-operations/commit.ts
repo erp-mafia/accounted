@@ -160,10 +160,13 @@ export interface CommitResult {
   error?: string
   http_status?: number
   auto_rejected?: boolean
-  // Set when the commit failed because the booking posts to BAS accounts not
-  // active in the company chart. Recoverable: the op is left 'pending' so the
-  // caller can activate the accounts and retry. Lets the route rebuild the
-  // structured ACCOUNTS_NOT_IN_CHART envelope (code + account_numbers).
+  // Structured-error registry code for the failure, when one is known, so a
+  // caller can branch on the failure mode instead of parsing `error` text.
+  // ACCOUNTS_NOT_IN_CHART is the recoverable case: the booking posts to BAS
+  // accounts not active in the company chart, the op is left 'pending', and
+  // the route rebuilds the structured envelope (code + account_numbers).
+  // Other codes (e.g. INVOICE_RECURRING_UPDATE_PARTIAL) are informational:
+  // callers that do not recognize the code fall back to `error`.
   code?: string
   account_numbers?: string[]
 }
@@ -239,6 +242,10 @@ async function recordSkippedInvoiceJournalEntry(
 type ExecutorResult = {
   data?: Record<string, unknown>
   error?: string
+  // Structured-error registry code for `error`, when the executor has one.
+  // Surfaced as CommitResult.code and persisted in result_data.error_code so a
+  // caller can branch on the failure mode instead of parsing the message text.
+  errorCode?: string
   status?: number
   // Set when the executor already performed an irreversible side-effect
   // (posted voucher, persisted credit note) before the failure in `error`:
@@ -716,6 +723,10 @@ async function commitUpdateRecurringSchedule(
       })
       return {
         error: `${partial?.message_sv ?? 'Ändringen kunde inte slutföras.'} (${result.error.message})`,
+        // Machine-readable twin of the PATCH route's envelope code, so an
+        // MCP/staged-op caller can detect the partial state without
+        // substring-matching the Swedish sentence.
+        errorCode: 'INVOICE_RECURRING_UPDATE_PARTIAL',
         status: 500,
       }
     }
@@ -5614,7 +5625,11 @@ async function commitPendingOperationInner(
         resolved_at: new Date().toISOString(),
         result_data: isAutoReject
           ? { auto_rejected: true, reason: result.error }
-          : { error: result.error, http_status: result.status },
+          : {
+              error: result.error,
+              http_status: result.status,
+              ...(result.errorCode ? { error_code: result.errorCode } : {}),
+            },
       })
       .eq('id', pendingOp.id)
     if (isAutoReject) {
@@ -5629,6 +5644,7 @@ async function commitPendingOperationInner(
       status: 'failed',
       error: result.error,
       http_status: result.status ?? 500,
+      ...(result.errorCode ? { code: result.errorCode } : {}),
     }
   }
 

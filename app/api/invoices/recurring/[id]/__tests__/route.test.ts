@@ -224,7 +224,14 @@ describe('PATCH /api/invoices/recurring/[id] combined edit rollback', () => {
         }
       }
       const itemsChain: Record<string, unknown> = {
-        select: () => ({ eq: () => Promise.resolve({ data: itemsSnapshot, error: null }) }),
+        // The snapshot is read through fetchAllRows, hence .order().range().
+        select: () => ({
+          eq: () => ({
+            order: () => ({
+              range: () => Promise.resolve({ data: itemsSnapshot, error: null }),
+            }),
+          }),
+        }),
         delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
         insert: (rows: Record<string, unknown>[]) => {
           itemsInserts.push(rows)

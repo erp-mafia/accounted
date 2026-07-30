@@ -1,6 +1,7 @@
 import type { PostgrestError, SupabaseClient } from '@supabase/supabase-js'
 import type { z } from 'zod'
 import type { RecurringScheduleItemSchema } from '@/lib/api/schemas'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
 
 /**
@@ -24,6 +25,21 @@ import { createLogger } from '@/lib/logger'
  * either is false the caller must tell the user the schedule may be partially
  * saved instead of reporting a clean failure.
  *
+ * No destructive write happens once its compensating snapshot is known to be
+ * unavailable: an unreadable header snapshot fails before the header UPDATE,
+ * and an unreadable item snapshot fails before the DELETE (rolling the header
+ * back). That is what keeps the cron invariant "a schedule always has items"
+ * true on EVERY failure path, not just the ones where the restore succeeded.
+ *
+ * Tenancy: `recurring_invoice_schedule_items` has no company_id, so the item
+ * DELETE/INSERT can only be scoped by `schedule_id`, and the commit executor
+ * runs this on a service-role client with RLS off. The helper therefore proves
+ * ownership itself: whenever `items` is provided it first reads the header row
+ * filtered by BOTH id and company_id, and a miss aborts before anything is
+ * written. Callers should still 404 on their own beforehand (they own the
+ * user-facing not-found shape), but a caller that forgets cannot reach another
+ * tenant's rows through here.
+ *
  * Shared by the cookie PATCH route (app/api/invoices/recurring/[id]) and the
  * update_recurring_schedule commit executor so the two surfaces cannot drift.
  */
@@ -40,7 +56,10 @@ type Log = { error: (message: string, ...args: unknown[]) => void }
 
 export type ApplyRecurringScheduleUpdateResult =
   | { ok: true }
-  /** The header update itself failed: nothing else was written. */
+  /**
+   * Nothing was written at all: either the pre-write header read (ownership
+   * proof + rollback snapshot) failed, or the header update itself did.
+   */
   | { ok: false; stage: 'header'; error: PostgrestError }
   | {
       ok: false
@@ -68,24 +87,44 @@ export async function applyRecurringScheduleUpdate(
   const hasFields = Object.keys(fields).length > 0
   if (!hasFields && !items) return { ok: true }
 
-  // Snapshot the header only for a combined edit: that is the only case with a
-  // committed header write that a later item failure has to undo. A header-only
-  // edit has nothing after it that can fail, and an item-only edit writes no
-  // header at all, so skipping the read there keeps both paths at their current
-  // number of round trips.
+  // Read the header row up front whenever the items are replaced. It does two
+  // jobs at once:
+  //   - it is the only proof that the schedule belongs to `companyId` before
+  //     the schedule_id-scoped item DELETE/INSERT below, and
+  //   - it is the snapshot a later item failure rolls the header fields back
+  //     to on a combined edit.
+  // A header-only edit needs neither (its single UPDATE is company-scoped and
+  // nothing after it can fail), so that path keeps its one round trip.
   let headerSnapshot: Record<string, unknown> | null = null
-  if (hasFields && items) {
+  if (items) {
     // select('*') on purpose: the restore must be able to put back every
     // column named in `fields`, including ones added to the update schema after
     // this function was written, so an explicit list here would silently fail
     // to restore new fields.
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('recurring_invoice_schedules')
       .select('*')
       .eq('id', scheduleId)
       .eq('company_id', companyId)
       .maybeSingle()
-    headerSnapshot = (data as Record<string, unknown> | null) ?? null
+
+    // No row read means no ownership proof and no rollback source. Writing the
+    // header anyway would be committing a change we already know we could
+    // never undo, which is exactly the half-applied state this function
+    // exists to prevent: stop before touching anything.
+    if (error || !data) {
+      log.error(
+        'recurring schedule header snapshot unavailable: nothing was written',
+        error ?? undefined,
+        { scheduleId, companyId, fields: Object.keys(fields) },
+      )
+      return {
+        ok: false,
+        stage: 'header',
+        error: error ?? asPostgrestError('Recurring schedule not found for this company', 'PGRST116'),
+      }
+    }
+    headerSnapshot = data as Record<string, unknown>
   }
 
   let headerStamp: string | null = null
@@ -107,12 +146,49 @@ export async function applyRecurringScheduleUpdate(
 
   if (!items) return { ok: true }
 
-  // Snapshot the items before deleting them, keeping the error: a snapshot that
-  // could not be read must not be reported as a successful restore.
-  const { data: snapshotRows, error: snapshotError } = await supabase
-    .from('recurring_invoice_schedule_items')
-    .select('*')
-    .eq('schedule_id', scheduleId)
+  // Snapshot the items before deleting them. Paginated on the id PK: a plain
+  // select is silently capped at 1000 rows by PostgREST, and a truncated
+  // snapshot would restore only part of the schedule while still reporting
+  // itemsRestored: true.
+  let snapshotRows: Record<string, unknown>[]
+  try {
+    snapshotRows = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
+      supabase
+        .from('recurring_invoice_schedule_items')
+        .select('*')
+        .eq('schedule_id', scheduleId)
+        .order('id')
+        .range(from, to),
+    )
+  } catch (err) {
+    // Without a snapshot the delete below could never be compensated, so the
+    // items are left alone (the schedule keeps its lines and the cron keeps
+    // working) and only the header write is undone.
+    const snapshotError = asPostgrestError(
+      err instanceof Error ? err.message : String(err),
+      'RECURRING_ITEMS_SNAPSHOT_FAILED',
+    )
+    log.error(
+      'recurring schedule items snapshot unreadable: items left untouched',
+      snapshotError,
+      { scheduleId, companyId },
+    )
+    const headerRestored = await restoreHeaderFields(supabase, {
+      scheduleId,
+      companyId,
+      fields,
+      snapshot: headerSnapshot,
+      headerStamp,
+      log,
+    })
+    return {
+      ok: false,
+      stage: 'items_delete',
+      error: snapshotError,
+      itemsRestored: true,
+      headerRestored,
+    }
+  }
 
   const { error: deleteError } = await supabase
     .from('recurring_invoice_schedule_items')
@@ -156,15 +232,14 @@ export async function applyRecurringScheduleUpdate(
 
   if (insertError) {
     // Best-effort restore of the previous lines so the schedule stays valid for
-    // the cron. A failed (or impossible) restore is reported, never swallowed.
+    // the cron. A failed restore is reported, never swallowed. (An unreadable
+    // snapshot cannot get here: it aborts before the delete above.)
     let itemsRestored = false
-    if (snapshotError || snapshotRows == null) {
-      itemsRestored = false
-    } else if (snapshotRows.length === 0) {
+    if (snapshotRows.length === 0) {
       // Nothing existed before, so the prior (empty) state already holds.
       itemsRestored = true
     } else {
-      const restoreRows = (snapshotRows as Record<string, unknown>[]).map((row) => {
+      const restoreRows = snapshotRows.map((row) => {
         const copy: Record<string, unknown> = { ...row }
         for (const column of SERVER_GENERATED_ITEM_COLUMNS) delete copy[column]
         copy.schedule_id = scheduleId
@@ -175,6 +250,12 @@ export async function applyRecurringScheduleUpdate(
         .insert(restoreRows)
       itemsRestored = !restoreError
       if (restoreError) {
+        // The rows are gone from the table and the reinsert was rejected, so
+        // this log line is the only remaining copy: it is logged deliberately
+        // so support can rebuild the schedule by hand. It is customer content
+        // (line descriptions and prices), which is why it appears on this
+        // branch only, never on a successful edit. lib/logger.ts redacts known
+        // PII keys before the record leaves the process.
         log.error(
           'recurring schedule items restore failed: schedule may be left with no items',
           restoreError,
@@ -205,6 +286,15 @@ export async function applyRecurringScheduleUpdate(
 }
 
 /**
+ * Build the PostgrestError shape callers already handle for a failure that did
+ * not come from PostgREST itself (a missing row, or fetchAllRows rethrowing a
+ * paged read error as a plain Error).
+ */
+function asPostgrestError(message: string, code: string): PostgrestError {
+  return { name: 'PostgrestError', message, details: '', hint: '', code } as PostgrestError
+}
+
+/**
  * Put the header columns named in `fields` back at their snapshot values.
  * Returns whether the schedule's header is known to be in its pre-edit state.
  */
@@ -223,6 +313,10 @@ async function restoreHeaderFields(
   const keys = Object.keys(fields)
   if (keys.length === 0) return true // No header write happened.
 
+  // Defensive only: a restore is reached exclusively after the pre-write read
+  // succeeded, which aborts the whole update when the row is missing. The
+  // branch stays so a future path that skips that read fails loudly instead of
+  // silently reporting a rollback it never performed.
   if (!snapshot) {
     log.error(
       'recurring schedule header snapshot missing: the field update cannot be rolled back',

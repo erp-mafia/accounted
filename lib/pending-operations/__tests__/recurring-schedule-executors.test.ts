@@ -206,11 +206,16 @@ describe('commitPendingOperation: update_recurring_schedule', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-recurring-1' } }) // claim
     enqueue({ data: existingRow }) // existing schedule
+    // The helper re-reads the header row scoped by company_id before touching
+    // the items: the items table has no company_id of its own, so this read is
+    // what keeps the schedule_id-scoped delete/insert inside the tenant on the
+    // service-role (RLS-off) executor path.
+    enqueue({ data: existingRow }) // header ownership read
     enqueue({
       data: [
         { sort_order: 0, description: 'Old', quantity: 1, unit: 'st', unit_price: 100, vat_rate: null },
       ],
-    }) // snapshot
+    }) // items snapshot
     enqueue({ data: null }) // delete old items
     enqueue({ data: null }) // insert new items
     enqueue({ data: null }) // finalize
@@ -236,9 +241,10 @@ describe('commitPendingOperation: update_recurring_schedule', () => {
       items_replaced: true,
       item_count: 2,
     })
-    expect(supabase.from).toHaveBeenNthCalledWith(3, 'recurring_invoice_schedule_items')
+    expect(supabase.from).toHaveBeenNthCalledWith(3, 'recurring_invoice_schedules')
     expect(supabase.from).toHaveBeenNthCalledWith(4, 'recurring_invoice_schedule_items')
     expect(supabase.from).toHaveBeenNthCalledWith(5, 'recurring_invoice_schedule_items')
+    expect(supabase.from).toHaveBeenNthCalledWith(6, 'recurring_invoice_schedule_items')
   })
 
   it('keeps existing items when items are omitted', async () => {
@@ -466,6 +472,9 @@ describe('commitPendingOperation: update_recurring_schedule', () => {
     expect(result.http_status).toBe(500)
     // Same registry sentence the PATCH route returns.
     expect(result.error).toMatch(/halvsparat/)
+    // And the same machine-readable code, so an MCP caller can detect the
+    // partial state without substring-matching the Swedish prose.
+    expect(result.code).toBe('INVOICE_RECURRING_UPDATE_PARTIAL')
   })
 
   it('rejects tampered change fields at the commit boundary', async () => {

@@ -68,6 +68,7 @@ type Fail = { message: string; code?: string } | null
  */
 function createHarness(opts: {
   headerSnapshot?: Record<string, unknown> | null
+  headerSnapshotError?: Fail
   headerUpdateError?: Fail
   /** Value of updated_at returned by the header update representation. */
   headerStamp?: string | null
@@ -83,6 +84,7 @@ function createHarness(opts: {
   const updates: Record<string, Record<string, unknown>[]> = {}
   const inserts: Record<string, Record<string, unknown>[][]> = {}
   const eqFilters: Record<string, unknown[][]> = {}
+  const deletes: string[] = []
   let headerUpdateCall = 0
   let itemsInsertCall = 0
 
@@ -94,8 +96,12 @@ function createHarness(opts: {
             eq: () => ({
               maybeSingle: () =>
                 Promise.resolve({
-                  data: opts.headerSnapshot === undefined ? headerRow : opts.headerSnapshot,
-                  error: null,
+                  data: opts.headerSnapshotError
+                    ? null
+                    : opts.headerSnapshot === undefined
+                      ? headerRow
+                      : opts.headerSnapshot,
+                  error: opts.headerSnapshotError ?? null,
                 }),
             }),
           }),
@@ -139,15 +145,24 @@ function createHarness(opts: {
       }
     }
     return {
+      // The snapshot is read through fetchAllRows, so the chain ends in
+      // .order().range() rather than resolving straight after .eq().
       select: () => ({
-        eq: () =>
-          Promise.resolve({
-            data: opts.itemsSnapshot === undefined ? [storedItem()] : opts.itemsSnapshot,
-            error: opts.itemsSnapshotError ?? null,
+        eq: () => ({
+          order: () => ({
+            range: () =>
+              Promise.resolve({
+                data: opts.itemsSnapshot === undefined ? [storedItem()] : opts.itemsSnapshot,
+                error: opts.itemsSnapshotError ?? null,
+              }),
           }),
+        }),
       }),
       delete: () => ({
-        eq: () => Promise.resolve({ error: opts.itemsDeleteError ?? null }),
+        eq: () => {
+          deletes.push(table)
+          return Promise.resolve({ error: opts.itemsDeleteError ?? null })
+        },
       }),
       insert: (rows: Record<string, unknown>[]) => {
         ;(inserts[table] ??= []).push(rows)
@@ -165,6 +180,7 @@ function createHarness(opts: {
     updates,
     inserts,
     eqFilters,
+    deletes,
     log,
   }
 }
@@ -202,7 +218,10 @@ describe('applyRecurringScheduleUpdate', () => {
     })
 
     expect(result).toEqual({ ok: true })
-    expect(h.from.mock.calls.map((c) => c[0])).not.toContain(SCHEDULES)
+    // The schedules table is READ (the ownership proof for the schedule_id-only
+    // item writes) but never written on an item-only edit.
+    expect(h.from.mock.calls.map((c) => c[0])).toContain(SCHEDULES)
+    expect(h.updates[SCHEDULES]).toBeUndefined()
     expect(h.inserts[ITEMS]).toHaveLength(1)
     expect(h.inserts[ITEMS][0]).toEqual([
       {
@@ -337,7 +356,10 @@ describe('applyRecurringScheduleUpdate', () => {
     expect(h.log.error.mock.calls.some((c) => /half-saved/.test(String(c[0])))).toBe(true)
   })
 
-  it('reports headerRestored: false when the header snapshot could not be read', async () => {
+  it('writes nothing at all when the header row is missing', async () => {
+    // No snapshot means no rollback source and no proof the schedule belongs to
+    // this company, so the header must NOT be updated: a write here would be
+    // committed in the full knowledge that it could never be undone.
     const h = createHarness({ headerSnapshot: null, itemsInsertErrors: [insertBoom, null] })
 
     const result = await applyRecurringScheduleUpdate(h.supabase, {
@@ -348,10 +370,62 @@ describe('applyRecurringScheduleUpdate', () => {
       log: h.log,
     })
 
-    expect(result).toMatchObject({ ok: false, headerRestored: false })
-    expect(h.log.error.mock.calls.some((c) => /cannot be rolled back/.test(String(c[0])))).toBe(true)
-    // Never a partial guess: only the failed replace insert plus the items restore.
-    expect(h.updates[SCHEDULES]).toHaveLength(1)
+    expect(result).toMatchObject({ ok: false, stage: 'header' })
+    expect(h.log.error.mock.calls.some((c) => /nothing was written/.test(String(c[0])))).toBe(true)
+    expect(h.updates[SCHEDULES]).toBeUndefined()
+    expect(h.inserts[ITEMS]).toBeUndefined()
+    expect(h.deletes).toEqual([])
+  })
+
+  it('writes nothing at all when the header snapshot read errors', async () => {
+    const snapshotBoom = { message: 'snapshot boom', code: '57014' }
+    const h = createHarness({ headerSnapshotError: snapshotBoom })
+
+    const result = await applyRecurringScheduleUpdate(h.supabase, {
+      scheduleId: SCHEDULE_ID,
+      companyId: COMPANY_ID,
+      fields: { day_of_month: 5 },
+      items: [makeItem()],
+      log: h.log,
+    })
+
+    expect(result).toEqual({ ok: false, stage: 'header', error: snapshotBoom })
+    expect(h.updates[SCHEDULES]).toBeUndefined()
+    expect(h.from.mock.calls.map((c) => c[0])).not.toContain(ITEMS)
+  })
+
+  it('leaves the items untouched and rolls the header back when the item snapshot errors', async () => {
+    // The single branch that can end with a schedule holding zero items: an
+    // unreadable snapshot must abort BEFORE the delete, not delete first and
+    // report itemsRestored: false afterwards.
+    const snapshotBoom = { message: 'items snapshot boom', code: '57014' }
+    const h = createHarness({ itemsSnapshotError: snapshotBoom })
+
+    const result = await applyRecurringScheduleUpdate(h.supabase, {
+      scheduleId: SCHEDULE_ID,
+      companyId: COMPANY_ID,
+      fields: { day_of_month: 5 },
+      items: [makeItem()],
+      log: h.log,
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      stage: 'items_delete',
+      itemsRestored: true,
+      headerRestored: true,
+    })
+    expect((result as { error: { message: string } }).error.message).toContain(
+      'items snapshot boom',
+    )
+    // Nothing was deleted and nothing was inserted: the schedule keeps its
+    // lines, so the cron's "schedule has no items" invariant still holds.
+    expect(h.deletes).toEqual([])
+    expect(h.inserts[ITEMS]).toBeUndefined()
+    // The header edit is undone, so the failure is clean rather than partial.
+    expect(h.updates[SCHEDULES]).toHaveLength(2)
+    expect(h.updates[SCHEDULES][1]).toEqual({ day_of_month: 25 })
+    expect(h.log.error.mock.calls.some((c) => /snapshot unreadable/.test(String(c[0])))).toBe(true)
   })
 
   it('stops at the delete stage without inserting anything', async () => {

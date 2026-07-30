@@ -197,27 +197,32 @@ export const PATCH = withRouteContext(
         log.error('failed to update recurring schedule', result.error)
         return errorResponse(result.error, log, { requestId })
       }
-      log.error('failed to replace schedule items', result.error, {
-        scheduleId: id,
-        stage: result.stage,
-        itemsRestored: result.itemsRestored,
-        headerRestored: result.headerRestored,
-      })
       if (!result.itemsRestored || !result.headerRestored) {
         // A compensation did not apply, so the schedule may be half-saved: say
-        // so instead of reporting a clean failure.
+        // so instead of reporting a clean failure. Logged here with the repair
+        // context (errorResponseFromCode only records the code itself), which
+        // the clean-rollback path below does not need.
+        log.error('recurring schedule update left a partial state', result.error, {
+          scheduleId: id,
+          stage: result.stage,
+          itemsRestored: result.itemsRestored,
+          headerRestored: result.headerRestored,
+        })
         return errorResponseFromCode('INVOICE_RECURRING_UPDATE_PARTIAL', log, {
           requestId,
+          // camelCase throughout, matching the pgCode key errorResponse itself
+          // merges into details for Postgres failures.
           details: {
             pgCode: result.error.code,
             stage: result.stage,
-            items_restored: result.itemsRestored,
-            fields_restored: result.headerRestored,
+            itemsRestored: result.itemsRestored,
+            headerRestored: result.headerRestored,
           },
         })
       }
       // Clean rollback: keep the PG-mapped error so a CHECK violation still
-      // surfaces its specific Swedish message.
+      // surfaces its specific Swedish message. errorResponse logs it, so no
+      // second log line here.
       return errorResponse(result.error, log, { requestId })
     }
 
