@@ -54,6 +54,20 @@ const DOMESTIC_SALES_RATE_BY_SUFFIX: Record<string, number> = {
 }
 
 /**
+ * Labels that contradict "momspliktig försäljning inom Sverige". Any hit vetoes
+ * the fallback even when the suffix and a "25/12/6 % moms" label agree: a konto
+ * named "momsfri", "omvänd betalningsskyldighet", VMB or export belongs in
+ * ruta 07/08/35/36/41, and inferring a sats for it would file the amount in
+ * ruta 05, i.e. in the wrong box. Omission is the safe failure here, so a
+ * contradictory label falls back to today's behaviour instead of guessing.
+ *
+ * Only consulted for a MISSING rate. An explicitly configured value stays
+ * authoritative and never reaches this check.
+ */
+const CONTRADICTING_ACCOUNT_NAME =
+  /momsfri|momsfritt|utan moms|omvänd|\bvmb\b|vinstmarginal|export|utanför|eu-land|unionsintern|0\s*%/i
+
+/**
  * Resolve a missing rate for a company-specific domestic sales sub-account.
  *
  * Neither signal is sufficient by itself:
@@ -63,6 +77,12 @@ const DOMESTIC_SALES_RATE_BY_SUFFIX: Record<string, number> = {
  * Requiring the conventional 30x1/30x2/30x3 suffix and one matching explicit
  * "25/12/6 % moms" label keeps the fallback deterministic. A configured value,
  * including explicit 0 %, is always authoritative and never reaches here.
+ *
+ * Three ways this deliberately answers null:
+ *   - the label states no sats, or states it without the word "moms"
+ *     ("Försäljning konsult 25 %" is a margin or a share, not a moms-sats);
+ *   - the label states two different sats, so neither can be trusted;
+ *   - the label also carries a contradicting term (see above).
  */
 function inferDomesticSalesRate(
   accountNumber: string,
@@ -71,9 +91,12 @@ function inferDomesticSalesRate(
   const accountMatch = /^30\d([123])$/.exec(accountNumber)
   if (!accountMatch) return null
 
+  const name = accountName ?? ''
+  if (CONTRADICTING_ACCOUNT_NAME.test(name)) return null
+
   const expectedRate = DOMESTIC_SALES_RATE_BY_SUFFIX[accountMatch[1]]
   const namedRates = new Set(
-    [...(accountName ?? '').matchAll(/\b(25|12|6)\s*%\s*moms\b/gi)].map(
+    [...name.matchAll(/\b(25|12|6)\s*%\s*moms\b/gi)].map(
       (match) => Number(match[1]) / 100,
     )
   )
