@@ -252,6 +252,32 @@ describe('ingestTransactions', () => {
     expect(payload.proprietary_bank_transaction_code).toBe('Överföring')
   })
 
+  it('treats a bank_connection_id row as a feed even without import_source', async () => {
+    // The oldest PSD2 rows predate the import_source column; a live bank
+    // connection is the unambiguous feed marker (isImportedTransaction).
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const raw = makeRaw({
+      description: 'Vercel Jul Överföring via internet',
+      import_source: undefined,
+      bank_connection_id: 'bc-1',
+    })
+    const inserted = makeTransaction({ id: 'tx-1', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    const feedPayload = (inserts['transactions'] ?? [])[0] as Record<string, unknown>
+    expect(feedPayload.transaction_method).toBe('transfer')
+    expect(feedPayload.description).toBe('Vercel Jul')
+    expect(feedPayload.original_description).toBe('Vercel Jul Överföring via internet')
+  })
+
   it('never classifies or strips user-created sources (manual/mcp)', async () => {
     const { supabase, enqueue, inserts } = createQueueMockSupabase()
     // A user-authored title that WOULD classify+strip if it came from a feed.

@@ -250,6 +250,10 @@ export default function TransactionInboxCard({
         onKeyDown={
           canExpand
             ? (e) => {
+                // Only when the row itself is focused: Enter/Space on a nested
+                // control (Bokför, ⋯, checkbox) bubbles here, and preventDefault
+                // would cancel the button's keyboard activation.
+                if (e.target !== e.currentTarget) return
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
                   onToggleExpand(transaction.id)

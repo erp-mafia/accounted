@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import type { TransactionMethod } from '@/types'
 import { seedCompany, insertTransaction } from '@/tests/pg/fixtures'
 import { getPool } from '@/tests/pg/setup'
 
@@ -72,7 +73,7 @@ async function insertFeedRow(params: {
 
 async function getRow(
   txId: string,
-): Promise<{ description: string; transaction_method: string | null }> {
+): Promise<{ description: string; transaction_method: TransactionMethod | null }> {
   const { rows } = await getPool().query(
     `SELECT description, transaction_method FROM public.transactions WHERE id = $1`,
     [txId],
@@ -107,7 +108,7 @@ describe('transactions.transaction_method: backfill classification + title strip
     const { userId, companyId } = await seedCompany()
     const cases: Array<{
       description: string
-      method: string
+      method: TransactionMethod
       stripped: string
     }> = [
       {

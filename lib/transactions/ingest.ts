@@ -9,7 +9,7 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, shiftIsoDate } from '@/lib/transactions/external-id'
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
-import { isImportedTransaction, USER_CREATED_IMPORT_SOURCES } from '@/lib/transactions/origin'
+import { isImportedTransaction } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 
@@ -542,12 +542,16 @@ export async function ingestTransactions(
     // bridge is unaffected.
     const description = normalizeImportedDescription(raw.description)
     // Classification is a FEED-row concept: a user-created row (manual UI,
-    // MCP, or a caller that set no source) carries a user-authored title, not
-    // bank channel vocabulary; classifying or stripping it would corrupt
-    // meaning ("Egen insättning" is a title, not a deposit label). Mirrors
-    // the scope of the 20260730100100 backfill.
-    const isUserCreatedSource =
-      !raw.import_source || USER_CREATED_IMPORT_SOURCES.has(raw.import_source)
+    // MCP, or a source-less caller without a bank connection) carries a
+    // user-authored title, not bank channel vocabulary; classifying or
+    // stripping it would corrupt meaning ("Egen insättning" is a title, not a
+    // deposit label). Same predicate as isImportedTransaction(): a live
+    // bank_connection_id marks a feed row even when import_source is unset.
+    // Mirrors the scope of the 20260730100100 backfill.
+    const isUserCreatedSource = !isImportedTransaction({
+      bank_connection_id: raw.bank_connection_id ?? null,
+      import_source: raw.import_source ?? null,
+    })
     const { method: transactionMethod, displayTitle } = isUserCreatedSource
       ? { method: null, displayTitle: description }
       : classifyTransactionMethod({
