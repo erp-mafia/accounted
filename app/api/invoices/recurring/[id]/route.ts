@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponse } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { UpdateRecurringScheduleSchema } from '@/lib/api/schemas'
+import { applyRecurringScheduleUpdate } from '@/lib/invoices/apply-recurring-schedule-update'
 import {
   computeInitialRunDate,
   computeNextRunDate,
@@ -162,22 +163,9 @@ export const PATCH = withRouteContext(
       }
     }
 
-    if (Object.keys(updateRow).length > 0) {
-      const { error: updateError } = await supabase
-        .from('recurring_invoice_schedules')
-        .update(updateRow)
-        .eq('id', id)
-        .eq('company_id', companyId)
-
-      if (updateError) {
-        log.error('failed to update recurring schedule', updateError)
-        return errorResponse(updateError, log, { requestId })
-      }
-    }
-
+    // Existence check BEFORE any write: with items in the payload the request
+    // writes two tables, so a 404 must not leave a header update behind.
     if (items) {
-      // Replace items wholesale. Cheaper than diffing for a small list and
-      // matches how the UI form sends the full list back on every save.
       const { data: existing } = await supabase
         .from('recurring_invoice_schedules')
         .select('id')
@@ -191,61 +179,46 @@ export const PATCH = withRouteContext(
           { status: 404 },
         )
       }
+    }
 
-      // Snapshot existing rows so we can restore them if the insert fails.
-      // Without this, a failed replace would leave the schedule with zero
-      // items and every subsequent cron run would throw "schedule has no
-      // items", silently skipping billing dates.
-      const { data: previousItems } = await supabase
-        .from('recurring_invoice_schedule_items')
-        .select('sort_order, description, quantity, unit, unit_price, vat_rate, dimensions')
-        .eq('schedule_id', id)
+    // Items are replaced wholesale. Cheaper than diffing for a small list and
+    // matches how the UI form sends the full list back on every save. Both
+    // writes are compensated on failure inside the shared helper.
+    const result = await applyRecurringScheduleUpdate(supabase, {
+      scheduleId: id,
+      companyId,
+      fields: updateRow,
+      items,
+      log,
+    })
 
-      await supabase
-        .from('recurring_invoice_schedule_items')
-        .delete()
-        .eq('schedule_id', id)
-
-      const itemRows = items.map((item, idx) => ({
-        schedule_id: id,
-        sort_order: idx,
-        description: item.description,
-        quantity: item.quantity,
-        unit: item.unit,
-        unit_price: item.unit_price,
-        vat_rate: item.vat_rate ?? null,
-        dimensions: item.dimensions ?? {},
-      }))
-      const { error: itemsError } = await supabase
-        .from('recurring_invoice_schedule_items')
-        .insert(itemRows)
-      if (itemsError) {
-        log.error('failed to replace schedule items', itemsError)
-        // Restore the snapshot so the schedule stays valid for the cron.
-        if (previousItems && previousItems.length > 0) {
-          const restoreRows = previousItems.map((row) => ({
-            schedule_id: id,
-            sort_order: row.sort_order,
-            description: row.description,
-            quantity: row.quantity,
-            unit: row.unit,
-            unit_price: row.unit_price,
-            vat_rate: row.vat_rate,
-            dimensions: row.dimensions ?? {},
-          }))
-          const { error: restoreError } = await supabase
-            .from('recurring_invoice_schedule_items')
-            .insert(restoreRows)
-          if (restoreError) {
-            log.error(
-              'failed to restore schedule items after failed replace: schedule may be left empty',
-              restoreError,
-              { scheduleId: id },
-            )
-          }
-        }
-        return errorResponse(itemsError, log, { requestId })
+    if (!result.ok) {
+      if (result.stage === 'header') {
+        log.error('failed to update recurring schedule', result.error)
+        return errorResponse(result.error, log, { requestId })
       }
+      log.error('failed to replace schedule items', result.error, {
+        scheduleId: id,
+        stage: result.stage,
+        itemsRestored: result.itemsRestored,
+        headerRestored: result.headerRestored,
+      })
+      if (!result.itemsRestored || !result.headerRestored) {
+        // A compensation did not apply, so the schedule may be half-saved: say
+        // so instead of reporting a clean failure.
+        return errorResponseFromCode('INVOICE_RECURRING_UPDATE_PARTIAL', log, {
+          requestId,
+          details: {
+            pgCode: result.error.code,
+            stage: result.stage,
+            items_restored: result.itemsRestored,
+            fields_restored: result.headerRestored,
+          },
+        })
+      }
+      // Clean rollback: keep the PG-mapped error so a CHECK violation still
+      // surfaces its specific Swedish message.
+      return errorResponse(result.error, log, { requestId })
     }
 
     const { data: complete } = await supabase

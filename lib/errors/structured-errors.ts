@@ -1125,6 +1125,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturanumret tilldelades men fakturan kunde inte läsas tillbaka. Ladda om sidan och kontrollera fakturan.',
     message_en: 'The invoice number was assigned but the invoice could not be re-read. Reload the page and verify the invoice.',
   },
+  INVOICE_RECURRING_UPDATE_PARTIAL: {
+    httpStatus: 500,
+    message_sv:
+      'Ändringen av det återkommande schemat kunde inte slutföras och schemat kan ha hamnat i ett halvsparat läge. Öppna schemat och kontrollera både fält och rader innan du sparar igen.',
+    message_en:
+      'The recurring schedule update failed and the compensating rollback did not fully apply: the schedule may be left in a partial state (header fields and items out of sync). Inspect the schedule fields and items before retrying.',
+  },
   // Quotes / Offerter
   QUOTE_NOT_FOUND: {
     httpStatus: 404,

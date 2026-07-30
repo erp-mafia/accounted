@@ -195,8 +195,13 @@ function NewRecurringScheduleForm({
         },
       )
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || t('create_failed_fallback'))
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string | { message?: string }
+        }
+        // errorResponse() returns the nested envelope { error: { code, message } },
+        // so reading body.error directly would stringify to "[object Object]".
+        const message = typeof body.error === 'string' ? body.error : body.error?.message
+        throw new Error(message || t('create_failed_fallback'))
       }
       toast({ title: schedule ? t('updated_title') : t('created_title') })
       onSaved()
