@@ -5,6 +5,28 @@
  * greedy assignment, dry run, manual link/unlink, status calculation.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// The #1290 diagnostic is a log line, so the logger is the assertion surface.
+// Hoisted spy (the module is imported at the top of bank-reconciliation.ts).
+//
+// The REAL logger module is kept and only `warn` is swapped. A file-global stub
+// exposing just the handful of methods this suite happens to use would be a trap
+// for whoever extends it: vi.mock replaces @/lib/logger for the whole module
+// graph of this file, so any module reached from here that calls a level the
+// stub omitted, or chains `log.child(...).info(...)`, would throw inside an
+// unrelated test. Here child() and every other export stay real.
+const { logWarn } = vi.hoisted(() => ({ logWarn: vi.fn() }))
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/logger')>()
+  return {
+    ...actual,
+    createLogger: (module: string, base?: Parameters<typeof actual.createLogger>[1]) => ({
+      ...actual.createLogger(module, base),
+      warn: logWarn,
+    }),
+  }
+})
+
 import {
   tryReconcileTransaction,
   runReconciliation,
@@ -1706,5 +1728,218 @@ describe('getReconciliationStatus', () => {
     expect(status.is_reconciled).toBe(true)
     expect(status.unconvertible_gl_line_count).toBe(0)
     expect(status.not_reconcilable_reason).toBeNull()
+  })
+})
+
+// ============================================================
+// Unscoped-run diagnostic (#1290)
+// ============================================================
+//
+// Leaving cashAccountId undefined makes scopeTransactionsToAccount fall back to
+// a currency-only filter: the transaction side pools EVERY same-currency cash
+// account while the GL side stays on one accountNumber. On the read path that
+// is the phantom difference the issue reported; on the write path it can
+// auto-link a savings-account transaction to a 1930 voucher. The engine cannot
+// refuse (single-account companies with no cash_accounts row legitimately take
+// the same fallback), so it warns exactly when the fetched rows really do span
+// more than one account.
+
+describe('unscoped cash-account diagnostic', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  // A real cash_accounts.id has to survive the UUID assertion inside
+  // scopeTransactionsToAccount, so these are shaped like real ones.
+  const ACCOUNT_A = '11111111-1111-4111-8111-111111111111'
+  const ACCOUNT_B = '22222222-2222-4222-8222-222222222222'
+
+  /**
+   * The queue-driven proxy the suites above use, plus a record of every builder
+   * call so the transactions select list can be pinned.
+   */
+  function createRecordingMockSupabase() {
+    const resultQueue: { data: unknown; error: unknown }[] = []
+    const calls: { method: string; args: unknown[] }[] = []
+
+    const enqueue = (...results: { data?: unknown; error?: unknown }[]) => {
+      for (const r of results) resultQueue.push({ data: r.data ?? null, error: r.error ?? null })
+    }
+
+    const buildChain = (): unknown => {
+      const handler: ProxyHandler<object> = {
+        get(_target, prop) {
+          if (prop === 'then') {
+            const next = resultQueue.shift() ?? { data: null, error: null }
+            return (resolve: (v: unknown) => void) => resolve(next)
+          }
+          return (...args: unknown[]) => {
+            calls.push({ method: String(prop), args })
+            return buildChain()
+          }
+        },
+      }
+      return new Proxy({}, handler)
+    }
+
+    const supabase = {
+      from: vi.fn().mockImplementation((table: string) => {
+        calls.push({ method: 'from', args: [table] })
+        return buildChain()
+      }),
+      rpc: vi.fn().mockImplementation((fn: string) => {
+        calls.push({ method: 'rpc', args: [fn] })
+        return buildChain()
+      }),
+    }
+
+    return { supabase, enqueue, calls }
+  }
+
+  /** The four reads getReconciliationStatus makes, in order. */
+  function enqueueStatusReads(
+    enqueue: (...results: { data?: unknown; error?: unknown }[]) => void,
+    transactions: unknown[],
+  ) {
+    enqueue({ data: transactions })   // 1) transactions
+    enqueue({ data: [] })             // 2) journal_entries page
+    enqueue({ data: [] })             // 3) journal_entry_lines for those entries
+    enqueue({ data: [] })             // 4) RPC get_unlinked_1930_lines
+  }
+
+  function statusTx(cashAccountId: string | null, amount = 100) {
+    return {
+      date: '2026-03-05',
+      amount,
+      journal_entry_id: 'je-1',
+      reconciliation_method: 'manual',
+      is_ignored: false,
+      cash_account_id: cashAccountId,
+    }
+  }
+
+  it('selects cash_account_id on the transactions read (the diagnostic needs it)', async () => {
+    // Pins the column list: drop cash_account_id from the select and every row
+    // arrives with it undefined, so the warning below can never fire again.
+    const { supabase, enqueue, calls } = createRecordingMockSupabase()
+    enqueueStatusReads(enqueue, [])
+
+    await getReconciliationStatus(supabase as never, 'company-1')
+
+    const firstFrom = calls.find((c) => c.method === 'from')
+    expect(firstFrom?.args[0]).toBe('transactions')
+    const firstSelect = calls.find((c) => c.method === 'select')
+    expect(firstSelect?.args[0]).toBe(
+      'date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id',
+    )
+  })
+
+  it('warns when getReconciliationStatus runs unscoped over more than one cash account', async () => {
+    const { supabase, enqueue } = createRecordingMockSupabase()
+    enqueueStatusReads(enqueue, [statusTx(ACCOUNT_A), statusTx(ACCOUNT_B, 250)])
+
+    await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(logWarn).toHaveBeenCalledWith(
+      'getReconciliationStatus ran unscoped across several cash accounts',
+      expect.objectContaining({
+        companyId: 'company-1',
+        operation: 'getReconciliationStatus',
+        entityType: 'cash_account',
+        details: expect.objectContaining({
+          accountNumber: '1930',
+          currency: 'SEK',
+          distinctCashAccounts: 2,
+        }),
+      }),
+    )
+  })
+
+  it('stays silent when getReconciliationStatus is scoped to a cash account', async () => {
+    // The fix the issue asked for: a scoped call is correct by construction, so
+    // it must not warn even when the mock hands back foreign rows.
+    const { supabase, enqueue } = createRecordingMockSupabase()
+    enqueueStatusReads(enqueue, [statusTx(ACCOUNT_A), statusTx(ACCOUNT_B, 250)])
+
+    await getReconciliationStatus(
+      supabase as never,
+      'company-1',
+      undefined,
+      undefined,
+      '1930',
+      'SEK',
+      ACCOUNT_A,
+      true,
+    )
+
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('stays silent when an unscoped run sees exactly one cash account', async () => {
+    const { supabase, enqueue } = createRecordingMockSupabase()
+    enqueueStatusReads(enqueue, [statusTx(ACCOUNT_A), statusTx(ACCOUNT_A, 250)])
+
+    await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('stays silent when an unscoped run sees only unassigned rows', async () => {
+    // The legacy single-account company that has no cash_accounts row at all:
+    // the currency-only fallback is the intended behaviour there, not a bug.
+    const { supabase, enqueue } = createRecordingMockSupabase()
+    enqueueStatusReads(enqueue, [statusTx(null), statusTx(null, 250)])
+
+    await getReconciliationStatus(supabase as never, 'company-1')
+
+    expect(logWarn).not.toHaveBeenCalled()
+  })
+
+  it('warns when runReconciliation runs unscoped over more than one cash account', async () => {
+    // The WRITE path: this sweep applies matches, so pooling here can persist a
+    // wrong journal_entry_id, not merely display a wrong figure.
+    const { supabase, enqueue } = createRecordingMockSupabase()
+    enqueue({ data: [] })  // RPC: unlinked GL lines
+    enqueue({
+      data: [
+        makeTransaction({ id: 'tx-1', cash_account_id: ACCOUNT_A }),
+        makeTransaction({ id: 'tx-2', cash_account_id: ACCOUNT_B }),
+      ],
+    })
+
+    await runReconciliation(supabase as never, 'company-1', 'user-1')
+
+    expect(logWarn).toHaveBeenCalledWith(
+      'runReconciliation ran unscoped across several cash accounts',
+      expect.objectContaining({
+        companyId: 'company-1',
+        operation: 'runReconciliation',
+        entityType: 'cash_account',
+        details: expect.objectContaining({
+          accountNumber: '1930',
+          currency: 'SEK',
+          distinctCashAccounts: 2,
+        }),
+      }),
+    )
+  })
+
+  it('stays silent when runReconciliation is scoped to a cash account', async () => {
+    const { supabase, enqueue } = createRecordingMockSupabase()
+    enqueue({ data: [] })
+    enqueue({
+      data: [
+        makeTransaction({ id: 'tx-1', cash_account_id: ACCOUNT_A }),
+        makeTransaction({ id: 'tx-2', cash_account_id: ACCOUNT_B }),
+      ],
+    })
+
+    await runReconciliation(supabase as never, 'company-1', 'user-1', {
+      cashAccountId: ACCOUNT_A,
+      includeUnassigned: true,
+    })
+
+    expect(logWarn).not.toHaveBeenCalled()
   })
 })

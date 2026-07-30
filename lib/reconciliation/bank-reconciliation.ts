@@ -9,6 +9,9 @@ import {
   ledgerLineAmountIn,
   type LedgerLineAmount,
 } from '@/lib/bookkeeping/ledger-line-amount'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('reconciliation.bank')
 
 // `ledgerLineAmountIn` moved to lib/bookkeeping/ledger-line-amount.ts verbatim
 // so the invoice / supplier-invoice voucher matchers share the one rule instead
@@ -220,6 +223,21 @@ export interface ReconciliationOptions {
  * omitted (single-account companies with no row, the '1930' fallback) the pure
  * currency filter is used and includeUnassigned is moot.
  *
+ * Account-scoped callers must resolve the row FIRST (see resolveCashAccountScope
+ * in lib/reconciliation/cash-account-scope.ts). Omitting cashAccountId is the
+ * legacy fallback for a company with no cash_accounts row at all; doing it on a
+ * company that HAS several is issue #1290: the transaction side pools every
+ * same-currency account while the GL side stays on one account, producing a
+ * difference with nothing unmatched to point at.
+ *
+ * Not every remaining unscoped caller is intentional. The post-sync sweeps in
+ * app/api/extensions/enable-banking/sync/cron/route.ts and
+ * extensions/general/enable-banking/index.ts call runReconciliation without a
+ * scope, which is a known open defect rather than a supported mode: they need
+ * one run per cash account, not one pooled run. Tracked as issue #1298;
+ * warnIfUnscopedAcrossCashAccounts below makes both visible in the logs until
+ * that is fixed.
+ *
  * The earlier nested `or(cash_account_id.eq.X,and(cash_account_id.is.null,currency.eq.cur))`
  * form is intentionally avoided: it silently returned ZERO rows mid-backfill.
  * A cash account has exactly one currency, so the flat two-term `or` is reliable.
@@ -248,6 +266,50 @@ export function scopeTransactionsToAccount<Q extends {
     return query.eq('currency', currency).eq('cash_account_id', cashAccountId)
   }
   return query.eq('currency', currency)
+}
+
+/**
+ * Emit a warning when a run left cashAccountId undefined AND the rows it
+ * fetched really do span more than one cash account.
+ *
+ * That combination is the #1290 shape: the transaction side pools every
+ * same-currency account while the GL side stays on a single accountNumber. On a
+ * read (getReconciliationStatus) it manufactures a difference with nothing
+ * unmatched behind it; on a WRITE (runReconciliation, which applies matches
+ * unless dryRun) it can auto-link a savings-account transaction to an unlinked
+ * 1930 voucher, i.e. persist a wrong journal_entry_id.
+ *
+ * It warns rather than throwing because single-account companies with no
+ * cash_accounts row still legitimately take the currency-only path, and they
+ * never trip this condition (0 or 1 distinct id). The fix for anything this
+ * logs is always at the CALL SITE: resolve the row with resolveCashAccountScope
+ * (lib/reconciliation/cash-account-scope.ts) and pass the scope through.
+ */
+function warnIfUnscopedAcrossCashAccounts(
+  operation: string,
+  rows: { cash_account_id?: string | null }[],
+  ctx: {
+    cashAccountId: string | undefined
+    companyId: string
+    accountNumber: string
+    currency: string
+  },
+): void {
+  if (ctx.cashAccountId) return
+  const distinct = new Set(
+    rows.map((r) => r.cash_account_id).filter((id): id is string => Boolean(id)),
+  )
+  if (distinct.size <= 1) return
+  log.warn(`${operation} ran unscoped across several cash accounts`, {
+    companyId: ctx.companyId,
+    operation,
+    entityType: 'cash_account',
+    details: {
+      accountNumber: ctx.accountNumber,
+      currency: ctx.currency,
+      distinctCashAccounts: distinct.size,
+    },
+  })
 }
 
 // ============================================================
@@ -377,6 +439,17 @@ export async function runReconciliation(
     return query.order('id').range(from, to)
   })
 
+  // Same diagnostic as the read path, and it matters MORE here: an unscoped run
+  // matches transactions from every same-currency account against unlinked GL
+  // lines on accountNumber alone, and (dryRun aside) writes the resulting
+  // journal_entry_id onto the transaction.
+  warnIfUnscopedAcrossCashAccounts('runReconciliation', transactions, {
+    cashAccountId,
+    companyId,
+    accountNumber,
+    currency,
+  })
+
   if (transactions.length === 0 || glLines.length === 0) {
     return { matches: [], applied: 0, errors: 0, skippedBelowThreshold: 0 }
   }
@@ -500,16 +573,24 @@ export async function getReconciliationStatus(
     journal_entry_id: string | null
     reconciliation_method: string | null
     is_ignored: boolean | null
+    cash_account_id: string | null
   }
   const transactions = await fetchAllRows<StatusTxRow>(({ from, to }) => {
     let txQuery = supabase
       .from('transactions')
-      .select('date, amount, journal_entry_id, reconciliation_method, is_ignored')
+      .select('date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
       .eq('company_id', companyId)
     txQuery = scopeTransactionsToAccount(txQuery, cashAccountId, currency, includeUnassigned)
     if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
     if (dateTo) txQuery = txQuery.lte('date', dateTo)
     return txQuery.order('id').range(from, to)
+  })
+
+  warnIfUnscopedAcrossCashAccounts('getReconciliationStatus', transactions, {
+    cashAccountId,
+    companyId,
+    accountNumber: bankAccount,
+    currency,
   })
 
   // Get GL bank-account lines. We fetch posted AND reversed entries and count

@@ -16,6 +16,8 @@ import { buildBokslutReadinessReport } from '../readiness-aggregator'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 
+const CASH_ACCOUNT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+
 interface MockBuilder {
   select: ReturnType<typeof vi.fn>
   eq: ReturnType<typeof vi.fn>
@@ -26,6 +28,7 @@ interface MockBuilder {
 function makeSupabase(handlers: {
   period: { data: unknown; error: unknown }
   settings: { data: unknown; error: unknown }
+  cashAccount?: { data: unknown; error: unknown }
 }) {
   function makeBuilder(table: string): MockBuilder {
     const b: MockBuilder = {
@@ -40,6 +43,20 @@ function makeSupabase(handlers: {
       b.single.mockResolvedValue(handlers.period)
     } else if (table === 'company_settings') {
       b.maybeSingle.mockResolvedValue(handlers.settings)
+    } else if (table === 'cash_accounts') {
+      // The aggregator resolves 1930 to its cash_accounts row so the bank total
+      // is scoped to that account (#1290).
+      b.maybeSingle.mockResolvedValue(
+        handlers.cashAccount ?? {
+          data: {
+            id: CASH_ACCOUNT_ID,
+            currency: 'SEK',
+            is_primary: true,
+            ledger_account: '1930',
+          },
+          error: null,
+        },
+      )
     }
     return b
   }
@@ -110,6 +127,40 @@ describe('buildBokslutReadinessReport', () => {
     expect(report.reminders.map((r) => r.code)).not.toContain('periodiseringsfond_manual')
     expect(report.reminders.find((r) => r.code === 'ef_skatt_via_ne')).toBeUndefined()
     expect(report.reconciliation?.is_reconciled).toBe(true)
+    // Scoped to the resolved 1930 cash account: a 4-arg call left cashAccountId
+    // undefined, so the bank side pooled every SEK account while the GL side
+    // stayed on 1930 and the wizard showed a differens with nothing to match
+    // (#1290).
+    expect(vi.mocked(getReconciliationStatus)).toHaveBeenCalledWith(
+      supabase,
+      'co-1',
+      '2025-01-01',
+      '2025-12-31',
+      '1930',
+      'SEK',
+      CASH_ACCOUNT_ID,
+      true,
+    )
+  })
+
+  it('drops the reconciliation snapshot when the cash-account lookup fails', async () => {
+    // resolveCashAccountScope fails CLOSED. The aggregator's catch must turn
+    // that into "no snapshot" rather than into an unscoped 4-arg call, which is
+    // the pooling path that produced #1290's phantom differens.
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    // getReconciliationStatus is deliberately left un-stubbed: it must never be
+    // reached, and an unstubbed mock resolving to undefined would break the
+    // report if it were.
+    const supabase = makeSupabase({
+      period: { data: PERIOD, error: null },
+      settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      cashAccount: { data: null, error: { code: '57014', message: 'canceling statement' } },
+    })
+
+    const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
+
+    expect(report.reconciliation).toBeNull()
+    expect(vi.mocked(getReconciliationStatus)).not.toHaveBeenCalled()
   })
 
   it('returns the EF-only reminder for enskild firma', async () => {

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
+import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
 import type { YearEndValidation } from '@/types'
 
@@ -100,11 +101,24 @@ export async function buildBokslutReadinessReport(
   // to null so the UI degrades gracefully.
   let reconciliation: BokslutReadinessReport['reconciliation'] = null
   try {
+    // Scope to the company's bank account. A 4-arg call leaves cashAccountId
+    // undefined and the bank side then sums every SEK cash account while the GL
+    // side stays on 1930 alone: the wizard surfaced that as "Bankavstämningen
+    // visar en differens" with nothing to match (#1290).
+    //
+    // resolveCashAccountScope fails CLOSED on a lookup error, so the catch below
+    // turns a failed lookup into "no reconciliation snapshot" rather than into
+    // the unscoped pooling path that produced the phantom difference.
+    const scope = await resolveCashAccountScope(supabase, companyId)
     const status = await getReconciliationStatus(
       supabase,
       companyId,
       period.period_start,
       period.period_end,
+      scope.accountNumber,
+      scope.currency,
+      scope.cashAccountId,
+      scope.includeUnassigned,
     )
     reconciliation = {
       is_reconciled: status.is_reconciled,

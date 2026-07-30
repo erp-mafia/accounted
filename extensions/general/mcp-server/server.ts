@@ -135,6 +135,7 @@ import {
 } from '@/lib/salary/agi-submission-state'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
+import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { createInvoicePaymentJournalEntry, createInvoiceCashEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
@@ -1764,49 +1765,42 @@ async function countMissingUnderlagInPeriod(
  * Resolve the cash-account identity before comparing its bank feed with the
  * ledger. The cashAccountId is what prevents another same-currency account
  * from being included in the transaction total.
+ *
+ * The lookup itself lives in lib/reconciliation/cash-account-scope.ts so the
+ * bokslut readiness aggregator (core code, which cannot import from
+ * @/extensions/) resolves the scope the exact same way. It keeps the fail-closed
+ * contract this function introduced in #1295: a cash_accounts lookup error
+ * throws rather than degrading into the unscoped currency-only path.
+ *
+ * Pass accountNumber only when the CALLER named an account; leaving it
+ * undefined means "the company's bank account", which additionally falls back
+ * to the primary cash account for companies that have no 1930 row at all.
  */
 async function getScopedReconciliationStatus(
   supabase: SupabaseClient,
   companyId: string,
   dateFrom: string | undefined,
   dateTo: string | undefined,
-  accountNumber: string,
+  accountNumber?: string,
 ) {
-  const { data: cashAccount, error: cashAccountError } = await supabase
-    .from('cash_accounts')
-    .select('id, currency, is_primary')
-    .eq('company_id', companyId)
-    .eq('ledger_account', accountNumber)
-    .maybeSingle()
+  const scope = await resolveCashAccountScope(supabase, companyId, accountNumber)
 
-  if (cashAccountError) {
-    log.error('Cash account lookup failed during reconciliation', {
-      companyId,
-      accountNumber,
-      errorCode: cashAccountError.code,
-      errorMessage: cashAccountError.message,
-    })
-    throw new Error(`Kunde inte hämta kassakonto ${accountNumber}`)
-  }
-
-  if (!cashAccount && accountNumber !== '1930') {
+  if (!scope.found && accountNumber !== undefined && accountNumber !== '1930') {
     throw new Error(`Okänt kassakonto ${accountNumber} för det här företaget`)
   }
 
-  const currency = (cashAccount?.currency as string | undefined) ?? 'SEK'
-  const cashAccountId = cashAccount?.id as string | undefined
-  const includeUnassigned = cashAccount ? Boolean(cashAccount.is_primary) : true
-
-  return getReconciliationStatus(
+  const status = await getReconciliationStatus(
     supabase,
     companyId,
     dateFrom,
     dateTo,
-    accountNumber,
-    currency,
-    cashAccountId,
-    includeUnassigned,
+    scope.accountNumber,
+    scope.currency,
+    scope.cashAccountId,
+    scope.includeUnassigned,
   )
+
+  return { status, scope }
 }
 
 export async function computeVatCloseCheck(
@@ -1840,7 +1834,7 @@ export async function computeVatCloseCheck(
   )
 
   // 4) Blocker scans: run in parallel
-  const [uncategorizedRes, unapprovedRes, reconRes, missingUnderlag] = await Promise.all([
+  const [uncategorizedRes, unapprovedRes, recon, missingUnderlag] = await Promise.all([
     supabase
       .from('transactions')
       .select('id', { count: 'exact', head: true })
@@ -1853,7 +1847,10 @@ export async function computeVatCloseCheck(
       .eq('company_id', companyId)
       .eq('status', 'registered')
       .gte('invoice_date', start).lte('invoice_date', end),
-    getScopedReconciliationStatus(supabase, companyId, start, end, '1930'),
+    // No account_number argument: the close check wants "the company's bank
+    // account", so the scope resolver may land on the primary cash account for
+    // a company that has no 1930 row.
+    getScopedReconciliationStatus(supabase, companyId, start, end),
     // Verifikat in the period that genuinely lack an underlag (BFL 5 kap
     // 6-7 §), counted over the SHARED SQL predicate. Never re-derive this
     // locally: countMissingUnderlagInPeriod documents what the hand-rolled
@@ -1882,12 +1879,17 @@ export async function computeVatCloseCheck(
       hint: 'Attestera via gnubok_approve_supplier_invoice: ingående moms (ruta 48) påverkas.',
     })
   }
+  const reconRes = recon.status
   if (!reconRes.is_reconciled) {
     blockers.push({
       kind: 'bank_unreconciled',
       severity: Math.abs(reconRes.difference) > 100 ? 'high' : 'medium',
       count: reconRes.unmatched_transaction_count + reconRes.unmatched_gl_line_count,
-      message: `Bankavstämning visar differens ${reconRes.difference.toFixed(2)} kr (${reconRes.unmatched_transaction_count} omatchade banktransaktioner, ${reconRes.unmatched_gl_line_count} omatchade huvudbokslinjer på 1930)`,
+      // The account is named from the RESOLVED scope, not hard-coded: for a
+      // company with no 1930 row this check now reconciles its primary cash
+      // account, and a message pointing at 1930 would send the user to an
+      // account with no lines on it.
+      message: `Bankavstämning visar differens ${reconRes.difference.toFixed(2)} kr (${reconRes.unmatched_transaction_count} omatchade banktransaktioner, ${reconRes.unmatched_gl_line_count} omatchade huvudbokslinjer på ${recon.scope.accountNumber})`,
       hint: 'Granska via gnubok_get_reconciliation_status och matcha: moms beräknas från huvudboken så differenser döljer fel.',
     })
   }
@@ -8999,7 +9001,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_reconciliation_status',
     title: 'Bank Reconciliation Status',
-    description: 'Bank reconciliation for one cash account: matched/unmatched counts, bank vs ledger balance, difference. Defaults to 1930; pass account_number for 1940/1932 etc. Optional date range.',
+    description: 'Bank reconciliation for one cash account: matched/unmatched counts, bank vs ledger balance, difference. Defaults to 1930, or the primary cash account if there is no 1930; pass account_number for 1940/1932 etc. Optional date range.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9022,15 +9024,20 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const dateFrom = args.date_from as string | undefined
       const dateTo = args.date_to as string | undefined
-      const accountNumber = (args.account_number as string | undefined) || '1930'
+      // Passed through as-is, undefined included: an omitted account_number is
+      // "the company's bank account", which resolves to 1930 and, for a company
+      // with no 1930 row, to its primary cash account. Substituting a literal
+      // '1930' here would instead make an unknown account an error case.
+      const accountNumber = args.account_number as string | undefined
 
-      return await getScopedReconciliationStatus(
+      const { status } = await getScopedReconciliationStatus(
         supabase,
         companyId,
         dateFrom,
         dateTo,
         accountNumber,
       )
+      return status
     },
   },
 
