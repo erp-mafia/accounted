@@ -65,6 +65,8 @@ function makeSupabase(opts: {
   deliveryCount?: number
   attempts?: number
   lostOwnership?: Set<string>
+  /** Rows the sweep RPC reports as recovered this tick. */
+  recovered?: Array<{ id: string; status: string; attempts: number }>
 } = {}): { client: SupabaseClient; recorded: Recorded } {
   const recorded: Recorded = { rpcCalls: [], deliveryUpdates: [] }
   const count = opts.deliveryCount ?? 1
@@ -87,8 +89,8 @@ function makeSupabase(opts: {
           error: null,
         }
       }
-      // recover_stuck_webhook_deliveries: nothing stuck in these cases.
-      return { data: [], error: null }
+      // recover_stuck_webhook_deliveries: nothing stuck unless a case says so.
+      return { data: opts.recovered ?? [], error: null }
     }),
     from: vi.fn((table: string) => {
       if (table === 'webhook_deliveries') {
@@ -189,39 +191,47 @@ describe('dispatcher stuck-in_flight recovery window', () => {
     const args = recoverArgs(recorded)
     const windowMs = NOW.getTime() - Date.parse(args.p_stuck_before as string)
 
-    // 50 rows x 10 s = 500 s, clamped to the 120 s cycle budget, + one request
-    // timeout + 30 s slack.
+    // The cycle budget (what actually bounds a cycle, whatever its batch size)
+    // plus one in-flight request plus slack. Spelled out as a literal as well
+    // as a derivation so a change to any constant has to be deliberate.
     expect(windowMs).toBe(160_000)
+    expect(windowMs).toBe(
+      __TESTING__.CYCLE_BUDGET_MS +
+        __TESTING__.REQUEST_TIMEOUT_MS +
+        __TESTING__.STUCK_RECOVERY_SLACK_MS,
+    )
 
     // The old threshold. A concurrent tick must no longer be able to re-arm a
     // row that a live cycle claimed only a couple of attempts ago.
     expect(windowMs).toBeGreaterThan(__TESTING__.REQUEST_TIMEOUT_MS * 2)
     // And it must cover the whole bounded cycle, not just part of it.
-    expect(windowMs).toBeGreaterThanOrEqual(__TESTING__.CYCLE_BUDGET_MS)
+    expect(windowMs).toBeGreaterThan(__TESTING__.CYCLE_BUDGET_MS)
 
     expect(args.p_now).toBe(NOW.toISOString())
   })
 
-  it('floors the window at the cron batch, so the 5-row kick cannot re-arm the cron rows', async () => {
-    const { client, recorded } = makeSupabase()
+  it('uses the same window for the 5-row kick as for the 50-row cron', async () => {
+    const windows: number[] = []
+    for (const batchSize of [5, __TESTING__.DEFAULT_BATCH_SIZE, 500]) {
+      const { client, recorded } = makeSupabase()
+      await dispatchDueDeliveries({
+        supabase: client,
+        batchSize,
+        now: NOW,
+        pinnedFetchImpl: makeOkFetch([]) as never,
+      })
+      windows.push(NOW.getTime() - Date.parse(recoverArgs(recorded).p_stuck_before as string))
+    }
 
-    await dispatchDueDeliveries({
-      supabase: client,
-      batchSize: 5,
-      now: NOW,
-      pinnedFetchImpl: makeOkFetch([]) as never,
-    })
-
-    const windowMs = NOW.getTime() - Date.parse(recoverArgs(recorded).p_stuck_before as string)
-    // Identical to the cron's window: the sweep is tenant-global, so a small
-    // batch must not shrink it.
-    expect(windowMs).toBe(160_000)
-    expect(__TESTING__.stuckInFlightAfterMs(5)).toBe(
-      __TESTING__.stuckInFlightAfterMs(__TESTING__.DEFAULT_BATCH_SIZE),
-    )
+    // The sweep is tenant-global, so a small batch must not shrink the window
+    // and a large one must not stretch it: the cycle budget bounds every
+    // caller alike. A batch-derived window (the pre-#1257 shape, and the shape
+    // a "floor at DEFAULT_BATCH_SIZE" would silently allow again above 50)
+    // would produce 50_000 here for the kick and 160_000 for the cron.
+    expect(windows).toEqual([160_000, 160_000, 160_000])
   })
 
-  it('hands the attempts cap to the RPC so recovery can charge the stall', async () => {
+  it('hands the attempts cap and the retry schedule to the RPC', async () => {
     const { client, recorded } = makeSupabase()
 
     await dispatchDueDeliveries({
@@ -230,10 +240,39 @@ describe('dispatcher stuck-in_flight recovery window', () => {
       pinnedFetchImpl: makeOkFetch([]) as never,
     })
 
+    const args = recoverArgs(recorded)
     // The cap stays single-sourced in TS; the increment happens in SQL, which
     // is the only place `attempts = attempts + 1` can be expressed atomically.
-    expect(recoverArgs(recorded).p_max_attempts).toBe(__TESTING__.MAX_ATTEMPTS)
+    expect(args.p_max_attempts).toBe(__TESTING__.MAX_ATTEMPTS)
     expect(__TESTING__.MAX_ATTEMPTS).toBe(8)
+
+    // And so does the backoff: a swept row must wait exactly as long as a row
+    // whose receiver answered 500. Re-arming at p_now let a repeatedly
+    // stranded delivery spend all 8 attempts inside half an hour and land in
+    // the terminal, immutable 'dead' state without ever being contacted.
+    expect(args.p_backoff).toEqual([...__TESTING__.RETRY_BACKOFF_SECONDS])
+    expect(args.p_backoff).toEqual([60, 300, 1800, 7200, 43200, 86400, 172800])
+  })
+
+  it('surfaces the sweep outcome in the summary, dead rows separately', async () => {
+    const { client } = makeSupabase({
+      recovered: [
+        { id: DELIVERY_IDS[0], status: 'failed', attempts: 2 },
+        { id: DELIVERY_IDS[1], status: 'dead', attempts: 8 },
+        { id: DELIVERY_IDS[2], status: 'dead', attempts: 8 },
+      ],
+    })
+
+    const summary = await dispatchDueDeliveries({
+      supabase: client,
+      now: NOW,
+      pinnedFetchImpl: makeOkFetch([]) as never,
+    })
+
+    // A tick that takes deliveries terminal has to be visible in the cron's
+    // own summary line, not only in a helper-level log.warn.
+    expect(summary.recovered).toBe(3)
+    expect(summary.recoveredDead).toBe(2)
   })
 })
 
@@ -369,9 +408,15 @@ describe('dispatcher cycle budget', () => {
     // they would sit in in_flight for the full 160 s window before any sweep
     // could re-arm them, and the sweep would then charge them an attempt they
     // never made.
+    //
+    // 'pending', not 'failed': these rows carry attempts = 0, so they had
+    // never been attempted and their pre-claim status was necessarily
+    // 'pending'. webhook_deliveries is customer-visible behandlingshistorik;
+    // a delivery that was claimed and handed back without a single POST must
+    // not read as a failure there.
     const release = recorded.deliveryUpdates.at(-1)
     expect(release?.payload).toEqual({
-      status: 'failed',
+      status: 'pending',
       next_attempt_at: NOW.toISOString(),
     })
     expect(release?.filters).toEqual({
@@ -382,5 +427,44 @@ describe('dispatcher cycle budget', () => {
     // diagnostic must survive.
     expect(release?.payload).not.toHaveProperty('attempts')
     expect(release?.payload).not.toHaveProperty('error')
+  })
+
+  it('releases a previously attempted row back to failed, not pending', async () => {
+    const { client, recorded } = makeSupabase({ deliveryCount: 3, attempts: 2 })
+    const posted: string[] = []
+
+    let clock = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+
+    const slowFetch = async (
+      _url: string,
+      init: { headers: Record<string, string> },
+    ): Promise<PinnedFetchResult> => {
+      posted.push(init.headers['X-Gnubok-Delivery'])
+      clock += __TESTING__.CYCLE_BUDGET_MS
+      return {
+        kind: 'ok',
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        body: '{"ok":true}',
+        bodyTruncated: false,
+        pinnedAddress: '93.184.216.34',
+      }
+    }
+
+    const summary = await dispatchDueDeliveries({
+      supabase: client,
+      now: NOW,
+      pinnedFetchImpl: slowFetch as never,
+    })
+
+    expect(summary.released).toBe(2)
+    // attempts > 0 means the row was already in the retry loop before this
+    // cycle claimed it, so 'failed' is its real pre-claim status.
+    const release = recorded.deliveryUpdates.at(-1)
+    expect(release?.payload).toEqual({
+      status: 'failed',
+      next_attempt_at: NOW.toISOString(),
+    })
   })
 })

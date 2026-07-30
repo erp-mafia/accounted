@@ -53,6 +53,12 @@ const DEFAULT_BATCH_SIZE = 50
  * receiver timeout is 500 s of worst case, which no serverless invocation
  * survives, so bound the cycle explicitly instead of letting the platform
  * kill it mid-loop and leaving the remainder to the sweep.
+ *
+ * The cron route backs this with `export const maxDuration = 300`
+ * (app/api/webhooks/dispatch/cron/route.ts): the budget is only a real bound
+ * if the platform actually grants the invocation more wall time than the
+ * budget spends, and the release path below only runs if the loop is still
+ * alive when the budget expires.
  */
 const CYCLE_BUDGET_MS = 120_000
 
@@ -61,17 +67,25 @@ const STUCK_RECOVERY_SLACK_MS = 30_000
 
 /**
  * How long an in_flight row may legitimately sit before the sweep may treat
- * it as abandoned. Derived, not guessed (#1257): a cycle attempts up to
- * batchSize rows serially at up to REQUEST_TIMEOUT_MS each, bounded by
- * CYCLE_BUDGET_MS, and a row still queued behind that loop carries the
- * updated_at its claim stamped. The floor is DEFAULT_BATCH_SIZE because the
- * sweep is tenant-global: the 5-row kick must not re-arm rows the 50-row
- * cron still owns.
+ * it as abandoned: 160 s. Derived, not guessed (#1257), and deliberately
+ * independent of batch size.
+ *
+ * A cycle attempts its rows serially at up to REQUEST_TIMEOUT_MS each, but
+ * the loop is cut off by CYCLE_BUDGET_MS regardless of how many rows were
+ * claimed, so the BUDGET, not the row count, is what bounds a cycle's life:
+ * budget + one in-flight request + slack. A 5-row kick and a 50-row cron
+ * therefore use the same window, which is what the tenant-global sweep needs
+ * (neither caller may re-arm a row the other still owns). Anything
+ * batch-derived would let the kick pick a window narrower than the cron's
+ * live cycle occupies, which is the shape #1257 was reported against.
+ *
+ * A plain constant rather than a function of batchSize on purpose: the
+ * previous shape took a batchSize it could not act on (the clamp swallowed
+ * every value) and documented a floor that never fired. If CYCLE_BUDGET_MS
+ * changes this moves with it, and the cron's maxDuration must stay
+ * comfortably above it.
  */
-function stuckInFlightAfterMs(batchSize: number = DEFAULT_BATCH_SIZE): number {
-  const serialCycleMs = Math.max(batchSize, DEFAULT_BATCH_SIZE) * REQUEST_TIMEOUT_MS
-  return Math.min(serialCycleMs, CYCLE_BUDGET_MS) + REQUEST_TIMEOUT_MS + STUCK_RECOVERY_SLACK_MS
-}
+const STUCK_IN_FLIGHT_AFTER_MS = CYCLE_BUDGET_MS + REQUEST_TIMEOUT_MS + STUCK_RECOVERY_SLACK_MS
 
 interface DueDelivery {
   id: string
@@ -100,6 +114,10 @@ export interface DispatchSummary {
   skipped: number
   /** Claimed but handed back unattempted because the cycle budget ran out. */
   released: number
+  /** Rows this tick's sweep pulled out of an abandoned in_flight state. */
+  recovered: number
+  /** Subset of `recovered` the sweep took terminal (attempts exhausted). */
+  recoveredDead: number
 }
 
 /**
@@ -128,21 +146,26 @@ export async function dispatchDueDeliveries(args: {
     dead: 0,
     skipped: 0,
     released: 0,
+    recovered: 0,
+    recoveredDead: 0,
   }
 
   // Recover stuck in_flight rows: a previous tick that was killed mid-flight
   // (Vercel function timeout, hard crash, manual termination) leaves rows
   // marked in_flight forever otherwise. Sweep them back to 'failed' so the
-  // retry loop picks them up at next_attempt_at.
+  // retry loop picks them up at next_attempt_at, on the same backoff schedule
+  // a normal failed attempt gets.
   //
-  // The window comes from stuckInFlightAfterMs(): a bounded cycle
-  // (CYCLE_BUDGET_MS) plus one receiver timeout plus slack, floored at the
-  // cron's own batch. It is deliberately WIDER than any live cycle can be,
+  // The window is STUCK_IN_FLIGHT_AFTER_MS: the bounded cycle
+  // (CYCLE_BUDGET_MS, backed by the route's maxDuration) plus one receiver
+  // timeout plus slack. It is deliberately WIDER than any live cycle can be,
   // so a row still queued behind an earlier cycle's serial loop is never
   // re-armed under it (#1257). The old fixed 2x REQUEST_TIMEOUT_MS was
   // narrower than a single cycle, which made every cycle recover the rows
   // the previous cycle was still working through.
-  await recoverStuckInFlight(args.supabase, now, batchSize)
+  const recovery = await recoverStuckInFlight(args.supabase, now)
+  summary.recovered = recovery.recovered
+  summary.recoveredDead = recovery.dead
 
   // Real clock, not the injectable `now`: the budget bounds this invocation's
   // wall time, so a fixed test `now` must not be able to trip it.
@@ -162,7 +185,11 @@ export async function dispatchDueDeliveries(args: {
     // remainder stranded in in_flight until a sweep re-arms it.
     if (Date.now() - cycleStartedAt >= CYCLE_BUDGET_MS - REQUEST_TIMEOUT_MS) {
       const remaining = due.slice(index)
-      await releaseUnattempted(args.supabase, remaining.map((d) => d.id), now)
+      await releaseUnattempted(
+        args.supabase,
+        remaining.map((d) => ({ id: d.id, attempts: d.attempts })),
+        now,
+      )
       summary.released = remaining.length
       log.warn('cycle budget exhausted: unattempted claims released', {
         count: remaining.length,
@@ -276,7 +303,16 @@ export async function dispatchDueDeliveries(args: {
  * PostgREST can express neither `attempts = attempts + 1` nor the
  * conditional flip to 'dead' at the cap, and a read-then-write loop would
  * reopen a TOCTOU against enforce_webhook_delivery_immutability. MAX_ATTEMPTS
- * is passed in so the cap stays single-sourced here in TS.
+ * and RETRY_BACKOFF_SECONDS are passed in so the cap AND the schedule stay
+ * single-sourced here in TS.
+ *
+ * A swept row is re-armed on the SAME backoff the normal failure path uses
+ * (markFailedForRetry), not immediately: a row that keeps getting stranded
+ * (deploy, instance recycle, a cycle that outlives its invocation) would
+ * otherwise be re-claimed on the very next per-minute tick, and could burn
+ * all MAX_ATTEMPTS in under half an hour and land in the terminal, immutable
+ * 'dead' state without its receiver ever having been contacted. The ~87 h
+ * retry schedule is the delivery guarantee; the sweep must not shorten it.
  *
  * Under READ COMMITTED (Postgres default), UPDATE re-evaluates the WHERE
  * clause against each row's current value when it acquires the row lock.
@@ -289,28 +325,32 @@ export async function dispatchDueDeliveries(args: {
 async function recoverStuckInFlight(
   supabase: SupabaseClient,
   now: Date,
-  batchSize: number,
-): Promise<void> {
-  const stuckBefore = new Date(now.getTime() - stuckInFlightAfterMs(batchSize))
+): Promise<{ recovered: number; dead: number }> {
+  const stuckBefore = new Date(now.getTime() - STUCK_IN_FLIGHT_AFTER_MS)
   const { data, error } = await supabase.rpc('recover_stuck_webhook_deliveries', {
     p_stuck_before: stuckBefore.toISOString(),
     p_max_attempts: MAX_ATTEMPTS,
+    p_backoff: [...RETRY_BACKOFF_SECONDS],
     p_now: now.toISOString(),
   })
 
   if (error) {
     log.warn('stuck in_flight recovery failed', { code: error.code })
-    return
+    return { recovered: 0, dead: 0 }
   }
   const rows = (data ?? []) as Array<{ id: string; status: string; attempts: number }>
+  const dead = rows.filter((r) => r.status === 'dead').length
   if (rows.length > 0) {
-    const dead = rows.filter((r) => r.status === 'dead').length
     log.warn('recovered stuck in_flight rows', {
       count: rows.length,
       dead,
       retrying: rows.length - dead,
     })
   }
+  // Counts are returned as well as logged: a tick that takes deliveries
+  // terminal is the event worth alerting on, and it must be visible in the
+  // cron's own summary line rather than only in a helper-level warn.
+  return { recovered: rows.length, dead }
 }
 
 async function claimDueDeliveries(
@@ -449,23 +489,47 @@ async function touchInFlight(supabase: SupabaseClient, id: string): Promise<bool
  *
  * Deliberately does NOT bump attempts (these rows were never attempted) and
  * deliberately does NOT write `error` (a release is not a failure; overwriting
- * would destroy the previous attempt's diagnostic). 'failed' rather than
- * 'pending' because that is the sweep's and the retry loop's vocabulary for a
- * re-claimable non-terminal row; claim_due_webhook_deliveries accepts both.
+ * would destroy the previous attempt's diagnostic).
+ *
+ * The status written back is the row's PRE-CLAIM status, reconstructed from
+ * `attempts` rather than guessed: claim_due_webhook_deliveries accepts
+ * status IN ('pending','failed'), and every path that writes 'failed' also
+ * writes attempts >= 1 (markFailedForRetry, the recovery sweep), while rows
+ * enter the table as 'pending' with attempts = 0. So attempts = 0 means the
+ * row was 'pending' and must go back to 'pending'. This matters because
+ * webhook_deliveries is behandlingshistorik (BFNAR 2013:2 kap 8 §) exposed on
+ * GET /webhooks/{id}/deliveries: a brand-new delivery that was claimed and
+ * handed back without a single POST must not read as 'failed' to the
+ * customer. Restoring the status verbatim would need the claim RPC to return
+ * it, which it does not; the attempts inference gets the same answer without
+ * changing a shipped function.
  */
 async function releaseUnattempted(
   supabase: SupabaseClient,
-  ids: string[],
+  rows: Array<{ id: string; attempts: number }>,
   now: Date,
 ): Promise<void> {
-  if (ids.length === 0) return
-  const { error } = await supabase
-    .from('webhook_deliveries')
-    .update({ status: 'failed', next_attempt_at: now.toISOString() })
-    .in('id', ids)
-    .eq('status', 'in_flight')
-  if (error) {
-    log.warn('release of unattempted claims failed', { count: ids.length, code: error.code })
+  if (rows.length === 0) return
+
+  const byPriorStatus: Array<{ status: 'pending' | 'failed'; ids: string[] }> = [
+    { status: 'pending', ids: rows.filter((r) => r.attempts === 0).map((r) => r.id) },
+    { status: 'failed', ids: rows.filter((r) => r.attempts > 0).map((r) => r.id) },
+  ]
+
+  for (const group of byPriorStatus) {
+    if (group.ids.length === 0) continue
+    const { error } = await supabase
+      .from('webhook_deliveries')
+      .update({ status: group.status, next_attempt_at: now.toISOString() })
+      .in('id', group.ids)
+      .eq('status', 'in_flight')
+    if (error) {
+      log.warn('release of unattempted claims failed', {
+        count: group.ids.length,
+        status: group.status,
+        code: error.code,
+      })
+    }
   }
 }
 
@@ -802,5 +866,5 @@ export const __TESTING__ = {
   DEFAULT_BATCH_SIZE,
   CYCLE_BUDGET_MS,
   STUCK_RECOVERY_SLACK_MS,
-  stuckInFlightAfterMs,
+  STUCK_IN_FLIGHT_AFTER_MS,
 }

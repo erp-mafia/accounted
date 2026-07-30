@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import { getClient, getPool, runAsServiceRole } from '@/tests/pg/setup'
 import { seedCompany } from '@/tests/pg/fixtures'
 
@@ -12,6 +12,9 @@ import { seedCompany } from '@/tests/pg/fixtures'
  * produces. The properties that need real Postgres:
  *
  *   - `attempts = attempts + 1` actually happens (PostgREST cannot express it)
+ *   - the re-armed row waits out the SAME backoff a normal failed attempt
+ *     waits, so a repeatedly stranded row cannot burn its 8 attempts in
+ *     minutes and land in the immutable 'dead' state uncontacted
  *   - a row at the cap becomes 'dead' with attempts = p_max_attempts, and the
  *     claim function then never picks it up again
  *   - terminal rows are skipped by the outer WHERE, so
@@ -25,6 +28,33 @@ import { seedCompany } from '@/tests/pg/fixtures'
 // ──────────────────────────────────────────────────────────────────────
 
 const MAX_ATTEMPTS = 8
+
+/**
+ * RETRY_BACKOFF_SECONDS from lib/webhooks/dispatcher.ts, spelled out rather
+ * than imported: this file asserts what the SQL does with the array it is
+ * handed, and importing the constant would make a schedule change silently
+ * rewrite the expectations too.
+ */
+const BACKOFF = [60, 5 * 60, 30 * 60, 2 * 60 * 60, 12 * 60 * 60, 24 * 60 * 60, 48 * 60 * 60]
+
+/**
+ * Every delivery this file seeds, so the non-terminal ones can be removed
+ * again. The suite is tenant-global by nature (the sweep has no company
+ * filter) and a leftover row that becomes due later shows up as a phantom
+ * extra claim in the sibling claim-due suite, which reads the whole table.
+ * Terminal rows are left alone: block_webhook_delivery_terminal_delete
+ * forbids deleting them, and the claim function never picks them up anyway.
+ */
+const seededDeliveryIds: string[] = []
+
+afterAll(async () => {
+  if (seededDeliveryIds.length === 0) return
+  await getPool().query(
+    `DELETE FROM public.webhook_deliveries
+      WHERE id = ANY($1::uuid[]) AND status NOT IN ('delivered', 'dead')`,
+    [seededDeliveryIds],
+  )
+})
 
 async function insertWebhook(params: { companyId: string }): Promise<string> {
   const id = randomUUID()
@@ -69,6 +99,7 @@ async function insertDelivery(params: {
       params.responseStatus ?? null,
     ],
   )
+  seededDeliveryIds.push(id)
   return id
 }
 
@@ -116,8 +147,8 @@ describe('recover_stuck_webhook_deliveries.pg', () => {
     const pNow = new Date()
     const returned = await runAsServiceRole(async (client) => {
       const r = await client.query<{ id: string; status: string; attempts: number }>(
-        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3)`,
-        [stuckBefore(), MAX_ATTEMPTS, pNow.toISOString()],
+        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], $4)`,
+        [stuckBefore(), MAX_ATTEMPTS, BACKOFF, pNow.toISOString()],
       )
       return r.rows
     })
@@ -133,7 +164,103 @@ describe('recover_stuck_webhook_deliveries.pg', () => {
     expect(row.attempts).toBe(1)
     expect(row.status).toBe('failed')
     expect(row.error).toBe('recovered_from_in_flight_timeout')
-    expect(row.next_attempt_at.getTime()).toBe(pNow.getTime())
+    // First backoff step, exactly like markFailedForRetry on a 0-attempt row.
+    // p_now would make the row re-claimable on the next per-minute tick, which
+    // is how a repeatedly stranded delivery burned all 8 attempts in minutes.
+    expect(row.next_attempt_at.getTime()).toBe(pNow.getTime() + BACKOFF[0] * 1000)
+  })
+
+  it('re-arms a swept row far enough out that the next tick cannot claim it', async () => {
+    const { companyId } = await seedCompany()
+    const webhookId = await insertWebhook({ companyId })
+    const deliveryId = await insertDelivery({
+      webhookId,
+      companyId,
+      status: 'in_flight',
+      attempts: 0,
+      updatedAt: longAgo(600),
+    })
+
+    const pNow = new Date()
+    await runAsServiceRole(async (client) => {
+      await client.query(
+        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], $4)`,
+        [stuckBefore(), MAX_ATTEMPTS, BACKOFF, pNow.toISOString()],
+      )
+    })
+
+    // The claim function is the real predicate: a swept row must NOT be due
+    // at the moment it was swept, nor a tick later. Rolled back so the claim's
+    // in_flight flips do not leak into the sibling claim-due suite.
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const { rows } = await client.query<{ id: string }>(
+        `SELECT id FROM public.claim_due_webhook_deliveries($1, $2)`,
+        [100, new Date(pNow.getTime() + 59_000).toISOString()],
+      )
+      expect(rows.map((r) => r.id)).not.toContain(deliveryId)
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+  })
+
+  it('picks the backoff step for the attempt it just charged', async () => {
+    const { companyId } = await seedCompany()
+    const webhookId = await insertWebhook({ companyId })
+    // attempts = 3 before the sweep, so the charged attempt is the 4th and the
+    // wait is BACKOFF[3] (2 h): index = attempts BEFORE this one, exactly the
+    // lookup markFailedForRetry does in TS, shifted by one for 1-indexed
+    // Postgres arrays.
+    const deliveryId = await insertDelivery({
+      webhookId,
+      companyId,
+      status: 'in_flight',
+      attempts: 3,
+      updatedAt: longAgo(600),
+    })
+
+    const pNow = new Date()
+    await runAsServiceRole(async (client) => {
+      await client.query(
+        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], $4)`,
+        [stuckBefore(), MAX_ATTEMPTS, BACKOFF, pNow.toISOString()],
+      )
+    })
+
+    const row = await readDelivery(deliveryId)
+    expect(row.attempts).toBe(4)
+    expect(row.next_attempt_at.getTime()).toBe(pNow.getTime() + BACKOFF[3] * 1000)
+  })
+
+  it('clamps to the last backoff step instead of subscripting past the array', async () => {
+    const { companyId } = await seedCompany()
+    const webhookId = await insertWebhook({ companyId })
+    const deliveryId = await insertDelivery({
+      webhookId,
+      companyId,
+      status: 'in_flight',
+      attempts: 4,
+      updatedAt: longAgo(600),
+    })
+
+    // A two-step schedule with a cap of 8: index 5 is past the end. Without
+    // the least() clamp the subscript yields NULL and next_attempt_at would go
+    // NULL, which the claim function reads as "not due, ever".
+    const shortBackoff = [60, 300]
+    const pNow = new Date()
+    await runAsServiceRole(async (client) => {
+      await client.query(
+        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], $4)`,
+        [stuckBefore(), MAX_ATTEMPTS, shortBackoff, pNow.toISOString()],
+      )
+    })
+
+    const row = await readDelivery(deliveryId)
+    expect(row.attempts).toBe(5)
+    expect(row.next_attempt_at).not.toBeNull()
+    expect(row.next_attempt_at.getTime()).toBe(pNow.getTime() + 300 * 1000)
   })
 
   it('lands a row at the cap on the same dead state the normal path produces', async () => {
@@ -149,10 +276,10 @@ describe('recover_stuck_webhook_deliveries.pg', () => {
     })
 
     await runAsServiceRole(async (client) => {
-      await client.query(`SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, now())`, [
-        stuckBefore(),
-        MAX_ATTEMPTS,
-      ])
+      await client.query(
+        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], now())`,
+        [stuckBefore(), MAX_ATTEMPTS, BACKOFF],
+      )
     })
 
     const row = await readDelivery(deliveryId)
@@ -177,10 +304,10 @@ describe('recover_stuck_webhook_deliveries.pg', () => {
     })
 
     await runAsServiceRole(async (client) => {
-      await client.query(`SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, now())`, [
-        stuckBefore(),
-        MAX_ATTEMPTS,
-      ])
+      await client.query(
+        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], now())`,
+        [stuckBefore(), MAX_ATTEMPTS, BACKOFF],
+      )
     })
     expect((await readDelivery(deliveryId)).status).toBe('dead')
 
@@ -215,8 +342,8 @@ describe('recover_stuck_webhook_deliveries.pg', () => {
     const sweep = () =>
       runAsServiceRole(async (client) => {
         await client.query(
-          `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, now())`,
-          [stuckBefore(), MAX_ATTEMPTS],
+          `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], now())`,
+          [stuckBefore(), MAX_ATTEMPTS, BACKOFF],
         )
       })
 
@@ -246,8 +373,8 @@ describe('recover_stuck_webhook_deliveries.pg', () => {
 
     const returned = await runAsServiceRole(async (client) => {
       const r = await client.query<{ id: string }>(
-        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, now())`,
-        [stuckBefore(), MAX_ATTEMPTS],
+        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], now())`,
+        [stuckBefore(), MAX_ATTEMPTS, BACKOFF],
       )
       return r.rows
     })
@@ -280,8 +407,8 @@ describe('recover_stuck_webhook_deliveries.pg', () => {
     await expect(
       runAsServiceRole(async (client) => {
         await client.query(
-          `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, now())`,
-          [stuckBefore(), MAX_ATTEMPTS],
+          `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], now())`,
+          [stuckBefore(), MAX_ATTEMPTS, BACKOFF],
         )
       }),
     ).resolves.toBeUndefined()
@@ -295,8 +422,8 @@ describe('recover_stuck_webhook_deliveries.pg', () => {
     // anon or authenticated may re-arm another tenant's deliveries.
     await expect(
       getPool().query(
-        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, now())`,
-        [stuckBefore(), MAX_ATTEMPTS],
+        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], now())`,
+        [stuckBefore(), MAX_ATTEMPTS, BACKOFF],
       ),
     ).rejects.toThrow(/server-controlled service role/i)
   })
@@ -305,8 +432,8 @@ describe('recover_stuck_webhook_deliveries.pg', () => {
     await expect(
       runAsServiceRole(async (client) => {
         await client.query(
-          `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, now())`,
-          [null, MAX_ATTEMPTS],
+          `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], now())`,
+          [null, MAX_ATTEMPTS, BACKOFF],
         )
       }),
     ).rejects.toThrow(/p_stuck_before is required/i)
@@ -314,8 +441,8 @@ describe('recover_stuck_webhook_deliveries.pg', () => {
     await expect(
       runAsServiceRole(async (client) => {
         await client.query(
-          `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, now())`,
-          [stuckBefore(), 0],
+          `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], now())`,
+          [stuckBefore(), 0, BACKOFF],
         )
       }),
     ).rejects.toThrow(/p_max_attempts must be > 0/i)
@@ -323,11 +450,27 @@ describe('recover_stuck_webhook_deliveries.pg', () => {
     await expect(
       runAsServiceRole(async (client) => {
         await client.query(
-          `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, now())`,
-          [stuckBefore(), null],
+          `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], now())`,
+          [stuckBefore(), null, BACKOFF],
         )
       }),
     ).rejects.toThrow(/p_max_attempts must be > 0/i)
+  })
+
+  it('rejects a missing or non-positive backoff schedule', async () => {
+    // A NULL, empty or zero/negative schedule would re-arm swept rows for
+    // immediate re-claim, which is the strand loop the backoff exists to stop.
+    // Failing loudly beats silently reverting to next_attempt_at = p_now.
+    for (const backoff of [null, [], [60, 0], [60, -5]]) {
+      await expect(
+        runAsServiceRole(async (client) => {
+          await client.query(
+            `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], now())`,
+            [stuckBefore(), MAX_ATTEMPTS, backoff],
+          )
+        }),
+      ).rejects.toThrow(/p_backoff/i)
+    }
   })
 })
 
@@ -374,8 +517,8 @@ describe('in_flight re-stamp: the DB behaviour touchInFlight relies on', () => {
     // moment ago and is not any more.
     const swept = await runAsServiceRole(async (client) => {
       const r = await client.query<{ id: string }>(
-        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, now())`,
-        [stuckBefore(), MAX_ATTEMPTS],
+        `SELECT * FROM public.recover_stuck_webhook_deliveries($1, $2, $3::int[], now())`,
+        [stuckBefore(), MAX_ATTEMPTS, BACKOFF],
       )
       return r.rows
     })

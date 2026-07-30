@@ -17,11 +17,13 @@
 --    threshold before its own attempt began, so cycle N recovered and
 --    re-claimed rows cycle N-1 was still working through: duplicate POSTs of
 --    the same X-Gnubok-Delivery, and a terminal status decided by a race whose
---    loser was swallowed as a log.warn. The caller now derives the window from
---    a bounded cycle (CYCLE_BUDGET_MS 120 s + one request timeout + 30 s
---    slack, floored at the cron's 50-row batch = 160 s) and re-stamps
---    updated_at immediately before each row's own attempt, so no row a live
---    cycle owns can fall inside the window.
+--    loser was swallowed as a log.warn. The caller now uses a window derived
+--    from the bounded cycle (CYCLE_BUDGET_MS 120 s + one request timeout +
+--    30 s slack = 160 s, independent of batch size) and re-stamps updated_at
+--    immediately before each row's own attempt, so no row a live cycle owns
+--    can fall inside the window. The cycle bound is enforced, not assumed:
+--    /api/webhooks/dispatch/cron declares maxDuration = 300, well above the
+--    120 s the loop is allowed to spend.
 --
 -- 2. WHY attempts IS CHARGED. The old sweep reset rows to 'failed' without
 --    touching attempts, so a delivery caught in the recover/re-claim loop
@@ -31,6 +33,18 @@
 --    cannot express `attempts = attempts + 1`, nor the conditional flip at the
 --    cap, and a read-then-write loop in JS would reopen a TOCTOU against
 --    enforce_webhook_delivery_immutability. Hence this function.
+--
+-- 2b. WHY THE STALL STILL WAITS OUT THE NORMAL BACKOFF. Charging an attempt is
+--    only half of "make the cap real". Re-arming at p_now would make a
+--    repeatedly stranded row (deploy, instance recycle, a cycle that outlives
+--    its invocation) re-claimable on the very next per-minute tick, so it
+--    could burn all 8 attempts in roughly 20 minutes and land in the terminal,
+--    immutable 'dead' state without its receiver having been contacted once.
+--    The sweep therefore reuses the dispatcher's own schedule: p_backoff is
+--    RETRY_BACKOFF_SECONDS (60 s .. 48 h, ~87 h total) passed in from TS so it
+--    stays single-sourced with markFailedForRetry, and the index math
+--    (least(attempts + 1, array_length)) mirrors the 0-indexed lookup there.
+--    A stall now costs an attempt AND the same wait a 500 response costs.
 --
 -- 3. WHY A ROW PAST THE CAP GOES TO 'dead'. Once attempts + 1 reaches
 --    p_max_attempts the row has exhausted its budget and must reach a terminal
@@ -56,9 +70,16 @@
 -- authenticated may re-arm another tenant's deliveries. Same shape as
 -- 20260727100000_list_invoice_delivery_summaries_for_service.sql.
 
+-- The 3-argument shape never reached any deployed environment (this migration
+-- has not been applied to production): the drop only cleans up developer and
+-- CI databases where an earlier revision of THIS migration ran, so that adding
+-- p_backoff cannot leave an ambiguous overload behind.
+DROP FUNCTION IF EXISTS public.recover_stuck_webhook_deliveries(timestamptz, int, timestamptz);
+
 CREATE OR REPLACE FUNCTION public.recover_stuck_webhook_deliveries(
   p_stuck_before timestamptz,
   p_max_attempts int,
+  p_backoff      int[],
   p_now          timestamptz DEFAULT now()
 )
 RETURNS TABLE (id uuid, status text, attempts int)
@@ -81,6 +102,19 @@ BEGIN
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
+  -- A missing, empty or non-positive backoff would silently re-arm swept rows
+  -- for immediate re-claim, which is exactly the strand loop this function
+  -- exists to bound. Fail loudly instead.
+  IF p_backoff IS NULL OR COALESCE(array_length(p_backoff, 1), 0) = 0 THEN
+    RAISE EXCEPTION 'p_backoff must be a non-empty int[] of retry delays in seconds'
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM unnest(p_backoff) AS s(v) WHERE s.v IS NULL OR s.v <= 0) THEN
+    RAISE EXCEPTION 'p_backoff entries must all be > 0 seconds'
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
   RETURN QUERY
   WITH stuck AS (
     SELECT wd.id
@@ -92,8 +126,15 @@ BEGIN
   UPDATE public.webhook_deliveries wd
      SET attempts = wd.attempts + 1,
          status = CASE WHEN wd.attempts + 1 >= p_max_attempts THEN 'dead' ELSE 'failed' END,
+         -- Same lookup markFailedForRetry does in TS: index = attempts BEFORE
+         -- this one, clamped to the last step, and Postgres arrays are
+         -- 1-indexed so the JS index i becomes i + 1 here.
          next_attempt_at = CASE WHEN wd.attempts + 1 >= p_max_attempts
-                                THEN wd.next_attempt_at ELSE p_now END,
+                                THEN wd.next_attempt_at
+                                ELSE p_now + (
+                                  p_backoff[least(wd.attempts + 1, array_length(p_backoff, 1))]
+                                  * interval '1 second'
+                                ) END,
          error = CASE WHEN wd.attempts + 1 >= p_max_attempts
                       THEN 'attempts_exhausted:in_flight_timeout'
                       ELSE 'recovered_from_in_flight_timeout' END
@@ -104,13 +145,18 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.recover_stuck_webhook_deliveries(timestamptz, int, timestamptz)
+REVOKE ALL ON FUNCTION public.recover_stuck_webhook_deliveries(timestamptz, int, int[], timestamptz)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.recover_stuck_webhook_deliveries(timestamptz, int, timestamptz)
+GRANT EXECUTE ON FUNCTION public.recover_stuck_webhook_deliveries(timestamptz, int, int[], timestamptz)
   TO service_role;
 
-COMMENT ON FUNCTION public.recover_stuck_webhook_deliveries(timestamptz, int, timestamptz) IS
-  'Service-role sweep of webhook_deliveries rows abandoned in in_flight by a killed dispatch cycle. Charges one attempt per stall and lands a row past p_max_attempts on the same dead/attempts-exhausted terminal state the normal retry path produces. Skips rows that raced to a terminal status, so the immutability trigger never fires.';
+COMMENT ON FUNCTION public.recover_stuck_webhook_deliveries(timestamptz, int, int[], timestamptz) IS
+  'Service-role sweep of webhook_deliveries rows abandoned in in_flight by a killed dispatch cycle. Charges one attempt per stall, re-arms on the caller-supplied retry backoff (p_backoff, seconds), and lands a row past p_max_attempts on the same dead/attempts-exhausted terminal state the normal retry path produces. Skips rows that raced to a terminal status, so the immutability trigger never fires.';
+
+-- Deliberately unbounded (no LIMIT on the CTE): the sweep must clear every
+-- abandoned row, and webhook_deliveries is tens of rows in production. If the
+-- table ever grows, this needs a LIMIT plus a retention policy; both are
+-- tracked as follow-ups on issue #1257 rather than guessed at here.
 
 -- Hygiene from #1257: no existing index serves this sweep.
 -- idx_webhook_deliveries_due is partial on status IN ('pending','failed'),

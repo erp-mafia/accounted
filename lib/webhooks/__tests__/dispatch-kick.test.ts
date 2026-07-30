@@ -14,6 +14,22 @@ vi.mock('next/server', () => ({
 
 import { kickWebhookDispatch, resetKickStateForTests, KICK_BATCH_SIZE } from '../dispatch-kick'
 
+/**
+ * A zero DispatchSummary. Spread rather than repeated so adding a counter to
+ * the summary does not mean re-editing every case in this file; these tests
+ * are about scheduling and coalescing, never about the counts.
+ */
+const EMPTY_SUMMARY = {
+  picked: 0,
+  delivered: 0,
+  failed: 0,
+  dead: 0,
+  skipped: 0,
+  released: 0,
+  recovered: 0,
+  recoveredDead: 0,
+}
+
 /** Resolves after the microtask queue drains, so floating work has run. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -24,7 +40,7 @@ beforeEach(() => {
 
 describe('kickWebhookDispatch', () => {
   it('runs one dispatch cycle with the small kick batch size', async () => {
-    const dispatch = vi.fn().mockResolvedValue({ picked: 1, delivered: 1, failed: 0, dead: 0, skipped: 0, released: 0 })
+    const dispatch = vi.fn().mockResolvedValue({ ...EMPTY_SUMMARY, picked: 1, delivered: 1 })
 
     kickWebhookDispatch(dispatch)
     await flush()
@@ -46,7 +62,7 @@ describe('kickWebhookDispatch', () => {
         new Promise((resolve) => {
           setTimeout(() => {
             settled = true
-            resolve({ picked: 0, delivered: 0, failed: 0, dead: 0, skipped: 0, released: 0 })
+            resolve({ ...EMPTY_SUMMARY })
           }, 20)
         }),
     )
@@ -66,7 +82,7 @@ describe('kickWebhookDispatch', () => {
   it('coalesces a burst of kicks into a single cycle', async () => {
     // A bulk booking emits once per row. Without coalescing, 100 rows would
     // mean 100 claim round trips against the same handful of due deliveries.
-    const dispatch = vi.fn().mockResolvedValue({ picked: 0, delivered: 0, failed: 0, dead: 0, skipped: 0, released: 0 })
+    const dispatch = vi.fn().mockResolvedValue({ ...EMPTY_SUMMARY })
 
     for (let i = 0; i < 100; i++) kickWebhookDispatch(dispatch)
     await flush()
@@ -75,7 +91,7 @@ describe('kickWebhookDispatch', () => {
   })
 
   it('accepts a new kick once the previous cycle has started', async () => {
-    const dispatch = vi.fn().mockResolvedValue({ picked: 0, delivered: 0, failed: 0, dead: 0, skipped: 0, released: 0 })
+    const dispatch = vi.fn().mockResolvedValue({ ...EMPTY_SUMMARY })
 
     kickWebhookDispatch(dispatch)
     await flush()
@@ -101,7 +117,7 @@ describe('kickWebhookDispatch', () => {
     kickWebhookDispatch(failing)
     await flush()
 
-    const ok = vi.fn().mockResolvedValue({ picked: 0, delivered: 0, failed: 0, dead: 0, skipped: 0, released: 0 })
+    const ok = vi.fn().mockResolvedValue({ ...EMPTY_SUMMARY })
     kickWebhookDispatch(ok)
     await flush()
 
