@@ -1,6 +1,7 @@
 {
   "common": {
     "active_company": "Active company",
+    "open_in_new_tab": "Open in new tab",
     "update_available": "A new version is available.",
     "reload": "Reload",
     "save": "Save",

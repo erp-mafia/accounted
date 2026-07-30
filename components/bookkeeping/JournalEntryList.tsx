@@ -30,6 +30,7 @@ import {
 } from '@/components/common/FiscalYearSelector'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
 import {
   TH_CLASS,
   TD_CLASS,
@@ -99,6 +100,11 @@ export default function JournalEntryList() {
   const [commitTarget, setCommitTarget] = useState<JournalEntry | null>(null)
   const [commitVoucherPreview, setCommitVoucherPreview] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  // Only the very first load may replace the table with a skeleton. Every
+  // later refetch (filter, sort, page, search) keeps the rows on screen and
+  // dims them, so the list never collapses to a spinner and springs back to
+  // full height under the pointer. Growing lists were causing real mis-clicks.
+  const [hasLoaded, setHasLoaded] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [count, setCount] = useState(0)
   const [page, setPage] = useState(0)
@@ -373,6 +379,7 @@ export default function JournalEntryList() {
 
     const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
     if (!res.ok) {
+      setHasLoaded(true)
       setLoading(false)
       return
     }
@@ -390,6 +397,7 @@ export default function JournalEntryList() {
     } else {
       fetchDraftCount()
     }
+    setHasLoaded(true)
     setLoading(false)
 
     // Fetch attachment counts + rättelse markers for the loaded entries
@@ -965,7 +973,7 @@ export default function JournalEntryList() {
         )}
       </div>
 
-      {loading ? (
+      {loading && !hasLoaded ? (
         <DataList className="stagger-enter">
           <DataListLoading />
         </DataList>
@@ -1000,7 +1008,13 @@ export default function JournalEntryList() {
           />
         </DataList>
       ) : (
-      <div>
+      <div
+        aria-busy={loading || undefined}
+        className={cn(
+          'transition-opacity duration-150',
+          loading && 'pointer-events-none opacity-60',
+        )}
+      >
         {/* Bulkbar (concept): hidden until at least one verifikat is
             selected via the hover checkboxes, then it pops in with the
             count and the batch actions. Select-all and the filter-scoped
@@ -1111,13 +1125,16 @@ export default function JournalEntryList() {
                         )}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
-                        <Link
-                          href={`/bookkeeping/${entry.id}`}
-                          className="font-mono text-[13px] tabular-nums hover:underline"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {formatVoucher(entry)}
-                        </Link>
+                        <span className="inline-flex items-center gap-1">
+                          <Link
+                            href={`/bookkeeping/${entry.id}`}
+                            className="font-mono text-[13px] tabular-nums hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {formatVoucher(entry)}
+                          </Link>
+                          <OpenInNewTab href={`/bookkeeping/${entry.id}`} />
+                        </span>
                       </td>
                       <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap tabular-nums text-muted-foreground')}>
                         {formatDate(entry.entry_date)}

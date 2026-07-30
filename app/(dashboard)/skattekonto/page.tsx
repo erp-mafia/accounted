@@ -10,7 +10,13 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import {
+  TH_CLASS,
+  TD_CLASS,
+  QUIET_LINK_CLASS,
+  HOVER_REVEAL_CLASS,
+} from '@/components/ui/dry-table'
+import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   Dialog,
@@ -774,17 +780,17 @@ function SkattekontoRow({
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
         {isBooked ? (
-          <Link
-            href={`/bookkeeping/${row.journal_entry_id}`}
-            className={cn(
-              QUIET_LINK_CLASS,
-              'opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100',
-            )}
-          >
-            {t('action_show_voucher')}
-          </Link>
+          <span className="inline-flex items-center justify-end gap-1">
+            <Link
+              href={`/bookkeeping/${row.journal_entry_id}`}
+              className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
+            >
+              {t('action_show_voucher')}
+            </Link>
+            <OpenInNewTab href={`/bookkeeping/${row.journal_entry_id}`} />
+          </span>
         ) : (
-          <span className="inline-flex items-center gap-3 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+          <span className={cn('inline-flex items-center gap-3', HOVER_REVEAL_CLASS)}>
             <button
               type="button"
               onClick={() => onMatch(row)}
