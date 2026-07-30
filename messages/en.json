@@ -6225,6 +6225,7 @@
     "band_booked": "Completed",
     "no_transactions": "No transactions yet. Sync to fetch the tax account.",
     "chip_not_booked": "Not booked",
+    "interest_from": "interest from {date}",
     "chip_possible_duplicate": "Possible duplicate of {voucher}",
     "chip_draft": "draft",
     "action_show_voucher": "Show voucher",

@@ -6225,6 +6225,7 @@
     "band_booked": "Genomförda",
     "no_transactions": "Inga transaktioner ännu. Synkronisera för att hämta skattekontot.",
     "chip_not_booked": "Ej bokförd",
+    "interest_from": "ränta fr.o.m. {date}",
     "chip_possible_duplicate": "Möjlig dublett av {voucher}",
     "chip_draft": "utkast",
     "action_show_voucher": "Visa verifikat",

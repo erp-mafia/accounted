@@ -29,6 +29,7 @@ import {
   formatDateTime,
 } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { rowsNeedingInterestDate } from '@/lib/skatteverket/interest-period'
 import {
   AlertCircle,
   Copy,
@@ -605,6 +606,19 @@ type TableSection = {
   rows: SkattekontoTransactionWithSuggestion[]
 }
 
+/**
+ * The date this row shows in the Datum column. Upcoming and overdue rows lead
+ * with their due date; genomförda rows lead with the transaction date.
+ */
+function rowDisplayDate(
+  row: StoredSkattekontoTransaction,
+  section: TableSection['key'],
+): string {
+  return section === 'upcoming' || section === 'overdue'
+    ? (row.forfallodatum ?? row.transaktionsdatum)
+    : row.transaktionsdatum
+}
+
 function SkattekontoTable({
   tx,
   onBokfor,
@@ -623,7 +637,23 @@ function SkattekontoTable({
     { key: 'overdue', label: t('band_overdue'), rows: tx?.overdue ?? [] },
     { key: 'booked', label: t('band_booked'), rows: tx?.booked ?? [] },
   ]
-  const sections = allSections.filter((s) => s.rows.length > 0)
+  // Rows from a retroactive omprövningsbeslut share date, text and amount, so
+  // they render identically unless we surface ränteberäkningsdatum. Resolved
+  // per band, since rows are only confusable with the rows beside them.
+  const sections = allSections
+    .filter((s) => s.rows.length > 0)
+    .map((s) => ({
+      ...s,
+      interestDateRowIds: rowsNeedingInterestDate(
+        s.rows.map((r) => ({
+          id: r.id,
+          displayDate: rowDisplayDate(r, s.key),
+          transaktionstext: r.transaktionstext,
+          belopp: Number(r.belopp_skatteverket),
+          ranteberakningsdatum: r.ranteberakningsdatum,
+        })),
+      ),
+    }))
 
   if (sections.length === 0) {
     return (
@@ -663,6 +693,7 @@ function SkattekontoTable({
                   onBokfor={onBokfor}
                   onMatch={onMatch}
                   bookingId={bookingId}
+                  showInterestDate={section.interestDateRowIds.has(row.id)}
                 />
               ))}
             </Fragment>
@@ -679,20 +710,19 @@ function SkattekontoRow({
   onBokfor,
   onMatch,
   bookingId,
+  showInterestDate,
 }: {
   row: SkattekontoTransactionWithSuggestion
   section: TableSection['key']
   onBokfor: (id: string) => void
   onMatch: (row: StoredSkattekontoTransaction) => void
   bookingId: string | null
+  showInterestDate: boolean
 }) {
   const t = useTranslations('skattekonto')
   const amount = Number(row.belopp_skatteverket)
   const isBooked = !!row.journal_entry_id
-  const displayDate =
-    section === 'upcoming' || section === 'overdue'
-      ? (row.forfallodatum ?? row.transaktionsdatum)
-      : row.transaktionsdatum
+  const displayDate = rowDisplayDate(row, section)
 
   return (
     <tr className="group transition-colors duration-150 hover:bg-secondary/35">
@@ -702,6 +732,14 @@ function SkattekontoRow({
       <td className={TD_CLASS}>
         <span className="inline-flex flex-wrap items-center gap-2">
           {row.transaktionstext}
+          {/* A retroactive beslut arrives as one row per re-charged month,
+              identical apart from ränteberäkningsdatum. Without this the rows
+              read as duplicates from the automatic hämtning. */}
+          {showInterestDate && row.ranteberakningsdatum && (
+            <span className="text-[12px] tabular-nums text-muted-foreground">
+              {t('interest_from', { date: formatDate(row.ranteberakningsdatum) })}
+            </span>
+          )}
           {/* Chips mark exceptions: only a *genomförd* row that is still
               unbooked deviates; upcoming rows are unbooked by nature. */}
           {section === 'booked' && !isBooked && (
