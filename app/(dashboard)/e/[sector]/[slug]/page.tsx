@@ -5,7 +5,13 @@ import ExtensionWorkspaceLoader from '@/components/extensions/ExtensionWorkspace
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtension } from '@/lib/entitlements/keys'
 import { ExtensionUpsellState } from '@/components/extensions/ExtensionUpsellState'
-import { getDashboardAuthContext, getDashboardCompanyId } from '../../../request-context'
+import { ExtensionSandboxLockState } from '@/components/extensions/ExtensionSandboxLockState'
+import { extensionDescriptionKey, extensionNameKey } from '@/lib/extensions/i18n'
+import {
+  getDashboardAuthContext,
+  getDashboardCompanyId,
+  getDashboardSettings,
+} from '../../../request-context'
 
 export default async function ExtensionWorkspacePage({
   params,
@@ -30,6 +36,30 @@ export default async function ExtensionWorkspacePage({
   // Fail closed: no resolvable company or the capability absent, both block.
   const requiredCapability = requiredCapabilityForExtension(sector, slug)
   if (requiredCapability) {
+    // Sandbox first, and before the capability check: a demo company holds the
+    // 30-day trial grant every new company gets, so the paywall waves it
+    // through onto a workspace whose external services the sandbox blocks
+    // (lib/sandbox/guard.ts). An anonymous user also has no billing to
+    // upgrade, so the billing upsell below would be the wrong exit.
+    const settings = await getDashboardSettings()
+    if (settings.data?.is_sandbox === true) {
+      const t = await getTranslations('extensions')
+      // The manifest ships Swedish-only name/description; the slug maps to a
+      // translated pair at the render layer (lib/extensions/i18n), same as the
+      // sidebar. Fall back to the manifest for a slug with no mapping yet.
+      const nameKey = extensionNameKey(slug)
+      const descriptionKey = extensionDescriptionKey(slug)
+      return (
+        <ExtensionSandboxLockState
+          iconName={definition.icon}
+          title={t('sandbox_locked_title', { name: nameKey ? t(nameKey) : definition.name })}
+          description={descriptionKey ? t(descriptionKey) : definition.description}
+          note={t('sandbox_locked_note')}
+          ctaLabel={t('sandbox_locked_cta')}
+        />
+      )
+    }
+
     const allowed = companyId
       ? await hasCapability(supabase, companyId, requiredCapability)
       : false

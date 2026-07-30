@@ -330,8 +330,24 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
     )
   }
 
+  // Some operations carry their kontering under the generic `preview_lines`
+  // key instead (the shape every other staged type renders through). Read it
+  // before falling through to the legacy summary, which would otherwise show
+  // blank accounts for a preview that does describe the entry in full.
+  if (isKonteringLines(data.preview_lines)) {
+    return (
+      <div className="space-y-1 text-sm">
+        <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
+        <PreviewKonteringTable lines={data.preview_lines} />
+      </div>
+    )
+  }
+
   // Legacy summary for operations staged before the preview carried full
   // lines: debit/credit accounts + gross amount + separate VAT rows.
+  const legacyAmount = typeof data.amount === 'number' && Number.isFinite(data.amount)
+    ? data.amount
+    : null
   return (
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
@@ -341,7 +357,11 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
         <span className="font-mono">{String(data.credit_account ?? '')}</span>
         <span className="text-muted-foreground">Belopp</span>
         <span className="font-mono tabular-nums">
-          {formatCurrency(data.amount as number, (data.currency as string) || 'SEK')}
+          {/* A preview with no usable amount used to render "NaN kr": show the
+              gap as a gap instead of a number that isn't one. */}
+          {legacyAmount === null
+            ? '-'
+            : formatCurrency(legacyAmount, (data.currency as string) || 'SEK')}
         </span>
       </div>
       {vatLines.length > 0 && (

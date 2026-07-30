@@ -8,6 +8,7 @@ import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { buildSandboxCustomers } from './customers'
+import { buildSandboxPendingOperations } from './pending-operations'
 
 // Anonymous sign-in is enabled in all environments so visitors can try the
 // product; a per-/24 cap on the seed endpoint keeps a single network from
@@ -841,102 +842,22 @@ export async function POST(request: Request) {
 
     if (inboxError) throw inboxError
 
-    // 17. Pre-staged pending_operations so /pending isn't empty.
-    // These are the kind of operation the AI agent would stage; pre-seeded
-    // here so the user can see the approval queue UI (preview, period
-    // status, risk level) without having to invoke the disabled AI. Each
-    // params blob must be executor-complete: the commit executors in
-    // lib/pending-operations/commit.ts validate required fields on "Godkänn",
-    // so a display-only preview with a hollow params object fails to save.
-    // actor_type='agent_chat' + risk_level on the row itself is required by
-    // pending_operations_chat_insert (the only RLS policy that lets a
-    // user-scoped client INSERT into this table).
+    // 17. Pre-staged pending_operations so /pending isn't empty. Both the
+    // executor-complete params and the per-type preview_data shapes live in
+    // ./pending-operations, where they are unit-testable.
     const { error: pendOpsError } = await supabase
       .from('pending_operations')
-      .insert([
-        {
-          user_id: userId,
-          company_id: companyId,
-          operation_type: 'create_supplier_invoice_from_inbox',
-          status: 'pending',
-          actor_type: 'agent_chat',
-          risk_level: 'low',
-          // Uses a distinct supplier_invoice_number so approving this
-          // pending operation creates a NEW supplier_invoices row instead
-          // of colliding with the Demokafé '88245' already booked above
-          // (BFL 5 kap: each affärshändelse must be recorded exactly once).
-          title: 'Registrera leverantörsfaktura, Demokafé (representation, nytt underlag)',
-          // Mirrors what gnubok_create_supplier_invoice_from_inbox would stage:
-          // every field commitCreateSupplierInvoiceFromInbox requires
-          // (inbox_item_id, supplier_id, supplier_invoice_number, invoice_date,
-          // finite subtotal/vat_amount/total, and a non-empty items array).
-          params: {
-            inbox_item_id: inboxRow.id,
-            supplier_id: supplierMap['Demokafé AB'],
-            document_id: null,
-            supplier_invoice_number: 'INKOMMANDE-2026-001',
-            invoice_date: toDateStr(fiveDaysAgo),
-            due_date: toDateStr(sevenDaysFromNow),
-            currency: 'SEK',
-            exchange_rate: null,
-            vat_treatment: 'reduced_12',
-            subtotal: 240,
-            vat_amount: 28.80,
-            total: 268.80,
-            notes: 'Representation, kundmöte (demo)',
-            items: [
-              {
-                line_number: 1,
-                description: 'Kundmöte Demokafé (representation)',
-                quantity: 1,
-                unit: 'st',
-                unit_price: 240,
-                line_total: 240,
-                account_number: '5810',
-                vat_rate: 12,
-                vat_amount: 28.80,
-              },
-            ],
-          },
-          preview_data: {
-            // Representation @ 12% VAT (café meal), 240 SEK excl. VAT for
-            // a single attendee. The avdragsrätt cap is 25% × 300 SEK ×
-            // antal_personer = 75 SEK / person (ML 8 kap. 9 §); since the
-            // VAT here is 28.80 SEK the full amount is deductible and the
-            // cost lands in 5810: no split needed.
-            preview_lines: [
-              { account: '5810', description: 'Representation (12% moms, ≤ 75 SEK moms/pers)', debit: 240, credit: 0 },
-              { account: '2641', description: 'Ingående moms', debit: 28.80, credit: 0 },
-              { account: '2440', description: 'Leverantörsskulder', debit: 0, credit: 268.80 },
-            ],
-          },
-        },
-        {
-          user_id: userId,
-          company_id: companyId,
-          operation_type: 'categorize_transaction',
-          status: 'pending',
-          actor_type: 'agent_chat',
-          risk_level: 'low',
-          title: 'Bokför insättning, bankgiro',
-          // commitCategorizeTransaction needs a real uncategorized
-          // transaction_id + a category that resolves to an account mapping.
-          // income_services → 3001 (Försäljning tjänster 25%), matching the
-          // preview's 1930 / 2611 / 3001 split for the 1 200 kr deposit.
-          params: {
-            transaction_id: txMap['INSÄTTNING BANKGIRO'],
-            category: 'income_services',
-            vat_treatment: 'standard_25',
-          },
-          preview_data: {
-            preview_lines: [
-              { account: '1930', description: 'Företagskonto', debit: 1200, credit: 0 },
-              { account: '2611', description: 'Utgående moms 25%', debit: 0, credit: 240 },
-              { account: '3001', description: 'Försäljning 25% moms', debit: 0, credit: 960 },
-            ],
-          },
-        },
-      ])
+      .insert(
+        buildSandboxPendingOperations({
+          userId,
+          companyId,
+          inboxItemId: inboxRow.id,
+          supplierId: supplierMap['Demokafé AB'],
+          invoiceDate: toDateStr(fiveDaysAgo),
+          dueDate: toDateStr(sevenDaysFromNow),
+          transactionId: txMap['INSÄTTNING BANKGIRO'],
+        }),
+      )
 
     if (pendOpsError) throw pendOpsError
 

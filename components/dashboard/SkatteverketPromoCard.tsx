@@ -6,7 +6,7 @@ import { ArrowRight, FileCheck, X } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
-import { useCapability } from '@/contexts/CompanyContext'
+import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 
 const dismissKey = (companyId: string) => `erp_skv_promo_dismissed:${companyId}`
@@ -36,11 +36,14 @@ interface SkatteverketPromoCardProps {
  * otherwise only discover the integration deep inside the VAT/AGI flows.
  * Capability-less users never see it: the paywall upsell lives where the
  * intent is (SkatteverketPanel, AGIPanel), not on the dashboard.
+ * Sandbox companies never see it either: Skatteverket is one of the external
+ * services the sandbox blocks outright, so the CTA would lead nowhere.
  */
 export function SkatteverketPromoCard({ companyId, connected }: SkatteverketPromoCardProps) {
   const t = useTranslations('dashboard')
   const extensionEnabled = ENABLED_EXTENSION_IDS.has('skatteverket')
   const hasCapability = useCapability(CAPABILITY.skatteverket)
+  const isSandbox = useCompanyOptional()?.isSandbox ?? false
 
   // Server snapshot says dismissed: the card appears only after hydration,
   // when localStorage is readable, so server and client never disagree.
@@ -55,7 +58,7 @@ export function SkatteverketPromoCard({ companyId, connected }: SkatteverketProm
     window.dispatchEvent(new Event(DISMISS_EVENT))
   }, [companyId])
 
-  if (!extensionEnabled || !hasCapability || connected || dismissed) return null
+  if (!extensionEnabled || !hasCapability || isSandbox || connected || dismissed) return null
 
   return (
     <section>
