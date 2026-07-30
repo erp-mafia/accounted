@@ -63,9 +63,18 @@ const DOMESTIC_SALES_RATE_BY_SUFFIX: Record<string, number> = {
  *
  * Only consulted for a MISSING rate. An explicitly configured value stays
  * authoritative and never reaches this check.
+ *
+ * The word boundaries are load-bearing, not decoration. "0 %" needs a leading
+ * \b or it also matches the trailing zero of "10/20/30/100 %", vetoing a
+ * perfectly ordinary "Försäljning varor 25 % moms, rabatt 30 %" and recreating
+ * the #1261 omission this module exists to remove. "vmb" needs both boundaries
+ * because three letters occur inside unrelated words. "export" and "utanför"
+ * are matched as bare substrings on purpose, so Swedish compounds
+ * ("exportförsäljning") are caught too; both are distinctive enough that a
+ * false hit would have to be contrived.
  */
 const CONTRADICTING_ACCOUNT_NAME =
-  /momsfri|momsfritt|utan moms|omvänd|\bvmb\b|vinstmarginal|export|utanför|eu-land|unionsintern|0\s*%/i
+  /momsfri|momsfritt|utan moms|omvänd|\bvmb\b|vinstmarginal|export|utanför|eu-land|unionsintern|\b0\s*%/i
 
 /**
  * Resolve a missing rate for a company-specific domestic sales sub-account.

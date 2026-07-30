@@ -1205,6 +1205,51 @@ describe('calculateVatDeclaration: company-specific ruta 05 accounts', () => {
     expect(result.rutor.ruta05).toBe(0)
   })
 
+  it('does not let a percentage ending in zero trip the 0 % veto', async () => {
+    // The veto's "0 %" alternative needs a leading word boundary: without one it
+    // also matches the trailing zero of "10/20/30/100 %", so an ordinary
+    // domestic sales konto whose name happens to mention a discount or a share
+    // would be dropped from ruta 05 and then raise a blocking
+    // OUTPUT_VAT_WITHOUT_SALES_BASE. Both names below are momspliktig
+    // försäljning inom Sverige: agreeing 30x1 suffix, agreeing "25 % moms".
+    chartAccounts = [
+      {
+        account_number: '3011',
+        account_name: 'Försäljning varor 25 % moms, rabatt 30 %',
+        default_vat_rate: null,
+      },
+      {
+        account_number: '3021',
+        account_name: 'Försäljning varor 25 % moms, 100 % ägt dotterbolag',
+        default_vat_rate: null,
+      },
+    ]
+    seedLedger([
+      { account_number: '3011', debit_amount: 0, credit_amount: 5000 },
+      { account_number: '3021', debit_amount: 0, credit_amount: 3000 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(8000)
+  })
+
+  it('still vetoes a konto whose label states a genuine 0 % sats', async () => {
+    // The other side of the boundary fix: a real "0 %" label must keep vetoing.
+    chartAccounts = [
+      {
+        account_number: '3011',
+        account_name: 'Försäljning 0 % moms',
+        default_vat_rate: null,
+      },
+    ]
+    seedLedger([{ account_number: '3011', debit_amount: 0, credit_amount: 5000 }])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta05).toBe(0)
+  })
+
   it('adds the accounts to p_accounts but never to p_ruta_accounts', async () => {
     // p_ruta_accounts is the settlement SHAPE detector inside the RPC: an entry
     // touching it plus 2650/1650 is classified a momsredovisning and dropped
