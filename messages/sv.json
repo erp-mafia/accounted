@@ -4087,8 +4087,8 @@
   "journal_status": {
     "status_draft": "Utkast",
     "status_posted": "Bokförd",
-    "status_reversed": "Omförd",
-    "status_cancelled": "Makulerad",
+    "status_reversed": "Makulerad",
+    "status_cancelled": "Avbruten",
     "source_storno": "Storno",
     "source_correction": "Rättelse",
     "source_label_manual": "Manuell",

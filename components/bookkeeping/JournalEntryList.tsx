@@ -1085,12 +1085,19 @@ export default function JournalEntryList() {
                 // Voucher total = sum of the debit side (= credit side when balanced).
                 const voucherTotal = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
                 const selectable = canWrite && isEligibleForExempt(entry)
+                // A makulerad verifikat should read as struck out, the way
+                // Grundbok already renders it. Applied per data cell rather
+                // than on the row: text-decoration propagates to descendants
+                // and a child cannot opt out, so striking the <tr> would draw
+                // a line through the row's action controls too.
+                const struckCell = entry.status === 'reversed' ? 'line-through' : undefined
 
                 return (
                   <Fragment key={entry.id}>
                     <tr
                       className={cn(
                         'group cursor-pointer transition-colors duration-150',
+                        entry.status === 'reversed' && 'opacity-60',
                         isExpanded ? 'bg-secondary/25' : 'hover:bg-secondary/35',
                         selectedIds.has(entry.id) && 'bg-secondary/40',
                       )}
@@ -1128,7 +1135,10 @@ export default function JournalEntryList() {
                         <span className="inline-flex items-center gap-1">
                           <Link
                             href={`/bookkeeping/${entry.id}`}
-                            className="font-mono text-[13px] tabular-nums hover:underline"
+                            className={cn(
+                              'font-mono text-[13px] tabular-nums hover:underline',
+                              struckCell,
+                            )}
                             onClick={(e) => e.stopPropagation()}
                           >
                             {formatVoucher(entry)}
@@ -1136,12 +1146,12 @@ export default function JournalEntryList() {
                           <OpenInNewTab href={`/bookkeeping/${entry.id}`} />
                         </span>
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap tabular-nums text-muted-foreground')}>
+                      <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap tabular-nums text-muted-foreground', struckCell)}>
                         {formatDate(entry.entry_date)}
                       </td>
                       <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
                         <span className="flex min-w-0 items-center gap-2">
-                          <span className="truncate">{entry.description}</span>
+                          <span className={cn('truncate', struckCell)}>{entry.description}</span>
                           {entry.out_of_period && (
                             <Badge
                               variant="outline"
@@ -1165,7 +1175,7 @@ export default function JournalEntryList() {
                           )}
                         </span>
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask', struckCell)}>
                         {formatCurrency(voucherTotal, 'SEK', { minimumFractionDigits: 2 })}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
