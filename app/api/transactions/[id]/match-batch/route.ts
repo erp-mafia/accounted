@@ -4,7 +4,7 @@ import { validateBody } from '@/lib/api/validate'
 import { MatchBatchSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { eventBus } from '@/lib/events/bus'
-import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { clearSettledBatchAllocationSuggestions } from '@/lib/invoices/clear-settled-batch-allocations'
 import { ensureInitialized } from '@/lib/init'
 import type { Invoice, SupplierInvoice, Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -152,23 +152,14 @@ export const POST = withRouteContext(
 
     // Every allocation the RPC settled in full retires its suggestion pointer
     // from the company's OTHER transactions (issue #1259). This request's own
-    // row is linked by the RPC, so it is excluded here.
-    for (const alloc of result.allocations) {
-      if (alloc.status !== 'paid') continue
-      if (alloc.kind === 'customer_invoice' && alloc.invoice_id) {
-        await clearSettledInvoiceSuggestions(supabase, companyId!, 'invoice', alloc.invoice_id, {
-          exceptTransactionId: transactionId,
-        })
-      } else if (alloc.kind === 'supplier_invoice' && alloc.supplier_invoice_id) {
-        await clearSettledInvoiceSuggestions(
-          supabase,
-          companyId!,
-          'supplier_invoice',
-          alloc.supplier_invoice_id,
-          { exceptTransactionId: transactionId },
-        )
-      }
-    }
+    // row is linked by the RPC, so it is excluded there. Shared with the MCP
+    // executor for the same RPC (commitMatchBatchAllocate).
+    await clearSettledBatchAllocationSuggestions(
+      supabase,
+      companyId!,
+      result.allocations,
+      transactionId,
+    )
 
     return NextResponse.json({
       data: {

@@ -397,6 +397,13 @@ export const POST = withRouteContext(
       })
     }
 
+    // Fully settled: retire every transaction's suggestion pointer at this
+    // invoice (issue #1259). No exceptTransactionId: this flow is not driven by
+    // a bank transaction, so any pointer at it is now dead.
+    if (isFullyPaid) {
+      await clearSettledInvoiceSuggestions(supabase, companyId!, 'supplier_invoice', id)
+    }
+
     // Under kontantmetoden the cash payment entry is the ONLY booking of the
     // affärshändelse, so its underlag (the document from the inbox) must hang on
     // THIS verifikat per BFL 5 kap 6 §. Under faktureringsmetoden the document
@@ -407,13 +414,6 @@ export const POST = withRouteContext(
     // anchor every missing-underlag surface warns on a verifikat that plainly
     // shows the invoice. Non-fatal by construction: the payment is already
     // committed and immutable, so the helper logs and returns null on failure.
-    // Fully settled: retire every transaction's suggestion pointer at this
-    // invoice (issue #1259). No exceptTransactionId: this flow is not driven by
-    // a bank transaction, so any pointer at it is now dead.
-    if (isFullyPaid) {
-      await clearSettledInvoiceSuggestions(supabase, companyId!, 'supplier_invoice', id)
-    }
-
     await anchorSupplierInvoiceDocument(supabase, companyId!, id)
 
     try {

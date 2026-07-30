@@ -351,4 +351,65 @@ describe('listSuggestedMatches', () => {
 
     await expect(listSuggestedMatches(supabase, COMPANY)).resolves.toEqual([])
   })
+
+  // The badge scans up to 200 hints (SUGGESTED_MATCH_SCAN_CAP), past the 150
+  // ids per .in() that countInboxDocuments already chunks for: PostgREST puts
+  // them in the GET query string, and a 414 would come back as a silent 0.
+  it('chunks the candidate id list at 150 ids per lookup', async () => {
+    const txRows = Array.from({ length: 151 }, (_, i) => ({
+      id: `tx-${i}`,
+      date: '2026-06-01',
+      description: 'X',
+      amount: 100,
+      currency: 'SEK',
+      potential_invoice_id: `inv-${i}`,
+      potential_supplier_invoice_id: null,
+    }))
+    enqueue({ data: txRows })
+    enqueue({ data: [] }) // chunk 1
+    enqueue({ data: [] }) // chunk 2
+
+    await listSuggestedMatches(supabase, COMPANY, 200)
+
+    const idFilters = findCalls('invoices', 'in').filter(([col]) => col === 'id')
+    expect(idFilters).toHaveLength(2)
+    expect((idFilters[0][1] as string[]).length).toBe(150)
+    expect((idFilters[1][1] as string[]).length).toBe(1)
+  })
+
+  // Previously the candidate results were consumed without checking .error, so
+  // a 414 / 500 / RLS change yielded empty maps, an empty list and a zero badge
+  // with nothing logged.
+  it('returns [] and logs with companyId when a candidate lookup fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    enqueue({
+      data: [
+        {
+          id: 'tx-1',
+          date: '2026-06-01',
+          description: 'X',
+          amount: 100,
+          currency: 'SEK',
+          potential_invoice_id: 'inv-1',
+          potential_supplier_invoice_id: null,
+        },
+      ],
+    })
+    enqueue({ error: { message: 'boom' } })
+
+    await expect(listSuggestedMatches(supabase, COMPANY)).resolves.toEqual([])
+    expect(consoleError).toHaveBeenCalled()
+    const logged = consoleError.mock.calls.map((c) => String(c[0])).join('\n')
+    expect(logged).toContain('candidate lookup failed')
+    expect(logged).toContain(COMPANY)
+    consoleError.mockRestore()
+  })
+
+  it('logs the tenant with the transaction query failure too', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    enqueue({ error: { message: 'boom' } })
+    await expect(listSuggestedMatches(supabase, COMPANY)).resolves.toEqual([])
+    expect(String(consoleError.mock.calls[0]?.[0])).toContain(COMPANY)
+    consoleError.mockRestore()
+  })
 })

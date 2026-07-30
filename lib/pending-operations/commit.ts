@@ -58,6 +58,10 @@ import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import {
+  clearSettledBatchAllocationSuggestions,
+  type BatchAllocationResult,
+} from '@/lib/invoices/clear-settled-batch-allocations'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { parseSIEFile } from '@/lib/import/sie-parser'
@@ -5096,7 +5100,13 @@ async function commitMatchBatchAllocate(
     })
     return { error: error.message || 'Database error', status: 500 }
   }
-  const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string }
+  const result = data as {
+    ok: boolean
+    code?: string
+    details?: unknown
+    journal_entry_id?: string
+    allocations?: BatchAllocationResult[]
+  }
   if (!result || !result.ok) {
     return {
       error: result?.code || 'match_batch_allocate failed',
@@ -5104,6 +5114,12 @@ async function commitMatchBatchAllocate(
       data: result?.details as Record<string, unknown> | undefined,
     }
   }
+  // Every allocation the RPC settled in full retires its suggestion pointer
+  // from the company's OTHER transactions (issue #1259): the RPC only nulls
+  // them on the source tx. Same helper as the HTTP twin
+  // (app/api/transactions/[id]/match-batch/route.ts) so the two cannot drift.
+  await clearSettledBatchAllocationSuggestions(supabase, companyId, result.allocations ?? [], txId)
+
   // Structured audit-trail entry on success (compliance-swarm V16). Tx
   // count + JE id + the source tx id only: no amounts, no
   // counterparty identifiers, no descriptions. txId is included

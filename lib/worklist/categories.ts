@@ -131,7 +131,9 @@ const SUGGESTED_MATCH_OR =
 
 /**
  * Cap on the hint scan behind countSuggestedMatches; clamps like
- * INBOX_SCAN_CAP.
+ * INBOX_SCAN_CAP. Above IN_CLAUSE_CHUNK on purpose: the candidate lookups it
+ * feeds are chunked (fetchCandidatesChunked), so the URL length stays bounded
+ * regardless of this number.
  */
 const SUGGESTED_MATCH_SCAN_CAP = 200
 
@@ -266,6 +268,37 @@ interface SuggestedMatchTxRow {
   potential_supplier_invoice_id: string | null
 }
 
+type CandidateRow = {
+  id: string
+  invoice_number?: string | null
+  supplier_invoice_number?: string | null
+  total: number | null
+  customer?: { name: string | null } | null
+  supplier?: { name: string | null } | null
+}
+
+/**
+ * Run one candidate lookup over a chunked id list. PostgREST serialises .in()
+ * into the GET query string, so a long list can push the URL past proxy limits
+ * (HTTP 414) exactly as countInboxDocuments guards against. The first error
+ * short-circuits: a partial candidate set would silently drop rows from the
+ * list and, through countSuggestedMatches, from the badge.
+ */
+async function fetchCandidatesChunked(
+  ids: string[],
+  runChunk: (
+    chunk: string[],
+  ) => PromiseLike<{ data: unknown; error: { message?: string } | null }>,
+): Promise<{ rows: CandidateRow[]; error: { message?: string } | null }> {
+  const rows: CandidateRow[] = []
+  for (let i = 0; i < ids.length; i += IN_CLAUSE_CHUNK) {
+    const { data, error } = await runChunk(ids.slice(i, i + IN_CLAUSE_CHUNK))
+    if (error) return { rows: [], error }
+    rows.push(...((data ?? []) as unknown as CandidateRow[]))
+  }
+  return { rows, error: null }
+}
+
 /**
  * Suggested transaction↔invoice matches with enough candidate context for a
  * one-click confirm row. Confirm endpoints:
@@ -302,51 +335,55 @@ export async function listSuggestedMatches(
     .order('date', { ascending: false })
     .limit(limit)
   if (error) {
-    log.error('worklist listSuggestedMatches failed', { reason: error.message })
+    // companyId matches logAndZero's convention so repeated failures can be
+    // correlated to a tenant in monitoring.
+    log.error('worklist listSuggestedMatches failed', { companyId, reason: error.message })
     return []
   }
 
   const txs = (txRows ?? []) as SuggestedMatchTxRow[]
-  const invoiceIds = txs.map((t) => t.potential_invoice_id).filter((x): x is string => !!x)
-  const supplierInvoiceIds = txs
-    .map((t) => t.potential_supplier_invoice_id)
-    .filter((x): x is string => !!x)
+  const invoiceIds = [
+    ...new Set(txs.map((t) => t.potential_invoice_id).filter((x): x is string => !!x)),
+  ]
+  const supplierInvoiceIds = [
+    ...new Set(txs.map((t) => t.potential_supplier_invoice_id).filter((x): x is string => !!x)),
+  ]
 
   const [invoiceRes, supplierRes] = await Promise.all([
-    invoiceIds.length > 0
-      ? supabase
-          .from('invoices')
-          .select('id, invoice_number, total, customer:customers(name)')
-          .eq('company_id', companyId)
-          .in('id', invoiceIds)
-          .in('status', [...MATCHABLE_INVOICE_STATUSES])
-          .gt('remaining_amount', 0)
-      : Promise.resolve({ data: [], error: null }),
-    supplierInvoiceIds.length > 0
-      ? supabase
-          .from('supplier_invoices')
-          .select('id, supplier_invoice_number, total, supplier:suppliers(name)')
-          .eq('company_id', companyId)
-          .in('id', supplierInvoiceIds)
-          .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
-          .gt('remaining_amount', 0)
-      : Promise.resolve({ data: [], error: null }),
+    fetchCandidatesChunked(invoiceIds, (chunk) =>
+      supabase
+        .from('invoices')
+        .select('id, invoice_number, total, customer:customers(name)')
+        .eq('company_id', companyId)
+        .in('id', chunk)
+        .in('status', [...MATCHABLE_INVOICE_STATUSES])
+        .gt('remaining_amount', 0),
+    ),
+    fetchCandidatesChunked(supplierInvoiceIds, (chunk) =>
+      supabase
+        .from('supplier_invoices')
+        .select('id, supplier_invoice_number, total, supplier:suppliers(name)')
+        .eq('company_id', companyId)
+        .in('id', chunk)
+        .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
+        .gt('remaining_amount', 0),
+    ),
   ])
 
-  type CandidateRow = {
-    id: string
-    invoice_number?: string | null
-    supplier_invoice_number?: string | null
-    total: number | null
-    customer?: { name: string | null } | null
-    supplier?: { name: string | null } | null
+  // A failed candidate lookup must not pass for "nothing is matchable": that
+  // would render an empty list and, through countSuggestedMatches, a silent
+  // zero badge. Log it (with companyId) and bail, same as the tx query above.
+  const candidateError = invoiceRes.error ?? supplierRes.error
+  if (candidateError) {
+    log.error('worklist listSuggestedMatches candidate lookup failed', {
+      companyId,
+      reason: candidateError.message,
+    })
+    return []
   }
-  const invoiceById = new Map<string, CandidateRow>(
-    ((invoiceRes.data ?? []) as unknown as CandidateRow[]).map((r) => [r.id, r]),
-  )
-  const supplierById = new Map<string, CandidateRow>(
-    ((supplierRes.data ?? []) as unknown as CandidateRow[]).map((r) => [r.id, r]),
-  )
+
+  const invoiceById = new Map<string, CandidateRow>(invoiceRes.rows.map((r) => [r.id, r]))
+  const supplierById = new Map<string, CandidateRow>(supplierRes.rows.map((r) => [r.id, r]))
 
   const matches: SuggestedMatch[] = []
   for (const tx of txs) {
