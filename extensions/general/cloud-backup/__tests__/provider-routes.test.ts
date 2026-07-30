@@ -66,6 +66,10 @@ const ENV_KEYS = [
   'DROPBOX_APP_SECRET',
   // The OAuth state parameter is encrypted with a key derived from this.
   'SUPABASE_SERVICE_ROLE_KEY',
+  // Canonical app origin: when set, redirect URIs must come from it, not from
+  // the request host. Cleared per test so assertions on the request-origin
+  // fallback stay deterministic whatever the runner's environment holds.
+  'NEXT_PUBLIC_APP_URL',
 ] as const
 const originalEnv: Record<string, string | undefined> = {}
 
@@ -77,6 +81,7 @@ beforeEach(() => {
   process.env.DROPBOX_APP_KEY = 'dropbox-key'
   process.env.DROPBOX_APP_SECRET = 'dropbox-secret'
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key'
+  delete process.env.NEXT_PUBLIC_APP_URL
 })
 
 afterEach(() => {
@@ -145,6 +150,41 @@ describe('provider routing', () => {
   it('registers a separate OAuth callback per provider', () => {
     expect(findRoute('GET', '/oauth/callback')).toBeDefined()
     expect(findRoute('GET', '/oauth/dropbox/callback')).toBeDefined()
+  })
+})
+
+describe('canonical redirect_uri', () => {
+  // Google and Dropbox reject any redirect_uri that is not pre-registered on
+  // the OAuth client. Only the canonical app origin is registered, so a
+  // request arriving on any other host (old app domain, deployment preview)
+  // must still produce the canonical redirect_uri or the provider refuses the
+  // flow before the consent screen.
+  it('builds the Google redirect_uri from NEXT_PUBLIC_APP_URL, not the request host', async () => {
+    process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.se'
+    const route = findRoute('POST', '/connect')
+    const { ctx } = makeContext()
+
+    const res = await route.handler(makeRequest('/connect?provider=google_drive'), ctx)
+
+    expect(res.status).toBe(200)
+    const { url } = (await res.json()) as { url: string }
+    expect(new URL(url).searchParams.get('redirect_uri')).toBe(
+      'https://app.accounted.se/api/extensions/ext/cloud-backup/oauth/callback'
+    )
+  })
+
+  it('builds the Dropbox redirect_uri from NEXT_PUBLIC_APP_URL, not the request host', async () => {
+    process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.se'
+    const route = findRoute('POST', '/connect')
+    const { ctx } = makeContext()
+
+    const res = await route.handler(makeRequest('/connect?provider=dropbox'), ctx)
+
+    expect(res.status).toBe(200)
+    const { url } = (await res.json()) as { url: string }
+    expect(new URL(url).searchParams.get('redirect_uri')).toBe(
+      'https://app.accounted.se/api/extensions/ext/cloud-backup/oauth/dropbox/callback'
+    )
   })
 })
 
