@@ -26,6 +26,8 @@ export const GET = withCronContext('cron.webhook_dispatch', async (_request, ctx
     delivered: summary.delivered,
     failed: summary.failed,
     dead: summary.dead,
+    skipped: summary.skipped,
+    released: summary.released,
   })
 
   return NextResponse.json({ data: summary })

@@ -45,6 +45,34 @@ const MAX_ATTEMPTS = RETRY_BACKOFF_SECONDS.length + 1 // initial + 7 retries = 8
 const REQUEST_TIMEOUT_MS = 10_000
 const MAX_RESPONSE_BODY_BYTES = 4096
 
+/** Rows claimed per cycle when the caller passes nothing: the cron. */
+const DEFAULT_BATCH_SIZE = 50
+
+/**
+ * Wall-clock ceiling on one cycle's serial attempt loop. 50 rows at a 10 s
+ * receiver timeout is 500 s of worst case, which no serverless invocation
+ * survives, so bound the cycle explicitly instead of letting the platform
+ * kill it mid-loop and leaving the remainder to the sweep.
+ */
+const CYCLE_BUDGET_MS = 120_000
+
+/** Slack over the cycle bound: claim round trip, re-stamp, terminal write, clock skew. */
+const STUCK_RECOVERY_SLACK_MS = 30_000
+
+/**
+ * How long an in_flight row may legitimately sit before the sweep may treat
+ * it as abandoned. Derived, not guessed (#1257): a cycle attempts up to
+ * batchSize rows serially at up to REQUEST_TIMEOUT_MS each, bounded by
+ * CYCLE_BUDGET_MS, and a row still queued behind that loop carries the
+ * updated_at its claim stamped. The floor is DEFAULT_BATCH_SIZE because the
+ * sweep is tenant-global: the 5-row kick must not re-arm rows the 50-row
+ * cron still owns.
+ */
+function stuckInFlightAfterMs(batchSize: number = DEFAULT_BATCH_SIZE): number {
+  const serialCycleMs = Math.max(batchSize, DEFAULT_BATCH_SIZE) * REQUEST_TIMEOUT_MS
+  return Math.min(serialCycleMs, CYCLE_BUDGET_MS) + REQUEST_TIMEOUT_MS + STUCK_RECOVERY_SLACK_MS
+}
+
 interface DueDelivery {
   id: string
   webhook_id: string
@@ -68,6 +96,10 @@ export interface DispatchSummary {
   delivered: number
   failed: number
   dead: number
+  /** Claimed but no longer ours by the time the attempt was due to start. */
+  skipped: number
+  /** Claimed but handed back unattempted because the cycle budget ran out. */
+  released: number
 }
 
 /**
@@ -85,21 +117,36 @@ export async function dispatchDueDeliveries(args: {
   /** Override for tests; injected pinned-fetch implementation. */
   pinnedFetchImpl?: typeof pinnedHttpsFetch
 }): Promise<DispatchSummary> {
-  const batchSize = args.batchSize ?? 50
+  const batchSize = args.batchSize ?? DEFAULT_BATCH_SIZE
   const now = args.now ?? new Date()
   const pinnedFetchImpl = args.pinnedFetchImpl ?? pinnedHttpsFetch
 
-  const summary: DispatchSummary = { picked: 0, delivered: 0, failed: 0, dead: 0 }
+  const summary: DispatchSummary = {
+    picked: 0,
+    delivered: 0,
+    failed: 0,
+    dead: 0,
+    skipped: 0,
+    released: 0,
+  }
 
   // Recover stuck in_flight rows: a previous tick that was killed mid-flight
   // (Vercel function timeout, hard crash, manual termination) leaves rows
   // marked in_flight forever otherwise. Sweep them back to 'failed' so the
   // retry loop picks them up at next_attempt_at.
   //
-  // Threshold = 2× REQUEST_TIMEOUT_MS. A live attempt takes at most
-  // REQUEST_TIMEOUT_MS plus the body read; doubling that gives an
-  // unambiguous "this is stuck, not in-flight" boundary.
-  await recoverStuckInFlight(args.supabase, now)
+  // The window comes from stuckInFlightAfterMs(): a bounded cycle
+  // (CYCLE_BUDGET_MS) plus one receiver timeout plus slack, floored at the
+  // cron's own batch. It is deliberately WIDER than any live cycle can be,
+  // so a row still queued behind an earlier cycle's serial loop is never
+  // re-armed under it (#1257). The old fixed 2x REQUEST_TIMEOUT_MS was
+  // narrower than a single cycle, which made every cycle recover the rows
+  // the previous cycle was still working through.
+  await recoverStuckInFlight(args.supabase, now, batchSize)
+
+  // Real clock, not the injectable `now`: the budget bounds this invocation's
+  // wall time, so a fixed test `now` must not be able to trip it.
+  const cycleStartedAt = Date.now()
 
   const due = await claimDueDeliveries(args.supabase, batchSize, now)
   summary.picked = due.length
@@ -109,7 +156,20 @@ export async function dispatchDueDeliveries(args: {
   const webhookIds = Array.from(new Set(due.map((d) => d.webhook_id)))
   const webhookMap = await loadWebhooksByIds(args.supabase, webhookIds)
 
-  for (const delivery of due) {
+  for (const [index, delivery] of due.entries()) {
+    // Out of budget: hand back everything we will not reach rather than
+    // letting the platform kill the invocation mid-loop and leaving the
+    // remainder stranded in in_flight until a sweep re-arms it.
+    if (Date.now() - cycleStartedAt >= CYCLE_BUDGET_MS - REQUEST_TIMEOUT_MS) {
+      const remaining = due.slice(index)
+      await releaseUnattempted(args.supabase, remaining.map((d) => d.id), now)
+      summary.released = remaining.length
+      log.warn('cycle budget exhausted: unattempted claims released', {
+        count: remaining.length,
+      })
+      break
+    }
+
     const webhook = webhookMap.get(delivery.webhook_id)
     if (!webhook) {
       // The webhook was deleted between enqueue and dispatch. Mark dead;
@@ -134,6 +194,19 @@ export async function dispatchDueDeliveries(args: {
       })
       await markDead(args.supabase, delivery.id, 'cross_tenant_mismatch')
       summary.dead++
+      continue
+    }
+
+    // Re-stamp updated_at immediately before this row's own attempt, so the
+    // row's in_flight age measures the attempt rather than the claim, and use
+    // the same write as an ownership check (#1257).
+    if (!(await touchInFlight(args.supabase, delivery.id))) {
+      log.info('delivery skipped: no longer in_flight', {
+        deliveryId: delivery.id,
+        webhookId: webhook.id,
+        companyId: delivery.company_id,
+      })
+      summary.skipped++
       continue
     }
 
@@ -193,36 +266,50 @@ export async function dispatchDueDeliveries(args: {
 // ──────────────────────────────────────────────────────────────────────
 
 /**
- * Mark in_flight rows whose updated_at is older than the stuck-threshold
- * back to 'failed' with next_attempt_at = now so they re-enter the
- * dispatch queue. Best-effort: a write failure here is logged but
+ * Sweep in_flight rows whose updated_at is older than the stuck-threshold
+ * back into the retry queue, charging an attempt for the stall so
+ * MAX_ATTEMPTS stays a real cap. Best-effort: a failure here is logged but
  * doesn't block the rest of the cycle.
+ *
+ * The predicate now lives in SQL (recover_stuck_webhook_deliveries,
+ * migration 20260730123000) rather than in a PostgREST chain, because
+ * PostgREST can express neither `attempts = attempts + 1` nor the
+ * conditional flip to 'dead' at the cap, and a read-then-write loop would
+ * reopen a TOCTOU against enforce_webhook_delivery_immutability. MAX_ATTEMPTS
+ * is passed in so the cap stays single-sourced here in TS.
+ *
+ * Under READ COMMITTED (Postgres default), UPDATE re-evaluates the WHERE
+ * clause against each row's current value when it acquires the row lock.
+ * The function keeps `status = 'in_flight'` in the outer UPDATE's WHERE for
+ * exactly that reason: a row that raced from 'in_flight' to
+ * 'delivered'/'dead' between scan and lock fails re-evaluation and is
+ * skipped entirely, so the immutability trigger never fires and a mid-flight
+ * terminal flip cannot abort the sweep.
  */
-async function recoverStuckInFlight(supabase: SupabaseClient, now: Date): Promise<void> {
-  const stuckBefore = new Date(now.getTime() - 2 * REQUEST_TIMEOUT_MS)
-  // Under READ COMMITTED (Postgres default), UPDATE re-evaluates the WHERE
-  // clause against each row's current value when it acquires the row lock.
-  // A row that raced from 'in_flight' to 'delivered'/'dead' between scan
-  // and lock will fail status='in_flight' on re-evaluation and be skipped
-  // entirely: the immutability trigger never fires, so a mid-flight
-  // terminal flip cannot abort the bulk update.
-  const { data, error } = await supabase
-    .from('webhook_deliveries')
-    .update({
-      status: 'failed',
-      next_attempt_at: now.toISOString(),
-      error: 'recovered_from_in_flight_timeout',
-    })
-    .eq('status', 'in_flight')
-    .lt('updated_at', stuckBefore.toISOString())
-    .select('id')
+async function recoverStuckInFlight(
+  supabase: SupabaseClient,
+  now: Date,
+  batchSize: number,
+): Promise<void> {
+  const stuckBefore = new Date(now.getTime() - stuckInFlightAfterMs(batchSize))
+  const { data, error } = await supabase.rpc('recover_stuck_webhook_deliveries', {
+    p_stuck_before: stuckBefore.toISOString(),
+    p_max_attempts: MAX_ATTEMPTS,
+    p_now: now.toISOString(),
+  })
 
   if (error) {
     log.warn('stuck in_flight recovery failed', { code: error.code })
     return
   }
-  if (data && data.length > 0) {
-    log.warn('recovered stuck in_flight rows', { count: data.length })
+  const rows = (data ?? []) as Array<{ id: string; status: string; attempts: number }>
+  if (rows.length > 0) {
+    const dead = rows.filter((r) => r.status === 'dead').length
+    log.warn('recovered stuck in_flight rows', {
+      count: rows.length,
+      dead,
+      retrying: rows.length - dead,
+    })
   }
 }
 
@@ -319,6 +406,67 @@ async function markFailedForRetry(
     })
     .eq('id', id)
   if (error) log.warn('mark failed-for-retry update failed', { id, code: error.code })
+}
+
+/**
+ * Re-stamp a claimed row's updated_at right before its own attempt starts,
+ * and report whether the row is still ours.
+ *
+ * `status` is written back verbatim: Postgres runs the UPDATE regardless of
+ * whether any value changed, so the table's BEFORE UPDATE
+ * update_updated_at_column trigger (migration 20260515200000) re-stamps
+ * updated_at. That is what makes a row's in_flight age measure its attempt
+ * instead of the moment the whole batch was claimed, which is the property
+ * the stuck sweep reads.
+ *
+ * The `.eq('status', 'in_flight')` filter keeps the write off terminal rows,
+ * so enforce_webhook_delivery_immutability never fires. A zero-row result
+ * means the delivery is no longer ours (another cycle recovered and re-claimed
+ * it, or it already reached a terminal state): skip it rather than POSTing a
+ * duplicate whose terminal write would lose the race anyway.
+ */
+async function touchInFlight(supabase: SupabaseClient, id: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('webhook_deliveries')
+    .update({ status: 'in_flight' })
+    .eq('id', id)
+    .eq('status', 'in_flight')
+    .select('id')
+
+  if (error) {
+    // Infrastructure hiccup, not lost ownership: proceed. Worst case the row
+    // looks older than it is and a later sweep re-arms it, which is exactly
+    // the pre-existing behaviour.
+    log.warn('in_flight touch failed', { id, code: error.code })
+    return true
+  }
+  return (data?.length ?? 0) > 0
+}
+
+/**
+ * Hand back rows this cycle claimed but will not attempt, so they are
+ * re-claimable immediately instead of waiting out the stuck window.
+ *
+ * Deliberately does NOT bump attempts (these rows were never attempted) and
+ * deliberately does NOT write `error` (a release is not a failure; overwriting
+ * would destroy the previous attempt's diagnostic). 'failed' rather than
+ * 'pending' because that is the sweep's and the retry loop's vocabulary for a
+ * re-claimable non-terminal row; claim_due_webhook_deliveries accepts both.
+ */
+async function releaseUnattempted(
+  supabase: SupabaseClient,
+  ids: string[],
+  now: Date,
+): Promise<void> {
+  if (ids.length === 0) return
+  const { error } = await supabase
+    .from('webhook_deliveries')
+    .update({ status: 'failed', next_attempt_at: now.toISOString() })
+    .in('id', ids)
+    .eq('status', 'in_flight')
+  if (error) {
+    log.warn('release of unattempted claims failed', { count: ids.length, code: error.code })
+  }
 }
 
 async function markDead(
@@ -651,4 +799,8 @@ export const __TESTING__ = {
   MAX_ATTEMPTS,
   REQUEST_TIMEOUT_MS,
   MAX_RESPONSE_BODY_BYTES,
+  DEFAULT_BATCH_SIZE,
+  CYCLE_BUDGET_MS,
+  STUCK_RECOVERY_SLACK_MS,
+  stuckInFlightAfterMs,
 }

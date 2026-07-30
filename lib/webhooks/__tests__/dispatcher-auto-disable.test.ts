@@ -76,12 +76,17 @@ function makeSupabase(opts: {
       }
 
       if (table === 'webhook_deliveries') {
-        // update(...).eq(...)                          -> markDead / markDelivered
-        // update(...).eq(...).lt(...).select('id')     -> recoverStuckInFlight
+        // update(...).eq(...)                                -> markDead / markDelivered
+        // update(...).eq('id').eq('status').select('id')     -> touchInFlight
+        //
+        // The touch must resolve to a NON-empty row set: an empty result means
+        // "this delivery is no longer ours" and the dispatcher skips the
+        // attempt, which would take the 410 auto-disable path out of reach.
+        // The stuck sweep no longer runs through this chain at all; it goes
+        // through rpc('recover_stuck_webhook_deliveries').
         const thenable = {
           eq: () => thenable,
-          lt: () => thenable,
-          select: async () => ({ data: [], error: null }),
+          select: async () => ({ data: [{ id: DELIVERY_ID }], error: null }),
           then: (resolve: (v: { error: null }) => unknown) => resolve({ error: null }),
         }
         return { update: () => thenable }

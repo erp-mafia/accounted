@@ -34,13 +34,17 @@
  * the same row at the same moment. That is a claim-time guarantee only, and it
  * is worth being precise about what it does NOT buy: the RPC autocommits, so
  * its locks are gone before any POST is issued, and from then on ownership is
- * just status='in_flight'. A later cycle's recoverStuckInFlight sweep can
- * re-arm a row that is still queued behind an earlier cycle's serial loop.
- * Delivery therefore stays at-least-once, exactly as the public docs promise
- * ("the same delivery id may arrive more than once ... idempotency is on
- * you"). The kick does not change that contract: the cron already claims 50
- * rows serially against the same 20 s stuck threshold, which is a wider window
- * than this batch of 5 can open.
+ * just status='in_flight'. Delivery therefore stays at-least-once, exactly as
+ * the public docs promise ("the same delivery id may arrive more than once ...
+ * idempotency is on you").
+ *
+ * The kick does not widen that. Since #1257 the stuck sweep's window is derived
+ * from the bounded cycle and floored at the cron's batch size, so it is
+ * identical for both callers and always wider than any live cycle: neither the
+ * cron nor this 5-row kick can re-arm a row the other still owns. What remains
+ * is the genuine crash case, where a hard-killed invocation's rows are
+ * recovered while its POSTs may still be in flight; the ownership check in
+ * touchInFlight drops the loser's POST before it is issued.
  */
 
 import { after } from 'next/server'

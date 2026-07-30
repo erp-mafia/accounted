@@ -24,7 +24,7 @@ beforeEach(() => {
 
 describe('kickWebhookDispatch', () => {
   it('runs one dispatch cycle with the small kick batch size', async () => {
-    const dispatch = vi.fn().mockResolvedValue({ picked: 1, delivered: 1, failed: 0, dead: 0 })
+    const dispatch = vi.fn().mockResolvedValue({ picked: 1, delivered: 1, failed: 0, dead: 0, skipped: 0, released: 0 })
 
     kickWebhookDispatch(dispatch)
     await flush()
@@ -46,7 +46,7 @@ describe('kickWebhookDispatch', () => {
         new Promise((resolve) => {
           setTimeout(() => {
             settled = true
-            resolve({ picked: 0, delivered: 0, failed: 0, dead: 0 })
+            resolve({ picked: 0, delivered: 0, failed: 0, dead: 0, skipped: 0, released: 0 })
           }, 20)
         }),
     )
@@ -66,7 +66,7 @@ describe('kickWebhookDispatch', () => {
   it('coalesces a burst of kicks into a single cycle', async () => {
     // A bulk booking emits once per row. Without coalescing, 100 rows would
     // mean 100 claim round trips against the same handful of due deliveries.
-    const dispatch = vi.fn().mockResolvedValue({ picked: 0, delivered: 0, failed: 0, dead: 0 })
+    const dispatch = vi.fn().mockResolvedValue({ picked: 0, delivered: 0, failed: 0, dead: 0, skipped: 0, released: 0 })
 
     for (let i = 0; i < 100; i++) kickWebhookDispatch(dispatch)
     await flush()
@@ -75,7 +75,7 @@ describe('kickWebhookDispatch', () => {
   })
 
   it('accepts a new kick once the previous cycle has started', async () => {
-    const dispatch = vi.fn().mockResolvedValue({ picked: 0, delivered: 0, failed: 0, dead: 0 })
+    const dispatch = vi.fn().mockResolvedValue({ picked: 0, delivered: 0, failed: 0, dead: 0, skipped: 0, released: 0 })
 
     kickWebhookDispatch(dispatch)
     await flush()
@@ -101,7 +101,7 @@ describe('kickWebhookDispatch', () => {
     kickWebhookDispatch(failing)
     await flush()
 
-    const ok = vi.fn().mockResolvedValue({ picked: 0, delivered: 0, failed: 0, dead: 0 })
+    const ok = vi.fn().mockResolvedValue({ picked: 0, delivered: 0, failed: 0, dead: 0, skipped: 0, released: 0 })
     kickWebhookDispatch(ok)
     await flush()
 
