@@ -109,6 +109,11 @@ export default function JournalEntryList() {
   const [count, setCount] = useState(0)
   const [page, setPage] = useState(0)
   const [attachmentCounts, setAttachmentCounts] = useState<Record<string, number>>({})
+  // Counts arrive in a second request, after the rows are already painted.
+  // Until they land, every row looks like it has no underlag, so rendering the
+  // chip eagerly flashes a false "Saknar underlag" compliance warning on every
+  // load, sort, filter and page change. Render nothing until we actually know.
+  const [attachmentCountsLoaded, setAttachmentCountsLoaded] = useState(false)
   // Entries with inline rättelser (journal_entry_rattelse_log rows): drives
   // the "Rättad" marker so a rättelse is discoverable from the list
   // (BFL 5 kap 5 §), not only on the detail page.
@@ -194,8 +199,13 @@ export default function JournalEntryList() {
   const fetchAttachmentCounts = useCallback(async (entryIds: string[]) => {
     if (entryIds.length === 0) {
       setAttachmentCounts({})
+      setAttachmentCountsLoaded(true)
       return
     }
+    // Deliberately keeps the previous counts in place while refetching: they
+    // are keyed by entry id, so a row that survives the refetch keeps its true
+    // count and a new row is covered by the loaded flag below.
+    setAttachmentCountsLoaded(false)
     // The counts route caps each request at 50 IDs, so a large page ("Alla", or
     // 100/page) must be split into chunks and merged. Without this the whole
     // request 400s and every document-requiring row falsely shows the
@@ -219,6 +229,8 @@ export default function JournalEntryList() {
       setAttachmentCounts(Object.assign({}, ...results))
     } catch {
       // Non-critical: silently ignore
+    } finally {
+      setAttachmentCountsLoaded(true)
     }
   }, [])
 
@@ -1199,7 +1211,7 @@ export default function JournalEntryList() {
                               <span className="text-xs tabular-nums">{attachmentCounts[entry.id]}</span>
                             </button>
                           ) : (
-                            NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
+                            attachmentCountsLoaded && NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && (
                               noDocRequired.has(entry.id) ? (
                                 <span title={t('no_doc_required_indicator_tooltip')}>
                                   <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
