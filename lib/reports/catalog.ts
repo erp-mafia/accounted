@@ -67,6 +67,13 @@ export interface ReportDescriptor {
    * lib/reports/__tests__/dimension-statutory-guard.test.ts.
    */
   dimensions?: boolean
+  /**
+   * Extra words the library search should match, beyond the translated name
+   * and description. For the vocabulary a user brings from another product or
+   * from the task they are doing ("verifikat per konto", "kontoanalys"), which
+   * is often not the word we chose for the report.
+   */
+  searchTerms?: string
   /** Only shown when company_settings.dimensions_enabled is true. */
   needsDimensions?: boolean
   /**
@@ -249,6 +256,11 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     params: 'fiscal-range',
     exports: ['xlsx'],
     dimensions: true,
+    // This is the "show me the verifikat behind account 1930" report, which
+    // is what people search for when reconciling before årsredovisningen.
+    // Fortnox calls it Kontoanalys, Björn Lundén Kontokontroll.
+    searchTerms:
+      'verifikat verifikationer per konto kontoanalys kontokort kontohistorik stäm av stämma avstämning ledger account statement vouchers',
   },
   {
     slug: 'grundbok',
@@ -363,4 +375,25 @@ export function getLibrarySections(
       (r) => r.category === category && isVisible(r, entityType, hasEmployees, dimensionsEnabled),
     ),
   })).filter((s) => s.items.length > 0)
+}
+
+/**
+ * Token-AND match used by the report library's search box.
+ *
+ * Every whitespace-separated token in the query must appear somewhere in the
+ * haystack, so narrowing words keep narrowing. Case- and diacritic-insensitive
+ * so "stam av" finds "stäm av" and a Swedish keyboard is not required.
+ */
+export function reportMatchesQuery(haystack: string, query: string): boolean {
+  const tokens = fold(query).split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return true
+  const hay = fold(haystack)
+  return tokens.every((token) => hay.includes(token))
+}
+
+function fold(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
 }

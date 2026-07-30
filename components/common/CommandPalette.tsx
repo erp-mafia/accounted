@@ -58,7 +58,10 @@ const PAGE_ENTRIES: Entry[] = [
   { id: 'rapport-balansrapport', label: 'Visa rapport: Balansrapport', icon: BarChart3, href: '/reports/balansrapport', keywords: 'rapport balans tillgångar skulder saldo per konto' },
   { id: 'rapport-saldobalans', label: 'Visa rapport: Saldobalans', icon: BarChart3, href: '/reports/trial-balance', keywords: 'rapport saldobalans trial balance saldo per konto' },
   { id: 'rapport-moms', label: 'Visa rapport: Momsdeklaration', icon: BarChart3, href: '/reports/vat-declaration', keywords: 'rapport moms vat deklaration' },
-  { id: 'rapport-huvudbok', label: 'Visa rapport: Huvudbok', icon: BookOpen, href: '/reports/huvudbok', keywords: 'rapport huvudbok ledger general konto saldo transaktioner per konto kontoutdrag kontoanalys kontokort kontohistorik balance account statement transactions' },
+  // "verifikat" is the word a bookkeeper reaches for ("verifikat per konto"),
+  // and matches() requires every typed token, so leaving it out made the exact
+  // phrase return nothing even though this report is precisely the answer.
+  { id: 'rapport-huvudbok', label: 'Visa rapport: Huvudbok', icon: BookOpen, href: '/reports/huvudbok', keywords: 'rapport huvudbok ledger general konto saldo transaktioner per konto verifikat verifikationer verifikationer per konto stäm av stämma avstämning kontoutdrag kontoanalys kontokort kontohistorik balance account statement transactions vouchers' },
   { id: 'rapport-kundreskontra', label: 'Visa rapport: Kundreskontra', icon: Users, href: '/reports/kundreskontra', keywords: 'rapport kundreskontra ar kundfordringar' },
   { id: 'rapport-bankavstamning', label: 'Bankavstämning', hint: 'Stäm av bank mot bokföring', icon: ArrowLeftRight, href: '/reports/bank-reconciliation', keywords: 'avstämning stäm av bank matcha banktransaktioner reconcile reconciliation 1930' },
   { id: 'importera', label: 'Importera', icon: Upload, href: '/import' },

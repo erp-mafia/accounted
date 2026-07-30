@@ -1,10 +1,17 @@
 'use client'
 
+import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
+import { Search, X } from 'lucide-react'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { cn, formatDate } from '@/lib/utils'
-import { getLibrarySections, type ReportDescriptor } from '@/lib/reports/catalog'
+import {
+  getLibrarySections,
+  reportMatchesQuery,
+  type ReportDescriptor,
+} from '@/lib/reports/catalog'
 import type { EntityType } from '@/types'
 
 /**
@@ -28,7 +35,26 @@ export function ReportLibrary({
   onOpen: (slug: string) => void
 }) {
   const t = useTranslations('reports')
-  const sections = getLibrarySections(entityType, hasEmployees, dimensionsEnabled)
+  const [query, setQuery] = useState('')
+  const allSections = getLibrarySections(entityType, hasEmployees, dimensionsEnabled)
+
+  // Matched against the translated name and description plus the descriptor's
+  // synonyms, so the vocabulary someone arrives with ("verifikat per konto")
+  // reaches the report even when we named it something else ("Huvudbok").
+  const sections = useMemo(() => {
+    if (!query.trim()) return allSections
+    return allSections
+      .map((section) => ({
+        ...section,
+        items: section.items.filter((item) =>
+          reportMatchesQuery(
+            `${t(item.labelKey)} ${t(item.descKey)} ${item.searchTerms ?? ''}`,
+            query,
+          ),
+        ),
+      }))
+      .filter((section) => section.items.length > 0)
+  }, [allSections, query, t])
 
   const lastOpenedLabel = (slug: string): string => {
     const at = openedAt[slug]
@@ -40,27 +66,60 @@ export function ReportLibrary({
   }
 
   return (
-    <div className="overflow-x-auto" role="region" aria-label={t('title')}>
-      <table className="w-full border-collapse text-[13px]">
-        <thead>
-          <tr>
-            <th className={cn(TH_CLASS, 'w-[240px]')}>{t('col_report')}</th>
-            <th className={TH_CLASS}>{t('col_description')}</th>
-            <th className={cn(TH_CLASS, 'w-[130px] text-right')}>{t('col_last_opened')}</th>
-          </tr>
-        </thead>
-        <tbody className="stagger-enter">
-          {sections.map((section) => (
-            <SectionRows
-              key={section.category}
-              label={t(section.labelKey)}
-              items={section.items}
-              lastOpenedLabel={lastOpenedLabel}
-              onOpen={onOpen}
-            />
-          ))}
-        </tbody>
-      </table>
+    <div className="space-y-4">
+      <div className="relative max-w-sm">
+        <Search
+          className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <Input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t('search_placeholder')}
+          aria-label={t('search_placeholder')}
+          className="h-9 pl-9 pr-9 text-[13px]"
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => setQuery('')}
+            aria-label={t('search_clear')}
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground transition-colors duration-150 hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        )}
+      </div>
+
+      {sections.length === 0 ? (
+        <p className="py-8 text-center text-sm text-muted-foreground">
+          {t('search_no_results', { query: query.trim() })}
+        </p>
+      ) : (
+        <div className="overflow-x-auto" role="region" aria-label={t('title')}>
+          <table className="w-full border-collapse text-[13px]">
+            <thead>
+              <tr>
+                <th className={cn(TH_CLASS, 'w-[240px]')}>{t('col_report')}</th>
+                <th className={TH_CLASS}>{t('col_description')}</th>
+                <th className={cn(TH_CLASS, 'w-[130px] text-right')}>{t('col_last_opened')}</th>
+              </tr>
+            </thead>
+            <tbody className="stagger-enter">
+              {sections.map((section) => (
+                <SectionRows
+                  key={section.category}
+                  label={t(section.labelKey)}
+                  items={section.items}
+                  lastOpenedLabel={lastOpenedLabel}
+                  onOpen={onOpen}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
