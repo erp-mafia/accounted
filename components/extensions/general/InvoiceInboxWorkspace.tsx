@@ -66,6 +66,11 @@ interface InboxItem {
   email_from: string | null
   email_subject: string | null
   email_received_at: string | null
+  // Plain-text body of the received email. Always captured, but only worth
+  // showing when the mail carried no usable attachment: that is the case where
+  // the body IS the content (a forwarding-confirmation code from Gmail, an
+  // invoice pasted inline, a note from the sender).
+  email_body_text: string | null
   document_id: string | null
   extracted_data: InvoiceExtractionResult | null
   matched_supplier_id: string | null
@@ -574,6 +579,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       email_from: null,
       email_subject: null,
       email_received_at: null,
+      email_body_text: null,
       document_id: null,
       extracted_data: null,
       matched_supplier_id: null,
@@ -1769,6 +1775,7 @@ function FieldsRail({
   const isResolved = isProcessed || isBookedDirectly
   const [isUnmatchingTx, setIsUnmatchingTx] = useState(false)
   const [isRetrying, setIsRetrying] = useState(false)
+  const t = useTranslations('inbox_workspace')
 
   // Surface a quiet hint when extraction caught a supplier name but no existing
   // supplier matched. The actual creation flow lives on the leverantörsfaktura
@@ -1852,6 +1859,27 @@ function FieldsRail({
               )}
               Försök igen
             </Button>
+          )}
+        </div>
+      )}
+
+      {/* Mail body. Shown only when nothing was attached: then the body IS the
+          delivered content, and without it the item is a dead end that says
+          "no attachments" and nothing more. This is what makes a Gmail forward
+          possible to set up, since Gmail sends its confirmation code as a
+          plain-text mail with no attachment. Rendered as selectable text so
+          the code can be copied out. */}
+      {item.source === 'email' && !item.document_id && (
+        <div className="border-b px-4 py-3">
+          <h3 className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-2">
+            {t('email_body_label')}
+          </h3>
+          {item.email_body_text?.trim() ? (
+            <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground">
+              {item.email_body_text}
+            </pre>
+          ) : (
+            <p className="text-xs text-muted-foreground">{t('email_body_empty')}</p>
           )}
         </div>
       )}

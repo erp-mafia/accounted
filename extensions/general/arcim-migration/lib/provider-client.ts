@@ -17,10 +17,15 @@ import { refreshBjornLundenToken } from '@/lib/providers/bjornlunden/oauth'
 import { BjornLundenClient, BjornLundenApiError } from '@/lib/providers/bjornlunden/client'
 import { exchangeBrioxCode } from '@/lib/providers/briox/oauth'
 import { BrioxApiError } from '@/lib/providers/briox/client'
+import { BokioClient, BokioApiError } from '@/lib/providers/bokio/client'
+import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import type { ConsentRecord, OtcResponse } from '../types'
 
 // Singleton (holds the rate limiter): used to validate BL User-Keys at submit
 const bjornLundenClient = new BjornLundenClient()
+
+// Singleton (holds the rate limiter): used to verify Bokio company identity
+const bokioClient = new BokioClient()
 
 /**
  * Thrown by submitProviderToken when the provider actively rejects the
@@ -45,6 +50,30 @@ export class ConsentNotFoundError extends Error {
   constructor() {
     super('Consent not found')
     this.name = 'ConsentNotFoundError'
+  }
+}
+
+/**
+ * Thrown when the credentials are valid but open a company whose org number is
+ * not the one being imported into. Reported as PROVIDER_COMPANY_MISMATCH (422).
+ *
+ * The failure this prevents is silent and expensive: a token that works plus a
+ * company id for the wrong company imports a FOREIGN legal entity's customers,
+ * suppliers and invoices into this ledger. Nothing errors, so the first signal
+ * is the user noticing their books are full of a stranger's data. Both org
+ * numbers are carried on the error so the wizard can name the two companies.
+ */
+export class ProviderCompanyMismatchError extends Error {
+  constructor(
+    public readonly expectedOrgNumber: string,
+    public readonly actualOrgNumber: string,
+    public readonly actualCompanyName: string | null,
+  ) {
+    super(
+      `Provider company mismatch: credentials open ${actualOrgNumber}, ` +
+      `but the target company is ${expectedOrgNumber}`,
+    )
+    this.name = 'ProviderCompanyMismatchError'
   }
 }
 
@@ -436,6 +465,82 @@ export async function submitProviderToken(
         )
       }
       throw error
+    }
+  }
+
+  // Bokio: the pasted integration token is scoped to ONE Bokio company, and the
+  // company GUID is typed in by hand. Nothing upstream ties either to the
+  // Accounted company being imported into, so a token/GUID for the user's other
+  // company imports that company's customers, suppliers and invoices here with
+  // no error at all. Probe /companies/{guid} before storing anything: it both
+  // proves the credentials work and returns the orgNumber to compare.
+  if (provider === 'bokio') {
+    if (!providerCompanyId) {
+      throw new ProviderTokenInvalidError('Bokio requires a company id')
+    }
+
+    let bokioCompany: Record<string, unknown> | null
+    try {
+      bokioCompany = await bokioClient.getCompany<Record<string, unknown>>(
+        accessToken,
+        providerCompanyId,
+      )
+    } catch (error) {
+      if (error instanceof BokioApiError) {
+        // 429/5xx are transient provider failures, not a verdict on the token:
+        // rethrow so the route reports a generic submit failure rather than
+        // telling the user their credentials are wrong. 401/403/404 mean the
+        // token or the GUID genuinely does not open this company.
+        if (error.statusCode === 429 || error.statusCode >= 500) {
+          throw error
+        }
+        throw new ProviderTokenInvalidError(
+          `Bokio rejected the credentials (HTTP ${error.statusCode})`,
+        )
+      }
+      throw error
+    }
+
+    // getCompany() maps 404 to null: an unknown GUID is a bad company id, not
+    // an outage.
+    if (!bokioCompany) {
+      throw new ProviderTokenInvalidError('Bokio does not know that company id')
+    }
+
+    const bokioName = typeof bokioCompany['name'] === 'string'
+      ? (bokioCompany['name'] as string).trim()
+      : ''
+    const bokioOrgNumber = normalizeOrgNumber(bokioCompany['orgNumber'] as string | undefined)
+
+    const { data: targetCompany } = await supabase
+      .from('companies')
+      .select('org_number')
+      .eq('id', ownerCompanyId)
+      .maybeSingle()
+    const targetOrgNumber = normalizeOrgNumber(targetCompany?.org_number)
+
+    // Only a confident mismatch blocks. A missing org number on either side is
+    // not evidence of anything (Accounted allows companies without one, and a
+    // Bokio response could omit it), so those fall through to the labelling
+    // below: the wizard still shows WHICH Bokio company was linked, which is
+    // what lets the user catch it themselves.
+    if (bokioOrgNumber && targetOrgNumber && bokioOrgNumber !== targetOrgNumber) {
+      throw new ProviderCompanyMismatchError(
+        targetOrgNumber,
+        bokioOrgNumber,
+        bokioName || null,
+      )
+    }
+
+    // Label the consent with what the credentials actually opened.
+    if (bokioName || bokioOrgNumber) {
+      await supabase
+        .from('provider_consents')
+        .update({
+          ...(bokioName ? { company_name: bokioName } : {}),
+          ...(bokioOrgNumber ? { org_number: bokioOrgNumber } : {}),
+        })
+        .eq('id', consentId)
     }
   }
 

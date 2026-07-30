@@ -2714,7 +2714,9 @@
     "address_load_failed": "Could not read the inbox address, so we do not know whether the company already has one.",
     "items_load_failed": "Could not load the inbox, so we do not know whether anything is waiting here.",
     "document_loading": "Fetching the document…",
-    "document_load_failed": "The document is still stored but could not be shown right now."
+    "document_load_failed": "The document is still stored but could not be shown right now.",
+    "email_body_label": "Email content",
+    "email_body_empty": "The email had no text."
   },
   "tx_match_allocation": {
     "title": "Split payment",

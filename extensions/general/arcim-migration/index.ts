@@ -14,6 +14,7 @@ import {
   resolveConsent,
   fetchCompanyInfoDirect,
   ProviderTokenInvalidError,
+  ProviderCompanyMismatchError,
   ConsentNotFoundError,
 } from './lib/provider-client'
 import { providerSupportsSie, fetchProviderSieFiles, getAllowedFiscalYears } from './lib/sie-fetcher'
@@ -435,6 +436,18 @@ export const arcimMigrationExtension: Extension = {
           if (error instanceof ProviderTokenInvalidError) {
             return errorResponseFromCode('PROVIDER_TOKEN_INVALID', moduleLog, {
               details: { provider, reason: error.message },
+            })
+          }
+          // Valid credentials, wrong company: name both org numbers so the user
+          // can see at a glance which company the token actually opened.
+          if (error instanceof ProviderCompanyMismatchError) {
+            return errorResponseFromCode('PROVIDER_COMPANY_MISMATCH', moduleLog, {
+              details: {
+                provider,
+                expectedOrgNumber: error.expectedOrgNumber,
+                actualOrgNumber: error.actualOrgNumber,
+                actualCompanyName: error.actualCompanyName,
+              },
             })
           }
           return errorResponseFromCode('PROVIDER_TOKEN_SUBMIT_FAILED', moduleLog, {

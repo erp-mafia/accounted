@@ -1806,6 +1806,17 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_en:
       'The provider rejected the credentials. Check that the account ID and application token are correct and try again.',
   },
+  PROVIDER_COMPANY_MISMATCH: {
+    // 422, same reasoning as PROVIDER_TOKEN_INVALID: the credentials are valid,
+    // but they open a DIFFERENT legal entity than the one being imported into.
+    // Importing anyway mixes another company's ledger into this one, which is
+    // both a bookkeeping and a data-protection problem: refuse at the boundary.
+    httpStatus: 422,
+    message_sv:
+      'Uppgifterna gäller ett annat företag än det du importerar till. Kontrollera att du valt rätt företag hos leverantören och försök igen.',
+    message_en:
+      'These credentials belong to a different company than the one you are importing into. Check that you picked the right company at the provider and try again.',
+  },
   PROVIDER_PREVIEW_FAILED: {
     httpStatus: 500,
     message_sv: 'Förhandsgranskningen från leverantören misslyckades.',

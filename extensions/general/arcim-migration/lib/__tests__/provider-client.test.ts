@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
-const { mockBlGet } = vi.hoisted(() => ({ mockBlGet: vi.fn() }))
+const { mockBlGet, mockBokioGetCompany } = vi.hoisted(() => ({
+  mockBlGet: vi.fn(),
+  mockBokioGetCompany: vi.fn(),
+}))
 
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
@@ -29,11 +32,25 @@ vi.mock('@/lib/providers/bjornlunden/client', async (importOriginal) => {
   }
 })
 
+// Same shape as the BL mock above: keep the real BokioApiError for the
+// instanceof checks, swap the client so the /companies probe is controllable.
+vi.mock('@/lib/providers/bokio/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/providers/bokio/client')>()
+  return {
+    ...actual,
+    BokioClient: vi.fn().mockImplementation(function mockClient() {
+      return { getCompany: mockBokioGetCompany }
+    }),
+  }
+})
+
 import { createServiceClient } from '@/lib/supabase/server'
 import { BjornLundenApiError } from '@/lib/providers/bjornlunden/client'
+import { BokioApiError } from '@/lib/providers/bokio/client'
 import {
   submitProviderToken,
   ProviderTokenInvalidError,
+  ProviderCompanyMismatchError,
   ConsentNotFoundError,
 } from '../provider-client'
 
@@ -65,12 +82,133 @@ describe('submitProviderToken', () => {
 
   it('stores tokens when the consent belongs to the caller company', async () => {
     mock.enqueue({ data: [{ id: 'consent-1' }] }) // ownership check
+    mock.enqueue({ data: { org_number: '5560125790' } }) // target company lookup
+    mock.enqueue({ data: null }) // consent label update
     mock.enqueue({ data: null }) // token upsert
+    mockBokioGetCompany.mockResolvedValueOnce({
+      name: 'Testbolaget AB',
+      orgNumber: '5560125790',
+    })
 
     const result = await submitProviderToken('consent-1', 'bokio', 'tok', 'bokio-guid', 'company-A')
 
     expect(result).toEqual({ success: true, consentId: 'consent-1' })
-    expect(tablesTouched()).toEqual(['provider_consents', 'provider_consent_tokens'])
+    expect(tablesTouched()).toEqual([
+      'provider_consents',
+      'companies',
+      'provider_consents',
+      'provider_consent_tokens',
+    ])
+  })
+
+  // ── Bokio company-identity guard ──────────────────────────────────
+  //
+  // The failure being prevented: a valid Bokio token plus a company id for the
+  // WRONG company imports a foreign legal entity's customers, suppliers and
+  // invoices into this ledger with no error at all.
+
+  it('refuses to store the token when the Bokio company org number differs from the target company', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] }) // ownership check
+    mock.enqueue({ data: { org_number: '5560125790' } }) // target company
+    mockBokioGetCompany.mockResolvedValueOnce({
+      name: 'Någon Annans Bolag AB',
+      orgNumber: '5566778899', // a different legal entity
+    })
+
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bokio',
+      'tok',
+      'bokio-guid',
+      'company-A',
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ProviderCompanyMismatchError)
+    expect(err).toMatchObject({
+      expectedOrgNumber: '5560125790',
+      actualOrgNumber: '5566778899',
+      actualCompanyName: 'Någon Annans Bolag AB',
+    })
+
+    // Nothing was stored and the consent was NOT labelled: the connection must
+    // not exist in any form, or the next step would import from it.
+    expect(tablesTouched()).not.toContain('provider_consent_tokens')
+    expect(tablesTouched()).toEqual(['provider_consents', 'companies'])
+  })
+
+  it('compares org numbers canonically, so formatting differences are not a mismatch', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mock.enqueue({ data: { org_number: '5560125790' } }) // stored 10-digit
+    mock.enqueue({ data: null }) // consent label update
+    mock.enqueue({ data: null }) // token upsert
+    // Same company, hyphenated and with the century prefix Bokio may return.
+    mockBokioGetCompany.mockResolvedValueOnce({
+      name: 'Testbolaget AB',
+      orgNumber: '556012-5790',
+    })
+
+    await expect(
+      submitProviderToken('consent-1', 'bokio', 'tok', 'bokio-guid', 'company-A'),
+    ).resolves.toEqual({ success: true, consentId: 'consent-1' })
+
+    expect(tablesTouched()).toContain('provider_consent_tokens')
+  })
+
+  it('still connects when an org number is missing on either side (absence is not evidence of mismatch)', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mock.enqueue({ data: { org_number: null } }) // company has no org number
+    mock.enqueue({ data: null }) // consent label update
+    mock.enqueue({ data: null }) // token upsert
+    mockBokioGetCompany.mockResolvedValueOnce({
+      name: 'Testbolaget AB',
+      orgNumber: '5560125790',
+    })
+
+    await expect(
+      submitProviderToken('consent-1', 'bokio', 'tok', 'bokio-guid', 'company-A'),
+    ).resolves.toEqual({ success: true, consentId: 'consent-1' })
+
+    // Labelled anyway: the wizard showing WHICH company was linked is what
+    // lets the user catch the mistake themselves in this case.
+    expect(tablesTouched()).toContain('provider_consent_tokens')
+  })
+
+  it('maps a 404 from the Bokio probe to invalid credentials', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    // getCompany() maps 404 to null: an unknown GUID, not an outage.
+    mockBokioGetCompany.mockResolvedValueOnce(null)
+
+    await expect(
+      submitProviderToken('consent-1', 'bokio', 'tok', 'bad-guid', 'company-A'),
+    ).rejects.toBeInstanceOf(ProviderTokenInvalidError)
+
+    expect(tablesTouched()).not.toContain('provider_consent_tokens')
+  })
+
+  it('maps a 401 from the Bokio probe to invalid credentials', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mockBokioGetCompany.mockRejectedValueOnce(new BokioApiError('Bokio API error: 401', 401))
+
+    await expect(
+      submitProviderToken('consent-1', 'bokio', 'tok', 'bokio-guid', 'company-A'),
+    ).rejects.toBeInstanceOf(ProviderTokenInvalidError)
+  })
+
+  it('does NOT map a transient 503 from the Bokio probe to invalid credentials', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mockBokioGetCompany.mockRejectedValueOnce(new BokioApiError('Bokio API error: 503', 503))
+
+    const err: unknown = await submitProviderToken(
+      'consent-1',
+      'bokio',
+      'tok',
+      'bokio-guid',
+      'company-A',
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(BokioApiError)
+    expect(err).not.toBeInstanceOf(ProviderTokenInvalidError)
+    expect(tablesTouched()).not.toContain('provider_consent_tokens')
   })
 
   // ── BL /details probe error classification ────────────────────────

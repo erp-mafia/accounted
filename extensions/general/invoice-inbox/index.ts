@@ -515,7 +515,8 @@ export const invoiceInboxExtension: Extension = {
           .select(`
             id, status, source, created_at, extracted_data,
             matched_supplier_id, document_id, email_from, email_subject,
-            email_received_at, error_message, created_supplier_invoice_id,
+            email_received_at, email_body_text, error_message,
+            created_supplier_invoice_id,
             matched_transaction_id, created_journal_entry_id,
             resend_email_id, extraction_skipped
           `)

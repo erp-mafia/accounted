@@ -2714,7 +2714,9 @@
     "address_load_failed": "Kunde inte läsa av inkorgsadressen, så vi vet inte om bolaget redan har en.",
     "items_load_failed": "Kunde inte läsa in inkorgen, så vi vet inte om det ligger något här.",
     "document_loading": "Hämtar underlaget…",
-    "document_load_failed": "Underlaget finns kvar men kunde inte visas just nu."
+    "document_load_failed": "Underlaget finns kvar men kunde inte visas just nu.",
+    "email_body_label": "Mejlets innehåll",
+    "email_body_empty": "Mejlet hade ingen text."
   },
   "tx_match_allocation": {
     "title": "Dela betalning",
