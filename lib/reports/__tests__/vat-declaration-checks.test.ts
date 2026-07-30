@@ -423,7 +423,11 @@ describe('runVatDeclarationChecks', () => {
       ruta49: 2500,
     }
     const findings = runVatDeclarationChecks(rutor)
-    expect(findings.find((f) => f.code === 'OUTPUT_VAT_WITHOUT_SALES_BASE')?.status).toBe('ERROR')
+    const finding = findings.find((f) => f.code === 'OUTPUT_VAT_WITHOUT_SALES_BASE')
+    expect(finding?.status).toBe('ERROR')
+    expect(finding?.message).toContain('momspliktiga intäktskonton')
+    expect(finding?.message).toContain('Standard moms')
+    expect(finding?.message).not.toContain('3001/3002/3003')
   })
 
   // SKV §4.1.1.4 rule 5: import base without import output VAT.

@@ -28,7 +28,11 @@ interface SupabaseShape {
 function buildSupabase(
   linesResult: { data: unknown; error: unknown },
   fiscalPeriodResult: { data: unknown; error: unknown } = { data: null, error: null },
-  chartAccounts: Array<{ account_number: string; default_vat_rate: number }> = []
+  chartAccounts: Array<{
+    account_number: string
+    account_name?: string
+    default_vat_rate: number | null
+  }> = []
 ): SupabaseShape {
   const chartResult = { data: chartAccounts, error: null }
   return {
@@ -251,6 +255,18 @@ describe('GET /api/reports/vat-declaration/ruta/[ruta]/sources: ruta 05 accounts
     const accounts = rpcAccounts(supabase)
     expect(accounts).toContain('3013')
     expect(accounts).toContain('3001') // static mapping still there
+  })
+
+  it('drills into a null-rate account when its number and label resolve the rate (#1289)', async () => {
+    const supabase = buildSupabase({ data: [], error: null }, { data: null, error: null }, [{
+      account_number: '3011',
+      account_name: 'Försäljning tjänster inom Sverige, 25 % moms',
+      default_vat_rate: null,
+    }])
+    authOk(supabase)
+
+    expect((await get('05')).status).toBe(200)
+    expect(rpcAccounts(supabase)).toContain('3011')
   })
 
   it('leaves other rutor on the static mapping alone', async () => {

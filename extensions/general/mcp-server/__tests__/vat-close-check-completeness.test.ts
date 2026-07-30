@@ -38,12 +38,18 @@ interface MockLine {
   source_type?: string | null
 }
 
+interface MockChartAccount {
+  account_number: string
+  account_name: string
+  default_vat_rate: number | null
+}
+
 /**
  * Table-routed Supabase double. journal_entries / journal_entry_lines serve the
  * fixture; everything else (transactions, supplier_invoices, company_settings)
  * comes back empty so no unrelated blocker fires.
  */
-function mockSupabase(lines: MockLine[]) {
+function mockSupabase(lines: MockLine[], chartAccounts: MockChartAccount[] = []) {
   const entries = [
     ...new Map(
       lines.map((l, i) => {
@@ -91,6 +97,7 @@ function mockSupabase(lines: MockLine[]) {
     from: (table: string) => {
       if (table === 'journal_entries') return makeChain(entries)
       if (table === 'journal_entry_lines') return makeChain(bareLines)
+      if (table === 'chart_of_accounts') return makeChain(chartAccounts)
       return makeChain([])
     },
     // The missing-underlag blocker reads the verifikat_without_documents RPC,
@@ -107,6 +114,31 @@ function mockSupabase(lines: MockLine[]) {
 const PERIOD = { period_type: 'monthly', year: 2026, period: 1 }
 
 describe('gnubok_vat_close_check: declaration completeness', () => {
+  it('includes a null-rate 3011 with matching domestic VAT evidence (#1289)', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '3011', credit_amount: 9725 },
+          { entry: 'e1', account_number: '2611', credit_amount: 2431.25 },
+          { entry: 'e1', account_number: '1510', debit_amount: 12156.25 },
+        ],
+        [{
+          account_number: '3011',
+          account_name: 'Försäljning tjänster inom Sverige, 25 % moms',
+          default_vat_rate: null,
+        }],
+      ),
+    )
+
+    expect(result.rutor.ruta05).toBe(9725)
+    expect(result.rutor.ruta10).toBe(2431.25)
+    expect(result.declaration_checks.map((finding) => finding.code))
+      .not.toContain('OUTPUT_VAT_WITHOUT_SALES_BASE')
+    expect(result.ready_to_close).toBe(true)
+  })
+
   it('refuses the #1164 declaration: fiktiv moms on 2614/2645 with no basbelopp on 44xx/45xx', async () => {
     // Both VAT legs of a reverse-charge purchase booked, but the cost went
     // straight to 6540 instead of the 4535 basis account, so rutor 20-24 stay

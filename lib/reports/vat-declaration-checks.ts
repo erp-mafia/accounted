@@ -267,8 +267,10 @@ export function runVatDeclarationChecks(
       message:
         'Du har redovisat utgående moms (ruta 10-12) men ingen momspliktig ' +
         'försäljning (ruta 05-08). Skatteverket kräver att utgående moms ' +
-        'matchas med ett försäljningsunderlag. Kontrollera att intäktskonton ' +
-        '(3001/3002/3003) är bokförda för varje VAT-rad.',
+        'matchas med ett försäljningsunderlag. Kontrollera att momspliktiga ' +
+        'intäktskonton är bokförda för varje momsrad. Om ett försäljningskonto ' +
+        'saknas i ruta 05, kontrollera att kontots "Standard moms" är rätt ' +
+        'inställd i kontoplanen.',
       rutor: ['ruta05', 'ruta06', 'ruta07', 'ruta08', 'ruta10', 'ruta11', 'ruta12'],
     })
   }
