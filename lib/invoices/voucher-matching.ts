@@ -29,6 +29,7 @@ import {
   customerNameMatches,
 } from './invoice-matching'
 import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
+import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggestions'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import type { Invoice, Customer } from '@/types'
 
@@ -802,6 +803,14 @@ export async function linkInvoiceToVoucher(
       journalEntryId: params.journalEntryId,
       reason: err instanceof Error ? err.message : String(err),
     })
+  }
+
+  // The invoice is settled, so every transaction still carrying a suggestion
+  // pointer at it is dead: retire them (issue #1259). No exceptTransactionId:
+  // the reconciled row (if any) has already had its own hint cleared by the
+  // auto-reconcile tag update, so nothing here needs preserving.
+  if (rpc.invoice_status === 'paid') {
+    await clearSettledInvoiceSuggestions(supabase, companyId, 'invoice', params.invoiceId)
   }
 
   return {

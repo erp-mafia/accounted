@@ -129,20 +129,27 @@ export async function countInboxDocuments(
 const SUGGESTED_MATCH_OR =
   'potential_invoice_id.not.is.null,potential_supplier_invoice_id.not.is.null'
 
-/** Unbooked transactions with an invoice/supplier-invoice match hint. */
+/**
+ * Cap on the hint scan behind countSuggestedMatches; clamps like
+ * INBOX_SCAN_CAP.
+ */
+const SUGGESTED_MATCH_SCAN_CAP = 200
+
+/**
+ * Unbooked transactions with a still-actionable invoice/supplier-invoice match
+ * hint.
+ *
+ * Delegates to listSuggestedMatches so the badge can never claim a number the
+ * list cannot render: a head count over the raw hint columns still counts a
+ * pointer at an invoice settled elsewhere (issue #1259), which is exactly the
+ * divergence lib/worklist exists to prevent (see types.ts).
+ */
 export async function countSuggestedMatches(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<number> {
-  const { count, error } = await supabase
-    .from('transactions')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .is('is_business', null)
-    .eq('is_ignored', false)
-    .or(SUGGESTED_MATCH_OR)
-  if (error) return logAndZero('suggested_match', companyId, error)
-  return count ?? 0
+  const matches = await listSuggestedMatches(supabase, companyId, SUGGESTED_MATCH_SCAN_CAP)
+  return matches.length
 }
 
 /** Supplier invoices awaiting approval ("attestera"). */
@@ -272,9 +279,11 @@ interface SuggestedMatchTxRow {
  * that has since been paid would otherwise render a one-click confirm row
  * whose endpoint can only answer ALREADY_PAID.
  *
- * Revalidation is done here, at read time, rather than by cleaning up sibling
- * pointers on settle: the settle paths are many and a missed one leaks, while
- * this check covers every route into the list.
+ * Revalidation stays here, at read time, even though the high-traffic settle
+ * paths now also retire sibling pointers
+ * (lib/invoices/clear-settled-invoice-suggestions.ts, issue #1259): the settle
+ * paths are many and a missed one leaks, while this check covers every route
+ * into the list.
  */
 export async function listSuggestedMatches(
   supabase: SupabaseClient,

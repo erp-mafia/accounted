@@ -8,6 +8,7 @@ import { resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payme
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment'
+import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { eventBus } from '@/lib/events'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
 
@@ -283,6 +284,13 @@ export async function settleInvoicePayment(
       )
     }
     return { ok: false, code: 'INVOICE_PAID_RACE' }
+  }
+
+  // Fully settled: retire every transaction's suggestion pointer at this
+  // invoice (issue #1259). No exceptTransactionId: this flow is not driven by
+  // a bank transaction, so any pointer at it is now dead.
+  if (newStatus === 'paid') {
+    await clearSettledInvoiceSuggestions(supabase, companyId, 'invoice', invoice.id)
   }
 
   // Notify subscribers: invoice.paid fans out to registered webhooks and the

@@ -27,6 +27,14 @@ vi.mock('@/lib/bookkeeping/invoice-entries', async () => {
   }
 })
 
+// Issue #1259: settling the invoice retires the suggestion pointers at it.
+// Mocked so it consumes no slot in the queued Supabase mock; the helper's own
+// query shape is pinned by lib/invoices/__tests__/clear-settled-invoice-suggestions.test.ts.
+const { mockClearSuggestions } = vi.hoisted(() => ({ mockClearSuggestions: vi.fn() }))
+vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
+  clearSettledInvoiceSuggestions: mockClearSuggestions,
+}))
+
 import { commitPendingOperation } from '../commit'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
@@ -149,6 +157,58 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       '1940',
     )
     expect(mockCreateCashEntry).not.toHaveBeenCalled()
+    // Issue #1259: the invoice is settled, so every OTHER transaction still
+    // carrying a suggestion pointer at it is retired; this op's own row is
+    // cleared by the link update.
+    expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
+    expect(mockClearSuggestions).toHaveBeenCalledWith(supabase, 'company-1', 'invoice', 'inv-1', {
+      exceptTransactionId: 'tx-1',
+    })
+  })
+
+  it('leaves the suggestions alone on a partial payment: the invoice is still matchable', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'tx-1',
+        company_id: 'company-1',
+        amount: 5000,
+        currency: 'SEK',
+        date: '2026-05-12',
+        invoice_id: null,
+        journal_entry_id: null,
+        cash_account_id: null,
+      },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: 'F-2026001',
+        status: 'sent',
+        total: 12500,
+        remaining_amount: 12500,
+        paid_amount: 0,
+        currency: 'SEK',
+        exchange_rate: null,
+        journal_entry_id: null,
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+    enqueue({ data: null, error: null }) // invoice_payments insert
+    enqueue({ data: null, error: null }) // transactions update (link)
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ invoice_status: 'partially_paid' })
+    expect(mockClearSuggestions).not.toHaveBeenCalled()
   })
 
   it('defaults to 1930 when the transaction has no linked cash account', async () => {

@@ -29,6 +29,7 @@ import {
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
+import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { eventBus } from '@/lib/events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -504,6 +505,18 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       ctx.log.warn('supplier_invoice_payments insert failed (non-blocking)', paymentErr, {
         invoiceId,
       })
+    }
+
+    // Fully settled: retire every transaction's suggestion pointer at this
+    // invoice (issue #1259). No exceptTransactionId: this flow is not driven by
+    // a bank transaction, so any pointer at it is now dead.
+    if (newStatus === 'paid') {
+      await clearSettledInvoiceSuggestions(
+        ctx.supabase,
+        ctx.companyId!,
+        'supplier_invoice',
+        invoiceId,
+      )
     }
 
     // Anchor the invoice's retained source document to a posted verifikat if

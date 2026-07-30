@@ -107,6 +107,14 @@ vi.mock('@/lib/core/documents/document-service', async () => {
   return { ...actual, linkToJournalEntry: vi.fn() }
 })
 
+// Mocked away so the settled-suggestion cleanup (issue #1259) does not add a
+// `transactions` query to the recorded set: the txQueries() assertions below
+// are about the duplicate-guard sweeps only. The helper's own query shape is
+// pinned by lib/invoices/__tests__/clear-settled-invoice-suggestions.test.ts.
+vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
+  clearSettledInvoiceSuggestions: vi.fn().mockResolvedValue(undefined),
+}))
+
 import { eventBus } from '@/lib/events'
 import { POST } from '../route'
 

@@ -10,6 +10,14 @@ import {
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 
+// Issue #1259: settling the invoice retires the suggestion pointers at it.
+// Mocked so it consumes no slot in the queued Supabase mock; the helper's own
+// query shape is pinned by ./clear-settled-invoice-suggestions.test.ts.
+const { mockClearSuggestions } = vi.hoisted(() => ({ mockClearSuggestions: vi.fn() }))
+vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
+  clearSettledInvoiceSuggestions: mockClearSuggestions,
+}))
+
 // ============================================================
 // validateVoucherForSupplierInvoiceLink: happy path + rejects
 // ============================================================
@@ -408,6 +416,16 @@ describe('linkSupplierInvoiceToVoucher', () => {
         payload: expect.objectContaining({ paymentAmount: 1000, userId: 'user-1' }),
       }),
     )
+
+    // Issue #1259: the invoice is settled, so no transaction may keep pointing
+    // at it as a match suggestion.
+    expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
+    expect(mockClearSuggestions).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'supplier_invoice',
+      invoice.id,
+    )
   })
 
   it('still returns success even if the post-link invoice re-fetch is empty (event is best-effort)', async () => {
@@ -441,6 +459,9 @@ describe('linkSupplierInvoiceToVoucher', () => {
     }
     // Event NOT emitted when re-fetch found nothing
     expect(emitSpy).not.toHaveBeenCalled()
+    // Issue #1259: a partially paid invoice is still matchable, so the
+    // suggestions pointing at it must survive.
+    expect(mockClearSuggestions).not.toHaveBeenCalled()
   })
 })
 

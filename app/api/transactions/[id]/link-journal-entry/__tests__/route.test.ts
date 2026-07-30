@@ -17,6 +17,14 @@ vi.mock('@/lib/invoices/match-log', () => ({
   logMatchEvent: vi.fn(),
 }))
 
+// Issue #1259: settling the invoice retires the suggestion pointers at it.
+// Mocked so it consumes no slot in the queued Supabase mock; the helper's own
+// query shape is pinned by lib/invoices/__tests__/clear-settled-invoice-suggestions.test.ts.
+const { mockClearSuggestions } = vi.hoisted(() => ({ mockClearSuggestions: vi.fn() }))
+vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
+  clearSettledInvoiceSuggestions: mockClearSuggestions,
+}))
+
 vi.mock('@/lib/events/bus', () => ({
   eventBus: { emit: vi.fn() },
 }))
@@ -250,6 +258,58 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
     expect(body.invoice_status).toBe('paid')
     expect(body.paid_amount).toBe(1000)
     expect(body.remaining_amount).toBe(0)
+    // Issue #1259: the invoice is settled, so no other transaction may keep
+    // pointing at it as a match suggestion.
+    expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
+    expect(mockClearSuggestions).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      'invoice',
+      INV_UUID,
+    )
+  })
+
+  it('leaves the suggestions alone on a partial payment: the invoice is still matchable', async () => {
+    enqueue({
+      data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: 400, date: '2026-05-15' }),
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: JE_UUID,
+        status: 'posted',
+        voucher_series: 'A',
+        voucher_number: 1,
+        entry_date: '2026-05-15',
+      },
+      error: null,
+    })
+    enqueue({
+      data: makeInvoice({
+        id: INV_UUID,
+        status: 'sent',
+        total: 1000,
+        remaining_amount: 1000,
+        paid_amount: 0,
+        currency: 'SEK',
+      }),
+      error: null,
+    })
+    enqueue({ data: [{ id: TX_UUID }], error: null }) // update transaction
+    enqueue({ data: [{ id: INV_UUID }], error: null }) // update invoice
+    enqueue({ data: null, error: null }) // insert invoice_payments
+    enqueue({ data: null, error: null }) // logMatchEvent
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
+      method: 'POST',
+      body: { journal_entry_id: JE_UUID, invoice_id: INV_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ invoice_status: string | null }>(response)
+
+    expect(status).toBe(200)
+    expect(body.invoice_status).toBe('partially_paid')
+    expect(mockClearSuggestions).not.toHaveBeenCalled()
   })
 
   it('returns 404 when invoice_id supplied but invoice not found', async () => {

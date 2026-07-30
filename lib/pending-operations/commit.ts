@@ -57,6 +57,7 @@ import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
+import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { parseSIEFile } from '@/lib/import/sie-parser'
@@ -2078,6 +2079,13 @@ async function commitMarkInvoicePaid(
     }
   }
 
+  // Fully settled: retire every transaction's suggestion pointer at this
+  // invoice (issue #1259). No exceptTransactionId: this flow is not driven by
+  // a bank transaction, so any pointer at it is now dead.
+  if (newStatus === 'paid') {
+    await clearSettledInvoiceSuggestions(supabase, companyId, 'invoice', invoiceId)
+  }
+
   // Notify subscribers: invoice.paid fans out to registered webhooks
   // (lib/webhooks/handler.ts). Best-effort: the payment is already committed,
   // so an emit failure must not fail the operation. Parity with the v1 and
@@ -2626,6 +2634,15 @@ async function commitMatchTransactionInvoice(
     transaction_id: transactionId,
     notes: paymentNotes,
   })
+
+  // The invoice is now settled, so every OTHER transaction still carrying a
+  // suggestion pointer at it is dead: retire them (issue #1259). This
+  // operation's own row is cleared by the update just below.
+  if (isFullyPaid) {
+    await clearSettledInvoiceSuggestions(supabase, companyId, 'invoice', invoiceId, {
+      exceptTransactionId: transactionId,
+    })
+  }
 
   await supabase
     .from('transactions')

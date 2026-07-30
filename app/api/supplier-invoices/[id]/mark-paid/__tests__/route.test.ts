@@ -39,8 +39,15 @@ vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({
   anchorSupplierInvoiceDocument: vi.fn().mockResolvedValue(null),
 }))
 
+// Mocked so it consumes no slot in the queued Supabase mock: the helper's own
+// query shape is pinned by lib/invoices/__tests__/clear-settled-invoice-suggestions.test.ts.
+vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
+  clearSettledInvoiceSuggestions: vi.fn().mockResolvedValue(undefined),
+}))
+
 import { eventBus } from '@/lib/events'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
+import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 
 import { POST } from '../route'
 
@@ -148,6 +155,16 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(body.remaining_amount).toBe(0)
     expect(body.journal_entry_id).toBe('je-1')
     expect(mockCreateSupplierInvoicePaymentEntry).toHaveBeenCalled()
+    // Issue #1259: full settlement retires every transaction's suggestion
+    // pointer at this invoice. No exceptTransactionId: mark-paid is not driven
+    // by a bank transaction.
+    expect(vi.mocked(clearSettledInvoiceSuggestions)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(clearSettledInvoiceSuggestions)).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      'supplier_invoice',
+      'si-1',
+    )
   })
 
   it('marks as partially paid', async () => {
@@ -188,6 +205,9 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(body.status).toBe('partially_paid')
     expect(body.paid_amount).toBe(5000)
     expect(body.remaining_amount).toBe(5000)
+    // Issue #1259: a partially paid invoice is still matchable, so its sibling
+    // suggestions must survive.
+    expect(vi.mocked(clearSettledInvoiceSuggestions)).not.toHaveBeenCalled()
   })
 
   it('uses cash method journal entry when configured', async () => {

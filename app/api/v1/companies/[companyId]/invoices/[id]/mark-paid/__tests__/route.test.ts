@@ -42,6 +42,14 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   findFiscalPeriod: vi.fn().mockResolvedValue('fp-1'),
 }))
 
+// Issue #1259: settling the invoice retires the suggestion pointers at it.
+// Mocked so the assertion is on the orchestration; the helper's own query
+// shape is pinned by lib/invoices/__tests__/clear-settled-invoice-suggestions.test.ts.
+const { mockClearSuggestions } = vi.hoisted(() => ({ mockClearSuggestions: vi.fn() }))
+vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
+  clearSettledInvoiceSuggestions: mockClearSuggestions,
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import {
   createInvoicePaymentJournalEntry as mockedPayment,
@@ -184,6 +192,15 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(paidHandler).toHaveBeenCalledTimes(1)
     expect(paidHandler).toHaveBeenCalledWith(
       expect.objectContaining({ companyId: COMPANY_ID, userId: USER_ID, paymentAmount: 12500 }),
+    )
+    // Issue #1259: the invoice is settled, so no transaction may keep pointing
+    // at it as a match suggestion.
+    expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
+    expect(mockClearSuggestions).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'invoice',
+      INVOICE_ID,
     )
   })
 
@@ -737,6 +754,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     // the transactions scan never runs: the matching bank row above would
     // otherwise have 409'd a perfectly valid partial payment.
     expect(calls.some((c) => c.table === 'transactions')).toBe(false)
+    // Issue #1259: a partially paid invoice is still matchable, so the
+    // suggestions pointing at it must survive.
+    expect(mockClearSuggestions).not.toHaveBeenCalled()
   })
 
   it('still runs the duplicate guard when the converted SEK lines settle a EUR invoice in full', async () => {

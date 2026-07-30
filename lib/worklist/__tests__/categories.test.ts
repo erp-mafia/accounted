@@ -109,7 +109,6 @@ describe('countVerifikatMissingDocument', () => {
 
 describe('simple head counts', () => {
   it.each([
-    ['countSuggestedMatches', countSuggestedMatches, 'transactions'],
     ['countSupplierInvoicesAwaitingApproval', countSupplierInvoicesAwaitingApproval, 'supplier_invoices'],
     ['countOverdueInvoices', countOverdueInvoices, 'invoices'],
     ['countDeadlinesNeedingAction', countDeadlinesNeedingAction, 'deadlines'],
@@ -118,6 +117,76 @@ describe('simple head counts', () => {
     enqueue({ count: 3 })
     await expect(fn(supabase, COMPANY)).resolves.toBe(3)
     expect(mockSupabase.from).toHaveBeenCalledWith(table)
+  })
+})
+
+// Issue #1259: the badge delegates to listSuggestedMatches so it can never
+// claim a number the list refuses to render. A raw head count over the hint
+// columns counted pointers at invoices settled by a different transaction.
+describe('countSuggestedMatches', () => {
+  it('counts only hints whose candidate is still matchable', async () => {
+    enqueue({
+      data: [
+        {
+          id: 'tx-1',
+          date: '2026-06-01',
+          description: 'ICA',
+          amount: 423,
+          currency: 'SEK',
+          potential_invoice_id: 'inv-1',
+          potential_supplier_invoice_id: null,
+        },
+        {
+          id: 'tx-2',
+          date: '2026-05-30',
+          description: 'TELIA',
+          amount: -549,
+          currency: 'SEK',
+          potential_invoice_id: null,
+          potential_supplier_invoice_id: 'sinv-paid',
+        },
+      ],
+    })
+    // inv-1 is still open; sinv-paid was settled by another transaction, so the
+    // status/remaining filters exclude it server-side.
+    enqueue({
+      data: [
+        { id: 'inv-1', invoice_number: 'F-1', total: 423, customer: { name: 'Kund AB' } },
+      ],
+    })
+    enqueue({ data: [] })
+
+    await expect(countSuggestedMatches(supabase, COMPANY)).resolves.toBe(1)
+    expect(mockSupabase.from).toHaveBeenCalledWith('transactions')
+  })
+
+  it('returns 0 when the only hint points at an invoice settled elsewhere', async () => {
+    enqueue({
+      data: [
+        {
+          id: 'tx-1',
+          date: '2026-06-01',
+          description: 'MONTHLY FEE',
+          amount: -549,
+          currency: 'SEK',
+          potential_invoice_id: null,
+          potential_supplier_invoice_id: 'sinv-paid',
+        },
+      ],
+    })
+    enqueue({ data: [] })
+    await expect(countSuggestedMatches(supabase, COMPANY)).resolves.toBe(0)
+  })
+
+  it('soft-fails to 0 on query error', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(countSuggestedMatches(supabase, COMPANY)).resolves.toBe(0)
+  })
+
+  it('clamps the scan so the badge cannot walk an unbounded hint set', async () => {
+    enqueue({ data: [] })
+    await countSuggestedMatches(supabase, COMPANY)
+    expect(findCall('transactions', 'limit')).toEqual([200])
   })
 })
 

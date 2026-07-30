@@ -9,6 +9,7 @@ import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
+import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { validateBody } from '@/lib/api/validate'
 import { MarkSupplierInvoicePaidSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -406,6 +407,13 @@ export const POST = withRouteContext(
     // anchor every missing-underlag surface warns on a verifikat that plainly
     // shows the invoice. Non-fatal by construction: the payment is already
     // committed and immutable, so the helper logs and returns null on failure.
+    // Fully settled: retire every transaction's suggestion pointer at this
+    // invoice (issue #1259). No exceptTransactionId: this flow is not driven by
+    // a bank transaction, so any pointer at it is now dead.
+    if (isFullyPaid) {
+      await clearSettledInvoiceSuggestions(supabase, companyId!, 'supplier_invoice', id)
+    }
+
     await anchorSupplierInvoiceDocument(supabase, companyId!, id)
 
     try {

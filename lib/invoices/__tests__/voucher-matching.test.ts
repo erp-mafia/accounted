@@ -10,6 +10,14 @@ import {
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 
+// Issue #1259: settling the invoice retires the suggestion pointers at it.
+// Mocked so it consumes no slot in the queued Supabase mock; the helper's own
+// query shape is pinned by ./clear-settled-invoice-suggestions.test.ts.
+const { mockClearSuggestions } = vi.hoisted(() => ({ mockClearSuggestions: vi.fn() }))
+vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
+  clearSettledInvoiceSuggestions: mockClearSuggestions,
+}))
+
 // ============================================================
 // validateVoucherForInvoiceLink: happy path + reject codes
 // ============================================================
@@ -650,5 +658,56 @@ describe('linkInvoiceToVoucher', () => {
     )
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('LINK_VOUCHER_DB_ERROR')
+  })
+
+  // Issue #1259: an invoice settled through this path must not leave other
+  // transactions pointing at it as a match suggestion.
+  function enqueueRpcOk(
+    enqueue: (r: { data?: unknown; error?: unknown }) => void,
+    invoiceStatus: 'paid' | 'partially_paid',
+  ) {
+    enqueue({
+      data: {
+        ok: true,
+        payment_id: 'pay-1',
+        invoice_status: invoiceStatus,
+        paid_amount: invoiceStatus === 'paid' ? 1000 : 400,
+        remaining_amount: invoiceStatus === 'paid' ? 0 : 600,
+        payment_amount: invoiceStatus === 'paid' ? 1000 : 400,
+        journal_entry_id: 'je-1',
+        currency: 'SEK',
+        payment_date: '2026-06-01',
+      },
+      error: null,
+    })
+    // Post-link invoice re-fetch for the event payload.
+    enqueue({ data: null, error: null })
+  }
+
+  it('retires the settled invoice suggestions on a full payment', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueRpcOk(enqueue, 'paid')
+
+    const result = await linkInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      invoiceId: 'inv-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
+    expect(mockClearSuggestions).toHaveBeenCalledWith(supabase, 'company-1', 'invoice', 'inv-1')
+  })
+
+  it('leaves the suggestions alone on a partial payment: the invoice is still matchable', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueRpcOk(enqueue, 'partially_paid')
+
+    const result = await linkInvoiceToVoucher(supabase as never, 'user-1', 'company-1', {
+      invoiceId: 'inv-1',
+      journalEntryId: 'je-1',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(mockClearSuggestions).not.toHaveBeenCalled()
   })
 })

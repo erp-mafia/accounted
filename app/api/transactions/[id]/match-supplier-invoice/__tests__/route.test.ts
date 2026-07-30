@@ -38,6 +38,13 @@ vi.mock('@/lib/invoices/match-log', () => ({
   logMatchEvent: vi.fn(),
 }))
 
+// Mocked so it consumes no slot in the queued Supabase mock: the helper's own
+// query shape is pinned by lib/invoices/__tests__/clear-settled-invoice-suggestions.test.ts.
+const mockClearSuggestions = vi.fn()
+vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
+  clearSettledInvoiceSuggestions: (...args: unknown[]) => mockClearSuggestions(...args),
+}))
+
 vi.mock('@/lib/events/bus', () => ({
   eventBus: { emit: vi.fn() },
 }))
@@ -471,6 +478,36 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
       potential_supplier_invoice_id: null,
       is_business: true,
     })
+  })
+
+  // Issue #1259: the settled invoice's pointer must also be retired from every
+  // OTHER transaction that still carries it as an import-time suggestion.
+  it('retires the settled invoice suggestion on the other transactions', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -1000, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 1000 },
+    })
+    await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+
+    expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
+    expect(mockClearSuggestions).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      'supplier_invoice',
+      SI_UUID,
+      { exceptTransactionId: TX_UUID },
+    )
+  })
+
+  it('leaves the suggestions alone on a partial payment: the invoice is still matchable', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -400, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 1000 },
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { body } = await parseJsonResponse<{ invoice_status: string }>(res)
+    expect(body.invoice_status).toBe('partially_paid')
+    expect(mockClearSuggestions).not.toHaveBeenCalled()
   })
 
   it('öresavrundning: a whole-krona Bankgiro payment settles an öre-bearing invoice in full via 3740', async () => {

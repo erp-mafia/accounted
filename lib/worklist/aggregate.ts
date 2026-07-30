@@ -12,9 +12,10 @@ import {
 } from './categories'
 
 /**
- * All worklist counts in one round-trip burst. Every count is a cheap
- * head-only query (categories.ts) and individually soft-fails to 0, so this
- * is safe to call from layouts and server components on every render.
+ * All worklist counts in one round-trip burst. Each count is a bounded query
+ * (mostly head-only; suggested_match revalidates its candidates, see
+ * categories.ts) and individually soft-fails to 0, so this is safe to call
+ * from layouts and server components on every render.
  *
  * `total` is the number of distinct actionable items: suggested_match is a
  * fast path over transactions already counted in book_transaction, so it is

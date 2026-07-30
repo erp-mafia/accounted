@@ -15,6 +15,7 @@ import { MatchInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
+import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { Currency, EntityType, Invoice, Transaction } from '@/types'
@@ -686,6 +687,15 @@ export const POST = withRouteContext(
       }
       txLog.error('failed to record invoice payment', paymentInsertError)
       return errorResponseFromCode('MATCH_INVOICE_RECORD_PAYMENT_FAILED', txLog, { requestId })
+    }
+
+    // The invoice is now settled, so every OTHER transaction still carrying a
+    // suggestion pointer at it is dead: retire them (issue #1259). This
+    // request's own row is cleared by the update just below.
+    if (isFullyPaid) {
+      await clearSettledInvoiceSuggestions(supabase, companyId!, 'invoice', invoice_id, {
+        exceptTransactionId: transactionId,
+      })
     }
 
     const { error: updateTxError } = await supabase

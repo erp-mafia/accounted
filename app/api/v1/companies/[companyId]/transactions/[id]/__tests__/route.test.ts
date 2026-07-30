@@ -69,6 +69,15 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
 vi.mock('@/lib/invoices/match-log', () => ({
   logMatchEvent: vi.fn(),
 }))
+// Issue #1259: the settle paths retire sibling suggestion pointers. Mocked so
+// the assertion is on the orchestration; the helper's own query shape is pinned
+// by lib/invoices/__tests__/clear-settled-invoice-suggestions.test.ts.
+const { clearSuggestionsMock } = vi.hoisted(() => ({
+  clearSuggestionsMock: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
+  clearSettledInvoiceSuggestions: clearSuggestionsMock,
+}))
 vi.mock('@/lib/bookkeeping/mapping-engine', async () => {
   // Keep the real applySettlementAccount: it's a pure rewrite (1930 -> the
   // resolved bank leg) and the v1 categorize route's settlement-account fix
@@ -558,6 +567,16 @@ describe('POST :id/match-invoice', () => {
       expect.objectContaining({ account_number: '1930', debit_amount: 12500, credit_amount: 0 }),
       expect.objectContaining({ account_number: '1510', debit_amount: 0, credit_amount: 12500 }),
     ])
+    // Issue #1259: settling the invoice retires its suggestion pointer on every
+    // OTHER transaction of the company.
+    expect(clearSuggestionsMock).toHaveBeenCalledTimes(1)
+    expect(clearSuggestionsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'invoice',
+      INV_ID,
+      { exceptTransactionId: TX_ID },
+    )
   })
 
   it('rejects negative transaction with MATCH_INVOICE_NOT_INCOME', async () => {
@@ -859,6 +878,17 @@ describe('POST :id/match-supplier-invoice', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.invoice_status).toBe('paid')
+    // Issue #1259: settling the invoice retires its suggestion pointer on every
+    // OTHER transaction of the company (this row's own hint is cleared by the
+    // link update).
+    expect(clearSuggestionsMock).toHaveBeenCalledTimes(1)
+    expect(clearSuggestionsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'supplier_invoice',
+      SI_ID,
+      { exceptTransactionId: TX_ID },
+    )
   })
 
   it('rejects positive transaction with MATCH_SI_NOT_EXPENSE', async () => {

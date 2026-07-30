@@ -44,6 +44,13 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectDuplicatePaymentVoucher: (...args: unknown[]) => mockDetectDuplicate(...args),
 }))
 
+// Mocked so it consumes no slot in the queued Supabase mock: the helper's own
+// query shape is pinned by lib/invoices/__tests__/clear-settled-invoice-suggestions.test.ts.
+const mockClearSuggestions = vi.fn()
+vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
+  clearSettledInvoiceSuggestions: (...args: unknown[]) => mockClearSuggestions(...args),
+}))
+
 vi.mock('@/lib/events/bus', () => ({
   eventBus: { emit: vi.fn() },
 }))
@@ -628,6 +635,49 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.invoice_status).toBe('partially_paid')
     expect(body.paid_amount).toBe(5000)
     expect(body.remaining_amount).toBe(7500)
+    // Issue #1259: a partially paid invoice is still matchable, so the sibling
+    // suggestions must survive.
+    expect(mockClearSuggestions).not.toHaveBeenCalled()
+  })
+
+  // Issue #1259: full settlement retires the pointer at this invoice from every
+  // OTHER transaction still carrying it as an import-time suggestion.
+  it('retires the settled invoice suggestion on the other transactions', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: 12500, invoice_id: null, date: '2024-06-15' })
+    const invoice = makeInvoice({
+      id: VALID_UUID,
+      status: 'sent',
+      total: 12500,
+      remaining_amount: 12500,
+      paid_amount: 0,
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: invoice, error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: VALID_UUID }], error: null }) // update invoice
+    enqueue({ data: null, error: null }) // insert invoice_payments
+    enqueue({ data: null, error: null }) // update transaction
+    enqueue({ data: null, error: null }) // logMatchEvent
+
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
+    expect(mockClearSuggestions).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      'invoice',
+      VALID_UUID,
+      { exceptTransactionId: 'tx-1' },
+    )
   })
 
   it('cash method ignores cash entry when invoice was already booked (accrual→cash migration)', async () => {

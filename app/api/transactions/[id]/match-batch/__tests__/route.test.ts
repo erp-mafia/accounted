@@ -19,6 +19,15 @@ vi.mock('@/lib/init', () => ({
   ensureInitialized: vi.fn(),
 }))
 
+// Issue #1259: each fully settled allocation retires the suggestion pointers
+// at its invoice. Mocked so it consumes no slot in the queued Supabase mock;
+// the helper's own query shape is pinned by
+// lib/invoices/__tests__/clear-settled-invoice-suggestions.test.ts.
+const { mockClearSuggestions } = vi.hoisted(() => ({ mockClearSuggestions: vi.fn() }))
+vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
+  clearSettledInvoiceSuggestions: mockClearSuggestions,
+}))
+
 vi.mock('@/lib/company/context', () => ({
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
@@ -33,6 +42,7 @@ import { POST } from '../route'
 const TX_UUID = '11111111-1111-4111-8111-111111111111'
 const INV_UUID = '22222222-2222-4222-8222-222222222222'
 const SI_UUID = '33333333-3333-4333-8333-333333333333'
+const SI_PARTIAL_UUID = '44444444-4444-4444-8444-444444444444'
 
 describe('POST /api/transactions/[id]/match-batch', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
@@ -116,6 +126,76 @@ describe('POST /api/transactions/[id]/match-batch', () => {
     expect(body.data.voucher_number).toBe(12)
     expect(body.data.allocations).toHaveLength(1)
     expect(body.data.total_allocated).toBe(1000)
+    // Issue #1259: the allocation settled the invoice in full, so every OTHER
+    // transaction still pointing at it as a suggestion is retired.
+    expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
+    expect(mockClearSuggestions).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      'invoice',
+      INV_UUID,
+      { exceptTransactionId: TX_UUID },
+    )
+  })
+
+  it('retires suggestions only for the allocations that settled in full', async () => {
+    enqueue({
+      data: {
+        ok: true,
+        journal_entry_id: 'je-batch-2',
+        voucher_series: 'A',
+        voucher_number: 13,
+        tx_id: TX_UUID,
+        allocations: [
+          {
+            kind: 'supplier_invoice',
+            supplier_invoice_id: SI_UUID,
+            payment_id: 'sip-1',
+            status: 'paid',
+            paid_amount: 1000,
+            remaining_amount: 0,
+            amount: 1000,
+          },
+          {
+            kind: 'supplier_invoice',
+            supplier_invoice_id: SI_PARTIAL_UUID,
+            payment_id: 'sip-2',
+            status: 'partially_paid',
+            paid_amount: 400,
+            remaining_amount: 600,
+            amount: 400,
+          },
+        ],
+        total_allocated: 1400,
+        leftover: 0,
+      },
+      error: null,
+    })
+    enqueue({ data: { id: TX_UUID, amount: -1400, currency: 'SEK' }, error: null }) // tx fetch
+    enqueue({ data: { id: SI_UUID, currency: 'SEK', status: 'paid' }, error: null })
+    enqueue({ data: { id: SI_PARTIAL_UUID, currency: 'SEK', status: 'partially_paid' }, error: null })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: {
+        allocations: [
+          { kind: 'supplier_invoice', supplier_invoice_id: SI_UUID, amount: 1000 },
+          { kind: 'supplier_invoice', supplier_invoice_id: SI_PARTIAL_UUID, amount: 400 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    expect(response.status).toBe(200)
+
+    // Only the fully settled one: a partially paid invoice is still matchable.
+    expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
+    expect(mockClearSuggestions).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      'supplier_invoice',
+      SI_UUID,
+      { exceptTransactionId: TX_UUID },
+    )
   })
 
   it('maps an RPC structured failure to errorResponseFromCode', async () => {

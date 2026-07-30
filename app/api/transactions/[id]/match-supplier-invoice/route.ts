@@ -15,6 +15,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { validateBody } from '@/lib/api/validate'
 import { MatchSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { SupplierInvoice, SupplierInvoiceItem, Transaction } from '@/types'
@@ -410,6 +411,19 @@ export const POST = withRouteContext(
       }
       txLog.error('failed to record supplier invoice payment', paymentInsertError)
       return errorResponseFromCode('MATCH_SI_RECORD_PAYMENT_FAILED', txLog, { requestId })
+    }
+
+    // The invoice is now settled, so every OTHER transaction still carrying a
+    // suggestion pointer at it is dead: retire them (issue #1259). This
+    // request's own row is cleared by the update just below.
+    if (isFullyPaid) {
+      await clearSettledInvoiceSuggestions(
+        supabase,
+        companyId!,
+        'supplier_invoice',
+        supplier_invoice_id,
+        { exceptTransactionId: transactionId },
+      )
     }
 
     const { error: updateTxError } = await supabase

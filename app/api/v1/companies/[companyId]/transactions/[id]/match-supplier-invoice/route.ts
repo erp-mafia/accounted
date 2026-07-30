@@ -23,6 +23,7 @@ import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { eventBus } from '@/lib/events/bus'
 import type { SupplierInvoice, SupplierInvoiceItem, Transaction } from '@/types'
 
@@ -464,10 +465,26 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // The invoice is now settled, so every OTHER transaction still carrying a
+    // suggestion pointer at it is dead: retire them (issue #1259). This
+    // request's own row is cleared by the update just below.
+    if (isFullyPaid) {
+      await clearSettledInvoiceSuggestions(
+        ctx.supabase,
+        ctx.companyId!,
+        'supplier_invoice',
+        supplier_invoice_id,
+        { exceptTransactionId: txId },
+      )
+    }
+
     const { error: updateTxErr } = await ctx.supabase
       .from('transactions')
       .update({
         supplier_invoice_id,
+        // Parity with the dashboard route: the confirmed link supersedes the
+        // suggestion, so the hint must not survive it (issue #1259).
+        potential_supplier_invoice_id: null,
         journal_entry_id: journalEntryId,
         is_business: true,
       })
