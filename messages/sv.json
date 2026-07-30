@@ -4514,6 +4514,8 @@
     "sandbox_locked_title": "{name} är låst i sandlådan",
     "sandbox_locked_note": "Sandlådan kör helt utan externa tjänster, så den här funktionen är avstängd här. Skapa ett konto för att använda den på riktigt.",
     "sandbox_locked_cta": "Skapa konto",
+    "sandbox_locked_signout_error_title": "Kunde inte lämna sandlådan",
+    "sandbox_locked_signout_error_description": "Försök igen om en stund.",
     "breadcrumb": "Tillägg",
     "extension_count": "{count} tillägg",
     "data_pattern_core": "Använder bokföringsdata",

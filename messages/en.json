@@ -4514,6 +4514,8 @@
     "sandbox_locked_title": "{name} is locked in the sandbox",
     "sandbox_locked_note": "The sandbox runs entirely without external services, so this feature is switched off here. Create an account to use it for real.",
     "sandbox_locked_cta": "Create account",
+    "sandbox_locked_signout_error_title": "Could not leave the sandbox",
+    "sandbox_locked_signout_error_description": "Please try again in a moment.",
     "breadcrumb": "Extensions",
     "extension_count": "{count} extensions",
     "data_pattern_core": "Uses bookkeeping data",

@@ -2,8 +2,10 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
+import { useToast } from '@/components/ui/use-toast'
 import { createClient } from '@/lib/supabase/client'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
 
@@ -41,11 +43,25 @@ export function ExtensionSandboxLockState({
 }: ExtensionSandboxLockStateProps) {
   const [isLeaving, setIsLeaving] = useState(false)
   const router = useRouter()
+  const t = useTranslations('extensions')
+  const { toast } = useToast()
 
   async function handleCreateAccount() {
     setIsLeaving(true)
     const supabase = createClient()
-    await supabase.auth.signOut()
+    const { error } = await supabase.auth.signOut()
+    if (error) {
+      // Navigating anyway would land on /register with the anonymous session
+      // still live, which registers INTO the sandbox: the exact outcome the
+      // sign-out exists to prevent. Stay put and let the user retry.
+      toast({
+        title: t('sandbox_locked_signout_error_title'),
+        description: t('sandbox_locked_signout_error_description'),
+        variant: 'destructive',
+      })
+      setIsLeaving(false)
+      return
+    }
     router.push('/register')
   }
 
