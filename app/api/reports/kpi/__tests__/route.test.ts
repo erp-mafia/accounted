@@ -324,8 +324,11 @@ describe('GET /api/reports/kpi', () => {
     // Unfiltered TB for balance-side KPIs + dimension-scoped TB for the
     // expense composition.
     expect(mockTrialBalance).toHaveBeenCalledTimes(2)
-    expect(mockTrialBalance).toHaveBeenNthCalledWith(1, supabase, 'company-1', 'period-1')
+    expect(mockTrialBalance).toHaveBeenNthCalledWith(1, supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
+    })
     expect(mockTrialBalance).toHaveBeenNthCalledWith(2, supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
       dimensions,
     })
     expect(supabase.rpc).not.toHaveBeenCalled()

@@ -16,6 +16,11 @@
 
 import type { ConceptAmount, ConceptAmounts } from './types'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
+import {
+  SIGN_RECLASSIFICATION_RULES,
+  type SignReclassificationId,
+  type SignReclassificationRule,
+} from '@/lib/reports/sign-reclassification'
 
 export interface TrialBalanceRowLike {
   account_number: string
@@ -50,15 +55,6 @@ interface PostMapping {
   /** Orientation of the produced amount. */
   balance: 'debit' | 'credit'
   ranges: Range[]
-}
-
-interface SignReclassification {
-  sourceConcept: string
-  targetConcept: string
-  balance: 'debit' | 'credit'
-  ranges: Range[]
-  mode: 'net' | 'deviating_rows'
-  warning: string
 }
 
 const r = (start: string, end: string): Range => ({ start, end })
@@ -394,40 +390,28 @@ const RECLASSIFIED_ACCOUNTS: Record<string, string> = {
 }
 
 /**
- * Tax settlement and VAT accounts can carry the opposite economic balance
- * from their BAS class. K2 presentation follows the balance's substance:
- * a tax-account credit is a liability, while a net debit on tax or VAT
- * liability accounts is a current receivable.
+ * K2 BR posts each shared sign-reclassification rule moves between. The rules
+ * themselves (ranges, mode, warning) live in lib/reports/sign-reclassification
+ * .ts so INK2R presents the same balance sheet as the årsredovisning. Only the
+ * post names are K2-specific; the arithmetic below stays öre-exact here.
  */
-const SIGN_RECLASSIFICATIONS: SignReclassification[] = [
-  {
+const SIGN_RECLASSIFICATION_POSTS: Record<
+  SignReclassificationId,
+  { sourceConcept: string; targetConcept: string }
+> = {
+  tax_account_credit_to_liability: {
     sourceConcept: 'OvrigaFordringarKortfristiga',
     targetConcept: 'Skatteskulder',
-    balance: 'debit',
-    ranges: [r('1630', '1659')],
-    mode: 'deviating_rows',
-    warning:
-      'Skatte- och momsfordringskonton 1630-1659 har ett nettokreditsaldo och har därför redovisats som skatteskuld.',
   },
-  {
+  tax_liability_debit_to_receivable: {
     sourceConcept: 'Skatteskulder',
     targetConcept: 'OvrigaFordringarKortfristiga',
-    balance: 'credit',
-    ranges: [r('2500', '2599')],
-    mode: 'net',
-    warning:
-      'Skatteskuldkonton 2500-2599 har ett nettodebetsaldo och har därför redovisats som övrig fordran.',
   },
-  {
+  vat_liability_debit_to_receivable: {
     sourceConcept: 'OvrigaKortfristigaSkulder',
     targetConcept: 'OvrigaFordringarKortfristiga',
-    balance: 'credit',
-    ranges: [r('2610', '2659')],
-    mode: 'net',
-    warning:
-      'Momsavräkningskonton 2610-2659 har ett nettodebetsaldo och har därför redovisats som övrig fordran.',
   },
-]
+}
 
 export interface K2MappingResult {
   rr: ConceptAmounts
@@ -502,7 +486,7 @@ function exactAmount(
 
 function deviatingRowsTotal(
   rows: TrialBalanceRowLike[],
-  rule: SignReclassification,
+  rule: SignReclassificationRule,
 ): number {
   return sumOre(
     rows
@@ -518,7 +502,8 @@ function applySignReclassifications(
   previous: TrialBalanceRowLike[] | null,
   warnings: string[],
 ): void {
-  for (const rule of SIGN_RECLASSIFICATIONS) {
+  for (const rule of SIGN_RECLASSIFICATION_RULES) {
+    const { sourceConcept, targetConcept } = SIGN_RECLASSIFICATION_POSTS[rule.id]
     let reclassified = false
     for (const field of ['current', 'previous'] as const) {
       const rows = field === 'current' ? current : previous
@@ -527,15 +512,15 @@ function applySignReclassifications(
         rule.mode === 'deviating_rows'
           ? deviatingRowsTotal(rows, rule)
           : exactSumForMapping(rows, {
-              concept: rule.sourceConcept,
+              concept: sourceConcept,
               balance: rule.balance,
               ranges: rule.ranges,
             })
       if (deviatingBalance >= 0) continue
 
       const amountToMove = -deviatingBalance
-      adjustConcept(br, rule.sourceConcept, field, amountToMove)
-      adjustConcept(br, rule.targetConcept, field, amountToMove)
+      adjustConcept(br, sourceConcept, field, amountToMove)
+      adjustConcept(br, targetConcept, field, amountToMove)
       reclassified = true
     }
     if (reclassified) warnings.push(rule.warning)

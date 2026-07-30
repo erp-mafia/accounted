@@ -53,7 +53,11 @@ interface SnapshotShape {
 // and collapses several rules onto one line. Strip the markers, normalise
 // whitespace, and split run-on "Firman tecknas …" clauses onto their own
 // lines so each rule reads as a sentence.
-function cleanSignatory(raw: string): string[] {
+function cleanSignatory(raw: string | null | undefined): string[] {
+  // The snapshot is unvalidated registry JSON: `description` is declared
+  // required inside an interface whose every other field is optional, so a
+  // signatory row without one would throw here and blank the settings panel.
+  if (!raw) return []
   const normalised = raw
     .replace(/>/g, ' ')
     .replace(/\s+/g, ' ')

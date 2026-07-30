@@ -32,7 +32,41 @@ import {
 import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { TICCompanyProfile } from '@/extensions/general/tic/lib/tic-types'
+
+/**
+ * The profile is hydrated from a persisted `extension_data` jsonb blob, so its
+ * shape is whatever the TIC schema looked like when it was cached, not what
+ * TICCompanyProfile promises today. A blob written before the v2 upgrade (#584)
+ * has no `statuses` key at all, and `profile.statuses.length` on a rendered
+ * blob like that dropped the whole workspace into the error boundary.
+ *
+ * Normalising once at the hydration boundary keeps every list read below
+ * honest, including the ones a future schema change would otherwise break.
+ */
+function normalizeProfile(raw: unknown): TICCompanyProfile {
+  const p = (raw ?? {}) as Partial<TICCompanyProfile>
+  const list = <T,>(value: T[] | undefined | null): T[] => (Array.isArray(value) ? value : [])
+  return {
+    ...(p as TICCompanyProfile),
+    registration: p.registration ?? { fTax: false, vat: false, payroll: false },
+    sniCodes: list(p.sniCodes),
+    bankAccounts: list(p.bankAccounts),
+    beneficialOwners: list(p.beneficialOwners),
+    financialReports: list(p.financialReports),
+    fiscalYearHistory: list(p.fiscalYearHistory),
+    signatory: list(p.signatory),
+    representatives: list(p.representatives),
+    payrolls: list(p.payrolls),
+    statuses: list(p.statuses),
+    // Declared nullable, so undefined would already read as falsy at the
+    // render guards; normalised anyway so the object matches its own type.
+    fiscalYear: p.fiscalYear ?? null,
+    board: p.board ?? null,
+    financials: p.financials ?? null,
+  }
+}
 
 function formatKSEK(value: number | null): string {
   if (value === null) return '-'
@@ -165,8 +199,13 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
   useEffect(() => {
     if (isDataLoading) return
     const cached = getByKey('company_profile')
-    if (cached?.value) {
-      setProfile(cached.value as unknown as TICCompanyProfile)
+    // Blobs written before the TIC v2 upgrade (#584) predate the statuses /
+    // board / payroll sections entirely. Rendering one normalized would show
+    // a permanently section-less profile, because the success path has no
+    // refresh button to repair it: leaving `profile` null instead lets the
+    // auto-fetch effect below pull the current shape and re-save it.
+    if (cached?.value && 'statuses' in cached.value) {
+      setProfile(normalizeProfile(cached.value))
     }
     setInitialLoad(false)
   }, [isDataLoading, getByKey])
@@ -196,14 +235,19 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
       )
 
       if (!res.ok) {
-        const { error } = await res.json()
-        toast({ title: error ?? t('toast_profile_failed'), variant: 'destructive' })
+        // `error` is the canonical envelope object, not a string: as a bare
+        // toast title it would render an object as a React child.
+        const body = await res.json().catch(() => null)
+        toast({
+          title: body?.error ? getErrorMessage(body, { statusCode: res.status }) : t('toast_profile_failed'),
+          variant: 'destructive',
+        })
         setFetchFailed(true)
         return
       }
 
       const { data } = await res.json()
-      setProfile(data)
+      setProfile(normalizeProfile(data))
       await save('company_profile', data)
     } catch {
       toast({ title: t('toast_unexpected_error'), variant: 'destructive' })

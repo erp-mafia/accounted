@@ -27,7 +27,9 @@ export async function generateIncomeStatement(
   // the resultaträkning to zero. The income statement must reflect the
   // pre-closing activity for the year.
   const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
-    excludeYearEndClosing: true,
+    // Operational convention, unchanged. Moving this to 'exclude-final' is
+    // Stage 2 of #1051 and deliberately deferred: see DECISIONS.md:632.
+    closingEntry: 'exclude-all-year-end',
     fromDate: options?.fromDate,
     toDate: options?.toDate,
     dimensions: options?.dimensions,

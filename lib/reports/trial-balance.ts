@@ -31,13 +31,43 @@ import type { TrialBalanceRow } from '@/types'
  * number of entries is handled without the pathological journal_entries!inner
  * embed plan (see entry-lines.ts for the full story).
  */
+/**
+ * How a caller treats the year-end closing entries. Required, with no default,
+ * on purpose: picking wrong is silent and produces a plausible-looking report,
+ * so every call site must state its choice and be reviewable.
+ *
+ * A resultatavslut posts the mirror image of every P&L account into 2099 inside
+ * the same fiscal period. A caller that sums class 3-8 and forgets to exclude
+ * it therefore reads ZERO across the board, and the balance sheet still ties
+ * out, so nothing warns. That defect shipped three times (årsredovisning
+ * 2026-07-23, INK2R and NE-bilaga 2026-07-29, Resultatrapport found in the
+ * same sweep) before this parameter existed.
+ */
+export type ClosingEntryMode =
+  /**
+   * Every entry, resultatavslut included. Correct for balance sheets (2099
+   * must carry årets resultat), for the year-end engine itself, and for
+   * archives and diagnostics that must see the ledger as posted.
+   */
+  | 'include'
+  /**
+   * Drop only fiscal_periods.closing_entry_id. Correct for statutory annual
+   * reports: skatt, avskrivningar and bokslutsdispositioner also carry
+   * source_type 'year_end' and belong on the form.
+   */
+  | 'exclude-final'
+  /**
+   * Drop every source_type 'year_end' entry and its storno/correction chain.
+   * The operational-report convention: pre-bokslut activity only.
+   */
+  | 'exclude-all-year-end'
+
 export async function generateTrialBalance(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  options?: {
-    excludeYearEndClosing?: boolean
-    excludeFinalClosingEntry?: boolean
+  options: {
+    closingEntry: ClosingEntryMode
     fromDate?: string
     toDate?: string
     dimensions?: Record<string, string>
@@ -50,13 +80,14 @@ export async function generateTrialBalance(
 }> {
 
   const dimensionFilter =
-    options?.dimensions && Object.keys(options.dimensions).length > 0
+    options.dimensions && Object.keys(options.dimensions).length > 0
       ? options.dimensions
       : undefined
-  const excludeAllYearEndEntries = options?.excludeYearEndClosing
+  const excludeAllYearEndEntries = options.closingEntry === 'exclude-all-year-end'
+  const excludeFinalOnly = options.closingEntry === 'exclude-final'
 
   // Wave 1: the period row (for opening balance computation), the reversed
-  // year-end entry ids (only needed for excludeYearEndClosing), and the
+  // year-end entry ids (only needed for 'exclude-all-year-end'), and the
   // chart of accounts are mutually independent, so they share one parallel
   // round trip instead of three sequential ones. The accounts list is now
   // also fetched for reports that turn out empty or fail the closed-period
@@ -103,7 +134,7 @@ export async function generateTrialBalance(
   // closed period without the link is ambiguous, so fail instead of silently
   // understating the statutory report.
   if (
-    options?.excludeFinalClosingEntry
+    excludeFinalOnly
     && period?.is_closed === true
     && !period.closing_entry_id
   ) {
@@ -122,7 +153,7 @@ export async function generateTrialBalance(
     return q
   }
 
-  const closingEntryId = options?.excludeFinalClosingEntry
+  const closingEntryId = excludeFinalOnly
     ? period?.closing_entry_id ?? null
     : null
   // The base query already admits only posted and reversed entries. Exclude a
@@ -144,7 +175,7 @@ export async function generateTrialBalance(
   // "opening" of that window must include all activity since the period
   // started (rolled forward below).
   const rollForwardWindow =
-    options?.fromDate && period?.period_start && options.fromDate > period.period_start
+    options.fromDate && period?.period_start && options.fromDate > period.period_start
       ? { periodStart: period.period_start, fromDate: options.fromDate }
       : null
 
@@ -180,7 +211,7 @@ export async function generateTrialBalance(
             if (excludeAllYearEndEntries) {
               query = excludeYearEndChain(query)
             }
-            if (options?.excludeFinalClosingEntry) {
+            if (excludeFinalOnly) {
               query = excludeClosingEntry(query)
             }
 
@@ -226,10 +257,10 @@ export async function generateTrialBalance(
         // increase query complexity (and break older mocks that don't stub gte
         // /lte). The fiscal_period_id constraint plus a CHECK on entry_date in
         // the engine keep activity inside the period.
-        if (options?.fromDate) {
+        if (options.fromDate) {
           query = query.gte('entry_date', options.fromDate)
         }
-        if (options?.toDate) {
+        if (options.toDate) {
           query = query.lte('entry_date', options.toDate)
         }
 
@@ -240,7 +271,7 @@ export async function generateTrialBalance(
         if (excludeAllYearEndEntries) {
           query = excludeYearEndChain(query)
         }
-        if (options?.excludeFinalClosingEntry) {
+        if (excludeFinalOnly) {
           query = excludeClosingEntry(query)
         }
 

@@ -414,13 +414,13 @@ describe('buildArsredovisningData: K2 byte-equivalence', () => {
       expect.anything(),
       'co1',
       'fp1',
-      { excludeFinalClosingEntry: true },
+      { closingEntry: 'exclude-final' },
     )
     expect(mockedTrialBalance).not.toHaveBeenCalledWith(
       expect.anything(),
       'co1',
       'fp1',
-      { excludeYearEndClosing: true },
+      { closingEntry: 'exclude-all-year-end' },
     )
   })
 

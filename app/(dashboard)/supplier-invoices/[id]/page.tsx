@@ -122,16 +122,35 @@ export default function SupplierInvoiceDetailPage() {
 
   async function fetchInvoice() {
     setIsLoading(true)
-    const res = await fetch(`/api/supplier-invoices/${params.id}`)
-    const { data, error } = await res.json()
-    if (error) {
-      toast({ title: t('load_failed_title'), description: error, variant: 'destructive' })
-    } else {
-      setInvoice(data)
-      setPayAmount(String(data.remaining_amount))
-      setPaymentDate(new Date().toISOString().split('T')[0])
+    // try/finally: a dropped connection or a non-JSON error page makes
+    // res.json() throw, and this runs from an effect, so the rejection is
+    // unhandled and isLoading would stay true: a spinner that never resolves.
+    try {
+      const res = await fetch(`/api/supplier-invoices/${params.id}`)
+      const body = await res.json().catch(() => null)
+      // See the identical fix in suppliers/[id]: `body.error` is the canonical
+      // envelope object, and rendering an object as a toast description throws
+      // out of the root layout into global-error.
+      if (!res.ok || body?.error || !body?.data) {
+        toast({
+          title: t('load_failed_title'),
+          description: getErrorMessage(body, { statusCode: res.status, context: 'supplier_invoice' }),
+          variant: 'destructive',
+        })
+      } else {
+        setInvoice(body.data)
+        setPayAmount(String(body.data.remaining_amount))
+        setPaymentDate(new Date().toISOString().split('T')[0])
+      }
+    } catch (err) {
+      toast({
+        title: t('load_failed_title'),
+        description: getErrorMessage(err, { context: 'supplier_invoice' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsLoading(false)
     }
-    setIsLoading(false)
   }
 
   useEffect(() => {

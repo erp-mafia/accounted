@@ -60,7 +60,7 @@ export async function loadTaxAdjustmentSnapshot(
 ): Promise<TaxAdjustmentSnapshot> {
   const [trialBalance, persistedResult] = await Promise.all([
     generateTrialBalance(supabase, companyId, fiscalPeriodId, {
-      excludeYearEndClosing: true,
+      closingEntry: 'exclude-all-year-end',
     }),
     supabase
       .from('fiscal_period_tax_adjustments')

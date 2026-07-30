@@ -12,6 +12,7 @@ import {
   type ASPSP,
 } from './lib/api-client'
 import { syncAccountTransactions } from './lib/sync'
+import { findReusableSessions, countLiveSiblings } from './lib/session-sharing'
 import {
   runReconciliation,
   DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
@@ -28,6 +29,7 @@ import type { Transaction } from '@/types'
 const RATE_LIMIT_ACCOUNTS = { maxRequests: 20, windowMs: 60_000 }
 const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
+const RATE_LIMIT_ATTACH = { maxRequests: 10, windowMs: 60_000 }
 
 const MAX_ENABLED_UIDS = 50
 
@@ -91,6 +93,179 @@ export const enableBankingExtension: Extension = {
             ],
             sandbox: isSandboxMode(),
           })
+        }
+      },
+    },
+    {
+      // Live PSD2 sessions the user already holds in their OTHER companies that
+      // still have unclaimed accounts. Drives the "reuse this connection" offer:
+      // several ASPSPs allow one active AIS session per PSU, so authorizing the
+      // same bank again for a second company kills the first company's feed.
+      // An empty list is the normal case and renders no offer at all.
+      method: 'GET',
+      path: '/reusable-sessions',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        const log = ctx?.log ?? console
+        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+
+        if (!user) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+        if (!ctx?.companyId) {
+          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
+        }
+
+        try {
+          const sessions = await findReusableSessions(supabase, user.id, ctx.companyId)
+          // Never ship session_id to the browser: it is the bearer of the PSD2
+          // consent. The client only needs to name the offer and post back the
+          // source connection id, which is re-validated server-side on attach.
+          return NextResponse.json({
+            sessions: sessions.map(s => ({
+              connection_id: s.connectionId,
+              company_id: s.companyId,
+              company_name: s.companyName,
+              bank_name: s.bankName,
+              consent_expires: s.consentExpires,
+              available_account_count: s.availableAccounts.length,
+            })),
+          })
+        } catch (error) {
+          log.error('[enable-banking] Failed to list reusable sessions', error)
+          return NextResponse.json({ sessions: [] })
+        }
+      },
+    },
+    {
+      // Attach the ACTIVE company to a session authorized for another of the
+      // user's companies. No BankID, no new /auth call, nothing revoked: the
+      // new row shares session_id + consent_expires and carries only the
+      // accounts no company has claimed. Lands in 'pending_selection' so the
+      // existing AccountPickerDialog does the ledger mapping, IBAN-aware.
+      method: 'POST',
+      path: '/attach',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        const log = ctx?.log ?? console
+        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+
+        if (!user) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+        if (!ctx?.companyId) {
+          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
+        }
+        const companyId = ctx.companyId
+
+        const blocked = await requireCapability(supabase, companyId, CAPABILITY.bank_sync)
+        if (blocked) return blocked
+
+        const rl = await checkRateLimit({
+          prefix: 'enable-banking:attach',
+          identifier: user.id,
+          ...RATE_LIMIT_ATTACH,
+        })
+        if (!rl.ok) return rl.response!
+
+        const { connection_id } = await request.json()
+        if (!connection_id) {
+          return NextResponse.json({ error: 'connection_id is required' }, { status: 400 })
+        }
+
+        try {
+          // Re-derive the offer server-side rather than trusting the posted id.
+          // findReusableSessions re-checks ownership (same user), that the
+          // source is a DIFFERENT company, that its session is active with a
+          // live consent, and which accounts are genuinely unclaimed.
+          const sessions = await findReusableSessions(supabase, user.id, companyId)
+          const source = sessions.find(s => s.connectionId === connection_id)
+          if (!source) {
+            return NextResponse.json(
+              { error: 'No reusable session available for this connection' },
+              { status: 404 }
+            )
+          }
+
+          // A company already syncing this bank must go through reconnect, not
+          // attach: a second live row for the same provider would sync the same
+          // accounts twice into one set of books.
+          const { data: existingForCompany } = await supabase
+            .from('bank_connections')
+            .select('id')
+            .eq('company_id', companyId)
+            .eq('provider', source.provider)
+            .in('status', ['active', 'pending_selection'])
+            .limit(1)
+            .maybeSingle()
+
+          if (existingForCompany) {
+            return NextResponse.json(
+              { error: 'This company is already connected to that bank' },
+              { status: 409 }
+            )
+          }
+
+          const { data: created, error: insertError } = await supabase
+            .from('bank_connections')
+            .insert({
+              user_id: user.id,
+              company_id: companyId,
+              provider: source.provider,
+              bank_name: source.bankName,
+              session_id: source.sessionId,
+              psu_type: source.psuType,
+              consent_expires: source.consentExpires,
+              accounts_data: source.availableAccounts,
+              status: 'pending_selection',
+            })
+            .select('id')
+            .single()
+
+          if (insertError || !created) {
+            log.error('[enable-banking] Failed to attach shared session', {
+              message: insertError?.message,
+              sourceConnectionId: source.connectionId,
+              companyId,
+            })
+            return NextResponse.json({ error: 'Failed to reuse connection' }, { status: 500 })
+          }
+
+          log.info('[enable-banking] Attached company to an existing PSD2 session', {
+            connectionId: created.id,
+            sourceConnectionId: source.connectionId,
+            companyId,
+            bankName: source.bankName,
+            accountCount: source.availableAccounts.length,
+          })
+
+          // This company gains access to bank data, so it is a consent grant
+          // from an audit standpoint even though no new consent was signed
+          // (ASVS V16 / GDPR Art.30), same event the callback emits.
+          try {
+            const emit = ctx?.emit ?? (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
+            await emit({
+              type: 'bank_connection.consent_granted',
+              payload: {
+                connectionId: created.id,
+                bankName: source.bankName ?? null,
+                accountCount: source.availableAccounts.length,
+                consentExpiresAt: source.consentExpires ?? null,
+                userId: user.id,
+                companyId,
+              },
+            })
+          } catch (emitError) {
+            log.error('[enable-banking] Failed to emit consent_granted on attach', emitError)
+          }
+
+          return NextResponse.json({
+            connection_id: created.id,
+            account_count: source.availableAccounts.length,
+          })
+        } catch (error) {
+          log.error('[enable-banking] Attach failed', error)
+          return NextResponse.json({ error: 'Failed to reuse connection' }, { status: 500 })
         }
       },
     },
@@ -294,7 +469,12 @@ export const enableBankingExtension: Extension = {
               .update({
                 oauth_state: oauthState,
                 status: 'expired',
-                session_id: null,
+                // session_id is deliberately KEPT here. The callback needs the
+                // session being replaced to carry the renewed consent across to
+                // sibling companies sharing it (lib/session-sharing.ts); nulling
+                // it made the renewal invisible and left the siblings pointing
+                // at a session the bank had just superseded. 'expired' already
+                // marks the row dead, and the probe pass skips expired rows.
                 error_message: null,
                 psu_type: psuType,
               })
@@ -316,7 +496,25 @@ export const enableBankingExtension: Extension = {
             // expected and non-fatal: the new authorization supersedes it.
             // Logged at WARN so a systematic revoke failure is visible to
             // monitoring (compliance: ASVS V16 / ISO 27001 A.8.15).
+            // Never revoke a session other companies still hold. On a shared
+            // consent this revoke would kill their feeds instantly, before the
+            // replacement session exists, and permanently if the user abandons
+            // the bank flow. The callback moves the siblings onto the new
+            // session once it lands; the superseded one lapses on its own.
+            let oldSessionShared = false
             if (existing.session_id) {
+              const { createServiceClient } = await import('@/lib/supabase/server')
+              const serviceSupabase = await createServiceClient()
+              oldSessionShared =
+                (await countLiveSiblings(serviceSupabase, existing.session_id, existing.id)) > 0
+              if (oldSessionShared) {
+                log.info('[enable-banking] Old session shared with other companies: not revoking', {
+                  connection_id: existing.id,
+                })
+              }
+            }
+
+            if (existing.session_id && !oldSessionShared) {
               try {
                 await deleteSession(existing.session_id)
               } catch (revokeError) {
@@ -1293,8 +1491,34 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
         }
 
-        // Revoke PSD2 consent if session exists
+        // Revoke the PSD2 consent only when no other company still depends on
+        // it. Sessions are shared across a user's companies (see
+        // lib/session-sharing.ts), so a blind revoke here would silently take
+        // down a sibling company's bank feed: exactly the failure this feature
+        // exists to remove. countLiveSiblings needs the service client because
+        // RLS hides a sibling living in a company the user has since left, and
+        // an unseen sibling would read as "safe to revoke".
+        let sharedWithSiblings = false
         if (connection.session_id) {
+          const { createServiceClient } = await import('@/lib/supabase/server')
+          const serviceSupabase = await createServiceClient()
+          const siblingCount = await countLiveSiblings(
+            serviceSupabase,
+            connection.session_id,
+            connection.id,
+          )
+          sharedWithSiblings = siblingCount > 0
+          if (sharedWithSiblings) {
+            log.info('[enable-banking] Session still in use by other companies: skipping revoke', {
+              connectionId: connection.id,
+              siblingCount,
+              userId: user.id,
+              companyId,
+            })
+          }
+        }
+
+        if (connection.session_id && !sharedWithSiblings) {
           try {
             await deleteSession(connection.session_id)
           } catch (error) {

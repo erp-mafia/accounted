@@ -185,6 +185,12 @@ export function AccountDangerZone() {
           {/* Live region always mounted so the failure is announced when it
               appears, not merely inserted. */}
           <div id={errorId} role="status" aria-live="polite" className="min-w-0">
+            {/* The button is disabled while companies remain, so the reason has
+                to be visible next to it: hiding it behind the blocker row's "?"
+                left users reading the greyed-out button as broken. */}
+            {!loadError && blockers !== null && blockers.length > 0 && (
+              <AttnLine>{t('blocked_reason', { count: blockers.length })}</AttnLine>
+            )}
             {loadError && (
               <AttnLine
                 action={
@@ -210,7 +216,7 @@ export function AccountDangerZone() {
               type="button"
               onClick={() => setShowDialog(true)}
               disabled={!canDelete}
-              aria-describedby={loadError ? errorId : undefined}
+              aria-describedby={canDelete ? undefined : errorId}
               className="text-sm font-medium text-destructive underline underline-offset-2 transition-colors duration-150 hover:text-destructive/80 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {t('delete_button')}

@@ -212,6 +212,8 @@ async function bookedBalance(
   }
 
   const tb = await generateTrialBalance(supabase, companyId, (period as { id: string }).id, {
+    // Reads 29xx semesterlöneskuld accounts (class 2).
+    closingEntry: 'include',
     toDate: asOfDate,
   })
   const balanceOf = (account: string): number => {

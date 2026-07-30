@@ -11,6 +11,7 @@ import {
   resolvePsd2LedgerAccount,
   defaultLedgerForCurrency,
 } from '@/lib/cash-accounts/service'
+import { fanOutSessionRenewal } from '@/extensions/general/enable-banking/lib/session-sharing'
 import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
 
 // This route emits bank_connection.consent_granted / .cash_account_mirror_failed
@@ -34,6 +35,12 @@ interface PendingConnection {
   company_id: string
   bank_name: string | null
   status: string
+  /**
+   * The session being replaced, captured before the update overwrites it, so a
+   * renewal can be carried to sibling companies sharing it (see
+   * lib/session-sharing.ts). Null on a first-time connect.
+   */
+  session_id: string | null
 }
 
 // Shown in the settings banner when the session exchange/finalize fails.
@@ -173,7 +180,7 @@ export async function GET(request: Request) {
   // state stays a plain redirect.
   const { data: pendingConnection, error: findError } = await supabase
     .from('bank_connections')
-    .select('id, user_id, company_id, bank_name, status')
+    .select('id, user_id, company_id, bank_name, status, session_id')
     .eq('oauth_state', state)
     .in('status', ['pending', 'expired', 'error'])
     .single()
@@ -337,6 +344,31 @@ async function finalizeConnection(
       sessionId: '[REDACTED]',
     })
     throw new Error(`Failed to update connection: ${updateError.message}`)
+  }
+
+  // A renewed consent belongs to every company that shared the old session,
+  // not just the one whose button was pressed. Without this the siblings keep
+  // pointing at the session the bank has just replaced and die on their next
+  // sync, which is the original one-session-per-PSU problem wearing a
+  // different hat. Non-fatal: this connection is already renewed and correct.
+  if (pendingConnection.session_id && pendingConnection.session_id !== session_id) {
+    try {
+      await fanOutSessionRenewal(supabase, {
+        oldSessionId: pendingConnection.session_id,
+        newSessionId: session_id,
+        consentExpires: consentExpiresAt ?? null,
+        excludeConnectionId: pendingConnection.id,
+        // Several ASPSPs mint new account uids on re-authorization, so the
+        // siblings need their stored uids re-pointed by IBAN too. Carrying the
+        // session id alone would leave them calling dead uids.
+        sessionAccounts: accountsMetadata,
+      })
+    } catch (renewalError) {
+      console.error('[enable-banking] Failed to carry renewed session to siblings', {
+        connectionId: pendingConnection.id,
+        message: renewalError instanceof Error ? renewalError.message : String(renewalError),
+      })
+    }
   }
 
   // Mirror each PSD2 account into cash_accounts so routing decisions read

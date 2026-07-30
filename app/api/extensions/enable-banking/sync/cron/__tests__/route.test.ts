@@ -14,7 +14,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 interface ClientState {
   active: Record<string, unknown>[]
   probeCandidates: Record<string, unknown>[]
-  updates: { id: unknown; payload: Record<string, unknown> }[]
+  /**
+   * Rows touched by an update. Always a list: the probe marks every connection
+   * sharing one dead session in a single .in('id', [...]) write.
+   */
+  updates: { ids: unknown[]; payload: Record<string, unknown> }[]
 }
 
 const mocks = vi.hoisted(() => ({
@@ -83,7 +87,10 @@ function makeClient(state: ClientState) {
       function result() {
         if (isDelete) return { data: [], error: null }
         if (updatePayload) {
-          state.updates.push({ id: filters.id, payload: updatePayload })
+          state.updates.push({
+            ids: filters['in:id'] ? (filters['in:id'] as unknown[]) : [filters.id],
+            payload: updatePayload,
+          })
           return { data: null, error: null }
         }
         // The sync loop asks for status = 'active'; the probe pass asks for
@@ -174,7 +181,30 @@ describe('GET /api/extensions/enable-banking/sync/cron: session health probe', (
     await expect(response.json()).resolves.toMatchObject({ probedDead: 1 })
     expect(state.updates).toEqual([
       {
-        id: 'conn-1',
+        ids: ['conn-1'],
+        payload: { status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE },
+      },
+    ])
+  })
+
+  it('expires every company sharing one dead session, on a single probe', async () => {
+    // Cross-company session reuse means one consent can back several
+    // companies. Probing per row would spend N identical API calls on one
+    // session and expire the companies one nightly run at a time, so the
+    // others would keep rendering as healthy in the meantime.
+    state.probeCandidates = [
+      connection({ id: 'conn-1', company_id: 'company-1' }),
+      connection({ id: 'conn-2', company_id: 'company-2' }),
+    ]
+    mocks.probeSessionHealth.mockResolvedValue('dead')
+
+    const response = await GET(cronRequest())
+
+    expect(mocks.probeSessionHealth).toHaveBeenCalledTimes(1)
+    await expect(response.json()).resolves.toMatchObject({ probedDead: 2 })
+    expect(state.updates).toEqual([
+      {
+        ids: ['conn-1', 'conn-2'],
         payload: { status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE },
       },
     ])

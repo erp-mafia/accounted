@@ -69,7 +69,7 @@ describe('generateTrialBalance', () => {
       ],
     }
 
-    const result = await generateTrialBalance(supabase, 'company-1', 'period-1')
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
 
     expect(result.rows).toEqual([])
     expect(result.totalDebit).toBe(0)
@@ -87,7 +87,7 @@ describe('generateTrialBalance', () => {
         {
           data: [
             { account_number: '3001', debit_amount: 0, credit_amount: 500 },
-            { account_number: '1930', debit_amount: 300, credit_amount: 0 },
+            { closingEntry: 'include', account_number: '1930', debit_amount: 300, credit_amount: 0 },
             { account_number: '3001', debit_amount: 0, credit_amount: 200 },
             { account_number: '1930', debit_amount: 450, credit_amount: 0 },
           ],
@@ -105,7 +105,7 @@ describe('generateTrialBalance', () => {
       ],
     }
 
-    const result = await generateTrialBalance(supabase, 'company-1', 'period-1')
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
 
     expect(result.rows).toHaveLength(2)
     // Sorted by account number
@@ -131,7 +131,7 @@ describe('generateTrialBalance', () => {
         {
           data: [
             { account_number: '1930', debit: 10000, credit: 0 },
-            { account_number: '2099', debit: 0, credit: 10000 },
+            { closingEntry: 'include', account_number: '2099', debit: 0, credit: 10000 },
           ],
           error: null,
         },
@@ -158,7 +158,7 @@ describe('generateTrialBalance', () => {
       ],
     }
 
-    const result = await generateTrialBalance(supabase, 'company-1', 'period-2')
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-2', { closingEntry: 'include' })
 
     // 1930: opening debit 10000, period credit 500 → closing debit 10000, credit 500
     const acc1930 = result.rows.find((r) => r.account_number === '1930')!
@@ -196,7 +196,7 @@ describe('generateTrialBalance', () => {
         {
           data: [
             { account_number: '1930', debit_amount: 8000, credit_amount: 0 },
-            { account_number: '2099', debit_amount: 0, credit_amount: 8000 },
+            { closingEntry: 'include', account_number: '2099', debit_amount: 0, credit_amount: 8000 },
           ],
           error: null,
         },
@@ -221,7 +221,7 @@ describe('generateTrialBalance', () => {
       ],
     }
 
-    const result = await generateTrialBalance(supabase, 'company-1', 'period-2')
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-2', { closingEntry: 'include' })
 
     // 1930: opening 8000 debit + period 1000 debit = closing 9000 debit
     const acc1930 = result.rows.find((r) => r.account_number === '1930')!
@@ -258,7 +258,7 @@ describe('generateTrialBalance', () => {
       ],
     }
 
-    const result = await generateTrialBalance(supabase, 'company-1', 'period-1')
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
 
     expect(result.rows[0].account_name).toBe('Konto 9999')
   })
@@ -281,7 +281,7 @@ describe('generateTrialBalance', () => {
       ],
     }
 
-    const result = await generateTrialBalance(supabase, 'company-1', 'period-1')
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
 
     expect(result.rows[0].account_class).toBe(5)
   })
@@ -295,7 +295,7 @@ describe('generateTrialBalance', () => {
         {
           data: [
             { account_number: '1930', debit_amount: 33.33, credit_amount: 0 },
-            { account_number: '1930', debit_amount: 33.33, credit_amount: 0 },
+            { closingEntry: 'include', account_number: '1930', debit_amount: 33.33, credit_amount: 0 },
             { account_number: '1930', debit_amount: 33.34, credit_amount: 0 },
             { account_number: '3001', debit_amount: 0, credit_amount: 100 },
           ],
@@ -313,7 +313,7 @@ describe('generateTrialBalance', () => {
       ],
     }
 
-    const result = await generateTrialBalance(supabase, 'company-1', 'period-1')
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
 
     expect(result.rows[0].closing_debit).toBe(100)
     expect(result.totalDebit).toBe(100)
@@ -330,7 +330,7 @@ describe('generateTrialBalance', () => {
         {
           data: [
             { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
-            { account_number: '3001', debit_amount: 0, credit_amount: 999 },
+            { closingEntry: 'include', account_number: '3001', debit_amount: 0, credit_amount: 999 },
           ],
           error: null,
         },
@@ -346,7 +346,7 @@ describe('generateTrialBalance', () => {
       ],
     }
 
-    const result = await generateTrialBalance(supabase, 'company-1', 'period-1')
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
 
     expect(result.totalDebit).toBe(1000)
     expect(result.totalCredit).toBe(999)
@@ -363,7 +363,7 @@ describe('generateTrialBalance', () => {
       ],
     }
 
-    await expect(generateTrialBalance(supabase, 'company-1', 'period-1')).rejects.toThrow('DB error')
+    await expect(generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })).rejects.toThrow('DB error')
   })
 
   it('handles balanced two-account entry', async () => {
@@ -375,7 +375,7 @@ describe('generateTrialBalance', () => {
         {
           data: [
             { account_number: '1930', debit_amount: 5000, credit_amount: 0 },
-            { account_number: '3001', debit_amount: 0, credit_amount: 5000 },
+            { closingEntry: 'include', account_number: '3001', debit_amount: 0, credit_amount: 5000 },
           ],
           error: null,
         },
@@ -391,7 +391,7 @@ describe('generateTrialBalance', () => {
       ],
     }
 
-    const result = await generateTrialBalance(supabase, 'company-1', 'period-1')
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
 
     expect(result.rows).toHaveLength(2)
     expect(result.totalDebit).toBe(5000)
@@ -418,7 +418,7 @@ describe('generateTrialBalance', () => {
         {
           data: [
             { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
-            { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
+            { closingEntry: 'include', account_number: '3001', debit_amount: 0, credit_amount: 1000 },
           ],
           error: null,
         },
@@ -434,7 +434,7 @@ describe('generateTrialBalance', () => {
       ],
     }
 
-    const result = await generateTrialBalance(supabase, 'company-1', 'period-1')
+    const result = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
 
     // Same as the existing "balanced two-account" case: no roll-forward query
     // is consumed because no range is requested.
@@ -457,7 +457,7 @@ describe('generateTrialBalance', () => {
         {
           data: [
             { account_number: '1930', debit_amount: 500, credit_amount: 0 },
-            { account_number: '3001', debit_amount: 0, credit_amount: 500 },
+            { closingEntry: 'include', account_number: '3001', debit_amount: 0, credit_amount: 500 },
           ],
           error: null,
         },
@@ -474,6 +474,7 @@ describe('generateTrialBalance', () => {
     }
 
     const result = await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
       fromDate: '2024-01-01',
       toDate: '2024-06-30',
     })
@@ -520,6 +521,7 @@ describe('generateTrialBalance', () => {
     }
 
     const result = await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
       fromDate: '2024-04-01',
       toDate: '2024-06-30',
     })
@@ -570,7 +572,7 @@ describe('generateTrialBalance', () => {
     }
 
     await generateTrialBalance(supabase, 'company-1', 'period-1', {
-      excludeFinalClosingEntry: true,
+      closingEntry: 'exclude-final',
     })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -597,14 +599,14 @@ describe('generateTrialBalance', () => {
           error: null,
         },
       ],
-      journal_entries: [{ data: [{ id: 'tax-1' }, { id: 'appropriation-1' }], error: null }],
+      journal_entries: [{ data: [{ id: 'tax-1' }, { closingEntry: 'include', id: 'appropriation-1' }], error: null }],
       journal_entry_lines: [{ data: [], error: null }],
       chart_of_accounts: [{ data: [], error: null }],
     }
 
     await expect(
       generateTrialBalance(supabase, 'company-1', 'period-1', {
-        excludeFinalClosingEntry: true,
+        closingEntry: 'exclude-final',
       }),
     ).rejects.toThrow(/missing closing_entry_id/i)
 
@@ -636,7 +638,7 @@ describe('generateTrialBalance', () => {
     }
 
     await generateTrialBalance(supabase, 'company-1', 'period-1', {
-      excludeFinalClosingEntry: true,
+      closingEntry: 'exclude-final',
     })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -659,13 +661,13 @@ describe('generateTrialBalance', () => {
           error: null,
         },
       ],
-      journal_entries: [{ data: [{ id: 'closing-1' }, { id: 'storno-1' }], error: null }],
+      journal_entries: [{ data: [{ id: 'closing-1' }, { closingEntry: 'include', id: 'storno-1' }], error: null }],
       journal_entry_lines: [{ data: [], error: null }],
       chart_of_accounts: [{ data: [], error: null }],
     }
 
     await generateTrialBalance(supabase, 'company-1', 'period-1', {
-      excludeFinalClosingEntry: true,
+      closingEntry: 'exclude-final',
     })
 
     // The OR excludes closing-1 only while status is posted. If it is
@@ -699,7 +701,7 @@ describe('generateTrialBalance', () => {
     }
 
     await generateTrialBalance(supabase, 'company-1', 'period-1', {
-      excludeYearEndClosing: true,
+      closingEntry: 'exclude-all-year-end',
     })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -730,7 +732,7 @@ describe('generateTrialBalance', () => {
         {
           data: [
             { account_number: '1930', debit_amount: 750, credit_amount: 0 },
-            { account_number: '3001', debit_amount: 0, credit_amount: 750 },
+            { closingEntry: 'include', account_number: '3001', debit_amount: 0, credit_amount: 750 },
           ],
           error: null,
         },
@@ -749,6 +751,7 @@ describe('generateTrialBalance', () => {
     }
 
     const result = await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
       fromDate: '2024-11-01',
       toDate: '2024-11-30',
     })

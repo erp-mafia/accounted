@@ -60,14 +60,35 @@ export default function SupplierDetailPage() {
 
   async function fetchSupplier() {
     setIsLoading(true)
-    const res = await fetch(`/api/suppliers/${params.id}`)
-    const { data, error } = await res.json()
-    if (error) {
-      toast({ title: t('load_failed_title'), description: error, variant: 'destructive' })
-    } else {
-      setSupplier(data)
+    // try/finally: this runs from an effect, so a throw out of fetch/res.json()
+    // (dropped connection, non-JSON error page) would be an unhandled rejection
+    // and leave isLoading stuck true on a spinner that never resolves.
+    try {
+      const res = await fetch(`/api/suppliers/${params.id}`)
+      const body = await res.json().catch(() => null)
+      // `body.error` is the canonical envelope OBJECT, not a string: handing it
+      // straight to the toast made the root <Toaster> render an object as a
+      // React child, which throws past every segment error boundary and lands
+      // the whole app on global-error. Route it through getErrorMessage, same
+      // as every other call site in this file.
+      if (!res.ok || body?.error) {
+        toast({
+          title: t('load_failed_title'),
+          description: getErrorMessage(body, { statusCode: res.status, context: 'supplier' }),
+          variant: 'destructive',
+        })
+      } else {
+        setSupplier(body.data)
+      }
+    } catch (err) {
+      toast({
+        title: t('load_failed_title'),
+        description: getErrorMessage(err, { context: 'supplier' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsLoading(false)
     }
-    setIsLoading(false)
   }
 
   async function fetchInvoices() {

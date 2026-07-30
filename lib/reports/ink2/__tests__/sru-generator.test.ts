@@ -59,7 +59,7 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
       totalAssets: 175000,
       totalEquityLiabilities: 175000,
       operatingResult: 305000,
-      resultAfterFinancial: 302000,
+      aretsResultat: 302000,
     },
     companyInfo: {
       companyName: 'Test AB',

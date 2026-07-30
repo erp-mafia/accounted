@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   MATCHABLE_INVOICE_STATUSES,
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
+  getInvoiceMatchTargetState,
+  getSupplierInvoiceMatchTargetState,
   isMatchableInvoice,
   isMatchableSupplierInvoice,
 } from '../matchable-statuses'
@@ -29,6 +31,57 @@ describe('matchable status lists', () => {
       expect([...MATCHABLE_INVOICE_STATUSES]).not.toContain(settled)
       expect([...MATCHABLE_SUPPLIER_INVOICE_STATUSES]).not.toContain(settled)
     }
+  })
+})
+
+describe('invoice match target states', () => {
+  it('keeps customer partial payments matchable', () => {
+    expect(
+      getInvoiceMatchTargetState({ status: 'partially_paid', remaining_amount: 20 }),
+    ).toBe('matchable')
+  })
+
+  it('distinguishes a settled customer invoice from another non-open state', () => {
+    expect(getInvoiceMatchTargetState({ status: 'paid', remaining_amount: 0 })).toBe('settled')
+    expect(getInvoiceMatchTargetState({ status: 'sent', remaining_amount: 0 })).toBe('settled')
+    expect(getInvoiceMatchTargetState({ status: 'cancelled', remaining_amount: 500 })).toBe(
+      'not_open',
+    )
+    expect(getInvoiceMatchTargetState({ status: 'credited', remaining_amount: 0 })).toBe(
+      'not_open',
+    )
+  })
+
+  it('keeps supplier partial payments matchable', () => {
+    expect(
+      getSupplierInvoiceMatchTargetState({
+        status: 'partially_paid',
+        remaining_amount: 49,
+      }),
+    ).toBe('matchable')
+  })
+
+  it('distinguishes a settled supplier invoice from another non-open state', () => {
+    expect(
+      getSupplierInvoiceMatchTargetState({ status: 'paid', remaining_amount: 0 }),
+    ).toBe('settled')
+    expect(
+      getSupplierInvoiceMatchTargetState({ status: 'registered', remaining_amount: 0 }),
+    ).toBe('settled')
+
+    for (const status of ['credited', 'disputed', 'reversed']) {
+      expect(
+        getSupplierInvoiceMatchTargetState({ status, remaining_amount: 500 }),
+      ).toBe('not_open')
+    }
+  })
+
+  it('fails closed when a candidate is missing or malformed', () => {
+    expect(getInvoiceMatchTargetState(null)).toBe('not_open')
+    expect(getInvoiceMatchTargetState({})).toBe('not_open')
+    expect(
+      getSupplierInvoiceMatchTargetState({ status: 'approved', remaining_amount: null }),
+    ).toBe('settled')
   })
 })
 

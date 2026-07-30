@@ -38,7 +38,7 @@ export const GET = withRouteContext('report.trial_balance.xlsx', async (request,
   }
 
   try {
-    const report = await generateTrialBalance(supabase, companyId, periodId)
+    const report = await generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include' })
 
     const buffer = reportToWorkbook<TrialBalanceRow>([
       {

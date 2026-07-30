@@ -98,6 +98,7 @@ describe('generateTrialBalance: dimensions option', () => {
     mockOpeningBalances.mockResolvedValue({ balances: new Map(), obEntryId: null })
 
     await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
       dimensions: { '6': 'P001' },
     })
 
@@ -110,7 +111,7 @@ describe('generateTrialBalance: dimensions option', () => {
     seedCommon()
     mockOpeningBalances.mockResolvedValue({ balances: new Map(), obEntryId: null })
 
-    await generateTrialBalance(supabase, 'company-1', 'period-1')
+    await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
 
     expect(containsCalls).toEqual([])
   })
@@ -119,7 +120,7 @@ describe('generateTrialBalance: dimensions option', () => {
     seedCommon()
     mockOpeningBalances.mockResolvedValue({ balances: new Map(), obEntryId: null })
 
-    await generateTrialBalance(supabase, 'company-1', 'period-1', { dimensions: {} })
+    await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include', dimensions: {} })
 
     expect(containsCalls).toEqual([])
   })
@@ -133,6 +134,7 @@ describe('generateTrialBalance: dimensions option', () => {
     })
 
     const filtered = await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
       dimensions: { '6': 'P001' },
     })
 
@@ -142,7 +144,7 @@ describe('generateTrialBalance: dimensions option', () => {
 
     // Unfiltered keeps the IB (control).
     seedCommon()
-    const unfiltered = await generateTrialBalance(supabase, 'company-1', 'period-1')
+    const unfiltered = await generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'include' })
     const bank2 = unfiltered.rows.find((r) => r.account_number === '1930')
     expect(bank2?.opening_debit).toBe(9000)
     expect(bank2?.closing_debit).toBe(9500)
@@ -156,6 +158,7 @@ describe('generateTrialBalance: dimensions option', () => {
     mockOpeningBalances.mockResolvedValue({ balances: new Map(), obEntryId: null })
 
     await generateTrialBalance(supabase, 'company-1', 'period-1', {
+      closingEntry: 'include',
       fromDate: '2026-06-01',
       dimensions: { '1': 'KS01' },
     })

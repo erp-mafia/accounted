@@ -17,10 +17,11 @@ import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
  * correct declaration got a blocking OUTPUT_VAT_WITHOUT_SALES error (#1261).
  *
  * The per-account "Standard moms" (chart_of_accounts.default_vat_rate) is the
- * resolver: a class 3 konto the user marked 25/12/6 % is by definition domestic
- * taxable sales, which is exactly what ruta 05 collects. The account dialogs
- * say so, since the field now carries declaration weight and not just line
- * prefill.
+ * primary resolver: a class 3 konto the user marked 25/12/6 % is by definition
+ * domestic taxable sales, which is exactly what ruta 05 collects. For a
+ * missing value, the narrow 30x1/30x2/30x3 convention is accepted only when
+ * the account label explicitly confirms the same rate. This recovers imported
+ * and older custom accounts without guessing from a number or free text alone.
  */
 
 /**
@@ -43,8 +44,42 @@ export const RUTA_05_EXCLUDED_ACCOUNTS = new Set([
   '3913',
 ])
 
-/** VAT rates that mark a konto as momspliktig försäljning. 0 and NULL do not. */
+/** VAT rates that mark a configured konto as momspliktig försäljning. */
 const TAXABLE_RATES = [0.25, 0.12, 0.06]
+
+const DOMESTIC_SALES_RATE_BY_SUFFIX: Record<string, number> = {
+  '1': 0.25,
+  '2': 0.12,
+  '3': 0.06,
+}
+
+/**
+ * Resolve a missing rate for a company-specific domestic sales sub-account.
+ *
+ * Neither signal is sufficient by itself:
+ *   - 3011 is not in the BAS 2026 catalog and custom numbers can be repurposed;
+ *   - account labels are free text and can be stale or contradictory.
+ *
+ * Requiring the conventional 30x1/30x2/30x3 suffix and one matching explicit
+ * "25/12/6 % moms" label keeps the fallback deterministic. A configured value,
+ * including explicit 0 %, is always authoritative and never reaches here.
+ */
+function inferDomesticSalesRate(
+  accountNumber: string,
+  accountName: string | null | undefined,
+): number | null {
+  const accountMatch = /^30\d([123])$/.exec(accountNumber)
+  if (!accountMatch) return null
+
+  const expectedRate = DOMESTIC_SALES_RATE_BY_SUFFIX[accountMatch[1]]
+  const namedRates = new Set(
+    [...(accountName ?? '').matchAll(/\b(25|12|6)\s*%\s*moms\b/gi)].map(
+      (match) => Number(match[1]) / 100,
+    )
+  )
+
+  return namedRates.size === 1 && namedRates.has(expectedRate) ? expectedRate : null
+}
 
 /**
  * Ruta 05 accounts that ACCOUNT_TO_BOX already sums, but whose per-rate bucket
@@ -104,11 +139,15 @@ export async function fetchDynamicRuta05Accounts(
   supabase: SupabaseClient,
   companyId: string
 ): Promise<DynamicRuta05Accounts> {
-  const rows = await fetchAllRows<{ account_number: string; default_vat_rate: number | string | null }>(
+  const rows = await fetchAllRows<{
+    account_number: string
+    account_name: string
+    default_vat_rate: number | string | null
+  }>(
     ({ from, to }) =>
       supabase
         .from('chart_of_accounts')
-        .select('account_number, default_vat_rate')
+        .select('account_number, account_name, default_vat_rate')
         .eq('company_id', companyId)
         .eq('account_class', 3)
         // Deactivated accounts only. is_active is nullable (boolean DEFAULT
@@ -117,7 +156,6 @@ export async function fetchDynamicRuta05Accounts(
         // NULL-flagged konto: the same kind of quiet omission this whole fix
         // exists to remove.
         .not('is_active', 'is', false)
-        .in('default_vat_rate', TAXABLE_RATES)
         .order('account_number', { ascending: true })
         .range(from, to)
   )
@@ -129,8 +167,10 @@ export async function fetchDynamicRuta05Accounts(
   const staticRateByAccount = new Map<string, number>()
   for (const row of rows) {
     const account = row.account_number
-    const rate = Number(row.default_vat_rate)
-    if (!TAXABLE_RATES.includes(rate)) continue
+    const rate = row.default_vat_rate === null
+      ? inferDomesticSalesRate(account, row.account_name)
+      : Number(row.default_vat_rate)
+    if (rate === null || !TAXABLE_RATES.includes(rate)) continue
 
     // Checked before the ACCOUNT_TO_BOX skip: these accounts ARE in that map,
     // which is precisely why they need the rate surfaced separately.

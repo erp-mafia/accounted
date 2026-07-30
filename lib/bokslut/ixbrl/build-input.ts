@@ -71,8 +71,8 @@ export async function buildIxbrlInput(
         .eq('id', fiscalPeriodId)
         .eq('company_id', companyId)
         .single(),
-      generateTrialBalance(supabase, companyId, fiscalPeriodId),
-      generateTrialBalance(supabase, companyId, fiscalPeriodId, { excludeFinalClosingEntry: true }),
+      generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
+      generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'exclude-final' }),
       options.signatureRequests ?? listSignatureRequests(supabase, companyId, fiscalPeriodId),
     ])
 
@@ -101,8 +101,8 @@ export async function buildIxbrlInput(
       previousPeriod = { start: prev.period_start, end: prev.period_end }
       try {
         const [prevFull, prevPreClosing] = await Promise.all([
-          generateTrialBalance(supabase, companyId, prev.id),
-          generateTrialBalance(supabase, companyId, prev.id, { excludeFinalClosingEntry: true }),
+          generateTrialBalance(supabase, companyId, prev.id, { closingEntry: 'include' }),
+          generateTrialBalance(supabase, companyId, prev.id, { closingEntry: 'exclude-final' }),
         ])
         previousTb = { full: prevFull.rows, preClosing: prevPreClosing.rows }
       } catch {

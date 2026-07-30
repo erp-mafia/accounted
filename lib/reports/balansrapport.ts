@@ -49,6 +49,8 @@ export async function generateBalansrapport(
   const effectiveToDate = options?.toDate ?? period.period_end
 
   const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+    // Class 1-2 only, and 2099 must carry årets resultat.
+    closingEntry: 'include',
     fromDate: options?.fromDate,
     toDate: options?.toDate,
   })

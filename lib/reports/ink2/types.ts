@@ -162,7 +162,12 @@ export interface INK2Declaration {
     totalAssets: number
     totalEquityLiabilities: number
     operatingResult: number
-    resultAfterFinancial: number
+    /**
+     * Årets resultat: after bokslutsdispositioner AND skatt. Named for what it
+     * is; it was called resultAfterFinancial, which is a different subtotal
+     * (and the name build-data.ts correctly uses for 602-style figures).
+     */
+    aretsResultat: number
   }
   companyInfo: INK2CompanyInfo
   warnings: string[]

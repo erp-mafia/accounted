@@ -89,8 +89,8 @@ export async function buildArsredovisningData(
         .order('period_start', { ascending: false })
         .range(from, to),
     ),
-    generateTrialBalance(supabase, companyId, fiscalPeriodId),
-    generateTrialBalance(supabase, companyId, fiscalPeriodId, { excludeFinalClosingEntry: true }),
+    generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
+    generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'exclude-final' }),
     // Load persisted narrative overrides: replaces the URL-query-param
     // carry from earlier phases. Caller-supplied overrides (passed in via
     // the second arg) still win, so the API can layer per-request edits on
@@ -162,8 +162,8 @@ export async function buildArsredovisningData(
     [...tbTargets.values()].map(async (p) => {
       try {
         const [full, preClosing] = await Promise.all([
-          generateTrialBalance(supabase, companyId, p.id),
-          generateTrialBalance(supabase, companyId, p.id, { excludeFinalClosingEntry: true }),
+          generateTrialBalance(supabase, companyId, p.id, { closingEntry: 'include' }),
+          generateTrialBalance(supabase, companyId, p.id, { closingEntry: 'exclude-final' }),
         ])
         tbPairs.set(p.id, { full: full.rows, preClosing: preClosing.rows })
       } catch {

@@ -1,5 +1,13 @@
 import { NextResponse, after } from 'next/server'
 import {
+  TASKS_EXTENSION_ID,
+  isTaskCapableClient,
+  createMcpTask,
+  resolveMcpTask,
+  taskToWire,
+  type McpTaskRow,
+} from './tasks'
+import {
   extractBearerToken,
   validateApiKey,
   createServiceClientNoCookies,
@@ -244,6 +252,11 @@ interface McpTool {
   // _meta.ui.resourceUri on the RESULT, so the host renders the widget only when
   // asked. (Contrast _meta above, on the definition, which renders on every call.)
   uiResourceUri?: string
+  // Tasks extension: when this predicate returns true for a call from a
+  // task-capable client, the dispatcher returns a CreateTaskResult and runs
+  // execute() after the response instead of blocking on it. Not serialized
+  // into tools/list.
+  shouldRunAsTask?: (args: Record<string, unknown>) => boolean
   execute: (
     args: Record<string, unknown>,
     companyId: string,
@@ -1747,6 +1760,55 @@ async function countMissingUnderlagInPeriod(
   return Math.max(0, fromStart - afterEnd)
 }
 
+/**
+ * Resolve the cash-account identity before comparing its bank feed with the
+ * ledger. The cashAccountId is what prevents another same-currency account
+ * from being included in the transaction total.
+ */
+async function getScopedReconciliationStatus(
+  supabase: SupabaseClient,
+  companyId: string,
+  dateFrom: string | undefined,
+  dateTo: string | undefined,
+  accountNumber: string,
+) {
+  const { data: cashAccount, error: cashAccountError } = await supabase
+    .from('cash_accounts')
+    .select('id, currency, is_primary')
+    .eq('company_id', companyId)
+    .eq('ledger_account', accountNumber)
+    .maybeSingle()
+
+  if (cashAccountError) {
+    log.error('Cash account lookup failed during reconciliation', {
+      companyId,
+      accountNumber,
+      errorCode: cashAccountError.code,
+      errorMessage: cashAccountError.message,
+    })
+    throw new Error(`Kunde inte hämta kassakonto ${accountNumber}`)
+  }
+
+  if (!cashAccount && accountNumber !== '1930') {
+    throw new Error(`Okänt kassakonto ${accountNumber} för det här företaget`)
+  }
+
+  const currency = (cashAccount?.currency as string | undefined) ?? 'SEK'
+  const cashAccountId = cashAccount?.id as string | undefined
+  const includeUnassigned = cashAccount ? Boolean(cashAccount.is_primary) : true
+
+  return getReconciliationStatus(
+    supabase,
+    companyId,
+    dateFrom,
+    dateTo,
+    accountNumber,
+    currency,
+    cashAccountId,
+    includeUnassigned,
+  )
+}
+
 export async function computeVatCloseCheck(
   args: Record<string, unknown>,
   companyId: string,
@@ -1791,7 +1853,7 @@ export async function computeVatCloseCheck(
       .eq('company_id', companyId)
       .eq('status', 'registered')
       .gte('invoice_date', start).lte('invoice_date', end),
-    getReconciliationStatus(supabase, companyId, start, end),
+    getScopedReconciliationStatus(supabase, companyId, start, end, '1930'),
     // Verifikat in the period that genuinely lack an underlag (BFL 5 kap
     // 6-7 §), counted over the SHARED SQL predicate. Never re-derive this
     // locally: countMissingUnderlagInPeriod documents what the hand-rolled
@@ -4862,7 +4924,10 @@ export const tools: McpTool[] = [
         supabase,
         companyId,
         periodId!,
-        dimFilter.filter ? { dimensions: dimFilter.filter } : undefined,
+        // Saldobalans is the ledger as posted, resultatavslut included.
+        dimFilter.filter
+          ? { closingEntry: 'include' as const, dimensions: dimFilter.filter }
+          : { closingEntry: 'include' as const },
       )
 
       const rows = trialBalance.rows
@@ -5068,7 +5133,7 @@ export const tools: McpTool[] = [
       const [incomeStatement, trialBalance, arLedger, monthlyBreakdown, paidInvoices] =
         await Promise.all([
           generateIncomeStatement(supabase, companyId, periodId!),
-          generateTrialBalance(supabase, companyId, periodId!),
+          generateTrialBalance(supabase, companyId, periodId!, { closingEntry: 'include' }),
           generateARLedger(supabase, companyId),
           generateMonthlyBreakdown(supabase, companyId, periodId!),
           supabase
@@ -8959,34 +9024,12 @@ export const tools: McpTool[] = [
       const dateTo = args.date_to as string | undefined
       const accountNumber = (args.account_number as string | undefined) || '1930'
 
-      // Pair the bank account with its currency + cash_account_id so EUR GL
-      // movements aren't compared against SEK transactions, and so a secondary
-      // same-currency account doesn't pool the primary's unassigned rows. Mirrors
-      // app/api/reconciliation/bank/status/route.ts.
-      const { data: cashAccount } = await supabase
-        .from('cash_accounts')
-        .select('id, currency, is_primary')
-        .eq('company_id', companyId)
-        .eq('ledger_account', accountNumber)
-        .maybeSingle()
-
-      if (!cashAccount && accountNumber !== '1930') {
-        throw new Error(`Okänt kassakonto ${accountNumber} för det här företaget`)
-      }
-
-      const currency = (cashAccount?.currency as string | undefined) ?? 'SEK'
-      const cashAccountId = cashAccount?.id as string | undefined
-      const includeUnassigned = cashAccount ? Boolean(cashAccount.is_primary) : true
-
-      return await getReconciliationStatus(
+      return await getScopedReconciliationStatus(
         supabase,
         companyId,
         dateFrom,
         dateTo,
         accountNumber,
-        currency,
-        cashAccountId,
-        includeUnassigned,
       )
     },
   },
@@ -12234,6 +12277,10 @@ export const tools: McpTool[] = [
       idempotentHint: true,  // repeat calls produce equivalent archives, fresh URL
       openWorldHint: false,
     },
+    // Archive generation is the one genuinely long-running synchronous call
+    // in the catalog: task-capable clients get a durable handle instead of a
+    // multi-minute blocking response. Size estimates stay synchronous.
+    shouldRunAsTask: (args) => args.estimate_only !== true,
     async execute(args, companyId, userId, supabase) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -14417,7 +14464,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_pending_operations',
     title: 'List Pending Operations',
-    description: 'List staged pending_operations. Filter by status (default pending), risk_level, or operation_type. Use to review the queue before calling gnubok_approve_pending_operation or gnubok_reject_pending_operation.',
+    description: 'List staged pending_operations. Filter by status (default pending), risk_level, or operation_type. Approve via gnubok_approve_pending_operation, discard via gnubok_reject_pending_operation. render_ui=true opens the approval widget.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -14427,11 +14474,19 @@ export const tools: McpTool[] = [
         operation_type: { type: 'string', description: 'Filter to a single operation_type (e.g. "create_invoice")' },
         limit: { type: 'number', minimum: 1, maximum: 200, description: 'Default 50' },
         offset: { type: 'number', minimum: 0, description: 'Default 0' },
+        render_ui: {
+          type: 'boolean',
+          description: 'Render the interactive approval widget (claude.ai / Desktop): approve/reject by click; the click supplies the high-risk BFL acknowledgment. Data returned either way. Default false.',
+        },
       },
       required: [],
     },
     outputSchema: paginatedSchema('operations'),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    // Renders the approval-queue widget only when the caller passes
+    // render_ui=true (the dispatcher emits result-level _meta in that case),
+    // keeping the tool data-only by default.
+    uiResourceUri: 'ui://pending-operations/app.html',
     async execute(args, companyId, _userId, supabase) {
       const status = (args.status as string) ?? 'pending'
       const limit = Math.min(200, Math.max(1, (args.limit as number) ?? 50))
@@ -15426,6 +15481,61 @@ const SERVER_INFO_BY_NAMESPACE = {
 
 const PROTOCOL_VERSION = '2025-06-18'
 
+// ── Spec revision 2026-07-28 (stateless core) ────────────────
+// New-style clients skip the initialize handshake and instead carry their
+// protocol version and capabilities in _meta on every request. The handshake
+// path keeps serving 2025-06-18-and-earlier clients unchanged: their
+// responses stay byte-identical.
+const STATELESS_PROTOCOL_VERSION = '2026-07-28'
+const SUPPORTED_PROTOCOL_VERSIONS = [
+  STATELESS_PROTOCOL_VERSION,
+  '2025-06-18',
+  '2025-03-26',
+  '2024-11-05',
+]
+const META_PROTOCOL_VERSION = 'io.modelcontextprotocol/protocolVersion'
+const META_SERVER_INFO = 'io.modelcontextprotocol/serverInfo'
+// 2026-07-28 reserves -32020..-32099 for spec-defined errors.
+const JSONRPC_HEADER_MISMATCH = -32020
+const JSONRPC_UNSUPPORTED_PROTOCOL_VERSION = -32022
+// CacheableResult freshness hints. The tool/prompt catalog and widget HTML
+// change only on deploy; skills live in the DB and can change between
+// deploys; data resources are live ledger state and must never be cached.
+// Everything is served behind Authorization, so cacheScope stays private.
+const CACHE_STATIC = { ttlMs: 3_600_000, cacheScope: 'private' } as const
+const CACHE_SKILLS = { ttlMs: 300_000, cacheScope: 'private' } as const
+const CACHE_LIVE = { ttlMs: 0, cacheScope: 'private' } as const
+
+const SERVER_CAPABILITIES = {
+  tools: { listChanged: false },
+  resources: { listChanged: false },
+  prompts: { listChanged: false },
+  extensions: {
+    // MCP Apps (ratified extension): widgets are served as ui:// resources
+    // and referenced from tool _meta.ui.resourceUri (see widgets/).
+    'io.modelcontextprotocol/ui': {},
+    // MCP Tasks: durable handles for long-running tool calls (see tasks.ts).
+    [TASKS_EXTENSION_ID]: {},
+  },
+}
+
+/**
+ * Decode a standard-header value per the 2026-07-28 Value Encoding rules:
+ * values outside plain ASCII arrive as =?base64?<data>?= and MUST be decoded
+ * before comparing against the request body. Returns null for an absent
+ * header so callers can distinguish "not sent" from "sent empty".
+ */
+function decodeMcpHeaderValue(value: string | null): string | null {
+  if (value === null) return null
+  const match = /^=\?base64\?(.*)\?=$/.exec(value)
+  if (!match) return value
+  try {
+    return Buffer.from(match[1], 'base64').toString('utf8')
+  } catch {
+    return value
+  }
+}
+
 function jsonRpc(id: string | number | null, result: unknown): JsonRpcResponse {
   return { jsonrpc: '2.0', id, result }
 }
@@ -15779,25 +15889,111 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     )
   }
 
+  // ── Stateless core (spec 2026-07-28) ──
+  // New-style clients carry their protocol version in _meta on every request
+  // instead of an initialize handshake. Requests without the key come from
+  // handshake-era clients and keep byte-identical responses.
+  const requestMeta = (body.params?._meta ?? {}) as Record<string, unknown>
+  const metaVersion = requestMeta[META_PROTOCOL_VERSION]
+  if (typeof metaVersion === 'string' && !SUPPORTED_PROTOCOL_VERSIONS.includes(metaVersion)) {
+    return NextResponse.json(
+      jsonRpcError(
+        body.id ?? null,
+        JSONRPC_UNSUPPORTED_PROTOCOL_VERSION,
+        `Unsupported protocol version: "${metaVersion}"`,
+        { supported: SUPPORTED_PROTOCOL_VERSIONS }
+      ),
+      { status: 400 }
+    )
+  }
+  // Revisions are ISO dates, so string comparison orders them correctly.
+  const statelessClient =
+    typeof metaVersion === 'string' && metaVersion >= STATELESS_PROTOCOL_VERSION
+  // Tasks extension: only a client that declared it in THIS request's
+  // capabilities may ever receive a CreateTaskResult.
+  const taskCapable = statelessClient && isTaskCapableClient(requestMeta)
+
+  // Standard request headers (2026-07-28): when present they must agree with
+  // the JSON-RPC body. Absence stays accepted: this server supports
+  // handshake-era clients (the spec sanctions that leniency), and the stdio
+  // bridges do not send the headers.
+  const headerProtocolVersion = request.headers.get('mcp-protocol-version')
+  if (
+    headerProtocolVersion &&
+    typeof metaVersion === 'string' &&
+    headerProtocolVersion !== metaVersion
+  ) {
+    return NextResponse.json(
+      jsonRpcError(
+        body.id ?? null,
+        JSONRPC_HEADER_MISMATCH,
+        `Header mismatch: MCP-Protocol-Version "${headerProtocolVersion}" does not match _meta protocol version "${metaVersion}"`
+      ),
+      { status: 400 }
+    )
+  }
+  const headerMethod = request.headers.get('mcp-method')
+  if (headerMethod && headerMethod !== body.method) {
+    return NextResponse.json(
+      jsonRpcError(
+        body.id ?? null,
+        JSONRPC_HEADER_MISMATCH,
+        `Header mismatch: Mcp-Method "${headerMethod}" does not match body method "${body.method}"`
+      ),
+      { status: 400 }
+    )
+  }
+  // Mcp-Name mirrors params.name (tools/call, prompts/get) or params.uri
+  // (resources/read); non-ASCII values arrive base64-wrapped and are decoded
+  // before comparison.
+  const headerName = decodeMcpHeaderValue(request.headers.get('mcp-name'))
+  const bodyParamName = body.params?.name ?? body.params?.uri
+  if (headerName !== null && typeof bodyParamName === 'string' && headerName !== bodyParamName) {
+    return NextResponse.json(
+      jsonRpcError(
+        body.id ?? null,
+        JSONRPC_HEADER_MISMATCH,
+        `Header mismatch: Mcp-Name "${headerName}" does not match the request body name/uri "${bodyParamName}"`
+      ),
+      { status: 400 }
+    )
+  }
+
+  /**
+   * Decorate a result for stateless-core clients: required resultType,
+   * serverInfo identification, and CacheableResult freshness hints. A no-op
+   * for handshake-era clients so existing connections see unchanged payloads.
+   */
+  const decorate = (
+    result: Record<string, unknown>,
+    cache?: { ttlMs: number; cacheScope: 'public' | 'private' }
+  ): Record<string, unknown> => {
+    if (!statelessClient) return result
+    const decorated: Record<string, unknown> = { resultType: 'complete', ...result }
+    if (cache) {
+      decorated.ttlMs = cache.ttlMs
+      decorated.cacheScope = cache.cacheScope
+    }
+    decorated._meta = {
+      ...((result._meta as Record<string, unknown> | undefined) ?? {}),
+      [META_SERVER_INFO]: SERVER_INFO_BY_NAMESPACE[toolNamespace],
+    }
+    return decorated
+  }
+
   // ── Dispatch ──
   const { method, id, params } = body
 
   switch (method) {
+    case 'server/discover':
     case 'initialize': {
-      const SUPPORTED_VERSIONS = new Set(['2025-06-18', '2025-03-26', '2024-11-05'])
+      // Handshake-era set: a 2026-07-28 stateless client never sends
+      // initialize; one that does anyway negotiates down to 2025-06-18.
+      const HANDSHAKE_VERSIONS = new Set(['2025-06-18', '2025-03-26', '2024-11-05'])
       const clientVersion = (params as Record<string, unknown>)?.protocolVersion as string | undefined
       const negotiatedVersion =
-        clientVersion && SUPPORTED_VERSIONS.has(clientVersion) ? clientVersion : PROTOCOL_VERSION
-      return NextResponse.json(
-        jsonRpc(id ?? null, {
-          protocolVersion: negotiatedVersion,
-          capabilities: {
-            tools: { listChanged: false },
-            resources: { listChanged: false },
-            prompts: { listChanged: false },
-          },
-          serverInfo: SERVER_INFO_BY_NAMESPACE[toolNamespace],
-          instructions: projectToolReferencesInText([
+        clientVersion && HANDSHAKE_VERSIONS.has(clientVersion) ? clientVersion : PROTOCOL_VERSION
+      const instructions = projectToolReferencesInText([
             'Accounted: Swedish double-entry bookkeeping via conversation.',
             '',
             'Discovery:',
@@ -15815,7 +16011,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• Suppliers: gnubok_list_suppliers (or gnubok_create_supplier) → gnubok_create_supplier_invoice_from_inbox → gnubok_approve_supplier_invoice. Refund via gnubok_credit_supplier_invoice.',
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report / _ar_ledger / _supplier_ledger: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
-            '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget and gnubok_receipt_matcher opens the receipt↔transaction matcher. Both also return structured data; other clients ignore the UI and use the data.',
+            '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) opens the approval queue where the user approves/rejects with a click. All also return structured data; other clients ignore the UI and use the data.',
             '• Year-end: gnubok_lock_period → gnubok_run_year_end → gnubok_set_opening_balances → gnubok_close_period. Each stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',
             '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',
@@ -15827,7 +16023,30 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             toolNamespace === 'gnubok'
               ? 'Tool names carry the legacy gnubok_ prefix (a stable identifier kept across the rebrand); the server and app are "Accounted". Same product: the prefix is not a different system.'
               : 'Tool names use the accounted_ prefix. Legacy gnubok_ aliases remain accepted for existing integrations.',
-          ].join('\n'), toolNamespace, getCanonicalToolNames()),
+          ].join('\n'), toolNamespace, getCanonicalToolNames())
+      // 2026-07-28 MUST: server/discover advertises supported revisions,
+      // capabilities, and identity so stateless clients can select a version
+      // up front or use it as a compatibility probe. Always answers in the
+      // stateless result shape regardless of the request's _meta.
+      if (method === 'server/discover') {
+        return NextResponse.json(
+          jsonRpc(id ?? null, {
+            resultType: 'complete',
+            supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
+            capabilities: SERVER_CAPABILITIES,
+            instructions,
+            ttlMs: CACHE_STATIC.ttlMs,
+            cacheScope: CACHE_STATIC.cacheScope,
+            _meta: { [META_SERVER_INFO]: SERVER_INFO_BY_NAMESPACE[toolNamespace] },
+          })
+        )
+      }
+      return NextResponse.json(
+        jsonRpc(id ?? null, {
+          protocolVersion: negotiatedVersion,
+          capabilities: SERVER_CAPABILITIES,
+          serverInfo: SERVER_INFO_BY_NAMESPACE[toolNamespace],
+          instructions,
         })
       )
     }
@@ -15837,7 +16056,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       return new Response(null, { status: 202 })
 
     case 'ping':
-      return NextResponse.json(jsonRpc(id ?? null, {}))
+      return NextResponse.json(jsonRpc(id ?? null, decorate({})))
 
     case 'tools/list': {
       const listStartedAt = Date.now()
@@ -15855,7 +16074,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         companyId,
       })
       return NextResponse.json(
-        jsonRpc(id ?? null, {
+        jsonRpc(id ?? null, decorate({
           tools: allowedTools.map((t) => {
             // Merge derived staging metadata with any literal _meta (e.g. UI
             // widget hints). Literal _meta wins on key collision so explicit
@@ -15877,7 +16096,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               toolNamespace
             )
           }),
-        })
+        }, CACHE_STATIC))
       )
     }
 
@@ -15945,10 +16164,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         })
         const publicScopeError = projectMcpPayload(scopeError, toolNamespace)
         return NextResponse.json(
-          jsonRpc(id ?? null, {
+          jsonRpc(id ?? null, decorate({
             content: [{ type: 'text', text: JSON.stringify(publicScopeError, null, 2) }],
             isError: true,
-          })
+          }))
         )
       }
 
@@ -15989,10 +16208,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           companyId,
         })
         return NextResponse.json(
-          jsonRpc(id ?? null, {
+          jsonRpc(id ?? null, decorate({
             content: [{ type: 'text', text: JSON.stringify(publicStructured, null, 2) }],
             isError: true,
-          })
+          }))
         )
       }
 
@@ -16019,10 +16238,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           companyId: effectiveCompanyId,
         })
         return NextResponse.json(
-          jsonRpc(id ?? null, {
+          jsonRpc(id ?? null, decorate({
             content: [{ type: 'text', text: JSON.stringify(publicCapError, null, 2) }],
             isError: true,
-          })
+          }))
         )
       }
 
@@ -16060,10 +16279,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             companyId: effectiveCompanyId,
           })
           return NextResponse.json(
-            jsonRpc(id ?? null, {
+            jsonRpc(id ?? null, decorate({
               content: [{ type: 'text', text: JSON.stringify(publicBlocked, null, 2) }],
               isError: true,
-            })
+            }))
           )
         }
       }
@@ -16072,6 +16291,90 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // run before execute() so we don't double-store on this call. Emits
       // mcp.next_hint_followed when the agent's behaviour matches the hint.
       checkAndEmitNextHintFollowed(sessionId, toolName, actor, userId, effectiveCompanyId)
+
+      // ── Tasks extension (io.modelcontextprotocol/tasks) ──
+      // Long-running tools return a durable handle immediately to a client
+      // that declared the extension; the work completes after the response
+      // (after() keeps the function alive) and the result lands in mcp_tasks
+      // for tasks/get polling. Runs after every auth/scope/capability guard
+      // so nothing is ever started for a call that would have been refused.
+      if (taskCapable && tool.shouldRunAsTask?.(toolArgs)) {
+        const task = await createMcpTask(supabase, {
+          companyId: effectiveCompanyId,
+          userId,
+          apiKeyId,
+          toolName,
+        })
+        const taskStartedAt = Date.now()
+        emitAfterResponse(async () => {
+          try {
+            const rawResult = await tool.execute(toolArgs, effectiveCompanyId, userId, supabase, actor)
+            const canonicalResult = addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
+            const result = projectMcpPayload(canonicalResult, toolNamespace)
+            const stored: Record<string, unknown> = {
+              resultType: 'complete',
+              content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+            }
+            if (result !== null && result !== undefined) {
+              stored.structuredContent =
+                typeof result === 'object' && !Array.isArray(result) ? result : { value: result }
+            }
+            await resolveMcpTask(supabase, task.id, { status: 'completed', result: stored })
+            emitToolCallTelemetry({
+              tool: toolName,
+              requiredScope: requiredScope ?? null,
+              actor,
+              latencyMs: Date.now() - taskStartedAt,
+              success: true,
+              isError: false,
+              errorCode: null,
+              errorKind: null,
+              errorMessage: null,
+              requestId: id ?? null,
+              userId,
+              companyId: effectiveCompanyId,
+            })
+          } catch (err) {
+            // Tool failures complete the task with the standard isError
+            // envelope: exactly what the synchronous call would have
+            // returned. `failed` stays reserved for infrastructure errors.
+            const structured = toToolError(err, { toolName })
+            const publicStructured = projectMcpPayload(structured, toolNamespace)
+            await resolveMcpTask(supabase, task.id, {
+              status: 'completed',
+              result: {
+                resultType: 'complete',
+                content: [{ type: 'text', text: JSON.stringify(publicStructured, null, 2) }],
+                isError: true,
+              },
+              statusMessage: structured.error.message_sv,
+            }).catch((updateErr) => {
+              log.error('Failed to store MCP task failure result', { taskId: task.id, updateErr })
+            })
+            emitToolCallTelemetry({
+              tool: toolName,
+              requiredScope: requiredScope ?? null,
+              actor,
+              latencyMs: Date.now() - taskStartedAt,
+              success: false,
+              isError: true,
+              errorCode: structured.error.code,
+              errorKind: 'execution',
+              errorMessage: structured.error.message_sv,
+              requestId: id ?? null,
+              userId,
+              companyId: effectiveCompanyId,
+            })
+          }
+        })
+        return NextResponse.json(
+          jsonRpc(id ?? null, {
+            resultType: 'task',
+            task: taskToWire(task),
+            _meta: { [META_SERVER_INFO]: SERVER_INFO_BY_NAMESPACE[toolNamespace] },
+          })
+        )
+      }
 
       const callStartedAt = Date.now()
       try {
@@ -16130,7 +16433,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           userId,
           companyId: effectiveCompanyId,
         })
-        return NextResponse.json(jsonRpc(id ?? null, response))
+        return NextResponse.json(jsonRpc(id ?? null, decorate(response)))
       } catch (err) {
         const latencyMs = Date.now() - callStartedAt
         const structured = toToolError(err, { toolName })
@@ -16153,10 +16456,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           companyId: effectiveCompanyId,
         })
         return NextResponse.json(
-          jsonRpc(id ?? null, {
+          jsonRpc(id ?? null, decorate({
             content: [{ type: 'text', text: JSON.stringify(publicStructured, null, 2) }],
             isError: true,
-          })
+          }))
         )
       }
     }
@@ -16164,7 +16467,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     case 'resources/list': {
       const allSkills = await loadAllSkills(supabase)
       return NextResponse.json(
-        jsonRpc(id ?? null, projectMcpPayload({
+        jsonRpc(id ?? null, decorate(projectMcpPayload({
           resources: [
             ...uiWidgets.map((w) => ({
               uri: w.uri,
@@ -16185,7 +16488,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               mimeType: r.mimeType,
             })),
           ],
-        }, toolNamespace))
+        }, toolNamespace), CACHE_SKILLS))
       )
     }
 
@@ -16207,7 +16510,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           companyId,
         })
         return NextResponse.json(
-          jsonRpc(id ?? null, {
+          jsonRpc(id ?? null, decorate({
             contents: [
               {
                 uri,
@@ -16219,7 +16522,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                 ),
               },
             ],
-          })
+          }, CACHE_STATIC))
         )
       }
 
@@ -16242,7 +16545,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             companyId,
           })
           return NextResponse.json(
-            jsonRpc(id ?? null, {
+            jsonRpc(id ?? null, decorate({
               contents: [
                 {
                   uri,
@@ -16254,7 +16557,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                   ),
                 },
               ],
-            })
+            }, CACHE_SKILLS))
           )
         }
       }
@@ -16281,7 +16584,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             companyId,
           })
           return NextResponse.json(
-            jsonRpc(id ?? null, {
+            jsonRpc(id ?? null, decorate({
               contents: [
                 {
                   uri,
@@ -16289,7 +16592,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                   text: JSON.stringify(projectMcpPayload(result, toolNamespace), null, 2),
                 },
               ],
-            })
+            }, CACHE_LIVE))
           )
         } catch (err) {
           const message = err instanceof Error ? err.message : 'Resource read failed'
@@ -16336,12 +16639,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
     case 'prompts/list':
       return NextResponse.json(
-        jsonRpc(id ?? null, projectMcpPayload({
+        jsonRpc(id ?? null, decorate(projectMcpPayload({
           prompts: prompts.map((p) => ({
             name: p.name,
             description: p.description,
           })),
-        }, toolNamespace))
+        }, toolNamespace), CACHE_STATIC))
       )
 
     case 'prompts/get': {
@@ -16353,7 +16656,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         )
       }
       return NextResponse.json(
-        jsonRpc(id ?? null, {
+        jsonRpc(id ?? null, decorate({
           description: prompt.description,
           messages: [
             {
@@ -16368,8 +16671,53 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               },
             },
           ],
-        })
+        }))
       )
+    }
+
+    case 'tasks/get': {
+      const taskId = (params as Record<string, unknown>)?.taskId
+      if (typeof taskId !== 'string' || !taskId) {
+        return NextResponse.json(jsonRpcError(id ?? null, -32602, 'taskId is required'))
+      }
+      // Scoped to the creating user: an API key can only poll its own tasks.
+      const { data: taskRow } = await supabase
+        .from('mcp_tasks')
+        .select('*')
+        .eq('id', taskId)
+        .eq('user_id', userId)
+        .single()
+      if (!taskRow) {
+        return NextResponse.json(jsonRpcError(id ?? null, -32602, `Task not found: "${taskId}"`))
+      }
+      const row = taskRow as McpTaskRow
+      const wire: Record<string, unknown> = { resultType: 'complete', ...taskToWire(row) }
+      if (row.status === 'completed' && row.result) wire.result = row.result
+      if (row.status === 'failed' && row.error) wire.error = row.error
+      wire._meta = { [META_SERVER_INFO]: SERVER_INFO_BY_NAMESPACE[toolNamespace] }
+      return NextResponse.json(jsonRpc(id ?? null, wire))
+    }
+
+    case 'tasks/update':
+      // No input_required flows exist yet: acknowledge and ignore unknown or
+      // already-satisfied inputResponses, as the extension spec instructs.
+      return NextResponse.json(jsonRpc(id ?? null, { resultType: 'complete' }))
+
+    case 'tasks/cancel': {
+      const taskId = (params as Record<string, unknown>)?.taskId
+      if (typeof taskId !== 'string' || !taskId) {
+        return NextResponse.json(jsonRpcError(id ?? null, -32602, 'taskId is required'))
+      }
+      // Cooperative cancellation: flip a still-working row; an in-flight
+      // execution is not interrupted, and its late completion becomes a
+      // no-op against the now-terminal row.
+      await supabase
+        .from('mcp_tasks')
+        .update({ status: 'cancelled' })
+        .eq('id', taskId)
+        .eq('user_id', userId)
+        .eq('status', 'working')
+      return NextResponse.json(jsonRpc(id ?? null, { resultType: 'complete' }))
     }
 
     default:

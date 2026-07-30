@@ -12,7 +12,7 @@ export const GET = withRouteContext('report.trial_balance', async (request, { su
   }
 
   try {
-    const result = await generateTrialBalance(supabase, companyId, periodId)
+    const result = await generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include' })
     return NextResponse.json({ data: result })
   } catch (err) {
     return NextResponse.json(

@@ -103,12 +103,17 @@ export const GET = withRouteContext('report.kpi', async (request, { supabase, co
     const [prefsRes, is, tb, ar, mb, paid, sup, filteredTb] = await Promise.all([
       prefsQuery(),
       generateIncomeStatement(supabase, companyId, periodId, { dimensions }),
-      generateTrialBalance(supabase, companyId, periodId),
+      // 'include' keeps this fallback path agreeing with the RPC path below,
+      // which reads agg.tb (equally unexcluded). The expense-composition KPI is
+      // therefore blank for a closed year; changing it moves a displayed figure
+      // for every company that ran bokslut, which is Stage 2 of #1051
+      // (DECISIONS.md:632), so it is recorded as a follow-up rather than done here.
+      generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include' }),
       generateARLedger(supabase, companyId),
       generateMonthlyBreakdown(supabase, companyId, periodId, { dimensions }),
       paidInvoicesQuery(),
       topSuppliersQuery(),
-      generateTrialBalance(supabase, companyId, periodId, { dimensions }),
+      generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include', dimensions }),
     ])
     prefsValue = prefsRes.data?.value
     incomeStatement = is

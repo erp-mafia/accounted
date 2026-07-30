@@ -506,12 +506,16 @@ export default function SkattekontoPage() {
               </AttnLine>
             ) : null}
 
-            {data.informationstext.length > 0 && (
+            {/* Optional chain on purpose: `data` is Skatteverket's raw saldo
+                JSON cast to our interface, and informationstext is not a
+                required field in SKV's own v2.1.0 schema. A response without
+                it blanked the whole Skattekonto page. */}
+            {(data.informationstext?.length ?? 0) > 0 && (
               <div className="space-y-1">
                 <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                   Information från Skatteverket
                 </p>
-                {data.informationstext.map((info, i) => (
+                {(data.informationstext ?? []).map((info, i) => (
                   <p key={i} className="text-xs leading-5 text-muted-foreground">
                     {info}
                   </p>

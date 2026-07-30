@@ -22,6 +22,18 @@
  *      lineDimensionColumns() from the dimensions JSONB map
  *      (lib/bookkeeping/dimension-resolver.ts): a new direct insert site can
  *      silently diverge the mirror columns. Tracked as a file-set.
+ *   3b. ledger-scanning-report: a statement generator under lib/reports or
+ *      lib/bokslut that aggregates `journal_entry_lines` itself instead of
+ *      going through generateTrialBalance. Aggregating raw lines means
+ *      remembering, per report, that the resultatavslut posts the mirror image
+ *      of every P&L account into 2099 inside the same fiscal period. Three
+ *      reports forgot (årsredovisning 2026-07-23, INK2R and NE-bilaga
+ *      2026-07-29) and each read ZERO revenue for a closed year while the
+ *      balance sheet still tied out, so nothing warned. generateTrialBalance
+ *      now requires an explicit closingEntry mode, which turns the decision
+ *      into a compile error; this guard keeps new reports on that path.
+ *      Tracked as a file-set. Voucher/line LISTINGS are sanctioned in
+ *      LEDGER_SCAN_SANCTIONED: they have no closingEntry decision to make.
  *   4. pinned-dep    : a dependency pinned to an exact version (PINNED_DEPS)
  *      whose package.json spec or locked version drifted from the pin. Guards
  *      against a repeat of the @anthropic-ai/bedrock-sdk 0.32.0 prod outage
@@ -130,6 +142,72 @@ function findDirectJelInserts() {
       if (JEL_INSERT_SANCTIONED.has(r)) return false
       if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
       return JEL_INSERT_CHAIN_RE.test(fs.readFileSync(f, 'utf8'))
+    })
+    .map(rel)
+    .sort()
+}
+
+// Statement generators that legitimately read journal_entry_lines directly:
+// the trial-balance stack itself, and the reports whose whole job is to list
+// vouchers or lines rather than to aggregate a fiscal year's balances.
+const LEDGER_SCAN_SANCTIONED = new Set([
+  // The shared balance source and its helpers.
+  'lib/reports/trial-balance.ts',
+  'lib/reports/opening-balances.ts',
+  // Voucher/line listings: they must show the ledger as posted, closing
+  // verifikat included, so there is no closingEntry decision to get wrong.
+  'lib/reports/general-ledger.ts',
+  'lib/reports/journal-register.ts',
+  'lib/reports/latest-vouchers.ts',
+  'lib/reports/source-lines.ts',
+  'lib/reports/sie-export.ts',
+  'lib/reports/full-archive-export.ts',
+  // Aggregate their own dimension-tagged or month-bucketed slice, and each
+  // carries an explicit year-end exclusion of its own.
+  'lib/reports/dimension-pnl.ts',
+  'lib/reports/monthly-breakdown.ts',
+  // Reconciliation and diagnostics: they compare against the ledger as posted.
+  'lib/reports/ar-reconciliation.ts',
+  'lib/reports/supplier-reconciliation.ts',
+  'lib/reports/reskontra-payments.ts',
+  'lib/reports/imbalance-diagnosis.ts',
+  'lib/reports/continuity-check.ts',
+  'lib/reports/rc-basis-gaps.ts',
+  'lib/reports/vat-settlement.ts',
+  'lib/reports/vat-declaration.ts',
+  'lib/reports/periodisk-sammanstallning.ts',
+  'lib/reports/avgifter-basis.ts',
+  'lib/reports/salary-journal.ts',
+  'lib/reports/vacation-liability.ts',
+])
+
+const LEDGER_SCAN_RE =
+  /\.from\(\s*['"]journal_entry_lines['"]\s*\)|fetchEntryLines\s*[<(]|lines:\s*journal_entry_lines\(/
+
+/**
+ * Statement generators that scan journal_entry_lines instead of going through
+ * generateTrialBalance.
+ *
+ * WHY: a generator that aggregates a fiscal year's balances from raw lines has
+ * to remember, on its own, that the resultatavslut posts the mirror image of
+ * every P&L account into 2099 inside the same period. Three shipped without
+ * remembering (årsredovisning 2026-07-23, INK2R and NE-bilaga 2026-07-29) and
+ * each reported ZERO revenue for a closed year while the balance sheet still
+ * tied out, so nothing warned. generateTrialBalance now REQUIRES a
+ * closingEntry mode, which makes the decision a compile error instead: this
+ * guard is what keeps new generators on that path.
+ */
+function findLedgerScanningReports() {
+  const files = [
+    ...walk(path.join(ROOT, 'lib', 'reports'), ['.ts']),
+    ...walk(path.join(ROOT, 'lib', 'bokslut'), ['.ts']),
+  ]
+  return files
+    .filter((f) => {
+      const r = rel(f)
+      if (LEDGER_SCAN_SANCTIONED.has(r)) return false
+      if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
+      return LEDGER_SCAN_RE.test(fs.readFileSync(f, 'utf8'))
     })
     .map(rel)
     .sort()
@@ -485,6 +563,7 @@ function findRawUserErrors() {
 const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
+  ledgerScanningReports: findLedgerScanningReports(),
   directJelInsert: findDirectJelInserts(),
   pinnedDepViolations: findPinnedDepViolations(),
   rawUserErrors: findRawUserErrors(),
@@ -500,6 +579,10 @@ if (isUpdate) {
       'Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: both reach 0 (A1 route-auth campaign, D1 rounding codemod).',
     rawRouteAuth: { count: current.rawRouteAuth.length, files: current.rawRouteAuth },
     naiveOreRound: { count: current.naiveOreRound },
+    ledgerScanningReports: {
+      count: current.ledgerScanningReports.length,
+      files: current.ledgerScanningReports,
+    },
   }
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
   console.log(
@@ -633,6 +716,29 @@ if (newUngatedRoutes.length) {
   )
 }
 
+// 1c. ledger-scanning-report: any statement generator not in the baseline set
+// is a NEW violation. Grandfathered files stay until they migrate.
+const ledgerScanBaseline = new Set(baseline.ledgerScanningReports?.files ?? [])
+const newLedgerScans = current.ledgerScanningReports.filter((f) => !ledgerScanBaseline.has(f))
+const fixedLedgerScans = (baseline.ledgerScanningReports?.files ?? []).filter(
+  (f) => !current.ledgerScanningReports.includes(f),
+)
+if (newLedgerScans.length) {
+  failed = true
+  console.error(
+    `\n✗ ledger-scanning-report: ${newLedgerScans.length} statement generator(s) aggregate ` +
+      `journal_entry_lines directly instead of going through generateTrialBalance:`,
+  )
+  newLedgerScans.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → call generateTrialBalance with an explicit closingEntry mode. Aggregating raw\n' +
+      '    lines means remembering the resultatavslut yourself, and three reports already\n' +
+      '    forgot (each read ZERO revenue for a closed year while the balance sheet still\n' +
+      '    tied out, so nothing warned). If the report genuinely lists vouchers rather\n' +
+      '    than balances, add it to LEDGER_SCAN_SANCTIONED in this file with a reason.',
+  )
+}
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -644,9 +750,11 @@ if (current.naiveOreRound > baseline.naiveOreRound.count) {
 }
 
 // Report ratchet-down progress (informational, never fails).
-if (fixedAuthFiles.length || current.naiveOreRound < baseline.naiveOreRound.count) {
+if (fixedAuthFiles.length || fixedLedgerScans.length || current.naiveOreRound < baseline.naiveOreRound.count) {
   console.log('\n✓ Progress since baseline:')
   if (fixedAuthFiles.length) console.log(`    raw-route-auth: -${fixedAuthFiles.length} file(s)`)
+  if (fixedLedgerScans.length)
+    console.log(`    ledger-scanning-report: -${fixedLedgerScans.length} file(s)`)
   if (current.naiveOreRound < baseline.naiveOreRound.count)
     console.log(`    naive-ore-round: -${baseline.naiveOreRound.count - current.naiveOreRound} occurrence(s)`)
   console.log('    Run with --update to ratchet the baseline down and lock in the gains.')
@@ -664,5 +772,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, direct-jel-insert: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
 )

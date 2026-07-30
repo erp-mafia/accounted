@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
 
 export interface MonthlyBreakdownMonth {
@@ -95,6 +96,14 @@ export function assembleMonthlyBreakdown(
  * Groups posted journal entry lines by month and account class:
  * - Class 3 (30xx) = revenue (credit side)
  * - Class 4-7 (40xx-79xx) = expenses (debit side)
+ *
+ * Year-end entries are excluded, including the storno/correction chain of a
+ * REVERSED year-end entry (an undone bokslut). Without that the resultatavslut,
+ * which posts the mirror image of every P&L account, showed the whole year's
+ * revenue as negative income in the fiscal-year-end month: measured on
+ * production as 28 companies affected, worst case a single month understated by
+ * 10 347 472 kr. Mirrors tb_ex_ye_entries in get_kpi_report_aggregates, which
+ * serves the same chart on the no-dimension hot path; the two must agree.
  */
 export async function generateMonthlyBreakdown(
   supabase: SupabaseClient,
@@ -119,6 +128,23 @@ export async function generateMonthlyBreakdown(
     return { months: [] }
   }
 
+  // Ids of REVERSED year-end entries, company-wide (no period filter): a storno
+  // in this period can reverse a year-end entry from another period. Mirrors the
+  // wave-1 fetch in lib/reports/trial-balance.ts and ye_reversed in
+  // get_kpi_report_aggregates.
+  const reversedYearEndIds = (
+    await fetchAllRows<{ id: string }>(({ from, to }) =>
+      supabase
+        .from('journal_entries')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('source_type', 'year_end')
+        .eq('status', 'reversed')
+        .order('id', { ascending: true })
+        .range(from, to)
+    )
+  ).map((r) => r.id)
+
   // Get all posted journal entry lines for this period with their entry dates,
   // via the two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -128,11 +154,19 @@ export async function generateMonthlyBreakdown(
       supabase,
       entryColumns: 'entry_date, status, company_id, fiscal_period_id',
       lineColumns: 'account_number, debit_amount, credit_amount',
-      filterEntries: (q: EntryLinesQuery) =>
-        q
+      filterEntries: (q: EntryLinesQuery) => {
+        let query = q
           .eq('fiscal_period_id', fiscalPeriodId)
           .eq('company_id', companyId)
-          .eq('status', 'posted'),
+          .eq('status', 'posted')
+          .neq('source_type', 'year_end')
+        if (reversedYearEndIds.length > 0) {
+          const idList = `(${reversedYearEndIds.join(',')})`
+          query = query.or(`reverses_id.is.null,reverses_id.not.in.${idList}`)
+          query = query.or(`correction_of_id.is.null,correction_of_id.not.in.${idList}`)
+        }
+        return query
+      },
       filterLines:
         options?.dimensions && Object.keys(options.dimensions).length > 0
           ? // jsonb containment (@>): served by idx_jel_dimensions_gin.

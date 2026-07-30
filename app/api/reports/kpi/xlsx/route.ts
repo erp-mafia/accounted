@@ -81,7 +81,7 @@ export const GET = withRouteContext('report.kpi.xlsx', async (request, { supabas
       topSuppliersResult,
     ] = await Promise.all([
       generateIncomeStatement(supabase, companyId, periodId),
-      generateTrialBalance(supabase, companyId, periodId),
+      generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include' }),
       generateARLedger(supabase, companyId),
       generateMonthlyBreakdown(supabase, companyId, periodId),
       supabase

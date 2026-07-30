@@ -256,7 +256,10 @@ export async function buildLatentTaxProposal(params: {
 }): Promise<ProposedDisposition | null> {
   const { supabase, companyId, fiscalPeriodId, proposalsBeforeLatentTax = [] } = params
 
-  const tb = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
+  // Reads 21xx and 2240 only (class 2), which no resultatavslut touches.
+  const tb = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+    closingEntry: 'include',
+  })
 
   // 21xx: obeskattade reserver (credit-normal, so we measure credit − debit).
   let untaxedReserves = tb.rows

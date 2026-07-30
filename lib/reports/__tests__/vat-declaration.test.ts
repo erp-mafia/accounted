@@ -8,13 +8,16 @@ let resultIdx: number
 let results: Array<{ data?: unknown; error?: unknown }>
 
 /**
- * The company's own class 3 accounts carrying a "Standard moms", as
- * fetchDynamicRuta05Accounts reads them. Answered off a table-routed builder
- * rather than the sequential queue: every calculateVatDeclaration test would
- * otherwise have to seed one, and a missing seed would silently hand the chart
- * query the ledger result.
+ * The company's own class 3 accounts, as fetchDynamicRuta05Accounts reads
+ * them. Answered off a table-routed builder rather than the sequential queue:
+ * every calculateVatDeclaration test would otherwise have to seed one, and a
+ * missing seed would silently hand the chart query the ledger result.
  */
-let chartAccounts: Array<{ account_number: string; default_vat_rate: number | null }>
+let chartAccounts: Array<{
+  account_number: string
+  account_name?: string
+  default_vat_rate: number | null
+}>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
@@ -28,9 +31,9 @@ function makeBuilder() {
 }
 
 /**
- * chart_of_accounts builder. Applies the same filters the real query relies on
- * (account_class = 3, default_vat_rate in the taxable sats) so a fixture can
- * assert that a rate-less or non-revenue konto never reaches ruta 05.
+ * chart_of_accounts builder. The real query returns all active class 3 rows:
+ * fetchDynamicRuta05Accounts applies configured-rate and narrow missing-rate
+ * fallback rules in memory.
  */
 function makeChartBuilder() {
   const b: Record<string, unknown> = {}
@@ -39,9 +42,7 @@ function makeChartBuilder() {
   }
   b.then = (resolve: (v: unknown) => void) =>
     resolve({
-      data: chartAccounts.filter(
-        (a) => a.default_vat_rate != null && [0.25, 0.12, 0.06].includes(a.default_vat_rate)
-      ),
+      data: chartAccounts.map((account) => ({ account_name: '', ...account })),
       error: null,
     })
   return b
@@ -939,6 +940,26 @@ describe('calculateVatDeclaration: parent/summary accounts', () => {
 // ============================================================
 
 describe('calculateVatDeclaration: company-specific ruta 05 accounts', () => {
+  it('infers a missing rate only from a matching domestic-sales number and label (#1289)', async () => {
+    chartAccounts = [{
+      account_number: '3011',
+      account_name: 'Försäljning tjänster inom Sverige, 25 % moms',
+      default_vat_rate: null,
+    }]
+    seedLedger([
+      { account_number: '3011', debit_amount: 0, credit_amount: 9725 },
+      { account_number: '2611', debit_amount: 0, credit_amount: 2431.25 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+    const findings = runVatDeclarationChecks(result.rutor)
+
+    expect(result.rutor.ruta05).toBe(9725)
+    expect(result.rutor.ruta10).toBe(2431.25)
+    expect(result.breakdown.invoices.base25).toBe(9725)
+    expect(findings.map((f) => f.code)).not.toContain('OUTPUT_VAT_WITHOUT_SALES_BASE')
+  })
+
   it('includes a user-added revenue account carrying a moms-sats', async () => {
     chartAccounts = [{ account_number: '3013', default_vat_rate: 0.06 }]
     seedLedger([
@@ -1090,16 +1111,20 @@ describe('calculateVatDeclaration: company-specific ruta 05 accounts', () => {
     expect(result.breakdown.invoices.base25).toBe(2000)
   })
 
-  it('ignores revenue accounts with no sats or an explicit 0 %', async () => {
-    // "Ingen standard" and "Ingen moms" both mean the konto is not declared
-    // momspliktig: momsfri revenue belongs in ruta 42, not 05.
+  it('ignores missing rates without matching evidence and keeps explicit 0 % authoritative', async () => {
+    // A number or a free-text label alone is not enough, and an explicit
+    // "Ingen moms" always wins over the fallback convention.
     chartAccounts = [
-      { account_number: '3013', default_vat_rate: null },
-      { account_number: '3014', default_vat_rate: 0 },
+      { account_number: '3013', account_name: 'Varugrupp C', default_vat_rate: null },
+      { account_number: '3011', account_name: 'Varugrupp A, 25 % moms', default_vat_rate: 0 },
+      { account_number: '3098', account_name: 'Försäljning 25 % moms', default_vat_rate: null },
+      { account_number: '3023', account_name: 'Försäljning 25 % moms', default_vat_rate: null },
     ]
     seedLedger([
       { account_number: '3013', debit_amount: 0, credit_amount: 8000 },
-      { account_number: '3014', debit_amount: 0, credit_amount: 2000 },
+      { account_number: '3011', debit_amount: 0, credit_amount: 2000 },
+      { account_number: '3098', debit_amount: 0, credit_amount: 1000 },
+      { account_number: '3023', debit_amount: 0, credit_amount: 500 },
     ])
 
     const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)

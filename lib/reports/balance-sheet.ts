@@ -22,6 +22,8 @@ export async function generateBalanceSheet(
   options?: { fromDate?: string; toDate?: string }
 ): Promise<BalanceSheetReport> {
   const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+    // Balance sheet: 2099 must carry årets resultat, so the resultatavslut stays in.
+    closingEntry: 'include',
     fromDate: options?.fromDate,
     toDate: options?.toDate,
   })

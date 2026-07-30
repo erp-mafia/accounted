@@ -220,7 +220,13 @@ export async function getBookedBolagsskatt(
   companyId: string,
   fiscalPeriodId: string,
 ): Promise<number> {
-  const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
+  const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+    // The contract above is an OPEN period, where no closing entry exists, so
+    // 'include' and 'exclude-final' agree. Left as 'include' to keep the tax
+    // path byte-identical: DECISIONS.md:632 records that this call chain
+    // already caused a too-high-tax customer bug once.
+    closingEntry: 'include',
+  })
   const amount = trialBalance.rows
     .filter((row) => row.account_number === '8910')
     .reduce((sum, row) => sum + row.closing_debit - row.closing_credit, 0)

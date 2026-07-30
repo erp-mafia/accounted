@@ -50,7 +50,8 @@ export async function proposeVacationLiabilityChange(
 
   const [report, tb] = await Promise.all([
     generateVacationLiability(supabase, companyId, closingYear),
-    generateTrialBalance(supabase, companyId, fiscalPeriodId),
+    // Reads 2920 (class 2), which no resultatavslut touches.
+    generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
   ])
 
   // Current closing balance (what 2920 should be at year-end)

@@ -62,7 +62,9 @@ export async function validateBalanceContinuity(
   const { rows: trialRows } = await generateTrialBalance(
     supabase,
     companyId,
-    prevPeriod.id
+    prevPeriod.id,
+    // IB/UB continuity is checked against the ledger as posted.
+    { closingEntry: 'include' }
   )
 
   const previousUB = new Map<string, { net: number; name: string }>()

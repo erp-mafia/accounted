@@ -357,7 +357,7 @@ async function generatePeriodReports(
 ): Promise<PeriodReports> {
   const [trialBalance, incomeStatement, balanceSheet, generalLedger, journalRegister] =
     await Promise.all([
-      generateTrialBalance(supabase, companyId, period.id),
+      generateTrialBalance(supabase, companyId, period.id, { closingEntry: 'include' }),
       generateIncomeStatement(supabase, companyId, period.id),
       generateBalanceSheet(supabase, companyId, period.id),
       generateGeneralLedger(supabase, companyId, period.id),
@@ -961,6 +961,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   idempotency_keys: 'infrastructure',
   inbox_rate_counters: 'infrastructure',
   invoice_inbox_items: 'inbox workflow state; the files live in document_attachments',
+  mcp_tasks: 'MCP task handles: transient tool-call state with a 1-hour TTL',
   metered_events: 'billing telemetry',
   notification_log: 'notification dedup log',
   operations: 'staged-operation workflow state',

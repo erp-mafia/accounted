@@ -16,7 +16,10 @@
  *   - ob sums the OB entry's lines with NO status filter (mirrors
  *     getOpeningBalances) but is company-guarded;
  *   - monthly is posted-only, classes 3-8, 8999 excluded, class 8 split
- *     per line by the sign of credit - debit;
+ *     per line by the sign of credit - debit, and (since migration
+ *     20260730090000) it shares tb_ex_year_end's entry set so the
+ *     resultatavslut cannot chart the whole year's revenue as negative
+ *     income in the fiscal-year-end month;
  *   - SECURITY INVOKER: a non-member gets empty sections under RLS.
  */
 import { describe, it, expect } from 'vitest'
@@ -308,12 +311,18 @@ describe('get_kpi_report_aggregates RPC', () => {
     expect(monthOf(payload, 2026, 2)).toMatchObject({ income: 0, expenses: 3000 })
     // March: 8310 credit 200 -> income; 8410 debit 500 -> expenses.
     expect(monthOf(payload, 2026, 3)).toMatchObject({ income: 200, expenses: 500 })
-    // December: year_end entries are NOT excluded from monthly. 8910 debit
-    // 1000 -> expenses; posted storno's 8999 credit excluded by account; the
-    // correction's 6200 debit 250 -> expenses. Total 1250.
-    expect(monthOf(payload, 2026, 12)).toMatchObject({ income: 0, expenses: 1250 })
-    // No phantom months.
-    expect(payload.monthly.map((m) => m.month).sort((a, b) => a - b)).toEqual([1, 2, 3, 12])
+    // December: year_end entries ARE excluded from monthly as of migration
+    // 20260730090000. Previously this month reported expenses 1250 (8910 debit
+    // 1000 from the posted year_end entry plus the correction's 6200 debit
+    // 250). Including them meant the resultatavslut charted the whole year's
+    // revenue as NEGATIVE income in the fiscal-year-end month: measured on
+    // production as 28 companies, worst case -10 347 459,81 kr in one month.
+    // This fixture's December holds ONLY year-end-chain entries, so the month
+    // disappears from the chart entirely, which is the correct operational
+    // view: a month whose only activity is bokslut has no operating result.
+    expect(monthOf(payload, 2026, 12)).toBeUndefined()
+    // No phantom months, and no bokslut-only months.
+    expect(payload.monthly.map((m) => m.month).sort((a, b) => a - b)).toEqual([1, 2, 3])
   })
 
   it('scopes to the requested company and returns empty sections for an empty one', async () => {

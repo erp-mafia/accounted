@@ -17,6 +17,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { cn, formatDate } from '@/lib/utils'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
 import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from '@/lib/reports/latest-vouchers-format'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -113,7 +114,10 @@ export function TrialBalanceView({ periodId, onNavigateToAccount }: { periodId: 
       .then((res) => res.json())
       .then((result) => {
         if (result.error) {
-          setError(result.error)
+          // `result.error` is the canonical envelope OBJECT; assigning it to a
+          // string state and rendering it bare threw "Objects are not valid as
+          // a React child" and blanked the report page.
+          setError(getErrorMessage(result))
         } else {
           setData(result.data)
         }
@@ -433,7 +437,10 @@ export function IncomeStatementView({ periodId, dateRange, dimensionFilter = nul
       .then((res) => res.json())
       .then((result) => {
         if (result.error) {
-          setError(result.error)
+          // `result.error` is the canonical envelope OBJECT; assigning it to a
+          // string state and rendering it bare threw "Objects are not valid as
+          // a React child" and blanked the report page.
+          setError(getErrorMessage(result))
         } else {
           setData(result.data)
         }
@@ -591,7 +598,10 @@ export function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: {
       .then((res) => res.json())
       .then((result) => {
         if (result.error) {
-          setError(result.error)
+          // `result.error` is the canonical envelope OBJECT; assigning it to a
+          // string state and rendering it bare threw "Objects are not valid as
+          // a React child" and blanked the report page.
+          setError(getErrorMessage(result))
         } else {
           setData(result.data)
         }
@@ -717,7 +727,10 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
       .then((res) => res.json())
       .then((result) => {
         if (result.error) {
-          setError(result.error)
+          // `result.error` is the canonical envelope OBJECT; assigning it to a
+          // string state and rendering it bare threw "Objects are not valid as
+          // a React child" and blanked the report page.
+          setError(getErrorMessage(result))
         } else {
           setData(result.data)
         }
@@ -872,7 +885,10 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
       .then((res) => res.json())
       .then((result) => {
         if (result.error) {
-          setError(result.error)
+          // `result.error` is the canonical envelope OBJECT; assigning it to a
+          // string state and rendering it bare threw "Objects are not valid as
+          // a React child" and blanked the report page.
+          setError(getErrorMessage(result))
         } else {
           setData(result.data)
         }
@@ -2351,7 +2367,9 @@ export function SupplierLedgerView({ periodId }: { periodId: string }) {
       const res = await fetch(`/api/reports/supplier-ledger?period_id=${periodId}&as_of_date=${asOfDate}`)
       const result = await res.json()
       if (result.error) {
-        setError(result.error)
+        // Envelope object, not a string: see the note on the other report
+        // fetches. Rendering it bare blanks the page.
+        setError(getErrorMessage(result))
       } else {
         setData(result.data)
       }
@@ -2628,7 +2646,9 @@ export function GeneralLedgerView({ periodId, initialAccountFilter, dimensionFil
       const res = await fetch(`/api/reports/general-ledger?${params}`)
       const result = await res.json()
       if (result.error) {
-        setError(result.error)
+        // Envelope object, not a string: see the note on the other report
+        // fetches. Rendering it bare blanks the page.
+        setError(getErrorMessage(result))
       } else {
         setData(result.data)
       }
@@ -2833,7 +2853,9 @@ export function JournalRegisterView({ periodId }: { periodId: string }) {
       const res = await fetch(`/api/reports/journal-register?period_id=${periodId}`)
       const result = await res.json()
       if (result.error) {
-        setError(result.error)
+        // Envelope object, not a string: see the note on the other report
+        // fetches. Rendering it bare blanks the page.
+        setError(getErrorMessage(result))
       } else {
         setData(result.data)
       }
@@ -3133,7 +3155,9 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
       const res = await fetch(`/api/reports/ar-ledger?period_id=${periodId}&as_of_date=${asOfDate}`)
       const result = await res.json()
       if (result.error) {
-        setError(result.error)
+        // Envelope object, not a string: see the note on the other report
+        // fetches. Rendering it bare blanks the page.
+        setError(getErrorMessage(result))
       } else {
         setData(result.data)
       }

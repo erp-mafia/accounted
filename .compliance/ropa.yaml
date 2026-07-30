@@ -466,6 +466,43 @@ processing_activities:
       - writes_staged_for_explicit_user_approval
       - plaintext_personnummer_blocked_from_staging
 
+  - id: mcp.async_task_handles
+    name: MCP-uppgiftshandtag för långkörande verktygsanrop
+    purpose: >-
+      Låta en behörig MCP-klient hämta resultatet av ett långkörande
+      verktygsanrop (t.ex. generering av arkivpaket) via ett hållbart
+      uppgifts-id i stället för att hålla anslutningen öppen. Raden lagrar
+      verktygets svar tills klienten hämtat det; endast den skapande
+      användaren kan läsa, och utgångna rader rensas löpande vid nya anrop.
+    lawful_basis: art_6_1_b
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - business_owner
+      - company_member
+    data_categories:
+      - user.financial
+      - user.activity_timestamp
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor.
+    retention:
+      duration: 1h
+      basis: transient_tool_call_state_storage_limitation
+      stored_in:
+        - mcp_tasks
+    security_measures:
+      - rls_user_scoped_select        # mcp_tasks SELECT: auth.uid() = user_id
+      - service_role_only_writes
+      - creator_scoped_task_polling   # tasks/get requires the creating user
+      - expired_rows_purged_on_creation
+
   - id: arsredovisning.signature_evidence
     name: Underskriftsbevis för årsredovisning
     purpose: >-

@@ -100,6 +100,13 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     daysUntilExpiry?: number | null
   }[] = []
 
+  // One PSD2 session can back several companies (lib/session-sharing.ts), and
+  // they all carry the same consent_expires. Keyed per (user, session) so a
+  // user with four companies on one consent gets one warning mail, not four.
+  const notifiedSessions = new Set<string>()
+  const notifyKey = (c: { user_id: string; session_id: string | null }) =>
+    `${c.user_id}:${c.session_id ?? 'none'}`
+
   for (const connection of connections ?? []) {
     if (Date.now() - startTime > TIME_BUDGET_MS) {
       ctx.log.info('time budget reached', { processedSoFar: results.length })
@@ -121,10 +128,13 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
           .update({ status: 'expired' })
           .eq('id', connection.id)
 
-        // Send expiry notification
-        await sendConsentExpiryNotification(
-          supabase, connection, 0, true, baseUrl
-        )
+        // Send expiry notification, once per shared consent
+        if (!notifiedSessions.has(notifyKey(connection))) {
+          notifiedSessions.add(notifyKey(connection))
+          await sendConsentExpiryNotification(
+            supabase, connection, 0, true, baseUrl
+          )
+        }
 
         results.push({
           connectionId: connection.id,
@@ -142,7 +152,13 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       const expiringSoon = isConsentExpiringSoon(connection.consent_expires)
 
       // Send consent expiry notifications at 7-day and 3-day thresholds
-      if (expiringSoon && daysLeft !== null && (daysLeft <= 3 || daysLeft === 7)) {
+      if (
+        expiringSoon &&
+        daysLeft !== null &&
+        (daysLeft <= 3 || daysLeft === 7) &&
+        !notifiedSessions.has(notifyKey(connection))
+      ) {
+        notifiedSessions.add(notifyKey(connection))
         await sendConsentExpiryNotification(
           supabase, connection, daysLeft, false, baseUrl
         )
@@ -354,47 +370,77 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     })
   }
 
+  // Probe per DISTINCT session, not per connection. One session can back
+  // several companies (lib/session-sharing.ts), so probing per row would spend
+  // four identical API calls on one consent and mark only one company dead at
+  // a time. A session is one live-or-dead fact: the verdict applies to every
+  // row holding it.
+  type UnverifiedConnection = NonNullable<typeof unverified>[number]
+  const probeGroups = new Map<string, UnverifiedConnection[]>()
+  // A session that synced successfully for ANY of its companies is alive, so
+  // skip the whole group rather than re-probing it through a sibling row.
+  const provenAliveSessions = new Set(
+    (unverified ?? [])
+      .filter(c => provenAlive.has(c.id))
+      .map(c => c.session_id as string)
+  )
+
   for (const connection of unverified ?? []) {
+    const sessionId = connection.session_id as string
+    if (provenAliveSessions.has(sessionId)) continue
+    const group = probeGroups.get(sessionId)
+    if (group) group.push(connection)
+    else probeGroups.set(sessionId, [connection])
+  }
+
+  for (const [sessionId, group] of probeGroups) {
     if (Date.now() - startTime > PROBE_BUDGET_MS) {
       ctx.log.info('probe budget reached', { probedSoFar: probeResults.length })
       break
     }
-    if (provenAlive.has(connection.id)) continue
 
-    // Per-connection isolation, matching the sync loop above: without it a
-    // single network blip aborts probing for every remaining candidate in the
-    // batch and the coverage gap stays silent until tomorrow's run.
+    // Per-session isolation, matching the sync loop above: without it a single
+    // network blip aborts probing for every remaining candidate in the batch
+    // and the coverage gap stays silent until tomorrow's run.
     try {
-      const health = await probeSessionHealth(connection.session_id as string)
+      const health = await probeSessionHealth(sessionId)
       if (health !== 'dead') continue
 
+      const groupIds = group.map(c => c.id)
       const { error: updateError } = await supabase
         .from('bank_connections')
         .update({ status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE })
-        .eq('id', connection.id)
+        .in('id', groupIds)
 
-      // Only claim the connection was marked dead once the write landed.
+      // Only claim the connections were marked dead once the write landed.
       // Notifying (and counting) on an unpersisted update would tell the user
-      // to re-authorize while the row still reads 'active'.
+      // to re-authorize while the rows still read 'active'.
       if (updateError) {
-        ctx.log.error('failed to mark probed-dead connection as expired', updateError, {
-          connectionId: connection.id,
+        ctx.log.error('failed to mark probed-dead connections as expired', updateError, {
+          connectionIds: groupIds,
         })
         continue
       }
 
-      await sendConsentExpiryNotification(supabase, connection, 0, true, baseUrl)
+      // One dead consent, one mail, however many companies share it.
+      const first = group[0]
+      if (!notifiedSessions.has(notifyKey(first))) {
+        notifiedSessions.add(notifyKey(first))
+        await sendConsentExpiryNotification(supabase, first, 0, true, baseUrl)
+      }
 
       ctx.log.info('health probe found a dead session', {
-        connectionId: connection.id,
-        bankName: connection.bank_name,
-        previousStatus: connection.status,
+        connectionIds: groupIds,
+        sharedAcrossCompanies: group.length > 1,
+        bankName: first.bank_name,
       })
-      probeResults.push({ connectionId: connection.id, bankName: connection.bank_name })
+      for (const connection of group) {
+        probeResults.push({ connectionId: connection.id, bankName: connection.bank_name })
+      }
     } catch (err) {
-      ctx.log.error('health probe failed for connection', err as Error, {
-        connectionId: connection.id,
-        bankName: connection.bank_name,
+      ctx.log.error('health probe failed for session', err as Error, {
+        connectionIds: group.map(c => c.id),
+        bankName: group[0]?.bank_name,
       })
     }
   }

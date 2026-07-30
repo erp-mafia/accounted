@@ -265,7 +265,9 @@ describe('generateResultatrapport', () => {
     expect(report.groups[0].rows[0].prior_period).toBe(150000)
     expect(report.prior_period).toEqual({ start: '2025-01-01', end: '2025-12-31' })
     // The fallback resolved 'period-0' and the prior TB was fetched for it.
-    expect(mockTrialBalance).toHaveBeenNthCalledWith(2, expect.anything(), 'company-1', 'period-0')
+    expect(mockTrialBalance).toHaveBeenNthCalledWith(2, expect.anything(), 'company-1', 'period-0', {
+      closingEntry: 'exclude-all-year-end',
+    })
   })
 
   it('leaves the prior column empty when there is no earlier period at all', async () => {
@@ -328,6 +330,7 @@ describe('generateResultatrapport', () => {
     expect(report.groups[0].rows[0].prior_period).toBe(60000)
     expect(report.prior_period).toEqual({ start: '2025-01-01', end: '2025-03-31' })
     expect(mockTrialBalance).toHaveBeenNthCalledWith(2, expect.anything(), 'company-1', 'period-0', {
+      closingEntry: 'exclude-all-year-end',
       fromDate: '2025-01-01',
       toDate: '2025-03-31',
     })
@@ -375,10 +378,12 @@ describe('generateResultatrapport', () => {
     expect(report.groups[0].rows[0].prior_period).toBe(25000)
     expect(report.prior_period).toEqual({ start: '2025-06-01', end: '2025-07-31' })
     expect(mockTrialBalance).toHaveBeenNthCalledWith(2, expect.anything(), 'company-1', 'period-old', {
+      closingEntry: 'exclude-all-year-end',
       fromDate: '2025-06-01',
       toDate: '2025-06-30',
     })
     expect(mockTrialBalance).toHaveBeenNthCalledWith(3, expect.anything(), 'company-1', 'period-1', {
+      closingEntry: 'exclude-all-year-end',
       fromDate: '2025-07-01',
       toDate: '2025-07-31',
     })
@@ -564,5 +569,35 @@ describe('shiftDateOneYearBack', () => {
   it('keeps Feb 29 when the target year is also a leap year divisible correctly', () => {
     // 2001 -> 2000 is a leap year (divisible by 400)
     expect(shiftDateOneYearBack('2001-02-28')).toBe('2000-02-28')
+  })
+})
+
+describe('closed fiscal year', () => {
+  it('excludes year-end closing entries on every trial-balance pass', async () => {
+    // Regression: the resultatavslut posts the mirror image of each P&L
+    // account into 2099 inside the same period, so without this exclusion the
+    // period movements this report sums cancel out and a closed year reads 0
+    // on every line. Reported against INK2R on the same ledger 2026-07-29.
+    const q = createQueuedMockSupabase()
+    q.enqueue({
+      data: { period_start: '2026-01-01', period_end: '2026-12-31', previous_period_id: 'period-0' },
+    })
+    q.enqueue({ data: { period_start: '2025-01-01', period_end: '2025-12-31' } })
+    mockTrialBalance.mockResolvedValue({
+      rows: [makeRow({ account_number: '3001', period_credit: 500000 })],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateResultatrapport(q.supabase as any, 'company-1', 'period-1')
+
+    // Both the current pass and the prior-year comparison pass must exclude:
+    // a prior year is almost always closed.
+    for (const call of mockTrialBalance.mock.calls) {
+      expect(call[3]).toMatchObject({ closingEntry: 'exclude-all-year-end' })
+    }
+    expect(report.groups[0].rows[0].current_period).toBe(500000)
   })
 })

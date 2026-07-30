@@ -12,12 +12,28 @@ import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
-import { SettingsGroup, SettingsRow, SettingsSeg } from '@/components/settings/SettingsRows'
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsRowEnd,
+  SettingsRowNote,
+  SettingsSeg,
+} from '@/components/settings/SettingsRows'
 import { BankSelector, type Bank } from './BankSelector'
 import { BankConnectionStatus } from './BankConnectionStatus'
 import { AccountPickerDialog } from './AccountPickerDialog'
 import type { BankConnection } from '@/types'
 import type { StoredAccount } from '../types'
+
+/** One "reuse an existing connection" offer, as returned by /reusable-sessions. */
+interface ReusableSessionOffer {
+  connection_id: string
+  company_id: string
+  company_name: string | null
+  bank_name: string | null
+  consent_expires: string | null
+  available_account_count: number
+}
 
 /**
  * Self-contained banking settings panel for the enable-banking extension.
@@ -56,6 +72,11 @@ export default function BankingSettingsPanel() {
   // Several ASPSPs allow only one active AIS session per PSU, so authorizing
   // company B silently kills company A's connection. RLS scopes SELECT to
   // user_company_ids(), so this read stays within the user's own companies.
+  // Live sessions in the user's OTHER companies that still have unclaimed
+  // accounts. Reusing one connects this company without a second BankID and
+  // without revoking the first, which is what kills feeds at one-session banks.
+  const [reusableSessions, setReusableSessions] = useState<ReusableSessionOffer[]>([])
+  const [attachingConnectionId, setAttachingConnectionId] = useState<string | null>(null)
   const [otherCompanyConnections, setOtherCompanyConnections] = useState<
     { bank_name: string; company_id: string }[]
   >([])
@@ -190,6 +211,20 @@ export default function BankingSettingsPanel() {
         )
       )
 
+      // Reuse offers. Best-effort: a failure here costs the shortcut, never the
+      // panel, so the normal connect flow stays available either way.
+      try {
+        const reuseResponse = await fetch('/api/extensions/ext/enable-banking/reusable-sessions')
+        if (reuseResponse.ok) {
+          const { sessions } = await reuseResponse.json()
+          setReusableSessions((sessions || []) as ReusableSessionOffer[])
+        } else {
+          setReusableSessions([])
+        }
+      } catch {
+        setReusableSessions([])
+      }
+
       // If a pending connection exists from a recent attempt (e.g. user bounced back from
       // the bank's auth page), keep the connect button disabled until the server-side lock expires.
       const freshPending = (connections || []).find((c) => c.status === 'pending')
@@ -239,6 +274,49 @@ export default function BankingSettingsPanel() {
       confirmLabel: 'Fortsätt',
       variant: 'warning',
     })
+  }
+
+  /**
+   * Reuse a session authorized for another of the user's companies. No bank
+   * round-trip: the server creates this company's connection against the same
+   * consent and parks it in 'pending_selection', so the account picker opens
+   * exactly as it does after a real authorization.
+   */
+  async function handleReuseConnection(offer: ReusableSessionOffer) {
+    if (attachingConnectionId) return
+    setAttachingConnectionId(offer.connection_id)
+    try {
+      const response = await fetch('/api/extensions/ext/enable-banking/attach', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connection_id: offer.connection_id }),
+      })
+      const result = await response.json()
+
+      if (!response.ok) {
+        toast({
+          title: 'Kunde inte återanvända anslutningen',
+          description: result?.error || 'Försök igen om en stund.',
+          variant: 'destructive',
+        })
+        return
+      }
+
+      await fetchConnections()
+      notifyBankSyncUpdated()
+      // Straight into account selection: the connection exists but syncs
+      // nothing until the user picks which accounts belong to this company.
+      setPickerConnectionId(result.connection_id)
+    } catch (error) {
+      console.error('[enable-banking] Reuse failed', error)
+      toast({
+        title: 'Kunde inte återanvända anslutningen',
+        description: 'Ett oväntat fel uppstod. Försök igen om en stund.',
+        variant: 'destructive',
+      })
+    } finally {
+      setAttachingConnectionId(null)
+    }
   }
 
   async function handleConnectBank(bank: Bank, psuTypeOverride?: 'personal' | 'business') {
@@ -650,6 +728,69 @@ export default function BankingSettingsPanel() {
               onManageAccounts={() => setPickerConnectionId(connection.id)}
               isSyncing={syncingConnectionId === connection.id}
             />
+          ))}
+        </SettingsGroup>
+      )}
+
+      {/* Reuse a session authorized for another of the user's companies. Sits
+          ABOVE the bank list deliberately: at a one-session-per-login bank,
+          choosing the bank below is the very action that kills the other
+          company's feed, so the cheaper and safer path has to be seen first.
+          Renders only when a live session actually has unclaimed accounts. */}
+      {hasBankSync && reusableSessions.length > 0 && (
+        <SettingsGroup
+          label="Återanvänd befintlig anslutning"
+          help={
+            <div className="space-y-2">
+              <p>
+                Du har redan en giltig bankanslutning i ett annat bolag, och den ser konton
+                som inget bolag använder ännu.
+              </p>
+              <p>
+                Vissa banker tillåter bara en aktiv anslutning per inloggning. Att återanvända
+                anslutningen i stället för att logga in på nytt låter bolagen dela samma
+                samtycke, så bolaget som redan är anslutet fortsätter att synka.
+              </p>
+              <p>
+                Bolagen delar bara samtycket. Konton, transaktioner och bokföring hålls isär,
+                och du väljer i nästa steg vilka konton som hör till det här bolaget.
+              </p>
+            </div>
+          }
+        >
+          {reusableSessions.map((offer) => (
+            <SettingsRow key={offer.connection_id} label={offer.bank_name ?? 'Bank'}>
+              <SettingsRowNote>
+                Ansluten för{' '}
+                <span className="font-medium text-foreground">
+                  {offer.company_name ?? 'ett annat bolag'}
+                </span>
+                . {offer.available_account_count}{' '}
+                {offer.available_account_count === 1 ? 'ledigt konto' : 'lediga konton'} kan
+                kopplas till{' '}
+                <span className="font-medium text-foreground">
+                  {company?.name ?? 'det här bolaget'}
+                </span>{' '}
+                utan nytt BankID.
+              </SettingsRowNote>
+              <SettingsRowEnd>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => handleReuseConnection(offer)}
+                  disabled={!!attachingConnectionId}
+                >
+                  {attachingConnectionId === offer.connection_id ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Kopplar
+                    </>
+                  ) : (
+                    'Återanvänd'
+                  )}
+                </Button>
+              </SettingsRowEnd>
+            </SettingsRow>
           ))}
         </SettingsGroup>
       )}

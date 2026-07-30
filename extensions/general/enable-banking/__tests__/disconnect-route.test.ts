@@ -12,6 +12,28 @@ vi.mock('../lib/api-client', () => ({
   SessionExpiredError: class SessionExpiredError extends Error {},
 }))
 
+// A PSD2 session can be shared by several of a user's companies, so the route
+// refcounts before revoking. That count runs on a service-role client (RLS
+// would hide a sibling in a company the user has since left), which without
+// this mock tries to build a real client and fails on missing env vars.
+const { siblingState } = vi.hoisted(() => ({
+  siblingState: { count: 0, error: null as { message: string } | null },
+}))
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: vi.fn(),
+  createServiceClient: vi.fn(async () => ({
+    from: vi.fn(() => {
+      const chain: Record<string, unknown> = {}
+      for (const method of ['select', 'eq', 'neq']) {
+        chain[method] = vi.fn(() => chain)
+      }
+      chain.then = (onFulfilled: (value: unknown) => unknown) =>
+        Promise.resolve({ count: siblingState.count, error: siblingState.error }).then(onFulfilled)
+      return chain
+    }),
+  })),
+}))
+
 import { enableBankingExtension } from '../index'
 import { deleteSession } from '../lib/api-client'
 import type { ExtensionContext } from '@/lib/extensions/types'
@@ -132,6 +154,37 @@ describe('DELETE /disconnect (enable-banking)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockedDeleteSession.mockResolvedValue(undefined)
+    siblingState.count = 0
+    siblingState.error = null
+  })
+
+  it('leaves the shared consent alone while another company still uses it', async () => {
+    // Sessions are shared across a user's companies (lib/session-sharing.ts).
+    // Revoking here would take down a sibling company's bank feed, which is the
+    // exact failure cross-company session reuse exists to remove.
+    siblingState.count = 1
+    const stub = makeStub()
+    const ctx = makeContext(buildSupabase(stub))
+
+    const res = await disconnectRoute.handler(makeRequest({ connection_id: 'conn-1' }), ctx)
+
+    expect(res.status).toBe(200)
+    expect(mockedDeleteSession).not.toHaveBeenCalled()
+    // This company is still fully disconnected: only the upstream consent
+    // survives, and it lapses on its own within 90 days.
+    expect(stub.connUpdates).toEqual([{ status: 'revoked', session_id: null }])
+    expect(stub.cashUpdates).toHaveLength(1)
+  })
+
+  it('treats a failed sibling count as shared rather than risk a live feed', async () => {
+    siblingState.error = { message: 'timeout' }
+    const stub = makeStub()
+    const ctx = makeContext(buildSupabase(stub))
+
+    const res = await disconnectRoute.handler(makeRequest({ connection_id: 'conn-1' }), ctx)
+
+    expect(res.status).toBe(200)
+    expect(mockedDeleteSession).not.toHaveBeenCalled()
   })
 
   it('returns 401 when unauthenticated', async () => {

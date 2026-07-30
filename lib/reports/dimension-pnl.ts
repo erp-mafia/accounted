@@ -29,10 +29,10 @@ const CLASS_LABELS: Record<number, string> = {
  * with activity becomes a column, plus an explicit "(Utan dimension)" bucket.
  *
  * Reconciliation is by construction, not by convention: the Totalt column
- * comes from the SAME unfiltered generateTrialBalance pass resultatrapport
- * uses (same options, same filterPnl scope, same sign convention), and the
- * untagged bucket is the residual Totalt − tagged columns. Columns therefore
- * always sum exactly to the unfiltered resultatrapport: including edge cases
+ * comes from the SAME generateTrialBalance pass resultatrapport uses (same
+ * options including closingEntry, same filterPnl scope, same sign convention),
+ * and the untagged bucket is the residual Totalt − tagged columns. Columns
+ * therefore always sum exactly to resultatrapport: including edge cases
  * the line pass cannot see (e.g. P&L opening remnants when a prior year was
  * never closed), which land in "(Utan dimension)" where they belong.
  */
@@ -67,7 +67,11 @@ export async function generateDimensionPnl(
   }
 
   // ── Totalt column: identical inputs to resultatrapport ─────────
+  // closingEntry must match resultatrapport exactly or the two stop
+  // reconciling, and a closed year reads zero without it (see resultatrapport
+  // and DECISIONS.md:632).
   const tb = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+    closingEntry: 'exclude-all-year-end',
     toDate: options?.toDate,
   })
   const pnlRows = filterPnl(tb.rows)

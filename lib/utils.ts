@@ -35,12 +35,18 @@ const INVALID_DATE_PLACEHOLDER = '-'
  */
 export function formatCurrency(
   amount: number,
-  currency: string = 'SEK',
+  currency?: string | null,
   options?: { minimumFractionDigits?: number; maximumFractionDigits?: number },
 ): string {
+  // A `= 'SEK'` default only covers undefined. `transactions.currency` is a
+  // nullable column whose NULL is legacy for the 'SEK' default (see migration
+  // 20260726100000), yet the Transaction type declares it required, so a NULL
+  // reached Intl unguarded: `currency: null` throws RangeError and a single
+  // legacy row blanked the whole transactions list into the error boundary.
+  const code = currency || 'SEK'
   return new Intl.NumberFormat('sv-SE', {
     style: 'currency',
-    currency,
+    currency: code,
     minimumFractionDigits: options?.minimumFractionDigits ?? 0,
     maximumFractionDigits: options?.maximumFractionDigits ?? 2,
   }).format(amount)

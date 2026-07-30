@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping, checkBalanceWarning } from '../ink2-engine'
 import type { INK2RSRUCode } from '../types'
+import {
+  SIGN_RECLASSIFICATION_RULES,
+  type SignReclassificationId,
+} from '@/lib/reports/sign-reclassification'
 
 /**
  * Helper to find which SRU code an account maps to
@@ -354,5 +358,37 @@ describe('checkBalanceWarning', () => {
     expect(warning).toContain('100000')
     expect(warning).toContain('100005')
     expect(warning).toContain('5')
+  })
+})
+
+describe('INK2R mapping table invariants', () => {
+  it('declares exactly one mapping per SRU code', () => {
+    // The engine indexes mappings by sruCode to re-orient reclassified
+    // accounts under their new post; a duplicate would silently drop one.
+    const seen = new Map<string, number>()
+    for (const mapping of INK2R_ACCOUNT_MAPPINGS) {
+      seen.set(mapping.sruCode, (seen.get(mapping.sruCode) ?? 0) + 1)
+    }
+    const duplicates = [...seen.entries()].filter(([, count]) => count > 1)
+    expect(duplicates).toEqual([])
+  })
+
+  it('routes every sign-reclassification rule out of the post its range maps to', () => {
+    // Pins lib/reports/sign-reclassification.ts against the mapping table: if
+    // a range moves to another SRU code, the reclassification would try to
+    // relocate accounts that are not in the source post.
+    const expectedSource: Record<SignReclassificationId, string> = {
+      tax_account_credit_to_liability: '7261',
+      tax_liability_debit_to_receivable: '7368',
+      vat_liability_debit_to_receivable: '7369',
+    }
+
+    for (const rule of SIGN_RECLASSIFICATION_RULES) {
+      for (const range of rule.ranges) {
+        for (const account of [range.start, range.end]) {
+          expect(findSRUCodeForAccount(account)).toBe(expectedSource[rule.id])
+        }
+      }
+    }
   })
 })

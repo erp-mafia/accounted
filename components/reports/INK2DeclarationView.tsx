@@ -296,10 +296,10 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
                 <td className="py-2">Årets resultat</td>
                 <td
                   className={`py-2 text-right tabular-nums ${
-                    data.totals.resultAfterFinancial >= 0 ? 'text-success' : 'text-destructive'
+                    data.totals.aretsResultat >= 0 ? 'text-success' : 'text-destructive'
                   }`}
                 >
-                  {formatWholeKronor(data.totals.resultAfterFinancial)}
+                  {formatWholeKronor(data.totals.aretsResultat)}
                 </td>
               </tr>
             </tfoot>

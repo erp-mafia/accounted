@@ -79,7 +79,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (!period.ok) return period.response
 
     const gen = await safeGenerate(
-      () => generateTrialBalance(ctx.supabase, ctx.companyId!, period.period.id),
+      () => generateTrialBalance(ctx.supabase, ctx.companyId!, period.period.id, { closingEntry: 'include' }),
       { log: ctx.log, requestId: ctx.requestId, reportName: 'trial-balance' },
     )
     if (!gen.ok) return gen.response

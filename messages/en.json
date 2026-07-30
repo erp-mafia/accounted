@@ -1681,8 +1681,9 @@
   "settings_account_danger": {
     "heading": "Delete account",
     "blockers_title": "Companies you own",
-    "blockers_description": "Delete or hand over all companies before you delete your account.",
+    "blockers_description": "The account can only be deleted once you have deleted or handed over every company you own.",
     "blockers_manage": "Manage",
+    "blocked_reason": "You can delete the account once you have deleted or handed over {count, plural, =1 {your company} other {your # companies}}.",
     "support_question": "Questions?",
     "support_subject": "Question about account deletion",
     "export_sie": "Export accounting data (SIE)",
@@ -2578,6 +2579,7 @@
     "title_customer": "Confirm invoice match",
     "description_supplier": "Link this transaction to the supplier invoice? The invoice will be marked as paid and a payment voucher created.",
     "description_customer": "Link this transaction to the invoice? The invoice will be marked as paid.",
+    "description_blocked": "The selected invoice can no longer be matched against this transaction.",
     "duplicate_title": "Possible duplicate posting",
     "duplicate_body_same_date": "There is already a posted journal entry {label} for the same amount ({amount}) on the same date. Have you already posted this payment manually?",
     "duplicate_body_window": "There is already a posted journal entry {label} for the same amount ({amount}) within ±7 days ({date}). Have you already posted this payment manually?",
@@ -2598,7 +2600,9 @@
     "partial_payment_note": ": the invoice will become partially paid.",
     "ore_rounding_note": "The {amount} difference is booked as rounding (account 3740). The invoice is marked as paid.",
     "target_settled_title": "This invoice is already fully paid",
-    "target_settled_description": "This match suggestion is out of date: the invoice was paid by another transaction and cannot be matched again. Close this dialog and match the transaction against the right invoice, or book it as usual.",
+    "target_settled_description": "No unpaid amount remains on this invoice, so it cannot be matched again. Close this dialog and select the right invoice, or book the transaction as usual.",
+    "target_not_open_title": "This invoice is not open for payment",
+    "target_not_open_description": "The invoice has changed since this match was suggested and can no longer be matched. Close this dialog and select an open invoice, or book the transaction as usual.",
     "fx_title": "Currency conversion",
     "fx_rate_description": "Riksbanken mid-rate {date}: 1 {invoiceCurrency} = {rate} SEK",
     "fx_paid_in_invoice_currency": "Payment equals: {amount}",
@@ -4696,6 +4700,8 @@
     "no_results": "No matching companies"
   },
   "transactions": {
+    "counterparty_suggestion_gone_title": "That counterparty is no longer available",
+    "counterparty_suggestion_gone_description": "The suggestion was refreshed. Close the dialog, open it again and pick the counterparty once more.",
     "page_title": "Transactions",
     "subtitle_to_post": "to post",
     "subtitle_matches": "{count} invoice matches",

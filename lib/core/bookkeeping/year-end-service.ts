@@ -204,7 +204,7 @@ export async function validateYearEndReadiness(
   }
 
   // Check: trial balance is balanced
-  const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
+  const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' })
   const trialBalanceBalanced = trialBalance.isBalanced
 
   if (!trialBalanceBalanced) {
@@ -345,7 +345,7 @@ export async function previewYearEndClosing(
       : 'Årets resultat'
 
   // Get trial balance for individual account balances in class 3-8
-  const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
+  const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' })
   const resultAccounts = rows.filter(
     (r) => r.account_class >= 3 && r.account_class <= 8
   )
@@ -560,7 +560,7 @@ export async function executeYearEndClosing(
   // the engine commits atomically per-entry via commit_journal_entry RPC,
   // so a failure here means we need to reverse the just-committed entry.
   try {
-    const postCloseTB = await generateTrialBalance(supabase, companyId, fiscalPeriodId)
+    const postCloseTB = await generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' })
     let resultNet = 0
     for (const row of postCloseTB.rows) {
       if (row.account_class >= 3 && row.account_class <= 8) {
@@ -756,7 +756,7 @@ export async function generateOpeningBalances(
   }
 
   // Get trial balance of closed period (includes the closing entry)
-  const { rows } = await generateTrialBalance(supabase, companyId, closedPeriodId)
+  const { rows } = await generateTrialBalance(supabase, companyId, closedPeriodId, { closingEntry: 'include' })
 
   // Filter to balance sheet accounts (class 1-2) with non-zero closing balance
   const balanceSheetAccounts = rows.filter(

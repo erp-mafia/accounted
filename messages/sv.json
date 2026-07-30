@@ -1681,8 +1681,9 @@
   "settings_account_danger": {
     "heading": "Radera konto",
     "blockers_title": "Företag du äger",
-    "blockers_description": "Radera eller överlåt alla företag innan du raderar kontot.",
+    "blockers_description": "Kontot kan raderas först när du har raderat eller överlåtit alla företag du äger.",
     "blockers_manage": "Hantera",
+    "blocked_reason": "Du kan radera kontot först när du har raderat eller överlåtit {count, plural, =1 {företaget} other {dina # företag}}.",
     "support_question": "Har du frågor?",
     "support_subject": "Fråga om kontoradering",
     "export_sie": "Exportera bokföringsdata (SIE)",
@@ -2578,6 +2579,7 @@
     "title_customer": "Bekräfta fakturamatchning",
     "description_supplier": "Vill du koppla denna transaktion till leverantörsfakturan? Fakturan kommer att markeras som betald och en betalningsverifikation skapas.",
     "description_customer": "Vill du koppla denna transaktion till fakturan? Fakturan kommer att markeras som betald.",
+    "description_blocked": "Den valda fakturan kan inte längre matchas mot transaktionen.",
     "duplicate_title": "Möjlig dubblettbokning",
     "duplicate_body_same_date": "Det finns redan en bokförd verifikation {label} på samma belopp ({amount}) på samma datum. Har du redan bokfört denna betalning manuellt?",
     "duplicate_body_window": "Det finns redan en bokförd verifikation {label} på samma belopp ({amount}) inom ±7 dagar ({date}). Har du redan bokfört denna betalning manuellt?",
@@ -2598,7 +2600,9 @@
     "partial_payment_note": ": fakturan blir delbetald.",
     "ore_rounding_note": "Differens {amount} bokförs som öresavrundning (konto 3740). Fakturan markeras som betald.",
     "target_settled_title": "Fakturan är redan slutbetald",
-    "target_settled_description": "Matchningsförslaget är inaktuellt: fakturan har betalats av en annan transaktion och kan inte matchas igen. Stäng dialogen och matcha transaktionen mot rätt faktura, eller bokför den som vanligt.",
+    "target_settled_description": "Ingen obetald summa återstår på fakturan, så den kan inte matchas igen. Stäng dialogen och välj rätt faktura, eller bokför transaktionen som vanligt.",
+    "target_not_open_title": "Fakturan är inte öppen för betalning",
+    "target_not_open_description": "Fakturan har ändrats sedan matchningsförslaget skapades och kan inte längre matchas. Stäng dialogen och välj en öppen faktura, eller bokför transaktionen som vanligt.",
     "fx_title": "Valutaomräkning",
     "fx_rate_description": "Riksbankens mittkurs {date}: 1 {invoiceCurrency} = {rate} SEK",
     "fx_paid_in_invoice_currency": "Inbetalning motsvarar: {amount}",
@@ -4696,6 +4700,8 @@
     "no_results": "Inga företag matchar"
   },
   "transactions": {
+    "counterparty_suggestion_gone_title": "Motparten är inte längre tillgänglig",
+    "counterparty_suggestion_gone_description": "Förslaget hann uppdateras. Stäng rutan, öppna den igen och välj motparten på nytt.",
     "page_title": "Transaktioner",
     "subtitle_to_post": "att bokföra",
     "subtitle_matches": "{count} fakturamatchningar",

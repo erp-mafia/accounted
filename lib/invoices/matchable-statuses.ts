@@ -21,6 +21,39 @@ export const MATCHABLE_SUPPLIER_INVOICE_STATUSES = [
   'partially_paid',
 ] as const
 
+export type InvoiceMatchTargetState = 'matchable' | 'settled' | 'not_open'
+
+type MatchCandidate = {
+  status?: string | null
+  remaining_amount?: number | null
+}
+
+function getMatchTargetState(
+  candidate: MatchCandidate | null | undefined,
+  matchableStatuses: readonly string[],
+): InvoiceMatchTargetState {
+  if (!candidate?.status) return 'not_open'
+
+  const hasMatchableStatus = matchableStatuses.includes(candidate.status)
+  if (!hasMatchableStatus) {
+    return candidate.status === 'paid' ? 'settled' : 'not_open'
+  }
+
+  return (candidate.remaining_amount ?? 0) > 0 ? 'matchable' : 'settled'
+}
+
+export function getInvoiceMatchTargetState(
+  candidate: MatchCandidate | null | undefined,
+): InvoiceMatchTargetState {
+  return getMatchTargetState(candidate, MATCHABLE_INVOICE_STATUSES)
+}
+
+export function getSupplierInvoiceMatchTargetState(
+  candidate: MatchCandidate | null | undefined,
+): InvoiceMatchTargetState {
+  return getMatchTargetState(candidate, MATCHABLE_SUPPLIER_INVOICE_STATUSES)
+}
+
 /**
  * A candidate is matchable when its status is still open AND it has an
  * outstanding balance. Both columns are NOT NULL in the schema (migrations
@@ -28,21 +61,13 @@ export const MATCHABLE_SUPPLIER_INVOICE_STATUSES = [
  * legitimate suggestion here.
  */
 export function isMatchableInvoice(
-  candidate: { status?: string | null; remaining_amount?: number | null } | null | undefined,
+  candidate: MatchCandidate | null | undefined,
 ): boolean {
-  if (!candidate?.status) return false
-  return (
-    (MATCHABLE_INVOICE_STATUSES as readonly string[]).includes(candidate.status) &&
-    (candidate.remaining_amount ?? 0) > 0
-  )
+  return getInvoiceMatchTargetState(candidate) === 'matchable'
 }
 
 export function isMatchableSupplierInvoice(
-  candidate: { status?: string | null; remaining_amount?: number | null } | null | undefined,
+  candidate: MatchCandidate | null | undefined,
 ): boolean {
-  if (!candidate?.status) return false
-  return (
-    (MATCHABLE_SUPPLIER_INVOICE_STATUSES as readonly string[]).includes(candidate.status) &&
-    (candidate.remaining_amount ?? 0) > 0
-  )
+  return getSupplierInvoiceMatchTargetState(candidate) === 'matchable'
 }

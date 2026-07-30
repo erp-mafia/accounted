@@ -261,10 +261,15 @@ describe('POST /connect (enable-banking): reconnect in place', () => {
     expect(firstUpdate).toMatchObject({
       oauth_state: expect.any(String),
       status: 'expired',
-      session_id: null,
       error_message: null,
     })
     expect(firstUpdate).not.toHaveProperty('authorization_id')
+    // The superseded session_id is deliberately KEPT on the row through the
+    // round-trip. A PSD2 session can be shared by several of the user's
+    // companies (lib/session-sharing.ts), and the callback needs the old id to
+    // move those siblings onto the renewed consent. Nulling it here made the
+    // renewal invisible and left them pointing at a dead session.
+    expect(firstUpdate).not.toHaveProperty('session_id')
 
     // The bank's authorization_id is recorded in a follow-up write (audit only;
     // the callback never reads it, so a failure here can't break the reconnect).

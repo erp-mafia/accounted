@@ -215,6 +215,7 @@ describe('generateDimensionPnl', () => {
     })
 
     expect(mockTrialBalance).toHaveBeenCalledWith(supabase, 'company-1', 'period-1', {
+      closingEntry: 'exclude-all-year-end',
       toDate: '2026-06-30',
     })
     // The label reflects actual coverage: cumulative from period_start.

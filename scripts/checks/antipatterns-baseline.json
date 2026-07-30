@@ -7,6 +7,15 @@
     ]
   },
   "naiveOreRound": {
-    "count": 646
+    "count": 641
+  },
+  "ledgerScanningReports": {
+    "count": 4,
+    "files": [
+      "lib/bokslut/assets/asset-service.ts",
+      "lib/bokslut/reserves/periodiseringsfond-service.ts",
+      "lib/bokslut/tax-provision/bolagsskatt-calculator.ts",
+      "lib/bokslut/tax-provision/sarskild-loneskatt-calculator.ts"
+    ]
   }
 }

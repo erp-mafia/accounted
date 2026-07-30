@@ -53,7 +53,10 @@ export async function findUntransferredResults(
 
   const culprits: UntransferredResult[] = []
   for (const period of candidates) {
-    const { rows } = await generateTrialBalance(supabase, companyId, period.id)
+    const { rows } = await generateTrialBalance(supabase, companyId, period.id, {
+      // Diagnostics must see the ledger exactly as posted.
+      closingEntry: 'include',
+    })
     const plNet = roundOre(
       rows
         .filter((r) => r.account_class >= 3 && r.account_class <= 8)

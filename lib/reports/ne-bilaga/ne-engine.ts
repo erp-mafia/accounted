@@ -1,10 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import type {
-  FiscalPeriod,
-  JournalEntry,
-  JournalEntryLine,
-} from '@/types'
+import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import type { FiscalPeriod } from '@/types'
 import type {
   NEDeclaration,
   NEDeclarationRutor,
@@ -195,47 +191,24 @@ export async function generateNEDeclaration(
     throw new Error('NE declaration is only for enskild firma (sole proprietorship)')
   }
 
-  // Fetch all posted journal entries with lines for this period.
-  // Paginated: a period can exceed PostgREST's 1000-row cap, and a silent
-  // truncation here would under-report the NE-bilaga tax declaration. PostgREST
-  // ranges count parent rows, so the embedded lines come with each entry.
-  const entries = await fetchAllRows<JournalEntry>(({ from, to }) =>
-    supabase
-      .from('journal_entries')
-      .select('*, lines:journal_entry_lines(*)')
-      .eq('company_id', companyId)
-      .eq('fiscal_period_id', fiscalPeriodId)
-      .in('status', ['posted', 'reversed'])
-      .order('id', { ascending: true })
-      .range(from, to)
-  , { dedupeBy: (e) => e.id })
-
-  // Fetch chart of accounts for account names
-  const accounts = await fetchAllRows<{ account_number: string; account_name: string }>(({ from, to }) =>
-    supabase
-      .from('chart_of_accounts')
-      .select('account_number, account_name')
-      .eq('company_id', companyId)
-      .order('account_number', { ascending: true })
-      .range(from, to)
-  )
+  // R1-R11 are an income statement, so read the PRE-CLOSING books. The
+  // resultatavslut zeroes every P&L account against 2019/2099 at year-end, and
+  // NE-bilaga is always filed after bokslut, so including it would report an
+  // empty näringsverksamhet. 'exclude-final' drops only
+  // fiscal_periods.closing_entry_id: avskrivningar and other bokslut entries
+  // also carry source_type 'year_end' and belong on the form.
+  const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
+    closingEntry: 'exclude-final',
+  })
 
   const accountNameMap = new Map<string, string>()
-  for (const acc of accounts) {
-    accountNameMap.set(acc.account_number, acc.account_name)
-  }
-
-  // Calculate balances per account
   const accountBalances = new Map<string, number>()
-
-  for (const entry of (entries as JournalEntry[]) || []) {
-    const lines = (entry.lines as JournalEntryLine[]) || []
-    for (const line of lines) {
-      const current = accountBalances.get(line.account_number) || 0
-      // Net amount: debit - credit
-      const netAmount = (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
-      accountBalances.set(line.account_number, current + netAmount)
-    }
+  for (const row of trialBalance.rows) {
+    accountNameMap.set(row.account_number, row.account_name)
+    accountBalances.set(
+      row.account_number,
+      (Number(row.closing_debit) || 0) - (Number(row.closing_credit) || 0),
+    )
   }
 
   // Map account balances to NE rutor

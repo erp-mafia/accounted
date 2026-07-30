@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { getSuggestedCategories, getSuggestedTemplates, buildMerchantHistory, merchantHistoryFor, type SuggestedCategory, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
-import { findCounterpartyTemplatesBatch, formatCounterpartyName, toCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
+import { getSuggestedCategories, getSuggestedTemplates, buildMerchantHistory, merchantHistoryFor, buildCounterpartySuggestion, type SuggestedCategory, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
+import { findCounterpartyTemplatesBatch } from '@/lib/bookkeeping/counterparty-templates'
 import type { Transaction, EntityType } from '@/types'
 
 /**
@@ -87,24 +87,7 @@ export const POST = withRouteContext(
       const cpMatch = counterpartyMatches.get(tx.id)
       if (!cpMatch) continue
 
-      const tmpl = cpMatch.template
-      const cpSuggestion: SuggestedTemplate = {
-        template_id: toCounterpartyTemplateId(tmpl.id),
-        name_sv: formatCounterpartyName(tmpl.counterparty_name),
-        name_en: formatCounterpartyName(tmpl.counterparty_name),
-        group: 'counterparty',
-        debit_account: tmpl.debit_account,
-        credit_account: tmpl.credit_account,
-        confidence: cpMatch.confidence,
-        description_sv: `${tmpl.occurrence_count} tidigare bokföringar`,
-        risk_level: 'NONE',
-        requires_review: false,
-        line_pattern: tmpl.line_pattern ?? null,
-        default_dimensions:
-          tmpl.default_dimensions && Object.keys(tmpl.default_dimensions).length > 0
-            ? tmpl.default_dimensions
-            : null,
-      }
+      const cpSuggestion = buildCounterpartySuggestion(cpMatch.template, cpMatch.confidence)
 
       const existing = template_suggestions[tx.id] || []
       template_suggestions[tx.id] = [cpSuggestion, ...existing]

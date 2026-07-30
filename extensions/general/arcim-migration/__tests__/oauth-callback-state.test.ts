@@ -45,11 +45,22 @@ vi.mock('../lib/provider-client', () => ({
   ConsentNotFoundError: class ConsentNotFoundError extends Error {},
 }))
 
+// The /connect handler unconditionally imports this module (for its
+// pending-consent token check); the real one pulls in next/headers.
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: vi.fn(),
+  createServiceClient: vi.fn(),
+}))
+
 import { arcimMigrationExtension } from '../index'
 import {
   consumeOAuthState,
   exchangeAuthToken,
   getConsent,
+  createConsent,
+  listConsents,
+  generateOtc,
+  getAuthUrl,
   ConsentNotFoundError,
 } from '../lib/provider-client'
 
@@ -84,6 +95,10 @@ describe('GET /callback: OAuth state binding', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.stubEnv('NEXT_PUBLIC_APP_URL', APP_URL)
+    // The exchange redirect_uri now consults the per-provider override; keep
+    // these tests on the NEXT_PUBLIC_APP_URL fallback regardless of local env.
+    vi.stubEnv('FORTNOX_REDIRECT_URI', '')
+    vi.stubEnv('VISMA_REDIRECT_URI', '')
     // The callback route is dispatched without an ExtensionContext (skipAuth
     // routes get no ctx), so console is the logger. Keep the output quiet.
     vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -235,6 +250,124 @@ describe('GET /callback: full-page fallback when there is no opener', () => {
     expect(target.pathname).toBe('/import')
     expect(target.searchParams.get('migration')).toBe('error')
     expect(target.searchParams.get('reason')).toContain(GENERIC_REJECTION)
+  })
+})
+
+/**
+ * The redirect_uri sent in the authorization request and the one sent in the
+ * token exchange must be byte-identical (RFC 6749 §4.1.3) or the provider
+ * rejects the code exchange. These broke apart once already: the authorize leg
+ * honored the FORTNOX_REDIRECT_URI override while the exchange hardcoded the
+ * NEXT_PUBLIC_APP_URL fallback, so when the app moved to app.accounted.se and
+ * the env var still pointed at app.gnubok.se, every Fortnox connect died at
+ * the exchange with no visible error (the error postMessage was then dropped
+ * by the opener's origin check). Both legs now resolve through
+ * resolveArcimCallbackUrl; these tests pin the symmetry.
+ */
+describe('OAuth redirect_uri symmetry between authorize and exchange', () => {
+  const OVERRIDE_URI = 'https://dev-tunnel.example.test/api/extensions/ext/arcim-migration/callback'
+
+  const connectHandler = findRoute('POST', '/connect').handler as RouteHandler
+
+  function connectCtx(): ExtensionContext {
+    const { supabase } = createMockSupabase()
+    ;(supabase as unknown as { auth: unknown }).auth = {
+      getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
+    }
+    return { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', APP_URL)
+    vi.stubEnv('FORTNOX_REDIRECT_URI', OVERRIDE_URI)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ;(listConsents as Mock).mockResolvedValue([])
+    ;(createConsent as Mock).mockResolvedValue({ id: 'consent-new' })
+    ;(generateOtc as Mock).mockResolvedValue({ code: 'otc-code-1' })
+    ;(getAuthUrl as Mock).mockResolvedValue({ url: 'https://apps.fortnox.se/oauth-v1/auth?x=1' })
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('authorize leg passes the env-override redirect URI to getAuthUrl', async () => {
+    const res = await connectHandler(
+      createMockRequest('http://localhost/api/extensions/ext/arcim-migration/connect', {
+        method: 'POST',
+        body: { provider: 'fortnox' },
+      }),
+      connectCtx(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(getAuthUrl).toHaveBeenCalledWith('fortnox', 'otc-code-1', OVERRIDE_URI)
+  })
+
+  it('exchange leg passes the SAME env-override redirect URI to exchangeAuthToken', async () => {
+    ;(consumeOAuthState as Mock).mockResolvedValue({
+      consentId: 'consent-new',
+      provider: 'fortnox',
+    })
+
+    await callbackHandler(
+      callbackRequest({ code: 'provider-auth-code', state: 'one-time-token' }),
+    )
+
+    expect(exchangeAuthToken).toHaveBeenCalledWith(
+      'consent-new',
+      'fortnox',
+      'provider-auth-code',
+      OVERRIDE_URI,
+    )
+  })
+})
+
+/**
+ * The error page must stay open: its postMessage is dropped whenever the
+ * popup's origin differs from the opener's, and a window.close() right after
+ * turns that into "I approve in Fortnox and then nothing happens". The success
+ * page still closes itself.
+ */
+describe('GET /callback: error popup stays open, success popup closes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', APP_URL)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('keeps the error popup open with the reason visible', async () => {
+    ;(consumeOAuthState as Mock).mockResolvedValue(null)
+
+    const res = await callbackHandler(
+      callbackRequest({ code: 'provider-auth-code', state: 'bad-token' }),
+    )
+    const html = await res.text()
+
+    expect(html).toContain('Anslutningen misslyckades')
+    expect(html).not.toContain('window.close')
+  })
+
+  it('still closes the success popup', async () => {
+    ;(consumeOAuthState as Mock).mockResolvedValue({
+      consentId: 'consent-1',
+      provider: 'fortnox',
+    })
+
+    const res = await callbackHandler(
+      callbackRequest({ code: 'provider-auth-code', state: 'one-time-token' }),
+    )
+    const html = await res.text()
+
+    expect(html).toContain('Anslutningen lyckades')
+    expect(html).toContain('window.close()')
   })
 })
 

@@ -1,8 +1,20 @@
 import { suggestCategory } from '@/lib/tax/expense-warnings'
 import { getExpenseAccountForCategory } from '@/lib/bookkeeping/category-mapping'
-import { normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import {
+  normalizeCounterpartyName,
+  formatCounterpartyName,
+  toCounterpartyTemplateId,
+} from '@/lib/bookkeeping/counterparty-templates'
 import { findMatchingTemplates, getTemplateById, type TemplateMatch } from '@/lib/bookkeeping/booking-templates'
-import type { Transaction, TransactionCategory, EntityType, MappingRule, LinePatternEntry } from '@/types'
+import type {
+  Transaction,
+  TransactionCategory,
+  EntityType,
+  MappingRule,
+  LinePatternEntry,
+  VatTreatment,
+  CategorizationTemplate,
+} from '@/types'
 
 export interface SuggestedCategory {
   category: TransactionCategory
@@ -247,6 +259,11 @@ export interface SuggestedTemplate {
   risk_level: string
   requires_review: boolean
   line_pattern?: LinePatternEntry[] | null
+  // Learned VAT treatment on a single-line counterparty suggestion. Without
+  // it the review dialog previews the verifikation at gross with no moms leg,
+  // while the server books the expense net + 2641. Multi-line suggestions
+  // carry their VAT inside line_pattern instead.
+  vat_treatment?: VatTreatment | null
   // Learned {sie_dim_no: code} bag on counterparty suggestions: prefills the
   // review dialog's dimension picker (the server applies it at booking anyway;
   // surfacing it keeps the user in the loop).
@@ -349,4 +366,41 @@ export async function getSuggestedTemplates(
   return results
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, 10)
+}
+
+/**
+ * Shape a learned counterparty template into the suggestion the transaction
+ * modal renders under "Tidigare motparter".
+ *
+ * Every field the review dialog later reads has to come across here: the
+ * dialog books through `counterparty_template_id`, so the accounts and VAT it
+ * previews must be the template's own, not the transaction category's
+ * fallbacks. A suggestion that omitted them previously left the dialog with an
+ * undefined default account, which crashed the page.
+ */
+export function buildCounterpartySuggestion(
+  template: CategorizationTemplate,
+  confidence: number,
+): SuggestedTemplate {
+  return {
+    template_id: toCounterpartyTemplateId(template.id),
+    name_sv: formatCounterpartyName(template.counterparty_name),
+    name_en: formatCounterpartyName(template.counterparty_name),
+    group: 'counterparty',
+    debit_account: template.debit_account,
+    credit_account: template.credit_account,
+    confidence,
+    description_sv: `${template.occurrence_count} tidigare bokföringar`,
+    risk_level: 'NONE',
+    requires_review: false,
+    line_pattern: template.line_pattern ?? null,
+    // Single-line templates book net expense + input VAT from this treatment
+    // (buildMappingResultFromCounterpartyTemplate); the review dialog needs it
+    // to preview the same verifikation.
+    vat_treatment: template.vat_treatment ?? null,
+    default_dimensions:
+      template.default_dimensions && Object.keys(template.default_dimensions).length > 0
+        ? template.default_dimensions
+        : null,
+  }
 }

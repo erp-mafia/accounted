@@ -145,7 +145,7 @@ export async function generateKassaflodesanalys(
   // Without this filter, the closing entry for class 3-8 would inflate
   // "övriga ej-kassaflödesposter" and break the reconciliation.
   const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
-    excludeYearEndClosing: true,
+    closingEntry: 'exclude-all-year-end',
   })
 
   // Net result before tax (resultat efter finansiella poster) comes from the

@@ -95,6 +95,7 @@ describe('gnubok_get_trial_balance: dimensions filter', () => {
     }
 
     expect(mockTrialBalance).toHaveBeenCalledWith(supabase, 'company-1', 'fp-1', {
+      closingEntry: 'include',
       dimensions: { '6': 'P001' },
     })
     expect(result.dimension_filter).toEqual({ '6': 'P001' })
@@ -117,7 +118,9 @@ describe('gnubok_get_trial_balance: dimensions filter', () => {
       supabase as never,
     )) as Record<string, unknown>
 
-    expect(mockTrialBalance).toHaveBeenCalledWith(supabase, 'company-1', 'fp-1', undefined)
+    expect(mockTrialBalance).toHaveBeenCalledWith(supabase, 'company-1', 'fp-1', {
+      closingEntry: 'include',
+    })
     expect(result).not.toHaveProperty('dimension_filter')
     expect(result).not.toHaveProperty('dimension_resolutions')
     // Zero registry queries when nothing is tagged.
