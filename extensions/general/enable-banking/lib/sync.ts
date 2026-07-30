@@ -184,6 +184,10 @@ export async function syncAccountTransactions(
       import_source: 'enable_banking',
       counterparty_iban: looksLikeIban ? cpAccount!.replace(/\s+/g, '') : null,
       counterparty_account: !looksLikeIban ? cpAccount : null,
+      // Verbatim transaction-type codes: the ingest boundary classifies them
+      // into transaction_method and persists them as evidence columns.
+      bank_transaction_code: tx.bank_transaction_code || null,
+      proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code || null,
     }
   })
 

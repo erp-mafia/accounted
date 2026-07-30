@@ -339,7 +339,13 @@ export async function findCounterpartyTemplatesBatch(
   }
 
   for (const tx of transactions) {
-    const rawName = tx.merchant_name || tx.description
+    // Identity anchors on the immutable bank original, not the working title:
+    // the ingest boundary strips the trailing channel phrase off description
+    // ("SPOTIFY AB Kortköp" → "SPOTIFY AB") and users can rename it, but
+    // templates were learned from the full bank string, so matching the
+    // original keeps every era's keys and aliases aligned (same rationale as
+    // buildMerchantHistory in lib/transactions/category-suggestions.ts).
+    const rawName = tx.merchant_name || tx.original_description || tx.description
     if (!rawName) continue
 
     const normalized = normalizeCounterpartyName(rawName)
@@ -906,7 +912,11 @@ export async function upsertCounterpartyTemplate(
   // flip the template's accounts and poison future matches.
   if (mappingResult.direction_mismatch) return
 
-  const rawName = transaction.merchant_name || transaction.description
+  // Learn from the immutable bank original (see findCounterpartyTemplatesBatch):
+  // learning and lookup MUST derive the key from the same string, or the
+  // ingest-time phrase strip would fork template identities by era.
+  const rawName =
+    transaction.merchant_name || transaction.original_description || transaction.description
   if (!rawName) return
 
   const normalized = normalizeCounterpartyName(rawName)
