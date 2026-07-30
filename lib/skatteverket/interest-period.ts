@@ -20,8 +20,11 @@
  *      Datum column (the retroactive-decision signature), or
  *   2. another row in the same band is otherwise indistinguishable from it.
  *
- * Rule 2 is what makes this a guarantee instead of a heuristic: within a band,
- * no two rows can render identically.
+ * Rule 2 catches the look-alikes the month rule alone would miss, such as a
+ * decision split inside a single month. It cannot separate rows that share a
+ * ränteberäkningsdatum, or that both lack one, since that is the only field
+ * left to distinguish them; in practice Skatteverket gives each month of a
+ * decision its own date, which is exactly the case this exists for.
  */
 
 export interface InterestPeriodRow {

@@ -38,7 +38,9 @@ export function OpenInNewTab({
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      aria-label={text}
+      // Named by the visually-hidden text below rather than aria-label, so the
+      // title renders a tooltip for sighted users without screen readers
+      // announcing the same string twice.
       title={text}
       onClick={(e) => e.stopPropagation()}
       // Rows that own this control are themselves interactive: JournalEntryList
@@ -49,12 +51,17 @@ export function OpenInNewTab({
       onKeyDown={(e) => e.stopPropagation()}
       className={cn(
         HOVER_REVEAL_CLASS,
-        'inline-flex shrink-0 items-center rounded p-1 text-muted-foreground',
+        'relative inline-flex shrink-0 items-center rounded p-1 text-muted-foreground',
+        // The icon stays 14px so the row keeps its density, but the pointer
+        // target is padded out to the 40px the design rules require.
+        'before:absolute before:left-1/2 before:top-1/2 before:h-10 before:w-10',
+        'before:-translate-x-1/2 before:-translate-y-1/2 before:content-[""]',
         'transition-colors duration-150 hover:text-foreground',
         className,
       )}
     >
       <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+      <span className="sr-only">{text}</span>
     </Link>
   )
 }

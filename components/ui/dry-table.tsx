@@ -20,8 +20,12 @@ export const QUIET_LINK_CLASS =
 // pointers never fire hover, so without pointer-coarse: the control would be
 // permanently invisible and the action unreachable on touch. Always use this
 // constant instead of hand-rolling `opacity-0 group-hover:opacity-100`.
+//
+// focus-within is what makes this safe on a WRAPPER: focus-visible only matches
+// the element itself, so a non-focusable <span> holding the buttons would stay
+// transparent while a keyboard user tabbed through the controls inside it.
 export const HOVER_REVEAL_CLASS =
-  'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100'
+  'opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100'
 
 // Animated row expansion (concept vwrap/vinner): grid-rows 0fr -> 1fr on
 // mount; the global reduced-motion rule collapses the transition.

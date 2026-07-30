@@ -73,7 +73,9 @@ export function ReportLibrary({
           aria-hidden="true"
         />
         <Input
-          type="search"
+          // Deliberately not type="search": WebKit adds its own cancel button,
+          // which would sit next to the X below as a second clear affordance.
+          type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t('search_placeholder')}
@@ -106,7 +108,10 @@ export function ReportLibrary({
                 <th className={cn(TH_CLASS, 'w-[130px] text-right')}>{t('col_last_opened')}</th>
               </tr>
             </thead>
-            <tbody className="stagger-enter">
+            {/* Stagger is the entry animation for the library as it loads. It
+                must not re-run per keystroke while filtering, or every widening
+                edit replays a 360ms cascade under the user's eyes. */}
+            <tbody className={query.trim() ? undefined : 'stagger-enter'}>
               {sections.map((section) => (
                 <SectionRows
                   key={section.category}

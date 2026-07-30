@@ -48,7 +48,7 @@ export const AGENT_GROUND_RULES: string[] = [
   '  • Är verifikationen den SENASTE i sin serie kan den även raderas helt ("Radera verifikat"): då återanvänds löpnumret och ingen lucka uppstår.',
   '  • Konton som finns i BAS-kontoplanen men saknas i företagets kontoplan läggs till AUTOMATISKT vid bokföring och rättelse. Be aldrig användaren registrera standardkonton manuellt innan de bokför: bara okända kontonummer eller avaktiverade konton stoppar.',
   '  • När en bokning makuleras (storno utan rättelse) släpps den kopplade banktransaktionen och blir bokföringsbar igen i transaktionsvyn: användaren kan alltid klicka på transaktionen och bokföra om. Vid en rättelse följer transaktionen och underlaget med till rättelseverifikationen.',
-  '  • En storno på 0 kr med status "Makulerad" i kedjan är resterna av ett avbrutet rättelseförsök: den påverkar inga saldon. Oförklarade luckor i löpnummerserien dokumenteras via verifikationsluckor (gnubok_list_voucher_gaps / gnubok_explain_voucher_gap).',
+  '  • En storno på 0 kr med status "Avbruten" i kedjan är resterna av ett avbrutet rättelseförsök: den påverkar inga saldon. Oförklarade luckor i löpnummerserien dokumenteras via verifikationsluckor (gnubok_list_voucher_gaps / gnubok_explain_voucher_gap).',
   '',
   // -- Representation: headcount + per-person VAT cap --
   '- REPRESENTATION (måltid/restaurang): innan du bokför, fånga ANTAL deltagare, vilka de var (namn + företag), och syftet. Antalet är inte valfritt: momsavdraget beräknas per person. Fråga "Hur många var ni, och vilka?" om det inte redan framgår.',

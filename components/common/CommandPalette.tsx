@@ -61,7 +61,11 @@ const PAGE_ENTRIES: Entry[] = [
   // "verifikat" is the word a bookkeeper reaches for ("verifikat per konto"),
   // and matches() requires every typed token, so leaving it out made the exact
   // phrase return nothing even though this report is precisely the answer.
-  { id: 'rapport-huvudbok', label: 'Visa rapport: Huvudbok', icon: BookOpen, href: '/reports/huvudbok', keywords: 'rapport huvudbok ledger general konto saldo transaktioner per konto verifikat verifikationer verifikationer per konto stäm av stämma avstämning kontoutdrag kontoanalys kontokort kontohistorik balance account statement transactions vouchers' },
+  // Deliberately NOT carrying "stäm av"/"avstämning" here: the palette
+  // auto-selects the first hit and huvudbok is listed above Bankavstämning, so
+  // those words would hijack Enter from the reconciliation page. They live in
+  // ReportDescriptor.searchTerms instead, where the library shows a list.
+  { id: 'rapport-huvudbok', label: 'Visa rapport: Huvudbok', icon: BookOpen, href: '/reports/huvudbok', keywords: 'rapport huvudbok ledger general konto saldo transaktioner per konto verifikat verifikationer verifikationer per konto kontoutdrag kontoanalys kontokort kontohistorik balance account statement transactions vouchers' },
   { id: 'rapport-kundreskontra', label: 'Visa rapport: Kundreskontra', icon: Users, href: '/reports/kundreskontra', keywords: 'rapport kundreskontra ar kundfordringar' },
   { id: 'rapport-bankavstamning', label: 'Bankavstämning', hint: 'Stäm av bank mot bokföring', icon: ArrowLeftRight, href: '/reports/bank-reconciliation', keywords: 'avstämning stäm av bank matcha banktransaktioner reconcile reconciliation 1930' },
   { id: 'importera', label: 'Importera', icon: Upload, href: '/import' },

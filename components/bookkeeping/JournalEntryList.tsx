@@ -993,8 +993,13 @@ export default function JournalEntryList() {
         // Empty placeholder, scoped to the situation: an empty drafts view, a
         // filtered committed view with no matches, or a committed view with no
         // posted entries yet (but drafts exist, hence we got here, not the
-        // pristine early return above).
-        <DataList className="stagger-enter">
+        // pristine early return above). Carries the same busy treatment as the
+        // table branch: widening a filter from an empty result would otherwise
+        // look identical to "still nothing" for the whole request.
+        <DataList
+          className={cn('stagger-enter', loading && 'opacity-60')}
+          aria-busy={loading || undefined}
+        >
           <DataListEmpty
             icon={
               listMode === 'drafts' || !hasActiveFilters ? (
@@ -1102,6 +1107,10 @@ export default function JournalEntryList() {
                 // than on the row: text-decoration propagates to descendants
                 // and a child cannot opt out, so striking the <tr> would draw
                 // a line through the row's action controls too.
+                //
+                // No opacity on the row: the strike plus the Makulerad chip
+                // already carry the state, and dimming muted-foreground text
+                // pushes the date column under the AA contrast floor.
                 const struckCell = entry.status === 'reversed' ? 'line-through' : undefined
 
                 return (
@@ -1109,7 +1118,6 @@ export default function JournalEntryList() {
                     <tr
                       className={cn(
                         'group cursor-pointer transition-colors duration-150',
-                        entry.status === 'reversed' && 'opacity-60',
                         isExpanded ? 'bg-secondary/25' : 'hover:bg-secondary/35',
                         selectedIds.has(entry.id) && 'bg-secondary/40',
                       )}
