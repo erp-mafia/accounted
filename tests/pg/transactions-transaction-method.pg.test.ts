@@ -6,8 +6,8 @@ import { getPool } from '@/tests/pg/setup'
 
 /**
  * pg-real coverage for transactions.transaction_method
- * (20260730073106_transactions_transaction_method.sql + the paired backfill
- * 20260730073206_..._backfill.sql).
+ * (20260730100000_transactions_transaction_method.sql + the paired backfill
+ * 20260730100100_..._backfill.sql).
  *
  * Locks in:
  *   - The closed-vocabulary CHECK constraint.
@@ -29,7 +29,7 @@ import { getPool } from '@/tests/pg/setup'
 const BACKFILL_SQL = readFileSync(
   join(
     process.cwd(),
-    'supabase/migrations/20260730073206_transactions_transaction_method_backfill.sql',
+    'supabase/migrations/20260730100100_transactions_transaction_method_backfill.sql',
   ),
   'utf8',
 )

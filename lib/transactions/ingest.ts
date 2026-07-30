@@ -545,7 +545,7 @@ export async function ingestTransactions(
     // MCP, or a caller that set no source) carries a user-authored title, not
     // bank channel vocabulary; classifying or stripping it would corrupt
     // meaning ("Egen insättning" is a title, not a deposit label). Mirrors
-    // the scope of the 20260730073206 backfill.
+    // the scope of the 20260730100100 backfill.
     const isUserCreatedSource =
       !raw.import_source || USER_CREATED_IMPORT_SOURCES.has(raw.import_source)
     const { method: transactionMethod, displayTitle } = isUserCreatedSource

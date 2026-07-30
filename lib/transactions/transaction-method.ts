@@ -29,7 +29,7 @@
  * the content-dedup bridge (descriptionsBridge, prefix containment) is built
  * to survive; the full bank string is preserved in original_description.
  *
- * Pure and side-effect free. The SQL backfill in migration 20260730073206
+ * Pure and side-effect free. The SQL backfill in migration 20260730100100
  * duplicates the phrase vocabulary as a one-shot snapshot; it does NOT need
  * to stay in sync (post-migration rows are classified here at ingest).
  */
@@ -141,7 +141,7 @@ const LEADING_RULES: ReadonlyArray<readonly [RegExp, TransactionMethod]> = [
  * "Egen insättning" must not become "Egen" (the phrase IS the meaning there).
  * When the stripped title would END in one of these, the strip is skipped;
  * the method classification still applies. Mirrored by the adjective guard in
- * the 20260730073206 backfill.
+ * the 20260730100100 backfill.
  */
 const ADJECTIVE_GUARD = new Set([
   'egen', 'eget', 'egna', 'privat', 'privata', 'intern', 'interna', 'extern', 'externa',
