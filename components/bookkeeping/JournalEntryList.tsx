@@ -1140,6 +1140,10 @@ export default function JournalEntryList() {
                               struckCell,
                             )}
                             onClick={(e) => e.stopPropagation()}
+                            // The row's Enter/Space handler calls
+                            // preventDefault(), so without this the voucher
+                            // link expands the row instead of opening it.
+                            onKeyDown={(e) => e.stopPropagation()}
                           >
                             {formatVoucher(entry)}
                           </Link>

@@ -41,6 +41,12 @@ export function OpenInNewTab({
       aria-label={text}
       title={text}
       onClick={(e) => e.stopPropagation()}
+      // Rows that own this control are themselves interactive: JournalEntryList
+      // gives its <tr> an Enter/Space handler that calls preventDefault() and
+      // expands the row. Without this, Enter on a focused link would expand the
+      // row instead of opening the voucher, so the control would be usable with
+      // a mouse but not a keyboard.
+      onKeyDown={(e) => e.stopPropagation()}
       className={cn(
         HOVER_REVEAL_CLASS,
         'inline-flex shrink-0 items-center rounded p-1 text-muted-foreground',
