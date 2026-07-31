@@ -4629,10 +4629,17 @@ export const tools: McpTool[] = [
         default_dimensions: inv.default_dimensions ?? {},
       }))
 
+      // has_more is required by paginatedSchema: omitting it makes the MCP
+      // client reject the whole response on output validation. This tool pages
+      // with limit only (no offset input), so there is no next_offset to hand
+      // back: has_more just tells the caller to narrow the filter.
+      const total = count ?? invoices.length
+
       return {
         invoices,
         count: invoices.length,
-        total_count: count ?? invoices.length,
+        total_count: total,
+        has_more: total > invoices.length,
       }
     },
   },
@@ -15042,10 +15049,15 @@ export const tools: McpTool[] = [
         }
       })
 
+      // See gnubok_list_invoices: has_more is required by paginatedSchema and
+      // this tool is limit-only, so no next_offset.
+      const total = count ?? schedules.length
+
       return {
         schedules,
         count: schedules.length,
-        total_count: count ?? schedules.length,
+        total_count: total,
+        has_more: total > schedules.length,
       }
     },
   },
