@@ -251,7 +251,7 @@ export type CoreEvent =
   // make the model worse: measure, don't assume).
   | { type: 'mcp.skill_loaded'; payload: {
       slug: string                                  // e.g. 'modifier/holding-ab', 'month-end-close'
-      tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier'
+      tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier' | 'product'
       sessionId: string | null
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron'
       actorId: string | null

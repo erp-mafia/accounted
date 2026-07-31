@@ -50,6 +50,17 @@ describe('discoverAtoms: reference children', () => {
     }
   })
 
+  it('discovers product-tier atoms from .claude/skills/product/<slug>/', async () => {
+    const all = await load()
+    const mallar = all.find((a) => a.id === 'product/bokforingsmallar')
+    expect(mallar, 'product atom should be discovered').toBeDefined()
+    expect(mallar!.tier).toBe('product')
+    expect(mallar!.parent_atom_id).toBeNull()
+    expect(mallar!.body).toContain('Betalning')
+    // The tier README is a file, not a skill directory: it must never become an atom.
+    expect(all.some((a) => a.id.startsWith('product/readme'))).toBe(false)
+  })
+
   it('every child parent_atom_id resolves to a real top-level skill', async () => {
     const all = await load()
     const topLevelIds = new Set(all.filter((a) => a.parent_atom_id === null).map((a) => a.id))

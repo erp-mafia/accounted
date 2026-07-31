@@ -7,7 +7,9 @@ import { loadActiveEmployeeCount } from './employee-facts'
 // metadata is enough for selection.
 export interface AtomRegistryIndexRow {
   id: string
-  tier: 'horizontal' | 'vertical' | 'modifier'
+  // 'product' atoms (how Accounted itself works) flow through the index but
+  // are never composer-selected: every tier filter below picks a specific tier.
+  tier: 'horizontal' | 'vertical' | 'modifier' | 'product'
   title: string
   description: string
   sni_prefixes: string[]

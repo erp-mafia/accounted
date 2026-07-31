@@ -15,7 +15,7 @@ import { SettingsGroup, SettingsRowNote } from '@/components/settings/SettingsRo
 import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
-type Tier = 'horizontal' | 'vertical' | 'modifier'
+type Tier = 'horizontal' | 'vertical' | 'modifier' | 'product'
 
 interface AtomMeta {
   id: string
@@ -25,7 +25,7 @@ interface AtomMeta {
   active: boolean
 }
 
-const TIER_ORDER: Tier[] = ['horizontal', 'vertical', 'modifier']
+const TIER_ORDER: Tier[] = ['horizontal', 'vertical', 'modifier', 'product']
 
 const TIER_SECTION: Record<Tier, { title: string; blurb: string }> = {
   horizontal: {
@@ -39,6 +39,10 @@ const TIER_SECTION: Record<Tier, { title: string; blurb: string }> = {
   modifier: {
     title: 'Din bolagssituation',
     blurb: 'Särskilda regler för hur just ditt bolag är uppbyggt.',
+  },
+  product: {
+    title: 'Så fungerar Accounted',
+    blurb: 'Kunskap om funktionerna i Accounted, så att assistenten kan förklara hur de används.',
   },
 }
 
@@ -124,7 +128,7 @@ export function AgentSkillsPanel() {
   }, [reloadKey, errorLocale])
 
   const grouped = useMemo(() => {
-    const map: Record<Tier, AtomMeta[]> = { horizontal: [], vertical: [], modifier: [] }
+    const map: Record<Tier, AtomMeta[]> = { horizontal: [], vertical: [], modifier: [], product: [] }
     for (const a of atoms ?? []) map[a.tier]?.push(a)
     return map
   }, [atoms])
@@ -185,7 +189,8 @@ export function AgentSkillsPanel() {
           </SettingsRowNote>
           <HelpPopover className="shrink-0">
             Utöver vad den minns om ditt företag bygger assistenten på en uppsättning
-            kunskapsområden om svensk bokföring och skatt. Kärnkompetensen gäller alla;
+            kunskapsområden: svensk bokföring och skatt, plus hur funktionerna i
+            Accounted fungerar. Kärnkompetensen och produktkunskapen gäller alla;
             bransch- och bolagsanpassningen väljs utifrån ditt företag. Klicka på ett
             område för att läsa hela kunskapen.
           </HelpPopover>
@@ -259,8 +264,10 @@ export function AgentSkillsPanel() {
                       <span className="block text-xs text-muted-foreground">{atom.description}</span>
                     </span>
                     {/* Chips mark exceptions: active is the normal state and
-                        renders as muted text, only dormant gets a Badge. */}
-                    {tier !== 'horizontal' && (
+                        renders as muted text, only dormant gets a Badge.
+                        Horizontal and product atoms are always active, so no
+                        state marker at all. */}
+                    {tier !== 'horizontal' && tier !== 'product' && (
                       atom.active ? (
                         <span className="mt-0.5 shrink-0 text-xs text-muted-foreground">Aktiv</span>
                       ) : (

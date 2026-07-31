@@ -48,6 +48,8 @@ export const settingsHelp = defineAgentIntent<SettingsHelpArgs, CapturedSettings
       `Användaren är i en inställningspanel${captured.panel ? ` (${captured.panel})` : ''} och vill förstå vad valen påverkar.`,
     )
     lines.push('')
+    lines.push('Frågor om hur en funktion i Accounted fungerar (t.ex. radtyperna i bokföringsmallar) besvaras ur motsvarande product/-atom: ladda den med gnubok_load_skill innan du svarar, och gissa inte om ingen atom täcker funktionen.')
+    lines.push('')
     lines.push('Vänta in användarens fråga. Om de inte säger något, börja med en kort sammanfattning av panelens syfte. Var direkt och svara på svenska.')
     return lines.join('\n')
   },

@@ -229,7 +229,10 @@ export function TemplateForm({
       </div>
 
       <div>
-        <Label>{t('lines_label')}</Label>
+        <div className="flex items-center gap-1">
+          <Label>{t('lines_label')}</Label>
+          <InfoTooltip content={t('line_types_help')} />
+        </div>
         <div className="space-y-2 mt-1">
           {lines.map((line, i) => {
             const showRatioInput = showRatio && line.type === 'business'
@@ -271,7 +274,7 @@ export function TemplateForm({
                 <Select value={line.type} onValueChange={(v) => updateLineType(i, v as BookingTemplateLibraryLine['type'])}>
                   <SelectTrigger className="flex-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="business">{t('type_cost')}</SelectItem>
+                    <SelectItem value="business">{t('type_cost_revenue')}</SelectItem>
                     <SelectItem value="vat">{t('type_vat')}</SelectItem>
                     <SelectItem value="settlement">{t('type_settlement')}</SelectItem>
                   </SelectContent>

@@ -7,9 +7,10 @@
  *    alongside tools (month-end close, VAT review, year-end, invoicing,
  *    payroll). They document *how* to compose Accounted tools for a real-world
  *    workflow.
- *  - **horizontal / vertical / modifier** atoms are loaded dynamically from
- *    `agent_atom_registry`: the same atoms the in-app composer assembles for
- *    a company. Exposing them here gives Claude.ai parity with the in-app
+ *  - **horizontal / vertical / modifier / product** atoms are loaded
+ *    dynamically from `agent_atom_registry`: the same atoms the in-app
+ *    composer assembles for a company (product atoms describe how Accounted
+ *    itself works). Exposing them here gives Claude.ai parity with the in-app
  *    surface (plan §13 MCP parity).
  *
  * Agents call `gnubok_list_skills` to discover, then `gnubok_load_skill(slug)`
@@ -20,7 +21,7 @@
  * Skill interface and bodies migrate without changes.
  */
 
-export type SkillTier = 'workflow' | 'horizontal' | 'vertical' | 'modifier'
+export type SkillTier = 'workflow' | 'horizontal' | 'vertical' | 'modifier' | 'product'
 
 /**
  * Pre-conditions a skill needs to be relevant to a company. `gnubok_list_skills`

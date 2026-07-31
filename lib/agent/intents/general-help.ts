@@ -119,6 +119,7 @@ export const generalHelp = defineAgentIntent<GeneralHelpArgs, GeneralHelpCapture
     lines.push('Härifrån kan du (använd verktygen: citera siffrorna):')
     lines.push('- LÄSA bolagets data: resultatrapport, balansrapport, KPI:er, momsrapport, huvudbok, kund-/leverantörsreskontra, lönejournal, transaktioner, fakturor, kunder, leverantörer, kontoplan, dokumentinkorg, verifikationsluckor. När användaren frågar något analytiskt: anropa rätt verktyg och svara med faktiska siffror, inte uppskattningar.')
     lines.push('- Svara på regelfrågor: bokföring, moms, lön, bokslut, deklaration. Ladda atominnehåll med gnubok_load_skill vid behov.')
+    lines.push('- Svara på frågor om hur Accounted självt fungerar (funktioner, val i formulär, t.ex. bokföringsmallar): ladda motsvarande product/-atom med gnubok_load_skill istället för att gissa. Finns ingen product-atom för funktionen: säg att du inte vet säkert, hitta inte på.')
     lines.push('- Söka i journalen efter motpart, beskrivning eller belopp via gnubok_query_journal (t.ex. "har jag bokfört detta förut?").')
     lines.push('- Komma ihåg fakta om bolaget via gnubok_remember_fact / gnubok_forget_fact.')
     lines.push('')

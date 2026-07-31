@@ -19,15 +19,16 @@ import { validateQuery } from '@/lib/api/validate'
 //   ?slug=<id>  → the full SKILL.md body for one atom, loaded on expand.
 //
 // "Active for this company": horizontal atoms are regulatory and shared by
-// every Swedish company, so always active. Vertical/modifier atoms are active
-// only when the composer selected them into this company's agent_profile:
-// others are shown dormant so the user sees both the full library and what's
-// tuned for them. The profile arrays store full ids ("vertical/konsult-it"),
-// matched directly against agent_atom_registry.id (see lib/agent/chat/system-prompt.ts).
+// every Swedish company, so always active; product atoms (how Accounted itself
+// works) likewise. Vertical/modifier atoms are active only when the composer
+// selected them into this company's agent_profile: others are shown dormant so
+// the user sees both the full library and what's tuned for them. The profile
+// arrays store full ids ("vertical/konsult-it"), matched directly against
+// agent_atom_registry.id (see lib/agent/chat/system-prompt.ts).
 
 interface AtomMeta {
   id: string
-  tier: 'horizontal' | 'vertical' | 'modifier'
+  tier: 'horizontal' | 'vertical' | 'modifier' | 'product'
   title: string
   description: string
   active: boolean
@@ -95,7 +96,7 @@ export const GET = withRouteContext('agent.skills.list', async (request, ctx) =>
   const result: AtomMeta[] = (atoms ?? []).map((a) => {
     const tier = a.tier as AtomMeta['tier']
     const active =
-      tier === 'horizontal'
+      tier === 'horizontal' || tier === 'product'
         ? true
         : tier === 'vertical'
           ? verticalActive.has(a.id)

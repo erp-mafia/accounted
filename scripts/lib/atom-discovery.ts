@@ -13,12 +13,13 @@
  *   horizontal: `.claude/skills/swedish-*\/SKILL.md`        (regulatory)
  *   vertical  : `.claude/skills/industry/<slug>\/SKILL.md`  (industry)
  *   modifier  : `.claude/skills/modifier/<slug>\/SKILL.md`  (cross-cutting)
+ *   product   : `.claude/skills/product/<slug>\/SKILL.md`   (how Accounted works)
  */
 
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 
-export type Tier = 'horizontal' | 'vertical' | 'modifier'
+export type Tier = 'horizontal' | 'vertical' | 'modifier' | 'product'
 
 export interface DiscoveredAtom {
   /** Stable id shaped as "<tier>/<slug>" (e.g. "horizontal/swedish-vat"). */
@@ -200,9 +201,9 @@ export async function discoverAtoms(rootDir: string): Promise<DiscoveredAtom[]> 
       continue
     }
 
-    // Vertical / modifier: subdirectories under those names
-    if (entry.name === 'industry' || entry.name === 'modifier') {
-      const tier: Tier = entry.name === 'industry' ? 'vertical' : 'modifier'
+    // Vertical / modifier / product: subdirectories under those names
+    if (entry.name === 'industry' || entry.name === 'modifier' || entry.name === 'product') {
+      const tier: Tier = entry.name === 'industry' ? 'vertical' : entry.name
       const tierDir = join(skillsDir, entry.name)
       const subs = await readdir(tierDir, { withFileTypes: true })
       for (const sub of subs) {
