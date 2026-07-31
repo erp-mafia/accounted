@@ -2658,11 +2658,11 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        tag: { type: 'string', description: 'Optional filter by tag (e.g. "vat", "monthly", "yearly", "payroll", or the tier name "workflow"/"horizontal"/"vertical"/"modifier"/"product").' },
+        tag: { type: 'string', description: 'Optional filter by tag (e.g. "vat", "monthly", "yearly", "payroll", or the tier name "workflow"/"horizontal"/"vertical"/"modifier").' },
         tier: {
           type: 'string',
-          enum: ['workflow', 'horizontal', 'vertical', 'modifier', 'product'],
-          description: 'Optional filter by tier. workflow = static guides, horizontal = regulatory atoms (Swedish VAT/payroll/…), vertical = industry atoms (konsult-IT, e-handel…), modifier = cross-cutting atoms (holding-AB…), product = how Accounted features work (bokföringsmallar…).',
+          enum: ['workflow', 'horizontal', 'vertical', 'modifier'],
+          description: 'Optional filter by tier. workflow = static guides, horizontal = regulatory atoms (Swedish VAT/payroll/…), vertical = industry atoms (konsult-IT, e-handel…), modifier = cross-cutting atoms (holding-AB…).',
         },
         include_all: {
           type: 'boolean',
@@ -2683,7 +2683,7 @@ export const tools: McpTool[] = [
               name: { type: 'string' },
               summary: { type: 'string' },
               tags: { type: 'array', items: { type: 'string' } },
-              tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier', 'product'] },
+              tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier'] },
             },
             required: ['slug', 'name', 'summary', 'tier'],
           },
@@ -2795,7 +2795,7 @@ export const tools: McpTool[] = [
         name: { type: 'string' },
         summary: { type: 'string' },
         tags: { type: 'array', items: { type: 'string' } },
-        tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier', 'product'] },
+        tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier'] },
         body: { type: 'string', description: 'Full skill content as Markdown' },
       },
       required: ['slug', 'name', 'body', 'tier'],
@@ -15759,7 +15759,7 @@ function checkAndEmitNextHintFollowed(
  */
 function emitSkillLoaded(payload: {
   slug: string
-  tier: SkillTier
+  tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier'
   actor: ActorContext
   userId: string
   companyId: string

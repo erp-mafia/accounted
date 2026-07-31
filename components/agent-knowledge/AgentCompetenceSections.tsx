@@ -16,20 +16,14 @@ import type { AgentCompetence, AtomTier, FactKind, FactSource } from '@/lib/agen
  * links there.
  */
 
-const TIER_ORDER: AtomTier[] = ['horizontal', 'vertical', 'modifier', 'product']
+const TIER_ORDER: AtomTier[] = ['horizontal', 'vertical', 'modifier']
 
 export function CompetenceCard({ competence }: { competence: AgentCompetence }) {
   const t = useTranslations('agentKnowledge')
   const { atoms } = competence
   const activeAtoms = atoms.filter((a) => a.active).length
   const tierLabel = (tier: AtomTier) =>
-    tier === 'horizontal'
-      ? t('tier_horizontal')
-      : tier === 'vertical'
-        ? t('tier_vertical')
-        : tier === 'modifier'
-          ? t('tier_modifier')
-          : t('tier_product')
+    tier === 'horizontal' ? t('tier_horizontal') : tier === 'vertical' ? t('tier_vertical') : t('tier_modifier')
 
   return (
     <SettingsGroup label={t('comp_title')} help={t('comp_desc')}>
@@ -53,7 +47,7 @@ export function CompetenceCard({ competence }: { competence: AgentCompetence }) 
                       title={a.description}
                     >
                       {a.title}
-                      {!a.active && tier !== 'horizontal' && tier !== 'product' && (
+                      {!a.active && tier !== 'horizontal' && (
                         <span className="ml-1.5 opacity-70">· {t('badge_dormant')}</span>
                       )}
                     </Badge>

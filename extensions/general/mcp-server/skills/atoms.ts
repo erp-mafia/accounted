@@ -21,7 +21,7 @@ import type { Skill, SkillTier } from './types'
 
 interface AtomRegistryRow {
   id: string
-  tier: 'horizontal' | 'vertical' | 'modifier' | 'product'
+  tier: 'horizontal' | 'vertical' | 'modifier'
   title: string | null
   description: string
   sni_prefixes: string[] | null

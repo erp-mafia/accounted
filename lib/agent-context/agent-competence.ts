@@ -6,15 +6,15 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 // GET /api/agent/memory so the two surfaces stay consistent; the full editable
 // management lives in /settings/assistant.
 
-export type AtomTier = 'horizontal' | 'vertical' | 'modifier' | 'product'
+export type AtomTier = 'horizontal' | 'vertical' | 'modifier'
 
 export interface AgentAtom {
   id: string
   tier: AtomTier
   title: string
   description: string
-  /** horizontal and product atoms apply to every company; vertical/modifier
-   *  only when the composer selected them into this company's profile. */
+  /** horizontal atoms apply to every company; vertical/modifier only when the
+   *  composer selected them into this company's profile. */
   active: boolean
 }
 
@@ -83,11 +83,7 @@ export async function buildAgentCompetence(
   const atoms: AgentAtom[] = (atomsRes.data ?? []).map((a) => {
     const tier = a.tier as AtomTier
     const active =
-      tier === 'horizontal' || tier === 'product'
-        ? true
-        : tier === 'vertical'
-          ? verticalActive.has(a.id)
-          : modifierActive.has(a.id)
+      tier === 'horizontal' ? true : tier === 'vertical' ? verticalActive.has(a.id) : modifierActive.has(a.id)
     return { id: a.id, tier, title: a.title, description: a.description, active }
   })
 

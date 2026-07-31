@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { seedCompany } from '@/tests/pg/fixtures'
-import { getPool, withUserContext } from '@/tests/pg/setup'
+import { withUserContext } from '@/tests/pg/setup'
 
 describe('agent_atom_registry.pg: seed + RLS', () => {
   it('seed migration populated active atoms with non-null bodies and no swarm-* ids', async () => {
@@ -72,30 +72,6 @@ describe('agent_atom_registry.pg: seed + RLS', () => {
     expect(listed).toContain('horizontal/swedish-vat')
     // …yet the loadable id is reachable from the parent body once loaded.
     expect(vatBody).toContain('gnubok_load_skill("horizontal/swedish-vat/vat-compliance-reference")')
-  })
-
-  it('tier CHECK accepts the product tier and still rejects unknown tiers', async () => {
-    const pool = getPool()
-
-    // 20260730130000 widened the CHECK and 20260730130001 seeded the first
-    // product atom through it: both facts in one read.
-    const seeded = await pool.query<{ tier: string; is_active: boolean; body: string | null }>(
-      `SELECT tier, is_active, body FROM public.agent_atom_registry
-        WHERE id = 'product/bokforingsmallar'`,
-    )
-    expect(seeded.rows[0]?.tier).toBe('product')
-    expect(seeded.rows[0]?.is_active).toBe(true)
-    expect(seeded.rows[0]?.body).toContain('Betalning')
-
-    // The constraint-rebuild in 20260730130000 must not have left the column
-    // unconstrained: an unknown tier still bounces (superuser pool, so RLS
-    // cannot be what rejects it).
-    await expect(
-      pool.query(
-        `INSERT INTO public.agent_atom_registry (id, tier, title, description, body_path)
-         VALUES ('bogus/x', 'bogus', 'x', 'x', 'x')`,
-      ),
-    ).rejects.toThrow(/tier/)
   })
 
   it('authenticated users can read the catalog but not write it', async () => {
