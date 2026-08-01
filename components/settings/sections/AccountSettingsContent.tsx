@@ -25,11 +25,15 @@ import { useSettings } from '@/components/settings/useSettings'
 import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import { useToast } from '@/components/ui/use-toast'
 import { SUPPORTED_LOCALES, type Locale } from '@/i18n/config'
+import { PalettePicker } from '@/components/settings/PalettePicker'
+import { usePalette } from '@/components/providers/PaletteProvider'
+import type { Palette } from '@/lib/theme/palettes'
 
 export function AccountSettingsContent() {
   const router = useRouter()
   const supabase = createClient()
   const { theme, setTheme } = useTheme()
+  const { palette, setPalette } = usePalette()
   const [mounted, setMounted] = useState(false)
   const hasCalendarExtension = ENABLED_EXTENSION_IDS.has('calendar')
   const { settings } = useSettings()
@@ -123,6 +127,13 @@ export function AccountSettingsContent() {
     en: tCommon('language_english'),
   }
 
+  const paletteLabels: Record<Palette, string> = {
+    neutral: tSettings('palette_neutral'),
+    indigo: tSettings('palette_indigo'),
+    forest: tSettings('palette_forest'),
+    sand: tSettings('palette_sand'),
+  }
+
   const nameUnchanged = !fullName.trim() || fullName.trim() === initialName
 
   return (
@@ -191,6 +202,21 @@ export function AccountSettingsContent() {
                   ),
                 },
               ]}
+            />
+          )}
+        </SettingsRow>
+
+        <SettingsRow
+          label={tSettings('palette_label')}
+          help={tSettings('palette_description')}
+          align="baseline"
+        >
+          {mounted && (
+            <PalettePicker
+              value={palette}
+              onChange={setPalette}
+              labels={paletteLabels}
+              aria-label={tSettings('palette_label')}
             />
           )}
         </SettingsRow>

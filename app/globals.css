@@ -156,6 +156,157 @@
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.45);
 }
 
+/* Color palettes are independent of appearance mode. next-themes continues
+   to own the .dark class while data-palette replaces only semantic chrome
+   tokens. Preview swatches share these rules so their colors cannot drift. */
+:root[data-palette="neutral"],
+[data-palette-preview="neutral"] {
+  --background: 0 0% 100%;
+  --primary: 0 0% 9%;
+  --secondary: 40 11% 89%;
+  --border: 45 5% 85%;
+}
+
+.dark[data-palette="neutral"],
+.dark [data-palette-preview="neutral"] {
+  --background: 0 0% 7%;
+  --primary: 0 0% 87%;
+  --secondary: 0 0% 14%;
+  --border: 45 4% 18%;
+}
+
+:root[data-palette="indigo"],
+[data-palette-preview="indigo"] {
+  --background: 228 35% 99%;
+  --foreground: 229 30% 14%;
+  --frame: 228 45% 96%;
+  --card: 0 0% 100%;
+  --card-foreground: 229 30% 14%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 229 30% 14%;
+  --primary: 231 38% 31%;
+  --primary-foreground: 225 40% 98%;
+  --secondary: 229 35% 91%;
+  --secondary-foreground: 229 30% 14%;
+  --muted: 228 30% 95%;
+  --muted-foreground: 229 17% 40%;
+  --accent: 228 30% 95%;
+  --accent-foreground: 229 30% 14%;
+  --border: 229 20% 82%;
+  --input: 229 20% 82%;
+  --ring: 231 38% 31%;
+}
+
+.dark[data-palette="indigo"],
+.dark [data-palette-preview="indigo"] {
+  --background: 231 22% 8%;
+  --foreground: 228 22% 89%;
+  --frame: 232 26% 5%;
+  --card: 231 20% 11%;
+  --card-foreground: 228 22% 89%;
+  --popover: 231 20% 11%;
+  --popover-foreground: 228 22% 89%;
+  --primary: 228 50% 78%;
+  --primary-foreground: 231 25% 10%;
+  --secondary: 231 20% 15%;
+  --secondary-foreground: 228 22% 89%;
+  --muted: 230 18% 17%;
+  --muted-foreground: 228 13% 62%;
+  --accent: 230 18% 17%;
+  --accent-foreground: 228 22% 89%;
+  --border: 231 15% 23%;
+  --input: 231 15% 23%;
+  --ring: 228 50% 78%;
+}
+
+:root[data-palette="forest"],
+[data-palette-preview="forest"] {
+  --background: 145 18% 99%;
+  --foreground: 150 24% 12%;
+  --frame: 140 25% 95%;
+  --card: 0 0% 100%;
+  --card-foreground: 150 24% 12%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 150 24% 12%;
+  --primary: 151 35% 26%;
+  --primary-foreground: 140 30% 98%;
+  --secondary: 140 22% 89%;
+  --secondary-foreground: 150 24% 12%;
+  --muted: 140 18% 94%;
+  --muted-foreground: 148 15% 36%;
+  --accent: 140 18% 94%;
+  --accent-foreground: 150 24% 12%;
+  --border: 142 14% 80%;
+  --input: 142 14% 80%;
+  --ring: 151 35% 26%;
+}
+
+.dark[data-palette="forest"],
+.dark [data-palette-preview="forest"] {
+  --background: 150 16% 7%;
+  --foreground: 140 15% 88%;
+  --frame: 150 18% 5%;
+  --card: 150 14% 11%;
+  --card-foreground: 140 15% 88%;
+  --popover: 150 14% 11%;
+  --popover-foreground: 140 15% 88%;
+  --primary: 145 30% 70%;
+  --primary-foreground: 150 18% 8%;
+  --secondary: 150 15% 14%;
+  --secondary-foreground: 140 15% 88%;
+  --muted: 150 13% 16%;
+  --muted-foreground: 143 11% 60%;
+  --accent: 150 13% 16%;
+  --accent-foreground: 140 15% 88%;
+  --border: 150 12% 22%;
+  --input: 150 12% 22%;
+  --ring: 145 30% 70%;
+}
+
+:root[data-palette="sand"],
+[data-palette-preview="sand"] {
+  --background: 42 40% 98%;
+  --foreground: 28 23% 13%;
+  --frame: 39 44% 94%;
+  --card: 42 35% 99%;
+  --card-foreground: 28 23% 13%;
+  --popover: 42 35% 99%;
+  --popover-foreground: 28 23% 13%;
+  --primary: 24 28% 28%;
+  --primary-foreground: 42 35% 98%;
+  --secondary: 38 34% 87%;
+  --secondary-foreground: 28 23% 13%;
+  --muted: 40 29% 92%;
+  --muted-foreground: 28 15% 36%;
+  --accent: 40 29% 92%;
+  --accent-foreground: 28 23% 13%;
+  --border: 36 20% 78%;
+  --input: 36 20% 78%;
+  --ring: 24 28% 28%;
+}
+
+.dark[data-palette="sand"],
+.dark [data-palette-preview="sand"] {
+  --background: 28 16% 8%;
+  --foreground: 39 20% 88%;
+  --frame: 25 17% 5%;
+  --card: 29 15% 11%;
+  --card-foreground: 39 20% 88%;
+  --popover: 29 15% 11%;
+  --popover-foreground: 39 20% 88%;
+  --primary: 35 36% 70%;
+  --primary-foreground: 28 18% 9%;
+  --secondary: 30 18% 15%;
+  --secondary-foreground: 39 20% 88%;
+  --muted: 30 16% 17%;
+  --muted-foreground: 34 12% 61%;
+  --accent: 30 16% 17%;
+  --accent-foreground: 39 20% 88%;
+  --border: 31 13% 23%;
+  --input: 31 13% 23%;
+  --ring: 35 36% 70%;
+}
+
 @theme inline {
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
