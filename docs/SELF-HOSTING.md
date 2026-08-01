@@ -355,9 +355,11 @@ flowchart LR
 Run Accounted and Supabase as two separate Container Manager Projects with two
 separate project directories. Accounted owns the Compose files in this
 repository. Supabase owns its database, Auth, Realtime, Storage, and pooler
-configuration, so always start from one version-matched copy of the
-[official Supabase Docker directory](https://github.com/supabase/supabase/tree/master/docker)
-instead of copying individual snippets into Accounted's Compose file.
+configuration. Choose one upstream release tag or full commit and copy the
+complete `docker/` directory from that immutable revision, following the
+[official Supabase Docker guide](https://supabase.com/docs/guides/self-hosting/docker).
+Do not copy individual snippets into Accounted's Compose file or mix files from
+different upstream revisions.
 
 For the **Accounted project**, follow the
 [Accounted Container Manager file layout](DOCKER.md#synology-dsm-and-xpenology).
@@ -378,12 +380,16 @@ For the **Supabase project**:
    Container Manager must be able to write to both directories. Use the
    narrowest NAS ACL that works for the container runtime; do not make the
    whole shared folder world-writable.
-3. If port 5432 is already used on the NAS, change `POSTGRES_PORT` in the
-   **Supabase** `.env` to an unused host port before starting its project, for
-   example `POSTGRES_PORT=5433`. Accounted's `PORT` only changes the web app
-   port and cannot resolve a PostgreSQL port conflict. Do not expose the
-   Supabase `db` container directly just to solve the conflict: the official
-   stack exposes session-mode PostgreSQL through Supavisor.
+3. Supavisor publishes two host ports. Before starting the project, make sure
+   both `POSTGRES_PORT` and `POOLER_PROXY_PORT_TRANSACTION` in the **Supabase**
+   `.env` are unused on the NAS. If the defaults conflict, examples are
+   `POSTGRES_PORT=5433` for session mode and
+   `POOLER_PROXY_PORT_TRANSACTION=6544` for transaction mode. Changing only
+   `POSTGRES_PORT` does not resolve a conflict on the transaction port.
+   Accounted's `PORT` only changes the web app port and cannot resolve either
+   database conflict. Do not expose the Supabase `db` container directly just
+   to solve a conflict: the official stack exposes PostgreSQL through
+   Supavisor.
 
    Supabase's default Supavisor port mappings listen on every host interface.
    Accounted does not need either database port over the network, so on a
@@ -419,6 +425,9 @@ After `JWT_JWKS` has been generated and saved in the Supabase `.env`, use the
 direct substitution documented by Supabase for limited Compose parsers:
 
 ```yaml
+# Supabase PostgREST
+PGRST_JWT_SECRET: ${JWT_JWKS}
+
 # Supabase Realtime
 API_JWT_JWKS: ${JWT_JWKS}
 
@@ -435,10 +444,11 @@ Accounted's base Compose file intentionally omits the optional `cpus` and
 builds can reject them. Operators who need a CPU cap can set one through DSM's
 resource controls or a local Compose override. Existing deployments that
 relied on the previous two-CPU cap must reapply it before restarting with the
-new base file. Command-line deployments on Docker Compose 2.20.2 or newer can
-use the version-controlled `docker-compose.resources.yml` overlay to restore
-both the cap and faster startup health checks; older NAS parsers should keep
-using the portable base file alone.
+new base file. Command-line deployments on Docker Compose 2.20.2 or newer and
+Docker Engine 25.0 or newer can use the version-controlled
+`docker-compose.resources.yml` overlay to restore both the cap and faster
+startup health checks; older NAS container stacks should keep using the
+portable base file alone.
 
 ### What you give up vs. cloud Supabase
 

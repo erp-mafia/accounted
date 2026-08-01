@@ -39,8 +39,8 @@ services:
       interval: 30s
       timeout: 5s
       start_period: 30s
-      # `start_interval` requires Docker Compose 2.20.2 and is optional. Omitting
-      # it keeps the base file usable with older Compose builds bundled by NASes.
+      # `start_interval` requires Docker Compose 2.20.2+ and Docker Engine 25.0+.
+      # Omitting it keeps the base file usable with older NAS container stacks.
       retries: 3
     logging:
       driver: json-file
