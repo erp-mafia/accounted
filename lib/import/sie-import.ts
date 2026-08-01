@@ -735,9 +735,10 @@ async function createOpeningBalanceEntry(
 }
 
 /**
- * Returns true when the company already has at least one posted (or reversed)
- * non-IB journal entry, i.e. this is a continuation import, not the first
- * ever SIE upload for the company.
+ * Returns true when the company already has at least one posted non-IB
+ * journal entry dated no later than the target fiscal period, i.e. this is a
+ * continuation import rather than the first SIE upload for that point in the
+ * company's chronology.
  *
  * Used to gate IB-entry creation: when a company is already live, each year's
  * #IB equals the prior year's UB, which is the sum of already-imported
@@ -746,7 +747,8 @@ async function createOpeningBalanceEntry(
  */
 export async function companyHasPriorActivity(
   supabase: SupabaseClient,
-  companyId: string
+  companyId: string,
+  targetPeriodEnd: string,
 ): Promise<boolean> {
   // Only count currently-effective real activity. Excluding 'reversed' drops
   // cancelled originals; excluding source_type 'storno' drops their matching
@@ -760,6 +762,9 @@ export async function companyHasPriorActivity(
     .neq('source_type', 'opening_balance')
     .neq('source_type', 'storno')
     .eq('status', 'posted')
+    // Keep same-period activity in the continuation guard, but ignore a
+    // later year that happened to be imported first.
+    .lte('entry_date', targetPeriodEnd)
 
   return (count ?? 0) > 0
 }
@@ -2199,7 +2204,11 @@ export async function executeSIEImport(
         // first-ever import creates the legitimate pre-system IB; subsequent
         // imports must rely on the prior entries to derive opening balances
         // on the fly (via getOpeningBalances() fallback).
-        const isContinuationImport = await companyHasPriorActivity(supabase, companyId)
+        const isContinuationImport = await companyHasPriorActivity(
+          supabase,
+          companyId,
+          fiscalYearEnd,
+        )
 
         if (isContinuationImport) {
           result.warnings.push(
@@ -2464,7 +2473,16 @@ export async function executeSIEImport(
     // exists with its own opening_balance entry, the customer is doing a
     // prior-year backfill. Sync the next period's IB to match the UB we
     // just imported so reports stay consistent.
-    if (result.success && fiscalYearEnd && result.fiscalPeriodId && parsed.closingBalances.length > 0) {
+    // result.success is finalized below, after diagnostics and documentation.
+    // Use the same error condition here so this block is reachable, but require
+    // a target-period entry so a no-op file cannot succeed through resync alone.
+    if (
+      result.errors.length === 0 &&
+      result.journalEntriesCreated > 0 &&
+      fiscalYearEnd &&
+      result.fiscalPeriodId &&
+      parsed.closingBalances.length > 0
+    ) {
       try {
         const resync = await resyncNextPeriodOpeningBalance(
           supabase,

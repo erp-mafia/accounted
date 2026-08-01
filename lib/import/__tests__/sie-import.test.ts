@@ -565,6 +565,30 @@ describe('ensureFiscalPeriod validation', () => {
     ).rejects.toThrow(/överlappar men matchar inte/)
   })
 
+  it('relinks the immediate successor when an earlier period is imported later', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: null, error: null },
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: { id: 'fp-2025' }, error: null },
+      { data: [{ id: 'fp-2026' }], error: null },
+      { data: null, error: null },
+    ])
+
+    const id = await ensureFiscalPeriod(
+      supabase as unknown as Supabase,
+      'company-id',
+      '2025-01-01',
+      '2025-12-31',
+    )
+
+    expect(id).toBe('fp-2025')
+    expect(findCalls('fiscal_periods', 'update')).toContainEqual([
+      { previous_period_id: 'fp-2025' },
+    ])
+  })
+
   // BFL 3 kap. caps any räkenskapsår at 18 months (12 is the norm; 18 is the
   // ceiling for a förlängt/omlagt year). #RAR used to be validated for start
   // and end DAY only, so a 24-month räkenskapsår from a foreign system
@@ -841,6 +865,10 @@ describe('companyHasPriorActivity', () => {
             capturedFilters[`in:${col}`] = val
             return chain
           },
+          lte: (col: string, val: unknown) => {
+            capturedFilters[`lte:${col}`] = val
+            return chain
+          },
           then: (resolve: (v: { count: number; error: null }) => void) =>
             resolve({ count, error: null }),
         }
@@ -853,7 +881,11 @@ describe('companyHasPriorActivity', () => {
   it('returns false when the company has no prior posted entries', async () => {
     const { supabase } = buildCountingSupabase(0)
 
-    const result = await companyHasPriorActivity(supabase as unknown as Supabase, 'company-1')
+    const result = await companyHasPriorActivity(
+      supabase as unknown as Supabase,
+      'company-1',
+      '2025-12-31',
+    )
 
     expect(result).toBe(false)
   })
@@ -861,7 +893,11 @@ describe('companyHasPriorActivity', () => {
   it('returns true when the company has prior posted non-IB entries', async () => {
     const { supabase } = buildCountingSupabase(42)
 
-    const result = await companyHasPriorActivity(supabase as unknown as Supabase, 'company-1')
+    const result = await companyHasPriorActivity(
+      supabase as unknown as Supabase,
+      'company-1',
+      '2025-12-31',
+    )
 
     expect(result).toBe(true)
   })
@@ -869,11 +905,16 @@ describe('companyHasPriorActivity', () => {
   it('excludes opening_balance and storno entries, and only counts posted', async () => {
     const { supabase, capturedFilters } = buildCountingSupabase(0)
 
-    await companyHasPriorActivity(supabase as unknown as Supabase, 'company-1')
+    await companyHasPriorActivity(
+      supabase as unknown as Supabase,
+      'company-1',
+      '2025-12-31',
+    )
 
     expect(capturedFilters['neq:source_type']).toEqual(['opening_balance', 'storno'])
     expect(capturedFilters['eq:status']).toBe('posted')
     expect(capturedFilters['eq:company_id']).toBe('company-1')
+    expect(capturedFilters['lte:entry_date']).toBe('2025-12-31')
   })
 
   it('treats null/undefined count as zero', async () => {
@@ -884,8 +925,10 @@ describe('companyHasPriorActivity', () => {
             neq: () => ({
               neq: () => ({
                 eq: () => ({
-                  then: (resolve: (v: { count: null; error: null }) => void) =>
-                    resolve({ count: null, error: null }),
+                  lte: () => ({
+                    then: (resolve: (v: { count: null; error: null }) => void) =>
+                      resolve({ count: null, error: null }),
+                  }),
                 }),
               }),
             }),
@@ -894,7 +937,11 @@ describe('companyHasPriorActivity', () => {
       }),
     }
 
-    const result = await companyHasPriorActivity(supabase as unknown as Supabase, 'company-1')
+    const result = await companyHasPriorActivity(
+      supabase as unknown as Supabase,
+      'company-1',
+      '2025-12-31',
+    )
 
     expect(result).toBe(false)
   })
