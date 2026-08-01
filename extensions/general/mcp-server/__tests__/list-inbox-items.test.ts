@@ -24,6 +24,7 @@ function makeInboxItem(overrides: Record<string, unknown> = {}) {
     email_from: null,
     email_subject: null,
     error_message: null,
+    document_attachments: [],
     ...overrides,
   }
 }
@@ -46,6 +47,25 @@ function makeRecordingChain(result: { data: unknown; error: unknown }) {
 }
 
 describe('gnubok_list_inbox_items', () => {
+  it('advertises file_name in its item output contract', () => {
+    const schema = tool.outputSchema as {
+      properties: {
+        items: {
+          items: {
+            properties: Record<string, unknown>
+            required: string[]
+          }
+        }
+      }
+    }
+
+    expect(schema.properties.items.items.properties.file_name).toEqual({
+      type: ['string', 'null'],
+      description: 'Original document file name, or null when the inbox item has no document',
+    })
+    expect(schema.properties.items.items.required).toContain('file_name')
+  })
+
   it('advertises optional cursor pagination without changing required output fields', () => {
     const inputSchema = tool.inputSchema as { properties: Record<string, unknown> }
     const outputSchema = tool.outputSchema as {
@@ -56,6 +76,38 @@ describe('gnubok_list_inbox_items', () => {
     expect(inputSchema.properties.cursor).toBeDefined()
     expect(outputSchema.properties.next_cursor).toBeDefined()
     expect(outputSchema.required).toEqual(['items', 'count'])
+  })
+
+  it('joins the document and returns its file_name on each list row', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        makeInboxItem({
+          id: 'inbox-1',
+          created_at: '2026-07-31T12:00:00Z',
+          document_attachments: [{ file_name: 'dooer-export-2026-07.pdf' }],
+        }),
+        makeInboxItem({
+          id: 'inbox-2',
+          source: 'email',
+          created_at: '2026-07-30T12:00:00Z',
+        }),
+      ],
+      error: null,
+    })
+
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ file_name: string | null }>
+      count: number
+    }
+
+    const select = findCall('invoice_inbox_items', 'select')?.[0]
+    expect(select).toContain('document_attachments(file_name)')
+    expect(result.items.map((item) => item.file_name)).toEqual([
+      'dooer-export-2026-07.pdf',
+      null,
+    ])
+    expect(result.count).toBe(2)
   })
 
   it('preserves the first-page response when there are no more items', async () => {
