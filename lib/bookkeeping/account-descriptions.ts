@@ -274,18 +274,19 @@ const ACCOUNT_DESCRIPTIONS: Record<string, AccountDescription> = {
     explanation: 'Diverse externa kostnader som inte passar in under andra konton.',
   },
 
-  // Class 7: Personnel & depreciation
+  // Class 7: Personnel & depreciation. Per BAS 2026: 7010 kollektivanställda,
+  // 7210 tjänstemän (the account the payroll engine books salaries to).
   '7010': {
+    name: 'Löner kollektivanställda',
+    classLabel: 'Personal och avskrivningar',
+    type: 'expense',
+    explanation: 'Bruttolöner (före skatt) till arbetare och kollektivanställda.',
+  },
+  '7210': {
     name: 'Löner tjänstemän',
     classLabel: 'Personal och avskrivningar',
     type: 'expense',
     explanation: 'Bruttolöner (före skatt) till anställda tjänstemän.',
-  },
-  '7210': {
-    name: 'Löner kollektiv',
-    classLabel: 'Personal och avskrivningar',
-    type: 'expense',
-    explanation: 'Bruttolöner till arbetare och kollektivanställda.',
   },
   '7510': {
     name: 'Arbetsgivaravgifter',

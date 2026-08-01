@@ -113,13 +113,16 @@ describe('seed_chart_of_accounts: Swedish characters', () => {
       '2440': 'Leverantörsskulder',
       '2611': 'Utgående moms försäljning inom Sverige, 25%',
       '2621': 'Utgående moms försäljning inom Sverige, 12%',
-      '2631': 'Utgående moms försäljning inom Sverige,  6%',
+      '2631': 'Utgående moms försäljning inom Sverige, 6%',
       '2641': 'Debiterad ingående moms',
       '2650': 'Redovisningskonto för moms',
       '2731': 'Avräkning socialavgifter',
       '2893': 'Skuld till aktieägare',
-      '3001': 'Försäljning tjänster 25%',
-      '3002': 'Försäljning varor 25%',
+      // 3001/3002 carry the BAS 2026 names: 3002 is the 12% revenue account
+      // (invoice booking, category mapping, default_vat_rate) and was once
+      // seeded as 'Försäljning varor 25%', see 20260731090000.
+      '3001': 'Försäljning inom Sverige, 25 % moms',
+      '3002': 'Försäljning inom Sverige, 12 % moms',
       '3100': 'Momsfri försäljning',
       '3900': 'Övriga rörelseintäkter',
       '4000': 'Varuinköp',
@@ -127,8 +130,12 @@ describe('seed_chart_of_accounts: Swedish characters', () => {
       '5460': 'Förbrukningsmaterial',
       '6530': 'Redovisningstjänster',
       '6991': 'Övriga avdragsgilla kostnader',
-      '7010': 'Löner',
-      '7210': 'Semesterlöner',
+      // BAS 2026: 7010 kollektivanställda, 7210 tjänstemän. 7210 was once
+      // seeded as 'Semesterlöner' (vacation pay lives on 7285), which put the
+      // payroll engine's salary bookings under a vacation-pay label in every
+      // report; see 20260731090000.
+      '7010': 'Löner till kollektivanställda',
+      '7210': 'Löner till tjänstemän',
       '7960': 'Valutakursförluster',
       '8310': 'Ränteintäkter',
       '8410': 'Räntekostnader',
