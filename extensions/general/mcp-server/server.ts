@@ -9167,6 +9167,7 @@ export const tools: McpTool[] = [
         status: { type: 'string', enum: ['received', 'error'], description: 'Filter by status' },
         unprocessed_only: { type: 'boolean', description: 'When true, only return items with no terminal link yet (not matched to a transaction, supplier invoice, or journal entry), i.e. documents that still need handling. Default false.' },
         limit: { type: 'number', description: 'Max results (default 20, max 50)' },
+        cursor: { type: 'string', description: 'Composite "<created_at>__<inbox_item_id>" from previous page (exclusive). Pass next_cursor verbatim.' },
       },
     },
     outputSchema: {
@@ -9175,6 +9176,7 @@ export const tools: McpTool[] = [
       properties: {
         items: { type: 'array', items: { type: 'object' } },
         count: { type: 'number' },
+        next_cursor: { type: 'string', description: 'Pass as cursor on next call. Absent = no more pages.' },
       },
       required: ['items', 'count'],
     },
@@ -9188,17 +9190,42 @@ export const tools: McpTool[] = [
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 50)
       const status = args.status as string | undefined
       const unprocessedOnly = args.unprocessed_only === true
+      const cursor = typeof args.cursor === 'string' ? args.cursor : null
+
+      // Composite cursor: "<created_at>__<id>". Falls back to plain timestamp
+      // for backward compatibility with older callers.
+      let cursorTs: string | null = null
+      let cursorId: string | null = null
+      if (cursor) {
+        const sep = cursor.indexOf('__')
+        if (sep === -1) {
+          cursorTs = cursor
+        } else {
+          cursorTs = cursor.slice(0, sep)
+          cursorId = cursor.slice(sep + 2)
+        }
+      }
+
+      const fetchSize = unprocessedOnly ? 200 : limit
 
       let query = supabase
         .from('invoice_inbox_items')
         .select('id, status, source, created_at, extracted_data, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, email_from, email_subject, error_message')
         .eq('company_id', companyId)
         .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
         // Fetch a wider window when filtering client-side so the limit
         // applies to the post-filter set rather than truncating before it.
-        .limit(unprocessedOnly ? 200 : limit)
+        .limit(fetchSize)
 
       if (status) query = query.eq('status', status)
+      if (cursorTs && cursorId) {
+        query = query.or(
+          `created_at.lt.${cursorTs},and(created_at.eq.${cursorTs},id.lt.${cursorId})`
+        )
+      } else if (cursorTs) {
+        query = query.lt('created_at', cursorTs)
+      }
 
       const { data, error } = await query
       if (error) throw new Error(`Database error: ${error.message}`)
@@ -9251,7 +9278,23 @@ export const tools: McpTool[] = [
       const filtered = unprocessedOnly ? mapped.filter((i) => !i.processed) : mapped
       const items = filtered.slice(0, limit)
 
-      return { items, count: items.length }
+      // A full returned page continues after its last item. When client-side
+      // filtering yields a short page from a full scan window, continue after
+      // the last inspected row so older unprocessed items remain reachable.
+      let nextCursor: string | null = null
+      if (items.length === limit) {
+        const last = items[items.length - 1]
+        nextCursor = `${last.created_at}__${last.id}`
+      } else if (data && data.length === fetchSize) {
+        const last = data[data.length - 1]
+        nextCursor = `${last.created_at}__${last.id}`
+      }
+
+      return {
+        items,
+        count: items.length,
+        ...(nextCursor ? { next_cursor: nextCursor } : {}),
+      }
     },
   },
 
