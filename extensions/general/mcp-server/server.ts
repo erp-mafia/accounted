@@ -9159,7 +9159,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_inbox_items',
     title: 'List Inbox Items',
-    description: 'List document inbox items. `processed` covers all terminal links (transaction, supplier invoice, journal entry); booked receipts count as done. unprocessed_only=true returns docs still needing handling.',
+    description: 'List document inbox items, including each original file_name. `processed` covers all terminal links (transaction, supplier invoice, journal entry); booked receipts count as done. unprocessed_only=true returns docs still needing handling.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9173,7 +9173,19 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        items: { type: 'array', items: { type: 'object' } },
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              file_name: {
+                type: ['string', 'null'],
+                description: 'Original document file name, or null when the inbox item has no document',
+              },
+            },
+            required: ['file_name'],
+          },
+        },
         count: { type: 'number' },
       },
       required: ['items', 'count'],
@@ -9191,7 +9203,11 @@ export const tools: McpTool[] = [
 
       let query = supabase
         .from('invoice_inbox_items')
-        .select('id, status, source, created_at, extracted_data, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, email_from, email_subject, error_message')
+        .select(`
+          id, status, source, created_at, extracted_data, matched_supplier_id,
+          matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id,
+          email_from, email_subject, error_message, document_attachments(file_name)
+        `)
         .eq('company_id', companyId)
         .order('created_at', { ascending: false })
         // Fetch a wider window when filtering client-side so the limit
@@ -9234,6 +9250,7 @@ export const tools: McpTool[] = [
           status: item.status,
           source: item.source,
           created_at: item.created_at,
+          file_name: item.document_attachments?.file_name ?? null,
           vendor_name: vendorName,
           amount,
           invoice_date: invoiceDate,
