@@ -9,6 +9,7 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
 
@@ -112,8 +113,6 @@ export async function settleInvoicePayment(
     }
   }
 
-  const now = new Date().toISOString()
-
   // Drive the JE shape from the invoice's actual booking state, not from
   // the current accounting_method setting. If the invoice was booked at
   // send (Dr 1510 / Cr 30xx + VAT), the payment MUST clear 1510:
@@ -147,6 +146,7 @@ export async function settleInvoicePayment(
     }
   }
   const { newPaidAmount, newRemaining, newStatus } = payment.plan
+  const paidAt = newStatus === 'paid' ? paidAtFromDate(paymentDate) : null
 
   const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
   let journalEntryId: string | null = null
@@ -249,7 +249,7 @@ export async function settleInvoicePayment(
       status: newStatus,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
-      ...(newStatus === 'paid' ? { paid_at: now } : {}),
+      ...(paidAt ? { paid_at: paidAt } : {}),
     })
     .eq('id', invoice.id)
     .eq('company_id', companyId)
@@ -305,7 +305,7 @@ export async function settleInvoicePayment(
           status: newStatus,
           paid_amount: newPaidAmount,
           remaining_amount: newRemaining,
-          paid_at: newStatus === 'paid' ? now : invoice.paid_at,
+          paid_at: paidAt ?? invoice.paid_at,
         } as Invoice,
         companyId,
         userId,
@@ -323,6 +323,6 @@ export async function settleInvoicePayment(
     newPaidAmount,
     newRemaining,
     journalEntryId,
-    paidAt: newStatus === 'paid' ? now : null,
+    paidAt,
   }
 }

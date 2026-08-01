@@ -42,6 +42,7 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
 import type { Currency, EntityType, Invoice, Transaction } from '@/types'
 
@@ -409,6 +410,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
+    const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
     if (transaction.journal_entry_id) {
       try {
@@ -431,8 +433,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
       }
     }
-
-    const now = new Date().toISOString()
 
     const { data: settings } = await ctx.supabase
       .from('company_settings')
@@ -675,7 +675,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       .from('invoices')
       .update({
         status: newStatus,
-        paid_at: isFullyPaid ? now : null,
+        paid_at: paidAt,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
       })
@@ -798,8 +798,21 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       eventBus.emit({
         type: 'invoice.match_confirmed',
         payload: {
-          invoice: invoice as Invoice,
-          transaction: transaction as Transaction,
+          invoice: {
+            ...invoice,
+            status: newStatus,
+            paid_at: paidAt,
+            paid_amount: newPaidAmount,
+            remaining_amount: newRemaining,
+          } as Invoice,
+          transaction: {
+            ...transaction,
+            invoice_id,
+            potential_invoice_id: null,
+            journal_entry_id: journalEntryId,
+            is_business: true,
+            ...(existingTxCategory ? { category: existingTxCategory } : {}),
+          } as Transaction,
           userId: ctx.userId,
           companyId: ctx.companyId!,
         },
@@ -812,7 +825,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       {
         success: true,
         invoice_status: newStatus,
-        paid_at: isFullyPaid ? now : null,
+        paid_at: paidAt,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
         journal_entry_id: journalEntryId,

@@ -67,6 +67,7 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 }))
 
 import { POST } from '../route'
+import { eventBus } from '@/lib/events/bus'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -459,6 +460,25 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
     expect(body.success).toBe(true)
     expect(body.paid_amount).toBe(1000)
     expect(body.remaining_amount).toBe(0)
+    const invoiceUpdate = findCalls('supplier_invoices', 'update').at(-1)?.[0]
+    expect(invoiceUpdate).toMatchObject({ paid_at: '2026-05-12T12:00:00Z' })
+    expect(vi.mocked(eventBus.emit)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'supplier_invoice.match_confirmed',
+        payload: expect.objectContaining({
+          supplierInvoice: expect.objectContaining({
+            status: 'paid',
+            paid_at: '2026-05-12T12:00:00Z',
+            paid_amount: 1000,
+            remaining_amount: 0,
+          }),
+          transaction: expect.objectContaining({
+            supplier_invoice_id: SI_UUID,
+            journal_entry_id: 'je-1',
+          }),
+        }),
+      }),
+    )
   })
 
   // The suggestion pointer must not survive the match that consumes it: this

@@ -204,21 +204,35 @@ describe('match_batch_allocate', () => {
       expect(apSum).toBe(6500)
 
       // Verify all 3 supplier invoices flipped to 'paid'.
-      const inv1 = await client.query<{ status: string; paid_amount: string; remaining_amount: string }>(
-        `SELECT status, paid_amount, remaining_amount FROM public.supplier_invoices WHERE id = $1`,
+      const inv1 = await client.query<{
+        status: string
+        paid_amount: string
+        remaining_amount: string
+        paid_at_matches: boolean
+      }>(
+        `SELECT status, paid_amount, remaining_amount,
+                paid_at = TIMESTAMPTZ '2026-06-05 12:00:00+00' AS paid_at_matches
+           FROM public.supplier_invoices WHERE id = $1`,
         [si1],
       )
       expect(inv1.rows[0]!.status).toBe('paid')
       expect(Number(inv1.rows[0]!.paid_amount)).toBe(2000)
       expect(Number(inv1.rows[0]!.remaining_amount)).toBe(0)
+      expect(inv1.rows[0]!.paid_at_matches).toBe(true)
 
       // Verify 3 supplier_invoice_payments rows all reference the same JE.
-      const payments = await client.query<{ journal_entry_id: string; supplier_invoice_id: string }>(
-        `SELECT journal_entry_id, supplier_invoice_id
+      const payments = await client.query<{
+        journal_entry_id: string
+        supplier_invoice_id: string
+        payment_date_matches: boolean
+      }>(
+        `SELECT journal_entry_id, supplier_invoice_id,
+                payment_date = DATE '2026-06-05' AS payment_date_matches
            FROM public.supplier_invoice_payments WHERE transaction_id = $1`,
         [txId],
       )
       expect(payments.rows).toHaveLength(3)
+      expect(payments.rows.every((payment) => payment.payment_date_matches)).toBe(true)
       const jeIds = new Set(payments.rows.map((p) => p.journal_entry_id))
       expect(jeIds.size).toBe(1)
       expect(jeIds.has(result.journal_entry_id!)).toBe(true)
@@ -245,6 +259,62 @@ describe('match_batch_allocate', () => {
         [result.journal_entry_id],
       )
       expect(je.rows[0]!.source_type).toBe('supplier_invoice_paid')
+    })
+  })
+
+  it('anchors customer paid_at at UTC noon on the bank transaction date', async () => {
+    const { userId, companyId } = await seedTenant()
+    const customerId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.customers
+         (id, user_id, company_id, name, customer_type, country)
+       VALUES ($1, $2, $3, 'Kund AB', 'swedish_business', 'SE')`,
+      [customerId, userId, companyId],
+    )
+
+    const invoiceId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.invoices
+         (id, user_id, company_id, customer_id, invoice_number, invoice_date, due_date,
+          status, currency, subtotal, vat_amount, total, paid_amount, remaining_amount,
+          vat_treatment)
+       VALUES ($1, $2, $3, $4, $5, '2026-06-01', '2026-07-01', 'sent', 'SEK',
+               1000, 0, 1000, 0, 1000, 'standard_25')`,
+      [invoiceId, userId, companyId, customerId, `F-${invoiceId.slice(0, 8)}`],
+    )
+    const txId = await insertTransaction({
+      userId,
+      companyId,
+      amount: 1000,
+      date: '2026-06-07',
+    })
+
+    await withUserContext(userId, async (client) => {
+      const response = await client.query<{ match_batch_allocate: RpcResult }>(
+        `SELECT match_batch_allocate($1, $2::jsonb, $3)`,
+        [
+          txId,
+          JSON.stringify([{ kind: 'customer_invoice', invoice_id: invoiceId, amount: 1000 }]),
+          companyId,
+        ],
+      )
+      expect(response.rows[0]!.match_batch_allocate.ok).toBe(true)
+
+      const invoice = await client.query<{ paid_at_matches: boolean }>(
+        `SELECT paid_at = TIMESTAMPTZ '2026-06-07 12:00:00+00' AS paid_at_matches
+           FROM public.invoices WHERE id = $1`,
+        [invoiceId],
+      )
+      expect(invoice.rows[0]!.paid_at_matches).toBe(true)
+
+      const payment = await client.query<{ payment_date_matches: boolean }>(
+        `SELECT payment_date = DATE '2026-06-07' AS payment_date_matches
+           FROM public.invoice_payments
+          WHERE invoice_id = $1 AND transaction_id = $2`,
+        [invoiceId, txId],
+      )
+      expect(payment.rows).toHaveLength(1)
+      expect(payment.rows[0]!.payment_date_matches).toBe(true)
     })
   })
 

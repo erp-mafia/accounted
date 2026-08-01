@@ -104,7 +104,9 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
   })
 
   it('credits the payment JE to the transaction\'s own linked cash account, not a hardcoded 1930', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const matchedHandler = vi.fn()
+    eventBus.on('invoice.match_confirmed', matchedHandler)
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
       data: {
@@ -157,6 +159,22 @@ describe('commitPendingOperation: match_transaction_invoice settlement account r
       '1940',
     )
     expect(mockCreateCashEntry).not.toHaveBeenCalled()
+    const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
+    expect(invoiceUpdate).toMatchObject({ paid_at: '2026-05-12T12:00:00Z' })
+    expect(matchedHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invoice: expect.objectContaining({
+          status: 'paid',
+          paid_at: '2026-05-12T12:00:00Z',
+          paid_amount: 12500,
+          remaining_amount: 0,
+        }),
+        transaction: expect.objectContaining({
+          invoice_id: 'inv-1',
+          journal_entry_id: 'je-1',
+        }),
+      }),
+    )
     // Issue #1259: the invoice is settled, so every OTHER transaction still
     // carrying a suggestion pointer at it is retired; this op's own row is
     // cleared by the link update.

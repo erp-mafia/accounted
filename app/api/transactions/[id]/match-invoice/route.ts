@@ -16,6 +16,7 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { Currency, EntityType, Invoice, Transaction } from '@/types'
@@ -357,7 +358,6 @@ export const POST = withRouteContext(
       }
     }
 
-    const now = new Date().toISOString()
     // paidAmountInInvoiceCurrency is what gets accumulated into
     // invoice.paid_amount / remaining_amount and stored on the
     // invoice_payments row. For same-currency it's just tx.amount; for
@@ -384,6 +384,7 @@ export const POST = withRouteContext(
       })
     }
     const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
+    const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
     const { data: settings } = await supabase
       .from('company_settings')
@@ -622,7 +623,7 @@ export const POST = withRouteContext(
       .from('invoices')
       .update({
         status: newStatus,
-        paid_at: isFullyPaid ? now : null,
+        paid_at: paidAt,
         paid_amount: newPaidAmount,
         remaining_amount: newRemaining,
       })
@@ -736,8 +737,21 @@ export const POST = withRouteContext(
       eventBus.emit({
         type: 'invoice.match_confirmed',
         payload: {
-          invoice: invoice as Invoice,
-          transaction: transaction as Transaction,
+          invoice: {
+            ...invoice,
+            status: newStatus,
+            paid_at: paidAt,
+            paid_amount: newPaidAmount,
+            remaining_amount: newRemaining,
+          } as Invoice,
+          transaction: {
+            ...transaction,
+            invoice_id,
+            potential_invoice_id: null,
+            journal_entry_id: journalEntryId,
+            is_business: true,
+            category: 'income_services',
+          } as Transaction,
           userId: user.id,
           companyId,
         },
@@ -749,7 +763,7 @@ export const POST = withRouteContext(
     return NextResponse.json({
       success: true,
       invoice_status: newStatus,
-      paid_at: isFullyPaid ? now : null,
+      paid_at: paidAt,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
       journal_entry_id: journalEntryId,

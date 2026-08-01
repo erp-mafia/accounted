@@ -44,6 +44,7 @@ import { eventBus } from '@/lib/events'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
 
@@ -240,6 +241,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const today = new Date().toISOString().split('T')[0]
     const paymentDate = bodyPaymentDate || today
+    const paidAt = paidAtFromDate(paymentDate)
 
     // Fetch settings for accounting method + entity type.
     const { data: settings } = await ctx.supabase
@@ -388,7 +390,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           status: newStatus,
           paid_amount: newPaidAmount,
           remaining_amount: newRemaining,
-          paid_at: paymentDate,
+          paid_at: paidAt,
           would_create_journal_entry: !typed.document_type || typed.document_type === 'invoice',
           accounting_method: accountingMethod,
           would_use_custom_lines: customLines !== undefined,
@@ -503,7 +505,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       updated_at: new Date().toISOString(),
     }
     if (newStatus === 'paid') {
-      updatePayload.paid_at = paymentDate
+      updatePayload.paid_at = paidAt
     }
     // Deliberately NOT writing journal_entry_id here: that column means "the
     // registration entry that booked this invoice at issuance" and drives the

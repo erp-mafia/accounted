@@ -333,19 +333,24 @@ describe('link_invoice_to_voucher RPC (atomic link: audit C2)', () => {
     expect(Number(result.remaining_amount)).toBe(0)
 
     const { rows: inv } = await getPool().query(
-      `SELECT status, paid_amount, remaining_amount FROM public.invoices WHERE id = $1`,
+      `SELECT status, paid_amount, remaining_amount,
+              paid_at = TIMESTAMPTZ '2026-05-05 12:00:00+00' AS paid_at_matches
+         FROM public.invoices WHERE id = $1`,
       [invoiceId],
     )
     expect(inv[0].status).toBe('paid')
     expect(Number(inv[0].paid_amount)).toBe(1000)
     expect(Number(inv[0].remaining_amount)).toBe(0)
+    expect(inv[0].paid_at_matches).toBe(true)
 
     const { rows: pay } = await getPool().query(
-      `SELECT amount FROM public.invoice_payments WHERE invoice_id = $1 AND journal_entry_id = $2`,
+      `SELECT amount, payment_date = DATE '2026-05-05' AS payment_date_matches
+         FROM public.invoice_payments WHERE invoice_id = $1 AND journal_entry_id = $2`,
       [invoiceId, voucherId],
     )
     expect(pay).toHaveLength(1)
     expect(Number(pay[0].amount)).toBe(1000)
+    expect(pay[0].payment_date_matches).toBe(true)
   })
 
   it('links a partial payment as partially_paid with the right remaining', async () => {
@@ -541,5 +546,76 @@ describe('link_invoice_to_voucher RPC (kontantmetoden: 19xx debit)', () => {
     const result = await callLinkRpc({ invoiceId, voucherId, userId, companyId })
     expect(result.ok).toBe(true)
     expect(result.invoice_status).toBe('paid')
+  })
+})
+
+describe('link_supplier_invoice_to_voucher RPC payment date', () => {
+  it('anchors paid_at at UTC noon on the voucher entry date', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    await insertCompanyMember({ companyId, userId })
+    const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
+
+    const supplierId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.suppliers
+         (id, user_id, company_id, name, supplier_type, country,
+          default_payment_terms, default_currency)
+       VALUES ($1, $2, $3, 'Leverantör AB', 'swedish_business', 'SE', 30, 'SEK')`,
+      [supplierId, userId, companyId],
+    )
+
+    const supplierInvoiceId = randomUUID()
+    const arrivalNumber = Number.parseInt(supplierInvoiceId.slice(0, 8), 16) % 2_000_000_000
+    await getPool().query(
+      `INSERT INTO public.supplier_invoices
+         (id, user_id, company_id, supplier_id, arrival_number, supplier_invoice_number,
+          invoice_date, due_date, received_date, status, currency,
+          subtotal, vat_amount, total, paid_amount, remaining_amount,
+          vat_treatment, reverse_charge, is_credit_note)
+       VALUES ($1, $2, $3, $4, $5, $6, '2026-04-01', '2026-05-01', '2026-04-01',
+               'approved', 'SEK', 1000, 0, 1000, 0, 1000,
+               'standard_25', false, false)`,
+      [
+        supplierInvoiceId,
+        userId,
+        companyId,
+        supplierId,
+        arrivalNumber,
+        `LF-${supplierInvoiceId.slice(0, 8)}`,
+      ],
+    )
+
+    const voucherId = await seedVoucherDebitCredit({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      amount: 1000,
+      debitAccount: '2440',
+      creditAccount: '1930',
+    })
+
+    const { rows } = await getPool().query<{ result: RpcResult }>(
+      `SELECT public.link_supplier_invoice_to_voucher($1, $2, $3, $4, NULL) AS result`,
+      [supplierInvoiceId, voucherId, userId, companyId],
+    )
+    expect(rows[0].result.ok).toBe(true)
+    expect(rows[0].result.invoice_status).toBe('paid')
+
+    const { rows: invoiceRows } = await getPool().query<{ paid_at_matches: boolean }>(
+      `SELECT paid_at = TIMESTAMPTZ '2026-05-05 12:00:00+00' AS paid_at_matches
+         FROM public.supplier_invoices WHERE id = $1`,
+      [supplierInvoiceId],
+    )
+    expect(invoiceRows[0].paid_at_matches).toBe(true)
+
+    const { rows: paymentRows } = await getPool().query<{ payment_date_matches: boolean }>(
+      `SELECT payment_date = DATE '2026-05-05' AS payment_date_matches
+         FROM public.supplier_invoice_payments
+        WHERE supplier_invoice_id = $1 AND journal_entry_id = $2`,
+      [supplierInvoiceId, voucherId],
+    )
+    expect(paymentRows).toHaveLength(1)
+    expect(paymentRows[0].payment_date_matches).toBe(true)
   })
 })

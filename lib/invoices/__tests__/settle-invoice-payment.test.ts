@@ -365,7 +365,7 @@ describe('settleInvoicePayment', () => {
   it('emits invoice.paid with the settled state', async () => {
     const handler = vi.fn()
     eventBus.on('invoice.paid', handler)
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [{ id: 'inv-1' }] })
 
     await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
@@ -377,8 +377,14 @@ describe('settleInvoicePayment', () => {
       expect.objectContaining({
         companyId: 'company-1',
         paymentAmount: 1250,
-        invoice: expect.objectContaining({ id: 'inv-1', status: 'paid' }),
+        invoice: expect.objectContaining({
+          id: 'inv-1',
+          status: 'paid',
+          paid_at: '2026-07-12T12:00:00Z',
+        }),
       }),
     )
+    const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
+    expect(invoiceUpdate).toMatchObject({ paid_at: '2026-07-12T12:00:00Z' })
   })
 })

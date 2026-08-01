@@ -175,7 +175,10 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     const paidHandler = vi.fn()
     eventBus.on('invoice.paid', paidHandler)
 
-    const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-05-12' },
+    })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
     const { status, body } = await parseJsonResponse<{
       success: boolean
@@ -183,6 +186,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       paid_amount: number
       remaining_amount: number
       journal_entry_id: string | null
+      paid_at: string | null
     }>(response)
 
     expect(status).toBe(200)
@@ -191,6 +195,7 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     expect(body.paid_amount).toBe(12500)
     expect(body.remaining_amount).toBe(0)
     expect(body.journal_entry_id).toBe('je-1')
+    expect(body.paid_at).toBe('2026-05-12T12:00:00Z')
     // invoice.paid must fire so registered webhooks fan out (issue #825).
     expect(paidHandler).toHaveBeenCalledTimes(1)
     expect(paidHandler).toHaveBeenCalledWith(
@@ -198,7 +203,13 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
         companyId: 'company-1',
         userId: 'user-1',
         paymentAmount: 12500,
-        invoice: expect.objectContaining({ id: 'inv-1', status: 'paid', paid_amount: 12500, remaining_amount: 0 }),
+        invoice: expect.objectContaining({
+          id: 'inv-1',
+          status: 'paid',
+          paid_amount: 12500,
+          remaining_amount: 0,
+          paid_at: '2026-05-12T12:00:00Z',
+        }),
       }),
     )
     expect(mockCreateInvoicePaymentJournalEntry).toHaveBeenCalledWith(

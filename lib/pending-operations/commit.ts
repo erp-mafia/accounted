@@ -58,6 +58,7 @@ import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import {
   clearSettledBatchAllocationSuggestions,
   type BatchAllocationResult,
@@ -2012,7 +2013,7 @@ async function commitMarkInvoicePaid(
     }
   }
 
-  const now = new Date().toISOString()
+  const paidAt = newStatus === 'paid' ? paidAtFromDate(paymentDate) : null
   // CAS guard: only flip from a payable status so a concurrently-settled
   // invoice no-ops here instead of double-booking the payment.
   const { data: updateResult, error: updateError } = await supabase
@@ -2021,7 +2022,7 @@ async function commitMarkInvoicePaid(
       status: newStatus,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
-      ...(newStatus === 'paid' ? { paid_at: now } : {}),
+      ...(paidAt ? { paid_at: paidAt } : {}),
     })
     .eq('id', invoiceId)
     .eq('company_id', companyId)
@@ -2076,7 +2077,7 @@ async function commitMarkInvoicePaid(
           status: newStatus,
           paid_amount: newPaidAmount,
           remaining_amount: newRemaining,
-          paid_at: newStatus === 'paid' ? now : (invoice as Invoice).paid_at,
+          paid_at: paidAt ?? (invoice as Invoice).paid_at,
         } as Invoice,
         companyId,
         userId,
@@ -2496,8 +2497,7 @@ async function commitMatchTransactionInvoice(
     }
   }
   const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
-
-  const now = new Date().toISOString()
+  const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
   // Read-only prevalidation, deliberately hoisted ABOVE the irreversible
   // storno below (issue #842): resolveSettlementAccount can throw
@@ -2573,7 +2573,7 @@ async function commitMatchTransactionInvoice(
     .from('invoices')
     .update({
       status: newStatus,
-      paid_at: isFullyPaid ? now : null,
+      paid_at: paidAt,
       paid_amount: newPaidAmount,
       remaining_amount: newRemaining,
     })
@@ -2635,7 +2635,25 @@ async function commitMatchTransactionInvoice(
   try {
     await eventBus.emit({
       type: 'invoice.match_confirmed',
-      payload: { invoice: invoice as Invoice, transaction: transaction as Transaction, userId, companyId },
+      payload: {
+        invoice: {
+          ...(invoice as Invoice),
+          status: newStatus,
+          paid_at: paidAt,
+          paid_amount: newPaidAmount,
+          remaining_amount: newRemaining,
+        } as Invoice,
+        transaction: {
+          ...(transaction as Transaction),
+          invoice_id: invoiceId,
+          potential_invoice_id: null,
+          journal_entry_id: journalEntryId,
+          is_business: true,
+          category: 'income_services',
+        } as Transaction,
+        userId,
+        companyId,
+      },
     })
   } catch { /* non-critical */ }
 

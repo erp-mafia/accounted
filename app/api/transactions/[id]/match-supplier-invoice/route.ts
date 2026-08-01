@@ -16,6 +16,7 @@ import { validateBody } from '@/lib/api/validate'
 import { MatchSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { SupplierInvoice, SupplierInvoiceItem, Transaction } from '@/types'
@@ -214,8 +215,6 @@ export const POST = withRouteContext(
     // as paymentAmountSek - exchangeRateDifference internally.
     const paymentAmountSek = exchangeRateDifference !== 0 ? originalBookedSek : actualBankSek
 
-    const now = new Date().toISOString()
-
     // A full settlement pays off the whole remaining balance. Cross-currency
     // matches always do (paymentAmountInvoiceCurrency is clamped to
     // invoice.remaining_amount above); same-currency does when the bank amount
@@ -361,6 +360,7 @@ export const POST = withRouteContext(
     // reports remaining 0 / status paid even though the bank paid a sub-krona
     // less (or more): the residual lives on 3740, not the supplier ledger.
     const { newRemaining, newPaidAmount, isFullyPaid, newStatus } = paymentPlan.plan
+    const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
     const { data: updatedRows, error: updateInvError } = await supabase
       .from('supplier_invoices')
@@ -368,7 +368,7 @@ export const POST = withRouteContext(
         status: newStatus,
         remaining_amount: newRemaining,
         paid_amount: newPaidAmount,
-        paid_at: isFullyPaid ? now : null,
+        paid_at: paidAt,
         payment_journal_entry_id: journalEntryId,
         transaction_id: transactionId,
       })
@@ -489,8 +489,22 @@ export const POST = withRouteContext(
       eventBus.emit({
         type: 'supplier_invoice.match_confirmed',
         payload: {
-          supplierInvoice: invoice as SupplierInvoice,
-          transaction: transaction as Transaction,
+          supplierInvoice: {
+            ...invoice,
+            status: newStatus,
+            remaining_amount: newRemaining,
+            paid_amount: newPaidAmount,
+            paid_at: paidAt,
+            payment_journal_entry_id: journalEntryId,
+            transaction_id: transactionId,
+          } as SupplierInvoice,
+          transaction: {
+            ...transaction,
+            supplier_invoice_id,
+            potential_supplier_invoice_id: null,
+            journal_entry_id: journalEntryId,
+            is_business: true,
+          } as Transaction,
           userId: user.id,
           companyId,
         },

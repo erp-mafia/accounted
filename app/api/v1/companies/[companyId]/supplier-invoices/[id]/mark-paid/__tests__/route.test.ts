@@ -64,7 +64,11 @@ const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
 type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
+type RecordedCall = { table: string; method: string; args: unknown[] }
+function makeFlexibleSupabase(
+  byTable: Record<string, MockResult | MockResult[]>,
+  calls?: RecordedCall[],
+) {
   const queues = new Map<string, MockResult[]>()
   for (const [t, val] of Object.entries(byTable)) {
     queues.set(t, Array.isArray(val) ? [...val] : [val])
@@ -79,7 +83,10 @@ function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>
             resolve(next)
           }
         }
-        return () => buildChain(table)
+        return (...args: unknown[]) => {
+          calls?.push({ table, method: String(prop), args })
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
@@ -151,26 +158,46 @@ beforeEach(() => {
 
 describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', () => {
   it('retires the settled invoice suggestions on a full payment (issue #1259)', async () => {
+    const calls: RecordedCall[] = []
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: [
           { data: APPROVED_SI, error: null },
           {
-            data: { ...APPROVED_SI, status: 'paid', paid_amount: 1000, remaining_amount: 0 },
+            data: {
+              ...APPROVED_SI,
+              status: 'paid',
+              paid_amount: 1000,
+              remaining_amount: 0,
+              paid_at: '2026-05-12T12:00:00Z',
+            },
             error: null,
           },
         ],
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         supplier_invoice_payments: { data: null, error: null },
-      }),
+      }, calls),
     )
+
+    const paidHandler = vi.fn()
+    eventBus.on('supplier_invoice.paid', paidHandler)
 
     const res = await markPaid(makeRequest({ payment_date: '2026-05-12' }), detailParams())
 
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.status).toBe('paid')
+    expect(body.data.paid_at).toBe('2026-05-12T12:00:00Z')
+    const invoiceUpdate = calls.find(
+      (call) => call.table === 'supplier_invoices' && call.method === 'update',
+    )
+    expect(invoiceUpdate?.args[0]).toMatchObject({ paid_at: '2026-05-12T12:00:00Z' })
+    expect(paidHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        supplierInvoice: expect.objectContaining({ paid_at: '2026-05-12T12:00:00Z' }),
+      }),
+    )
     expect(mockClearSuggestions).toHaveBeenCalledTimes(1)
     expect(mockClearSuggestions).toHaveBeenCalledWith(
       expect.anything(),

@@ -9,7 +9,7 @@ import {
   makeCustomer,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -69,6 +69,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 
 import { POST } from '../route'
+import { eventBus } from '@/lib/events/bus'
 // Mocked above: imported here as a spy handle to assert FX rate provenance
 // lands in the audit trail (PR #615 review).
 import { logMatchEvent } from '@/lib/invoices/match-log'
@@ -478,6 +479,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
       paid_amount: number
       remaining_amount: number
       journal_entry_id: string
+      paid_at: string | null
     }>(response)
 
     expect(status).toBe(200)
@@ -486,6 +488,26 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(body.paid_amount).toBe(12500)
     expect(body.remaining_amount).toBe(0)
     expect(body.journal_entry_id).toBe('je-1')
+    expect(body.paid_at).toBe('2024-06-15T12:00:00Z')
+    const invoiceUpdate = findCalls('invoices', 'update').at(-1)?.[0]
+    expect(invoiceUpdate).toMatchObject({ paid_at: '2024-06-15T12:00:00Z' })
+    expect(vi.mocked(eventBus.emit)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'invoice.match_confirmed',
+        payload: expect.objectContaining({
+          invoice: expect.objectContaining({
+            status: 'paid',
+            paid_at: '2024-06-15T12:00:00Z',
+            paid_amount: 12500,
+            remaining_amount: 0,
+          }),
+          transaction: expect.objectContaining({
+            invoice_id: VALID_UUID,
+            journal_entry_id: 'je-1',
+          }),
+        }),
+      }),
+    )
 
     // Clearing path now builds lines via buildInvoicePaymentClearingLines and
     // posts via createJournalEntry directly (FX fix PR #614 round 6). For a

@@ -24,6 +24,7 @@ import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-inv
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
 import type { SupplierInvoice, SupplierInvoiceItem, Transaction } from '@/types'
 
@@ -266,8 +267,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
-    const now = new Date().toISOString()
-
     const { data: settings } = await ctx.supabase
       .from('company_settings')
       .select('accounting_method')
@@ -407,6 +406,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       Math.round((invoice.paid_amount + paymentAmountInvoiceCurrency) * 100) / 100
     const isFullyPaid = newRemaining <= 0
     const newStatus = isFullyPaid ? 'paid' : 'partially_paid'
+    const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
     const { data: updatedRows, error: updateInvErr } = await ctx.supabase
       .from('supplier_invoices')
@@ -414,7 +414,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         status: newStatus,
         remaining_amount: newRemaining,
         paid_amount: newPaidAmount,
-        paid_at: isFullyPaid ? now : null,
+        paid_at: paidAt,
         payment_journal_entry_id: journalEntryId,
         transaction_id: txId,
       })
@@ -538,8 +538,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       eventBus.emit({
         type: 'supplier_invoice.match_confirmed',
         payload: {
-          supplierInvoice: invoice as SupplierInvoice,
-          transaction: transaction as Transaction,
+          supplierInvoice: {
+            ...invoice,
+            status: newStatus,
+            remaining_amount: newRemaining,
+            paid_amount: newPaidAmount,
+            paid_at: paidAt,
+            payment_journal_entry_id: journalEntryId,
+            transaction_id: txId,
+          } as SupplierInvoice,
+          transaction: {
+            ...transaction,
+            supplier_invoice_id,
+            potential_supplier_invoice_id: null,
+            journal_entry_id: journalEntryId,
+            is_business: true,
+          } as Transaction,
           userId: ctx.userId,
           companyId: ctx.companyId!,
         },

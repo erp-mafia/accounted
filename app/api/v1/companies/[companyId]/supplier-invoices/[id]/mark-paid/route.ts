@@ -30,6 +30,7 @@ import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookke
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -145,6 +146,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const today = new Date().toISOString().split('T')[0]
     const paymentDate = bodyPaymentDate || today
+    const paidAt = paidAtFromDate(paymentDate)
 
     // Reject future payment_date at the schema layer. BFL 5 kap 2 §
     // requires bokföring to follow real cash movement; a payment booked
@@ -313,17 +315,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     if (ctx.dryRun) {
-      // paid_at: the live UPDATE writes `new Date().toISOString()` (a full UTC
-      // timestamp). Mirror that shape here so callers validating dry-run vs
-      // live against the same regex don't see surprises. payment_date stays
-      // ISO date because it represents the user-supplied calendar date.
+      // Keep the preview aligned with the live date-only payment timestamp.
       return dryRunPreview(
         {
           ...typed,
           status: newStatus,
           paid_amount: newPaidAmount,
           remaining_amount: newRemaining,
-          paid_at: newStatus === 'paid' ? new Date().toISOString() : null,
+          paid_at: newStatus === 'paid' ? paidAt : null,
           payment_date: paymentDate,
           payment_amount: paymentAmount,
           would_create_payment_journal_entry: true,
@@ -425,7 +424,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         status: newStatus,
         remaining_amount: newRemaining,
         paid_amount: newPaidAmount,
-        paid_at: newStatus === 'paid' ? new Date().toISOString() : null,
+        paid_at: newStatus === 'paid' ? paidAt : null,
         payment_journal_entry_id: journalEntryId,
       })
       .eq('company_id', ctx.companyId!)
@@ -532,7 +531,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       await eventBus.emit({
         type: 'supplier_invoice.paid',
         payload: {
-          supplierInvoice: typed as unknown as SupplierInvoice,
+          supplierInvoice: {
+            ...typed,
+            paid_at: newStatus === 'paid' ? paidAt : (typed.paid_at ?? null),
+          } as unknown as SupplierInvoice,
           paymentAmount,
           companyId: ctx.companyId!,
           userId: ctx.userId,

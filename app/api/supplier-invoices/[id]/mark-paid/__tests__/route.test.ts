@@ -8,7 +8,7 @@ import {
   makeSupplier,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -135,9 +135,12 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     // Record payment
     enqueue({ data: null, error: null })
 
+    const paidHandler = vi.fn()
+    eventBus.on('supplier_invoice.paid', paidHandler)
+
     const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
       method: 'POST',
-      body: {},
+      body: { payment_date: '2026-05-12' },
     })
     const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
     const { status, body } = await parseJsonResponse<{
@@ -155,6 +158,13 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
     expect(body.remaining_amount).toBe(0)
     expect(body.journal_entry_id).toBe('je-1')
     expect(mockCreateSupplierInvoicePaymentEntry).toHaveBeenCalled()
+    const invoiceUpdate = findCalls('supplier_invoices', 'update').at(-1)?.[0]
+    expect(invoiceUpdate).toMatchObject({ paid_at: '2026-05-12T12:00:00Z' })
+    expect(paidHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        supplierInvoice: expect.objectContaining({ paid_at: '2026-05-12T12:00:00Z' }),
+      }),
+    )
     // Issue #1259: full settlement retires every transaction's suggestion
     // pointer at this invoice. No exceptTransactionId: mark-paid is not driven
     // by a bank transaction.
