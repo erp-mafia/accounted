@@ -350,6 +350,93 @@ flowchart LR
 
 5. **Reverse proxy** in front of both hosts. The app container and the Supabase `kong` container must share an external Docker network so the proxy can route to them by name.
 
+### Synology DSM and Xpenology notes
+
+Run Accounted and Supabase as two separate Container Manager Projects with two
+separate project directories. Accounted owns the Compose files in this
+repository. Supabase owns its database, Auth, Realtime, Storage, and pooler
+configuration, so always start from one version-matched copy of the
+[official Supabase Docker directory](https://github.com/supabase/supabase/tree/master/docker)
+instead of copying individual snippets into Accounted's Compose file.
+
+For the **Accounted project**, follow the
+[Accounted Container Manager file layout](DOCKER.md#synology-dsm-and-xpenology).
+For the **Supabase project**:
+
+1. Copy the entire upstream `supabase/docker/` directory into the project
+   directory. Do not upload only its `docker-compose.yml`: it bind-mounts SQL,
+   gateway, function, pooler, and Storage files from the accompanying
+   `volumes/` tree.
+2. Create the two runtime directories that upstream deliberately excludes from
+   Git before the first deployment. File Station is fine, or from the Supabase
+   project directory use:
+
+   ```bash
+   mkdir -p volumes/db/data volumes/storage
+   ```
+
+   Container Manager must be able to write to both directories. Use the
+   narrowest NAS ACL that works for the container runtime; do not make the
+   whole shared folder world-writable.
+3. If port 5432 is already used on the NAS, change `POSTGRES_PORT` in the
+   **Supabase** `.env` to an unused host port before starting its project, for
+   example `POSTGRES_PORT=5433`. Accounted's `PORT` only changes the web app
+   port and cannot resolve a PostgreSQL port conflict. Do not expose the
+   Supabase `db` container directly just to solve the conflict: the official
+   stack exposes session-mode PostgreSQL through Supavisor.
+
+   Supabase's default Supavisor port mappings listen on every host interface.
+   Accounted does not need either database port over the network, so on a
+   shared NAS bind both mappings to loopback in the version-matched Supabase
+   Compose file:
+
+   ```yaml
+   services:
+     supavisor:
+       ports:
+         - "127.0.0.1:${POSTGRES_PORT}:5432"
+         - "127.0.0.1:${POOLER_PROXY_PORT_TRANSACTION}:6543"
+   ```
+
+   If another trusted machine must connect, bind to a specific private NAS
+   address and restrict both ports to trusted source addresses in the DSM
+   firewall. Never forward either database port to the public internet.
+4. The default Accounted integration uses Supabase's legacy `ANON_KEY` and
+   `SERVICE_ROLE_KEY`, so asymmetric keys and `JWT_JWKS` are optional. Leave
+   the upstream JWKS lines commented when using legacy-only mode. If you enable
+   Supabase's new asymmetric keys, generate them with the upstream
+   `utils/add-new-auth-keys.sh` script and follow the
+   [official authentication-key guide](https://supabase.com/docs/guides/self-hosting/self-hosted-auth-keys).
+
+Some older Compose parsers reject the inline JSON fallback in Supabase's
+optional Realtime setting:
+
+```yaml
+API_JWT_JWKS: ${JWT_JWKS:-{"keys":[]}}
+```
+
+After `JWT_JWKS` has been generated and saved in the Supabase `.env`, use the
+direct substitution documented by Supabase for limited Compose parsers:
+
+```yaml
+# Supabase Realtime
+API_JWT_JWKS: ${JWT_JWKS}
+
+# Supabase Storage
+JWT_JWKS: ${JWT_JWKS}
+```
+
+Do not invent an empty or placeholder JWKS for a production deployment. Either
+keep asymmetric authentication disabled or configure the generated value
+consistently for every Supabase service that verifies tokens.
+
+Accounted's base Compose file intentionally omits the optional `cpus` and
+`healthcheck.start_interval` settings because older Container Manager Compose
+builds can reject them. Operators who need a CPU cap can set one through DSM's
+resource controls or a local Compose override. Existing deployments that
+relied on the previous two-CPU cap must reapply it before restarting with the
+new base file.
+
 ### What you give up vs. cloud Supabase
 
 - **Backups** are entirely your responsibility: set up `pg_dump` (or a tool like restic) to off-host storage. As a portable, vendor-neutral *logical* backup on top of the raw dump, you can also export each fiscal period as a standard **SIE4** file via the API and archive it: any Swedish bookkeeping system can re-import it:

@@ -67,6 +67,40 @@ curl http://localhost:3000/api/health
 
 ---
 
+## Synology DSM and Xpenology
+
+Use a **Container Manager Project**, not the single-container wizard. The
+project path is the working directory for every relative path in the Compose
+file. Create that directory first and put all of these files in it before
+deploying the project:
+
+```text
+docker-compose.yml
+.env
+docker/
+  cron.Dockerfile
+  crontab.self-hosted
+```
+
+Uploading only `docker-compose.yml` is not enough: the cron service is built
+from `docker/cron.Dockerfile` and bind-mounts
+`docker/crontab.self-hosted`. Keep `.env` readable only by the administrator
+and Container Manager because it contains the Supabase service-role key.
+
+Container Manager ships its own Compose build, and supported keys vary by DSM
+release. Accounted's base Compose file avoids the optional `cpus` and
+`healthcheck.start_interval` keys for compatibility. Set a CPU limit through
+Container Manager's resource controls or a local override if needed. When
+updating an existing deployment that relied on the previous two-CPU cap,
+reapply that limit in the host controls before restarting the project.
+
+Accounted itself does not use PostgreSQL port 5432 and does not need a database
+data folder when connected to Supabase Cloud. If Supabase is also running on
+the NAS, follow the [fully self-hosted notes](SELF-HOSTING.md#synology-dsm-and-xpenology-notes)
+for its separate project, bind mounts, ports, and JWKS configuration.
+
+---
+
 ## Enable HTTPS (recommended)
 
 Ship a Caddy reverse proxy alongside the app: it auto-provisions Let's Encrypt certificates and renews them forever.

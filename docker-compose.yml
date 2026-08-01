@@ -26,8 +26,9 @@ services:
       - /tmp
       - /app/.next:uid=1001,gid=1001,mode=750,size=400m
       - /app/public:uid=1001,gid=1001,mode=750,size=200m
+    # CPU limits are intentionally left to host tooling or a local override.
+    # Some Compose builds bundled with NAS platforms reject the `cpus` key.
     mem_limit: 1g
-    cpus: 2
     pids_limit: 200
     restart: unless-stopped
     healthcheck:
@@ -38,7 +39,8 @@ services:
       interval: 30s
       timeout: 5s
       start_period: 30s
-      start_interval: 5s
+      # `start_interval` requires Docker Compose 2.20.2 and is optional. Omitting
+      # it keeps the base file usable with older Compose builds bundled by NASes.
       retries: 3
     logging:
       driver: json-file
