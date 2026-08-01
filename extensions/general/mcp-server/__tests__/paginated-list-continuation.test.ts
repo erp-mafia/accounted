@@ -69,7 +69,7 @@ describe.each(cases)('$name continuation', ({ name, table, itemsKey, primaryOrde
       required?: string[]
       properties: Record<string, { type?: string; minimum?: number }>
     }
-    expect(input.properties.offset).toMatchObject({ type: 'number', minimum: 0 })
+    expect(input.properties.offset).toMatchObject({ type: 'integer', minimum: 0 })
     expect(input.required ?? []).not.toContain('offset')
 
     const output = tool.outputSchema as { required: string[]; properties: Record<string, unknown> }
@@ -140,6 +140,26 @@ describe.each(cases)('$name continuation', ({ name, table, itemsKey, primaryOrde
       has_more: false,
     })
     expect(result).not.toHaveProperty('next_offset')
+  })
+
+  it('normalizes fractional offsets for direct execution', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: [row('row-5')], error: null, count: 6 })
+
+    const result = (await tool.execute(
+      { limit: 2, offset: 4.9 },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as Record<string, unknown>
+
+    expect(findCall(table, 'range')).toEqual([4, 5])
+    expect(result).toMatchObject({
+      count: 1,
+      total_count: 6,
+      has_more: true,
+      next_offset: 5,
+    })
   })
 
   it('falls back to the returned row count when the exact count is unavailable', async () => {

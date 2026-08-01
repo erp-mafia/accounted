@@ -4588,7 +4588,7 @@ export const tools: McpTool[] = [
           description: 'Filter by invoice status',
         },
         limit: { type: 'number', description: 'Max results (default 50, max 100)' },
-        offset: { type: 'number', minimum: 0, description: 'Number of results to skip for pagination (default 0)' },
+        offset: { type: 'integer', minimum: 0, description: 'Number of results to skip for pagination (default 0)' },
       },
     },
     outputSchema: paginatedSchema('invoices', { type: 'object' }),
@@ -4600,7 +4600,7 @@ export const tools: McpTool[] = [
     },
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
-      const offset = Math.max(0, Number(args.offset) || 0)
+      const offset = Math.max(0, Math.floor(Number(args.offset) || 0))
       const status = args.status as string | undefined
 
       let query = supabase
@@ -15015,7 +15015,7 @@ export const tools: McpTool[] = [
           description: 'Filter by schedule status',
         },
         limit: { type: 'number', description: 'Max results (default 50, max 100)' },
-        offset: { type: 'number', minimum: 0, description: 'Number of results to skip for pagination (default 0)' },
+        offset: { type: 'integer', minimum: 0, description: 'Number of results to skip for pagination (default 0)' },
       },
     },
     outputSchema: paginatedSchema('schedules', {
@@ -15066,7 +15066,7 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 50), 100)
-      const offset = Math.max(0, Number(args.offset) || 0)
+      const offset = Math.max(0, Math.floor(Number(args.offset) || 0))
       const status = args.status as string | undefined
 
       let query = supabase

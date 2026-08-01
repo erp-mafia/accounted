@@ -731,3 +731,5 @@ One line per decision: `[YYYY-MM-DD] <decision>: <why>`. Appended by agents and 
 [2026-08-01] Do not claim a fixed Supabase Docker revision: Accounted does not maintain a tested Supabase stack pin, so the self-hosting guide requires one complete immutable upstream tag or commit instead of naming an unverified version.
 
 [2026-08-01] gnubok_list_invoices and gnubok_list_recurring_schedules use the same offset, has_more, and next_offset contract as the other paginated MCP tools, with id as a descending tie-break after the existing business-date order. Returning has_more without an offset left rows beyond the first 100 unreachable, while the secondary order prevents equal invoice dates or creation timestamps from reshuffling between page requests.
+
+[2026-08-01] MCP page offsets are declared as non-negative integers and defensively floored before PostgREST range calls: fractional offsets cannot name a stable row boundary and can produce invalid range bounds when execution bypasses schema validation.
