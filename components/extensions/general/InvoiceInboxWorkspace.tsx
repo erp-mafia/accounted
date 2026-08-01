@@ -1128,6 +1128,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           {selected ? (
             <FieldsRail
               item={selected}
+              docMime={docMime}
               accountingMethod={accountingMethod}
               onDelete={() => handleDelete(selected.id)}
               onBookDirect={() => setBookDirectOpen(true)}
@@ -1741,6 +1742,7 @@ function EmptyPreview({
 
 function FieldsRail({
   item,
+  docMime,
   accountingMethod,
   onDelete,
   onBookDirect,
@@ -1753,6 +1755,7 @@ function FieldsRail({
   onRetryRequested,
 }: {
   item: InboxItem
+  docMime: string | null
   accountingMethod: AccountingMethod
   onDelete: () => void
   onBookDirect: () => void
@@ -1787,6 +1790,9 @@ function FieldsRail({
     !!extractedSupplierName
 
   const handleRetry = async () => {
+    // Retry overwrites extracted_data wholesale server-side, including any
+    // manual field edits: make the user opt into that loss explicitly.
+    if (hasAnyExtractedField(data) && !confirm(t('retry_overwrite_confirm'))) return
     setIsRetrying(true)
     try {
       const res = await fetch(
@@ -1830,6 +1836,38 @@ function FieldsRail({
             <div className="flex gap-2">
               <span className="text-muted-foreground w-14 shrink-0">Mottaget</span>
               <span>{new Date(item.email_received_at).toLocaleString('sv-SE')}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* AI classification: what kind of document this is and how it was
+          paid. Read-only context above the editable fields; absent for
+          extractions from before the fields existed. */}
+      {(data?.documentKind || data?.payment?.method || data?.pages) && (
+        <div className="border-b px-4 py-3 text-xs space-y-1">
+          {data?.documentKind && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-14 shrink-0">{t('doc_kind_label')}</span>
+              <span>{t(`doc_kind_${data.documentKind}`)}</span>
+            </div>
+          )}
+          {data?.payment?.method && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-14 shrink-0">{t('payment_label')}</span>
+              <span>
+                {t(`payment_${data.payment.method}`)}
+                {data.payment.cardLast4 ? ` •• ${data.payment.cardLast4}` : ''}
+                {data.purchaseTime ? ` · ${data.purchaseTime}` : ''}
+              </span>
+            </div>
+          )}
+          {data?.pages && (
+            <div className="text-muted-foreground">
+              {t('pages_partial_note', {
+                analyzed: data.pages.analyzed,
+                total: data.pages.total,
+              })}
             </div>
           )}
         </div>
@@ -1894,14 +1932,27 @@ function FieldsRail({
       )}
 
       {/* Skipped-extraction hint: explains the empty fields and points the
-          user to the manual paths (transaction link or supplier invoice). */}
+          user to the manual paths (transaction link or supplier invoice).
+          Deliberately reason-agnostic: skip covers sandbox, BYO-extraction
+          and unsliceable PDFs, not just page count anymore. */}
       {item.extraction_skipped && !isResolved && (
         <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
-          AI-tolkning skippades p.g.a. dokumentets storlek (fler än 3 sidor).
-          Du kan koppla dokumentet till en transaktion eller skapa
-          leverantörsfaktura manuellt.
+          {t('skipped_hint')}
         </div>
       )}
+
+      {/* HEIC: extraction ran but Bedrock cannot read the format, so every
+          field came back empty with no error. Tell the user why instead of
+          leaving a silently blank rail (iPhone photos default to HEIC). */}
+      {!item.extraction_skipped &&
+        !isResolved &&
+        hasAi &&
+        (docMime === 'image/heic' || docMime === 'image/heif') &&
+        !hasAnyExtractedField(data) && (
+          <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+            {t('heic_hint')}
+          </div>
+        )}
 
       {/* Extracted fields */}
       <div className="flex-1 overflow-y-auto px-4 py-3">

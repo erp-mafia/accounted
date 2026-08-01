@@ -121,20 +121,33 @@ beforeEach(() => {
 })
 
 describe('POST /upload: page-count gate (issue #553)', () => {
-  it('skips extraction and marks the row as skipped when PDF has more than 3 pages', async () => {
+  it('slices long PDFs to the first 3 pages and extracts, instead of skipping', async () => {
     const captured: { row?: Record<string, unknown> } = {}
     const supabase = makeSupabase(captured)
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce({
+      data: emptyResult(),
+      rawText: 'ok',
+    })
 
     const req = await makeUploadRequest(6)
     const res = await uploadRoute.handler(req, buildCtx(supabase))
-    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+    const { status, body } = await parseJsonResponse<{
+      data: { extracted_data?: { pages?: { total: number; analyzed: number } } } & Record<string, unknown>
+    }>(res)
 
     expect(status).toBe(200)
-    expect(extractInvoiceFields).not.toHaveBeenCalled()
-    expect(captured.row?.extraction_skipped).toBe(true)
-    expect(body.data.extraction_skipped).toBe(true)
-    expect(body.data.skip_reason).toBe('too_many_pages')
+    expect(extractInvoiceFields).toHaveBeenCalledOnce()
+    // The buffer handed to Bedrock is the sliced copy, not the original.
+    const sentBuffer = vi.mocked(extractInvoiceFields).mock.calls[0][0].buffer
+    const sentPdf = await PDFDocument.load(sentBuffer)
+    expect(sentPdf.getPageCount()).toBe(3)
+    // The row is a normal extracted row: the truncation is recorded in
+    // extracted_data.pages rather than as a skip.
+    expect(captured.row?.extraction_skipped).toBe(false)
+    expect(body.data.extraction_skipped).toBe(false)
+    expect(body.data.skip_reason).toBeNull()
     expect(body.data.page_count).toBe(6)
+    expect(body.data.extracted_data?.pages).toEqual({ total: 6, analyzed: 3 })
   })
 
   it('runs extraction normally for PDFs at or below the page-count limit', async () => {

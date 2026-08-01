@@ -2797,7 +2797,22 @@
     "document_loading": "Hämtar underlaget…",
     "document_load_failed": "Underlaget finns kvar men kunde inte visas just nu.",
     "email_body_label": "Mejlets innehåll",
-    "email_body_empty": "Mejlet hade ingen text."
+    "email_body_empty": "Mejlet hade ingen text.",
+    "doc_kind_label": "Typ",
+    "doc_kind_receipt": "Kvitto",
+    "doc_kind_supplier_invoice": "Leverantörsfaktura",
+    "doc_kind_government_letter": "Myndighetsbrev",
+    "doc_kind_other": "Övrigt dokument",
+    "payment_label": "Betalsätt",
+    "payment_card": "Kort",
+    "payment_swish": "Swish",
+    "payment_cash": "Kontant",
+    "payment_invoice": "Faktureras",
+    "payment_other": "Annat",
+    "pages_partial_note": "Tolkad från de första {analyzed} av {total} sidorna.",
+    "heic_hint": "HEIC-bilder kan inte AI-tolkas ännu. Ladda upp kvittot som JPEG eller PDF, eller fyll i fälten manuellt.",
+    "skipped_hint": "AI-tolkning kördes inte för det här dokumentet. Du kan koppla dokumentet till en transaktion eller skapa leverantörsfaktura manuellt.",
+    "retry_overwrite_confirm": "Ny tolkning skriver över fälten, även ändringar du gjort själv. Fortsätta?"
   },
   "inbox_custom_domain": {
     "title": "Egen domän för inkorgen",

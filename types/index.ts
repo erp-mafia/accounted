@@ -3628,7 +3628,32 @@ export interface IngestResult {
 
 // ── Invoice extraction (used by invoice-inbox extension and core utils) ──
 
+export type ExtractedDocumentKind =
+  | 'receipt'
+  | 'supplier_invoice'
+  | 'government_letter'
+  | 'other'
+export type ExtractedPaymentMethod = 'card' | 'swish' | 'cash' | 'invoice' | 'other'
+export type ExtractedMerchantCategory =
+  | 'restaurant'
+  | 'cafe'
+  | 'taxi'
+  | 'parking'
+  | 'fuel'
+  | 'grocery'
+  | 'hotel'
+  | 'other'
+export type ExtractedLegibility = 'good' | 'partial' | 'unreadable'
+
 export interface InvoiceExtractionResult {
+  // Classification fields (2026-08): optional because extractions stored
+  // before they existed lack them. They route UI emphasis and clarifying
+  // questions only: never bookings.
+  documentKind?: ExtractedDocumentKind | null
+  merchantCategory?: ExtractedMerchantCategory | null
+  legibility?: ExtractedLegibility | null
+  purchaseTime?: string | null
+  payment?: { method: ExtractedPaymentMethod | null; cardLast4: string | null } | null
   supplier: {
     name: string | null
     orgNumber: string | null
@@ -3654,10 +3679,15 @@ export interface InvoiceExtractionResult {
     subtotal: number | null
     vatAmount: number | null
     total: number | null
+    // Öresavrundning line on Swedish receipts; negative when rounded down.
+    roundingAmount?: number | null
   }
   vatBreakdown: VatBreakdownItem[]
   confidence: number
   suggestedTemplateId?: string
+  // Set by the caller (not the model) when a long PDF was sliced before
+  // extraction: fields were read from the first `analyzed` of `total` pages.
+  pages?: { total: number; analyzed: number }
 }
 
 export interface ExtractedInvoiceLineItem {
