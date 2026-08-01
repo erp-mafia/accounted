@@ -41,7 +41,7 @@ describe('gnubok_list_inbox_items', () => {
           email_from: null,
           email_subject: null,
           error_message: null,
-          document_attachments: { file_name: 'dooer-export-2026-07.pdf' },
+          document_attachments: [{ file_name: 'dooer-export-2026-07.pdf' }],
         },
         {
           id: 'inbox-2',
@@ -56,7 +56,7 @@ describe('gnubok_list_inbox_items', () => {
           email_from: null,
           email_subject: null,
           error_message: null,
-          document_attachments: null,
+          document_attachments: [],
         },
       ],
       error: null,

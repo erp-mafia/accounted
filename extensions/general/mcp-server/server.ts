@@ -9250,7 +9250,7 @@ export const tools: McpTool[] = [
           status: item.status,
           source: item.source,
           created_at: item.created_at,
-          file_name: item.document_attachments?.file_name ?? null,
+          file_name: item.document_attachments?.[0]?.file_name ?? null,
           vendor_name: vendorName,
           amount,
           invoice_date: invoiceDate,
