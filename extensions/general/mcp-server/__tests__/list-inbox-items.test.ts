@@ -1,8 +1,14 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { tools } from '../server'
 
 const tool = tools.find((candidate) => candidate.name === 'gnubok_list_inbox_items')!
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  eventBus.clear()
+})
 
 function makeInboxItem(overrides: Record<string, unknown> = {}) {
   return {
