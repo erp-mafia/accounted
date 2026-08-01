@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+vi.mock('next/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('next/server')>()
+  return { ...actual, after: vi.fn() }
+})
+
 import { cloudBackupExtension } from '../index'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import type { CloudBackupStatus } from '../types'
+import { createOAuthState } from '../lib/crypto'
+import { googleDriveProvider } from '../lib/google-provider'
 
 const BASE = 'https://test.local/api/extensions/ext/cloud-backup'
 
@@ -66,6 +73,9 @@ const ENV_KEYS = [
   'DROPBOX_APP_SECRET',
   // The OAuth state parameter is encrypted with a key derived from this.
   'SUPABASE_SERVICE_ROLE_KEY',
+  // Canonical app origin. Cleared so request-origin fallback tests remain
+  // deterministic regardless of the runner's environment.
+  'NEXT_PUBLIC_APP_URL',
 ] as const
 const originalEnv: Record<string, string | undefined> = {}
 
@@ -77,9 +87,11 @@ beforeEach(() => {
   process.env.DROPBOX_APP_KEY = 'dropbox-key'
   process.env.DROPBOX_APP_SECRET = 'dropbox-secret'
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key'
+  delete process.env.NEXT_PUBLIC_APP_URL
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   for (const key of ENV_KEYS) {
     if (originalEnv[key] === undefined) delete process.env[key]
     else process.env[key] = originalEnv[key]
@@ -145,6 +157,57 @@ describe('provider routing', () => {
   it('registers a separate OAuth callback per provider', () => {
     expect(findRoute('GET', '/oauth/callback')).toBeDefined()
     expect(findRoute('GET', '/oauth/dropbox/callback')).toBeDefined()
+  })
+})
+
+describe('canonical redirect URI', () => {
+  it('builds the Google callback from NEXT_PUBLIC_APP_URL, not the request host', async () => {
+    process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.se'
+    const route = findRoute('POST', '/connect')
+    const { ctx } = makeContext()
+
+    const res = await route.handler(makeRequest('/connect?provider=google_drive'), ctx)
+
+    expect(res.status).toBe(200)
+    const { url } = (await res.json()) as { url: string }
+    expect(new URL(url).searchParams.get('redirect_uri')).toBe(
+      'https://app.accounted.se/api/extensions/ext/cloud-backup/oauth/callback'
+    )
+  })
+
+  it('builds the Dropbox callback from NEXT_PUBLIC_APP_URL, not the request host', async () => {
+    process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.se'
+    const route = findRoute('POST', '/connect')
+    const { ctx } = makeContext()
+
+    const res = await route.handler(makeRequest('/connect?provider=dropbox'), ctx)
+
+    expect(res.status).toBe(200)
+    const { url } = (await res.json()) as { url: string }
+    expect(new URL(url).searchParams.get('redirect_uri')).toBe(
+      'https://app.accounted.se/api/extensions/ext/cloud-backup/oauth/dropbox/callback'
+    )
+  })
+
+  it('uses the same canonical origin for the callback token exchange', async () => {
+    process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.se'
+    const route = findRoute('GET', '/oauth/callback')
+    const { ctx } = makeContext()
+    const exchange = vi.spyOn(googleDriveProvider, 'exchangeCode').mockResolvedValue({
+      refreshToken: 'refresh-token',
+      accountLabel: 'backup@example.com',
+    })
+    const callbackUrl = new URL(`${BASE}/oauth/callback`)
+    callbackUrl.searchParams.set('code', 'provider-code')
+    callbackUrl.searchParams.set('state', createOAuthState(ctx.userId, ctx.companyId))
+
+    const res = await route.handler(new Request(callbackUrl), ctx)
+
+    expect(exchange).toHaveBeenCalledWith('https://app.accounted.se', 'provider-code')
+    const location = new URL(res.headers.get('location')!)
+    expect(location.origin).toBe('https://app.accounted.se')
+    expect(location.pathname).toBe('/settings/backup')
+    expect(location.searchParams.get('cloud_backup')).toBe('connected_first')
   })
 })
 

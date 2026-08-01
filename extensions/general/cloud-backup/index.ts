@@ -7,6 +7,7 @@ import {
   verifyOAuthState,
 } from './lib/crypto'
 import { performSync } from './lib/sync'
+import { resolveCallbackOrigin } from './lib/callback-origin'
 import { stockholmHourToUtcHour } from './lib/schedule'
 import { CLOUD_PROVIDERS, providerFromRequest } from './lib/provider-registry'
 import { googleDriveProvider } from './lib/google-provider'
@@ -91,7 +92,9 @@ async function handleOAuthCallback(
   const code = url.searchParams.get('code')
   const state = url.searchParams.get('state')
   const errorParam = url.searchParams.get('error')
-  const origin = url.origin
+  // Resolve exactly as /connect did: the token exchange repeats the
+  // redirect_uri from the authorization request.
+  const origin = resolveCallbackOrigin(url.origin)
   const redirect = (status: string, reason?: string) => {
     const target = new URL('/settings/backup', origin)
     target.searchParams.set('cloud_backup', status)
@@ -146,14 +149,13 @@ async function handleOAuthCallback(
     // Kick off the first backup after the redirect response is sent, so
     // the user lands back on the card immediately while the archive
     // builds in the background.
-    const syncOrigin = process.env.NEXT_PUBLIC_APP_URL || origin
     after(async () => {
       try {
         await performSync({
           supabase: ctx.supabase,
           companyId: ctx.companyId,
           userId: ctx.userId,
-          origin: syncOrigin,
+          origin,
           includeDocuments: true,
           allowDocumentFallback: true,
           provider,
@@ -198,7 +200,7 @@ export const cloudBackupExtension: Extension = {
         const resolved = resolveProvider(request, { requireConfigured: true })
         if ('error' in resolved) return resolved.error
         try {
-          const origin = new URL(request.url).origin
+          const origin = resolveCallbackOrigin(new URL(request.url).origin)
           const state = createOAuthState(ctx.userId, ctx.companyId)
           const url = resolved.provider.buildAuthorizationUrl(origin, state)
           return NextResponse.json({ url })
@@ -244,7 +246,10 @@ export const cloudBackupExtension: Extension = {
           if (connection) {
             try {
               const refreshToken = decryptToken(connection.refresh_token_encrypted)
-              await provider.revoke(refreshToken, new URL(request.url).origin)
+              await provider.revoke(
+                refreshToken,
+                resolveCallbackOrigin(new URL(request.url).origin)
+              )
             } catch (err) {
               ctx.log.warn('token revoke failed (continuing)', err)
             }
@@ -382,8 +387,7 @@ export const cloudBackupExtension: Extension = {
             include_documents?: boolean
             allow_document_fallback?: boolean
           }
-          const origin =
-            process.env.NEXT_PUBLIC_APP_URL || new URL(request.url).origin
+          const origin = resolveCallbackOrigin(new URL(request.url).origin)
           const result = await performSync({
             supabase: ctx.supabase,
             companyId: ctx.companyId,
