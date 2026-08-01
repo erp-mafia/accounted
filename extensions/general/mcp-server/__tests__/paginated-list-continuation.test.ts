@@ -121,4 +121,55 @@ describe.each(cases)('$name continuation', ({ name, table, itemsKey, primaryOrde
     })
     expect(result).not.toHaveProperty('next_offset')
   })
+
+  it('returns an empty terminal page', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [], error: null, count: 0 })
+
+    const result = (await tool.execute(
+      { limit: 2, offset: 4 },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as Record<string, unknown>
+
+    expect(result[itemsKey]).toEqual([])
+    expect(result).toMatchObject({
+      count: 0,
+      total_count: 0,
+      has_more: false,
+    })
+    expect(result).not.toHaveProperty('next_offset')
+  })
+
+  it('falls back to the returned row count when the exact count is unavailable', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [row('only-row')], error: null, count: null })
+
+    const result = (await tool.execute(
+      {},
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as Record<string, unknown>
+
+    expect(result).toMatchObject({
+      count: 1,
+      total_count: 1,
+      has_more: false,
+    })
+    expect(result).not.toHaveProperty('next_offset')
+  })
+
+  it('reports database errors', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { message: 'connection reset' }, count: null })
+
+    await expect(tool.execute(
+      {},
+      'company-1',
+      'user-1',
+      supabase as never,
+    )).rejects.toThrow('Database error: connection reset')
+  })
 })
