@@ -90,6 +90,34 @@ async function countPdfPages(buffer: ArrayBuffer): Promise<number | null> {
   }
 }
 
+// Long PDFs used to skip extraction entirely (issue #553). Invoice data
+// almost always sits on the first page(s), so instead we extract from a
+// slim copy of the first MAX_PAGES_FOR_AUTO_EXTRACT pages and record the
+// truncation in extracted_data.pages. Returns null when slicing fails
+// (encrypted/malformed PDF) so the caller can fall back to the old skip.
+async function slicePdfForExtraction(
+  buffer: ArrayBuffer,
+  maxPages: number
+): Promise<ArrayBuffer | null> {
+  try {
+    const src = await PDFDocument.load(buffer, { updateMetadata: false })
+    const dst = await PDFDocument.create()
+    const pages = await dst.copyPages(
+      src,
+      Array.from({ length: Math.min(maxPages, src.getPageCount()) }, (_, i) => i)
+    )
+    for (const page of pages) dst.addPage(page)
+    const bytes = await dst.save()
+    // Copy into a fresh ArrayBuffer: Uint8Array.buffer is ArrayBufferLike
+    // (possibly SharedArrayBuffer-backed) and may span more than the view.
+    const out = new ArrayBuffer(bytes.byteLength)
+    new Uint8Array(out).set(bytes)
+    return out
+  } catch {
+    return null
+  }
+}
+
 // Sandbox companies (24h anonymous demo accounts) skip the Bedrock extraction
 // pipeline entirely. The document still uploads, the inbox row still lands,
 // and the user can fill the fields in by hand, but no Claude tokens are
@@ -261,16 +289,26 @@ async function uploadAndExtract(
   // extraction path, so the document is still stored and can be filled in
   // manually. Highest priority (a hard paywall rule, not a heuristic).
   const hasAiEntitlement = await hasCapability(supabase, companyId, CAPABILITY.ai)
-  // Skip-reason priority: no-AI-entitlement > sandbox > page-count > client opt-out.
+  // Long PDFs are sliced to their first pages instead of skipped, but only
+  // when extraction would actually run: slicing after an entitlement/sandbox/
+  // opt-out verdict would be wasted CPU.
+  const slicedBuffer =
+    gatedByPageCount && hasAiEntitlement && !sandbox && !opts.skipExtraction
+      ? await slicePdfForExtraction(file.buffer, MAX_PAGES_FOR_AUTO_EXTRACT)
+      : null
+  // Skip-reason priority: no-AI-entitlement > sandbox > client opt-out >
+  // page-count. Opt-out now outranks the page gate (an opted-out caller never
+  // extracts regardless of length), and too_many_pages only fires when the
+  // slice fallback also failed (encrypted/malformed PDF).
   const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'client_opt_out' | 'sandbox' | null =
     !hasAiEntitlement
       ? 'no_ai_entitlement'
       : sandbox
         ? 'sandbox'
-        : gatedByPageCount
-          ? 'too_many_pages'
-          : opts.skipExtraction
-            ? 'client_opt_out'
+        : opts.skipExtraction
+          ? 'client_opt_out'
+          : gatedByPageCount && slicedBuffer == null
+            ? 'too_many_pages'
             : null
   const skipExtraction = skipReason !== null
 
@@ -282,10 +320,13 @@ async function uploadAndExtract(
   const { data: extracted, rawText } = skipExtraction
     ? { data: emptyResult(), rawText: null }
     : await extractInvoiceFields({
-        buffer: Buffer.from(file.buffer),
+        buffer: Buffer.from(slicedBuffer ?? file.buffer),
         mimeType: file.type,
         fileName: file.name,
       })
+  if (!skipExtraction && slicedBuffer != null && pageCount != null) {
+    extracted.pages = { total: pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
+  }
 
   // Supplier match by org-nr, then case-insensitive name (no AI fuzz).
   let matchedSupplierId: string | null = null
@@ -843,9 +884,10 @@ export const invoiceInboxExtension: Extension = {
             upload_source: 'file_upload',
           })
 
-          // Same page-count gate as /upload (issue #553): attaching a 6-page
-          // sales report to an existing inbox row should not block on Bedrock.
-          // Sandbox companies skip Bedrock unconditionally.
+          // Same page handling as /upload (issue #553): long PDFs extract
+          // from a slice of their first pages; the skip only remains for
+          // unsliceable (encrypted/malformed) PDFs. Sandbox companies skip
+          // Bedrock unconditionally.
           const pageCount =
             file.type === 'application/pdf' ? await countPdfPages(buffer) : null
           const gatedByPageCount =
@@ -855,12 +897,16 @@ export const invoiceInboxExtension: Extension = {
           // skeleton; the attached document is still stored). Same paywall as
           // the shared upload path above.
           const hasAiEntitlement = await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.ai)
+          const slicedBuffer =
+            gatedByPageCount && hasAiEntitlement && !sandbox
+              ? await slicePdfForExtraction(buffer, MAX_PAGES_FOR_AUTO_EXTRACT)
+              : null
           const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'sandbox' | null =
             !hasAiEntitlement
               ? 'no_ai_entitlement'
               : sandbox
                 ? 'sandbox'
-                : gatedByPageCount
+                : gatedByPageCount && slicedBuffer == null
                   ? 'too_many_pages'
                   : null
           const skipExtraction = skipReason !== null
@@ -868,10 +914,13 @@ export const invoiceInboxExtension: Extension = {
           const { data: extracted } = skipExtraction
             ? { data: emptyResult() }
             : await extractInvoiceFields({
-                buffer: Buffer.from(buffer),
+                buffer: Buffer.from(slicedBuffer ?? buffer),
                 mimeType: file.type,
                 fileName: file.name,
               })
+          if (!skipExtraction && slicedBuffer != null && pageCount != null) {
+            extracted.pages = { total: pageCount, analyzed: MAX_PAGES_FOR_AUTO_EXTRACT }
+          }
 
           const { error: linkError } = await ctx.supabase
             .from('invoice_inbox_items')
