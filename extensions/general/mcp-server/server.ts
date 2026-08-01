@@ -4615,11 +4615,12 @@ export const tools: McpTool[] = [
       const { data, error, count } = await query
         .order('invoice_date', { ascending: false })
         .order('id', { ascending: false })
-        .range(offset, offset + limit - 1)
+        .range(offset, offset + limit)
 
       if (error) throw new Error(`Database error: ${error.message}`)
 
-      const invoices = (data ?? []).map((inv: Record<string, unknown>) => ({
+      const rows = data ?? []
+      const invoices = rows.slice(0, limit).map((inv: Record<string, unknown>) => ({
         id: inv.id,
         invoice_number: inv.invoice_number,
         status: inv.status,
@@ -4632,8 +4633,10 @@ export const tools: McpTool[] = [
         default_dimensions: inv.default_dimensions ?? {},
       }))
 
-      const total = count ?? invoices.length
-      const hasMore = offset + invoices.length < total
+      const hasMore = count == null
+        ? rows.length > limit
+        : offset + invoices.length < count
+      const total = count ?? offset + invoices.length + (hasMore ? 1 : 0)
 
       return {
         invoices,
@@ -15084,11 +15087,12 @@ export const tools: McpTool[] = [
       const { data, error, count } = await query
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
-        .range(offset, offset + limit - 1)
+        .range(offset, offset + limit)
 
       if (error) throw new Error(`Database error: ${error.message}`)
 
-      const schedules = (data ?? []).map((row: Record<string, unknown>) => {
+      const rows = data ?? []
+      const schedules = rows.slice(0, limit).map((row: Record<string, unknown>) => {
         const items = ((row.items as Array<Record<string, unknown>>) ?? [])
           .slice()
           .sort((a, b) => Number(a.sort_order) - Number(b.sort_order))
@@ -15124,8 +15128,10 @@ export const tools: McpTool[] = [
         }
       })
 
-      const total = count ?? schedules.length
-      const hasMore = offset + schedules.length < total
+      const hasMore = count == null
+        ? rows.length > limit
+        : offset + schedules.length < count
+      const total = count ?? offset + schedules.length + (hasMore ? 1 : 0)
 
       return {
         schedules,

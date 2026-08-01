@@ -88,7 +88,7 @@ describe.each(cases)('$name continuation', ({ name, table, itemsKey, primaryOrde
       supabase as never,
     )) as Record<string, unknown>
 
-    expect(findCall(table, 'range')).toEqual([4, 5])
+    expect(findCall(table, 'range')).toEqual([4, 6])
     expect(findCalls(table, 'order')).toEqual([
       [primaryOrder, { ascending: false }],
       ['id', { ascending: false }],
@@ -113,7 +113,7 @@ describe.each(cases)('$name continuation', ({ name, table, itemsKey, primaryOrde
       supabase as never,
     )) as Record<string, unknown>
 
-    expect(findCall(table, 'range')).toEqual([0, 49])
+    expect(findCall(table, 'range')).toEqual([0, 50])
     expect(result).toMatchObject({
       count: 1,
       total_count: 1,
@@ -153,7 +153,7 @@ describe.each(cases)('$name continuation', ({ name, table, itemsKey, primaryOrde
       supabase as never,
     )) as Record<string, unknown>
 
-    expect(findCall(table, 'range')).toEqual([4, 5])
+    expect(findCall(table, 'range')).toEqual([4, 6])
     expect(result).toMatchObject({
       count: 1,
       total_count: 6,
@@ -162,23 +162,24 @@ describe.each(cases)('$name continuation', ({ name, table, itemsKey, primaryOrde
     })
   })
 
-  it('falls back to the returned row count when the exact count is unavailable', async () => {
+  it('uses a lookahead row when the exact count is unavailable', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: [row('only-row')], error: null, count: null })
+    enqueue({ data: [row('row-5'), row('row-6'), row('lookahead-row')], error: null, count: null })
 
     const result = (await tool.execute(
-      {},
+      { limit: 2, offset: 4 },
       'company-1',
       'user-1',
       supabase as never,
     )) as Record<string, unknown>
 
+    expect(result[itemsKey]).toHaveLength(2)
     expect(result).toMatchObject({
-      count: 1,
-      total_count: 1,
-      has_more: false,
+      count: 2,
+      total_count: 7,
+      has_more: true,
+      next_offset: 6,
     })
-    expect(result).not.toHaveProperty('next_offset')
   })
 
   it('reports database errors', async () => {

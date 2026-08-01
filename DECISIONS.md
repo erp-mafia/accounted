@@ -733,3 +733,5 @@ One line per decision: `[YYYY-MM-DD] <decision>: <why>`. Appended by agents and 
 [2026-08-01] gnubok_list_invoices and gnubok_list_recurring_schedules use the same offset, has_more, and next_offset contract as the other paginated MCP tools, with id as a descending tie-break after the existing business-date order. Returning has_more without an offset left rows beyond the first 100 unreachable, while the secondary order prevents equal invoice dates or creation timestamps from reshuffling between page requests.
 
 [2026-08-01] MCP page offsets are declared as non-negative integers and defensively floored before PostgREST range calls: fractional offsets cannot name a stable row boundary and can produce invalid range bounds when execution bypasses schema validation.
+
+[2026-08-01] Paginated MCP invoice tools fetch one lookahead row and use it when Supabase omits the exact count: returning a conservative next_offset avoids falsely declaring the current page terminal and silently truncating callers, while exact-count responses and page sizes remain unchanged.
