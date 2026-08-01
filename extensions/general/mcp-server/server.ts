@@ -9167,7 +9167,12 @@ export const tools: McpTool[] = [
         status: { type: 'string', enum: ['received', 'error'], description: 'Filter by status' },
         unprocessed_only: { type: 'boolean', description: 'When true, only return items with no terminal link yet (not matched to a transaction, supplier invoice, or journal entry), i.e. documents that still need handling. Default false.' },
         limit: { type: 'number', description: 'Max results (default 20, max 50)' },
-        cursor: { type: 'string', description: 'Composite "<created_at>__<inbox_item_id>" from previous page (exclusive). Pass next_cursor verbatim.' },
+        cursor: {
+          type: 'string',
+          maxLength: 100,
+          pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})(?:__[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$',
+          description: 'Composite "<created_at>__<inbox_item_id>" from previous page (exclusive). Pass next_cursor verbatim.',
+        },
       },
     },
     outputSchema: {
@@ -9204,6 +9209,12 @@ export const tools: McpTool[] = [
           cursorTs = cursor.slice(0, sep)
           cursorId = cursor.slice(sep + 2)
         }
+      }
+      if (cursorTs && !z.string().datetime({ offset: true }).safeParse(cursorTs).success) {
+        throw new Error('Invalid cursor timestamp. Pass next_cursor verbatim.')
+      }
+      if (cursorId && !z.string().uuid().safeParse(cursorId).success) {
+        throw new Error('Invalid cursor inbox item ID. Pass next_cursor verbatim.')
       }
 
       const fetchSize = unprocessedOnly ? 200 : limit

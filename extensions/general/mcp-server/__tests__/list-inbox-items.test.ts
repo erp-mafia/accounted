@@ -6,7 +6,7 @@ const tool = tools.find((candidate) => candidate.name === 'gnubok_list_inbox_ite
 
 function makeInboxItem(overrides: Record<string, unknown> = {}) {
   return {
-    id: 'inbox-1',
+    id: '11111111-1111-4111-8111-111111111111',
     status: 'received',
     source: 'upload',
     created_at: '2026-07-01T12:00:00Z',
@@ -60,7 +60,7 @@ describe('gnubok_list_inbox_items', () => {
 
     expect(result).toMatchObject({
       count: 1,
-      items: [{ id: 'inbox-1', created_at: '2026-07-01T12:00:00Z' }],
+      items: [{ id: '11111111-1111-4111-8111-111111111111', created_at: '2026-07-01T12:00:00Z' }],
     })
     expect(result).not.toHaveProperty('next_cursor')
   })
@@ -69,8 +69,8 @@ describe('gnubok_list_inbox_items', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
       data: [
-        makeInboxItem({ id: 'inbox-2', created_at: '2026-07-02T12:00:00Z' }),
-        makeInboxItem({ id: 'inbox-1', created_at: '2026-07-01T12:00:00Z' }),
+        makeInboxItem({ id: '22222222-2222-4222-8222-222222222222', created_at: '2026-07-02T12:00:00Z' }),
+        makeInboxItem({ id: '11111111-1111-4111-8111-111111111111', created_at: '2026-07-01T12:00:00Z' }),
       ],
       error: null,
     })
@@ -79,7 +79,7 @@ describe('gnubok_list_inbox_items', () => {
 
     expect(result).toMatchObject({
       count: 2,
-      next_cursor: '2026-07-01T12:00:00Z__inbox-1',
+      next_cursor: '2026-07-01T12:00:00Z__11111111-1111-4111-8111-111111111111',
     })
   })
 
@@ -88,7 +88,7 @@ describe('gnubok_list_inbox_items', () => {
     const supabase = { from: vi.fn().mockReturnValue(query.proxy) }
 
     await tool.execute(
-      { cursor: '2026-07-01T12:00:00Z__inbox-1' },
+      { cursor: '2026-07-01T12:00:00Z__11111111-1111-4111-8111-111111111111' },
       'company-1',
       'user-1',
       supabase as never,
@@ -101,16 +101,28 @@ describe('gnubok_list_inbox_items', () => {
     expect(query.calls).toContainEqual({
       method: 'or',
       args: [
-        'created_at.lt.2026-07-01T12:00:00Z,and(created_at.eq.2026-07-01T12:00:00Z,id.lt.inbox-1)',
+        'created_at.lt.2026-07-01T12:00:00Z,and(created_at.eq.2026-07-01T12:00:00Z,id.lt.11111111-1111-4111-8111-111111111111)',
       ],
     })
+  })
+
+  it.each([
+    'not-a-timestamp',
+    '2026-07-01T12:00:00Z__11111111-1111-4111-8111-111111111111,created_at.gt.1900-01-01',
+  ])('rejects a malformed cursor before querying the database: %s', async (cursor) => {
+    const supabase = { from: vi.fn() }
+
+    await expect(
+      tool.execute({ cursor }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/Invalid cursor/)
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 
   it('advances a full unprocessed scan window even when every row is processed', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const rows = Array.from({ length: 200 }, (_, index) =>
       makeInboxItem({
-        id: `inbox-${String(200 - index).padStart(3, '0')}`,
+        id: `00000000-0000-4000-8000-${String(200 - index).padStart(12, '0')}`,
         created_at: `2026-07-01T11:${String(59 - (index % 60)).padStart(2, '0')}:00Z`,
         matched_transaction_id: `transaction-${index}`,
       }),
