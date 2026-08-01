@@ -13,7 +13,14 @@ export function resolveCallbackOrigin(requestOrigin: string): string {
     try {
       // Normalizes trailing slashes and strips paths so the provider receives
       // the same bare origin on the authorization and token-exchange legs.
-      return new URL(appUrl).origin
+      const configuredUrl = new URL(appUrl)
+      if (
+        configuredUrl.protocol !== 'http:' &&
+        configuredUrl.protocol !== 'https:'
+      ) {
+        return requestOrigin
+      }
+      return configuredUrl.origin
     } catch {
       return requestOrigin
     }

@@ -53,4 +53,11 @@ describe('resolveCallbackOrigin', () => {
       'https://other.example'
     )
   })
+
+  it('falls back to the request origin for a non-web URL scheme', () => {
+    process.env.NEXT_PUBLIC_APP_URL = 'mailto:backup@example.com'
+    expect(resolveCallbackOrigin('https://other.example')).toBe(
+      'https://other.example'
+    )
+  })
 })
