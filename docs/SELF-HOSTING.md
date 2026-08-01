@@ -435,7 +435,10 @@ Accounted's base Compose file intentionally omits the optional `cpus` and
 builds can reject them. Operators who need a CPU cap can set one through DSM's
 resource controls or a local Compose override. Existing deployments that
 relied on the previous two-CPU cap must reapply it before restarting with the
-new base file.
+new base file. Command-line deployments on Docker Compose 2.20.2 or newer can
+use the version-controlled `docker-compose.resources.yml` overlay to restore
+both the cap and faster startup health checks; older NAS parsers should keep
+using the portable base file alone.
 
 ### What you give up vs. cloud Supabase
 

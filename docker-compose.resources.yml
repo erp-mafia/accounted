@@ -1,0 +1,7 @@
+# Optional resource and startup-health controls for Docker Compose 2.20.2+.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.resources.yml up -d
+services:
+  app:
+    cpus: 2
+    healthcheck:
+      start_interval: 5s

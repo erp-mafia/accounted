@@ -94,6 +94,29 @@ Container Manager's resource controls or a local override if needed. When
 updating an existing deployment that relied on the previous two-CPU cap,
 reapply that limit in the host controls before restarting the project.
 
+If you run Docker Compose 2.20.2 or newer from the command line, the optional
+resource overlay restores the previous two-CPU cap and faster startup health
+checks while keeping the base file compatible:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/docker-compose.resources.yml
+docker compose -f docker-compose.yml -f docker-compose.resources.yml up -d
+```
+
+Compose only applies the files named in each invocation. Keep the resource
+overlay in every later `up` command, after any other overlay. For example:
+
+```bash
+# HTTPS with Caddy
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml -f docker-compose.resources.yml up -d
+
+# Local image build
+docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.resources.yml up --build -d
+```
+
+Do not use this overlay if Container Manager rejects either key. The memory
+and PID limits remain active in the base file either way.
+
 Accounted itself does not use PostgreSQL port 5432 and does not need a database
 data folder when connected to Supabase Cloud. If Supabase is also running on
 the NAS, follow the [fully self-hosted notes](SELF-HOSTING.md#synology-dsm-and-xpenology-notes)
