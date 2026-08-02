@@ -9,6 +9,7 @@ import {
   SettingsRowEnd,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
+import { useBranding } from '@/lib/branding/brand-context'
 
 type BeforeInstallPromptEvent = Event & {
   prompt: () => Promise<void>
@@ -38,6 +39,7 @@ function getIsStandalone() {
  */
 export function InstallAppSection() {
   const t = useTranslations('settings')
+  const { appName } = useBranding()
   // Server snapshot says standalone so the row is absent from server HTML
   // and only appears client-side when actually running in a browser tab.
   const isStandalone = useSyncExternalStore(subscribeDisplayMode, getIsStandalone, () => true)
@@ -74,13 +76,13 @@ export function InstallAppSection() {
   const isIos = /iPad|iPhone|iPod/.test(ua)
   const isSafari = /Safari/.test(ua) && !/Chrome|Chromium|Edg|CriOS/.test(ua)
   const hint = isIos
-    ? t('install_app_hint_ios')
+    ? t('install_app_hint_ios', { appName })
     : isSafari
-      ? t('install_app_hint_safari')
-      : t('install_app_hint_generic')
+      ? t('install_app_hint_safari', { appName })
+      : t('install_app_hint_generic', { appName })
 
   return (
-    <SettingsRow label={t('install_app_title')} help={t('install_app_description')}>
+    <SettingsRow label={t('install_app_title')} help={t('install_app_description', { appName })}>
       {installPrompt ? (
         <SettingsRowEnd>
           <Button variant="outline" size="sm" onClick={handleInstall}>

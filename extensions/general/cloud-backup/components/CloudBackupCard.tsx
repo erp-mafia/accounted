@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Unplug,
 } from 'lucide-react'
+import { useBranding } from '@/lib/branding/brand-context'
 import type {
   CloudBackupStatus,
   CloudLastSync,
@@ -149,6 +150,7 @@ interface ProviderRowProps {
 function ProviderRow({ status, onChanged }: ProviderRowProps) {
   const { toast } = useToast()
   const t = useTranslations('extensions')
+  const { appName } = useBranding()
   const { dialogProps, confirm } = useDestructiveConfirm()
 
   const [isConnecting, setIsConnecting] = useState(false)
@@ -311,7 +313,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
               {t('ext_cloud_backup_card_tagline', { provider })}
             </p>
             <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
-              {t('ext_cloud_backup_legal_note', { provider })}
+              {t('ext_cloud_backup_legal_note', { provider, appName })}
             </p>
           </div>
         </div>
@@ -430,7 +432,8 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
                 {t(
                   providerId === 'dropbox'
                     ? 'ext_cloud_backup_connect_description_dropbox'
-                    : 'ext_cloud_backup_connect_description_google'
+                    : 'ext_cloud_backup_connect_description_google',
+                  { appName }
                 )}
               </p>
               <div className="mt-4">

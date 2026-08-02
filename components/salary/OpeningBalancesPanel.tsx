@@ -20,6 +20,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Save } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { useBranding } from '@/lib/branding/brand-context'
 
 interface OpeningBalancesData {
   cutover_date: string
@@ -41,6 +42,7 @@ const SAVED_YEARS = Array.from({ length: 5 }, (_, i) => String(currentYear - 1 -
 
 export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: string; canWrite: boolean }) {
   const t = useTranslations('salary_employee')
+  const { appName } = useBranding()
   const { toast } = useToast()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -144,7 +146,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
     <Card>
       <CardHeader>
         <CardTitle className="text-base">{t('opening_balances_title')}</CardTitle>
-        <p className="text-sm text-muted-foreground">{t('opening_balances_description')}</p>
+        <p className="text-sm text-muted-foreground">{t('opening_balances_description', { appName })}</p>
       </CardHeader>
       <CardContent className="space-y-6">
         {locked && (
@@ -163,7 +165,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
               onChange={(e) => setCutoverDate(e.target.value)}
               disabled={readOnly}
             />
-            <p className="text-xs text-muted-foreground">{t('opening_balances_cutover_hint')}</p>
+            <p className="text-xs text-muted-foreground">{t('opening_balances_cutover_hint', { appName })}</p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="ob-karens">{t('opening_balances_karens')}</Label>

@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
+import { useBranding } from '@/lib/branding/brand-context'
 import type { InvoiceDelivery, InvoiceDeliveryProviderStatus } from '@/types'
 
 export type InvoiceDeliveryView = Pick<
@@ -71,6 +72,7 @@ export function InvoiceDeliveryHistory({
 }: InvoiceDeliveryHistoryProps) {
   const t = useTranslations('invoice_detail')
   const format = useFormatter()
+  const { appName } = useBranding()
 
   if (deliveries.length === 0 && !showLegacyEmptyState) return null
 
@@ -132,7 +134,7 @@ export function InvoiceDeliveryHistory({
                     <Separator className="mb-4" />
                     {isManual ? (
                       <p className="text-sm text-muted-foreground">
-                        {t('delivery_manual_unknown_details')}
+                        {t('delivery_manual_unknown_details', { appName })}
                       </p>
                     ) : (
                       <div className="space-y-4 text-sm">

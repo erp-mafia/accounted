@@ -17,6 +17,7 @@ import { AlertTriangle, Check, Copy, Loader2, RefreshCw, Trash2 } from 'lucide-r
 import { formatDateLong } from '@/lib/utils'
 import type { CompanyInboundDomain, InboundDomainDnsRecord } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { useBranding } from '@/lib/branding/brand-context'
 
 const BASE = '/api/extensions/ext/invoice-inbox/inbox/domain'
 
@@ -40,6 +41,7 @@ interface Props {
 // server-side: this surface only manages the claim lifecycle.
 export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
   const { toast } = useToast()
+  const { appName } = useBranding()
   const [isLoading, setIsLoading] = useState(true)
   const [domain, setDomain] = useState<CompanyInboundDomain | null>(null)
   const [domainInput, setDomainInput] = useState('')
@@ -117,7 +119,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
 
   const handleRemove = useCallback(async () => {
     if (!domain) return
-    if (!confirm(`Ta bort ${domain.domain}? E-post till domänen slutar landa i Accounted.`)) return
+    if (!confirm(`Ta bort ${domain.domain}? E-post till domänen slutar landa i ${appName}.`)) return
     setIsRemoving(true)
     try {
       const res = await fetch(BASE, { method: 'DELETE' })
@@ -134,7 +136,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
     } finally {
       setIsRemoving(false)
     }
-  }, [domain, toast])
+  }, [domain, toast, appName])
 
   const handleCopy = useCallback(
     (value: string) => {
@@ -169,7 +171,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
               <div className="space-y-1">
                 <p className="font-medium">Viktigt om din domän redan tar emot e-post</p>
                 <p className="text-muted-foreground">
-                  Domänens MX-poster pekas om till Accounted. Om domänen redan används för
+                  Domänens MX-poster pekas om till {appName}. Om domänen redan används för
                   e-post (Google Workspace, Microsoft 365) slutar din vanliga e-post att
                   fungera: använd då en underdomän, t.ex.{' '}
                   <code className="font-mono text-xs">faktura.dittbolag.se</code>, eller

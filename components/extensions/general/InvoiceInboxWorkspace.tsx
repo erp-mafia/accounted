@@ -43,6 +43,7 @@ import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { useBranding } from '@/lib/branding/brand-context'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { InvoiceExtractionResult } from '@/types'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
@@ -1541,6 +1542,7 @@ function OnboardingCard({
   isActivating,
   compact = false,
 }: OnboardingCardProps) {
+  const { appName } = useBranding()
   const steps = [
     {
       done: hasInboxAddress,
@@ -1550,7 +1552,7 @@ function OnboardingCard({
     {
       done: hasAnyItem,
       title: 'Ladda upp eller maila in ett underlag',
-      hint: 'Accounted tolkar fakturan eller kvittot åt dig och fyller i fält automatiskt.',
+      hint: `${appName} tolkar fakturan eller kvittot åt dig och fyller i fält automatiskt.`,
     },
     {
       done: hasResolvedItem,
@@ -1766,6 +1768,7 @@ function FieldsRail({
 }) {
   const { toast } = useToast()
   const hasAi = useCapability(CAPABILITY.ai)
+  const { appName } = useBranding()
   const data = item.extracted_data
   const isProcessed = !!item.created_supplier_invoice_id
   const isBookedDirectly = !isProcessed && !!item.created_journal_entry_id
@@ -1928,7 +1931,7 @@ function FieldsRail({
               AI-tolkning ingår i abonnemanget
             </div>
             <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-              Uppgradera för att låta Accounted läsa av leverantör, belopp och
+              Uppgradera för att låta {appName} läsa av leverantör, belopp och
               moms automatiskt. Du kan fortfarande fylla i fälten manuellt eller
               koppla dokumentet till en transaktion nedan.
             </p>

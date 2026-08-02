@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
+import { guardBrowserWrite } from '@/lib/company/tab-guard'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -68,6 +69,7 @@ import {
 } from '@/components/ui/dialog'
 import type { Invoice, InvoiceItem, Customer, InvoiceStatus, InvoiceReminder, InvoiceDocumentType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { useBranding } from '@/lib/branding/brand-context'
 
 const statusVariantMap: Record<InvoiceStatus, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
   draft: 'secondary',
@@ -116,6 +118,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoice_detail')
+  const { appName } = useBranding()
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
   const [reminders, setReminders] = useState<InvoiceReminder[]>([])
@@ -403,6 +406,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   async function updateStatus(status: InvoiceStatus) {
     if (!invoice) return
+    // Cross-tab guard (WL-09): the direct Supabase branches below bypass the
+    // patched window.fetch, so consult the tab guard explicitly. On a
+    // mismatch the blocking dialog raised by guardBrowserWrite is the user
+    // feedback; nothing is written.
+    if (!guardBrowserWrite()) return
 
     setIsUpdating(true)
 
@@ -541,7 +549,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       if (caveat) {
         toast({
           title: t('pdf_rerender_downloaded_title'),
-          description: t(RERENDER_CAVEAT_KEYS[caveat]),
+          description: t(RERENDER_CAVEAT_KEYS[caveat], { appName }),
         })
       } else {
         toast({
@@ -601,7 +609,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     if (!window.open(url, '_blank', 'noopener,noreferrer')) {
       toast({
         title: t('pdf_preview_blocked_title'),
-        description: t('pdf_preview_blocked_description'),
+        description: t('pdf_preview_blocked_description', { appName }),
         variant: 'destructive',
       })
       return
@@ -611,7 +619,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     if (caveat) {
       toast({
         title: t('pdf_rerender_preview_title'),
-        description: t(RERENDER_CAVEAT_KEYS[caveat]),
+        description: t(RERENDER_CAVEAT_KEYS[caveat], { appName }),
       })
     }
   }
@@ -1783,7 +1791,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <DialogDescription>
               {pdfArchiveIssue === 'document'
                 ? t('pdf_archive_issue_document_desc')
-                : t('pdf_archive_issue_history_desc')}
+                : t('pdf_archive_issue_history_desc', { appName })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

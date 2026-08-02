@@ -45,6 +45,7 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useBranding } from '@/lib/branding/brand-context'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { InvoiceReviewContent } from '@/components/invoices/InvoiceReviewContent'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -138,6 +139,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const ts = useTranslations('self_billing')
   const ta = useTranslations('accruals')
   const tCommon = useTranslations('common')
+  const { appName } = useBranding()
   // Toggle between a normal customer invoice (default) and registering a
   // self-billing invoice we received (mottagen självfaktura, ML 17 kap 15§).
   // Self-billing is never available when editing an existing draft.
@@ -1395,7 +1397,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         window.URL.revokeObjectURL(url)
         toast({
           title: t('preview_pdf_failed'),
-          description: tCommon('popup_blocked_description'),
+          description: tCommon('popup_blocked_description', { appName }),
           variant: 'destructive',
         })
         return

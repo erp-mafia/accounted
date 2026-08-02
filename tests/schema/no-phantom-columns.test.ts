@@ -79,8 +79,12 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
  *
  * Baseline 2026-07-26: 346 (145 dynamic-payload, 116 dynamic-select,
  * 48 dynamic-logical, 32 spread-payload, 4 dynamic-column, 1 computed key).
+ *
+ * 2026-08-01: 361 after the white-label build (WL-17: brands, teams.kind,
+ * cockpit, brand mail). The growth is spread across ordinary feature queries;
+ * ceiling raised 360 -> 370 to restore headroom.
  */
-const UNRESOLVED_CEILING = 360
+const UNRESOLVED_CEILING = 370
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

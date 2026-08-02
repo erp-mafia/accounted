@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { useBranding } from '@/lib/branding/brand-context'
 import type {
   AnnualReportComplianceIssue,
   AnnualReportProfile,
@@ -92,6 +93,7 @@ export function AnnualReportStudio({
   onVersionsChanged,
 }: AnnualReportStudioProps) {
   const t = useTranslations('annualReportStudio')
+  const { appName } = useBranding()
   const { toast } = useToast()
   const [compliance, setCompliance] = useState<ComplianceResponse | null>(null)
   const [profile, setProfile] = useState<AnnualReportProfile | null>(null)
@@ -344,7 +346,7 @@ export function AnnualReportStudio({
           <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('scope_title')}</h3>
           <div className="h-px flex-1 bg-border/60" />
         </div>
-        <p className="px-1 text-sm text-muted-foreground">{t('scope_description')}</p>
+        <p className="px-1 text-sm text-muted-foreground">{t('scope_description', { appName })}</p>
         <div className="space-y-6 px-1 pt-4">
           <div className="grid gap-4 md:grid-cols-2">
             <BooleanQuestion

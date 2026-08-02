@@ -18,6 +18,7 @@ import {
 } from '@/components/settings/SettingsRows'
 import { CheckCircle2, ExternalLink, Loader2, ShieldOff, FlaskConical, ShieldAlert } from 'lucide-react'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { useBranding } from '@/lib/branding/brand-context'
 
 type Environment = 'test' | 'prod'
 
@@ -442,6 +443,7 @@ interface SystemConnectionState {
  */
 function SkatteverketSystemConnectionCard() {
   const t = useTranslations('settings_skatteverket_connect')
+  const { appName } = useBranding()
   const { toast } = useToast()
   const [state, setState] = useState<SystemConnectionState | null>(null)
   const [verifying, setVerifying] = useState(false)
@@ -511,7 +513,7 @@ function SkatteverketSystemConnectionCard() {
   }
 
   return (
-    <SettingsGroup label={t('system_title')} help={t('system_intro')}>
+    <SettingsGroup label={t('system_title')} help={t('system_intro', { appName })}>
       {state.ombud_org_number && (
         <SettingsRow label={t('system_org_label')}>
           <span className="font-mono text-sm tabular-nums">{state.ombud_org_number}</span>
@@ -527,7 +529,7 @@ function SkatteverketSystemConnectionCard() {
 
       {state.cert?.expiresSoon && (
         <WarningLine>
-          {t('system_cert_expires_soon', { days: state.cert.daysUntilExpiry })}
+          {t('system_cert_expires_soon', { days: state.cert.daysUntilExpiry, appName })}
         </WarningLine>
       )}
 
