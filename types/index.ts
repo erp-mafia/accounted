@@ -14,10 +14,13 @@ export type CompanyRole = 'owner' | 'admin' | 'member' | 'viewer'
 export type TeamRole = 'owner' | 'admin' | 'member'
 export type MemberSource = 'direct' | 'team'
 
-// Team (consulting firm grouping)
+// Team (consulting firm grouping). 'personal' teams are the implicit
+// one-per-user grouping; 'byra' teams are ops-created accounting-firm
+// tenants (WL-08) with invites, a brand, and cockpit access.
 export interface Team {
   id: string
   name: string
+  kind: 'personal' | 'byra'
   created_by: string
   created_at: string
   updated_at: string
