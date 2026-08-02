@@ -978,6 +978,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   stripe_payment_events: 'mirror of Stripe data, re-fetchable at source',
   stripe_payouts: 'mirror of Stripe data, re-fetchable at source',
   webhook_deliveries: 'automation delivery log',
+  whatsapp_conversations:
+    'WhatsApp bot conversation state (company_id is only a which-company pin); receipts live in document_attachments',
   webhooks: 'automation config with signing secrets',
 }
 
