@@ -37,6 +37,13 @@ const REQUIRED_EXTENSION_VARS: ReadonlyArray<readonly string[]> = [
   ['ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', 'ENABLE_BANKING_PRIVATE_KEY'],
   ['AWS_ACCESS_KEY_ID'],
   ['AWS_SECRET_ACCESS_KEY'],
+  // whatsapp-inbox extension (Meta Cloud API + phone PII at rest)
+  ['WHATSAPP_ACCESS_TOKEN'],
+  ['WHATSAPP_PHONE_NUMBER_ID'],
+  ['WHATSAPP_APP_SECRET'],
+  ['WHATSAPP_VERIFY_TOKEN'],
+  ['WHATSAPP_PHONE_HASH_KEY'],
+  ['WHATSAPP_PHONE_ENCRYPTION_KEY'],
 ] as const
 
 function validateEnvironment(): void {

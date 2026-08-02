@@ -1,0 +1,181 @@
+/**
+ * Outbound bot copy for the WhatsApp channel (PR3 subset of the approved
+ * conversation spec M1-M18; M5-M10 belong to the PR4 conversation layer).
+ *
+ * Server-side constants, NOT messages/*.json: these strings are sent from
+ * webhook/worker contexts where no next-intl session exists (same pattern as
+ * lib/email/reminder-templates.ts). Domain terms (Underlag, verifikation) stay
+ * Swedish in both locales per the i18n rules. WhatsApp formatting subset only
+ * (*bold*, _italic_); never em/en dashes, per repo hard rule.
+ *
+ * Locale: the chat has no session, and no per-user locale is stored server-side
+ * today, so dispatch always sends 'sv'. The 'en' variants exist so the wiring
+ * is a one-line change once a stored locale exists.
+ */
+
+export type BotLocale = 'sv' | 'en'
+
+export interface LinkedTemplateArgs {
+  companyName?: string | null
+  companyCount?: number
+  merchant?: string | null
+  amount?: string | null
+  date?: string | null
+  minutes?: number
+}
+
+/** Stable ids stamped into whatsapp_messages.raw_payload.template on every send
+ *  (throttle checks and tests key on these, never on the copy). */
+export const TEMPLATE = {
+  m1Unlinked: 'm1_unlinked',
+  m2BadCode: 'm2_bad_code',
+  m3Linked: 'm3_linked',
+  m4Ack: 'm4_ack',
+  m4AckEmpty: 'm4_ack_empty',
+  m4Duplicate: 'm4_duplicate',
+  m6NoDefaultCompany: 'm6_no_default_company',
+  m11Stop: 'm11_stop',
+  m12Start: 'm12_start',
+  m13Help: 'm13_help',
+  m14Voice: 'm14_voice',
+  m15Unsupported: 'm15_unsupported',
+  m16Fallback: 'm16_fallback',
+  m17RateLimited: 'm17_rate_limited',
+  m18Error: 'm18_error',
+} as const
+
+export type TemplateId = (typeof TEMPLATE)[keyof typeof TEMPLATE]
+
+const SV = {
+  m1Unlinked: () =>
+    'Hej! Det här är *Accounteds kvittomottagning*, en automatisk AI-tjänst.\n\n' +
+    'För att koppla ditt nummer: öppna Accounted, gå till *Inställningar -> WhatsApp* och skicka den 6-siffriga koden här.\n\n' +
+    'Skriv *hjälp* för att nå en människa.',
+
+  m2BadCode: () =>
+    'Koden stämmer inte eller har gått ut. Hämta en ny under *Inställningar -> WhatsApp* i Accounted och skicka den här inom 10 minuter.',
+
+  m3Linked: ({ companyName, companyCount = 1 }: LinkedTemplateArgs) => {
+    const intro = companyName
+      ? `Klart! Ditt nummer är kopplat till *${companyName}*.`
+      : 'Klart! Ditt nummer är kopplat till *Accounted*.'
+    const tips =
+      'Skicka kvitton hit som foto eller PDF så lägger jag dem i *Underlag* i Accounted. ' +
+      'Två tips: skicka som _dokument_ (gem-ikonen) för bästa skärpa, och en fil per kvitto. Flersidiga kvitton skickas som PDF.'
+    const outro =
+      'Jag är en AI-assistent. Skriv *hjälp* för mänsklig support, *stopp* för att koppla från.'
+    const multi =
+      companyCount > 1
+        ? `Du är med i ${companyCount} företag i Accounted. Välj standardföretag i panelen så hamnar kvitton rätt. `
+        : ''
+    return `${intro}\n\n${tips}\n\n${multi}${outro}`
+  },
+
+  m4Ack: ({ merchant, amount, date }: LinkedTemplateArgs) => {
+    const who = merchant ? `${merchant}, ` : ''
+    const when = date ? ` (${date})` : ''
+    return `*Kvitto mottaget:* ${who}${amount}${when}. Ligger i Underlag, granska och bokför i appen.`
+  },
+
+  m4AckEmpty: () =>
+    '*Kvitto mottaget.* Jag kunde inte läsa av beloppet, komplettera i appen under Underlag.',
+
+  m4Duplicate: () => 'Det kvittot finns redan i Underlag.',
+
+  m6NoDefaultCompany: () =>
+    'Du är med i flera företag. Välj standardföretag under *Inställningar -> WhatsApp* i Accounted, så tar jag emot kvitton här. Kvittot sparades inte.',
+
+  m11Stop: () =>
+    'Okej, jag slutar svara här och ditt nummer kopplas från. Dina underlag i Accounted påverkas inte. Skicka *start* om du vill aktivera igen.',
+
+  m12Start: () => 'Välkommen tillbaka! Ditt nummer är aktivt igen, skicka kvitton när du vill.',
+
+  m13Help: () =>
+    'Du når en människa på *support@accounted.se*, vi svarar vardagar, oftast samma dag. Skriv gärna vilket företag det gäller.\n\n' +
+    'Här i chatten tar jag annars emot kvitton och underlag (foto eller PDF).',
+
+  m14Voice: () =>
+    'Jag kan inte lyssna på röstmeddelanden ännu. Skicka kvittot som foto eller PDF, eller skriv en kort rad text.',
+
+  m15Unsupported: () =>
+    'Jag kan bara ta emot bilder och PDF-dokument (bild max 5 MB). Skicka kvittot som foto eller PDF.',
+
+  m16Fallback: () =>
+    'Jag är en automatisk kvittomottagning och kan inte svara på frågor här i chatten. Skicka ett kvitto (foto/PDF) så tar jag hand om det, eller skriv *hjälp* för mänsklig support.',
+
+  m17RateLimited: ({ minutes = 10 }: LinkedTemplateArgs) =>
+    `Det blev många filer på kort tid, jag pausar mottagningen en stund. Försök igen om cirka ${minutes} minuter.`,
+
+  m18Error: () =>
+    'Något gick fel när jag tog emot filen. Försök igen om en stund, eller ladda upp kvittot direkt i appen under *Underlag*. Skriv *hjälp* om det fortsätter.',
+}
+
+const EN: typeof SV = {
+  m1Unlinked: () =>
+    'Hi! This is *Accounted receipt intake*, an automated AI service.\n\n' +
+    'To link your number: open Accounted, go to *Settings -> WhatsApp* and send the 6-character code here.\n\n' +
+    'Type *hjälp* to reach a human.',
+
+  m2BadCode: () =>
+    'That code is wrong or has expired. Get a new one under *Settings -> WhatsApp* in Accounted and send it here within 10 minutes.',
+
+  m3Linked: ({ companyName, companyCount = 1 }: LinkedTemplateArgs) => {
+    const intro = companyName
+      ? `Done! Your number is linked to *${companyName}*.`
+      : 'Done! Your number is linked to *Accounted*.'
+    const tips =
+      'Send receipts here as a photo or PDF and I will file them under *Underlag* in Accounted. ' +
+      'Two tips: send as a _document_ (the paperclip icon) for full sharpness, and one file per receipt. Multi-page receipts go as PDF.'
+    const outro =
+      'I am an AI assistant. Type *hjälp* for human support, *stopp* to disconnect.'
+    const multi =
+      companyCount > 1
+        ? `You belong to ${companyCount} companies in Accounted. Pick a default company in the panel so receipts land in the right one. `
+        : ''
+    return `${intro}\n\n${tips}\n\n${multi}${outro}`
+  },
+
+  m4Ack: ({ merchant, amount, date }: LinkedTemplateArgs) => {
+    const who = merchant ? `${merchant}, ` : ''
+    const when = date ? ` (${date})` : ''
+    return `*Receipt received:* ${who}${amount}${when}. It is in Underlag, review and book it in the app.`
+  },
+
+  m4AckEmpty: () =>
+    '*Receipt received.* I could not read the amount, complete it in the app under Underlag.',
+
+  m4Duplicate: () => 'That receipt is already in Underlag.',
+
+  m6NoDefaultCompany: () =>
+    'You belong to several companies. Pick a default company under *Settings -> WhatsApp* in Accounted, then I can receive receipts here. The receipt was not saved.',
+
+  m11Stop: () =>
+    'Okay, I will stop replying here and your number is disconnected. Your documents in Accounted are not affected. Send *start* to activate again.',
+
+  m12Start: () => 'Welcome back! Your number is active again, send receipts whenever you like.',
+
+  m13Help: () =>
+    'You reach a human at *support@accounted.se*, we reply on weekdays, usually the same day. Please mention which company it concerns.\n\n' +
+    'Here in the chat I otherwise receive receipts and documents (photo or PDF).',
+
+  m14Voice: () =>
+    'I cannot listen to voice messages yet. Send the receipt as a photo or PDF, or write a short line of text.',
+
+  m15Unsupported: () =>
+    'I can only receive images and PDF documents (image max 5 MB). Send the receipt as a photo or PDF.',
+
+  m16Fallback: () =>
+    'I am an automated receipt intake and cannot answer questions here in the chat. Send a receipt (photo/PDF) and I will handle it, or type *hjälp* for human support.',
+
+  m17RateLimited: ({ minutes = 10 }: LinkedTemplateArgs) =>
+    `That was a lot of files in a short time, I am pausing intake for a bit. Try again in about ${minutes} minutes.`,
+
+  m18Error: () =>
+    'Something went wrong receiving the file. Try again in a moment, or upload the receipt directly in the app under *Underlag*. Type *hjälp* if it keeps happening.',
+}
+
+const COPY: Record<BotLocale, typeof SV> = { sv: SV, en: EN }
+
+export function botCopy(locale: BotLocale = 'sv'): typeof SV {
+  return COPY[locale] ?? SV
+}
