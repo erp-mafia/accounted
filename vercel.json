@@ -70,6 +70,10 @@
       "schedule": "* * * * *"
     },
     {
+      "path": "/api/extensions/whatsapp-inbox/retention/cron",
+      "schedule": "15 4 * * *"
+    },
+    {
       "path": "/api/bookkeeping/accruals/post-due/cron",
       "schedule": "15 5 * * *"
     }

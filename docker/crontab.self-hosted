@@ -40,4 +40,5 @@
 30 */2 * * *  curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/skatteverket/vat/kvittenser/cron
 * * * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/webhooks/dispatch/cron
 * * * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/whatsapp-inbox/sweep/cron
+15 4 * * *    curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/whatsapp-inbox/retention/cron
 15 5 * * *    curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bookkeeping/accruals/post-due/cron
