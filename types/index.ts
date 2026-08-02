@@ -2652,7 +2652,7 @@ export interface SIEAccountMapping {
 // ============================================================
 
 export type InboxItemStatus = 'received' | 'error'
-export type InboxItemSource = 'email' | 'upload'
+export type InboxItemSource = 'email' | 'upload' | 'whatsapp'
 
 export type CompanyInboxStatus = 'active' | 'deprecated' | 'blocked'
 
@@ -2715,6 +2715,13 @@ export interface InvoiceInboxItem {
   error_message: string | null
   raw_email_payload: Record<string, unknown> | null
 
+  // WhatsApp channel (migration 20260802092000). whatsapp_message_id links
+  // back to the delivering chat message; channel_context holds verified
+  // human answers from the chat (kept OUT of extracted_data on purpose:
+  // retry-extraction overwrites that container wholesale).
+  whatsapp_message_id?: string | null
+  channel_context?: InboxChannelContext | null
+
   // Audit chain (processing_history correlation)
   correlation_id: string | null
 
@@ -2725,6 +2732,102 @@ export interface InvoiceInboxItem {
   document?: DocumentAttachment
   supplier?: Supplier
   supplier_invoice?: SupplierInvoice
+}
+
+// Chat-sourced context attached to an inbox item. `raw_answer` + timestamps
+// double as the Skatteverket representation documentation trail.
+export interface InboxChannelContext {
+  channel: 'whatsapp'
+  caption?: string | null
+  company_selected_via?: 'button' | 'pin' | 'default' | 'single'
+  representation?: {
+    participants: { name: string; company: string | null }[]
+    purpose: string | null
+    event_date: string | null
+    raw_answer: string
+    answered_at: string
+  }
+  user_note?: string | null
+  quality?: { resend_requested_at: string; resent: boolean }
+  pending_question?: {
+    type: 'representation' | 'context' | 'resend'
+    asked_at: string
+    status: 'open' | 'answered' | 'moved_to_app'
+  }
+}
+
+// ============================================================
+// WhatsApp Channel Types (migrations 20260802090000/091000)
+// ============================================================
+
+export interface WhatsAppPhoneLink {
+  id: string
+  user_id: string
+  phone_hash: string
+  phone_enc: string
+  phone_masked: string
+  wa_profile_name: string | null
+  default_company_id: string | null
+  last_company_id: string | null
+  verified_at: string
+  revoked_at: string | null
+  muted_at: string | null
+  last_message_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type WhatsAppConversationState =
+  | 'idle'
+  | 'awaiting_company'
+  | 'awaiting_representation'
+  | 'awaiting_context'
+  | 'awaiting_resend'
+
+export interface WhatsAppConversation {
+  id: string
+  phone_link_id: string
+  state: WhatsAppConversationState
+  context: Record<string, unknown>
+  company_id: string | null
+  service_window_expires_at: string | null
+  debounce_until: string | null
+  pending_ack: boolean
+  last_inbound_at: string | null
+  last_outbound_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type WhatsAppMessageProcessingStatus =
+  | 'received'
+  | 'processing'
+  | 'done'
+  | 'skipped'
+  | 'error'
+
+export interface WhatsAppMessage {
+  id: string
+  direction: 'inbound' | 'outbound'
+  wamid: string | null
+  sender_phone_hash: string | null
+  phone_link_id: string | null
+  conversation_id: string | null
+  message_type: string
+  body_text: string | null
+  media_id: string | null
+  media_mime: string | null
+  media_sha256: string | null
+  media_filename: string | null
+  raw_payload: Record<string, unknown> | null
+  processing_status: WhatsAppMessageProcessingStatus
+  attempts: number
+  error_message: string | null
+  inbox_item_id: string | null
+  delivery_status: string | null
+  correlation_id: string | null
+  created_at: string
+  updated_at: string
 }
 
 // ============================================================
@@ -3140,6 +3243,7 @@ export type DocumentUploadSource =
   | 'scan'
   | 'api'
   | 'system'
+  | 'whatsapp'
 
 export interface DocumentAttachment {
   id: string
