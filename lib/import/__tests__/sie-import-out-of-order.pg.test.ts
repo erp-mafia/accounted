@@ -192,7 +192,10 @@ function makePgSupabase(_userId: string): SupabaseClient {
         limit: () => chain,
         maybeSingle: async () => {
           const result = await getPool().query(
-            `SELECT id, name, period_start, period_end, is_closed, locked_at,
+            `SELECT id, name,
+                    period_start::text AS period_start,
+                    period_end::text AS period_end,
+                    is_closed, locked_at,
                     opening_balance_entry_id, opening_balances_set
                FROM public.fiscal_periods
               WHERE company_id = $1
