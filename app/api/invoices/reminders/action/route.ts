@@ -4,6 +4,7 @@ import {
   calculateReminderAmounts,
   REMINDER_FEE_CURRENCY,
 } from '@/lib/email/reminder-templates'
+import { resolveBrandForCompany } from '@/lib/branding/resolve'
 
 // Create a service client (no auth needed - public endpoint with token validation)
 function createServiceClient() {
@@ -120,6 +121,7 @@ export async function GET(request: Request) {
     .from('invoice_reminders')
     .select(`
       id,
+      company_id,
       reminder_level,
       sent_at,
       response_type,
@@ -183,6 +185,12 @@ export async function GET(request: Request) {
     currency: invoice.currency,
   })
 
+  // Brand of the COMPANY the invoice concerns (WL-13): the public page styles
+  // itself by this regardless of host. Null (no brand) = today's page.
+  const brand = reminder.company_id
+    ? await resolveBrandForCompany(reminder.company_id as string)
+    : null
+
   return NextResponse.json({
     invoiceNumber: invoice.invoice_number,
     invoiceDate: invoice.invoice_date,
@@ -207,5 +215,9 @@ export async function GET(request: Request) {
     totalDue: amounts.totalDue,
     /** In SEK. Non-zero only when the fee must be demanded outside `totalDue`. */
     feeDueSeparately: amounts.feeDueSeparately,
+    /** White-label brand of the invoice's company; null keeps today's page. */
+    brand: brand
+      ? { appName: brand.appName, logoUrl: brand.logoUrl, brandColor: brand.brandColor }
+      : null,
   })
 }

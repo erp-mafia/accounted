@@ -15,6 +15,13 @@ export interface SendEmailOptions {
   text?: string
   replyTo?: string
   fromName?: string
+  /**
+   * Explicit From address. Only ever set by lib/email/brand-sender.ts for
+   * brands whose Resend sender domain is VERIFIED. When absent, the provider
+   * sends from its default address (RESEND_FROM_EMAIL), rendering fromName
+   * as "<fromName> via <platform>".
+   */
+  fromAddress?: string
   attachments?: Array<{
     filename: string
     content: Buffer | string

@@ -41,7 +41,7 @@ function isResendConfigured(): boolean {
 
 export class ResendEmailService implements EmailService {
   async sendEmail(options: SendEmailOptions): Promise<SendEmailResult> {
-    const { to, cc, bcc, subject, html, text, replyTo, fromName, attachments } = options
+    const { to, cc, bcc, subject, html, text, replyTo, fromName, fromAddress, attachments } = options
 
     if (!this.isConfigured()) {
       return { success: false, error: 'Email service is not configured' }
@@ -50,12 +50,19 @@ export class ResendEmailService implements EmailService {
     // Strip CRLF and angle brackets from name parts to prevent header injection.
     // Resend's API does its own validation, but defense in depth: both fromName
     // (user-controlled, from company settings) and appName (admin-controlled,
-    // from branding) flow into the From header.
+    // from branding) flow into the From header. fromAddress is only ever set
+    // by lib/email/brand-sender.ts for VERIFIED brand sender domains: when
+    // present the mail rides the brand domain and the "via" pattern is skipped.
     const safeAppName = sanitizeHeaderPart(getBranding().appName)
     const safeFromName = fromName ? sanitizeHeaderPart(fromName) : null
-    const from = safeFromName
-      ? `${safeFromName} via ${safeAppName} <${DEFAULT_FROM_EMAIL}>`
-      : `${safeAppName} <${DEFAULT_FROM_EMAIL}>`
+    const safeFromAddress = fromAddress ? sanitizeHeaderPart(fromAddress) : null
+    const from = safeFromAddress
+      ? safeFromName
+        ? `${safeFromName} <${safeFromAddress}>`
+        : safeFromAddress
+      : safeFromName
+        ? `${safeFromName} via ${safeAppName} <${DEFAULT_FROM_EMAIL}>`
+        : `${safeAppName} <${DEFAULT_FROM_EMAIL}>`
 
     try {
       const resend = getResendClient()

@@ -4,16 +4,22 @@ export interface InviteEmailData {
   companyName: string
   inviterEmail: string
   inviteUrl: string
+  /**
+   * Brand override (WL-13): the app name of the brand of the company the
+   * invite concerns. Absent = platform default from getBranding(), which
+   * keeps unbranded companies byte-identical to before.
+   */
+  appName?: string
 }
 
 export function generateInviteEmailSubject(data: InviteEmailData): string {
-  const { appName } = getBranding()
+  const appName = data.appName ?? getBranding().appName
   return `Du har bjudits in till ${data.companyName} på ${appName.toLowerCase()}`
 }
 
 export function generateInviteEmailHtml(data: InviteEmailData): string {
   const { companyName, inviterEmail, inviteUrl } = data
-  const { appName } = getBranding()
+  const appName = data.appName ?? getBranding().appName
 
   return `
 <!DOCTYPE html>
@@ -55,7 +61,7 @@ export function generateInviteEmailHtml(data: InviteEmailData): string {
 }
 
 export function generateInviteEmailText(data: InviteEmailData): string {
-  const { appName } = getBranding()
+  const appName = data.appName ?? getBranding().appName
   return `Du har bjudits in till ${data.companyName} på ${appName.toLowerCase()} av ${data.inviterEmail}.
 
 Acceptera inbjudan: ${data.inviteUrl}
@@ -70,16 +76,22 @@ Länken är giltig i 7 dagar.`
 export interface TeamInviteEmailData {
   inviterEmail: string
   inviteUrl: string
+  /**
+   * Brand override (WL-13): the app name of the byrå team's brand. Absent =
+   * platform default from getBranding(), which keeps brandless teams
+   * byte-identical to before.
+   */
+  appName?: string
 }
 
-export function generateTeamInviteEmailSubject(): string {
-  const { appName } = getBranding()
+export function generateTeamInviteEmailSubject(data?: Pick<TeamInviteEmailData, 'appName'>): string {
+  const appName = data?.appName ?? getBranding().appName
   return `Du har bjudits in till ett team på ${appName.toLowerCase()}`
 }
 
 export function generateTeamInviteEmailHtml(data: TeamInviteEmailData): string {
   const { inviterEmail, inviteUrl } = data
-  const { appName } = getBranding()
+  const appName = data.appName ?? getBranding().appName
 
   return `
 <!DOCTYPE html>
@@ -121,7 +133,7 @@ export function generateTeamInviteEmailHtml(data: TeamInviteEmailData): string {
 }
 
 export function generateTeamInviteEmailText(data: TeamInviteEmailData): string {
-  const { appName } = getBranding()
+  const appName = data.appName ?? getBranding().appName
   return `Du har bjudits in som konsult till ett team på ${appName.toLowerCase()} av ${data.inviterEmail}. Du får tillgång till alla företag i teamet.
 
 Acceptera inbjudan: ${data.inviteUrl}

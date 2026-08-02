@@ -5,12 +5,16 @@ import type { EmailService } from '@/lib/email/service'
 const mockUploadDocument = vi.fn()
 const mockDeleteDocument = vi.fn()
 const mockCreateServiceClient = vi.fn()
+const mockGetSenderForCompany = vi.fn()
 vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: (...args: unknown[]) => mockUploadDocument(...args),
   deleteDocument: (...args: unknown[]) => mockDeleteDocument(...args),
 }))
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: () => mockCreateServiceClient(),
+}))
+vi.mock('@/lib/email/brand-sender', () => ({
+  getSenderForCompany: (...args: unknown[]) => mockGetSenderForCompany(...args),
 }))
 
 import {
@@ -97,6 +101,13 @@ describe('invoice delivery tracking', () => {
       sha256_hash: 'sha256-exact-pdf',
     })
     mockDeleteDocument.mockResolvedValue({ ok: true })
+    // Default: unbranded company (today's sender, byte for byte).
+    mockGetSenderForCompany.mockResolvedValue({
+      fromName: null,
+      fromAddress: null,
+      replyTo: null,
+      brand: null,
+    })
   })
 
   it('persists the exact payload before sending and records provider success', async () => {
@@ -150,6 +161,56 @@ describe('invoice delivery tracking', () => {
       deliveryId: 'delivery-1',
       documentId: 'document-1',
     })
+  })
+
+  it('keeps the From header unbranded for a company without a brand', async () => {
+    const { supabase } = makeSupabase()
+    const sendEmail = vi.fn().mockResolvedValue({ success: true, provider: 'resend' })
+
+    await sendTrackedInvoiceEmail(makeInput(supabase, makeEmailService(sendEmail)))
+
+    expect(mockGetSenderForCompany).toHaveBeenCalledWith('company-1')
+    const options = sendEmail.mock.calls[0][0]
+    expect(options.fromName).toBe('Example AB')
+    expect(options.fromAddress).toBeUndefined()
+    expect(options.replyTo).toBe('sender@example.com')
+  })
+
+  it('rides the verified brand sender domain while keeping the company display name', async () => {
+    mockGetSenderForCompany.mockResolvedValue({
+      fromName: 'Siffra',
+      fromAddress: 'noreply@post.siffra.se',
+      replyTo: 'support@siffra.se',
+      brand: { appName: 'Siffra' },
+    })
+    const { supabase } = makeSupabase()
+    const sendEmail = vi.fn().mockResolvedValue({ success: true, provider: 'resend' })
+
+    await sendTrackedInvoiceEmail(makeInput(supabase, makeEmailService(sendEmail)))
+
+    const options = sendEmail.mock.calls[0][0]
+    // The COMPANY stays the displayed sender; only the address is the brand's.
+    expect(options.fromName).toBe('Example AB')
+    expect(options.fromAddress).toBe('noreply@post.siffra.se')
+    // Reply-to stays the company's own address, not the brand support box.
+    expect(options.replyTo).toBe('sender@example.com')
+  })
+
+  it('does not attach a From address for an unverified brand sender domain', async () => {
+    mockGetSenderForCompany.mockResolvedValue({
+      fromName: 'Siffra',
+      fromAddress: null,
+      replyTo: 'support@siffra.se',
+      brand: { appName: 'Siffra' },
+    })
+    const { supabase } = makeSupabase()
+    const sendEmail = vi.fn().mockResolvedValue({ success: true, provider: 'resend' })
+
+    await sendTrackedInvoiceEmail(makeInput(supabase, makeEmailService(sendEmail)))
+
+    const options = sendEmail.mock.calls[0][0]
+    expect(options.fromName).toBe('Example AB')
+    expect(options.fromAddress).toBeUndefined()
   })
 
   it('does not call the provider when the immutable snapshot cannot be saved', async () => {

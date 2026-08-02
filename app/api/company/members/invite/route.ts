@@ -6,6 +6,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { getEmailService } from '@/lib/email/service'
+import { getSenderForCompany, getBaseUrlForBrand } from '@/lib/email/brand-sender'
 import {
   generateInviteEmailSubject,
   generateInviteEmailHtml,
@@ -134,7 +135,11 @@ export const POST = withRouteContext(
     // Send email. email_sent is surfaced in the response so the UI can tell
     // the user when the invitation exists but the mail never went out:
     // previously a send failure was invisible (invite looked sent).
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+    // Brand mail (WL-13): sender identity and the invite link follow the
+    // brand of the company the invite concerns; a company without a brand
+    // gets the canonical URL and sender exactly as before.
+    const sender = await getSenderForCompany(companyId)
+    const appUrl = getBaseUrlForBrand(sender.brand)
     const emailService = getEmailService()
     let emailSent = false
     if (emailService.isConfigured()) {
@@ -144,6 +149,7 @@ export const POST = withRouteContext(
         companyName: company?.name || 'Företag',
         inviterEmail: user.email || '',
         inviteUrl,
+        appName: sender.brand?.appName,
       }
 
       const result = await emailService.sendEmail({
@@ -151,6 +157,9 @@ export const POST = withRouteContext(
         subject: generateInviteEmailSubject(emailData),
         html: generateInviteEmailHtml(emailData),
         text: generateInviteEmailText(emailData),
+        fromName: sender.fromName ?? undefined,
+        fromAddress: sender.fromAddress ?? undefined,
+        replyTo: sender.replyTo ?? undefined,
       })
 
       if (result.success) {
