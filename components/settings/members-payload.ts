@@ -33,19 +33,40 @@ export function parseCompanyMembersPayload<M, I>(body: unknown): CompanyMembersP
   }
 }
 
-export interface TeamMembersPayload<M> {
+export interface TeamMembersPayload<M, I> {
   members: M[]
+  invitations: I[]
   teamName: string | null
+  teamId: string | null
+  teamKind: string | null
+  isOwner: boolean
+  canInvite: boolean
 }
 
-export function parseTeamMembersPayload<M>(body: unknown): TeamMembersPayload<M> | null {
+export function parseTeamMembersPayload<M, I>(body: unknown): TeamMembersPayload<M, I> | null {
   if (typeof body !== 'object' || body === null) return null
   const data = (body as { data?: unknown }).data
   if (typeof data !== 'object' || data === null) return null
-  const d = data as { members?: unknown; teamName?: unknown }
+  const d = data as {
+    members?: unknown
+    invitations?: unknown
+    teamName?: unknown
+    teamId?: unknown
+    teamKind?: unknown
+    isOwner?: unknown
+    canInvite?: unknown
+  }
   if (!Array.isArray(d.members)) return null
   return {
     members: d.members as M[],
+    // Management-only extra, not roster state: a missing list means "none",
+    // not a failed read (the strictness above protects the member roster).
+    invitations: Array.isArray(d.invitations) ? (d.invitations as I[]) : [],
     teamName: typeof d.teamName === 'string' && d.teamName.length > 0 ? d.teamName : null,
+    teamId: typeof d.teamId === 'string' && d.teamId.length > 0 ? d.teamId : null,
+    teamKind: typeof d.teamKind === 'string' && d.teamKind.length > 0 ? d.teamKind : null,
+    // Only explicit boolean true unlocks management affordances.
+    isOwner: d.isOwner === true,
+    canInvite: d.canInvite === true,
   }
 }

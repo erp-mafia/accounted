@@ -42,12 +42,22 @@ vi.mock('@/lib/sandbox/guard', () => ({
   isSandboxCompany: vi.fn().mockResolvedValue(false),
 }))
 
+// Service client for the WL-10 team-agreement lookup (end clients cannot read
+// the byrå team or its grants under RLS, so the route uses the service role).
+let serviceByTable: Record<string, TableResult> = {}
+const createServiceClientMock = vi.fn(() => makeSupabase(serviceByTable))
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: () => createServiceClientMock(),
+  createClient: vi.fn(),
+}))
+
 import { GET } from '../status/route'
 
 interface StatusBody {
   isPaying: boolean
   trialEndsAt: string | null
   isDemo: boolean
+  teamAgreement?: { teamName: string }
 }
 
 function authAs(byTable: Record<string, TableResult>) {
@@ -60,6 +70,7 @@ function authAs(byTable: Record<string, TableResult>) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  serviceByTable = {}
 })
 
 describe('GET /api/billing/status', () => {
@@ -106,5 +117,100 @@ describe('GET /api/billing/status', () => {
 
     const { body } = await parseJsonResponse<StatusBody>(await GET())
     expect(body.isPaying).toBe(false)
+  })
+})
+
+// WL-10 billing honesty: a non-paying company under a byrå team with an
+// active team-scoped manual grant gets the additive teamAgreement field.
+describe('GET /api/billing/status team agreement', () => {
+  it('returns teamAgreement for a byrå-covered non-paying company', async () => {
+    authAs({
+      company_subscriptions: { data: null },
+      capability_grants: { data: null },
+    })
+    serviceByTable = {
+      companies: { data: { team_id: 'team-1' } },
+      teams: { data: { name: 'Siffran AB', kind: 'byra' } },
+      capability_grants: { data: [{ expires_at: null }] },
+    }
+
+    const { status, body } = await parseJsonResponse<StatusBody>(await GET())
+    expect(status).toBe(200)
+    expect(body.isPaying).toBe(false)
+    expect(body.teamAgreement).toEqual({ teamName: 'Siffran AB' })
+  })
+
+  it('accepts a future-dated grant expiry', async () => {
+    authAs({
+      company_subscriptions: { data: null },
+      capability_grants: { data: null },
+    })
+    serviceByTable = {
+      companies: { data: { team_id: 'team-1' } },
+      teams: { data: { name: 'Siffran AB', kind: 'byra' } },
+      capability_grants: { data: [{ expires_at: '2099-01-01T00:00:00Z' }] },
+    }
+
+    const { body } = await parseJsonResponse<StatusBody>(await GET())
+    expect(body.teamAgreement).toEqual({ teamName: 'Siffran AB' })
+  })
+
+  it('ignores an expired team grant (grace lapsed: standard paywall)', async () => {
+    authAs({
+      company_subscriptions: { data: null },
+      capability_grants: { data: null },
+    })
+    serviceByTable = {
+      companies: { data: { team_id: 'team-1' } },
+      teams: { data: { name: 'Siffran AB', kind: 'byra' } },
+      capability_grants: { data: [{ expires_at: '2020-01-01T00:00:00Z' }] },
+    }
+
+    const { body } = await parseJsonResponse<StatusBody>(await GET())
+    expect(body.isPaying).toBe(false)
+    expect(body.teamAgreement).toBeUndefined()
+  })
+
+  it('ignores a personal team even with a manual grant', async () => {
+    authAs({
+      company_subscriptions: { data: null },
+      capability_grants: { data: null },
+    })
+    serviceByTable = {
+      companies: { data: { team_id: 'team-1' } },
+      teams: { data: { name: 'Personal', kind: 'personal' } },
+      capability_grants: { data: [{ expires_at: null }] },
+    }
+
+    const { body } = await parseJsonResponse<StatusBody>(await GET())
+    expect(body.teamAgreement).toBeUndefined()
+  })
+
+  it('leaves a teamless company unchanged', async () => {
+    authAs({
+      company_subscriptions: { data: null },
+      capability_grants: { data: { expires_at: '2099-01-01T00:00:00Z' } },
+    })
+    serviceByTable = {
+      companies: { data: { team_id: null } },
+    }
+
+    const { body } = await parseJsonResponse<StatusBody>(await GET())
+    expect(body.isPaying).toBe(false)
+    expect(body.trialEndsAt).toBe('2099-01-01T00:00:00Z')
+    expect(body.teamAgreement).toBeUndefined()
+    expect('teamAgreement' in (body as object)).toBe(false)
+  })
+
+  it('never consults the team path for a paying company', async () => {
+    authAs({
+      company_subscriptions: { data: { status: 'active' } },
+      capability_grants: { data: null },
+    })
+
+    const { body } = await parseJsonResponse<StatusBody>(await GET())
+    expect(body.isPaying).toBe(true)
+    expect(body.teamAgreement).toBeUndefined()
+    expect(createServiceClientMock).not.toHaveBeenCalled()
   })
 })

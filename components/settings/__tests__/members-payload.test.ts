@@ -57,14 +57,37 @@ describe('parseCompanyMembersPayload', () => {
 describe('parseTeamMembersPayload', () => {
   it('passes a well-formed payload through', () => {
     expect(
-      parseTeamMembersPayload({ data: { members: [{ id: 'm1' }], teamName: 'Byrån AB' } }),
-    ).toEqual({ members: [{ id: 'm1' }], teamName: 'Byrån AB' })
+      parseTeamMembersPayload({
+        data: {
+          members: [{ id: 'm1' }],
+          invitations: [{ id: 'i1' }],
+          teamName: 'Byrån AB',
+          teamId: 'team-1',
+          teamKind: 'byra',
+          isOwner: true,
+          canInvite: true,
+        },
+      }),
+    ).toEqual({
+      members: [{ id: 'm1' }],
+      invitations: [{ id: 'i1' }],
+      teamName: 'Byrån AB',
+      teamId: 'team-1',
+      teamKind: 'byra',
+      isOwner: true,
+      canInvite: true,
+    })
   })
 
-  it('accepts a confirmed-empty roster and a missing team name', () => {
+  it('accepts a confirmed-empty roster and missing management fields', () => {
     expect(parseTeamMembersPayload({ data: { members: [] } })).toEqual({
       members: [],
+      invitations: [],
       teamName: null,
+      teamId: null,
+      teamKind: null,
+      isOwner: false,
+      canInvite: false,
     })
   })
 
@@ -76,9 +99,16 @@ describe('parseTeamMembersPayload', () => {
   })
 
   it('drops a non-string team name instead of rendering it', () => {
-    expect(parseTeamMembersPayload({ data: { members: [], teamName: 42 } })).toEqual({
-      members: [],
-      teamName: null,
-    })
+    expect(
+      parseTeamMembersPayload({ data: { members: [], teamName: 42 } }),
+    ).toMatchObject({ members: [], teamName: null })
+  })
+
+  it('only grants management affordances on explicit boolean true', () => {
+    expect(
+      parseTeamMembersPayload({
+        data: { members: [], invitations: 'oops', isOwner: 'yes', canInvite: 1 },
+      }),
+    ).toMatchObject({ invitations: [], isOwner: false, canInvite: false })
   })
 })

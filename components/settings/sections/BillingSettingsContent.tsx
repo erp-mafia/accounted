@@ -16,6 +16,7 @@ import {
 import { formatDateLong } from '@/lib/utils'
 import { BillingActions } from '@/components/settings/BillingActions'
 import { ILLUSTRATIONS, illustrationSrc } from '@/components/onboarding/onboarding-illustrations'
+import { useBranding } from '@/lib/branding/brand-context'
 
 // What the paid tier unlocks (mirrors lib/entitlements PAID_CAPABILITIES).
 const INCLUDED = [
@@ -48,6 +49,12 @@ interface BillingView {
   chargeDeferred: boolean
   paidJustNow: boolean
   isDemo: boolean
+  /**
+   * WL-10: present when the company is covered by its byrå team's agreement
+   * (active team-scoped manual grant). Replaces the upgrade pitch with a
+   * read-only "Ingår i <teamName>s avtal" state.
+   */
+  teamAgreement: { teamName: string } | null
 }
 
 /**
@@ -105,6 +112,7 @@ export function BillingSettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const tBilling = useTranslations('settings_billing')
+  const { appName } = useBranding()
   const errorLocale = useLocale() as ErrorLocale
   // null = the billing state is not known: still loading, or the read failed
   // (loadError). A failed GET must never render a fabricated non-paying,
@@ -144,6 +152,7 @@ export function BillingSettingsContent() {
           configured?: unknown
           trialEndsAt?: unknown
           isDemo?: unknown
+          teamAgreement?: unknown
         }
         if (!active) return
         if (typeof d?.isPaying !== 'boolean' || typeof d?.configured !== 'boolean') {
@@ -159,6 +168,13 @@ export function BillingSettingsContent() {
         // Set by the checkout success redirect. Provisioning happens via the
         // Stripe webhook, so isPaying can lag the redirect by a few seconds.
         const paidJustNow = new URLSearchParams(window.location.search).get('success') === '1'
+        // Only a well-formed teamAgreement (non-empty team name) activates the
+        // read-only agreement state: anything else falls back to the normal view.
+        const rawAgreement = d.teamAgreement as { teamName?: unknown } | null | undefined
+        const teamAgreement =
+          rawAgreement && typeof rawAgreement.teamName === 'string' && rawAgreement.teamName.length > 0
+            ? { teamName: rawAgreement.teamName }
+            : null
         setView({
           isPaying: d.isPaying,
           configured: d.configured,
@@ -167,6 +183,7 @@ export function BillingSettingsContent() {
           chargeDeferred,
           paidJustNow,
           isDemo: d.isDemo === true,
+          teamAgreement,
         })
       } catch {
         if (active) {
@@ -228,7 +245,7 @@ export function BillingSettingsContent() {
           <SettingsRow label="Status" borderless>
             <span>Demo</span>
             <SettingsRowNote>
-              Du provkör Accounted i en demo. Skapa ett riktigt konto för att aktivera
+              Du provkör {appName} i en demo. Skapa ett riktigt konto för att aktivera
               abonnemang, AI-assistent, bankkoppling och inlämning till Skatteverket.
             </SettingsRowNote>
           </SettingsRow>
@@ -292,6 +309,35 @@ export function BillingSettingsContent() {
             </span>
             <SettingsRowNote>Ladda om sidan om du inte ser ändringen.</SettingsRowNote>
           </SettingsRow>
+        </SettingsGroup>
+      </div>
+    )
+  }
+
+  // Covered by the byrå team's agreement (WL-10) → read-only state instead
+  // of the upgrade pitch and Stripe checkout. The page stays visible for
+  // transparency; billing is the byrå's, so there is nothing to manage here.
+  if (view.teamAgreement) {
+    return (
+      <div>
+        {header}
+        <SettingsGroup label="Ditt abonnemang">
+          <SettingsRow label="Status" borderless>
+            <span className="font-medium">
+              {tBilling('team_agreement_status', { teamName: view.teamAgreement.teamName })}
+            </span>
+            <SettingsRowNote>{tBilling('team_agreement_note')}</SettingsRowNote>
+          </SettingsRow>
+        </SettingsGroup>
+        <SettingsGroup label="I abonnemanget">
+          <ul className="space-y-2 px-1 pt-3">
+            {INCLUDED.map((item) => (
+              <li key={item} className="flex items-start gap-2 text-sm">
+                <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
         </SettingsGroup>
       </div>
     )
