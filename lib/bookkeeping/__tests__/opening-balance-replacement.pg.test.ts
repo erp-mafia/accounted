@@ -28,6 +28,16 @@ async function seedOpeningBalance(params: {
   link?: boolean
 }): Promise<SeededOpeningBalance> {
   const amount = params.debit ?? 100
+  await getPool().query(
+    `INSERT INTO public.chart_of_accounts
+       (user_id, company_id, account_number, account_name, account_class,
+        account_type, normal_balance, is_active)
+     VALUES
+       ($1, $2, '1930', 'Bankkonto', 1, 'asset', 'debit', true),
+       ($1, $2, '2010', 'Eget kapital', 2, 'equity', 'credit', true)
+     ON CONFLICT (company_id, account_number) DO NOTHING`,
+    [params.userId, params.companyId],
+  )
   const accounts = await getPool().query<{ id: string; account_number: string }>(
     `SELECT id, account_number
        FROM public.chart_of_accounts
