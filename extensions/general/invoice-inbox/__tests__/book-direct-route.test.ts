@@ -217,6 +217,109 @@ describe('POST /items/:id/book-direct', () => {
     expect(createJournalEntryMock).not.toHaveBeenCalled()
   })
 
+  // ── WhatsApp channel-context notes default ──────────────────
+  // The chat answers (representation deltagare + syfte, sender note) reach
+  // the verifikat even through callers that never saw the chat: absent/empty
+  // request notes default server-side to the rendered channel_context.
+
+  const WA_CONTEXT = {
+    channel: 'whatsapp' as const,
+    caption: 'Kvitto lunch',
+    representation: {
+      participants: [
+        { name: 'Anna Berg', company: 'Volvo' },
+        { name: 'Jakob W', company: null },
+      ],
+      purpose: 'uppföljning av avtal',
+      event_date: null,
+      raw_answer: 'Anna Berg Volvo och jag, uppföljning av avtal',
+      answered_at: '2026-08-01T12:00:00Z',
+    },
+  }
+
+  it('defaults notes to the rendered channel context when the request sends none', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        document_id: 'doc-1',
+        source: 'whatsapp',
+        channel_context: WA_CONTEXT,
+      }),
+    })
+    enqueue({ data: null }) // inbox item update
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY, // no notes field
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        notes: 'Representation: Anna Berg (Volvo), Jakob W · Syfte: uppföljning av avtal',
+      }),
+    )
+  })
+
+  it('lets caller-supplied notes win over the channel context', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        document_id: 'doc-1',
+        source: 'whatsapp',
+        channel_context: WA_CONTEXT,
+      }),
+    })
+    enqueue({ data: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: { ...VALID_BODY, notes: 'Min egen anteckning' },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ notes: 'Min egen anteckning' }),
+    )
+  })
+
+  it('leaves notes undefined when the item has no channel context', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
+    enqueue({ data: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ notes: undefined }),
+    )
+  })
+
   it('books with transaction link: source_type=bank_transaction, source_id=transaction.id', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })

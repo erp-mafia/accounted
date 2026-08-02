@@ -2844,7 +2844,14 @@
     "pages_partial_note": "Tolkad från de första {analyzed} av {total} sidorna.",
     "heic_hint": "HEIC-bilder kan inte AI-tolkas ännu. Ladda upp kvittot som JPEG eller PDF, eller fyll i fälten manuellt.",
     "skipped_hint": "AI-tolkning kördes inte för det här dokumentet. Du kan koppla dokumentet till en transaktion eller skapa leverantörsfaktura manuellt.",
-    "retry_overwrite_confirm": "Ny tolkning skriver över fälten, även ändringar du gjort själv. Fortsätta?"
+    "retry_overwrite_confirm": "Ny tolkning skriver över fälten, även ändringar du gjort själv. Fortsätta?",
+    "wa_block_title": "Från WhatsApp",
+    "wa_caption_label": "Meddelande",
+    "wa_participants_label": "Deltagare",
+    "wa_purpose_label": "Syfte",
+    "wa_note_label": "Anteckning",
+    "wa_question_unanswered": "En fråga från chatten blev obesvarad. Komplettera uppgifterna här innan du bokför.",
+    "wa_question_badge": "Fråga obesvarad"
   },
   "inbox_custom_domain": {
     "title": "Egen domän för inkorgen",

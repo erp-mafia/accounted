@@ -32,13 +32,18 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
-import type { BASAccount, BookingTemplateLibrary, CashAccount, FiscalPeriod, InvoiceExtractionResult } from '@/types'
+import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
+import type { BASAccount, BookingTemplateLibrary, CashAccount, FiscalPeriod, InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
   id: string
   document_id: string | null
   matched_transaction_id: string | null
   extracted_data: InvoiceExtractionResult | null
+  // Verified human answers from the delivering chat (WhatsApp items):
+  // prefills the notes field so representation deltagare + syfte reach the
+  // verifikat. Absent for email/upload items.
+  channel_context?: InboxChannelContext | null
 }
 
 interface PickerTransaction {
@@ -225,7 +230,11 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     const supplier = item.extracted_data?.supplier?.name?.trim() || ''
     const invoiceNum = item.extracted_data?.invoice?.invoiceNumber?.trim() || ''
     setDescription([supplier, invoiceNum].filter(Boolean).join(' · ') || 'Bokföring från inkorg')
-    setNotes('')
+    // WhatsApp items: prefill with the rendered chat context (representation
+    // deltagare + syfte, sender note) so it lands on the verifikat unless the
+    // user edits it away. The server applies the same default only when the
+    // submitted notes are empty, so an edited value always wins.
+    setNotes(renderChannelContextNotes(item.channel_context) ?? '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, item.id])
 

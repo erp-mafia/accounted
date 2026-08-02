@@ -2844,7 +2844,14 @@
     "pages_partial_note": "Extracted from the first {analyzed} of {total} pages.",
     "heic_hint": "HEIC images cannot be AI-extracted yet. Upload the receipt as JPEG or PDF, or fill in the fields manually.",
     "skipped_hint": "AI extraction did not run for this document. You can link the document to a transaction or create a supplier invoice manually.",
-    "retry_overwrite_confirm": "Re-running extraction overwrites the fields, including your own edits. Continue?"
+    "retry_overwrite_confirm": "Re-running extraction overwrites the fields, including your own edits. Continue?",
+    "wa_block_title": "From WhatsApp",
+    "wa_caption_label": "Message",
+    "wa_participants_label": "Participants",
+    "wa_purpose_label": "Purpose",
+    "wa_note_label": "Note",
+    "wa_question_unanswered": "A question from the chat went unanswered. Complete the details here before booking.",
+    "wa_question_badge": "Unanswered question"
   },
   "inbox_custom_domain": {
     "title": "Custom inbox domain",
