@@ -447,10 +447,12 @@ describe('commit_opening_balance_replacement', () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const seeded = await seedOpeningBalance({ userId, companyId, fiscalPeriodId })
     await getPool().query(
-      `UPDATE public.company_settings
-          SET bookkeeping_locked_through = '2026-01-01'
-        WHERE company_id = $1`,
-      [companyId],
+      `INSERT INTO public.company_settings
+         (user_id, company_id, bookkeeping_locked_through)
+       VALUES ($1, $2, '2026-01-01')
+       ON CONFLICT (company_id)
+       DO UPDATE SET bookkeeping_locked_through = EXCLUDED.bookkeeping_locked_through`,
+      [userId, companyId],
     )
     const before = await getPool().query<{ count: number }>(
       `SELECT count(*)::int AS count FROM public.journal_entries WHERE company_id = $1`,

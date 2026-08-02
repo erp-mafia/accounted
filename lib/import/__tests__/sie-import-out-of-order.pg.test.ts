@@ -245,6 +245,17 @@ describe('out-of-order SIE opening balances', () => {
 
   it('keeps the 2025 IB and replaces the imported-first 2026 IB without duplication', async () => {
     const { userId, companyId, fiscalPeriodId: period2026Id } = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.chart_of_accounts
+         (user_id, company_id, account_number, account_name, account_class,
+          account_type, normal_balance, is_active)
+       VALUES
+         ($1, $2, '1930', 'Bankkonto', 1, 'asset', 'debit', true),
+         ($1, $2, '2010', 'Eget kapital', 2, 'equity', 'credit', true),
+         ($1, $2, '3001', 'Forsaljning', 3, 'revenue', 'credit', true)
+       ON CONFLICT (company_id, account_number) DO NOTHING`,
+      [userId, companyId],
+    )
     const old2026IBId = await insertPostedEntry({
       userId,
       companyId,
