@@ -13,14 +13,14 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { executeSIEImport } from '../sie-import'
-import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { createJournalEntry, replaceOpeningBalanceEntry } from '@/lib/bookkeeping/engine'
 import { findUntransferredResults } from '@/lib/reports/imbalance-diagnosis'
 import type { ParsedSIEFile, AccountMapping } from '../types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: vi.fn(async () => ({ id: 'ob-entry-1' })),
-  reverseEntry: vi.fn(),
+  replaceOpeningBalanceEntry: vi.fn(),
 }))
 
 vi.mock('@/lib/reports/imbalance-diagnosis', () => ({
@@ -306,12 +306,15 @@ describe('executeSIEImport: derived IB from #UB -1 (issue #675)', () => {
       { count: 0 },
     ]
 
-    vi.mocked(createJournalEntry)
-      .mockResolvedValueOnce({ id: 'ib-2025' } as Awaited<ReturnType<typeof createJournalEntry>>)
-      .mockResolvedValueOnce({ id: 'ib-2026-new' } as Awaited<ReturnType<typeof createJournalEntry>>)
-    vi.mocked(reverseEntry).mockResolvedValueOnce({
-      id: 'storno-2026-old',
-    } as Awaited<ReturnType<typeof reverseEntry>>)
+    vi.mocked(createJournalEntry).mockResolvedValueOnce({
+      id: 'ib-2025',
+    } as Awaited<ReturnType<typeof createJournalEntry>>)
+    vi.mocked(replaceOpeningBalanceEntry).mockResolvedValueOnce({
+      newEntryId: 'ib-2026-new',
+      stornoEntryId: 'storno-2026-old',
+      newVoucherNumber: 2,
+      stornoVoucherNumber: 3,
+    })
 
     const parsed = makeParsedFile({
       header: {
@@ -359,17 +362,16 @@ describe('executeSIEImport: derived IB from #UB -1 (issue #675)', () => {
       source_type: 'opening_balance',
       entry_date: '2025-01-01',
     })
-    expect(vi.mocked(createJournalEntry).mock.calls[1][3]).toMatchObject({
-      fiscal_period_id: 'fp-2026',
-      source_type: 'opening_balance',
-      entry_date: '2026-01-01',
-    })
-    expect(reverseEntry).toHaveBeenCalledWith(
+    expect(replaceOpeningBalanceEntry).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',
       'user-1',
       'ib-2026-old',
-      '2026-01-01',
+      expect.objectContaining({
+      fiscal_period_id: 'fp-2026',
+      source_type: 'opening_balance',
+      entry_date: '2026-01-01',
+      }),
     )
   })
 
@@ -437,7 +439,7 @@ describe('executeSIEImport: derived IB from #UB -1 (issue #675)', () => {
     })
     expect(result.warnings.join(' ')).toMatch(/Räkenskapsår 2026.*är låst/)
     expect(createJournalEntry).toHaveBeenCalledTimes(1)
-    expect(reverseEntry).not.toHaveBeenCalled()
+    expect(replaceOpeningBalanceEntry).not.toHaveBeenCalled()
   })
 
   it('still rejects a file whose vouchers cross the target fiscal-period boundary', async () => {

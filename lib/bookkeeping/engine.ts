@@ -713,6 +713,166 @@ export async function createJournalEntry(
   }
 }
 
+export interface OpeningBalanceReplacementResult {
+  newEntryId: string
+  stornoEntryId: string
+  newVoucherNumber: number
+  stornoVoucherNumber: number
+}
+
+/**
+ * Atomically replace a period's posted opening balance with a new engine
+ * voucher and a storno of the old voucher. The database function owns the
+ * period row lock, authorization, compare-and-swap check, voucher commits,
+ * status transition, and pointer swap in one transaction.
+ */
+export async function replaceOpeningBalanceEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  expectedOldEntryId: string,
+  input: CreateJournalEntryInput,
+): Promise<OpeningBalanceReplacementResult> {
+  if (input.source_type !== 'opening_balance') {
+    throw new BookkeepingDatabaseError(
+      'replace_opening_balance',
+      'Replacement entry must use source_type opening_balance',
+    )
+  }
+
+  const balance = validateBalance(input.lines)
+  if (!balance.valid) {
+    throw new JournalEntryNotBalancedError(
+      balance.totalDebit,
+      balance.totalCredit,
+      'draft',
+    )
+  }
+
+  await validateEntryDimensions(supabase, companyId, input.lines)
+
+  const accountIdMap = await resolveAccountIds(supabase, companyId, input.lines)
+  const accountNumbers = [...new Set(input.lines.map((line) => line.account_number))]
+  let missingAccounts = accountNumbers.filter((number) => !accountIdMap.has(number))
+
+  if (missingAccounts.length > 0) {
+    const seeded = await backfillStandardBASAccounts(
+      supabase,
+      companyId,
+      userId,
+      missingAccounts,
+    )
+    if (seeded.length > 0) {
+      const refreshed = await resolveAccountIds(supabase, companyId, input.lines)
+      for (const [number, id] of refreshed) accountIdMap.set(number, id)
+      missingAccounts = accountNumbers.filter((number) => !accountIdMap.has(number))
+    }
+    if (missingAccounts.length > 0) {
+      throw new AccountsNotInChartError(missingAccounts)
+    }
+  }
+
+  const voucherSeries = input.voucher_series
+    ?? await resolveSeriesFromSettings(supabase, companyId, 'opening_balance')
+  const preparedLines = buildLineInserts(
+    '00000000-0000-0000-0000-000000000000',
+    input.lines,
+    accountIdMap,
+  ).map(({ journal_entry_id: _journalEntryId, ...line }) => line)
+  const actor = getActor()
+
+  const { data, error } = await supabase.rpc('commit_opening_balance_replacement', {
+    p_company_id: companyId,
+    p_period_id: input.fiscal_period_id,
+    p_expected_old_entry_id: expectedOldEntryId,
+    p_user_id: userId,
+    p_entry_date: input.entry_date,
+    p_description: input.description,
+    p_voucher_series: voucherSeries,
+    p_lines: preparedLines,
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
+  })
+
+  if (error) {
+    log.error('commit_opening_balance_replacement RPC failed', error, {
+      operation: 'replace_opening_balance',
+      companyId,
+      userId,
+      entityType: 'journal_entry',
+      entityId: expectedOldEntryId,
+      fiscalPeriodId: input.fiscal_period_id,
+      pgCode: (error as { code?: string }).code,
+      pgDetails: (error as { details?: string }).details,
+      pgHint: (error as { hint?: string }).hint,
+    })
+    throw new BookkeepingDatabaseError('replace_opening_balance', error.message)
+  }
+
+  type RpcRow = {
+    new_entry_id: string
+    storno_entry_id: string
+    new_voucher_number: number
+    storno_voucher_number: number
+  }
+  const row = (Array.isArray(data) ? data[0] : data) as RpcRow | null
+  if (!row?.new_entry_id || !row.storno_entry_id) {
+    throw new BookkeepingDatabaseError(
+      'replace_opening_balance',
+      'Atomic replacement returned no journal entry ids',
+    )
+  }
+
+  const result: OpeningBalanceReplacementResult = {
+    newEntryId: row.new_entry_id,
+    stornoEntryId: row.storno_entry_id,
+    newVoucherNumber: row.new_voucher_number,
+    stornoVoucherNumber: row.storno_voucher_number,
+  }
+
+  const { data: entries, error: entriesError } = await supabase
+    .from('journal_entries')
+    .select('*, lines:journal_entry_lines(*)')
+    .eq('company_id', companyId)
+    .in('id', [expectedOldEntryId, result.newEntryId, result.stornoEntryId])
+
+  if (entriesError) {
+    log.error('atomic opening balance replacement committed but entry refresh failed', entriesError, {
+      companyId,
+      entityId: result.newEntryId,
+    })
+    return result
+  }
+
+  const byId = new Map(
+    ((entries ?? []) as JournalEntry[]).map((entry) => [entry.id, entry]),
+  )
+  const originalEntry = byId.get(expectedOldEntryId)
+  const newEntry = byId.get(result.newEntryId)
+  const stornoEntry = byId.get(result.stornoEntryId)
+
+  if (newEntry) {
+    await eventBus.emit({
+      type: 'journal_entry.committed',
+      payload: { entry: newEntry, userId, companyId },
+    })
+  }
+  if (stornoEntry) {
+    await eventBus.emit({
+      type: 'journal_entry.committed',
+      payload: { entry: stornoEntry, userId, companyId },
+    })
+  }
+  if (originalEntry && stornoEntry) {
+    await eventBus.emit({
+      type: 'journal_entry.reversed',
+      payload: { originalEntry, reversalEntry: stornoEntry, userId, companyId },
+    })
+  }
+
+  return result
+}
+
 /**
  * Get the current date in Swedish timezone (Europe/Stockholm).
  * Avoids UTC date shift when server runs in a different timezone.

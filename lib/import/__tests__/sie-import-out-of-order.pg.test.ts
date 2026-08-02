@@ -4,15 +4,15 @@ import type { PoolClient } from 'pg'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getClient, getPool } from '@/tests/pg/setup'
 import { seedCompany } from '@/tests/pg/fixtures'
-import type { CreateJournalEntryInput, JournalEntry } from '@/types'
+import type { CreateJournalEntryInput } from '@/types'
 import type { ParsedSIEFile } from '../types'
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: vi.fn(),
-  reverseEntry: vi.fn(),
+  replaceOpeningBalanceEntry: vi.fn(),
 }))
 
-import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { replaceOpeningBalanceEntry } from '@/lib/bookkeeping/engine'
 import {
   companyHasPriorActivity,
   resyncNextPeriodOpeningBalance,
@@ -63,6 +63,23 @@ async function insertPostedEntry(params: {
     ],
   )
 
+  await getPool().query(
+    `INSERT INTO public.voucher_sequences
+       (company_id, user_id, fiscal_period_id, voucher_series, last_number)
+     VALUES ($1, $2, $3, 'A', $4)
+     ON CONFLICT (company_id, fiscal_period_id, voucher_series)
+     DO UPDATE SET last_number = GREATEST(
+       public.voucher_sequences.last_number,
+       EXCLUDED.last_number
+     )`,
+    [
+      params.companyId,
+      params.userId,
+      params.fiscalPeriodId,
+      voucher.rows[0]!.next_number,
+    ],
+  )
+
   for (const line of params.lines) {
     await getPool().query(
       `INSERT INTO public.journal_entry_lines
@@ -104,7 +121,7 @@ async function runAsAuthenticated<T>(
   }
 }
 
-function makePgSupabase(userId: string): SupabaseClient {
+function makePgSupabase(_userId: string): SupabaseClient {
   const from = (table: string) => {
     if (table === 'journal_entries') {
       const filters: {
@@ -193,25 +210,7 @@ function makePgSupabase(userId: string): SupabaseClient {
     throw new Error(`Unexpected table in pg adapter: ${table}`)
   }
 
-  const rpc = async (name: string, args: Record<string, unknown>) => {
-    if (name !== 'replace_period_opening_balance_link') {
-      throw new Error(`Unexpected RPC in pg adapter: ${name}`)
-    }
-    try {
-      await runAsAuthenticated(userId, (client) => client.query(
-        `SELECT public.replace_period_opening_balance_link($1::uuid, $2::uuid, $3::uuid)`,
-        [args.p_company_id, args.p_period_id, args.p_new_entry_id],
-      ))
-      return { data: null, error: null }
-    } catch (error) {
-      return {
-        data: null,
-        error: { message: error instanceof Error ? error.message : String(error) },
-      }
-    }
-  }
-
-  return { from, rpc } as unknown as SupabaseClient
+  return { from } as unknown as SupabaseClient
 }
 
 function closingBalances(): ParsedSIEFile {
@@ -241,8 +240,7 @@ const oldIBLines: EntryLine[] = [
 
 describe('out-of-order SIE opening balances', () => {
   beforeEach(() => {
-    vi.mocked(createJournalEntry).mockReset()
-    vi.mocked(reverseEntry).mockReset()
+    vi.mocked(replaceOpeningBalanceEntry).mockReset()
   })
 
   it('keeps the 2025 IB and replaces the imported-first 2026 IB without duplication', async () => {
@@ -301,66 +299,66 @@ describe('out-of-order SIE opening balances', () => {
       [ib2025Id, period2025Id],
     )
 
-    vi.mocked(createJournalEntry).mockImplementation(async (
+    vi.mocked(replaceOpeningBalanceEntry).mockImplementation(async (
       _client: SupabaseClient,
       targetCompanyId: string,
       targetUserId: string,
+      expectedOldEntryId: string,
       input: CreateJournalEntryInput,
     ) => {
-      const id = await insertPostedEntry({
-        userId: targetUserId,
-        companyId: targetCompanyId,
-        fiscalPeriodId: input.fiscal_period_id,
-        entryDate: input.entry_date,
-        sourceType: 'opening_balance',
-        description: input.description,
-        lines: input.lines,
+      const accounts = await getPool().query<{ id: string; account_number: string }>(
+        `SELECT id, account_number
+           FROM public.chart_of_accounts
+          WHERE company_id = $1
+            AND account_number = ANY($2::text[])`,
+        [targetCompanyId, input.lines.map((line) => line.account_number)],
+      )
+      const accountIds = new Map(accounts.rows.map((account) => [account.account_number, account.id]))
+      const lines = input.lines.map((line, sortOrder) => ({
+        account_number: line.account_number,
+        account_id: accountIds.get(line.account_number),
+        debit_amount: line.debit_amount,
+        credit_amount: line.credit_amount,
+        currency: line.currency ?? 'SEK',
+        amount_in_currency: line.amount_in_currency ?? null,
+        exchange_rate: line.exchange_rate ?? null,
+        line_description: line.line_description ?? null,
+        tax_code: line.tax_code ?? null,
+        dimensions: line.dimensions ?? {},
+        sort_order: sortOrder,
+      }))
+
+      const outcome = await runAsAuthenticated(targetUserId, async (client) => {
+        const result = await client.query<{
+          new_entry_id: string
+          storno_entry_id: string
+          new_voucher_number: number
+          storno_voucher_number: number
+        }>(
+          `SELECT * FROM public.commit_opening_balance_replacement(
+             $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::date,
+             $6::text, $7::text, $8::jsonb, NULL, NULL
+           )`,
+          [
+            targetCompanyId,
+            input.fiscal_period_id,
+            expectedOldEntryId,
+            targetUserId,
+            input.entry_date,
+            input.description,
+            input.voucher_series ?? 'A',
+            JSON.stringify(lines),
+          ],
+        )
+        return result.rows[0]!
       })
-      return { id } as JournalEntry
-    })
-    vi.mocked(reverseEntry).mockImplementation(async (
-      _client: SupabaseClient,
-      targetCompanyId: string,
-      targetUserId: string,
-      entryId: string,
-      reversalDate?: string,
-    ) => {
-      const original = await getPool().query<{
-        fiscal_period_id: string
-        entry_date: string
-      }>(
-        `SELECT fiscal_period_id, entry_date::text
-           FROM public.journal_entries
-          WHERE id = $1 AND company_id = $2`,
-        [entryId, targetCompanyId],
-      )
-      const lines = await getPool().query<EntryLine>(
-        `SELECT account_number, debit_amount::float8, credit_amount::float8
-           FROM public.journal_entry_lines
-          WHERE journal_entry_id = $1`,
-        [entryId],
-      )
-      const stornoId = await insertPostedEntry({
-        userId: targetUserId,
-        companyId: targetCompanyId,
-        fiscalPeriodId: original.rows[0]!.fiscal_period_id,
-        entryDate: reversalDate ?? original.rows[0]!.entry_date,
-        sourceType: 'storno',
-        description: 'Storno old 2026 IB',
-        reversesId: entryId,
-        lines: lines.rows.map((line) => ({
-          account_number: line.account_number,
-          debit_amount: line.credit_amount,
-          credit_amount: line.debit_amount,
-        })),
-      })
-      await getPool().query(
-        `UPDATE public.journal_entries
-            SET status = 'reversed', reversed_by_id = $1
-          WHERE id = $2 AND status = 'posted'`,
-        [stornoId, entryId],
-      )
-      return { id: stornoId } as JournalEntry
+
+      return {
+        newEntryId: outcome.new_entry_id,
+        stornoEntryId: outcome.storno_entry_id,
+        newVoucherNumber: outcome.new_voucher_number,
+        stornoVoucherNumber: outcome.storno_voucher_number,
+      }
     })
 
     const resync = await resyncNextPeriodOpeningBalance(
@@ -477,8 +475,7 @@ describe('out-of-order SIE opening balances', () => {
       reason: 'next_period_locked',
       nextPeriodName: '2026',
     })
-    expect(createJournalEntry).not.toHaveBeenCalled()
-    expect(reverseEntry).not.toHaveBeenCalled()
+    expect(replaceOpeningBalanceEntry).not.toHaveBeenCalled()
 
     const after = await getPool().query<{
       opening_balance_entry_id: string | null

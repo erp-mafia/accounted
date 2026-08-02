@@ -9,7 +9,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { importDimensionRegistry } from './sie-dimensions'
-import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
+import { createJournalEntry, replaceOpeningBalanceEntry } from '@/lib/bookkeeping/engine'
 import type {
   ParsedSIEFile,
   AccountMapping,
@@ -914,52 +914,27 @@ export async function resyncNextPeriodOpeningBalance(
     }
   }
 
-  // Ordering note: create the new IB FIRST, then storno the old one. If we
-  // stornoed first and the createJournalEntry call failed, the next period
-  // would be left with a reversed IB and nothing to replace it, and
-  // executeSIEImport swallows our error as a non-fatal warning. By creating
-  // first we guarantee the worst case is "new IB exists but not yet linked",
-  // which getOpeningBalances() can still reason about.
-
-  // Build the new IB entry on the next period.
-  const newEntry = await createJournalEntry(supabase, companyId, userId, {
-    fiscal_period_id: nextPeriod.id,
-    entry_date: nextPeriod.period_start as string,
-    description: 'Ingående balanser (resynk efter prior-year SIE-import)',
-    source_type: 'opening_balance',
-    voucher_series: 'A',
-    lines: newLines,
-  })
-
-  // Atomically swap the period FK pointer (two-step around the
-  // immutability trigger).
-  const { error: relinkError } = await supabase.rpc('replace_period_opening_balance_link', {
-    p_company_id: companyId,
-    p_period_id: nextPeriod.id,
-    p_new_entry_id: newEntry.id,
-  })
-
-  if (relinkError) {
-    throw new Error(`Failed to relink opening balance on next period: ${relinkError.message}`)
-  }
-
-  // Now that the period points at the new IB, storno the old one. If this
-  // throws, the period is already on the correct entry: the orphaned old
-  // entry shows up as a stray verifikat but the FK stays consistent.
-  const storno = await reverseEntry(
+  const replacement = await replaceOpeningBalanceEntry(
     supabase,
     companyId,
     userId,
     nextPeriod.opening_balance_entry_id,
-    nextPeriod.period_start as string,
+    {
+      fiscal_period_id: nextPeriod.id,
+      entry_date: nextPeriod.period_start as string,
+      description: 'Ingående balanser (resynk efter prior-year SIE-import)',
+      source_type: 'opening_balance',
+      voucher_series: 'A',
+      lines: newLines,
+    },
   )
 
   return {
     resynced: true,
     nextPeriodId: nextPeriod.id,
     nextPeriodName: nextPeriod.name,
-    stornoEntryId: storno.id,
-    newOpeningBalanceEntryId: newEntry.id,
+    stornoEntryId: replacement.stornoEntryId,
+    newOpeningBalanceEntryId: replacement.newEntryId,
   }
 }
 
