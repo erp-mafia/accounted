@@ -844,6 +844,21 @@ export async function resyncNextPeriodOpeningBalance(
     return { resynced: false, reason: 'no_next_period' }
   }
 
+  const importedPeriodEnd = new Date(`${justImportedPeriodEnd}T00:00:00Z`)
+  importedPeriodEnd.setUTCDate(importedPeriodEnd.getUTCDate() + 1)
+  const expectedNextPeriodStart = importedPeriodEnd.toISOString().slice(0, 10)
+
+  if (nextPeriod.period_start !== expectedNextPeriodStart) {
+    // A later period separated by a gap has its own authoritative IB. It must
+    // not be replaced with a non-adjacent year's UB while the middle year is
+    // still missing.
+    return {
+      resynced: false,
+      reason: 'next_period_not_adjacent',
+      nextPeriodName: nextPeriod.name,
+    }
+  }
+
   if (!nextPeriod.opening_balance_entry_id) {
     // No existing IB on the next period: caller has nothing to resync; the
     // user's first IB for the next period will be derived from the import

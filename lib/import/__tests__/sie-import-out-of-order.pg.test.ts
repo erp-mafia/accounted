@@ -213,24 +213,93 @@ function makePgSupabase(_userId: string): SupabaseClient {
   return { from } as unknown as SupabaseClient
 }
 
-function closingBalances(): ParsedSIEFile {
+function closingBalances(amount = 150): ParsedSIEFile {
   return {
     closingBalances: [
-      { yearIndex: 0, account: '1930', amount: 150 },
-      { yearIndex: 0, account: '2010', amount: -150 },
+      { yearIndex: 0, account: '1930', amount },
+      { yearIndex: 0, account: '2010', amount: -amount },
     ],
   } as ParsedSIEFile
 }
 
-async function insertPriorPeriod(companyId: string): Promise<string> {
+async function insertPeriod(
+  companyId: string,
+  name: string,
+  periodStart: string,
+  periodEnd: string,
+): Promise<string> {
   const result = await getPool().query<{ id: string }>(
     `INSERT INTO public.fiscal_periods
        (company_id, name, period_start, period_end, is_closed, opening_balances_set)
-     VALUES ($1, 'Räkenskapsår 2025', '2025-01-01', '2025-12-31', false, false)
+     VALUES ($1, $2, $3, $4, false, false)
      RETURNING id`,
-    [companyId],
+    [companyId, name, periodStart, periodEnd],
   )
   return result.rows[0]!.id
+}
+
+function installAtomicReplacementMock(): void {
+  vi.mocked(replaceOpeningBalanceEntry).mockImplementation(async (
+    _client: SupabaseClient,
+    targetCompanyId: string,
+    targetUserId: string,
+    expectedOldEntryId: string,
+    input: CreateJournalEntryInput,
+  ) => {
+    const accounts = await getPool().query<{ id: string; account_number: string }>(
+      `SELECT id, account_number
+         FROM public.chart_of_accounts
+        WHERE company_id = $1
+          AND account_number = ANY($2::text[])`,
+      [targetCompanyId, input.lines.map((line) => line.account_number)],
+    )
+    const accountIds = new Map(accounts.rows.map((account) => [account.account_number, account.id]))
+    const lines = input.lines.map((line, sortOrder) => ({
+      account_number: line.account_number,
+      account_id: accountIds.get(line.account_number),
+      debit_amount: line.debit_amount,
+      credit_amount: line.credit_amount,
+      currency: line.currency ?? 'SEK',
+      amount_in_currency: line.amount_in_currency ?? null,
+      exchange_rate: line.exchange_rate ?? null,
+      line_description: line.line_description ?? null,
+      tax_code: line.tax_code ?? null,
+      dimensions: line.dimensions ?? {},
+      sort_order: sortOrder,
+    }))
+
+    const outcome = await runAsAuthenticated(targetUserId, async (client) => {
+      const result = await client.query<{
+        new_entry_id: string
+        storno_entry_id: string
+        new_voucher_number: number
+        storno_voucher_number: number
+      }>(
+        `SELECT * FROM public.commit_opening_balance_replacement(
+           $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::date,
+           $6::text, $7::text, $8::jsonb, NULL, NULL
+         )`,
+        [
+          targetCompanyId,
+          input.fiscal_period_id,
+          expectedOldEntryId,
+          targetUserId,
+          input.entry_date,
+          input.description,
+          input.voucher_series ?? 'A',
+          JSON.stringify(lines),
+        ],
+      )
+      return result.rows[0]!
+    })
+
+    return {
+      newEntryId: outcome.new_entry_id,
+      stornoEntryId: outcome.storno_entry_id,
+      newVoucherNumber: outcome.new_voucher_number,
+      stornoVoucherNumber: outcome.storno_voucher_number,
+    }
+  })
 }
 
 const oldIBLines: EntryLine[] = [
@@ -289,7 +358,12 @@ describe('out-of-order SIE opening balances', () => {
     // Inclusive end-date filtering preserves the same-period continuation guard.
     expect(await companyHasPriorActivity(supabase, companyId, '2026-12-31')).toBe(true)
 
-    const period2025Id = await insertPriorPeriod(companyId)
+    const period2025Id = await insertPeriod(
+      companyId,
+      'Räkenskapsår 2025',
+      '2025-01-01',
+      '2025-12-31',
+    )
     await getPool().query(
       `UPDATE public.fiscal_periods SET previous_period_id = $1 WHERE id = $2`,
       [period2025Id, period2026Id],
@@ -310,67 +384,7 @@ describe('out-of-order SIE opening balances', () => {
       [ib2025Id, period2025Id],
     )
 
-    vi.mocked(replaceOpeningBalanceEntry).mockImplementation(async (
-      _client: SupabaseClient,
-      targetCompanyId: string,
-      targetUserId: string,
-      expectedOldEntryId: string,
-      input: CreateJournalEntryInput,
-    ) => {
-      const accounts = await getPool().query<{ id: string; account_number: string }>(
-        `SELECT id, account_number
-           FROM public.chart_of_accounts
-          WHERE company_id = $1
-            AND account_number = ANY($2::text[])`,
-        [targetCompanyId, input.lines.map((line) => line.account_number)],
-      )
-      const accountIds = new Map(accounts.rows.map((account) => [account.account_number, account.id]))
-      const lines = input.lines.map((line, sortOrder) => ({
-        account_number: line.account_number,
-        account_id: accountIds.get(line.account_number),
-        debit_amount: line.debit_amount,
-        credit_amount: line.credit_amount,
-        currency: line.currency ?? 'SEK',
-        amount_in_currency: line.amount_in_currency ?? null,
-        exchange_rate: line.exchange_rate ?? null,
-        line_description: line.line_description ?? null,
-        tax_code: line.tax_code ?? null,
-        dimensions: line.dimensions ?? {},
-        sort_order: sortOrder,
-      }))
-
-      const outcome = await runAsAuthenticated(targetUserId, async (client) => {
-        const result = await client.query<{
-          new_entry_id: string
-          storno_entry_id: string
-          new_voucher_number: number
-          storno_voucher_number: number
-        }>(
-          `SELECT * FROM public.commit_opening_balance_replacement(
-             $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::date,
-             $6::text, $7::text, $8::jsonb, NULL, NULL
-           )`,
-          [
-            targetCompanyId,
-            input.fiscal_period_id,
-            expectedOldEntryId,
-            targetUserId,
-            input.entry_date,
-            input.description,
-            input.voucher_series ?? 'A',
-            JSON.stringify(lines),
-          ],
-        )
-        return result.rows[0]!
-      })
-
-      return {
-        newEntryId: outcome.new_entry_id,
-        stornoEntryId: outcome.storno_entry_id,
-        newVoucherNumber: outcome.new_voucher_number,
-        stornoVoucherNumber: outcome.storno_voucher_number,
-      }
-    })
+    installAtomicReplacementMock()
 
     const resync = await resyncNextPeriodOpeningBalance(
       supabase,
@@ -445,6 +459,188 @@ describe('out-of-order SIE opening balances', () => {
     expect(net.rows).toEqual([
       { account_number: '1930', amount: 150 },
       { account_number: '2010', amount: -150 },
+    ])
+  })
+
+  it('waits for a missing middle year before resyncing a later opening balance', async () => {
+    const { userId, companyId, fiscalPeriodId: period2026Id } = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.chart_of_accounts
+         (user_id, company_id, account_number, account_name, account_class,
+          account_type, normal_balance, is_active)
+       VALUES
+         ($1, $2, '1930', 'Bankkonto', 1, 'asset', 'debit', true),
+         ($1, $2, '2010', 'Eget kapital', 2, 'equity', 'credit', true),
+         ($1, $2, '3001', 'Forsaljning', 3, 'revenue', 'credit', true)
+       ON CONFLICT (company_id, account_number) DO NOTHING`,
+      [userId, companyId],
+    )
+    const old2026IBId = await insertPostedEntry({
+      userId,
+      companyId,
+      fiscalPeriodId: period2026Id,
+      entryDate: '2026-01-01',
+      sourceType: 'opening_balance',
+      description: 'Imported-first 2026 IB',
+      lines: oldIBLines,
+    })
+    await insertPostedEntry({
+      userId,
+      companyId,
+      fiscalPeriodId: period2026Id,
+      entryDate: '2026-06-01',
+      sourceType: 'import',
+      description: 'Imported 2026 activity',
+      lines: [
+        { account_number: '1930', debit_amount: 25, credit_amount: 0 },
+        { account_number: '3001', debit_amount: 0, credit_amount: 25 },
+      ],
+    })
+    await getPool().query(
+      `UPDATE public.fiscal_periods
+          SET opening_balance_entry_id = $1, opening_balances_set = true
+        WHERE id = $2`,
+      [old2026IBId, period2026Id],
+    )
+
+    const supabase = makePgSupabase(userId)
+    expect(await companyHasPriorActivity(supabase, companyId, '2024-12-31')).toBe(false)
+
+    const period2024Id = await insertPeriod(
+      companyId,
+      'Räkenskapsår 2024',
+      '2024-01-01',
+      '2024-12-31',
+    )
+    const ib2024Id = await insertPostedEntry({
+      userId,
+      companyId,
+      fiscalPeriodId: period2024Id,
+      entryDate: '2024-01-01',
+      sourceType: 'opening_balance',
+      description: 'Imported 2024 IB',
+      lines: oldIBLines,
+    })
+    await insertPostedEntry({
+      userId,
+      companyId,
+      fiscalPeriodId: period2024Id,
+      entryDate: '2024-06-01',
+      sourceType: 'import',
+      description: 'Imported 2024 activity',
+      lines: [
+        { account_number: '1930', debit_amount: 50, credit_amount: 0 },
+        { account_number: '3001', debit_amount: 0, credit_amount: 50 },
+      ],
+    })
+    await getPool().query(
+      `UPDATE public.fiscal_periods
+          SET opening_balance_entry_id = $1, opening_balances_set = true
+        WHERE id = $2`,
+      [ib2024Id, period2024Id],
+    )
+
+    installAtomicReplacementMock()
+    const gapResync = await resyncNextPeriodOpeningBalance(
+      supabase,
+      companyId,
+      userId,
+      '2024-12-31',
+      closingBalances(150),
+      new Map([['1930', '1930'], ['2010', '2010']]),
+    )
+
+    expect(gapResync).toEqual({
+      resynced: false,
+      reason: 'next_period_not_adjacent',
+      nextPeriodName: '2026',
+    })
+    expect(replaceOpeningBalanceEntry).not.toHaveBeenCalled()
+
+    const afterGap = await getPool().query<{ opening_balance_entry_id: string | null }>(
+      `SELECT opening_balance_entry_id FROM public.fiscal_periods WHERE id = $1`,
+      [period2026Id],
+    )
+    expect(afterGap.rows[0]!.opening_balance_entry_id).toBe(old2026IBId)
+
+    expect(await companyHasPriorActivity(supabase, companyId, '2025-12-31')).toBe(true)
+    const period2025Id = await insertPeriod(
+      companyId,
+      'Räkenskapsår 2025',
+      '2025-01-01',
+      '2025-12-31',
+    )
+    await insertPostedEntry({
+      userId,
+      companyId,
+      fiscalPeriodId: period2025Id,
+      entryDate: '2025-06-01',
+      sourceType: 'import',
+      description: 'Imported 2025 activity',
+      lines: [
+        { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+        { account_number: '3001', debit_amount: 0, credit_amount: 100 },
+      ],
+    })
+
+    const adjacentResync = await resyncNextPeriodOpeningBalance(
+      supabase,
+      companyId,
+      userId,
+      '2025-12-31',
+      closingBalances(250),
+      new Map([['1930', '1930'], ['2010', '2010']]),
+    )
+
+    expect(adjacentResync.resynced).toBe(true)
+    if (!adjacentResync.resynced) {
+      throw new Error(`Unexpected resync failure: ${adjacentResync.reason}`)
+    }
+
+    const periods = await getPool().query<{
+      id: string
+      opening_balance_entry_id: string | null
+    }>(
+      `SELECT id, opening_balance_entry_id
+         FROM public.fiscal_periods
+        WHERE id = ANY($1::uuid[])
+        ORDER BY period_start`,
+      [[period2024Id, period2025Id, period2026Id]],
+    )
+    expect(periods.rows).toEqual([
+      { id: period2024Id, opening_balance_entry_id: ib2024Id },
+      { id: period2025Id, opening_balance_entry_id: null },
+      { id: period2026Id, opening_balance_entry_id: adjacentResync.newOpeningBalanceEntryId },
+    ])
+
+    const effective2026IB = await getPool().query<{ count: string }>(
+      `SELECT count(*)::text AS count
+         FROM public.journal_entries
+        WHERE fiscal_period_id = $1
+          AND source_type = 'opening_balance'
+          AND status = 'posted'`,
+      [period2026Id],
+    )
+    expect(effective2026IB.rows[0]!.count).toBe('1')
+
+    const net = await getPool().query<{ account_number: string; amount: number }>(
+      `SELECT l.account_number,
+              SUM(l.debit_amount - l.credit_amount)::float8 AS amount
+         FROM public.journal_entry_lines l
+         JOIN public.journal_entries e ON e.id = l.journal_entry_id
+        WHERE e.id = ANY($1::uuid[])
+          AND e.status IN ('posted', 'reversed')
+        GROUP BY l.account_number
+        ORDER BY l.account_number`,
+      [[
+        old2026IBId,
+        adjacentResync.stornoEntryId,
+        adjacentResync.newOpeningBalanceEntryId,
+      ]],
+    )
+    expect(net.rows).toEqual([
+      { account_number: '1930', amount: 250 },
+      { account_number: '2010', amount: -250 },
     ])
   })
 
