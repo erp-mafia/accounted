@@ -191,8 +191,7 @@ export async function findFiscalPeriod(
  * Build line insert objects from input lines, resolving account IDs and
  * including tax_code and the dimensions bag
  */
-function buildLineInserts(
-  entryId: string,
+function buildLineValues(
   lines: CreateJournalEntryLineInput[],
   accountIdMap: Map<string, string>
 ) {
@@ -202,7 +201,6 @@ function buildLineInserts(
     // (20260702230000): writing them explicitly would error.
     const dimensions = normalizeLineDimensions(line)
     return {
-      journal_entry_id: entryId,
       account_number: line.account_number,
       account_id: accountIdMap.get(line.account_number) || null,
       debit_amount: Math.round((line.debit_amount || 0) * 100) / 100,
@@ -216,6 +214,17 @@ function buildLineInserts(
       sort_order: index,
     }
   })
+}
+
+function buildLineInserts(
+  entryId: string,
+  lines: CreateJournalEntryLineInput[],
+  accountIdMap: Map<string, string>
+) {
+  return buildLineValues(lines, accountIdMap).map((line) => ({
+    journal_entry_id: entryId,
+    ...line,
+  }))
 }
 
 /**
@@ -774,11 +783,7 @@ export async function replaceOpeningBalanceEntry(
 
   const voucherSeries = input.voucher_series
     ?? await resolveSeriesFromSettings(supabase, companyId, 'opening_balance')
-  const preparedLines = buildLineInserts(
-    '00000000-0000-0000-0000-000000000000',
-    input.lines,
-    accountIdMap,
-  ).map(({ journal_entry_id: _journalEntryId, ...line }) => line)
+  const preparedLines = buildLineValues(input.lines, accountIdMap)
   const actor = getActor()
 
   const { data, error } = await supabase.rpc('commit_opening_balance_replacement', {
@@ -850,6 +855,22 @@ export async function replaceOpeningBalanceEntry(
   const originalEntry = byId.get(expectedOldEntryId)
   const newEntry = byId.get(result.newEntryId)
   const stornoEntry = byId.get(result.stornoEntryId)
+
+  if (!originalEntry || !newEntry || !stornoEntry) {
+    log.error(
+      'atomic opening balance replacement committed but event entries are missing',
+      new Error('journal entry refresh returned incomplete replacement data'),
+      {
+        companyId,
+        expectedOldEntryId,
+        newEntryId: result.newEntryId,
+        stornoEntryId: result.stornoEntryId,
+        missingOriginalEntry: !originalEntry,
+        missingNewEntry: !newEntry,
+        missingStornoEntry: !stornoEntry,
+      },
+    )
+  }
 
   if (newEntry) {
     await eventBus.emit({

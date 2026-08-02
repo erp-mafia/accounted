@@ -135,15 +135,18 @@ function makePgSupabase(_userId: string): SupabaseClient {
         select: () => chain,
         eq: (column: string, value: unknown) => {
           if (column === 'company_id') filters.companyId = String(value)
-          if (column === 'status') filters.status = String(value)
+          else if (column === 'status') filters.status = String(value)
+          else throw new Error(`Unhandled eq filter in journal entry pg adapter: ${column}`)
           return chain
         },
         neq: (column: string, value: unknown) => {
           if (column === 'source_type') filters.excludedSourceTypes.push(String(value))
+          else throw new Error(`Unhandled neq filter in journal entry pg adapter: ${column}`)
           return chain
         },
         lte: (column: string, value: unknown) => {
           if (column === 'entry_date') filters.throughDate = String(value)
+          else throw new Error(`Unhandled lte filter in journal entry pg adapter: ${column}`)
           return chain
         },
         then: (
@@ -182,10 +185,12 @@ function makePgSupabase(_userId: string): SupabaseClient {
         select: () => chain,
         eq: (column: string, value: unknown) => {
           if (column === 'company_id') filters.companyId = String(value)
+          else throw new Error(`Unhandled eq filter in fiscal period pg adapter: ${column}`)
           return chain
         },
         gt: (column: string, value: unknown) => {
           if (column === 'period_start') filters.afterDate = String(value)
+          else throw new Error(`Unhandled gt filter in fiscal period pg adapter: ${column}`)
           return chain
         },
         order: () => chain,

@@ -373,6 +373,9 @@ describe('executeSIEImport: derived IB from #UB -1 (issue #675)', () => {
       entry_date: '2026-01-01',
       }),
     )
+    expect(vi.mocked(replaceOpeningBalanceEntry).mock.calls[0]?.[4]).not.toHaveProperty(
+      'voucher_series',
+    )
   })
 
   it('warns without changing a locked successor opening balance', async () => {

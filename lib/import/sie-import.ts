@@ -939,7 +939,6 @@ export async function resyncNextPeriodOpeningBalance(
       entry_date: nextPeriod.period_start as string,
       description: 'Ingående balanser (resynk efter prior-year SIE-import)',
       source_type: 'opening_balance',
-      voucher_series: 'A',
       lines: newLines,
     },
   )

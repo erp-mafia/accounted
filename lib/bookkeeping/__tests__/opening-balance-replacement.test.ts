@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { eventBus } from '@/lib/events'
 import { replaceOpeningBalanceEntry } from '../engine'
-import { BookkeepingDatabaseError, JournalEntryNotBalancedError } from '../errors'
+import {
+  AccountsNotInChartError,
+  BookkeepingDatabaseError,
+  JournalEntryNotBalancedError,
+} from '../errors'
 
 vi.mock('@/lib/events', () => ({
   eventBus: { emit: vi.fn().mockResolvedValue([]) },
@@ -129,6 +133,24 @@ describe('replaceOpeningBalanceEntry', () => {
         ],
       },
     )).rejects.toBeInstanceOf(JournalEntryNotBalancedError)
+
+    expect(rpc).not.toHaveBeenCalled()
+  })
+
+  it('rejects lines whose accounts are absent from the chart', async () => {
+    const rpc = vi.fn()
+    const from = vi.fn().mockImplementation((table: string) => {
+      if (table !== 'chart_of_accounts') throw new Error(`Unexpected table: ${table}`)
+      return thenableChain({ data: [], error: null })
+    })
+
+    await expect(replaceOpeningBalanceEntry(
+      { rpc, from } as never,
+      'company-1',
+      'user-1',
+      'old-entry',
+      input,
+    )).rejects.toBeInstanceOf(AccountsNotInChartError)
 
     expect(rpc).not.toHaveBeenCalled()
   })

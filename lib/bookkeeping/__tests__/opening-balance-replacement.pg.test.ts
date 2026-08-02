@@ -150,7 +150,11 @@ async function setRole(
   await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [JSON.stringify(claims)])
   await client.query(`SELECT set_config('request.jwt.claim.role', $1, true)`, [role])
   await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [userId ?? ''])
-  await client.query(`SET LOCAL ROLE ${role}`)
+  const roleStatements = {
+    authenticated: 'SET LOCAL ROLE authenticated',
+    service_role: 'SET LOCAL ROLE service_role',
+  } as const
+  await client.query(roleStatements[role])
 }
 
 async function runAs<T>(
