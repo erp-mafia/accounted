@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
-import Image from 'next/image'
 import { usePathname, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
@@ -45,8 +44,10 @@ import {
   PanelLeftClose,
   Library,
   BookCheck,
+  Briefcase,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
+import { BrandHomeLink } from '@/components/branding/BrandHomeLink'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
 import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
@@ -124,6 +125,7 @@ type NavLabelKey =
   | 'income_declaration'
   | 'help'
   | 'settings'
+  | 'clients'
 
 // Nav layout (July 2026, UI-migration concept, dev_docs/ui_migration_plan.md
 // PR 2): same routes, concept structure.
@@ -168,6 +170,9 @@ interface NavItem {
   // Statutory surfaces that only exist for one company form (INK2 vs
   // NE-bilaga, årsredovisning): hidden for the other entity type.
   entityOnly?: EntityType
+  // Byrå cockpit surfaces (WL-14): visible only to byrå team members
+  // (teams.kind = 'byra'). The /clients page + API enforce server-side.
+  byraOnly?: boolean
   hidden?: boolean
   comingSoon?: boolean
   devBadge?: boolean
@@ -181,6 +186,8 @@ const navItems: NavItem[] = [
   // Top section: flat list, always visible, no header. (Flöden joins here
   // when the flow engine exists.)
   { href: '/', labelKey: 'home', icon: Home, group: 'top' },
+  // Byrå cockpit (WL-14): the client list, byrå team members only.
+  { href: '/clients', labelKey: 'clients', icon: Briefcase, group: 'top', byraOnly: true },
   { href: '/chat', labelKey: 'assistant', icon: Sparkles, group: 'top' },
   // Arbeta: everything the user produces, bookkeeping funnel first
   // (Bokföring · Underlag · Transaktioner · Granskning), then the
@@ -269,7 +276,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
-  const { company, capabilities, trialEndsAt } = useCompany()
+  const { company, capabilities, trialEndsAt, byraTeam } = useCompany()
   // Agent identity drives the "Assistent" nav icon: when the user has
   // built their assistant we show its chosen avatar instead of the
   // generic Sparkles glyph.
@@ -311,7 +318,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   }, [trialEndsAt])
 
   const hasCompany = !!company
-  const ALWAYS_ENABLED = new Set(['/settings'])
+  // /clients is a byrå-scope surface, not a company surface: it must stay
+  // reachable even when the active company is unresolved.
+  const ALWAYS_ENABLED = new Set(['/settings', '/clients'])
   const isItemEnabled = (href: string) => hasCompany || ALWAYS_ENABLED.has(href)
   type ExpandableGroup = Exclude<GroupKey, 'top'>
 
@@ -489,6 +498,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // Entity-gated statutory surfaces: INK2/ÅR for aktiebolag, NE for
     // enskild firma; the page for the other form doesn't exist.
     if (item.entityOnly && item.entityOnly !== entityType) return false
+    // Byrå cockpit: only byrå team members see Klienter (WL-14; the page
+    // redirects and the API 403s for everyone else).
+    if (item.byraOnly && !byraTeam) return false
     // Hide the Assistent (/chat) tab until the agent is built: mirrors the
     // floating AgentTrigger and avoids a nav entry that only bounces to the
     // home checklist (chat/layout redirects unverified users to /).
@@ -693,19 +705,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 : 'justify-between pl-5 pr-3',
             )}
           >
-            <Link
-              href="/"
-              aria-label={getBranding().appName}
-              className="flex items-center rounded-lg"
-            >
-              <Image
-                src={getBranding().logoPath}
-                alt=""
-                width={26}
-                height={26}
-                className="h-[26px] w-[26px] rounded-md"
-              />
-            </Link>
+            {/* Brand mark (WL-12 slice A3): brand logo on branded hosts,
+                the exact legacy image everywhere else. */}
+            <BrandHomeLink />
             <button
               type="button"
               onClick={toggleCollapsed}
@@ -898,8 +900,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         </div>
       </aside>
 
-      {/* Mobile bottom navigation */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
+      {/* Mobile bottom navigation. data-mobile-nav is the brand-style hook:
+          on branded hosts the brand style block re-tints the bar's tokens
+          (--card/--border/--primary...) to the deep chrome, mirroring the
+          sidebar; on default hosts the attribute matches nothing. */}
+      <nav data-mobile-nav="" className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
         <div className="flex items-center justify-around h-16 px-2">
           {mobileNavItems.map((item) => {
             const active = isActive(item.href)

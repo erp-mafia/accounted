@@ -115,6 +115,31 @@ async function createCompanyFromOnboardingImpl(params: {
     return { error: 'org_number_invalid' }
   }
 
+  // Creating a company under a BYRÅ team is admin-gated (WL-15): every
+  // created client company is +1 on the byrå's monthly invoice, so only team
+  // owner/admin may do it. Personal-team creation is untouched. The
+  // create_company_with_owner RPC enforces the same rule in the database
+  // (migration 20260801120000); this check exists to return a readable error
+  // instead of a raw 42501. A team the caller cannot read via RLS resolves
+  // to null kind here and falls through to the RPC's own membership check.
+  const { data: teamRow } = await supabase
+    .from('teams')
+    .select('kind')
+    .eq('id', params.teamId)
+    .maybeSingle()
+  if ((teamRow as { kind?: string } | null)?.kind === 'byra') {
+    const { data: teamMemberRow } = await supabase
+      .from('team_members')
+      .select('role')
+      .eq('team_id', params.teamId)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    const teamRole = (teamMemberRow as { role?: string } | null)?.role
+    if (teamRole !== 'owner' && teamRole !== 'admin') {
+      return { error: 'Endast byråns ägare och administratörer kan skapa klientbolag.' }
+    }
+  }
+
   // 1. Create company + owner membership atomically via RPC
   const { data: newCompanyId, error: companyError } = await supabase.rpc('create_company_with_owner', {
     p_name: companyName,

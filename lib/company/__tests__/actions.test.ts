@@ -211,6 +211,96 @@ describe('createCompanyFromOnboarding: org_number validation', () => {
   })
 })
 
+describe('createCompanyFromOnboarding: byrå team gating (WL-15)', () => {
+  const baseParams = {
+    settings: {
+      entity_type: 'aktiebolag' as const,
+      company_name: 'Klient AB',
+    },
+    fiscalPeriod: {
+      startDate: '2026-01-01',
+      endDate: '2026-12-31',
+      name: 'Räkenskapsår 2026',
+    },
+  }
+
+  it('refuses a plain byrå MEMBER (creation is +1 on the byrå invoice)', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'byra' } } },
+        team_members: { maybeSingle: { data: { role: 'member' } } },
+      },
+      rpcResults: { create_company_with_owner: { data: 'should-not-happen' } },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding({
+      teamId: 'byra-team',
+      ...baseParams,
+    })
+
+    expect(result.error).toBe(
+      'Endast byråns ägare och administratörer kan skapa klientbolag.',
+    )
+    const rpcCreate = supabase.rpc.mock.calls.find(
+      ([name]) => name === 'create_company_with_owner',
+    )
+    expect(rpcCreate).toBeUndefined()
+  })
+
+  it('lets a byrå ADMIN create, with the explicit byrå team binding', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'byra' } } },
+        team_members: { maybeSingle: { data: { role: 'admin' } } },
+      },
+      rpcResults: {
+        create_company_with_owner: { data: 'client-company-id' },
+        seed_chart_of_accounts: { data: null },
+      },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding({
+      teamId: 'byra-team',
+      ...baseParams,
+    })
+
+    // Response shape: the created company id, no error.
+    expect(result).toEqual({ companyId: 'client-company-id' })
+
+    // Team binding present: the RPC received the byrå team explicitly
+    // (never ensure_user_team arbitrariness, WL-08/WL-15).
+    const rpcCreate = supabase.rpc.mock.calls.find(
+      ([name]) => name === 'create_company_with_owner',
+    )
+    expect(rpcCreate?.[1]).toMatchObject({ p_team_id: 'byra-team' })
+  })
+
+  it('keeps personal-team creation untouched (no role gate)', async () => {
+    const { supabase } = buildSupabase({
+      user: { id: 'user-1' },
+      results: {
+        teams: { maybeSingle: { data: { kind: 'personal' } } },
+      },
+      rpcResults: {
+        create_company_with_owner: { data: 'personal-company-id' },
+        seed_chart_of_accounts: { data: null },
+      },
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const result = await createCompanyFromOnboarding({
+      teamId: 'personal-team',
+      ...baseParams,
+    })
+
+    expect(result).toEqual({ companyId: 'personal-company-id' })
+  })
+})
+
 describe('createCompanyFromOnboarding: TIC snapshot persistence', () => {
   it('persists the supplied ticLookup to companies.tic_snapshot', async () => {
     const { supabase, calls } = buildSupabase({

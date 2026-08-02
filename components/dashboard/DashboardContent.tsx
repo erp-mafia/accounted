@@ -16,6 +16,7 @@ import ResumePane from '@/components/dashboard/ResumePane'
 import BackupHealthBanner from '@/components/dashboard/BackupHealthBanner'
 import { SkatteverketPromoCard } from '@/components/dashboard/SkatteverketPromoCard'
 import { ArrowRight } from 'lucide-react'
+import { useBranding } from '@/lib/branding/brand-context'
 import type { InitialSetupState, OnboardingProgress } from '@/types'
 import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
 import type { ResumeItem } from '@/lib/worklist/resume'
@@ -70,6 +71,7 @@ export default function DashboardContent({
   agentBuilt = true,
 }: DashboardContentProps) {
   const t = useTranslations('dashboard')
+  const { appName } = useBranding()
   const hasAi = useCapability(CAPABILITY.ai)
   const { company } = useCompany()
   const router = useRouter()
@@ -113,7 +115,7 @@ export default function DashboardContent({
             className="mt-3"
             action={{ label: t('other_account_hint_action'), onClick: handleSwitchAccount }}
           >
-            {t('other_account_hint')}
+            {t('other_account_hint', { appName })}
           </AttnLine>
         )}
       </section>
