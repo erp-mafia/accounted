@@ -12,18 +12,18 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Mail, ArrowLeft, KeyRound, ExternalLink } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
+import { SourceCodeFooter } from '@/components/branding/SourceCodeFooter'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
-import { getBranding } from '@/lib/branding/service'
+import { useBranding } from '@/lib/branding/brand-context'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { resolvePostLoginDestination } from '@/lib/company/post-login-landing'
 import {
   consumeInviteCookie,
   INVITE_PROBLEM_MESSAGE_KEYS,
 } from '@/lib/auth/consume-invite-cookie'
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
-
-const branding = getBranding()
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 
 const BankIdAuth = dynamic(
@@ -61,6 +61,9 @@ function LoginPageContent() {
   const nextPath = safeReturnTo(searchParams.get('next'), '/')
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
+  // Per-request brand merged over getBranding() defaults (WL-12): identical
+  // values on default hosts, brand values on branded hosts.
+  const branding = useBranding()
   const tAuth = useTranslations('auth')
   const tCommon = useTranslations('common')
   const tInvite = useTranslations('invite')
@@ -215,7 +218,10 @@ function LoginPageContent() {
         return
       }
 
-      router.push('/')
+      // Byrå staff land in the cockpit on their byrå's home domain (WL-14);
+      // everyone else resolves to '/' and keeps today's flow byte-identically
+      // (any failure inside the helper also degrades to '/').
+      router.push(await resolvePostLoginDestination())
       router.refresh()
     } catch (error) {
       toast({
@@ -560,6 +566,10 @@ function LoginPageContent() {
           </a>
           .
         </p>
+
+        {/* AGPL section 13 source offer (WL-06): renders on both default and
+            branded hosts; never gate this on a brand. */}
+        <SourceCodeFooter className="mt-4" />
       </div>
     </div>
   )

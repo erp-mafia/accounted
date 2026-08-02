@@ -15,15 +15,13 @@ import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
-import { getBranding } from '@/lib/branding/service'
+import { useBranding } from '@/lib/branding/brand-context'
 import { detectWebmailHint } from '@/lib/auth/webmail-search'
 import {
   consumeInviteCookie,
   INVITE_PROBLEM_MESSAGE_KEYS,
 } from '@/lib/auth/consume-invite-cookie'
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
-
-const branding = getBranding()
 
 const BankIdAuth = dynamic(
   () => import('@/components/auth/BankIdAuth').then((module) => module.BankIdAuth),
@@ -65,6 +63,9 @@ function RegisterPageContent() {
   const router = useRouter()
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
+  // Per-request brand merged over getBranding() defaults (WL-12): identical
+  // values on default hosts, brand values on branded hosts.
+  const branding = useBranding()
   const t = useTranslations('register')
   const tInvite = useTranslations('invite')
   const errorLocale = useLocale() as ErrorLocale
