@@ -14,9 +14,16 @@
  * Rejected/rate-limited content always acks 200: a retryable status would
  * only buy a redelivery of something we already decided to drop.
  *
- * Deferred to PR4: burst debounce + combined ack, company choice buttons,
- * clarifying questions (representation/quality/context), interpret-answer LLM
- * call, sweep + retention crons.
+ * Conversation layer (PR4): media replies are burst-debounced into ONE
+ * combined ack (M4/M5) sent by the single winner of the pending_ack claim;
+ * multi-company senders get the company question (buttons/list/numbered) with
+ * an 8h sliding pin; clarifying questions (M7/M9/M10) ride on the ack and
+ * free-text answers route to the deferred interpret-answer worker. The
+ * per-minute sweep cron (app/api/extensions/whatsapp-inbox/sweep/cron)
+ * re-claims stuck rows and expires stale questions/pins.
+ *
+ * Deferred to PR5: retention cron, FieldsRail surfacing, booking-notes
+ * threading.
  */
 
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
@@ -26,7 +33,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { createServiceClient } from '@/lib/supabase/server'
 import { createLogger } from '@/lib/logger'
-import type { WhatsAppPhoneLink } from '@/types'
+import type { WhatsAppConversation, WhatsAppPhoneLink } from '@/types'
 import { verifyMetaSignature, verifyChallengeToken } from './lib/webhook-verify'
 import { parseWebhookEnvelope, type ParsedInboundMessage } from './lib/webhook-parse'
 import { hashPhone } from './lib/phone-crypto'
@@ -37,9 +44,17 @@ import {
   lookupActiveLink,
   mintLinkCode,
 } from './lib/linking'
-import { sendText, getDisplayPhoneNumber } from './lib/graph-api'
+import { sendText, getDisplayPhoneNumber, MAX_REPLY_BUTTONS } from './lib/graph-api'
 import { botCopy, TEMPLATE } from './lib/messages'
 import { kickInboundProcessing } from './lib/process-inbound'
+import {
+  DEBOUNCE_WINDOW_MS,
+  getContext,
+  getOrCreateConversation,
+  resolveAnswerTarget,
+  type ConversationContext,
+} from './lib/conversation'
+import { applyCompanyChoice, type CompanyChoiceVia } from './lib/company-question'
 
 const log = createLogger('whatsapp-inbox')
 
@@ -60,6 +75,9 @@ const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000
 const STOP_KEYWORDS = new Set(['stopp', 'stop', 'avsluta'])
 const HELP_KEYWORDS = new Set(['hjälp', 'hjalp', 'help', 'support', 'människa', 'manniska'])
 const START_KEYWORD = 'start'
+// Clears the 8h company pin. Recognized in idle only: inside an awaiting
+// state the word could plausibly be answer text.
+const BYT_KEYWORD = 'byt'
 
 const DefaultCompanySchema = z.object({
   companyId: z.string().uuid().nullable(),
@@ -196,12 +214,22 @@ type Disposition =
   | { kind: 'stop' }
   | { kind: 'start' }
   | { kind: 'help' }
+  | { kind: 'byt' }
+  | { kind: 'company_digit'; digit: number }
+  | { kind: 'company_interactive'; companyId: string }
+  | { kind: 'answer' }
+  | { kind: 'text_open' }
   | { kind: 'voice' }
   | { kind: 'unsupported' }
   | { kind: 'fallback' }
   | { kind: 'silence' }
 
-function classify(msg: ParsedInboundMessage, muted: boolean): Disposition {
+function classify(
+  msg: ParsedInboundMessage,
+  muted: boolean,
+  conversation: WhatsAppConversation | null,
+): Disposition {
+  const state = conversation?.state ?? 'idle'
   if (msg.type === 'text') {
     const normalized = (msg.text ?? '').trim().toLowerCase()
     if (muted) {
@@ -211,9 +239,27 @@ function classify(msg: ParsedInboundMessage, muted: boolean): Disposition {
     if (STOP_KEYWORDS.has(normalized)) return { kind: 'stop' }
     if (HELP_KEYWORDS.has(normalized)) return { kind: 'help' }
     if (normalized === START_KEYWORD) return { kind: 'start' }
-    return { kind: 'fallback' }
+    if (normalized === BYT_KEYWORD && state === 'idle') return { kind: 'byt' }
+    if (state === 'awaiting_company') {
+      // The answer is a tapped button/row (interactive) or a typed digit.
+      if (/^\d{1,2}$/.test(normalized)) return { kind: 'company_digit', digit: Number(normalized) }
+      return { kind: 'fallback' }
+    }
+    if (state === 'awaiting_representation' || state === 'awaiting_context') {
+      return { kind: 'answer' }
+    }
+    // Idle / awaiting_resend free text: maybe a late answer to an earlier
+    // question (quoted reply or the most recent open one); resolved below.
+    return { kind: 'text_open' }
   }
   if (muted) return { kind: 'silence' }
+  if (msg.type === 'interactive') {
+    if (conversation?.state === 'awaiting_company' && msg.interactiveReplyId) {
+      return { kind: 'company_interactive', companyId: msg.interactiveReplyId }
+    }
+    // Stale button tap after the question closed: silence beats lecturing.
+    return { kind: 'silence' }
+  }
   if (msg.type === 'image' || msg.type === 'document') {
     return msg.media ? { kind: 'media' } : { kind: 'unsupported' }
   }
@@ -226,40 +272,37 @@ function classify(msg: ParsedInboundMessage, muted: boolean): Disposition {
   return { kind: 'silence' }
 }
 
-async function resolveConversationId(
-  supabase: SupabaseClient,
-  phoneLinkId: string,
-): Promise<string | null> {
-  const { data: existing } = await supabase
-    .from('whatsapp_conversations')
-    .select('id')
-    .eq('phone_link_id', phoneLinkId)
-    .maybeSingle()
-  if (existing) return (existing as { id: string }).id
-  const { data: created } = await supabase
-    .from('whatsapp_conversations')
-    .insert({ phone_link_id: phoneLinkId })
-    .select('id')
-    .maybeSingle()
-  return (created as { id: string } | null)?.id ?? null
-}
-
 async function handleLinkedSender(
   supabase: SupabaseClient,
   msg: ParsedInboundMessage,
   phoneHash: string,
   link: WhatsAppPhoneLink,
-  mediaMessageIds: string[],
+  deferredMessageIds: string[],
 ): Promise<void> {
-  const disposition = classify(msg, link.muted_at != null)
-  const conversationId = await resolveConversationId(supabase, link.id)
+  const conversation = await getOrCreateConversation(supabase, link.id)
+  const conversationId = conversation?.id ?? null
+  let disposition = classify(msg, link.muted_at != null, conversation)
+
+  // Late-answer probe: free text with no open awaiting state still answers a
+  // recent question when it quotes one of its messages or one is open <=7d.
+  if (disposition.kind === 'text_open') {
+    const target = conversation
+      ? await resolveAnswerTarget(supabase, conversation, msg.contextWamid)
+      : null
+    disposition = target ? { kind: 'answer' } : { kind: 'fallback' }
+  }
+
   const correlationId = crypto.randomUUID()
   const copy = botCopy('sv')
 
   // Persist-first, dedupe on the inbound-wamid partial unique index. A
   // redelivered wamid violates it (23505): already handled, stop entirely.
   const initialStatus =
-    disposition.kind === 'media' ? 'received' : disposition.kind === 'silence' ? 'skipped' : 'done'
+    disposition.kind === 'media' || disposition.kind === 'answer'
+      ? 'received'
+      : disposition.kind === 'silence'
+        ? 'skipped'
+        : 'done'
   const { data: inserted, error: insertError } = await supabase
     .from('whatsapp_messages')
     .insert({
@@ -294,13 +337,29 @@ async function handleLinkedSender(
     .update({ last_message_at: now.toISOString() })
     .eq('id', link.id)
   if (conversationId) {
-    await supabase
-      .from('whatsapp_conversations')
-      .update({
-        last_inbound_at: now.toISOString(),
-        service_window_expires_at: new Date(now.getTime() + SERVICE_WINDOW_MS).toISOString(),
-      })
-      .eq('id', conversationId)
+    // Media arms the burst debounce: each file pushes the deadline forward,
+    // and the deferred worker whose deadline survives claims the ONE ack.
+    // Two literal payloads (not one built at runtime) so the phantom-column
+    // scanner can verify both shapes.
+    if (disposition.kind === 'media') {
+      await supabase
+        .from('whatsapp_conversations')
+        .update({
+          last_inbound_at: now.toISOString(),
+          service_window_expires_at: new Date(now.getTime() + SERVICE_WINDOW_MS).toISOString(),
+          debounce_until: new Date(now.getTime() + DEBOUNCE_WINDOW_MS).toISOString(),
+          pending_ack: true,
+        })
+        .eq('id', conversationId)
+    } else {
+      await supabase
+        .from('whatsapp_conversations')
+        .update({
+          last_inbound_at: now.toISOString(),
+          service_window_expires_at: new Date(now.getTime() + SERVICE_WINDOW_MS).toISOString(),
+        })
+        .eq('id', conversationId)
+    }
   }
 
   const replyBase = {
@@ -312,8 +371,50 @@ async function handleLinkedSender(
 
   switch (disposition.kind) {
     case 'media':
-      if (messageId) mediaMessageIds.push(messageId)
+    case 'answer':
+      // Media intake and answer interpretation both run deferred (the answer
+      // path may call the LLM; the webhook must 200 in seconds).
+      if (messageId) deferredMessageIds.push(messageId)
       return
+    case 'company_digit':
+    case 'company_interactive': {
+      if (!conversation) return
+      const via: CompanyChoiceVia =
+        disposition.kind === 'company_digit'
+          ? 'numbered'
+          : (getContext(conversation).company_options?.length ?? 0) <= MAX_REPLY_BUTTONS
+            ? 'button'
+            : 'list'
+      const applied = await applyCompanyChoice(supabase, {
+        conversation,
+        link,
+        choice:
+          disposition.kind === 'company_digit'
+            ? { digit: disposition.digit }
+            : { companyId: disposition.companyId },
+        via,
+        to: msg.from,
+        replyBase,
+      })
+      // Silent on invalid/unauthorized choices (stale or forged payloads).
+      if (applied && applied.stagedMessageIds.length > 0) {
+        kickInboundProcessing(applied.stagedMessageIds, { companySelectedVia: via })
+      }
+      return
+    }
+    case 'byt': {
+      if (conversation) {
+        const context: ConversationContext = { ...getContext(conversation) }
+        delete context.pin_expires_at
+        delete context.pin_source
+        await supabase
+          .from('whatsapp_conversations')
+          .update({ company_id: null, context: context as Record<string, unknown> })
+          .eq('id', conversation.id)
+      }
+      await sendText(supabase, { to: msg.from, body: copy.m6BytPin(), template: TEMPLATE.m6BytPin, ...replyBase })
+      return
+    }
     case 'stop':
       await supabase
         .from('whatsapp_phone_links')
@@ -424,13 +525,13 @@ export const whatsappInboxExtension: Extension = {
             .eq('direction', 'outbound')
         }
 
-        const mediaMessageIds: string[] = []
+        const deferredMessageIds: string[] = []
         for (const msg of parsed.messages) {
           try {
             const phoneHash = hashPhone(msg.from)
             const link = await lookupActiveLink(supabase, phoneHash)
             if (link) {
-              await handleLinkedSender(supabase, msg, phoneHash, link, mediaMessageIds)
+              await handleLinkedSender(supabase, msg, phoneHash, link, deferredMessageIds)
             } else {
               await handleUnknownSender(supabase, msg, phoneHash)
             }
@@ -441,15 +542,16 @@ export const whatsappInboxExtension: Extension = {
           }
         }
 
-        // 200 first, processing after: extraction takes 10-60s and Meta
-        // expects the ack within seconds.
-        kickInboundProcessing(mediaMessageIds)
+        // 200 first, processing after: extraction takes 10-60s, answer
+        // interpretation may call the LLM, and Meta expects the ack within
+        // seconds.
+        kickInboundProcessing(deferredMessageIds)
 
         return NextResponse.json({
           data: {
             received: parsed.messages.length,
             statuses: parsed.statuses.length,
-            queued: mediaMessageIds.length,
+            queued: deferredMessageIds.length,
           },
         })
       },

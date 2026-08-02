@@ -21,6 +21,11 @@ const MediaSchema = z.object({
   voice: z.boolean().optional(),
 })
 
+const InteractiveReplySchema = z.object({
+  id: z.string().min(1).max(256),
+  title: z.string().max(1024).optional(),
+})
+
 // Permissive per-message schema: `type` is an open string and per-type payloads
 // are all optional, so an unexpected combination degrades instead of failing.
 const MessageSchema = z.object({
@@ -34,6 +39,13 @@ const MessageSchema = z.object({
   audio: MediaSchema.optional(),
   video: MediaSchema.optional(),
   sticker: MediaSchema.optional(),
+  interactive: z
+    .object({
+      type: z.string().max(40).optional(),
+      button_reply: InteractiveReplySchema.optional(),
+      list_reply: InteractiveReplySchema.optional(),
+    })
+    .optional(),
   context: z.object({ id: z.string().max(200).optional() }).optional(),
 })
 
@@ -80,6 +92,7 @@ export type ParsedMessageType =
   | 'sticker'
   | 'location'
   | 'contacts'
+  | 'interactive'
   | 'unknown'
 
 export interface ParsedMedia {
@@ -100,6 +113,8 @@ export interface ParsedInboundMessage {
   /** Caption for media messages. */
   caption: string | null
   media: ParsedMedia | null
+  /** Interactive answer payload: the tapped button's/row's id (company_id). */
+  interactiveReplyId: string | null
   /** Quoted-reply target (context.id), when present. */
   contextWamid: string | null
   profileName: string | null
@@ -126,6 +141,7 @@ const KNOWN_TYPES: ReadonlySet<string> = new Set([
   'sticker',
   'location',
   'contacts',
+  'interactive',
 ])
 
 function toParsedMessage(
@@ -169,6 +185,10 @@ function toParsedMessage(
           voice: mediaSource.voice === true,
         }
       : null,
+    interactiveReplyId:
+      type === 'interactive'
+        ? (msg.interactive?.button_reply?.id ?? msg.interactive?.list_reply?.id ?? null)
+        : null,
     contextWamid: msg.context?.id ?? null,
     profileName: profileNames.get(msg.from) ?? null,
     raw,

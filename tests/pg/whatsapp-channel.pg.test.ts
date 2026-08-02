@@ -5,7 +5,8 @@ import { seedCompany, insertAuthUser } from './fixtures'
 
 // Migrations under test: 20260802090000 (phone links + link codes),
 // 20260802091000 (conversations + messages + sender quota RPC),
-// 20260802092000 (inbox source CHECK widening + channel_context).
+// 20260802092000 (inbox source CHECK widening + channel_context),
+// 20260802210000 (acked_at combined-ack marker).
 
 function hash(value: string): string {
   return createHash('sha256').update(value).digest('hex')
@@ -250,6 +251,61 @@ describe('inbox source widening (20260802092000)', () => {
         [userId, companyId, `documents/${companyId}/${userId}/t2_kvitto.jpg`, hash(randomUUID())],
       ),
     ).rejects.toThrow(/document_attachments_upload_source_check/)
+  })
+})
+
+describe('burst debounce claim + acked_at marker (20260802210000)', () => {
+  it('lets exactly one claimant win a due pending_ack, and none before the deadline', async () => {
+    const userId = await insertAuthUser()
+    const linkId = await insertPhoneLink({ userId })
+    const conv = await getPool().query(
+      `INSERT INTO public.whatsapp_conversations (phone_link_id, pending_ack, debounce_until)
+       VALUES ($1, true, now() + interval '1 hour') RETURNING id`,
+      [linkId],
+    )
+    const conversationId = conv.rows[0].id
+
+    // Deadline not reached: the claim must not fire.
+    const early = await getPool().query(
+      `UPDATE public.whatsapp_conversations SET pending_ack = false
+       WHERE id = $1 AND pending_ack AND debounce_until <= now() RETURNING id`,
+      [conversationId],
+    )
+    expect(early.rows).toHaveLength(0)
+
+    await getPool().query(
+      `UPDATE public.whatsapp_conversations SET debounce_until = now() - interval '1 second'
+       WHERE id = $1`,
+      [conversationId],
+    )
+
+    const claim = () =>
+      getPool().query(
+        `UPDATE public.whatsapp_conversations SET pending_ack = false
+         WHERE id = $1 AND pending_ack AND debounce_until <= now() RETURNING id`,
+        [conversationId],
+      )
+    const first = await claim()
+    expect(first.rows).toHaveLength(1)
+    const second = await claim()
+    expect(second.rows).toHaveLength(0)
+  })
+
+  it('exposes acked_at on whatsapp_messages, null by default', async () => {
+    const res = await getPool().query(
+      `INSERT INTO public.whatsapp_messages (direction, message_type, processing_status)
+       VALUES ('inbound', 'image', 'done') RETURNING acked_at`,
+    )
+    expect(res.rows[0].acked_at).toBeNull()
+
+    const stamped = await getPool().query(
+      `UPDATE public.whatsapp_messages SET acked_at = now()
+       WHERE acked_at IS NULL AND direction = 'inbound' AND processing_status = 'done'
+         AND conversation_id IS NULL
+       RETURNING acked_at`,
+    )
+    expect(stamped.rows.length).toBeGreaterThan(0)
+    expect(stamped.rows[0].acked_at).not.toBeNull()
   })
 })
 

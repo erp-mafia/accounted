@@ -1,6 +1,6 @@
 /**
- * Outbound bot copy for the WhatsApp channel (PR3 subset of the approved
- * conversation spec M1-M18; M5-M10 belong to the PR4 conversation layer).
+ * Outbound bot copy for the WhatsApp channel (approved conversation spec
+ * M1-M18; M5-M10 are the PR4 conversation layer).
  *
  * Server-side constants, NOT messages/*.json: these strings are sent from
  * webhook/worker contexts where no next-intl session exists (same pattern as
@@ -33,7 +33,17 @@ export const TEMPLATE = {
   m4Ack: 'm4_ack',
   m4AckEmpty: 'm4_ack_empty',
   m4Duplicate: 'm4_duplicate',
-  m6NoDefaultCompany: 'm6_no_default_company',
+  m5BurstAck: 'm5_burst_ack',
+  m6CompanyQuestion: 'm6_company_question',
+  m6CompanyConfirm: 'm6_company_confirm',
+  m6BytPin: 'm6_byt_pin',
+  m7Representation: 'm7_representation',
+  m8RepConfirmed: 'm8_rep_confirmed',
+  m8RepPartial: 'm8_rep_partial',
+  m8RepDenied: 'm8_rep_denied',
+  m9Resend: 'm9_resend',
+  m10Context: 'm10_context',
+  m10ContextConfirm: 'm10_context_confirm',
   m11Stop: 'm11_stop',
   m12Start: 'm12_start',
   m13Help: 'm13_help',
@@ -82,8 +92,51 @@ const SV = {
 
   m4Duplicate: () => 'Det kvittot finns redan i Underlag.',
 
-  m6NoDefaultCompany: () =>
-    'Du är med i flera företag. Välj standardföretag under *Inställningar -> WhatsApp* i Accounted, så tar jag emot kvitton här. Kvittot sparades inte.',
+  m5BurstAck: ({ lines }: { lines: string[] }) =>
+    `Fick *${lines.length}* kvitton:\n` +
+    lines.map((line, i) => `${i + 1}. ${line}`).join('\n') +
+    '\nAlla ligger i Underlag i Accounted.',
+
+  // The receipt is not ingested yet when this is asked (the item is created
+  // only after the company answer), so merchant/amount are unknown here.
+  m6CompanyQuestion: ({ count = 1 }: { count?: number }): string =>
+    count > 1 ? 'Vilket företag gäller kvittona?' : 'Vilket företag gäller kvittot?',
+
+  m6CompanyQuestionNumbered: ({ count = 1, options }: { count?: number; options: string[] }) =>
+    (count > 1 ? 'Vilket företag gäller kvittona?' : 'Vilket företag gäller kvittot?') +
+    '\n\n' +
+    options.map((name, i) => `${i + 1}. ${name}`).join('\n') +
+    '\n\nSvara med en siffra.',
+
+  m6CompanyConfirm: ({ companyName }: { companyName: string }) =>
+    `*${companyName}*, noterat. Jag minns valet i 8 timmar (skriv *byt* för att ändra).`,
+
+  m6BytPin: () => 'Okej, jag frågar vilket företag nästa gång du skickar ett kvitto.',
+
+  m7Representation: ({ ref }: { ref?: string | null } = {}) =>
+    `${ref ?? 'Det ser ut som representation.'} För att avdraget ska hålla behöver verifikationen *vilka som deltog* (namn + företag) och *syftet*.\n\n` +
+    'Svara i ett meddelande, t.ex: _Lunch med Anna Berg (Volvo) och mig, uppföljning av avtal_. Svara *nej* om det inte är representation.',
+
+  m8RepConfirmed: ({ participants, purpose }: { participants: string; purpose?: string | null }) =>
+    `Tack! Noterat: ${participants}${purpose ? ` · Syfte: ${purpose}` : ''}. Följer med när kvittot bokförs.`,
+
+  m8RepPartial: () =>
+    'Tack! Jag har sparat ditt svar som anteckning på kvittot. Kolla att deltagare och syfte kom med när du bokför i appen.',
+
+  m8RepDenied: () => 'Okej, ingen representation. Kvittot ligger i Underlag som vanligt.',
+
+  m9Resend: ({ ordinal }: { ordinal?: number | null } = {}) =>
+    ordinal != null
+      ? `Kvitto ${ordinal} blev för lågupplöst för att läsas av, WhatsApp komprimerar foton hårt. Skicka gärna det igen som *dokument* (gem-ikonen -> _Dokument_) så behålls full skärpa.`
+      : 'Bilden blev för lågupplöst för att läsas av, WhatsApp komprimerar foton hårt.\n\n' +
+        'Skicka gärna samma kvitto igen som *dokument*: gem-ikonen -> _Dokument_ -> välj bilden. Då behålls full skärpa. Kvittot ligger kvar i Underlag så länge.',
+
+  m10Context: ({ ordinal }: { ordinal?: number | null } = {}) =>
+    ordinal != null
+      ? `Kvitto ${ordinal}: jag kunde inte läsa av allt. Vad gäller köpet? Skriv en kort rad (t.ex. _taxi till kundmöte, 240 kr_) så sparar jag det på kvittot.`
+      : '*Fil mottagen*, men jag kunde inte läsa av allt. Vad gäller köpet? Skriv en kort rad (t.ex. _taxi till kundmöte, 240 kr_) så sparar jag det på kvittot.',
+
+  m10ContextConfirm: () => 'Tack! Sparat som anteckning på kvittot.',
 
   m11Stop: () =>
     'Okej, jag slutar svara här och ditt nummer kopplas från. Dina underlag i Accounted påverkas inte. Skicka *start* om du vill aktivera igen.',
@@ -146,8 +199,53 @@ const EN: typeof SV = {
 
   m4Duplicate: () => 'That receipt is already in Underlag.',
 
-  m6NoDefaultCompany: () =>
-    'You belong to several companies. Pick a default company under *Settings -> WhatsApp* in Accounted, then I can receive receipts here. The receipt was not saved.',
+  m5BurstAck: ({ lines }: { lines: string[] }) =>
+    `Got *${lines.length}* receipts:\n` +
+    lines.map((line, i) => `${i + 1}. ${line}`).join('\n') +
+    '\nAll of them are in Underlag in Accounted.',
+
+  m6CompanyQuestion: ({ count = 1 }: { count?: number }) =>
+    count > 1
+      ? 'Which company do the receipts belong to?'
+      : 'Which company does the receipt belong to?',
+
+  m6CompanyQuestionNumbered: ({ count = 1, options }: { count?: number; options: string[] }) =>
+    (count > 1
+      ? 'Which company do the receipts belong to?'
+      : 'Which company does the receipt belong to?') +
+    '\n\n' +
+    options.map((name, i) => `${i + 1}. ${name}`).join('\n') +
+    '\n\nReply with a number.',
+
+  m6CompanyConfirm: ({ companyName }: { companyName: string }) =>
+    `*${companyName}*, noted. I will remember the choice for 8 hours (type *byt* to change).`,
+
+  m6BytPin: () => 'Okay, I will ask which company the next time you send a receipt.',
+
+  m7Representation: ({ ref }: { ref?: string | null } = {}) =>
+    `${ref ?? 'This looks like representation.'} For the deduction to hold, the verifikation needs *who attended* (name + company) and *the purpose*.\n\n` +
+    'Reply in one message, e.g: _Lunch with Anna Berg (Volvo) and me, contract follow-up_. Reply *nej* if it is not representation.',
+
+  m8RepConfirmed: ({ participants, purpose }: { participants: string; purpose?: string | null }) =>
+    `Thanks! Noted: ${participants}${purpose ? ` · Purpose: ${purpose}` : ''}. It follows the receipt when it is booked.`,
+
+  m8RepPartial: () =>
+    'Thanks! I saved your reply as a note on the receipt. Check that attendees and purpose came through when you book it in the app.',
+
+  m8RepDenied: () => 'Okay, no representation. The receipt is in Underlag as usual.',
+
+  m9Resend: ({ ordinal }: { ordinal?: number | null } = {}) =>
+    ordinal != null
+      ? `Receipt ${ordinal} came through at too low a resolution to read, WhatsApp compresses photos hard. Please send it again as a *document* (paperclip icon -> _Document_) to keep full sharpness.`
+      : 'The image came through at too low a resolution to read, WhatsApp compresses photos hard.\n\n' +
+        'Please send the same receipt again as a *document*: paperclip icon -> _Document_ -> pick the image. That keeps full sharpness. The receipt stays in Underlag meanwhile.',
+
+  m10Context: ({ ordinal }: { ordinal?: number | null } = {}) =>
+    ordinal != null
+      ? `Receipt ${ordinal}: I could not read everything. What was the purchase? Write a short line (e.g. _taxi to client meeting, 240 kr_) and I will save it on the receipt.`
+      : '*File received*, but I could not read everything. What was the purchase? Write a short line (e.g. _taxi to client meeting, 240 kr_) and I will save it on the receipt.',
+
+  m10ContextConfirm: () => 'Thanks! Saved as a note on the receipt.',
 
   m11Stop: () =>
     'Okay, I will stop replying here and your number is disconnected. Your documents in Accounted are not affected. Send *start* to activate again.',

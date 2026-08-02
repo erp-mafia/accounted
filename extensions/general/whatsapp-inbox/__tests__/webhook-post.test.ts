@@ -155,14 +155,15 @@ describe('POST /webhook', () => {
     expect(updateArgs[0]).toEqual({ delivery_status: 'delivered' })
   })
 
-  it('persists a linked media message and defers processing', async () => {
+  it('persists a linked media message, arms the burst debounce and defers processing', async () => {
     const { enqueue, findCall } = mockSupabase()
     enqueue({ data: makeLink() }) // active link lookup
     enqueue({ data: { id: 'conv-1' } }) // conversation lookup
     enqueue({ data: { id: 'msg-row-1' } }) // message insert
     enqueue({ data: null }) // phone_links last_message_at update
-    enqueue({ data: null }) // conversation window update
+    enqueue({ data: null }) // conversation window + debounce update
 
+    const before = Date.now()
     const response = await route.handler(
       signedRequest(envelope({ messages: [imageMessage()] })),
     )
@@ -175,8 +176,16 @@ describe('POST /webhook', () => {
     expect(row.media_id).toBe('media-1')
     expect(row.media_mime).toBe('image/jpeg')
     expect(row.body_text).toBe('kvitto') // caption travels in body_text
+
+    // Debounce armed: pending_ack + a ~12s deadline pushed forward.
+    const [patch] = findCall('whatsapp_conversations', 'update') as [Record<string, unknown>]
+    expect(patch.pending_ack).toBe(true)
+    const deadline = new Date(patch.debounce_until as string).getTime() - before
+    expect(deadline).toBeGreaterThan(10_000)
+    expect(deadline).toBeLessThan(14_000)
+
     expect(kickMock).toHaveBeenCalledWith(['msg-row-1'])
-    expect(sendTextMock).not.toHaveBeenCalled() // per-receipt ack comes from the worker
+    expect(sendTextMock).not.toHaveBeenCalled() // the combined ack comes from the worker
   })
 
   it('dedupes a redelivered wamid via the unique index (23505): no reply, no processing', async () => {
@@ -479,6 +488,210 @@ describe('POST /webhook', () => {
         ),
       )
       expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m15Unsupported)
+    })
+  })
+
+  describe('conversation layer routing', () => {
+    const awaitingCompany = () => ({
+      id: 'conv-1',
+      state: 'awaiting_company',
+      context: {
+        company_options: [
+          { id: 'company-1', name: 'Bolag A AB' },
+          { id: 'company-2', name: 'Bolag B AB' },
+        ],
+        pending_question: {
+          type: 'company',
+          inbox_item_id: null,
+          asked_at: new Date().toISOString(),
+        },
+      },
+      company_id: null,
+    })
+
+    it('a typed digit in awaiting_company applies the choice and kicks the parked rows', async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink() })
+      mock.enqueue({ data: awaitingCompany() })
+      mock.enqueue({ data: { id: 'msg-row-1' } }) // insert
+      mock.enqueue({ data: null }) // link last_message_at
+      mock.enqueue({ data: null }) // conversation window update
+      mock.enqueue({ data: { company_id: 'company-2' } }) // membership check
+      mock.enqueue({ data: null }) // conversation pin update
+      mock.enqueue({ data: null }) // link last_company_id
+      mock.enqueue({ data: [{ id: 'stg-1' }, { id: 'stg-2' }] }) // staged reopen
+
+      await route.handler(signedRequest(envelope({ messages: [textMessage('2')] })))
+
+      expect(sendTextMock).toHaveBeenCalledTimes(1)
+      const confirm = sendTextMock.mock.calls[0][1]
+      expect(confirm.template).toBe(TEMPLATE.m6CompanyConfirm)
+      expect(confirm.body).toContain('Bolag B AB')
+      expect(kickMock).toHaveBeenCalledWith(['stg-1', 'stg-2'], { companySelectedVia: 'numbered' })
+    })
+
+    it('an interactive button reply in awaiting_company applies the tapped company', async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink() })
+      mock.enqueue({ data: awaitingCompany() })
+      mock.enqueue({ data: { id: 'msg-row-1' } })
+      mock.enqueue({ data: null })
+      mock.enqueue({ data: null })
+      mock.enqueue({ data: { company_id: 'company-1' } }) // membership check
+      mock.enqueue({ data: null }) // conversation pin update
+      mock.enqueue({ data: null }) // link last_company_id
+      mock.enqueue({ data: [{ id: 'stg-1' }] }) // staged reopen
+
+      await route.handler(
+        signedRequest(
+          envelope({
+            messages: [
+              {
+                from: '46701234567',
+                id: 'wamid.IN1',
+                type: 'interactive',
+                interactive: {
+                  type: 'button_reply',
+                  button_reply: { id: 'company-1', title: 'Bolag A AB' },
+                },
+              },
+            ],
+          }),
+        ),
+      )
+
+      expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6CompanyConfirm)
+      expect(kickMock).toHaveBeenCalledWith(['stg-1'], { companySelectedVia: 'button' })
+    })
+
+    it('a stale interactive tap outside awaiting_company is silence', async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink() })
+      mock.enqueue({ data: { id: 'conv-1', state: 'idle', context: {} } })
+      mock.enqueue({ data: { id: 'msg-row-1' } })
+      mock.enqueue({ data: null })
+      mock.enqueue({ data: null })
+
+      await route.handler(
+        signedRequest(
+          envelope({
+            messages: [
+              {
+                from: '46701234567',
+                id: 'wamid.IN1',
+                type: 'interactive',
+                interactive: {
+                  type: 'button_reply',
+                  button_reply: { id: 'company-1', title: 'Bolag A AB' },
+                },
+              },
+            ],
+          }),
+        ),
+      )
+
+      expect(sendTextMock).not.toHaveBeenCalled()
+      const [row] = mock.findCall('whatsapp_messages', 'insert') as [Record<string, unknown>]
+      expect(row.processing_status).toBe('skipped')
+    })
+
+    it("'byt' in idle clears the company pin and confirms", async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink() })
+      mock.enqueue({
+        data: {
+          id: 'conv-1',
+          state: 'idle',
+          context: {
+            pin_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+            pin_source: 'button',
+          },
+          company_id: 'company-2',
+        },
+      })
+      mock.enqueue({ data: { id: 'msg-row-1' } })
+      mock.enqueue({ data: null }) // link update
+      mock.enqueue({ data: null }) // conversation window update
+      mock.enqueue({ data: null }) // pin clear update
+
+      await route.handler(signedRequest(envelope({ messages: [textMessage('byt')] })))
+
+      expect(sendTextMock).toHaveBeenCalledTimes(1)
+      expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6BytPin)
+      const pinClear = mock
+        .findCalls('whatsapp_conversations', 'update')
+        .map((args) => args[0] as Record<string, unknown>)
+        .find((patch) => 'company_id' in patch)
+      expect(pinClear?.company_id).toBeNull()
+      expect((pinClear?.context as Record<string, unknown>).pin_expires_at).toBeUndefined()
+    })
+
+    it('free text while awaiting_representation is deferred as an answer (never handled inline)', async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink() })
+      mock.enqueue({
+        data: {
+          id: 'conv-1',
+          state: 'awaiting_representation',
+          context: {
+            pending_question: {
+              type: 'representation',
+              inbox_item_id: 'item-9',
+              asked_at: new Date().toISOString(),
+            },
+          },
+        },
+      })
+      mock.enqueue({ data: { id: 'msg-row-9' } })
+      mock.enqueue({ data: null })
+      mock.enqueue({ data: null })
+
+      await route.handler(
+        signedRequest(envelope({ messages: [textMessage('Lunch med Anna Berg (Volvo)')] })),
+      )
+
+      const [row] = mock.findCall('whatsapp_messages', 'insert') as [Record<string, unknown>]
+      expect(row.processing_status).toBe('received') // durable job row for the worker
+      expect(kickMock).toHaveBeenCalledWith(['msg-row-9'])
+      expect(sendTextMock).not.toHaveBeenCalled() // no inline M16 while a question is open
+    })
+
+    it('idle free text quoting an earlier receipt routes as a late answer', async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink() })
+      mock.enqueue({
+        data: {
+          id: 'conv-1',
+          state: 'idle',
+          context: {
+            recent_questions: [
+              {
+                type: 'context',
+                inbox_item_id: 'item-7',
+                asked_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+                status: 'moved_to_app',
+              },
+            ],
+          },
+        },
+      })
+      mock.enqueue({ data: { inbox_item_id: 'item-7' } }) // quoted wamid lookup
+      mock.enqueue({ data: { id: 'msg-row-7' } })
+      mock.enqueue({ data: null })
+      mock.enqueue({ data: null })
+
+      await route.handler(
+        signedRequest(
+          envelope({
+            messages: [textMessage('taxi till kundmöte', { context: { id: 'wamid.QUOTED' } })],
+          }),
+        ),
+      )
+
+      const [row] = mock.findCall('whatsapp_messages', 'insert') as [Record<string, unknown>]
+      expect(row.processing_status).toBe('received')
+      expect(kickMock).toHaveBeenCalledWith(['msg-row-7'])
+      expect(sendTextMock).not.toHaveBeenCalled()
     })
   })
 

@@ -48,16 +48,22 @@ function getPhoneNumberId(): string {
   return id
 }
 
-export interface SendTextArgs {
+export interface SendMessageBase {
   /** Recipient: E.164 digits, no '+' (Meta's wa_id format). */
   to: string
-  body: string
   /** Template id stamped into raw_payload for throttle checks and audit. */
   template: TemplateId
   senderPhoneHash?: string | null
   phoneLinkId?: string | null
   conversationId?: string | null
   correlationId?: string | null
+  /** Underlag item this outbound message concerns (ack/question sends).
+   *  Lets a quoted reply resolve back to its receipt. */
+  inboxItemId?: string | null
+}
+
+export interface SendTextArgs extends SendMessageBase {
+  body: string
 }
 
 export interface SendTextResult {
@@ -65,12 +71,10 @@ export interface SendTextResult {
   wamid: string | null
 }
 
-/**
- * Send a plain text message and persist the outbound row. Never throws.
- */
-export async function sendText(
-  supabase: SupabaseClient,
-  args: SendTextArgs,
+/** POST one message payload to the Graph API. Never throws. */
+async function postToGraph(
+  payload: Record<string, unknown>,
+  template: TemplateId,
 ): Promise<SendTextResult> {
   let wamid: string | null = null
   let ok = false
@@ -84,58 +88,205 @@ export async function sendText(
           Authorization: `Bearer ${getAccessToken()}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          recipient_type: 'individual',
-          to: args.to,
-          type: 'text',
-          text: { body: args.body },
-        }),
+        body: JSON.stringify(payload),
       },
       { timeoutMs: SEND_TIMEOUT_MS, description: 'WhatsApp send' },
     )
 
     if (response.ok) {
-      const payload = (await response.json().catch(() => null)) as {
+      const body = (await response.json().catch(() => null)) as {
         messages?: Array<{ id?: string }>
       } | null
-      wamid = payload?.messages?.[0]?.id ?? null
+      wamid = body?.messages?.[0]?.id ?? null
       ok = true
     } else {
       const detail = await response.text().catch(() => '')
       log.warn('WhatsApp send failed', {
         status: response.status,
-        template: args.template,
+        template,
         detail: detail.slice(0, 300),
       })
     }
   } catch (err) {
     log.warn('WhatsApp send errored', {
-      template: args.template,
+      template,
       error: err instanceof Error ? err.message : String(err),
     })
   }
 
+  return { ok, wamid }
+}
+
+/** Persist the outbound message row. Never throws. */
+async function persistOutbound(
+  supabase: SupabaseClient,
+  args: SendMessageBase & { bodyText: string; messageType: string },
+  result: SendTextResult,
+): Promise<void> {
   try {
     await supabase.from('whatsapp_messages').insert({
       direction: 'outbound',
-      wamid,
+      wamid: result.wamid,
       sender_phone_hash: args.senderPhoneHash ?? null,
       phone_link_id: args.phoneLinkId ?? null,
       conversation_id: args.conversationId ?? null,
-      message_type: 'text',
-      body_text: args.body,
+      message_type: args.messageType,
+      body_text: args.bodyText,
       raw_payload: { template: args.template },
-      // Outbound rows are not jobs: mark done so the PR4 sweep never claims them.
+      // Outbound rows are not jobs: mark done so the sweep never claims them.
       processing_status: 'done',
-      delivery_status: ok ? 'sent' : 'failed',
+      delivery_status: result.ok ? 'sent' : 'failed',
       correlation_id: args.correlationId ?? null,
+      inbox_item_id: args.inboxItemId ?? null,
     })
   } catch (err) {
     log.error('Failed to persist outbound WhatsApp message row', err)
   }
+}
 
-  return { ok, wamid }
+/**
+ * Send a plain text message and persist the outbound row. Never throws.
+ */
+export async function sendText(
+  supabase: SupabaseClient,
+  args: SendTextArgs,
+): Promise<SendTextResult> {
+  const result = await postToGraph(
+    {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: args.to,
+      type: 'text',
+      text: { body: args.body },
+    },
+    args.template,
+  )
+  await persistOutbound(supabase, { ...args, bodyText: args.body, messageType: 'text' }, result)
+  return result
+}
+
+// ── Interactive messages (company choice) ────────────────────
+
+export interface ChoiceOption {
+  /** Sent back verbatim in the interactive reply payload (company_id here). */
+  id: string
+  title: string
+}
+
+/** WhatsApp hard limits: button titles 20 chars, list row titles 24. */
+export const BUTTON_TITLE_MAX = 20
+export const LIST_ROW_TITLE_MAX = 24
+export const MAX_REPLY_BUTTONS = 3
+export const MAX_LIST_ROWS = 10
+
+/**
+ * Truncate a display title cleanly: prefer cutting at a word boundary when
+ * one sits in the second half, and mark the cut with a single ellipsis.
+ */
+export function truncateTitle(name: string, max: number): string {
+  const trimmed = name.trim()
+  if (trimmed.length <= max) return trimmed
+  const slice = trimmed.slice(0, max - 1)
+  const lastSpace = slice.lastIndexOf(' ')
+  const cut = lastSpace >= Math.floor(max / 2) ? slice.slice(0, lastSpace) : slice
+  return `${cut.trimEnd()}…`
+}
+
+export interface SendReplyButtonsArgs extends SendMessageBase {
+  body: string
+  /** At most MAX_REPLY_BUTTONS options; extras are dropped defensively. */
+  buttons: ChoiceOption[]
+}
+
+/**
+ * Send an interactive reply-buttons message (max 3). Never throws.
+ */
+export async function sendReplyButtons(
+  supabase: SupabaseClient,
+  args: SendReplyButtonsArgs,
+): Promise<SendTextResult> {
+  const buttons = args.buttons.slice(0, MAX_REPLY_BUTTONS)
+  const result = await postToGraph(
+    {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: args.to,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: args.body },
+        action: {
+          buttons: buttons.map((b) => ({
+            type: 'reply',
+            reply: { id: b.id, title: truncateTitle(b.title, BUTTON_TITLE_MAX) },
+          })),
+        },
+      },
+    },
+    args.template,
+  )
+  await persistOutbound(
+    supabase,
+    {
+      ...args,
+      bodyText: `${args.body}\n[${buttons.map((b) => b.title).join(' | ')}]`,
+      messageType: 'interactive',
+    },
+    result,
+  )
+  return result
+}
+
+export interface SendListArgs extends SendMessageBase {
+  body: string
+  /** Label on the list-opening button (<= 20 chars after truncation). */
+  buttonLabel: string
+  /** At most MAX_LIST_ROWS options; extras are dropped defensively. */
+  rows: ChoiceOption[]
+}
+
+/**
+ * Send an interactive list message (max 10 rows). Never throws.
+ */
+export async function sendList(
+  supabase: SupabaseClient,
+  args: SendListArgs,
+): Promise<SendTextResult> {
+  const rows = args.rows.slice(0, MAX_LIST_ROWS)
+  const result = await postToGraph(
+    {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: args.to,
+      type: 'interactive',
+      interactive: {
+        type: 'list',
+        body: { text: args.body },
+        action: {
+          button: truncateTitle(args.buttonLabel, BUTTON_TITLE_MAX),
+          sections: [
+            {
+              rows: rows.map((r) => ({
+                id: r.id,
+                title: truncateTitle(r.title, LIST_ROW_TITLE_MAX),
+              })),
+            },
+          ],
+        },
+      },
+    },
+    args.template,
+  )
+  await persistOutbound(
+    supabase,
+    {
+      ...args,
+      bodyText: `${args.body}\n[${rows.map((r) => r.title).join(' | ')}]`,
+      messageType: 'interactive',
+    },
+    result,
+  )
+  return result
 }
 
 /**

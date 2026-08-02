@@ -14,12 +14,26 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   }
 })
 
+vi.mock('@/extensions/general/whatsapp-inbox/lib/company-question', async () => {
+  const actual = await vi.importActual<
+    typeof import('@/extensions/general/whatsapp-inbox/lib/company-question')
+  >('@/extensions/general/whatsapp-inbox/lib/company-question')
+  return {
+    ...actual,
+    askCompanyQuestion: vi.fn().mockResolvedValue(true),
+  }
+})
+
 vi.mock('@/extensions/general/invoice-inbox/lib/upload-and-extract', () => ({
   uploadAndExtract: vi.fn(),
 }))
 
 vi.mock('@/lib/rate-limits/inbox', () => ({
   checkInboxUploadRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+}))
+
+vi.mock('@/lib/rate-limits/agent', () => ({
+  checkAgentRateLimit: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
 vi.mock('@/lib/processing-history/append', () => ({
@@ -36,10 +50,14 @@ import {
   downloadMedia,
   GraphApiError,
 } from '@/extensions/general/whatsapp-inbox/lib/graph-api'
+import { askCompanyQuestion } from '@/extensions/general/whatsapp-inbox/lib/company-question'
 import { uploadAndExtract } from '@/extensions/general/invoice-inbox/lib/upload-and-extract'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { processInboundMessage } from '@/extensions/general/whatsapp-inbox/lib/process-inbound'
+import {
+  STAGED_AWAITING_COMPANY,
+} from '@/extensions/general/whatsapp-inbox/lib/conversation'
 import { TEMPLATE } from '@/extensions/general/whatsapp-inbox/lib/messages'
 
 const sendTextMock = vi.mocked(sendText)
@@ -47,6 +65,7 @@ const downloadMediaMock = vi.mocked(downloadMedia)
 const uploadAndExtractMock = vi.mocked(uploadAndExtract)
 const rateLimitMock = vi.mocked(checkInboxUploadRateLimit)
 const appendHistoryMock = vi.mocked(appendProcessingHistory)
+const askCompanyQuestionMock = vi.mocked(askCompanyQuestion)
 
 function makeRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -69,6 +88,7 @@ function makeRow(overrides: Record<string, unknown> = {}) {
     inbox_item_id: null,
     delivery_status: null,
     correlation_id: 'corr-1',
+    acked_at: null,
     created_at: '2026-08-01T10:00:00Z',
     updated_at: '2026-08-01T10:00:00Z',
     ...overrides,
@@ -95,15 +115,34 @@ function makeLink(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function makeConversation(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'conv-1',
+    phone_link_id: 'link-1',
+    state: 'idle',
+    context: {},
+    company_id: null,
+    service_window_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    debounce_until: new Date().toISOString(),
+    pending_ack: true,
+    last_inbound_at: null,
+    last_outbound_at: null,
+    created_at: '2026-08-01T09:00:00Z',
+    updated_at: '2026-08-01T09:00:00Z',
+    ...overrides,
+  }
+}
+
 function lastUpdate(findCalls: (table: string, method: string) => unknown[][]): Record<string, unknown> {
   const updates = findCalls('whatsapp_messages', 'update')
   return updates[updates.length - 1][0] as Record<string, unknown>
 }
 
-describe('processInboundMessage', () => {
+describe('processInboundMessage (media intake)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT' })
+    askCompanyQuestionMock.mockResolvedValue(true)
     rateLimitMock.mockResolvedValue({ ok: true })
     downloadMediaMock.mockResolvedValue({
       buffer: new Uint8Array([1, 2, 3, 4]).buffer,
@@ -131,20 +170,23 @@ describe('processInboundMessage', () => {
     vi.clearAllMocks()
   })
 
-  it('happy path: claims, downloads, funnels through uploadAndExtract and acks with M4', async () => {
+  it('happy path: claims, ingests, marks done, and sends NO ack (the burst winner acks)', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: makeRow() }) // load row
     enqueue({ data: { id: 'msg-1' } }) // claim
     enqueue({ data: makeLink() }) // load link
+    enqueue({ data: makeConversation() }) // load conversation
     enqueue({ data: [{ company_id: 'company-1' }] }) // sole membership
     enqueue({ data: null }) // sha256 dup check: none
+    enqueue({ data: null }) // item channel_context load
+    enqueue({ data: null }) // item channel_context update
     enqueue({ data: null }) // final markStatus done
 
-    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+    const outcome = await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
 
+    expect(outcome).toEqual({ kind: 'media_processed', conversationId: 'conv-1' })
     expect(markReadWithTyping).toHaveBeenCalledWith('wamid.IN1')
     expect(downloadMediaMock).toHaveBeenCalledWith('media-1')
-    expect(uploadAndExtractMock).toHaveBeenCalledTimes(1)
     expect(uploadAndExtractMock).toHaveBeenCalledWith(
       supabase,
       'user-1',
@@ -159,36 +201,19 @@ describe('processInboundMessage', () => {
       },
     )
 
+    // company_selected_via lands on the item.
+    const itemUpdates = findCalls('invoice_inbox_items', 'update')
+    expect(itemUpdates).toHaveLength(1)
+    const contextArg = (itemUpdates[0][0] as { channel_context: Record<string, unknown> })
+      .channel_context
+    expect(contextArg.company_selected_via).toBe('single')
+
     const finalUpdate = lastUpdate(findCalls)
     expect(finalUpdate.processing_status).toBe('done')
     expect(finalUpdate.inbox_item_id).toBe('item-1')
 
-    expect(sendTextMock).toHaveBeenCalledTimes(1)
-    const ack = sendTextMock.mock.calls[0][1]
-    expect(ack.template).toBe(TEMPLATE.m4Ack)
-    expect(ack.to).toBe('46701234567')
-    expect(ack.body).toContain('Espresso House')
-    expect(ack.body).toContain('450 kr')
-    expect(ack.body).toContain('2026-07-30')
-  })
-
-  it('sends the empty-extraction M4 variant when no total was read', async () => {
-    uploadAndExtractMock.mockResolvedValue({
-      document_id: 'doc-1',
-      inbox_item_id: 'item-1',
-      extracted_data: { supplier: { name: null }, totals: { total: null }, invoice: {} },
-    } as never)
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: makeRow() })
-    enqueue({ data: { id: 'msg-1' } })
-    enqueue({ data: makeLink() })
-    enqueue({ data: [{ company_id: 'company-1' }] })
-    enqueue({ data: null })
-    enqueue({ data: null })
-
-    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
-
-    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m4AckEmpty)
+    // The per-receipt ack is debounced: this worker never sends it.
+    expect(sendTextMock).not.toHaveBeenCalled()
   })
 
   it('does nothing when the claim is lost (already processing)', async () => {
@@ -196,8 +221,9 @@ describe('processInboundMessage', () => {
     enqueue({ data: makeRow() })
     enqueue({ data: null }) // claim matched no row
 
-    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+    const outcome = await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
 
+    expect(outcome).toEqual({ kind: 'none' })
     expect(downloadMediaMock).not.toHaveBeenCalled()
     expect(uploadAndExtractMock).not.toHaveBeenCalled()
     expect(sendTextMock).not.toHaveBeenCalled()
@@ -208,7 +234,7 @@ describe('processInboundMessage', () => {
     enqueue({ data: makeRow({ media_mime: 'video/mp4', message_type: 'document' }) })
     enqueue({ data: { id: 'msg-1' } })
     enqueue({ data: makeLink() })
-    enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: makeConversation() })
     enqueue({ data: null }) // markStatus skipped
 
     await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
@@ -220,21 +246,97 @@ describe('processInboundMessage', () => {
     expect(lastUpdate(findCalls).processing_status).toBe('skipped')
   })
 
-  it('multi-company sender without a default gets M6 fallback and no item', async () => {
+  it('multi-company sender without pin/default: parks the row and asks the company question', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: makeRow() })
     enqueue({ data: { id: 'msg-1' } })
     enqueue({ data: makeLink() })
+    enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }, { company_id: 'company-2' }] })
-    enqueue({ data: null }) // markStatus skipped
+    enqueue({ data: null }) // markStatus skipped (staged)
+    enqueue({ data: null, count: 1 }) // staged count
+
+    const outcome = await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    expect(outcome).toEqual({ kind: 'media_staged', conversationId: 'conv-1' })
+    expect(uploadAndExtractMock).not.toHaveBeenCalled()
+    expect(downloadMediaMock).not.toHaveBeenCalled()
+    // Parked with the staged marker, not dropped.
+    const staged = lastUpdate(findCalls)
+    expect(staged.processing_status).toBe('skipped')
+    expect(staged.error_message).toBe(STAGED_AWAITING_COMPANY)
+    expect(askCompanyQuestionMock).toHaveBeenCalledTimes(1)
+    expect(askCompanyQuestionMock.mock.calls[0][1]).toMatchObject({
+      to: '46701234567',
+      stagedCount: 1,
+    })
+  })
+
+  it('uses a live conversation pin over everything and stamps via=pin', async () => {
+    const pinExpiry = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() })
+    enqueue({ data: { id: 'msg-1' } })
+    enqueue({ data: makeLink({ default_company_id: 'company-7' }) })
+    enqueue({
+      data: makeConversation({ company_id: 'company-9', context: { pin_expires_at: pinExpiry } }),
+    })
+    enqueue({ data: { company_id: 'company-9' } }) // pin membership check
+    enqueue({ data: null }) // sliding pin refresh (context update)
+    enqueue({ data: null }) // dup check
+    enqueue({ data: null }) // item context load
+    enqueue({ data: null }) // item context update
+    enqueue({ data: null }) // markStatus done
 
     await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
 
+    expect(uploadAndExtractMock).toHaveBeenCalledWith(
+      supabase,
+      'user-1',
+      'company-9',
+      expect.anything(),
+      'whatsapp',
+      undefined,
+      undefined,
+      expect.anything(),
+    )
+    // Sliding TTL: the pin refresh pushed pin_expires_at forward.
+    const conversationUpdates = findCalls('whatsapp_conversations', 'update')
+    const refresh = conversationUpdates.find((args) => {
+      const patch = args[0] as { context?: { pin_expires_at?: string } }
+      return patch.context?.pin_expires_at != null
+    })
+    expect(refresh).toBeTruthy()
+    const refreshed = (refresh![0] as { context: { pin_expires_at: string } }).context
+      .pin_expires_at
+    expect(new Date(refreshed).getTime()).toBeGreaterThan(new Date(pinExpiry).getTime())
+    // Item records that a pin resolved the company.
+    const itemUpdate = findCalls('invoice_inbox_items', 'update')[0][0] as {
+      channel_context: Record<string, unknown>
+    }
+    expect(itemUpdate.channel_context.company_selected_via).toBe('pin')
+  })
+
+  it('an EXPIRED pin no longer resolves: multi-company sender is asked again', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() })
+    enqueue({ data: { id: 'msg-1' } })
+    enqueue({ data: makeLink() })
+    enqueue({
+      data: makeConversation({
+        company_id: 'company-9',
+        context: { pin_expires_at: new Date(Date.now() - 1000).toISOString() },
+      }),
+    })
+    enqueue({ data: [{ company_id: 'company-1' }, { company_id: 'company-2' }] })
+    enqueue({ data: null }) // markStatus skipped
+    enqueue({ data: null, count: 1 }) // staged count
+
+    const outcome = await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    expect(outcome.kind).toBe('media_staged')
     expect(uploadAndExtractMock).not.toHaveBeenCalled()
-    expect(downloadMediaMock).not.toHaveBeenCalled()
-    expect(sendTextMock).toHaveBeenCalledTimes(1)
-    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6NoDefaultCompany)
-    expect(lastUpdate(findCalls).processing_status).toBe('skipped')
+    expect(askCompanyQuestionMock).toHaveBeenCalledTimes(1)
   })
 
   it('uses the default company when set and still a member', async () => {
@@ -242,8 +344,11 @@ describe('processInboundMessage', () => {
     enqueue({ data: makeRow() })
     enqueue({ data: { id: 'msg-1' } })
     enqueue({ data: makeLink({ default_company_id: 'company-7' }) })
+    enqueue({ data: makeConversation() })
     enqueue({ data: { company_id: 'company-7' } }) // membership check for default
     enqueue({ data: null }) // dup check
+    enqueue({ data: null }) // item context load
+    enqueue({ data: null }) // item context update
     enqueue({ data: null }) // markStatus done
 
     await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
@@ -266,6 +371,7 @@ describe('processInboundMessage', () => {
     enqueue({ data: makeRow() })
     enqueue({ data: { id: 'msg-1' } })
     enqueue({ data: makeLink() })
+    enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
     enqueue({ data: null }) // M17 notice check: none sent yet
     enqueue({ data: null }) // markStatus skipped
@@ -288,6 +394,7 @@ describe('processInboundMessage', () => {
     enqueue({ data: makeRow() })
     enqueue({ data: { id: 'msg-1' } })
     enqueue({ data: makeLink() })
+    enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
     enqueue({ data: { id: 'earlier-m17' } }) // notice already sent
     enqueue({ data: null }) // markStatus skipped
@@ -302,6 +409,7 @@ describe('processInboundMessage', () => {
     enqueue({ data: makeRow() })
     enqueue({ data: { id: 'msg-1' } })
     enqueue({ data: makeLink() })
+    enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
     enqueue({ data: { id: 'existing-doc' } }) // dup found
     enqueue({ data: null }) // markStatus skipped
@@ -314,12 +422,75 @@ describe('processInboundMessage', () => {
     expect(lastUpdate(findCalls).processing_status).toBe('skipped')
   })
 
+  it('a new file while awaiting_resend supersedes the old item and closes the question', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() })
+    enqueue({ data: { id: 'msg-1' } })
+    enqueue({ data: makeLink() })
+    enqueue({
+      data: makeConversation({
+        state: 'awaiting_resend',
+        context: {
+          pending_question: {
+            type: 'resend',
+            inbox_item_id: 'item-old',
+            asked_at: '2026-08-01T09:30:00Z',
+          },
+          recent_questions: [
+            {
+              type: 'resend',
+              inbox_item_id: 'item-old',
+              asked_at: '2026-08-01T09:30:00Z',
+              status: 'open',
+            },
+          ],
+        },
+      }),
+    })
+    enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: null }) // dup check
+    enqueue({ data: null }) // new item context load
+    enqueue({ data: null }) // new item context update
+    enqueue({
+      data: {
+        channel_context: {
+          channel: 'whatsapp',
+          quality: { resend_requested_at: '2026-08-01T09:30:00Z' },
+          pending_question: { type: 'resend', asked_at: '2026-08-01T09:30:00Z', status: 'open' },
+        },
+      },
+    }) // old item context load
+    enqueue({ data: null }) // old item context update
+    enqueue({ data: null }) // conversation -> idle
+    enqueue({ data: { company_id: 'company-1', correlation_id: null } }) // history item lookup
+    enqueue({ data: null }) // markStatus done
+
+    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    const itemUpdates = findCalls('invoice_inbox_items', 'update')
+    const oldItemPatch = itemUpdates[1][0] as { channel_context: Record<string, unknown> }
+    expect(oldItemPatch.channel_context.quality).toMatchObject({
+      resent: true,
+      superseded: true,
+    })
+    expect(
+      (oldItemPatch.channel_context.pending_question as { status: string }).status,
+    ).toBe('answered')
+
+    const conversationUpdates = findCalls('whatsapp_conversations', 'update')
+    const idleUpdate = conversationUpdates.find(
+      (args) => (args[0] as { state?: string }).state === 'idle',
+    )
+    expect(idleUpdate).toBeTruthy()
+  })
+
   it('wraps failures: error status + error_message + a single M18', async () => {
     downloadMediaMock.mockRejectedValue(new GraphApiError('Media download failed (500)', 500))
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: makeRow() })
     enqueue({ data: { id: 'msg-1' } })
     enqueue({ data: makeLink() })
+    enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
     enqueue({ data: null }) // markStatus error
 
@@ -338,6 +509,7 @@ describe('processInboundMessage', () => {
     enqueue({ data: makeRow({ attempts: 1 }) })
     enqueue({ data: { id: 'msg-1' } })
     enqueue({ data: makeLink() })
+    enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
     enqueue({ data: null }) // markStatus error
 

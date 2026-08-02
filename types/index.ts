@@ -2739,16 +2739,26 @@ export interface InvoiceInboxItem {
 export interface InboxChannelContext {
   channel: 'whatsapp'
   caption?: string | null
-  company_selected_via?: 'button' | 'pin' | 'default' | 'single'
+  company_selected_via?: 'button' | 'list' | 'numbered' | 'pin' | 'default' | 'single'
   representation?: {
     participants: { name: string; company: string | null }[]
     purpose: string | null
     event_date: string | null
     raw_answer: string
     answered_at: string
+    /** True when the user answered `nej` (or the LLM read a denial): the
+     *  receipt is NOT representation and the question is settled. */
+    denied?: boolean
   }
   user_note?: string | null
-  quality?: { resend_requested_at: string; resent: boolean }
+  quality?: {
+    resend_requested_at: string
+    resent?: boolean
+    /** Set on the OLD item when a re-sent, sharper file created a fresh item
+     *  (WORM archive + anchored-doc invariant forbid swapping the document
+     *  out from under the original). */
+    superseded?: boolean
+  }
   pending_question?: {
     type: 'representation' | 'context' | 'resend'
     asked_at: string
@@ -2826,6 +2836,9 @@ export interface WhatsAppMessage {
   inbox_item_id: string | null
   delivery_status: string | null
   correlation_id: string | null
+  /** When a combined burst ack (M4/M5) covered this ingested row.
+   *  NULL = not yet acked (the burst winner's work queue). */
+  acked_at: string | null
   created_at: string
   updated_at: string
 }
