@@ -54,7 +54,9 @@ import {
   markRecentQuestion,
   questionsAskedToday,
   resolveAnswerTarget,
+  resolveRecipient,
   serviceWindowOpen,
+  updateConversation,
   type ConversationContext,
   type QueuedQuestion,
   type QuestionType,
@@ -112,11 +114,19 @@ function fallbackFilename(mime: string): string {
   return `whatsapp-${new Date().toISOString().slice(0, 10)}.${ext}`
 }
 
-function formatSek(amount: number): string {
-  return `${new Intl.NumberFormat('sv-SE', {
+/**
+ * Amount as the ack states it. The extraction pipeline preserves the document
+ * currency ("Do NOT default to SEK"), so printing every total with 'kr' turned
+ * a EUR 250 hotel receipt into "250 kr" on the one surface that tells the user
+ * their receipt was filed correctly.
+ */
+function formatAmount(amount: number, currency: string | null | undefined): string {
+  const formatted = new Intl.NumberFormat('sv-SE', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
-  }).format(amount)} kr`
+  }).format(amount)
+  const code = (currency ?? '').trim().toUpperCase()
+  return code === '' || code === 'SEK' ? `${formatted} kr` : `${formatted} ${code}`
 }
 
 async function loadRow(
@@ -169,13 +179,21 @@ async function rateLimitNoticeAlreadySent(
     .select('id')
     .eq('direction', 'outbound')
     .eq('sender_phone_hash', senderPhoneHash)
-    .eq('raw_payload->>template', TEMPLATE.m17RateLimited)
+    // Both m17 variants (minute + day scope) share the window.
+    .like('raw_payload->>template', `${TEMPLATE.m17RateLimited}%`)
     .gte('created_at', since)
     .limit(1)
     .maybeSingle()
   return data != null
 }
 
+/**
+ * Terminal status write. Guarded on processing_status='processing': the row is
+ * only ours while we hold the claim, and an unguarded write let a late loser
+ * (a sweep re-claim that raced a live worker) overwrite the winner's 'done'
+ * and null its inbox_item_id, which silently loses the burst ack and breaks
+ * quoted-reply resolution.
+ */
 async function markStatus(
   supabase: SupabaseClient,
   messageId: string,
@@ -191,6 +209,69 @@ async function markStatus(
       inbox_item_id: extra.inboxItemId ?? null,
     })
     .eq('id', messageId)
+    .eq('processing_status', 'processing')
+}
+
+/** The Underlag item this chat message already produced, if any. The partial
+ *  unique index invoice_inbox_items_whatsapp_msg makes this the item-level
+ *  idempotency key for a re-processed row. */
+async function existingInboxItemId(
+  supabase: SupabaseClient,
+  whatsappMessageId: string,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('invoice_inbox_items')
+    .select('id')
+    .eq('whatsapp_message_id', whatsappMessageId)
+    .limit(1)
+    .maybeSingle()
+  return (data as { id: string } | null)?.id ?? null
+}
+
+/** True when an M18 failure notice already went out for this message. */
+async function errorNoticeAlreadySent(
+  supabase: SupabaseClient,
+  correlationId: string | null,
+): Promise<boolean> {
+  if (!correlationId) return false
+  const { data } = await supabase
+    .from('whatsapp_messages')
+    .select('id')
+    .eq('direction', 'outbound')
+    .eq('correlation_id', correlationId)
+    .eq('raw_payload->>template', TEMPLATE.m18Error)
+    .limit(1)
+    .maybeSingle()
+  return data != null
+}
+
+/**
+ * Tell the sender their file failed, at most once per message. Gating this on
+ * `attempt <= 1` made it unreachable for exactly the failure the sweep exists
+ * for: a first attempt that dies with the instance already counted its
+ * attempt, so every re-claim suppressed the notice and the row ended in
+ * 'error' with the sender never hearing about that receipt at all.
+ */
+export async function sendErrorNoticeOnce(
+  supabase: SupabaseClient,
+  args: {
+    to: string
+    senderPhoneHash: string | null
+    phoneLinkId: string | null
+    conversationId: string | null
+    correlationId: string | null
+  },
+): Promise<void> {
+  if (await errorNoticeAlreadySent(supabase, args.correlationId)) return
+  await sendText(supabase, {
+    to: args.to,
+    body: botCopy('sv').m18Error(),
+    template: TEMPLATE.m18Error,
+    senderPhoneHash: args.senderPhoneHash,
+    phoneLinkId: args.phoneLinkId,
+    conversationId: args.conversationId,
+    correlationId: args.correlationId,
+  })
 }
 
 // ── Company resolution (PR4 ladder) ──────────────────────────
@@ -214,21 +295,19 @@ async function resolveCompanyTarget(
 
   if (conversation && hasLivePin(conversation, now) && conversation.company_id) {
     if (await isMember(supabase, link.user_id, conversation.company_id)) {
-      // Sliding TTL. Refresh at most once a minute: the pin write is a plain
-      // context read-modify-write, and throttling it shrinks the window in
-      // which it could race a question-state write from the ack winner.
+      // Sliding TTL, refreshed at most once a minute. The write is guarded
+      // (updateConversation): a blind whole-context replacement here would
+      // wipe a pending_question the ack winner wrote in between, and the
+      // sweep would then reset the state a minute later.
       const context = getContext(conversation)
       const expiresAt = context.pin_expires_at ? new Date(context.pin_expires_at).getTime() : 0
       if (expiresAt - now.getTime() < COMPANY_PIN_TTL_MS - 60 * 1000) {
-        await supabase
-          .from('whatsapp_conversations')
-          .update({
-            context: {
-              ...context,
-              pin_expires_at: new Date(now.getTime() + COMPANY_PIN_TTL_MS).toISOString(),
-            } as Record<string, unknown>,
-          })
-          .eq('id', conversation.id)
+        await updateConversation(supabase, conversation, (_current, currentContext) => ({
+          context: {
+            ...currentContext,
+            pin_expires_at: new Date(now.getTime() + COMPANY_PIN_TTL_MS).toISOString(),
+          },
+        }))
       }
       return { companyId: conversation.company_id, via: selectedViaOverride ?? 'pin' }
     }
@@ -300,7 +379,6 @@ async function processMediaMessage(
   opts: KickOptions,
 ): Promise<ProcessOutcome> {
   const copy = botCopy('sv')
-  const to = extractRecipient(row)
 
   const replyBase = {
     senderPhoneHash: row.sender_phone_hash,
@@ -308,9 +386,10 @@ async function processMediaMessage(
     conversationId: row.conversation_id,
     correlationId: row.correlation_id,
   }
+  let to: string | null = null
 
   try {
-    if (!row.phone_link_id || !row.media_id || !to) {
+    if (!row.phone_link_id || !row.media_id) {
       await markStatus(supabase, row.id, 'error', {
         errorMessage: 'Message row is missing link or media reference',
       })
@@ -323,6 +402,13 @@ async function processMediaMessage(
     if (!link || link.revoked_at) {
       await markStatus(supabase, row.id, 'skipped', {
         errorMessage: 'Phone link revoked before processing',
+      })
+      return { kind: 'none' }
+    }
+    to = resolveRecipient(row, link)
+    if (!to) {
+      await markStatus(supabase, row.id, 'error', {
+        errorMessage: 'No reply address for message row',
       })
       return { kind: 'none' }
     }
@@ -394,9 +480,30 @@ async function processMediaMessage(
         log.error('RateLimitedDropped append failed', err)
       }
       if (row.sender_phone_hash && !(await rateLimitNoticeAlreadySent(supabase, row.sender_phone_hash))) {
-        await sendText(supabase, { to, body: copy.m17RateLimited({}), template: TEMPLATE.m17RateLimited, ...replyBase })
+        // The daily company quota resets at Stockholm midnight, so the
+        // template's 10-minute default is simply false there.
+        const dayScope = limit.scope === 'day'
+        await sendText(supabase, {
+          to,
+          body: dayScope
+            ? copy.m17RateLimitedDay()
+            : copy.m17RateLimited({ minutes: Math.max(1, Math.ceil((limit.retryAfterSec ?? 600) / 60)) }),
+          template: dayScope ? TEMPLATE.m17RateLimitedDay : TEMPLATE.m17RateLimited,
+          ...replyBase,
+        })
       }
       await markStatus(supabase, row.id, 'skipped', { errorMessage: 'Rate limited' })
+      return { kind: 'media_processed', conversationId: conversation?.id ?? null }
+    }
+
+    // ── Already ingested? (idempotency at the item level) ──
+    // A sweep re-claim that raced a live worker must adopt the item the
+    // winner created, not create a second one: the WORM document is written
+    // before the item insert and can never be deleted (7-year retention),
+    // and the unique index would make the second insert throw.
+    const alreadyIngested = await existingInboxItemId(supabase, row.id)
+    if (alreadyIngested) {
+      await markStatus(supabase, row.id, 'done', { inboxItemId: alreadyIngested })
       return { kind: 'media_processed', conversationId: conversation?.id ?? null }
     }
 
@@ -419,22 +526,33 @@ async function processMediaMessage(
     }
 
     // ── Upload + extract (the shared invoice-inbox funnel) ──
-    const result = await uploadAndExtract(
-      supabase,
-      link.user_id,
-      companyId,
-      { name: row.media_filename || fallbackFilename(mime), buffer: media.buffer, type: mime },
-      'whatsapp',
-      undefined,
-      undefined,
-      {
-        channelMeta: { whatsappMessageId: row.id, caption: row.body_text ?? null },
-        actorId: 'whatsapp-inbound',
-      },
-    )
+    let inboxItemId: string
+    try {
+      const result = await uploadAndExtract(
+        supabase,
+        link.user_id,
+        companyId,
+        { name: row.media_filename || fallbackFilename(mime), buffer: media.buffer, type: mime },
+        'whatsapp',
+        undefined,
+        undefined,
+        {
+          channelMeta: { whatsappMessageId: row.id, caption: row.body_text ?? null },
+          actorId: 'whatsapp-inbound',
+        },
+      )
+      inboxItemId = result.inbox_item_id
+    } catch (uploadErr) {
+      // invoice_inbox_items_whatsapp_msg is a unique index: a concurrent
+      // worker that got there first is a success, not a failure.
+      const adopted = await existingInboxItemId(supabase, row.id)
+      if (!adopted) throw uploadErr
+      await markStatus(supabase, row.id, 'done', { inboxItemId: adopted })
+      return { kind: 'media_processed', conversationId: conversation?.id ?? null }
+    }
 
     // Record how the company was chosen (audit + FieldsRail in PR5).
-    await updateItemContext(supabase, result.inbox_item_id, (context) => ({
+    await updateItemContext(supabase, inboxItemId, (context) => ({
       ...context,
       company_selected_via: resolved.via,
     }))
@@ -449,19 +567,19 @@ async function processMediaMessage(
       await resolveResendQuestion(supabase, conversation)
     }
 
-    await markStatus(supabase, row.id, 'done', { inboxItemId: result.inbox_item_id })
+    await markStatus(supabase, row.id, 'done', { inboxItemId })
     // No ack here: the burst winner sends ONE combined M4/M5 (+ question).
     return { kind: 'media_processed', conversationId: conversation?.id ?? null }
   } catch (err) {
     const message =
       err instanceof GraphApiError || err instanceof Error ? err.message : String(err)
-    log.error('WhatsApp intake processing failed', err, { messageId: row.id })
+    log.error('WhatsApp intake processing failed', err, { messageId: row.id, attempt })
     try {
       await markStatus(supabase, row.id, 'error', { errorMessage: message.slice(0, 500) })
-      // M18 once per message: only on the first attempt, so a sweep re-claim
-      // of the same row never spams the sender.
-      if (to && attempt <= 1) {
-        await sendText(supabase, { to, body: botCopy('sv').m18Error(), template: TEMPLATE.m18Error, ...replyBase })
+      // M18 at most once per message, tracked by the outbound row rather than
+      // the attempt counter (a first attempt that died still burned its).
+      if (to) {
+        await sendErrorNoticeOnce(supabase, { to, ...replyBase })
       }
     } catch (innerErr) {
       log.error('Failed to record WhatsApp processing error', innerErr, { messageId: row.id })
@@ -492,15 +610,14 @@ async function resolveResendQuestion(
       : { type: 'resend', asked_at: pending.asked_at, status: 'answered' },
   }))
 
-  const nextContext: ConversationContext = {
-    ...context,
-    recent_questions: markRecentQuestion(context, oldItemId, 'answered'),
-  }
-  delete nextContext.pending_question
-  await supabase
-    .from('whatsapp_conversations')
-    .update({ state: 'idle', context: nextContext as Record<string, unknown> })
-    .eq('id', conversation.id)
+  await updateConversation(supabase, conversation, (_current, currentContext) => {
+    const nextContext: ConversationContext = {
+      ...currentContext,
+      recent_questions: markRecentQuestion(currentContext, oldItemId, 'answered'),
+    }
+    delete nextContext.pending_question
+    return { state: 'idle', context: nextContext }
+  })
   await appendQuestionHistory(supabase, {
     inboxItemId: oldItemId,
     eventType: 'ChannelQuestionAnswered',
@@ -524,7 +641,8 @@ function ackLine(entry: BurstEntry): string {
   const merchant =
     entry.extracted?.supplier?.name ?? entry.row.media_filename ?? 'Kvitto'
   const total = entry.extracted?.totals?.total ?? null
-  return `${merchant}, ${total != null ? formatSek(total) : 'belopp saknas'}`
+  const currency = entry.extracted?.invoice?.currency ?? null
+  return `${merchant}, ${total != null ? formatAmount(total, currency) : 'belopp saknas'}`
 }
 
 /**
@@ -558,7 +676,13 @@ export async function finalizeBurst(
     const nowIso = now.toISOString()
     const rowIds = rows.map((r) => r.id)
 
-    const to = rows.map(extractRecipient).find((value) => value != null) ?? null
+    // Legacy rows still carry the sender number; redacted ones do not, and
+    // then the reply address comes from the link's encrypted copy.
+    let to = rows.map(extractRecipient).find((value) => value != null) ?? null
+    if (!to) {
+      const link = await loadLink(supabase, conversation.phone_link_id)
+      to = rows.map((r) => resolveRecipient(r, link)).find((value) => value != null) ?? null
+    }
     // Never initiate outside the 24h service window (no templates in v1):
     // if the window closed, hand off silently and mark the rows covered.
     if (!to || !serviceWindowOpen(conversation, now)) {
@@ -677,7 +801,7 @@ export async function finalizeBurst(
           total != null
             ? copy.m4Ack({
                 merchant: entry.extracted?.supplier?.name ?? null,
-                amount: formatSek(total),
+                amount: formatAmount(total, entry.extracted?.invoice?.currency ?? null),
                 date: entry.extracted?.invoice?.invoiceDate ?? null,
               })
             : copy.m4AckEmpty()
@@ -707,30 +831,35 @@ export async function finalizeBurst(
     }
 
     // ── Persist state BEFORE sending (a fast answer must find it) ──
-    const nextContext: ConversationContext = { ...context, question_queue: queue }
-    let nextState = conversation.state
-    if (toAsk) {
-      nextContext.pending_question = {
-        type: toAsk.type,
-        inbox_item_id: toAsk.entry.itemId,
-        asked_at: nowIso,
-      }
-      nextContext.recent_questions = appendRecentQuestion(
-        context,
-        { type: toAsk.type, inbox_item_id: toAsk.entry.itemId, asked_at: nowIso, status: 'open' },
-        now,
-      )
-      nextContext.budget = bumpBudget(context, 1, now)
-      nextState = STATE_FOR_QUESTION[toAsk.type]
-    }
-    await supabase
-      .from('whatsapp_conversations')
-      .update({
-        state: nextState,
-        context: nextContext as Record<string, unknown>,
-        last_outbound_at: nowIso,
-      })
-      .eq('id', conversationId)
+    // Guarded write: this runs seconds after the reads above, and the answer
+    // worker (a different claim entirely) may have settled a question in
+    // between. Replacing the whole jsonb blindly resurrected answered
+    // questions and dropped queue entries.
+    const previousState = conversation.state
+    const askedItemId = toAsk?.entry.itemId ?? null
+    const committed = await updateConversation(
+      supabase,
+      conversation,
+      (current, currentContext) => {
+        const nextContext: ConversationContext = { ...currentContext, question_queue: queue }
+        let nextState = current.state
+        if (toAsk) {
+          nextContext.pending_question = {
+            type: toAsk.type,
+            inbox_item_id: toAsk.entry.itemId,
+            asked_at: nowIso,
+          }
+          nextContext.recent_questions = appendRecentQuestion(
+            currentContext,
+            { type: toAsk.type, inbox_item_id: toAsk.entry.itemId, asked_at: nowIso, status: 'open' },
+            now,
+          )
+          nextContext.budget = bumpBudget(currentContext, 1, now)
+          nextState = STATE_FOR_QUESTION[toAsk.type]
+        }
+        return { state: nextState, context: nextContext, last_outbound_at: nowIso }
+      },
+    )
 
     if (toAsk) {
       await updateItemContext(supabase, toAsk.entry.itemId, (itemContext) => ({
@@ -754,7 +883,7 @@ export async function finalizeBurst(
     }
 
     const last = rows[rows.length - 1]
-    await sendText(supabase, {
+    const sent = await sendText(supabase, {
       to,
       body,
       template,
@@ -764,6 +893,34 @@ export async function finalizeBurst(
       correlationId: last.correlation_id,
       inboxItemId: ackItemId,
     })
+
+    if (!sent.ok) {
+      // Sends never throw, so an ignored result meant a Graph failure left the
+      // user with no ack ever (acked_at blocks the sweep's re-arm) AND the
+      // conversation parked on a question they never received, which the next
+      // unrelated text would then be interpreted as answering. Undo the
+      // question and leave the rows unacked so sweep pass 2b retries.
+      if (toAsk && committed && askedItemId) {
+        await updateConversation(supabase, committed, (current, currentContext) => {
+          if (currentContext.pending_question?.asked_at !== nowIso) return null
+          const rolledBack: ConversationContext = { ...currentContext }
+          delete rolledBack.pending_question
+          rolledBack.recent_questions = (currentContext.recent_questions ?? []).filter(
+            (q) => !(q.inbox_item_id === askedItemId && q.asked_at === nowIso),
+          )
+          rolledBack.budget = bumpBudget(currentContext, -1, now)
+          return { state: current.state === STATE_FOR_QUESTION[toAsk.type] ? previousState : current.state, context: rolledBack }
+        })
+        await updateItemContext(supabase, askedItemId, (itemContext) => {
+          if (itemContext.pending_question?.asked_at !== nowIso) return itemContext
+          const reverted = { ...itemContext }
+          delete reverted.pending_question
+          return reverted
+        })
+      }
+      log.warn('combined ack send failed; rows left unacked for the sweep', { conversationId })
+      return
+    }
 
     await supabase.from('whatsapp_messages').update({ acked_at: nowIso }).in('id', rowIds)
   } catch (err) {
@@ -781,12 +938,23 @@ function renderParticipants(
     .join(', ')
 }
 
+/** Append a chat line to the item's note, keeping whatever is already there. */
+async function appendUserNote(
+  supabase: SupabaseClient,
+  inboxItemId: string,
+  text: string,
+): Promise<void> {
+  await updateItemContext(supabase, inboxItemId, (itemContext) => ({
+    ...itemContext,
+    user_note: itemContext.user_note ? `${itemContext.user_note}\n${text}` : text,
+  }))
+}
+
 async function processAnswerMessage(
   supabase: SupabaseClient,
   row: WhatsAppMessage,
 ): Promise<ProcessOutcome> {
   const copy = botCopy('sv')
-  const to = extractRecipient(row)
   const replyBase = {
     senderPhoneHash: row.sender_phone_hash,
     phoneLinkId: row.phone_link_id,
@@ -795,13 +963,18 @@ async function processAnswerMessage(
   }
 
   try {
-    if (!row.phone_link_id || !to) {
+    if (!row.phone_link_id) {
       await markStatus(supabase, row.id, 'error', { errorMessage: 'Answer row is missing link' })
       return { kind: 'none' }
     }
     const link = await loadLink(supabase, row.phone_link_id)
     if (!link || link.revoked_at) {
       await markStatus(supabase, row.id, 'skipped', { errorMessage: 'Phone link revoked' })
+      return { kind: 'none' }
+    }
+    const to = resolveRecipient(row, link)
+    if (!to) {
+      await markStatus(supabase, row.id, 'error', { errorMessage: 'No reply address for answer row' })
       return { kind: 'none' }
     }
     const conversation = row.conversation_id
@@ -815,12 +988,51 @@ async function processAnswerMessage(
 
     const raw = row.raw_payload as { context?: { id?: unknown } } | null
     const quotedWamid = typeof raw?.context?.id === 'string' ? raw.context.id : null
+
+    // Words cannot answer the re-send question (it needs a sharper file), but
+    // they ARE about that receipt. Keep them there and leave the question
+    // open, instead of letting the late-answer probe bind them to some other
+    // receipt's question and confirm it as that receipt's note.
+    const resendPending = getContext(conversation).pending_question
+    if (
+      conversation.state === 'awaiting_resend' &&
+      resendPending?.type === 'resend' &&
+      resendPending.inbox_item_id
+    ) {
+      await appendUserNote(supabase, resendPending.inbox_item_id, text)
+      await sendText(supabase, {
+        to,
+        body: copy.m9NoteSaved(),
+        template: TEMPLATE.m9NoteSaved,
+        ...replyBase,
+        inboxItemId: resendPending.inbox_item_id,
+      })
+      await markStatus(supabase, row.id, 'done', { inboxItemId: resendPending.inbox_item_id })
+      return { kind: 'answer', conversationId: conversation.id }
+    }
+
     const target = await resolveAnswerTarget(supabase, conversation, quotedWamid)
     if (!target) {
       // The question disappeared between webhook routing and processing
       // (TTL sweep or a concurrent answer): plain fallback.
       await sendText(supabase, { to, body: copy.m16Fallback(), template: TEMPLATE.m16Fallback, ...replyBase })
       await markStatus(supabase, row.id, 'done')
+      return { kind: 'answer', conversationId: conversation.id }
+    }
+
+    if (target.followUp) {
+      // The user quoted a receipt whose question is already settled: this is
+      // an addition ('glömde: Bo Ek var också med'), so it is appended to
+      // that receipt instead of overwriting its confirmed answer.
+      await appendUserNote(supabase, target.inboxItemId, text)
+      await sendText(supabase, {
+        to,
+        body: copy.m10ContextConfirm(),
+        template: TEMPLATE.m10ContextConfirm,
+        ...replyBase,
+        inboxItemId: target.inboxItemId,
+      })
+      await markStatus(supabase, row.id, 'done', { inboxItemId: target.inboxItemId })
       return { kind: 'answer', conversationId: conversation.id }
     }
 
@@ -922,6 +1134,11 @@ async function processAnswerMessage(
         await updateItemContext(supabase, target.inboxItemId, (itemContext) => ({
           ...itemContext,
           user_note: note,
+          // The note is an LLM paraphrase; keep what the human actually
+          // wrote (and when) next to it, the way the representation branch
+          // does. Without this the only copy of the raw wording is
+          // whatsapp_messages.body_text, which the retention cron purges.
+          context_answer: { raw_answer: text, answered_at: nowIso },
           pending_question: itemContext.pending_question
             ? { ...itemContext.pending_question, status: 'answered' }
             : undefined,
@@ -932,21 +1149,23 @@ async function processAnswerMessage(
     }
 
     // Conversation bookkeeping: settle the question, then surface the next
-    // queued one (if any and the budget allows).
-    const context = getContext(conversation)
-    const nextContext: ConversationContext = {
-      ...context,
-      recent_questions: markRecentQuestion(context, target.inboxItemId, 'answered'),
-    }
+    // queued one (if any and the budget allows). Guarded: the LLM call above
+    // takes seconds, and a burst finalize or a second answer fragment may
+    // have written the row in between (a blind write resurrected the
+    // question or dropped the queue).
     let nextState = conversation.state
-    if (!target.late && context.pending_question?.inbox_item_id === target.inboxItemId) {
-      delete nextContext.pending_question
-      nextState = 'idle'
-    }
-    await supabase
-      .from('whatsapp_conversations')
-      .update({ state: nextState, context: nextContext as Record<string, unknown> })
-      .eq('id', conversation.id)
+    await updateConversation(supabase, conversation, (current, currentContext) => {
+      const patchContext: ConversationContext = {
+        ...currentContext,
+        recent_questions: markRecentQuestion(currentContext, target.inboxItemId, 'answered'),
+      }
+      nextState = current.state
+      if (!target.late && currentContext.pending_question?.inbox_item_id === target.inboxItemId) {
+        delete patchContext.pending_question
+        nextState = 'idle'
+      }
+      return { state: nextState, context: patchContext }
+    })
 
     await appendQuestionHistory(supabase, {
       inboxItemId: target.inboxItemId,
@@ -999,7 +1218,8 @@ async function askNextQueuedQuestion(
   const conversation = await loadConversation(supabase, conversationId)
   if (!conversation || conversation.state !== 'idle') return
   const context = getContext(conversation)
-  const queue: QueuedQuestion[] = [...(context.question_queue ?? [])]
+  const originalQueue: QueuedQuestion[] = context.question_queue ?? []
+  const queue: QueuedQuestion[] = [...originalQueue]
   if (queue.length === 0) return
 
   const now = new Date()
@@ -1025,12 +1245,44 @@ async function askNextQueuedQuestion(
     }))
   }
   if (!next) {
-    await supabase
-      .from('whatsapp_conversations')
-      .update({ context: { ...context, question_queue: [] } as Record<string, unknown> })
-      .eq('id', conversationId)
+    await updateConversation(supabase, conversation, (_current, currentContext) => ({
+      context: { ...currentContext, question_queue: [] },
+    }))
     return
   }
+
+  // Claim the pop BEFORE composing and sending. The idle check plus shift
+  // above is a plain read-modify-write, so two answer workers landing
+  // together both popped the same question and asked it twice. This guarded
+  // write elects one of them and settles the whole question state in one go.
+  const claimed = await updateConversation(supabase, conversation, (current, currentContext) => {
+    if (current.state !== 'idle') return null
+    if (
+      JSON.stringify(currentContext.question_queue ?? []) !== JSON.stringify(originalQueue)
+    ) {
+      return null
+    }
+    return {
+      state: STATE_FOR_QUESTION[next!.type],
+      context: {
+        ...currentContext,
+        question_queue: queue,
+        pending_question: {
+          type: next!.type,
+          inbox_item_id: next!.inbox_item_id,
+          asked_at: nowIso,
+        },
+        recent_questions: appendRecentQuestion(
+          currentContext,
+          { type: next!.type, inbox_item_id: next!.inbox_item_id, asked_at: nowIso, status: 'open' },
+          now,
+        ),
+        budget: bumpBudget(currentContext, 1, now),
+      },
+      last_outbound_at: nowIso,
+    }
+  })
+  if (!claimed) return
 
   const { data: itemData } = await supabase
     .from('invoice_inbox_items')
@@ -1059,26 +1311,6 @@ async function askNextQueuedQuestion(
     body = copy.m10Context({})
     template = TEMPLATE.m10Context
   }
-
-  const nextContext: ConversationContext = {
-    ...context,
-    question_queue: queue,
-    pending_question: { type: next.type, inbox_item_id: next.inbox_item_id, asked_at: nowIso },
-    recent_questions: appendRecentQuestion(
-      context,
-      { type: next.type, inbox_item_id: next.inbox_item_id, asked_at: nowIso, status: 'open' },
-      now,
-    ),
-    budget: bumpBudget(context, 1, now),
-  }
-  await supabase
-    .from('whatsapp_conversations')
-    .update({
-      state: STATE_FOR_QUESTION[next.type],
-      context: nextContext as Record<string, unknown>,
-      last_outbound_at: nowIso,
-    })
-    .eq('id', conversationId)
 
   await updateItemContext(supabase, next.inbox_item_id, (itemContext) => ({
     ...itemContext,

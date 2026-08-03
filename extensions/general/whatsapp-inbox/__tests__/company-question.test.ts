@@ -217,6 +217,7 @@ describe('applyCompanyChoice', () => {
     })
 
     expect(applied).toEqual({
+      ok: true,
       companyId: 'company-2',
       companyName: 'Bolag B AB',
       stagedMessageIds: ['stg-1', 'stg-2'],
@@ -266,8 +267,10 @@ describe('applyCompanyChoice', () => {
       replyBase,
     })
 
-    expect(applied?.companyId).toBe('company-1')
-    expect(applied?.stagedMessageIds).toEqual([])
+    expect(applied.ok).toBe(true)
+    if (!applied.ok) throw new Error('expected the choice to apply')
+    expect(applied.companyId).toBe('company-1')
+    expect(applied.stagedMessageIds).toEqual([])
   })
 
   it('rejects a company the sender is not a member of (forged/stale payload)', async () => {
@@ -283,7 +286,7 @@ describe('applyCompanyChoice', () => {
       replyBase,
     })
 
-    expect(applied).toBeNull()
+    expect(applied).toEqual({ ok: false, reason: 'not_member' })
     expect(sendTextMock).not.toHaveBeenCalled()
     expect(findCalls('whatsapp_conversations', 'update')).toHaveLength(0)
   })
@@ -298,8 +301,44 @@ describe('applyCompanyChoice', () => {
       to: '46701234567',
       replyBase,
     })
-    expect(applied).toBeNull()
+    // Ordinary user input (a typo), so the CALLER re-prompts the options
+    // rather than the silence reserved for forged payloads.
+    expect(applied).toEqual({ ok: false, reason: 'invalid_option' })
     expect(sendTextMock).not.toHaveBeenCalled()
+  })
+
+  it('treats a transient membership-query error as unresolved, not as "not a member"', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ error: { message: 'connection reset' } })
+
+    const applied = await applyCompanyChoice(supabase as unknown as SupabaseClient, {
+      conversation: awaitingConversation(),
+      link: makeLink(),
+      choice: { companyId: 'company-1' },
+      via: 'button',
+      to: '46701234567',
+      replyBase,
+    })
+
+    expect(applied).toEqual({ ok: false, reason: 'lookup_failed' })
+    expect(findCalls('whatsapp_conversations', 'update')).toHaveLength(0)
+  })
+
+  it('a second tap after the choice was applied confirms nothing (options are gone)', async () => {
+    const { supabase, findCalls } = createQueuedMockSupabase()
+
+    const applied = await applyCompanyChoice(supabase as unknown as SupabaseClient, {
+      conversation: makeConversation({ state: 'idle', context: {} }),
+      link: makeLink(),
+      choice: { companyId: 'company-1' },
+      via: 'button',
+      to: '46701234567',
+      replyBase,
+    })
+
+    expect(applied).toEqual({ ok: false, reason: 'already_applied' })
+    expect(sendTextMock).not.toHaveBeenCalled()
+    expect(findCalls('whatsapp_conversations', 'update')).toHaveLength(0)
   })
 })
 

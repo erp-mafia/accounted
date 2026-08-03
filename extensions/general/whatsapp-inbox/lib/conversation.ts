@@ -12,16 +12,22 @@
  *   - recent_questions      asked-question log for late answers (<= 7 days)
  *   - budget                daily content-question counter (Europe/Stockholm)
  *
- * Concurrency note: context is read-modify-write via PostgREST. Single-writer
- * discipline keeps that safe: only the burst-ack winner, the answer worker,
- * the company-choice handler and the sweep write it, and the pending_ack /
- * processing_status claims serialize them. Media staging deliberately does
- * NOT go through context (staged refs live as whatsapp_messages rows) so
- * parallel webhook invocations never race on this column.
+ * Concurrency note: context is read-modify-write via PostgREST, and the
+ * writers (burst-ack winner, answer worker, company-choice handler, sweep)
+ * hold DIFFERENT claims (pending_ack vs processing_status), so they are not
+ * serialized against each other. Every context write therefore goes through
+ * updateConversation(), which guards on the updated_at it read and re-applies
+ * the mutation against fresh state when it loses. Media staging deliberately
+ * does NOT go through context (staged refs live as whatsapp_messages rows) so
+ * parallel webhook invocations never race on this column at all.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
 import type { WhatsAppConversation, WhatsAppMessage } from '@/types'
+import { decryptPhone } from './phone-crypto'
+
+const log = createLogger('whatsapp-inbox/conversation')
 
 export const COMPANY_PIN_TTL_MS = 8 * 60 * 60 * 1000
 export const QUESTION_TTL_MS = 48 * 60 * 60 * 1000
@@ -103,6 +109,73 @@ export async function loadConversation(
   return (data as WhatsAppConversation | null) ?? null
 }
 
+/** Fields a conversation write may touch. Anything omitted stays as it is. */
+export interface ConversationPatch {
+  state?: WhatsAppConversation['state']
+  context?: ConversationContext
+  company_id?: string | null
+  last_outbound_at?: string
+  pending_ack?: boolean
+  debounce_until?: string
+}
+
+/**
+ * Optimistic-concurrency write of a conversation row.
+ *
+ * `context` is a whole-jsonb column written read-modify-write, and its writers
+ * hold different claims (the ack winner holds pending_ack, an answer worker
+ * holds its own row's processing_status, the sweep holds nothing), so a blind
+ * `.eq('id')` update silently clobbers whatever landed in between: resurrected
+ * questions, wiped pending_question, dropped queue entries.
+ *
+ * The updated_at trigger makes that column a revision counter, so guarding on
+ * the value the mutation was derived from turns every write into a
+ * compare-and-set. On a lost race the row is reloaded and `mutate` runs again
+ * against fresh state; returning null from it aborts (the work is already
+ * done, or no longer applies).
+ */
+export async function updateConversation(
+  supabase: SupabaseClient,
+  conversation: WhatsAppConversation,
+  mutate: (
+    current: WhatsAppConversation,
+    context: ConversationContext,
+  ) => ConversationPatch | null,
+  maxAttempts = 4,
+): Promise<WhatsAppConversation | null> {
+  let current: WhatsAppConversation | null = conversation
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (!current) return null
+    const patch = mutate(current, getContext(current))
+    if (!patch) return null
+    // Literal payload so the phantom-column scanner can verify the column
+    // names; undefined values drop out of the JSON body PostgREST receives.
+    const { data } = await supabase
+      .from('whatsapp_conversations')
+      .update({
+        state: patch.state,
+        context: patch.context as Record<string, unknown> | undefined,
+        company_id: patch.company_id,
+        last_outbound_at: patch.last_outbound_at,
+        pending_ack: patch.pending_ack,
+        debounce_until: patch.debounce_until,
+      })
+      .eq('id', current.id)
+      .eq('updated_at', current.updated_at)
+      .select('*')
+    // PostgREST returns [] only when the revision guard did not match.
+    if (!Array.isArray(data) || data.length > 0) {
+      const written = Array.isArray(data) ? (data[0] as WhatsAppConversation) : null
+      return written ?? ({ ...current, ...patch } as WhatsAppConversation)
+    }
+    current = await loadConversation(supabase, current.id)
+  }
+  log.warn('conversation write gave up after concurrent modifications', {
+    conversationId: conversation.id,
+  })
+  return null
+}
+
 /**
  * Atomic burst-ack claim. Exactly one caller per debounce window gets a row
  * back; everyone else stays silent. `debounce_until <= now` uses the caller's
@@ -147,7 +220,8 @@ export function bumpBudget(
 ): ConversationContext['budget'] {
   const dayKey = stockholmDayKey(now)
   const current = context.budget?.day_key === dayKey ? context.budget.count : 0
-  return { day_key: dayKey, count: current + asked }
+  // Negative `asked` refunds a question whose send failed; never below zero.
+  return { day_key: dayKey, count: Math.max(0, current + asked) }
 }
 
 /** True when the company pin on the conversation is present and unexpired. */
@@ -178,17 +252,30 @@ export interface AnswerTarget {
   inboxItemId: string
   /** True when matched outside an awaiting_* state (quoted or recent). */
   late: boolean
+  /** The quoted receipt's question was already answered: this is a follow-up
+   *  correction, appended to the note instead of overwriting the answer. */
+  followUp?: boolean
 }
 
 const TEXT_ANSWERABLE: ReadonlySet<string> = new Set(['representation', 'context'])
 
+function isTextAnswerable(
+  question: RecentQuestion,
+): question is RecentQuestion & { type: TextAnswerableQuestionType } {
+  return TEXT_ANSWERABLE.has(question.type)
+}
+
 /**
  * Resolve which question a free-text message answers.
  *
- * 1. An awaiting_representation/awaiting_context state answers its own
- *    pending question.
- * 2. Otherwise a quoted reply (context.message_id -> whatsapp_messages.wamid,
- *    either direction) resolves through that row's inbox_item_id.
+ * 1. A quoted reply (context.message_id -> whatsapp_messages.wamid, either
+ *    direction) names its receipt, so it wins over everything else, including
+ *    an unrelated pending question and including a question that receipt has
+ *    already answered (the reply is then a follow-up correction). Binding a
+ *    quoted correction to some OTHER receipt because the quoted one was
+ *    settled is how the wrong item gets the note.
+ * 2. Otherwise an awaiting_representation/awaiting_context state answers its
+ *    own pending question.
  * 3. Otherwise the single most recent question asked within 7 days that has
  *    not been answered yet (moved_to_app still accepts a late answer).
  */
@@ -200,26 +287,20 @@ export async function resolveAnswerTarget(
 ): Promise<AnswerTarget | null> {
   const context = getContext(conversation)
 
-  if (
+  const pending =
     (conversation.state === 'awaiting_representation' ||
       conversation.state === 'awaiting_context') &&
     context.pending_question &&
     TEXT_ANSWERABLE.has(context.pending_question.type) &&
     context.pending_question.inbox_item_id
-  ) {
-    return {
-      type: context.pending_question.type as TextAnswerableQuestionType,
-      inboxItemId: context.pending_question.inbox_item_id,
-      late: false,
-    }
-  }
+      ? {
+          type: context.pending_question.type as TextAnswerableQuestionType,
+          inboxItemId: context.pending_question.inbox_item_id,
+        }
+      : null
 
-  const recent = (context.recent_questions ?? []).filter(
-    (q): q is RecentQuestion & { type: TextAnswerableQuestionType } =>
-      TEXT_ANSWERABLE.has(q.type) &&
-      q.status !== 'answered' &&
-      now.getTime() - new Date(q.asked_at).getTime() <= LATE_ANSWER_MAX_AGE_MS,
-  )
+  const withinWindow = (question: RecentQuestion): boolean =>
+    now.getTime() - new Date(question.asked_at).getTime() <= LATE_ANSWER_MAX_AGE_MS
 
   if (quotedWamid) {
     const { data: quotedRow } = await supabase
@@ -231,10 +312,30 @@ export async function resolveAnswerTarget(
       .maybeSingle()
     const quotedItemId = (quotedRow as { inbox_item_id: string | null } | null)?.inbox_item_id
     if (quotedItemId) {
-      const match = recent.find((q) => q.inbox_item_id === quotedItemId)
-      if (match) return { type: match.type, inboxItemId: match.inbox_item_id, late: true }
+      // Quoting the very question that is open: an ordinary answer, not late.
+      if (pending && pending.inboxItemId === quotedItemId) {
+        return { ...pending, late: false }
+      }
+      const quoted = [...(context.recent_questions ?? [])]
+        .filter((q) => isTextAnswerable(q) && withinWindow(q) && q.inbox_item_id === quotedItemId)
+        .sort((a, b) => new Date(b.asked_at).getTime() - new Date(a.asked_at).getTime())[0]
+      if (quoted && isTextAnswerable(quoted)) {
+        return {
+          type: quoted.type,
+          inboxItemId: quoted.inbox_item_id,
+          late: true,
+          followUp: quoted.status === 'answered',
+        }
+      }
     }
   }
+
+  if (pending) return { ...pending, late: false }
+
+  const recent = (context.recent_questions ?? []).filter(
+    (q): q is RecentQuestion & { type: TextAnswerableQuestionType } =>
+      isTextAnswerable(q) && q.status !== 'answered' && withinWindow(q),
+  )
 
   if (recent.length > 0) {
     const latest = [...recent].sort(
@@ -270,9 +371,48 @@ export function appendRecentQuestion(
   return [...kept, entry].slice(-10)
 }
 
-/** The recipient phone (E.164 digits) for replies, read back from the
- *  persisted raw payload (the row never stores the raw number elsewhere). */
+/**
+ * Legacy recipient read: rows persisted before the raw payload was redacted
+ * still carry the sender's plaintext number under `from`. New rows do not,
+ * so this returns null for them and the caller decrypts the phone link.
+ */
 export function extractRecipient(row: WhatsAppMessage): string | null {
   const raw = row.raw_payload as { from?: unknown } | null
   return raw && typeof raw.from === 'string' && raw.from.length > 0 ? raw.from : null
+}
+
+/**
+ * The recipient phone (E.164 digits) for replies.
+ *
+ * The authoritative copy is whatsapp_phone_links.phone_enc (AES-256-GCM):
+ * persisting the plaintext number in every message's raw_payload defeated the
+ * whole point of encrypting it once on the link. Falls back to the legacy
+ * raw_payload copy for rows written before the redaction.
+ */
+export function resolveRecipient(
+  row: WhatsAppMessage,
+  link: { phone_enc?: string | null } | null,
+): string | null {
+  const legacy = extractRecipient(row)
+  if (legacy) return legacy
+  if (!link?.phone_enc) return null
+  try {
+    const phone = decryptPhone(link.phone_enc)
+    return phone.length > 0 ? phone : null
+  } catch (err) {
+    // Shredded (retention/erasure sets phone_enc = '') or a key rotation:
+    // there is no one left to reply to, and that must not throw here.
+    log.warn('could not decrypt phone link for reply', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+}
+
+/** Strip the sender's plaintext phone number out of the payload we persist.
+ *  Everything else (type, timestamp, quoted context.id) is kept verbatim. */
+export function redactRawPayload(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object') return null
+  const { from: _from, ...rest } = raw as Record<string, unknown>
+  return rest
 }

@@ -36,12 +36,14 @@ export const TEMPLATE = {
   m5BurstAck: 'm5_burst_ack',
   m6CompanyQuestion: 'm6_company_question',
   m6CompanyConfirm: 'm6_company_confirm',
+  m6CompanyRetry: 'm6_company_retry',
   m6BytPin: 'm6_byt_pin',
   m7Representation: 'm7_representation',
   m8RepConfirmed: 'm8_rep_confirmed',
   m8RepPartial: 'm8_rep_partial',
   m8RepDenied: 'm8_rep_denied',
   m9Resend: 'm9_resend',
+  m9NoteSaved: 'm9_note_saved',
   m10Context: 'm10_context',
   m10ContextConfirm: 'm10_context_confirm',
   m11Stop: 'm11_stop',
@@ -51,6 +53,7 @@ export const TEMPLATE = {
   m15Unsupported: 'm15_unsupported',
   m16Fallback: 'm16_fallback',
   m17RateLimited: 'm17_rate_limited',
+  m17RateLimitedDay: 'm17_rate_limited_day',
   m18Error: 'm18_error',
 } as const
 
@@ -111,6 +114,12 @@ const SV = {
   m6CompanyConfirm: ({ companyName }: { companyName: string }) =>
     `*${companyName}*, noterat. Jag minns valet i 8 timmar (skriv *byt* för att ändra).`,
 
+  // Typo or a typed company name while the question is open: repeat the list
+  // instead of the M16 lecture or silence.
+  m6CompanyRetry: ({ options }: { options: string[] }) =>
+    `Jag känner inte igen svaret. Svara med en siffra 1-${options.length}:\n\n` +
+    options.map((name, i) => `${i + 1}. ${name}`).join('\n'),
+
   m6BytPin: () => 'Okej, jag frågar vilket företag nästa gång du skickar ett kvitto.',
 
   m7Representation: ({ ref }: { ref?: string | null } = {}) =>
@@ -131,6 +140,11 @@ const SV = {
       : 'Bilden blev för lågupplöst för att läsas av, WhatsApp komprimerar foton hårt.\n\n' +
         'Skicka gärna samma kvitto igen som *dokument*: gem-ikonen -> _Dokument_ -> välj bilden. Då behålls full skärpa. Kvittot ligger kvar i Underlag så länge.',
 
+  // Text arrived while a re-send question is open: the words cannot replace
+  // the file, so they are kept as a note and the question stays open.
+  m9NoteSaved: () =>
+    'Tack! Sparat som anteckning på kvittot. Skicka gärna samma kvitto igen som *dokument* (gem-ikonen -> _Dokument_) så kan jag läsa av beloppen.',
+
   m10Context: ({ ordinal }: { ordinal?: number | null } = {}) =>
     ordinal != null
       ? `Kvitto ${ordinal}: jag kunde inte läsa av allt. Vad gäller köpet? Skriv en kort rad (t.ex. _taxi till kundmöte, 240 kr_) så sparar jag det på kvittot.`
@@ -138,8 +152,12 @@ const SV = {
 
   m10ContextConfirm: () => 'Tack! Sparat som anteckning på kvittot.',
 
+  // Honest wording: `stopp` PAUSES the channel (muted_at), it does not revoke
+  // the binding. Actually disconnecting is the settings panel's "Koppla från",
+  // and the panel shows the paused state as "Pausad": the copy must match.
   m11Stop: () =>
-    'Okej, jag slutar svara här och ditt nummer kopplas från. Dina underlag i Accounted påverkas inte. Skicka *start* om du vill aktivera igen.',
+    'Okej, jag pausar och slutar svara här. Numret är kvar kopplat men jag tar inte emot något mer. Dina underlag i Accounted påverkas inte.\n\n' +
+    'Skicka *start* när du vill aktivera igen, eller koppla från numret helt under *Inställningar -> WhatsApp* i Accounted.',
 
   m12Start: () => 'Välkommen tillbaka! Ditt nummer är aktivt igen, skicka kvitton när du vill.',
 
@@ -158,6 +176,11 @@ const SV = {
 
   m17RateLimited: ({ minutes = 10 }: LinkedTemplateArgs) =>
     `Det blev många filer på kort tid, jag pausar mottagningen en stund. Försök igen om cirka ${minutes} minuter.`,
+
+  // The 500/day company quota resets at midnight, so "cirka 10 minuter" is
+  // simply wrong there: never promise a minute count we cannot keep.
+  m17RateLimitedDay: () =>
+    'Dagens gräns för mottagna filer är nådd för det här företaget. Jag tar emot fler i morgon, eller ladda upp direkt i appen under *Underlag* så kommer de in nu.',
 
   m18Error: () =>
     'Något gick fel när jag tog emot filen. Försök igen om en stund, eller ladda upp kvittot direkt i appen under *Underlag*. Skriv *hjälp* om det fortsätter.',
@@ -220,6 +243,10 @@ const EN: typeof SV = {
   m6CompanyConfirm: ({ companyName }: { companyName: string }) =>
     `*${companyName}*, noted. I will remember the choice for 8 hours (type *byt* to change).`,
 
+  m6CompanyRetry: ({ options }: { options: string[] }) =>
+    `I did not recognise that answer. Reply with a number 1-${options.length}:\n\n` +
+    options.map((name, i) => `${i + 1}. ${name}`).join('\n'),
+
   m6BytPin: () => 'Okay, I will ask which company the next time you send a receipt.',
 
   m7Representation: ({ ref }: { ref?: string | null } = {}) =>
@@ -240,6 +267,9 @@ const EN: typeof SV = {
       : 'The image came through at too low a resolution to read, WhatsApp compresses photos hard.\n\n' +
         'Please send the same receipt again as a *document*: paperclip icon -> _Document_ -> pick the image. That keeps full sharpness. The receipt stays in Underlag meanwhile.',
 
+  m9NoteSaved: () =>
+    'Thanks! Saved as a note on the receipt. Please send the same receipt again as a *document* (paperclip icon -> _Document_) so I can read the amounts.',
+
   m10Context: ({ ordinal }: { ordinal?: number | null } = {}) =>
     ordinal != null
       ? `Receipt ${ordinal}: I could not read everything. What was the purchase? Write a short line (e.g. _taxi to client meeting, 240 kr_) and I will save it on the receipt.`
@@ -248,7 +278,8 @@ const EN: typeof SV = {
   m10ContextConfirm: () => 'Thanks! Saved as a note on the receipt.',
 
   m11Stop: () =>
-    'Okay, I will stop replying here and your number is disconnected. Your documents in Accounted are not affected. Send *start* to activate again.',
+    'Okay, I am pausing and will stop replying here. Your number stays linked but I will not receive anything more. Your documents in Accounted are not affected.\n\n' +
+    'Send *start* whenever you want to activate again, or disconnect the number entirely under *Settings -> WhatsApp* in Accounted.',
 
   m12Start: () => 'Welcome back! Your number is active again, send receipts whenever you like.',
 
@@ -267,6 +298,9 @@ const EN: typeof SV = {
 
   m17RateLimited: ({ minutes = 10 }: LinkedTemplateArgs) =>
     `That was a lot of files in a short time, I am pausing intake for a bit. Try again in about ${minutes} minutes.`,
+
+  m17RateLimitedDay: () =>
+    'This company has reached its daily limit for received files. I will accept more tomorrow, or upload directly in the app under *Underlag* to get them in now.',
 
   m18Error: () =>
     'Something went wrong receiving the file. Try again in a moment, or upload the receipt directly in the app under *Underlag*. Type *hjälp* if it keeps happening.',

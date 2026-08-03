@@ -363,10 +363,26 @@ describe('POST /webhook', () => {
       mock.enqueue({ data: null }) // conversation window
     }
 
+    /** Dispositions with a durable side effect run it BEFORE the terminal row
+     *  is written, so the wamid dedupe becomes a pre-check and the insert
+     *  lands last (see handleLinkedSender). */
+    function enqueueDurablePreamble(
+      mock: ReturnType<typeof mockSupabase>,
+      link: Record<string, unknown>,
+      conversation: Record<string, unknown> = { id: 'conv-1', state: 'idle', context: {} },
+    ) {
+      mock.enqueue({ data: link }) // link lookup
+      mock.enqueue({ data: conversation }) // conversation
+      mock.enqueue({ data: null }) // wamid dedupe pre-check: not seen yet
+      mock.enqueue({ data: null }) // link last_message_at
+      mock.enqueue({ data: null }) // conversation window
+    }
+
     it('stopp mutes the link and confirms with M11', async () => {
       const mock = mockSupabase()
-      enqueueLinkedTextPreamble(mock, makeLink())
+      enqueueDurablePreamble(mock, makeLink())
       mock.enqueue({ data: null }) // muted_at update
+      mock.enqueue({ data: null }) // terminal row insert
 
       await route.handler(signedRequest(envelope({ messages: [textMessage('Stopp')] })))
 
@@ -406,8 +422,9 @@ describe('POST /webhook', () => {
 
     it('start unmutes and welcomes back with M12', async () => {
       const mock = mockSupabase()
-      enqueueLinkedTextPreamble(mock, makeLink({ muted_at: '2026-08-01T10:00:00Z' }))
+      enqueueDurablePreamble(mock, makeLink({ muted_at: '2026-08-01T10:00:00Z' }))
       mock.enqueue({ data: null }) // muted_at cleared
+      mock.enqueue({ data: null }) // terminal row insert
 
       await route.handler(signedRequest(envelope({ messages: [textMessage('start')] })))
 
@@ -513,13 +530,14 @@ describe('POST /webhook', () => {
       const mock = mockSupabase()
       mock.enqueue({ data: makeLink() })
       mock.enqueue({ data: awaitingCompany() })
-      mock.enqueue({ data: { id: 'msg-row-1' } }) // insert
+      mock.enqueue({ data: null }) // wamid dedupe pre-check
       mock.enqueue({ data: null }) // link last_message_at
       mock.enqueue({ data: null }) // conversation window update
       mock.enqueue({ data: { company_id: 'company-2' } }) // membership check
-      mock.enqueue({ data: null }) // conversation pin update
+      mock.enqueue({ data: null }) // guarded conversation pin update
       mock.enqueue({ data: null }) // link last_company_id
       mock.enqueue({ data: [{ id: 'stg-1' }, { id: 'stg-2' }] }) // staged reopen
+      mock.enqueue({ data: null }) // terminal row insert
 
       await route.handler(signedRequest(envelope({ messages: [textMessage('2')] })))
 
@@ -534,13 +552,14 @@ describe('POST /webhook', () => {
       const mock = mockSupabase()
       mock.enqueue({ data: makeLink() })
       mock.enqueue({ data: awaitingCompany() })
-      mock.enqueue({ data: { id: 'msg-row-1' } })
+      mock.enqueue({ data: null }) // wamid dedupe pre-check
       mock.enqueue({ data: null })
       mock.enqueue({ data: null })
       mock.enqueue({ data: { company_id: 'company-1' } }) // membership check
-      mock.enqueue({ data: null }) // conversation pin update
+      mock.enqueue({ data: null }) // guarded conversation pin update
       mock.enqueue({ data: null }) // link last_company_id
       mock.enqueue({ data: [{ id: 'stg-1' }] }) // staged reopen
+      mock.enqueue({ data: null }) // terminal row insert
 
       await route.handler(
         signedRequest(
@@ -609,10 +628,11 @@ describe('POST /webhook', () => {
           company_id: 'company-2',
         },
       })
-      mock.enqueue({ data: { id: 'msg-row-1' } })
+      mock.enqueue({ data: null }) // wamid dedupe pre-check
       mock.enqueue({ data: null }) // link update
       mock.enqueue({ data: null }) // conversation window update
-      mock.enqueue({ data: null }) // pin clear update
+      mock.enqueue({ data: null }) // guarded pin clear update
+      mock.enqueue({ data: null }) // terminal row insert
 
       await route.handler(signedRequest(envelope({ messages: [textMessage('byt')] })))
 
@@ -692,6 +712,159 @@ describe('POST /webhook', () => {
       expect(row.processing_status).toBe('received')
       expect(kickMock).toHaveBeenCalledWith(['msg-row-7'])
       expect(sendTextMock).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('hardening: dispositions, late company answers, payload redaction', () => {
+    const withOptions = (state: string) => ({
+      id: 'conv-1',
+      state,
+      context: {
+        company_options: [
+          { id: 'company-1', name: 'Bolag A AB' },
+          { id: 'company-2', name: 'Bolag B AB' },
+        ],
+      },
+      company_id: null,
+    })
+
+    it('an out-of-range digit gets the options repeated instead of silence', async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink() })
+      mock.enqueue({ data: withOptions('awaiting_company') })
+      mock.enqueue({ data: null }) // wamid dedupe pre-check
+      mock.enqueue({ data: null }) // link last_message_at
+      mock.enqueue({ data: null }) // conversation window
+      mock.enqueue({ data: null }) // terminal row insert
+
+      await route.handler(signedRequest(envelope({ messages: [textMessage('9')] })))
+
+      expect(sendTextMock).toHaveBeenCalledTimes(1)
+      expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6CompanyRetry)
+      expect(sendTextMock.mock.calls[0][1].body).toContain('Bolag B AB')
+    })
+
+    it('a typed company name gets the options repeated, not the M16 lecture', async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink() })
+      mock.enqueue({ data: withOptions('awaiting_company') })
+      mock.enqueue({ data: { id: 'msg-row-1' } }) // insert (reply-only disposition)
+      mock.enqueue({ data: null })
+      mock.enqueue({ data: null })
+
+      await route.handler(signedRequest(envelope({ messages: [textMessage('Bolag B AB')] })))
+
+      expect(sendTextMock).toHaveBeenCalledTimes(1)
+      expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6CompanyRetry)
+    })
+
+    it('accepts a LATE company answer after the 48h reset (options still present)', async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink() })
+      mock.enqueue({ data: withOptions('idle') })
+      mock.enqueue({ data: null }) // wamid dedupe pre-check
+      mock.enqueue({ data: null }) // link last_message_at
+      mock.enqueue({ data: null }) // conversation window
+      mock.enqueue({ data: { company_id: 'company-2' } }) // membership check
+      mock.enqueue({ data: null }) // guarded pin write
+      mock.enqueue({ data: null }) // link last_company_id
+      mock.enqueue({ data: [{ id: 'stg-1' }] }) // staged reopen
+      mock.enqueue({ data: null }) // terminal row insert
+
+      await route.handler(signedRequest(envelope({ messages: [textMessage('2')] })))
+
+      expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6CompanyConfirm)
+      expect(kickMock).toHaveBeenCalledWith(['stg-1'], { companySelectedVia: 'numbered' })
+    })
+
+    it("recognises 'byt' inside an awaiting state, the word m6-confirm teaches", async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink() })
+      mock.enqueue({
+        data: {
+          id: 'conv-1',
+          state: 'awaiting_context',
+          context: {
+            pin_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+            pending_question: {
+              type: 'context',
+              inbox_item_id: 'item-1',
+              asked_at: new Date().toISOString(),
+            },
+          },
+          company_id: 'company-2',
+        },
+      })
+      mock.enqueue({ data: null }) // wamid dedupe pre-check
+      mock.enqueue({ data: null }) // link last_message_at
+      mock.enqueue({ data: null }) // conversation window
+      mock.enqueue({ data: null }) // guarded pin clear
+      mock.enqueue({ data: null }) // terminal row insert
+
+      await route.handler(signedRequest(envelope({ messages: [textMessage('byt')] })))
+
+      expect(sendTextMock).toHaveBeenCalledTimes(1)
+      expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m6BytPin)
+      expect(kickMock).toHaveBeenCalledWith([])
+    })
+
+    it('applies STOP before writing its terminal row, so a crash cannot lose the opt-out', async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink() })
+      mock.enqueue({ data: { id: 'conv-1', state: 'idle', context: {} } })
+      mock.enqueue({ data: null }) // wamid dedupe pre-check
+      mock.enqueue({ data: null }) // link last_message_at
+      mock.enqueue({ data: null }) // conversation window
+      mock.enqueue({ data: null }) // muted_at
+      mock.enqueue({ data: null }) // terminal row insert
+
+      await route.handler(signedRequest(envelope({ messages: [textMessage('stopp')] })))
+
+      const order = mock.calls
+        .filter(
+          (c) =>
+            (c.table === 'whatsapp_phone_links' &&
+              c.method === 'update' &&
+              (c.args[0] as Record<string, unknown>).muted_at != null) ||
+            (c.table === 'whatsapp_messages' && c.method === 'insert'),
+        )
+        .map((c) => `${c.table}.${c.method}`)
+      expect(order).toEqual(['whatsapp_phone_links.update', 'whatsapp_messages.insert'])
+      const [row] = mock.findCall('whatsapp_messages', 'insert') as [Record<string, unknown>]
+      expect(row.processing_status).toBe('done')
+    })
+
+    it('never persists the sender plaintext number in raw_payload', async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink() })
+      mock.enqueue({ data: { id: 'conv-1', state: 'idle', context: {} } })
+      mock.enqueue({ data: { id: 'msg-row-1' } })
+      mock.enqueue({ data: null })
+      mock.enqueue({ data: null })
+
+      await route.handler(signedRequest(envelope({ messages: [imageMessage()] })))
+
+      const [row] = mock.findCall('whatsapp_messages', 'insert') as [Record<string, unknown>]
+      expect(JSON.stringify(row.raw_payload)).not.toContain('46701234567')
+      expect(row.raw_payload).toMatchObject({ id: 'wamid.IN1', type: 'image' })
+    })
+
+    it('a muted sender contributes no chat content at all', async () => {
+      const mock = mockSupabase()
+      mock.enqueue({ data: makeLink({ muted_at: '2026-08-01T10:00:00Z' }) })
+      mock.enqueue({ data: { id: 'conv-1', state: 'idle', context: {} } })
+      mock.enqueue({ data: { id: 'msg-row-1' } })
+      mock.enqueue({ data: null })
+      mock.enqueue({ data: null })
+
+      await route.handler(
+        signedRequest(envelope({ messages: [textMessage('känslig text till en död linje')] })),
+      )
+
+      const [row] = mock.findCall('whatsapp_messages', 'insert') as [Record<string, unknown>]
+      expect(row.processing_status).toBe('skipped')
+      expect(row.body_text).toBeNull()
+      expect(row.raw_payload).toBeNull()
     })
   })
 

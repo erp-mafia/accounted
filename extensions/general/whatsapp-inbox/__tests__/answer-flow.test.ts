@@ -272,7 +272,7 @@ describe('answer flow (text rows through processInboundMessage)', () => {
     expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m10ContextConfirm)
     // No conversation update ever wrote a company id.
     for (const args of findCalls('whatsapp_conversations', 'update')) {
-      expect(Object.keys(args[0] as Record<string, unknown>)).not.toContain('company_id')
+      expect((args[0] as Record<string, unknown>).company_id).toBeUndefined()
     }
   })
 

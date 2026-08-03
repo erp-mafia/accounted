@@ -2751,6 +2751,14 @@ export interface InboxChannelContext {
     denied?: boolean
   }
   user_note?: string | null
+  /** What the user actually typed when answering a context question, kept
+   *  next to the LLM paraphrase in user_note. The paraphrase is what renders;
+   *  this is the durable human answer, mirroring the representation branch
+   *  (whatsapp_messages.body_text is purged at 90 days, so it is no trail). */
+  context_answer?: {
+    raw_answer: string
+    answered_at: string
+  }
   quality?: {
     resend_requested_at: string
     resent?: boolean

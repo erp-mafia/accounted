@@ -27,6 +27,7 @@ import {
   COMPANY_PIN_TTL_MS,
   STAGED_AWAITING_COMPANY,
   getContext,
+  updateConversation,
   type ConversationContext,
 } from './conversation'
 
@@ -73,6 +74,12 @@ export async function loadCompanyOptions(
  * transition (WHERE state <> 'awaiting_company') makes concurrent workers of
  * one burst produce exactly one M6; losers stage silently.
  *
+ * The state is committed BEFORE the send (a fast tap must find it) but rolled
+ * back when the send fails: sends are best-effort and never throw, so without
+ * the rollback an expired token or a Graph 5xx left the conversation parked on
+ * a question the user never received, with the guard suppressing every later
+ * ask and the 48h TTL eventually discarding the staged receipts.
+ *
  * Returns true when this caller sent the question.
  */
 export async function askCompanyQuestion(
@@ -97,11 +104,13 @@ export async function askCompanyQuestion(
   }
 
   const now = new Date()
+  const askedAt = now.toISOString()
+  const previousState = args.conversation.state
   const context = getContext(args.conversation)
   const nextContext: ConversationContext = {
     ...context,
     company_options: options,
-    pending_question: { type: 'company', inbox_item_id: null, asked_at: now.toISOString() },
+    pending_question: { type: 'company', inbox_item_id: null, asked_at: askedAt },
   }
 
   const { data: won } = await supabase
@@ -109,28 +118,37 @@ export async function askCompanyQuestion(
     .update({ state: 'awaiting_company', context: nextContext as Record<string, unknown> })
     .eq('id', args.conversation.id)
     .neq('state', 'awaiting_company')
-    .select('id')
+    .select('*')
   if (!Array.isArray(won) || won.length === 0) return false
+  // Take updated_at (the revision guard) from the echoed row, but state and
+  // context from what we just wrote: that is what a rollback must match.
+  const committed: WhatsAppConversation = {
+    ...args.conversation,
+    ...((won[0] as WhatsAppConversation | undefined) ?? {}),
+    state: 'awaiting_company',
+    context: nextContext as Record<string, unknown>,
+  }
 
   const copy = botCopy('sv')
   const body = copy.m6CompanyQuestion({ count: args.stagedCount })
   const base = { to: args.to, template: TEMPLATE.m6CompanyQuestion, ...args.replyBase }
 
+  let sent: { ok: boolean }
   if (options.length <= MAX_REPLY_BUTTONS) {
-    await sendReplyButtons(supabase, {
+    sent = await sendReplyButtons(supabase, {
       ...base,
       body,
       buttons: options.map((o) => ({ id: o.id, title: o.name })),
     })
   } else if (options.length <= MAX_LIST_ROWS) {
-    await sendList(supabase, {
+    sent = await sendList(supabase, {
       ...base,
       body,
       buttonLabel: 'Välj företag',
       rows: options.map((o) => ({ id: o.id, title: o.name })),
     })
   } else {
-    await sendText(supabase, {
+    sent = await sendText(supabase, {
       ...base,
       body: copy.m6CompanyQuestionNumbered({
         count: args.stagedCount,
@@ -138,22 +156,60 @@ export async function askCompanyQuestion(
       }),
     })
   }
+
+  if (!sent.ok) {
+    // Undo the ask so the next receipt re-triggers it. Only our own question
+    // is rolled back: a newer one (different asked_at) is left alone.
+    await updateConversation(supabase, committed, (current, currentContext) => {
+      if (
+        current.state !== 'awaiting_company' ||
+        currentContext.pending_question?.asked_at !== askedAt
+      ) {
+        return null
+      }
+      const rolledBack: ConversationContext = { ...currentContext }
+      delete rolledBack.company_options
+      delete rolledBack.pending_question
+      return { state: previousState === 'awaiting_company' ? 'idle' : previousState, context: rolledBack }
+    })
+    log.warn('company question send failed; question rolled back', {
+      conversationId: args.conversation.id,
+    })
+    return false
+  }
   return true
 }
 
 export interface AppliedCompanyChoice {
+  ok: true
   companyId: string
   companyName: string
   /** Parked message rows re-opened for processing (run through the kick). */
   stagedMessageIds: string[]
 }
 
+export interface RejectedCompanyChoice {
+  ok: false
+  /**
+   *  - invalid_option: a typed digit outside the numbered range. Ordinary
+   *    user input (a typo), so the caller re-prompts instead of going silent.
+   *  - not_member / lookup_failed / already_applied: stale or forged payloads
+   *    and races. Silence.
+   */
+  reason: 'invalid_option' | 'not_member' | 'lookup_failed' | 'already_applied'
+}
+
+export type CompanyChoiceResult = AppliedCompanyChoice | RejectedCompanyChoice
+
 /**
  * Apply a company answer (button/list id or typed digit). Validates
  * membership, pins the company for 8h, confirms with M6-confirm, re-opens
- * the parked rows and arms the combined ack. Returns null on an invalid or
- * unauthorized choice (callers stay silent: only stale or forged payloads
- * get here).
+ * the parked rows and arms the combined ack.
+ *
+ * The open question, not the conversation state, is the thing being claimed:
+ * company_options are deleted by the winning write, so a double tap delivered
+ * into parallel invocations confirms exactly once, and a LATE answer (the 48h
+ * TTL reset the state to idle but kept the options) still lands.
  */
 export async function applyCompanyChoice(
   supabase: SupabaseClient,
@@ -165,9 +221,10 @@ export async function applyCompanyChoice(
     to: string
     replyBase: ReplyBase
   },
-): Promise<AppliedCompanyChoice | null> {
+): Promise<CompanyChoiceResult> {
   const context = getContext(args.conversation)
   const options = context.company_options ?? []
+  if (options.length === 0) return { ok: false, reason: 'already_applied' }
 
   let companyId: string | null = null
   if ('companyId' in args.choice) {
@@ -175,23 +232,31 @@ export async function applyCompanyChoice(
   } else {
     const option = options[args.choice.digit - 1]
     companyId = option?.id ?? null
+    if (!companyId) return { ok: false, reason: 'invalid_option' }
   }
-  if (!companyId) return null
+  if (!companyId) return { ok: false, reason: 'invalid_option' }
 
   // Defense in depth: the chosen company must be one the sender belongs to,
-  // whatever the payload claimed.
-  const { data: membership } = await supabase
+  // whatever the payload claimed. A query ERROR is not a missing membership:
+  // treating a transient failure as "not a member" silently drops the answer.
+  const { data: membership, error: membershipError } = await supabase
     .from('company_members')
     .select('company_id')
     .eq('user_id', args.link.user_id)
     .eq('company_id', companyId)
     .limit(1)
     .maybeSingle()
+  if (membershipError) {
+    log.error('company choice membership lookup failed', membershipError, {
+      conversationId: args.conversation.id,
+    })
+    return { ok: false, reason: 'lookup_failed' }
+  }
   if (!membership) {
     log.warn('company choice rejected: sender is not a member', {
       conversationId: args.conversation.id,
     })
-    return null
+    return { ok: false, reason: 'not_member' }
   }
 
   const known = options.find((o) => o.id === companyId)
@@ -206,24 +271,25 @@ export async function applyCompanyChoice(
   }
 
   const now = new Date()
-  const nextContext: ConversationContext = { ...context }
-  delete nextContext.company_options
-  delete nextContext.pending_question
-  nextContext.pin_expires_at = new Date(now.getTime() + COMPANY_PIN_TTL_MS).toISOString()
-  nextContext.pin_source = args.via
-
   // Pin + arm the combined ack: the staged receipts process right after,
   // and the finalize step claims `pending_ack AND debounce_until <= now()`.
-  await supabase
-    .from('whatsapp_conversations')
-    .update({
+  // Guarded: whoever deletes company_options first owns the answer.
+  const applied = await updateConversation(supabase, args.conversation, (_current, currentContext) => {
+    if ((currentContext.company_options?.length ?? 0) === 0) return null
+    const nextContext: ConversationContext = { ...currentContext }
+    delete nextContext.company_options
+    delete nextContext.pending_question
+    nextContext.pin_expires_at = new Date(now.getTime() + COMPANY_PIN_TTL_MS).toISOString()
+    nextContext.pin_source = args.via
+    return {
       state: 'idle',
       company_id: companyId,
-      context: nextContext as Record<string, unknown>,
+      context: nextContext,
       pending_ack: true,
       debounce_until: now.toISOString(),
-    })
-    .eq('id', args.conversation.id)
+    }
+  })
+  if (!applied) return { ok: false, reason: 'already_applied' }
 
   await supabase
     .from('whatsapp_phone_links')
@@ -246,6 +312,7 @@ export async function applyCompanyChoice(
     .select('id')
 
   return {
+    ok: true,
     companyId,
     companyName,
     stagedMessageIds: ((reopened ?? []) as { id: string }[]).map((r) => r.id),

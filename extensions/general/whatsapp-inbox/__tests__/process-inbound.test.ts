@@ -411,6 +411,7 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: null }) // no inbox item for this message yet
     enqueue({ data: { id: 'existing-doc' } }) // dup found
     enqueue({ data: null }) // markStatus skipped
 
@@ -492,7 +493,9 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: null }) // no inbox item yet
     enqueue({ data: null }) // markStatus error
+    enqueue({ data: null }) // no M18 sent yet
 
     await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
 
@@ -503,7 +506,10 @@ describe('processInboundMessage (media intake)', () => {
     expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m18Error)
   })
 
-  it('suppresses M18 on re-claims (attempts > 1)', async () => {
+  it('still sends M18 on a re-claim when the first attempt died before the catch', async () => {
+    // Gating M18 on `attempt <= 1` made it unreachable for exactly the crash
+    // the sweep exists for: the dead first attempt already burned its
+    // attempt, so the sender heard nothing about that receipt at all.
     downloadMediaMock.mockRejectedValue(new GraphApiError('still failing'))
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: makeRow({ attempts: 1 }) })
@@ -511,11 +517,51 @@ describe('processInboundMessage (media intake)', () => {
     enqueue({ data: makeLink() })
     enqueue({ data: makeConversation() })
     enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: null }) // no inbox item yet
     enqueue({ data: null }) // markStatus error
+    enqueue({ data: null }) // no M18 sent for this message yet
+
+    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    expect(lastUpdate(findCalls).processing_status).toBe('error')
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m18Error)
+  })
+
+  it('never repeats M18 when one already went out for the same message', async () => {
+    downloadMediaMock.mockRejectedValue(new GraphApiError('still failing'))
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow({ attempts: 2 }) })
+    enqueue({ data: { id: 'msg-1' } })
+    enqueue({ data: makeLink() })
+    enqueue({ data: makeConversation() })
+    enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: null }) // no inbox item yet
+    enqueue({ data: null }) // markStatus error
+    enqueue({ data: { id: 'out-1' } }) // an M18 for this correlation exists
 
     await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
 
     expect(lastUpdate(findCalls).processing_status).toBe('error')
     expect(sendTextMock).not.toHaveBeenCalled()
+  })
+
+  it('adopts an item a concurrent worker already created instead of ingesting twice', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() })
+    enqueue({ data: { id: 'msg-1' } })
+    enqueue({ data: makeLink() })
+    enqueue({ data: makeConversation() })
+    enqueue({ data: [{ company_id: 'company-1' }] })
+    enqueue({ data: { id: 'item-winner' } }) // the winner's item
+    enqueue({ data: null }) // markStatus done
+
+    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    expect(downloadMediaMock).not.toHaveBeenCalled()
+    expect(uploadAndExtractMock).not.toHaveBeenCalled()
+    const finalUpdate = lastUpdate(findCalls)
+    expect(finalUpdate.processing_status).toBe('done')
+    expect(finalUpdate.inbox_item_id).toBe('item-winner')
   })
 })
