@@ -5381,6 +5381,7 @@
     "download_excel": "Download Excel",
     "download_csv": "Download CSV",
     "download_xml": "Download XML file",
+    "latest_posted_vouchers": "Latest posted vouchers",
     "pdf_download_failed_title": "The PDF could not be generated",
     "pdf_download_timeout": "The server did not respond in time. No PDF was saved. Try again.",
     "pdf_download_network": "No connection to the server. No PDF was saved. Check your internet connection and try again.",
