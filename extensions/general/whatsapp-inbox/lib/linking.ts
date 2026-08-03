@@ -4,7 +4,11 @@
  * The code proves control of an Accounted account (minted in an authenticated
  * settings panel) and sending it proves possession of the phone; the webhook
  * binds the two. Invite-token pattern (lib/auth/invite-tokens.ts): the raw
- * code exists only in the user's chat, the DB stores its sha256.
+ * code exists only in the user's chat, the DB stores a hash. That hash is
+ * HMAC-peppered, NOT a plain sha256: invite tokens are 256-bit random, but a
+ * link code is one of 30^6 values behind a fixed 'AC-' prefix, and enumerating
+ * that space offline takes about a second (the exact reason phone-crypto.ts
+ * peppers the phone hash).
  *
  * All functions here take a SERVICE-ROLE client: whatsapp_link_codes has RLS
  * enabled with no policies, and link INSERTs are service-role only by design
@@ -14,7 +18,7 @@
 import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { WhatsAppPhoneLink } from '@/types'
-import { encryptPhone, hashPhone, maskPhone } from './phone-crypto'
+import { encryptPhone, hashPhone, hashSecret, maskPhone } from './phone-crypto'
 
 /** Uppercased twin of generate_inbox_local_part's ambiguity-free alphabet
  *  (no I/L/O/U, no 0/1): codes survive being read aloud or retyped. */
@@ -22,9 +26,20 @@ export const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTVWXYZ23456789'
 export const CODE_PREFIX = 'AC-'
 export const CODE_LENGTH = 6
 export const CODE_TTL_MS = 10 * 60 * 1000
+/** Codes a single account may mint inside the TTL window before it must wait.
+ *  The panel mints one per visit; anything above this is a script. */
+export const MAX_CODES_PER_TTL_WINDOW = 5
 
 export function hashLinkCode(code: string): string {
-  return crypto.createHash('sha256').update(code).digest('hex')
+  return hashSecret(code)
+}
+
+/** Thrown by mintLinkCode when the caller is minting far too fast. */
+export class LinkCodeRateLimitError extends Error {
+  readonly name = 'LinkCodeRateLimitError'
+  constructor() {
+    super('Too many link codes requested')
+  }
 }
 
 /**
@@ -59,12 +74,32 @@ export interface MintedCode {
   expiresAt: string
 }
 
-/** Mint a fresh code for the settings panel. Earlier unused codes stay valid
- *  until their own 10-minute expiry; the webhook consumes whichever arrives. */
+/**
+ * Mint a fresh code for the settings panel.
+ *
+ * Exactly one code per account is live at a time: minting burns the caller's
+ * earlier unused codes, so the panel showing a code is the only code that
+ * works. Minting is also capped per TTL window, because the route is an
+ * authenticated unbounded INSERT otherwise.
+ */
 export async function mintLinkCode(
   serviceClient: SupabaseClient,
   userId: string,
 ): Promise<MintedCode> {
+  const windowStart = new Date(Date.now() - CODE_TTL_MS).toISOString()
+  const { count } = await serviceClient
+    .from('whatsapp_link_codes')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .gte('created_at', windowStart)
+  if ((count ?? 0) >= MAX_CODES_PER_TTL_WINDOW) throw new LinkCodeRateLimitError()
+
+  await serviceClient
+    .from('whatsapp_link_codes')
+    .update({ used_at: new Date().toISOString() })
+    .eq('user_id', userId)
+    .is('used_at', null)
+
   let body = ''
   for (let i = 0; i < CODE_LENGTH; i++) {
     body += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)]

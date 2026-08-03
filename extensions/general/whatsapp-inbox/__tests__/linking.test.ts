@@ -3,6 +3,8 @@ import crypto from 'crypto'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   CODE_ALPHABET,
+  LinkCodeRateLimitError,
+  MAX_CODES_PER_TTL_WINDOW,
   normalizeLinkCode,
   looksLikeLinkCode,
   hashLinkCode,
@@ -64,15 +66,31 @@ describe('linking', () => {
   })
 
   describe('hashLinkCode', () => {
-    it('is sha256 hex of the code', () => {
-      const expected = crypto.createHash('sha256').update('AC-7KP4QF').digest('hex')
-      expect(hashLinkCode('AC-7KP4QF')).toBe(expected)
+    it('is an HMAC under the server pepper, never a bare sha256', () => {
+      // 30^6 codes behind a fixed 'AC-' prefix is enumerable offline in about
+      // a second, so an unpeppered digest would protect nothing at rest.
+      const bare = crypto.createHash('sha256').update('AC-7KP4QF').digest('hex')
+      const peppered = crypto
+        .createHmac('sha256', Buffer.from('test-pepper', 'utf8'))
+        .update('AC-7KP4QF')
+        .digest('hex')
+      expect(hashLinkCode('AC-7KP4QF')).toBe(peppered)
+      expect(hashLinkCode('AC-7KP4QF')).not.toBe(bare)
+    })
+
+    it('changes with the pepper', () => {
+      const withA = hashLinkCode('AC-7KP4QF')
+      process.env.WHATSAPP_PHONE_HASH_KEY = 'another-pepper'
+      expect(hashLinkCode('AC-7KP4QF')).not.toBe(withA)
+      process.env.WHATSAPP_PHONE_HASH_KEY = 'test-pepper'
     })
   })
 
   describe('mintLinkCode', () => {
     it('mints an AC- prefixed code from the ambiguity-free alphabet with a 10 min TTL', async () => {
       const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      enqueue({ count: 0 }) // mint-rate check
+      enqueue({ data: null, error: null }) // burn earlier unused codes
       enqueue({ data: null, error: null })
 
       const before = Date.now()
@@ -93,10 +111,33 @@ describe('linking', () => {
 
     it('throws when the insert fails', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ count: 0 })
+      enqueue({ data: null, error: null })
       enqueue({ data: null, error: { message: 'boom' } })
       await expect(
         mintLinkCode(supabase as unknown as SupabaseClient, 'user-1'),
       ).rejects.toThrow(/boom/)
+    })
+
+    it('burns the caller earlier unused codes so only the newest one works', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      enqueue({ count: 1 })
+      enqueue({ data: null, error: null })
+      enqueue({ data: null, error: null })
+
+      await mintLinkCode(supabase as unknown as SupabaseClient, 'user-1')
+
+      const burn = findCall('whatsapp_link_codes', 'update') as [Record<string, unknown>]
+      expect(burn[0].used_at).toBeTruthy()
+    })
+
+    it('refuses to mint once the caller has burned through the window quota', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ count: MAX_CODES_PER_TTL_WINDOW })
+
+      await expect(
+        mintLinkCode(supabase as unknown as SupabaseClient, 'user-1'),
+      ).rejects.toBeInstanceOf(LinkCodeRateLimitError)
     })
   })
 

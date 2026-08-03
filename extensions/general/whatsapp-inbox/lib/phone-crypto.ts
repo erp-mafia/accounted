@@ -40,6 +40,17 @@ export function hashPhone(rawPhone: string): string {
   return crypto.createHmac('sha256', getHashKey()).update(normalizePhone(rawPhone)).digest('hex')
 }
 
+/**
+ * Peppered hash for any other low-entropy secret stored in this channel
+ * (link codes: 30^6 values, a smaller space than the phone numbers the
+ * pepper exists for). Same key, same reason: a plain sha256 over a space
+ * that small is enumerable offline in seconds, so hashing at rest would
+ * protect nothing.
+ */
+export function hashSecret(value: string): string {
+  return crypto.createHmac('sha256', getHashKey()).update(value).digest('hex')
+}
+
 /** AES-256-GCM encrypt a phone number. Returns hex(iv | tag | ciphertext) for a text column. */
 export function encryptPhone(rawPhone: string): string {
   const key = getEncryptionKey()
