@@ -1,65 +1,83 @@
 #!/usr/bin/env npx tsx
 /**
- * Retroactive catch-up for the year-open result omföring (2099 → 2098).
+ * Conservative historical catch-up for the year-open result transfer
+ * (2099 -> 2098).
  *
- * Problem: before generateResultAppropriation existed, year-end closing posted
- * the result to 2099 "Årets resultat" and the opening-balance entry carried it
- * forward verbatim. 2099 was therefore re-opened on 2099 every year and the
- * prior result accumulated there instead of being moved off "Årets resultat".
+ * Normal year-end closing already posts this transfer immediately after it
+ * creates the next period's opening balance. This script is only for periods
+ * created before that behavior existed.
  *
- * Fix (per affected aktiebolag): for EACH of the company's open (unlocked,
- * unclosed) periods, post one balanced omföring verifikat that clears the 2099
- * balance the period's ingående balans carried forward (Dr 2099 / Cr 2098 for a
- * profit, reversed for a loss). Each period is handled independently: this is
- * NOT a single lump-sum across years. A period whose 2099 is already flat (or
- * already has a result_appropriation entry) is skipped. No closed/locked years
- * are touched: entries land in open periods and respect every BFL trigger. This
- * corrects the balance sheet going forward; it does not reconstruct per-year
- * history (which would require reopening closed years).
+ * Historical data cannot be repaired from the frozen opening balance alone.
+ * A user or SIE import may already have disposed of 2099, and replaying the
+ * opening amount would then move equity twice. The script therefore requires:
  *
- * The actual posting and all no-op gating (AB-only, idempotency, zero balance)
- * are delegated to the SAME helper the year-end flow uses, so the catch-up and
- * the steady-state behaviour can never diverge.
+ *  - an open and unlocked aktiebolag period,
+ *  - an explicit, posted opening_balance entry,
+ *  - active 2099 and 2098 accounts,
+ *  - no existing posted result_appropriation entry,
+ *  - current posted 2099 equal to the explicit opening 2099, and
+ *  - no other entry touching 2099 in the period.
  *
- * Attribution (BFL 5 kap 6§): the omföring verifikat is attributed to a user.
- * Pass --user-id to set it explicitly. Otherwise it defaults to the company
- * owner; only if no owner row exists does it fall back to an arbitrary member,
- * and that fallback prints a loud WARNING so a misattributed rättelse can't slip
- * through unnoticed.
+ * Everything else is skipped or printed for manual review. Periods without an
+ * explicit opening-balance entry are never reconstructed from cumulative
+ * history. All writes use the bookkeeping engine and commit mode re-assesses
+ * the period immediately before posting. The --user-id the entry is
+ * attributed to must be a member of the company.
  *
  * Usage:
- *   # Preview every affected company (read-only)
+ *   # Preview every company. Read-only.
  *   npx tsx scripts/repair-result-appropriation.ts
  *
- *   # Preview a single company
+ *   # Preview one company or one exact period.
  *   npx tsx scripts/repair-result-appropriation.ts --company-id <uuid>
+ *   npx tsx scripts/repair-result-appropriation.ts --company-id <uuid> --period-id <uuid>
  *
- *   # Apply (post the omföring entries), attributing to a specific user
- *   npx tsx scripts/repair-result-appropriation.ts --commit --user-id <uuid>
+ *   # Apply one reviewed period only.
+ *   npx tsx scripts/repair-result-appropriation.ts --commit \
+ *     --company-id <uuid> --period-id <uuid> --user-id <uuid>
  *
- * Run against staging first; only run against prod after reviewing the dry-run.
+ * Run a reviewed dry-run against staging first. Production writes require
+ * explicit approval for the exact company, period, amount, and attribution.
  */
 
 import { config } from 'dotenv'
 config({ path: '.env.local' })
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '../lib/supabase/fetch-all'
 import {
-  planResultAppropriation,
-  generateResultAppropriation,
-} from '../lib/core/bookkeeping/result-appropriation-service'
-
-// ──────────────────────────────────────────────────────────────────
-// Args + client
-// ──────────────────────────────────────────────────────────────────
+  assessHistoricalResultRepair,
+  getHistoricalResultRepairScopeError,
+  postHistoricalResultRepair,
+  type HistoricalResultRepairAssessment,
+  type HistoricalResultRepairReason,
+} from '../lib/core/bookkeeping/result-appropriation-repair'
 
 function arg(name: string): string | undefined {
-  const i = process.argv.indexOf(`--${name}`)
-  return i >= 0 ? process.argv[i + 1] : undefined
+  const index = process.argv.indexOf(`--${name}`)
+  if (index < 0) return undefined
+  const value = process.argv[index + 1]
+  if (value === undefined || value.startsWith('--')) {
+    console.error(`--${name} requires a value`)
+    process.exit(1)
+  }
+  return value
 }
 
 const ONLY_COMPANY_ID = arg('company-id')
-const USER_ID_OVERRIDE = arg('user-id')
+const ONLY_PERIOD_ID = arg('period-id')
+const USER_ID = arg('user-id')
 const COMMIT = process.argv.includes('--commit')
+
+const scopeError = getHistoricalResultRepairScopeError({
+  commit: COMMIT,
+  companyId: ONLY_COMPANY_ID,
+  periodId: ONLY_PERIOD_ID,
+  userId: USER_ID,
+})
+if (scopeError) {
+  console.error(scopeError)
+  process.exit(1)
+}
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -71,166 +89,188 @@ if (!supabaseUrl || !serviceRoleKey) {
 
 const supabase = createClient(supabaseUrl, serviceRoleKey) as SupabaseClient
 
-console.log('─────────────────────────────────────────────────────────')
-console.log('Result Appropriation Catch-up (2099 → 2098)')
-console.log('─────────────────────────────────────────────────────────')
-console.log('Supabase URL :', supabaseUrl)
-console.log('Scope        :', ONLY_COMPANY_ID ? `company ${ONLY_COMPANY_ID}` : 'ALL companies')
-console.log('Attribution  :', USER_ID_OVERRIDE ? `user ${USER_ID_OVERRIDE} (--user-id)` : 'company owner (fallback: any member)')
-console.log('Mode         :', COMMIT ? 'COMMIT (writes)' : 'DRY RUN (no writes)')
-console.log('─────────────────────────────────────────────────────────\n')
+const REASON_LABELS: Record<HistoricalResultRepairReason, string> = {
+  ready: 'safe to repair',
+  non_aktiebolag: 'not an aktiebolag',
+  period_closed: 'period is closed',
+  period_locked: 'period is locked',
+  already_corrected: 'posted result appropriation already exists',
+  missing_explicit_opening_balance: 'no explicit opening-balance entry',
+  invalid_opening_balance_entry: 'opening-balance pointer is not a posted opening_balance entry',
+  missing_required_accounts: 'active 2099 and 2098 accounts are required',
+  no_result_to_move: 'opening and current 2099 are zero',
+  already_disposed: 'current 2099 is zero, so the result has already been disposed',
+  current_balance_differs: 'current 2099 differs from the explicit opening amount',
+  intervening_2099_activity: 'another entry touched 2099 in the period',
+}
 
-// ──────────────────────────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────────────────────────
+console.log('---------------------------------------------------------')
+console.log('Historical Result Appropriation Repair (2099 -> 2098)')
+console.log('---------------------------------------------------------')
+console.log('Supabase URL :', supabaseUrl)
+console.log('Company scope:', ONLY_COMPANY_ID ?? 'ALL companies')
+console.log('Period scope :', ONLY_PERIOD_ID ?? 'all open periods')
+console.log('Attribution  :', USER_ID ?? 'not needed for dry-run')
+console.log('Mode         :', COMMIT ? 'COMMIT (writes one reviewed period)' : 'DRY RUN (no writes)')
+console.log('---------------------------------------------------------\n')
 
 async function listCompanyIds(): Promise<string[]> {
   if (ONLY_COMPANY_ID) return [ONLY_COMPANY_ID]
-  const { data, error } = await supabase
-    .from('companies')
-    .select('id')
-    .order('created_at', { ascending: true })
-  if (error) throw new Error(`Failed to list companies: ${error.message}`)
-  return (data as { id: string }[]).map((c) => c.id)
+
+  const rows = await fetchAllRows<{ id: string }>(({ from, to }) =>
+    supabase
+      .from('companies')
+      .select('id')
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  return rows.map((company) => company.id)
 }
 
-/** Open periods (not locked, not closed), earliest first. */
-async function listOpenPeriods(companyId: string): Promise<{ id: string; name: string }[]> {
-  const { data, error } = await supabase
-    .from('fiscal_periods')
-    .select('id, name')
-    .eq('company_id', companyId)
-    .eq('is_closed', false)
-    .is('locked_at', null)
-    .order('period_start', { ascending: true })
-  if (error) throw new Error(`Failed to list open periods for ${companyId}: ${error.message}`)
-  return (data as { id: string; name: string }[]) ?? []
-}
-
-/**
- * Resolve the user_id to attribute the verifikat to (BFL 5 kap 6§). Precedence:
- *   1. --user-id override (caller takes responsibility for correctness),
- *   2. the company owner,
- *   3. any member, but this is an arbitrary attribution, so it prints a loud
- *      WARNING; a rättelse landing on the wrong person must never be silent.
- * Returns null only when the company has no members at all.
- */
-async function resolveAttributionUserId(
+async function listOpenPeriods(
   companyId: string,
-  companyLabel: string,
-): Promise<string | null> {
-  if (USER_ID_OVERRIDE) return USER_ID_OVERRIDE
+): Promise<Array<{ id: string; name: string }>> {
+  const rows = await fetchAllRows<{ id: string; name: string }>(({ from, to }) => {
+    let query = supabase
+      .from('fiscal_periods')
+      .select('id, name')
+      .eq('company_id', companyId)
+      .eq('is_closed', false)
+      .is('locked_at', null)
 
-  const { data: owner } = await supabase
-    .from('company_members')
-    .select('user_id')
-    .eq('company_id', companyId)
-    .eq('role', 'owner')
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-  if (owner?.user_id) return owner.user_id as string
+    if (ONLY_PERIOD_ID) query = query.eq('id', ONLY_PERIOD_ID)
 
-  // Fallback: any member (e.g. legacy data with no explicit owner row).
-  const { data: anyMember } = await supabase
-    .from('company_members')
-    .select('user_id')
-    .eq('company_id', companyId)
-    .limit(1)
-    .maybeSingle()
-  const fallbackId = (anyMember?.user_id as string) ?? null
-  if (fallbackId) {
-    console.warn(
-      `  ⚠ ${companyLabel}: no owner row: attributing the omföring to an ARBITRARY ` +
-        `member (${fallbackId}). Pass --user-id <uuid> to attribute it deliberately.`,
-    )
-  }
-  return fallbackId
+    return query.order('period_start', { ascending: true }).range(from, to)
+  })
+  return rows
 }
 
-// ──────────────────────────────────────────────────────────────────
-// Main
-// ──────────────────────────────────────────────────────────────────
+function describeAssessment(assessment: HistoricalResultRepairAssessment): string {
+  const amounts =
+    `opening 2099=${assessment.openingNet}, current 2099=${assessment.currentNet}, ` +
+    `other 2099 entries=${assessment.nonOpeningActivityEntries}`
+  return `${REASON_LABELS[assessment.reason]} (${amounts})`
+}
 
 async function main() {
-  let scanned = 0
-  let planned = 0
+  let companiesScanned = 0
+  let periodsScanned = 0
+  let safe = 0
+  let manualReview = 0
+  let skipped = 0
   let posted = 0
-  let skippedNoOwner = 0
+  let revalidationBlocked = 0
   let failed = 0
 
   const companyIds = await listCompanyIds()
-  console.log(`Scanning ${companyIds.length} company(ies)…\n`)
+  console.log(`Scanning ${companyIds.length} company(ies)...\n`)
 
   for (const companyId of companyIds) {
-    scanned++
-    let openPeriods: { id: string; name: string }[]
+    companiesScanned++
+    let periods: Array<{ id: string; name: string }>
     try {
-      openPeriods = await listOpenPeriods(companyId)
-    } catch (err) {
-      console.error(`  · ${companyId}: FAILED to list periods:`, err instanceof Error ? err.message : err)
+      periods = await listOpenPeriods(companyId)
+    } catch (error) {
+      console.error(
+        `  ${companyId}: FAILED to list periods:`,
+        error instanceof Error ? error.message : error,
+      )
       failed++
       continue
     }
 
-    for (const period of openPeriods) {
-      let plan
+    for (const period of periods) {
+      periodsScanned++
+      let assessment: HistoricalResultRepairAssessment
       try {
-        plan = await planResultAppropriation(supabase, companyId, period.id)
-      } catch (err) {
+        assessment = await assessHistoricalResultRepair(supabase, companyId, period.id)
+      } catch (error) {
         console.error(
-          `  · ${companyId} / ${period.name}: FAILED to plan:`,
-          err instanceof Error ? err.message : err,
+          `  ${companyId} / ${period.name}: FAILED to assess:`,
+          error instanceof Error ? error.message : error,
         )
         failed++
         continue
       }
-      if (!plan) continue // non-AB, already done, or 2099 flat
 
-      planned++
+      if (assessment.status !== 'safe') {
+        if (assessment.status === 'skipped') {
+          skipped++
+          continue
+        }
+        manualReview++
+        console.warn(
+          `  REVIEW ${companyId} / ${period.name} (${period.id}): ${describeAssessment(assessment)}`,
+        )
+        continue
+      }
+
+      safe++
       console.log(
-        `  · ${companyId} / ${period.name}: ${plan.direction} ${plan.amount} kr ` +
-          `: ${plan.lines.map((l) => `${l.account_number} ${l.debit_amount ? `D ${l.debit_amount}` : `K ${l.credit_amount}`}`).join(' / ')}`,
+        `  SAFE ${companyId} / ${period.name} (${period.id}): ` +
+          `${assessment.plan.direction} ${assessment.plan.amount} kr, ` +
+          assessment.plan.lines
+            .map((line) =>
+              `${line.account_number} ${line.debit_amount ? `D ${line.debit_amount}` : `K ${line.credit_amount}`}`,
+            )
+            .join(' / '),
       )
 
       if (!COMMIT) continue
 
-      const userId = await resolveAttributionUserId(companyId, `${companyId} / ${period.name}`)
-      if (!userId) {
-        console.error(`  · ${companyId}: SKIPPED: no member to attribute the entry to`)
-        skippedNoOwner++
-        continue
-      }
-
       try {
-        const entry = await generateResultAppropriation(supabase, companyId, userId, period.id)
-        if (entry) {
-          console.log(`    → posted ${entry.voucher_series}${entry.voucher_number} (${entry.id})`)
-          posted++
+        const result = await postHistoricalResultRepair(
+          supabase,
+          companyId,
+          USER_ID!,
+          period.id,
+        )
+        if (!result.entry) {
+          revalidationBlocked++
+          console.warn(
+            `    NOT POSTED after revalidation: ${describeAssessment(result.assessment)}`,
+          )
+          continue
         }
-      } catch (err) {
+
+        posted++
+        console.log(
+          `    posted ${result.entry.voucher_series}${result.entry.voucher_number} (${result.entry.id})`,
+        )
+      } catch (error) {
         console.error(
-          `  · ${companyId} / ${period.name}: FAILED to post:`,
-          err instanceof Error ? err.message : err,
+          `  ${companyId} / ${period.name}: FAILED to post:`,
+          error instanceof Error ? error.message : error,
         )
         failed++
       }
     }
   }
 
-  console.log('\n─────────────────────────────────────────────────────────')
+  console.log('\n---------------------------------------------------------')
   console.log('Summary')
-  console.log('─────────────────────────────────────────────────────────')
-  console.log(`Companies scanned : ${scanned}`)
-  console.log(`Omföringar planned: ${planned}`)
-  console.log(`Omföringar posted : ${posted}`)
-  console.log(`Skipped (no owner): ${skippedNoOwner}`)
-  console.log(`Failed            : ${failed}`)
-  console.log(`Mode              : ${COMMIT ? 'COMMIT' : 'DRY RUN'}`)
-  if (!COMMIT) console.log('\nRe-run with --commit to apply.')
+  console.log('---------------------------------------------------------')
+  console.log(`Companies scanned   : ${companiesScanned}`)
+  console.log(`Periods scanned     : ${periodsScanned}`)
+  console.log(`Safe candidates     : ${safe}`)
+  console.log(`Manual review       : ${manualReview}`)
+  console.log(`Skipped             : ${skipped}`)
+  console.log(`Posted              : ${posted}`)
+  console.log(`Blocked on recheck  : ${revalidationBlocked}`)
+  console.log(`Failed              : ${failed}`)
+  console.log(`Mode                : ${COMMIT ? 'COMMIT' : 'DRY RUN'}`)
+  if (!COMMIT) {
+    console.log(
+      '\nCommit mode requires one reviewed --company-id, --period-id, and --user-id.',
+    )
+  }
+  if (failed > 0) {
+    process.exitCode = 1
+  }
 }
 
-main().catch((err) => {
-  console.error('\nFATAL:', err instanceof Error ? err.message : err)
+main().catch((error) => {
+  console.error('\nFATAL:', error instanceof Error ? error.message : error)
   process.exit(1)
 })
