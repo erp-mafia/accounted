@@ -61,6 +61,9 @@ describe('evaluateAnnualReportEligibility', () => {
     expect(result.digital_issues.filter((item) => item.code === 'AR-SCOPE-CURRENCY')).toHaveLength(
       1,
     )
+    expect(
+      result.digital_issues.filter((item) => item.code === 'AR-DIGITAL-CURRENCY'),
+    ).toHaveLength(0)
   })
 
   it('does not treat unanswered legal facts as false', () => {
