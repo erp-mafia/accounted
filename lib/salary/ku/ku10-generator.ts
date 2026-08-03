@@ -1,5 +1,6 @@
 import { decryptPersonnummer } from '../personnummer'
 import { getBranding } from '@/lib/branding/service'
+import { stripOrgNumberFormatting } from '@/lib/invariants/org-number'
 
 /**
  * KU10 (Kontrolluppgift): Annual employee income statement.
@@ -49,7 +50,10 @@ export function generateKU10Xml(
   employees: KU10EmployeeData[]
 ): string {
   const lines: string[] = []
-  const orgNr = company.orgNumber.replace('-', '')
+  // Shared rule (lib/invariants/org-number.ts). The previous
+  // `replace('-', '')` removed only the FIRST hyphen and left spaces intact, so
+  // an org number entered as "556012 5790" reached Skatteverket with a space in it.
+  const orgNr = stripOrgNumberFormatting(company.orgNumber)
 
   lines.push('<?xml version="1.0" encoding="UTF-8"?>')
   lines.push('<Skatteverket xmlns="http://xmls.skatteverket.se/se/skatteverket/ai/instans/infoForBeskworksgivku/1.0"')

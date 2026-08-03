@@ -9,7 +9,9 @@ import type { LatestVoucherPerSeries } from '@/types'
  */
 
 /**
- * Swedish-only report surface (see .claude/rules/i18n.md).
+ * Swedish label for PDF and spreadsheet exports, whose complete document
+ * chrome currently renders in Swedish. Client views use the localized
+ * `reports.latest_posted_vouchers` message instead.
  *
  * The wording is load-bearing: this is the last POSTED number, not the last
  * number the sequence counter handed out. A reconciler who assumes the other
