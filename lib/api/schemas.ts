@@ -1,7 +1,13 @@
 import { z } from 'zod'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
-import { isSaneDateString } from '@/lib/utils'
+import {
+  accountNumberSchema,
+  isoDateSchema,
+  saneIsoDateSchema,
+  fiscalYearSchema,
+} from '@/lib/invariants/zod'
+import { ISO_DATE_RE, ISO_DATE_MESSAGE_SV } from '@/lib/invariants/iso-date'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
@@ -17,8 +23,13 @@ import type { AuditAction } from '@/types'
 /** UUID v4 string */
 const uuid = z.string().uuid()
 
-/** ISO date string (YYYY-MM-DD) */
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD date format')
+/**
+ * ISO date string (YYYY-MM-DD).
+ *
+ * Shape only. From `lib/invariants/iso-date.ts` so that every schema below, the
+ * v1 routes, and the MCP surface reject a malformed date the same way.
+ */
+const isoDate = isoDateSchema
 
 /**
  * ISO date that must also be a real, in-range calendar date: not just the
@@ -26,12 +37,10 @@ const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD dat
  * transaction form) so a 6-digit year or impossible date can't slip through
  * for user-entered dates. Use this over `isoDate` for free-text date input.
  */
-const saneIsoDate = z
-  .string()
-  .refine(isSaneDateString, 'Invalid or out-of-range date (expected YYYY-MM-DD, year 1900-2100)')
+const saneIsoDate = saneIsoDateSchema
 
 /** BAS account number: always a string of 4 digits */
-const accountNumber = z.string().regex(/^\d{4}$/, 'Account number must be exactly 4 digits')
+const accountNumber = accountNumberSchema
 
 /** Non-negative monetary amount (>= 0) */
 const nonNegativeAmount = z.number().nonnegative()
@@ -1751,7 +1760,7 @@ export const UpdateSettingsSchema = z.object({
   pays_salaries: z.boolean().optional(),
   sector_slug: z.string().nullable().optional(),
   // Bookkeeping lock
-  bookkeeping_locked_through: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Ogiltigt datumformat (YYYY-MM-DD)').nullable().optional(),
+  bookkeeping_locked_through: z.string().regex(ISO_DATE_RE, ISO_DATE_MESSAGE_SV).nullable().optional(),
   auto_lock_period_days: z.number().int().positive().nullable().optional(),
   // Voucher series
   default_voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').optional(),
@@ -1989,10 +1998,7 @@ export const BankLinkSchema = z.object({
   // Settlement account being reconciled. The voucher must have a line on this
   // account and the transaction must belong to it. Defaults to '1930' in the
   // route for back-compat.
-  account_number: z
-    .string()
-    .regex(/^[0-9]{4}$/, 'Kontonummer måste vara 4 siffror')
-    .optional(),
+  account_number: accountNumber.optional(),
 })
 
 export const BankUnlinkSchema = z.object({
@@ -2014,10 +2020,7 @@ export const RunReconciliationSchema = z.object({
   date_to: isoDate.optional(),
   // BAS settlement account to reconcile against (e.g. '1930', '1932'). Defaults
   // to '1930' server-side so existing clients stay correct.
-  account_number: z
-    .string()
-    .regex(/^[0-9]{4}$/, 'Kontonummer måste vara 4 siffror')
-    .optional(),
+  account_number: accountNumber.optional(),
   dry_run: z.boolean().optional(),
   // Pairs the user ticked in the dry-run preview. When present on an apply
   // (dry_run false), only these pairs are committed: intersected server-side
@@ -2745,7 +2748,7 @@ const openingBalancesShape = {
   ytd_net: z.number().min(0).default(0),
   vacation_paid_days_remaining: z.number().min(0).max(40).default(0),
   vacation_saved_days_by_year: z
-    .record(z.string().regex(/^\d{4}$/, 'Nyckel måste vara ett fyrsiffrigt år'), z.number().min(0).max(40))
+    .record(fiscalYearSchema, z.number().min(0).max(40))
     .default({}),
   opening_semester_liability: z.number().min(0).default(0),
   opening_semester_liability_avgifter: z.number().min(0).default(0),
