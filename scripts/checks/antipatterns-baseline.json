@@ -9,6 +9,9 @@
   "naiveOreRound": {
     "count": 641
   },
+  "handRolledInvariants": {
+    "count": 114
+  },
   "ledgerScanningReports": {
     "count": 4,
     "files": [
