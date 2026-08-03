@@ -25,6 +25,7 @@
 
 0 6 * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/deadlines/status/cron
 0 * * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/invoices/recurring/cron
+30 4 * * *    curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/settings/booking-templates/sync/cron
 0 0 * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/tax-deadlines/cron
 0 5 * * *     curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/enable-banking/sync/cron
 30 3 * * *    curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/stripe/transactions/cron

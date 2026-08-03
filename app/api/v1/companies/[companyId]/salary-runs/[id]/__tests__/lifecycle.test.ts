@@ -421,6 +421,7 @@ describe('POST /salary-runs/:id/book', () => {
     total_net: 25500,
     total_avgifter: 10997,
     total_vacation_accrual: 0,
+    calculation_params: { slpRate: 0.2426 },
   }
 
   const employeeRow = {
@@ -478,6 +479,12 @@ describe('POST /salary-runs/:id/book', () => {
     expect(body.data.entry_ids).toEqual(['je_salary', 'je_avg'])
     expect(body.meta.audit.voucher_number).toBe('L2026-0023')
     expect(body.meta.audit.voucher_url).toContain('je_salary')
+    expect(mocks.createSalaryRunEntries).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      USER_ID,
+      expect.objectContaining({ calculation_params: { slpRate: 0.2426 } }),
+    )
   })
 
   it('returns PERIOD_LOCKED before invoking the engine when payment_date is locked', async () => {

@@ -1486,7 +1486,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
         line_total: 1000,
         account_number: '5410',
         vat_code: null,
-        vat_rate: 0.25,
+        vat_rate: 25,
         vat_amount: 250,
       },
     ],
@@ -1502,6 +1502,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
       credited_invoice_id: SI_ID,
     }
     let siReadCount = 0
+    let insertedItems: Array<{ vat_rate: number }> = []
     mockServiceClient.mockReturnValue({
       from: (table: string) => {
         return new Proxy({}, {
@@ -1528,7 +1529,12 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
                 }
               }
             }
-            return () => new Proxy({}, this!)
+            return (...args: unknown[]) => {
+              if (table === 'supplier_invoice_items' && prop === 'insert') {
+                insertedItems = args[0] as Array<{ vat_rate: number }>
+              }
+              return new Proxy({}, this!)
+            }
           },
         })
       },
@@ -1544,6 +1550,9 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
 
     expect(res.status).toBe(200)
     expect(mockedCredit).toHaveBeenCalledTimes(1)
+    expect(insertedItems[0]?.vat_rate).toBe(0.25)
+    expect(mockedCredit.mock.calls[0]?.[4]).toBe(registeredSI.items)
+    expect((mockedCredit.mock.calls[0]?.[4] as typeof registeredSI.items)[0]?.vat_rate).toBe(25)
     const body = await res.json()
     expect(body.data.credit_note_id).toBe(creditNoteRow.id)
     expect(body.data.original_id).toBe(SI_ID)

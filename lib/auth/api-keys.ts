@@ -232,6 +232,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Staged bulk retag of posted-line dimensions (dimensions PR6).
   gnubok_tag_journal_lines:               'bookkeeping:write',
   // Document inbox
+  gnubok_create_document_upload:          'transactions:write',
+  gnubok_complete_document_upload:        'transactions:write',
   gnubok_upload_document:                 'transactions:write',
   gnubok_list_inbox_items:                'transactions:read',
   gnubok_get_inbox_item:                  'transactions:read',

@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,7 +20,7 @@ import { ContextPicker } from '@/components/common/ContextPicker'
 import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
-import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from '@/lib/reports/latest-vouchers-format'
+import { formatLatestVouchers } from '@/lib/reports/latest-vouchers-format'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
@@ -715,10 +716,12 @@ export function BalanceSheetView({ periodId, dateRange, onNavigateToAccount }: {
 }
 
 export function ResultatrapportView({ periodId, dateRange, dimensionFilter = null, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; dimensionFilter?: DimensionFilterValue | null; onNavigateToAccount: (account: string) => void }) {
+  const t = useTranslations('reports')
   const [data, setData] = useState<ResultatrapportReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const reportQs = reportQuery(periodId, dateRange, dimensionFilter)
+  const latestVouchers = formatLatestVouchers(data?.latest_vouchers)
 
   useEffect(() => {
     setLoading(true)
@@ -786,9 +789,9 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
           { format: 'xlsx', href: `/api/reports/resultatrapport/xlsx?${reportQs}` },
         ]}
       />
-      {formatLatestVouchers(data.latest_vouchers) && (
+      {latestVouchers && (
         <p className="text-sm text-muted-foreground">
-          {LATEST_VOUCHERS_LABEL}: {formatLatestVouchers(data.latest_vouchers)}
+          {t('latest_posted_vouchers')}: {latestVouchers}
         </p>
       )}
 
@@ -873,10 +876,12 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
 }
 
 export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: { periodId: string; dateRange: DateRangeValue; onNavigateToAccount: (account: string) => void }) {
+  const t = useTranslations('reports')
   const [data, setData] = useState<BalansrapportReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const reportQs = reportQuery(periodId, dateRange)
+  const latestVouchers = formatLatestVouchers(data?.latest_vouchers)
 
   useEffect(() => {
     setLoading(true)
@@ -939,9 +944,9 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
           { format: 'xlsx', href: `/api/reports/balansrapport/xlsx?${reportQs}` },
         ]}
       />
-      {formatLatestVouchers(data.latest_vouchers) && (
+      {latestVouchers && (
         <p className="text-sm text-muted-foreground">
-          {LATEST_VOUCHERS_LABEL}: {formatLatestVouchers(data.latest_vouchers)}
+          {t('latest_posted_vouchers')}: {latestVouchers}
         </p>
       )}
 

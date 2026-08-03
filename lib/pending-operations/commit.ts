@@ -24,7 +24,10 @@ import {
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
 import { validateVatNumber } from '@/lib/vat/vies-client'
-import { normalizeVatRateToDecimal } from '@/lib/vat/supplier-invoice-line-checks'
+import {
+  normalizeVatRateToDecimal,
+  normalizeVatRateToFraction,
+} from '@/lib/vat/supplier-invoice-line-checks'
 import {
   createInvoicePaymentJournalEntry,
   createInvoiceCashEntry,
@@ -3729,7 +3732,7 @@ async function commitCreditSupplierInvoice(
     line_total: item.line_total,
     account_number: item.account_number,
     vat_code: item.vat_code,
-    vat_rate: item.vat_rate,
+    vat_rate: normalizeVatRateToFraction(item.vat_rate),
     vat_amount: item.vat_amount,
     dimensions: item.dimensions ?? {},
   }))
@@ -3747,7 +3750,7 @@ async function commitCreditSupplierInvoice(
         companyId,
         userId,
         creditNote,
-        creditItems as never,
+        original.items as never,
         original.supplier?.supplier_type || 'swedish_business',
         original.supplier?.name
       )

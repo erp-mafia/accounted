@@ -152,9 +152,19 @@ describe('tools/list payload size guard', () => {
     //     hint prose was trimmed to the floor first (~30 tokens recovered);
     //     headroom before the change was ~14 tokens, so even the trimmed wire
     //     contract crossed.
+    //   * 58.5K → 59K with the model-free upload pair (#748):
+    //     gnubok_create_document_upload + gnubok_complete_document_upload move
+    //     document bytes out of the model context via a signed PUT URL, fixing
+    //     silent base64 corruption on real-size PDFs. Neither tool can be
+    //     search-only: the pair is the primary upload path for harnesses with
+    //     file access, and the legacy inline tool stays listed for clients
+    //     without it. Trimmed first: the create tool's outputSchema was cut to
+    //     upload_id/upload_url/expires_at (method, size cap and echo fields
+    //     moved to description prose) and mime_type made optional on complete;
+    //     the ~360-token remainder is the two tools' wire contract.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(58_500)
+    expect(approxTokens).toBeLessThan(59_000)
   })
 })

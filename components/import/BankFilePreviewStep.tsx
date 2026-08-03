@@ -35,7 +35,8 @@ export default function BankFilePreviewStep({
   onBack,
 }: BankFilePreviewStepProps) {
   const { transactions, stats, issues, date_from, date_to } = parseResult
-  const hasIssues = issues.filter((i) => i.severity === 'error').length > 0
+  const errors = issues.filter((i) => i.severity === 'error')
+  const hasIssues = errors.length > 0
   const warnings = issues.filter((i) => i.severity === 'warning')
   // Wise/camt.053 files can mix currencies per row: the parser-level totals
   // sum across currencies, so income/expenses are grouped per currency here.
@@ -190,11 +191,15 @@ export default function BankFilePreviewStep({
           <CardContent className="pt-6">
             <div className="flex gap-3">
               <AlertTriangle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
-              <div>
+              <div className="min-w-0 space-y-2">
                 <p className="font-medium text-destructive">Filen innehåller fel som förhindrar import</p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Kontrollera felet ovan och försök ladda upp en korrigerad fil.
-                </p>
+                <div className="max-h-32 space-y-1 overflow-y-auto">
+                  {errors.map((issue, i) => (
+                    <p key={i} className="text-xs text-muted-foreground">
+                      Rad {issue.row}: {issue.message}
+                    </p>
+                  ))}
+                </div>
               </div>
             </div>
           </CardContent>

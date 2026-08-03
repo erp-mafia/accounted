@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: overavskrivning-inventarier
+  order: 26
+  name: 'Överavskrivning inventarier'
+  category: year_end
+  entity_type: aktiebolag
+  description: >-
+    Bokföring av överavskrivning (skillnad räkenskapsenlig vs planenlig).
+lines:
+  - account: '8850'
+    label: 'Förändring överavskrivning'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '2150'
+    label: 'Ackumulerade överavskrivningar'
+    side: credit
+    type: business
+    ratio: 1.0

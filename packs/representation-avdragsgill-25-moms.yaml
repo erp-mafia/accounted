@@ -1,0 +1,26 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: representation-avdragsgill-25-moms
+  order: 13
+  name: 'Representation (avdragsgill, 25% moms)'
+  category: representation
+  entity_type: all
+  description: >-
+    Extern representation med avdragsgill moms. Max 300 kr/person exkl. moms.
+lines:
+  - account: '6072'
+    label: 'Representation avdragsgill'
+    side: debit
+    type: business
+    ratio: 0.8
+  - account: '2641'
+    label: 'Ingående moms'
+    side: debit
+    type: vat
+    vat_rate: 0.25
+  - account: '1930'
+    label: 'Företagskonto'
+    side: credit
+    type: settlement
+    ratio: 1.0

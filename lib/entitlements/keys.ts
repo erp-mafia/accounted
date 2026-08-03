@@ -65,17 +65,19 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
  * read/local SKV tools (generate_agi, vat_declaration_validate/status, agi_status)
  * stay free: the §4 carve-out forbids blocking a statutory filing obligation.
  *
- * gnubok_upload_document invokes AI (Bedrock document OCR via
- * extractInvoiceFields), so it is gated on CAPABILITY.ai: the same paywall the
- * HTTP inbox upload/attach/retry paths enforce. Without this entry a free-tier
- * API key (incl. the claude.ai connector's minted gnubok_sk_ key) could trigger
- * paid AI extraction. bank_sync has no MCP tool (bank sync is cron/HTTP only).
+ * The document upload tools invoke AI (Bedrock document OCR via
+ * extractInvoiceFields), so they are gated on CAPABILITY.ai: the same paywall
+ * the HTTP inbox upload/attach/retry paths enforce. Without these entries a
+ * free-tier API key could trigger paid AI extraction. bank_sync has no MCP
+ * tool (bank sync is cron/HTTP only).
  */
 export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, CapabilityKey>>> = {
   gnubok_send_invoice: CAPABILITY.email_send,
   gnubok_vat_declaration_submit: CAPABILITY.skatteverket,
   gnubok_agi_submit: CAPABILITY.skatteverket,
   // AI document OCR (Bedrock): the inbox's paid extraction, reachable via MCP.
+  gnubok_create_document_upload: CAPABILITY.ai,
+  gnubok_complete_document_upload: CAPABILITY.ai,
   gnubok_upload_document: CAPABILITY.ai,
 } as const
 

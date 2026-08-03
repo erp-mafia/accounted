@@ -11,6 +11,7 @@ import {
   makeCustomer,
   makeInvoice,
   makeFiscalPeriod,
+  makeSupplierInvoice,
 } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'
 
@@ -66,6 +67,17 @@ vi.mock('@/lib/bookkeeping/invoice-entries', async () => {
   }
 })
 
+vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/lib/bookkeeping/supplier-invoice-entries')>(
+      '@/lib/bookkeeping/supplier-invoice-entries'
+    )
+  return {
+    ...actual,
+    createSupplierCreditNoteEntry: vi.fn(),
+  }
+})
+
 vi.mock('@/lib/transactions/categorize-core', async () => {
   const actual =
     await vi.importActual<typeof import('@/lib/transactions/categorize-core')>(
@@ -107,6 +119,7 @@ import { parseSIEFile } from '@/lib/import/sie-parser'
 import { executeSIEImport } from '@/lib/import/sie-import'
 import { commitAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
+import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 
@@ -846,6 +859,76 @@ describe('commitPendingOperation: credit_invoice', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
+  })
+})
+
+// ─── credit_supplier_invoice ────────────────────────────────────────
+
+describe('commitPendingOperation: credit_supplier_invoice', () => {
+  it('normalizes copied storage and reverses with the untouched original items', async () => {
+    const originalItems = [
+      {
+        sort_order: 0,
+        description: 'Office supplies',
+        quantity: 1,
+        unit: 'st',
+        unit_price: 1000,
+        line_total: 1000,
+        account_number: '5410',
+        vat_code: null,
+        vat_rate: 25,
+        vat_amount: 250,
+        dimensions: {},
+      },
+    ]
+    const original = {
+      ...makeSupplierInvoice({ id: 'supplier-invoice-1', status: 'registered' }),
+      supplier: { name: 'Office Depot AB', supplier_type: 'swedish_business' },
+      items: originalItems,
+    }
+    const creditNote = makeSupplierInvoice({
+      id: 'supplier-credit-1',
+      is_credit_note: true,
+      credited_invoice_id: original.id,
+    })
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'op-1' }, error: null },
+      { data: original, error: null },
+      { data: 2, error: null },
+      { data: creditNote, error: null },
+      { data: null, error: null },
+      { data: { accounting_method: 'accrual' }, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+    ])
+    vi.mocked(createSupplierCreditNoteEntry).mockResolvedValueOnce({ id: 'je-1' } as never)
+
+    const op = makePendingOp({
+      operation_type: 'credit_supplier_invoice',
+      params: { supplier_invoice_id: original.id },
+    })
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      op,
+    )
+
+    expect(result.status).toBe('committed')
+    const insertArgs = findCall('supplier_invoice_items', 'insert')
+    const insertedItems = insertArgs?.[0] as Array<{ vat_rate: number }>
+    expect(insertedItems[0]?.vat_rate).toBe(0.25)
+    expect(createSupplierCreditNoteEntry).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      creditNote,
+      originalItems,
+      'swedish_business',
+      'Office Depot AB',
+    )
   })
 })
 

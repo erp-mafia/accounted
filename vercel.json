@@ -10,6 +10,10 @@
       "schedule": "0 * * * *"
     },
     {
+      "path": "/api/settings/booking-templates/sync/cron",
+      "schedule": "30 4 * * *"
+    },
+    {
       "path": "/api/tax-deadlines/cron",
       "schedule": "0 0 * * *"
     },

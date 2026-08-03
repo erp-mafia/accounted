@@ -8,6 +8,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
+import { normalizeVatRateToFraction } from '@/lib/vat/supplier-invoice-line-checks'
 import type { Currency, CustomerType, ExchangeRate, SupplierType, VatTreatment } from '@/types'
 import type {
   CustomerDto,
@@ -664,7 +665,10 @@ function mapSupplierInvoiceLine(line: SupplierInvoiceLineDto, index: number): Re
     unit_price: round2(line.unitPrice?.value ?? line.lineExtensionAmount.value),
     line_total: round2(line.lineExtensionAmount.value),
     account_number: line.accountNumber || '4000', // Default to purchases
-    vat_rate: inferVatRate(line.taxPercent),
+    // supplier_invoice_items stores decimal fractions (0.25 = 25 %), unlike
+    // customer invoice_items which store percent; foreign rates (19 % DE)
+    // must survive as 0.19 rather than be coerced to a Swedish rate.
+    vat_rate: normalizeVatRateToFraction(line.taxPercent ?? 25),
     vat_amount: round2(line.taxAmount?.value ?? 0),
   }
 }
