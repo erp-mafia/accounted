@@ -1,8 +1,8 @@
 /**
  * renderChannelContextNotes: the one string WhatsApp chat context becomes on
  * its way into a verifikat description. Pins precedence (representation >
- * user_note > caption), the 220-char cap, and whole-name participant
- * truncation ("… och N till", never a name cut mid-way).
+ * user_note > caption), the caption opt-in, the 220-char cap, and whole-name
+ * participant truncation ("… och N till", never a name cut mid-way).
  */
 import { describe, it, expect } from 'vitest'
 import {
@@ -114,12 +114,14 @@ describe('renderChannelContextNotes', () => {
     )
   })
 
-  it('falls back to the caption only when nothing else exists', () => {
+  it('falls back to the caption only when nothing else exists AND it was asked for', () => {
     const captionOnly: InboxChannelContext = {
       channel: 'whatsapp',
       caption: 'Kvitto taxi till kundmöte',
     }
-    expect(renderChannelContextNotes(captionOnly)).toBe('Kvitto taxi till kundmöte')
+    expect(renderChannelContextNotes(captionOnly, { includeCaption: true })).toBe(
+      'Kvitto taxi till kundmöte',
+    )
 
     // Caption is ignored the moment an explicit answer exists.
     const withNote: InboxChannelContext = {
@@ -127,12 +129,35 @@ describe('renderChannelContextNotes', () => {
       caption: 'Kvitto taxi till kundmöte',
       user_note: 'Resa till Arlanda',
     }
-    expect(renderChannelContextNotes(withNote)).toBe('Resa till Arlanda')
+    expect(renderChannelContextNotes(withNote, { includeCaption: true })).toBe('Resa till Arlanda')
+  })
+
+  // The caption is chat text nobody was asked for and nobody reviewed, while
+  // every unattended caller (bulk-book, the routes' server-side defaults)
+  // writes the result into an immutable verifikat. Opt-in, never default.
+  it('leaves the caption out by default', () => {
+    const captionOnly: InboxChannelContext = {
+      channel: 'whatsapp',
+      caption: 'kvittot från igår, Annas sjukbesök, hon betalade',
+    }
+    expect(renderChannelContextNotes(captionOnly)).toBeNull()
+    expect(renderChannelContextNotes(captionOnly, {})).toBeNull()
+    expect(renderChannelContextNotes(captionOnly, { includeCaption: false })).toBeNull()
+  })
+
+  it('renders the answered parts and drops the caption when captions are off', () => {
+    const ctx = repCtx([{ name: 'Anna Berg', company: 'Volvo' }], 'avtalslunch', {
+      caption: 'privat text som ingen granskat',
+      user_note: 'Betald privat',
+    })
+    const line = renderChannelContextNotes(ctx)!
+    expect(line).toBe('Representation: Anna Berg (Volvo) · Syfte: avtalslunch · Betald privat')
+    expect(line).not.toContain('privat text som ingen granskat')
   })
 
   it('caps a runaway caption', () => {
     const ctx: InboxChannelContext = { channel: 'whatsapp', caption: 'k'.repeat(500) }
-    const line = renderChannelContextNotes(ctx)!
+    const line = renderChannelContextNotes(ctx, { includeCaption: true })!
     expect(line.length).toBeLessThanOrEqual(CHANNEL_CONTEXT_NOTES_MAX)
     expect(line.endsWith('…')).toBe(true)
   })
@@ -144,7 +169,7 @@ describe('renderChannelContextNotes', () => {
     expect(
       renderChannelContextNotes({
         channel: 'whatsapp',
-        caption: '   ',
+        caption: 'ignorerad utan opt-in',
         user_note: '',
         representation: {
           participants: [{ name: '  ', company: null }],
@@ -154,6 +179,23 @@ describe('renderChannelContextNotes', () => {
           answered_at: '2026-08-01T12:00:00Z',
         },
       }),
+    ).toBeNull()
+    expect(
+      renderChannelContextNotes(
+        {
+          channel: 'whatsapp',
+          caption: '   ',
+          user_note: '',
+          representation: {
+            participants: [{ name: '  ', company: null }],
+            purpose: '  ',
+            event_date: null,
+            raw_answer: 'nej',
+            answered_at: '2026-08-01T12:00:00Z',
+          },
+        },
+        { includeCaption: true },
+      ),
     ).toBeNull()
   })
 

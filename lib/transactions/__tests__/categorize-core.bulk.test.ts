@@ -414,6 +414,83 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
     )
   })
 
+  // Regression (adversarial review): the photo caption is chat text nobody
+  // was asked for and nobody reviewed, and this loop books every selected item
+  // with no per-item notes field. Burning it into a posted verifikat
+  // description would need a formal rättelse to undo, so only the answered
+  // parts (representation, user_note) are threaded here.
+  it('does NOT thread an unreviewed photo caption into the verifikat notes', async () => {
+    const supabase = queuedSupabase([
+      {
+        data: {
+          id: 'i1',
+          matched_transaction_id: 'tx-1',
+          created_journal_entry_id: null,
+          created_supplier_invoice_id: null,
+          channel_context: {
+            channel: 'whatsapp',
+            caption: 'kvittot från igår, Annas sjukbesök, hon betalade',
+          },
+        },
+      },
+      { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+      { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: [{ id: 'fp-1' }] },
+      { error: null },
+      { data: [] },
+    ])
+
+    await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1'],
+      category: 'expense_software',
+      notes: 'Gemensam batchanteckning',
+    })
+
+    expect(mockCreateJE).toHaveBeenCalledWith(
+      expect.anything(),
+      'c1',
+      'u1',
+      expect.objectContaining({ id: 'tx-1' }),
+      expect.anything(),
+      'Gemensam batchanteckning',
+    )
+    const passedNotes = mockCreateJE.mock.calls[0][5] as string | undefined
+    expect(passedNotes).not.toContain('sjukbesök')
+  })
+
+  it('threads the answered parts of a captioned item and drops the caption', async () => {
+    const supabase = queuedSupabase([
+      {
+        data: {
+          id: 'i1',
+          matched_transaction_id: 'tx-1',
+          created_journal_entry_id: null,
+          created_supplier_invoice_id: null,
+          channel_context: { ...WA_CONTEXT, caption: 'random bildtext' },
+        },
+      },
+      { data: { id: 'tx-1', date: '2026-06-01', amount: -700, currency: 'SEK', cash_account_id: null, journal_entry_id: null } },
+      { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: [{ id: 'fp-1' }] },
+      { error: null },
+      { data: [] },
+    ])
+
+    await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1'],
+      category: 'expense_software',
+    })
+
+    expect(mockCreateJE).toHaveBeenCalledWith(
+      expect.anything(),
+      'c1',
+      'u1',
+      expect.objectContaining({ id: 'tx-1' }),
+      expect.anything(),
+      RENDERED,
+    )
+  })
+
   it('passes notes through unchanged for items without channel context', async () => {
     const supabase = queuedSupabase([
       { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null, channel_context: null } },

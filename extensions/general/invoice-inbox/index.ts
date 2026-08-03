@@ -1773,15 +1773,20 @@ export const invoiceInboxExtension: Extension = {
             total_sek: totalSek,
             remaining_amount: total,
             document_id: item.document_id || null,
-            // WhatsApp-sourced items: when the caller supplies no notes,
-            // default to the rendered chat context (representation deltagare
-            // + syfte, sender note) so the human answers from the chat reach
-            // the leverantörsfaktura. A caller-supplied value always wins.
-            notes: body.notes?.trim()
-              ? body.notes
-              : renderChannelContextNotes(
-                  (item as { channel_context?: InboxChannelContext | null }).channel_context,
-                ),
+            // WhatsApp-sourced items: when the request carries NO notes field
+            // at all, default to the rendered chat context (representation
+            // deltagare + syfte, sender note) so the human answers from the
+            // chat reach the leverantörsfaktura. Presence decides, not
+            // truthiness: `notes: ""` is an explicit clear and stays empty
+            // (same rule as book-direct, where the value lands on an
+            // immutable verifikat). The caption is excluded: this form never
+            // shows the chat context, so nobody reviewed it.
+            notes:
+              body.notes === undefined
+                ? renderChannelContextNotes(
+                    (item as { channel_context?: InboxChannelContext | null }).channel_context,
+                  )
+                : body.notes.trim() || null,
           })
           .select()
           .single()
@@ -2083,17 +2088,23 @@ export const invoiceInboxExtension: Extension = {
           transaction = tx
         }
 
-        // WhatsApp-sourced items: when the caller sent no notes of their own,
-        // default to the rendered chat context (representation deltagare +
-        // syfte, sender note) so the audit text reaches the verifikat even
-        // through clients that never saw the chat (MCP, older UI). A
-        // caller-supplied notes value always wins; the UI prefills the same
-        // rendered string so an explicit user edit survives this default.
-        const effectiveNotes = body.notes?.trim()
-          ? body.notes
-          : renderChannelContextNotes(
-              (item as { channel_context?: InboxChannelContext | null }).channel_context,
-            ) ?? undefined
+        // WhatsApp-sourced items: when the request carries NO notes field at
+        // all, default to the rendered chat context (representation deltagare
+        // + syfte, sender note) so the audit text reaches the verifikat even
+        // through clients that never saw the chat (MCP, older UI).
+        //
+        // Presence decides, not truthiness: `notes: ""` is the UI saying the
+        // user emptied the field, and resurrecting the prefill there would
+        // write text onto an immutable verifikat against an explicit user
+        // action (removable only via rättelse). So an empty string clears,
+        // and only an absent field defaults. The caption is excluded: this
+        // path can run without a human ever seeing the string.
+        const effectiveNotes =
+          body.notes === undefined
+            ? renderChannelContextNotes(
+                (item as { channel_context?: InboxChannelContext | null }).channel_context,
+              ) ?? undefined
+            : body.notes.trim() || undefined
 
         // Create the journal entry via the engine. Source-tracks back to
         // the inbox item so the audit trail is preserved even when no

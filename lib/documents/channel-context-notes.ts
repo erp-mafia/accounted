@@ -12,8 +12,11 @@
  *
  * Precedence: representation answers first (Skatteverket's dokumentationskrav
  * for representation: deltagare + syfte belong on the verifikat), then the
- * sender's explicit note. The photo caption is the weakest signal and is used
- * only when nothing else exists.
+ * sender's explicit note. Both are answers a human typed to a question the bot
+ * asked, having been told they reach the bookkeeping. The photo caption is the
+ * weakest signal: nobody was asked for it and nobody reviewed it, so it is
+ * OFF by default and only renders where a human sees the result before it is
+ * posted (see ChannelContextNotesOptions.includeCaption).
  *
  * Core lib: must not import from @/extensions. Deliberately Swedish-only
  * output: the verifikat description is a regulatory surface (see
@@ -63,8 +66,27 @@ function capFreeText(line: string): string {
   return `${line.slice(0, CHANNEL_CONTEXT_NOTES_MAX - 1).trimEnd()}…`
 }
 
+export interface ChannelContextNotesOptions {
+  /**
+   * Render the raw photo caption when there is neither a representation
+   * answer nor a sender note. Default false.
+   *
+   * Off by default on purpose. The representation answer and the note are
+   * replies to a question the bot asked, so the sender knew they were writing
+   * bookkeeping text; the caption is whatever happened to be typed next to a
+   * photo and nobody reviewed it. Every unattended path (bulk-book, the
+   * server-side note defaults used by MCP and API callers) writes straight
+   * into a posted verifikat, which BFL 5 kap 5 § only lets you change through
+   * a formal rättelse. Pass true only where a human sees the string and can
+   * edit or delete it before booking: today that is the Bokför direkt dialog
+   * prefill.
+   */
+  includeCaption?: boolean
+}
+
 export function renderChannelContextNotes(
   ctx: InboxChannelContext | null | undefined,
+  options: ChannelContextNotesOptions = {},
 ): string | null {
   if (!ctx) return null
 
@@ -73,9 +95,10 @@ export function renderChannelContextNotes(
     .filter((n) => n.length > 0)
   const purpose = ctx.representation?.purpose?.trim() || null
   const userNote = ctx.user_note?.trim() || null
-  const caption = ctx.caption?.trim() || null
+  const caption = options.includeCaption ? ctx.caption?.trim() || null : null
 
-  // Caption only when there is neither a representation answer nor a note.
+  // Caption (when allowed) only if there is neither a representation answer
+  // nor a note.
   if (names.length === 0 && !purpose && !userNote) {
     return caption ? capFreeText(caption) : null
   }

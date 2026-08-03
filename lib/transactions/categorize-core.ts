@@ -530,6 +530,12 @@ export async function bulkBookMatchedInboxItems(
     // booking never shows a per-item notes field, so dropping the chat
     // answers here would silently lose the Skatteverket representation
     // documentation that only exists on this one item.
+    //
+    // Answers only, never the photo caption (the renderer leaves it out
+    // unless asked for it): this loop books without any per-item review and
+    // the verifikat description is immutable under BFL 5 kap, so unreviewed
+    // chat text must not land there. Captions only reach a verifikat through
+    // Bokför direkt, where the user reads them in an editable field first.
     const channelNotes = renderChannelContextNotes(
       (item as { channel_context?: InboxChannelContext | null }).channel_context,
     )
