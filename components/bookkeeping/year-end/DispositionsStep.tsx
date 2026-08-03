@@ -255,6 +255,15 @@ export function DispositionsStep({ periodId, onBack, onContinue }: DispositionsS
         />
       )}
 
+      {proposal.warnings?.map((warning) => (
+        <Card key={warning}>
+          <CardContent className="p-4 text-sm text-warning-foreground flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <span>{warning}</span>
+          </CardContent>
+        </Card>
+      ))}
+
       {(proposal.completedDispositions ?? []).map((completed) => (
         <Card key={`completed-${completed.kind}`}>
           <CardHeader>
@@ -486,7 +495,7 @@ function ProposalCard({
   lockedSkip: boolean
   onChange: (next: { accept?: boolean; overrideAmount?: number }) => void
 }) {
-  const overridable = isOverridable(proposal.kind)
+  const overridable = isOverridable(proposal)
   const displayedAmount = overridable ? overrideAmount ?? proposal.amount : proposal.amount
 
   return (
@@ -553,14 +562,20 @@ function ProposalCard({
   )
 }
 
-function isOverridable(kind: DispositionKind): boolean {
+function isOverridable(proposal: ProposedDisposition): boolean {
   // Bolagsskatt and SLP are derived from posted entries: overriding the amount
   // would silently break the journal posting (the calculator would still
   // recompute server-side). p-fond avsättning and överavskrivningar take a
   // desired amount as input, so editing is meaningful. p-fond återföring is
   // composed of mandatory cohorts and isn't safely editable from a single
   // amount field.
-  return kind === 'periodiseringsfond_avsattning' || kind === 'overavskrivningar'
+  return (
+    proposal.kind === 'periodiseringsfond_avsattning'
+    || (
+      proposal.kind === 'overavskrivningar'
+      && (proposal.signedAmount ?? proposal.amount) > 0
+    )
+  )
 }
 
 function proposalKey(p: ProposedDisposition, index = 0): string {
@@ -605,12 +620,16 @@ function buildPostItems(proposal: DispositionsProposal, ui: UiState): PostItem[]
         if (account) ateforingReturns[account] = p.amount
         break
       }
-      case 'overavskrivningar':
+      case 'overavskrivningar': {
+        const signedDefault = p.signedAmount ?? p.amount
+        const selectedAmount = sel.overrideAmount ?? p.amount
         items.push({
           kind: 'overavskrivningar',
-          additionalAmount: sel.overrideAmount ?? p.amount,
+          additionalAmount:
+            signedDefault < 0 ? -Math.abs(selectedAmount) : selectedAmount,
         })
         break
+      }
       case 'uppskjuten_skatt':
         // K3 only: server recomputes the amount; client just signals intent.
         items.push({ kind: 'uppskjuten_skatt' })
