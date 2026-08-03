@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: ranteintakt
+  order: 6
+  name: 'Ränteintäkt'
+  category: financial
+  entity_type: all
+  description: >-
+    Ränta från sparkonto eller bank.
+lines:
+  - account: '1930'
+    label: 'Företagskonto'
+    side: debit
+    type: settlement
+    ratio: 1.0
+  - account: '8311'
+    label: 'Ränteintäkter'
+    side: credit
+    type: business
+    ratio: 1.0

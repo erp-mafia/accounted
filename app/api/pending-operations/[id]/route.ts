@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { buildMappingResultFromCategory, getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
+import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
 import { getVatRate } from '@/lib/bookkeeping/vat-entries'
 import type { EntityType, Transaction, TransactionCategory, VatTreatment } from '@/types'
@@ -49,7 +51,7 @@ const PatchSchema = z
 
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'pending_operation.update',
-  async (request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId, log }, { params }) => {
     const { id } = await params
 
     let body: z.infer<typeof PatchSchema>
@@ -165,6 +167,25 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       return NextResponse.json(
         { error: err instanceof Error ? getUserErrorMessage(err) : 'Ogiltig momsjustering' },
         { status: 400 },
+      )
+    }
+
+    try {
+      const settlementAccount = await resolveSettlementAccount(
+        supabase,
+        companyId,
+        (tx as Transaction).cash_account_id,
+        log,
+      )
+      mapping = applySettlementAccount(mapping, settlementAccount)
+    } catch (err) {
+      log.error('pending-operation edit: settlement account lookup failed', err as Error, {
+        operationId: id,
+        transactionId: txId,
+      })
+      return NextResponse.json(
+        { error: getUserErrorMessage(err) },
+        { status: 500 },
       )
     }
 

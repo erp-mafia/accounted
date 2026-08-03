@@ -45,11 +45,18 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   traktamente_taxable: '7322',
   mileage_taxfree: '7331',
   mileage_taxable: '7332',
-  // Net deductions
-  net_deduction_advance: '7210',
-  net_deduction_union: '7210',
+  // Net deductions (nettolöneavdrag): withheld from the payout and owed to a
+  // third party, so the default account is the credit-side settlement account,
+  // not a 7xxx salary expense. Advance repayments credit the receivable (1613),
+  // union fees credit 2794, everything unmapped lands on 2799 Övriga
+  // löneavdrag. There is a single benefit-payment item type, so its default
+  // credits 7385 Kostnader för fri bil, the dominant co-payment case;
+  // co-payments for other benefit kinds must set account_number on the line
+  // (7381/7382/7388/7389/7699).
+  net_deduction_advance: '1613',
+  net_deduction_union: '2794',
   net_deduction_benefit_payment: '7385',
-  net_deduction_other: '7210',
+  net_deduction_other: '2799',
   // Other
   correction: '7210',
   other: '7210',

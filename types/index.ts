@@ -1048,9 +1048,9 @@ export type InvoiceDeliveryStatus = 'preparing' | 'pending' | 'sent' | 'failed' 
 
 /**
  * Delivery outcome reported by the email provider after the send itself
- * succeeded. Reported per message, never per recipient: a message with several
- * recipients gets one outcome, and the reason text names the address that
- * failed. `null` means no report has arrived yet.
+ * succeeded. The delivery keeps an aggregate outcome and, when the provider
+ * identifies affected recipients, outcomes keyed by stable To/CC positions.
+ * `null` means no report has arrived yet.
  */
 export type InvoiceDeliveryProviderStatus =
   | 'delayed'
@@ -1059,6 +1059,20 @@ export type InvoiceDeliveryProviderStatus =
   | 'bounced'
   | 'failed'
   | 'suppressed'
+
+export interface InvoiceDeliveryRecipientStatus {
+  status: InvoiceDeliveryProviderStatus
+  status_at: string
+}
+
+/**
+ * PII-free recipient references. `to:1` is the first immutable To address and
+ * `cc:1` the first immutable CC address. BCC recipients are never exposed.
+ */
+export type InvoiceDeliveryRecipientStatuses = Partial<Record<
+  `to:${number}` | `cc:${number}`,
+  InvoiceDeliveryRecipientStatus
+>>
 
 export interface InvoiceDelivery {
   id: string
@@ -1080,6 +1094,7 @@ export interface InvoiceDelivery {
   provider_status: InvoiceDeliveryProviderStatus | null
   provider_status_at: string | null
   provider_status_detail: string | null
+  provider_recipient_statuses: InvoiceDeliveryRecipientStatuses
   error_code: string | null
   document_attachment_id: string | null
   attachment_filename: string | null

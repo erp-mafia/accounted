@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { getLatestPostedVouchers } from '../latest-vouchers'
 import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from '../latest-vouchers-format'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import enMessages from '../../../messages/en.json'
+import svMessages from '../../../messages/sv.json'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -183,5 +185,10 @@ describe('formatLatestVouchers', () => {
     // The distinction is the whole point: an allocated number can sit ahead of
     // the books, and a reconciler told the wrong one chases a phantom gap.
     expect(LATEST_VOUCHERS_LABEL).toBe('Senaste bokförda verifikat')
+  })
+
+  it('keeps the web label explicit in both supported locales', () => {
+    expect(svMessages.reports.latest_posted_vouchers).toBe(LATEST_VOUCHERS_LABEL)
+    expect(enMessages.reports.latest_posted_vouchers).toBe('Latest posted vouchers')
   })
 })

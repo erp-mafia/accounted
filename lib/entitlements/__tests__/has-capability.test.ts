@@ -4,6 +4,7 @@ import {
   hasCapability,
   requireCapability,
   capabilityBlockedResponse,
+  getCompanyIdsWithCapability,
   getCompanyEntitlements,
 } from '../has-capability'
 import { CAPABILITY, PAID_CAPABILITIES } from '../keys'
@@ -131,6 +132,68 @@ describe('hasCapability', () => {
       capability_grants: { data: null, error: { message: 'boom' } },
     })
     expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.ai)).toBe(false)
+  })
+})
+
+describe('getCompanyIdsWithCapability', () => {
+  const directCompanyId = '11111111-1111-4111-8111-111111111111'
+  const firmCompanyId = '22222222-2222-4222-8222-222222222222'
+  const expiredCompanyId = '33333333-3333-4333-8333-333333333333'
+  const disabledCompanyId = '44444444-4444-4444-8444-444444444444'
+  const teamId = '55555555-5555-4555-8555-555555555555'
+
+  it('resolves direct and firm grants before excluding expired and disabled companies', async () => {
+    const supabase = makeSupabase({
+      companies: {
+        data: [
+          { id: directCompanyId, team_id: null },
+          { id: firmCompanyId, team_id: teamId },
+          { id: expiredCompanyId, team_id: null },
+          { id: disabledCompanyId, team_id: null },
+        ],
+      },
+      capability_grants: {
+        data: [
+          { company_id: directCompanyId, team_id: null, expires_at: null },
+          { company_id: null, team_id: teamId, expires_at: iso(60_000) },
+          { company_id: expiredCompanyId, team_id: null, expires_at: iso(-60_000) },
+          { company_id: disabledCompanyId, team_id: null, expires_at: null },
+        ],
+      },
+      company_capability_config: { data: [{ company_id: disabledCompanyId }] },
+    })
+
+    const result = await getCompanyIdsWithCapability(
+      supabase,
+      [directCompanyId, firmCompanyId, expiredCompanyId, disabledCompanyId],
+      CAPABILITY.bank_sync,
+    )
+
+    expect([...result].sort()).toEqual([directCompanyId, firmCompanyId].sort())
+  })
+
+  it('returns every valid requested company when the paywall is bypassed', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const supabase = makeSupabase({})
+
+    const result = await getCompanyIdsWithCapability(
+      supabase,
+      [directCompanyId, directCompanyId, 'not-a-uuid'],
+      CAPABILITY.skatteverket,
+    )
+
+    expect([...result]).toEqual([directCompanyId])
+  })
+
+  it('throws on a database error so a cron run cannot silently skip every payer', async () => {
+    const supabase = makeSupabase({
+      companies: { data: null, error: { message: 'connection reset' } },
+      company_capability_config: { data: [] },
+    })
+
+    await expect(
+      getCompanyIdsWithCapability(supabase, [directCompanyId], CAPABILITY.bank_sync),
+    ).rejects.toThrow('Failed to resolve capability company scopes: connection reset')
   })
 })
 

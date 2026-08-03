@@ -119,6 +119,124 @@ beforeEach(() => {
 })
 
 describe('POST batch-categorize', () => {
+  it('uses the linked cash account in validation and the posted mapping', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: {
+          data: {
+            id: TX_A,
+            company_id: COMPANY_ID,
+            date: '2026-05-12',
+            amount: -349.5,
+            currency: 'SEK',
+            merchant_name: 'ICA',
+            cash_account_id: 'cash-1',
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        cash_accounts: { data: { ledger_account: '1931' }, error: null },
+        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      }).supabase,
+    )
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [
+            { transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } },
+          ],
+        },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(findMissingAccountsMock).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      expect.arrayContaining(['1931']),
+    )
+    expect(createTxJE).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'user-1',
+      expect.objectContaining({ id: TX_A, cash_account_id: 'cash-1' }),
+      expect.objectContaining({ credit_account: '1931' }),
+    )
+  })
+
+  it('isolates a settlement lookup failure to its item and continues the batch', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: [
+          {
+            data: {
+              id: TX_A,
+              company_id: COMPANY_ID,
+              date: '2026-05-12',
+              amount: -100,
+              currency: 'SEK',
+              cash_account_id: 'cash-broken',
+              journal_entry_id: null,
+            },
+            error: null,
+          },
+          {
+            data: {
+              id: TX_B,
+              company_id: COMPANY_ID,
+              date: '2026-05-13',
+              amount: -200,
+              currency: 'SEK',
+              cash_account_id: 'cash-ok',
+              journal_entry_id: null,
+            },
+            error: null,
+          },
+        ],
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        cash_accounts: [
+          { data: null, error: { message: 'temporary lookup failure' } },
+          { data: { ledger_account: '1931' }, error: null },
+        ],
+        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      }).supabase,
+    )
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        {
+          items: [
+            { transaction_id: TX_A, categorization: { is_business: true, category: 'expense_office' } },
+            { transaction_id: TX_B, categorization: { is_business: true, category: 'expense_office' } },
+          ],
+        },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.results[0].ok).toBe(false)
+    expect(body.data.results[0].error.code).toBe('INTERNAL_ERROR')
+    expect(body.data.results[1].ok).toBe(true)
+    expect(body.data.summary).toEqual({ total: 2, succeeded: 1, failed: 1 })
+    expect(createTxJE).toHaveBeenCalledTimes(1)
+    expect(createTxJE).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      'user-1',
+      expect.objectContaining({ id: TX_B }),
+      expect.objectContaining({ credit_account: '1931' }),
+    )
+  })
+
   it('returns per-item ACCOUNTS_NOT_IN_CHART for items whose mapping references inactive accounts; clean items still succeed', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

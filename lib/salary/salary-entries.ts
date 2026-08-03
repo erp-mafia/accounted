@@ -8,6 +8,7 @@ import {
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { SALARY_ACCOUNTS, getLineItemAccount } from './account-mapping'
+import { calculateLoneVaxlingPensionProvision } from './lonevaxling'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -58,7 +59,45 @@ interface SalaryRunData {
   total_net: number
   total_avgifter: number
   total_vacation_accrual: number
+  calculation_params?: Record<string, unknown> | null
   employees: SalaryRunEmployee[]
+}
+
+function resolveLoneVaxlingPension(run: SalaryRunData): SalaryRunData {
+  const snapshotSlpRate = run.calculation_params?.slpRate
+
+  return {
+    ...run,
+    employees: run.employees.map((employee) => {
+      // Preserve the explicit amounts accepted by this low-level API. Current
+      // booking callers omit them and derive from the frozen line-item set.
+      if (
+        employee.pension_contribution !== undefined ||
+        employee.pension_slp !== undefined
+      ) {
+        return employee
+      }
+
+      const salaryReduction = employee.line_items
+        .filter((line) => line.item_type === 'gross_deduction_pension')
+        .reduce((sum, line) => sum + line.amount, 0)
+
+      if (roundOre(Math.abs(salaryReduction)) === 0) return employee
+      if (typeof snapshotSlpRate !== 'number') {
+        throw new Error('Salary run calculation snapshot is missing the SLP rate')
+      }
+
+      const provision = calculateLoneVaxlingPensionProvision(
+        salaryReduction,
+        snapshotSlpRate,
+      )
+      return {
+        ...employee,
+        pension_contribution: provision.pensionContribution,
+        pension_slp: provision.slpOnPension,
+      }
+    }),
+  }
 }
 
 /**
@@ -81,6 +120,7 @@ export async function createSalaryRunEntries(
   vacationEntry: JournalEntry | null
   pensionEntry: JournalEntry | null
 }> {
+  const postingRun = resolveLoneVaxlingPension(run)
   const entryDate = run.payment_date
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
   if (!fiscalPeriodId) {
@@ -90,25 +130,25 @@ export async function createSalaryRunEntries(
   const periodLabel = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
   const desc = `Lön ${periodLabel}`
 
-  await ensureSalaryAccountsExist(supabase, companyId, userId, run)
+  await ensureSalaryAccountsExist(supabase, companyId, userId, postingRun)
 
   // ─── Entry 1: Salary (brutto, skatt, netto) ───
   const salaryEntry = await createSalaryEntry(
-    supabase, companyId, userId, run, fiscalPeriodId, desc
+    supabase, companyId, userId, postingRun, fiscalPeriodId, desc
   )
 
   // ─── Entry 2: Arbetsgivaravgifter ───
   const avgifterEntry = await createAvgifterEntry(
-    supabase, companyId, userId, run, fiscalPeriodId, desc
+    supabase, companyId, userId, postingRun, fiscalPeriodId, desc
   )
 
   // ─── Entry 3: Vacation accrual (if any) ───
   let vacationEntry: JournalEntry | null = null
-  const totalVacation = run.employees.reduce((sum, e) => sum + e.vacation_accrual, 0)
-  const totalVacationAvgifter = run.employees.reduce((sum, e) => sum + e.vacation_accrual_avgifter, 0)
+  const totalVacation = postingRun.employees.reduce((sum, e) => sum + e.vacation_accrual, 0)
+  const totalVacationAvgifter = postingRun.employees.reduce((sum, e) => sum + e.vacation_accrual_avgifter, 0)
   if (totalVacation > 0 || totalVacationAvgifter > 0) {
     vacationEntry = await createVacationEntry(
-      supabase, companyId, userId, run, fiscalPeriodId, desc, totalVacation, totalVacationAvgifter
+      supabase, companyId, userId, postingRun, fiscalPeriodId, desc, totalVacation, totalVacationAvgifter
     )
   }
 
@@ -117,11 +157,11 @@ export async function createSalaryRunEntries(
   // Debit 7410 Pensionsförsäkringspremier / Credit 2740 Skuld pensionsförsäkringar
   // Debit 7533 Särskild löneskatt / Credit 2514 Beräknad särskild löneskatt
   let pensionEntry: JournalEntry | null = null
-  const totalPension = run.employees.reduce((sum, e) => sum + (e.pension_contribution || 0), 0)
-  const totalSlp = run.employees.reduce((sum, e) => sum + (e.pension_slp || 0), 0)
+  const totalPension = postingRun.employees.reduce((sum, e) => sum + (e.pension_contribution || 0), 0)
+  const totalSlp = postingRun.employees.reduce((sum, e) => sum + (e.pension_slp || 0), 0)
   if (totalPension > 0) {
     pensionEntry = await createPensionEntry(
-      supabase, companyId, userId, run, fiscalPeriodId, desc, totalPension, totalSlp
+      supabase, companyId, userId, postingRun, fiscalPeriodId, desc, totalPension, totalSlp
     )
   }
 
@@ -164,6 +204,14 @@ async function createSalaryEntry(
     expenseBuckets.set(key, bucket)
   }
 
+  // Net deductions (nettolöneavdrag) reduce the payout but not gross pay: the
+  // withheld amount is owed elsewhere (union fee, advance repayment, benefit
+  // co-payment), so each one books on its mapped settlement account instead of
+  // a 7xxx expense. Skipping them entirely (the old behavior) left the entry
+  // unbalanced by exactly the deducted amount. Like the 2710/1930 legs these
+  // stay aggregated and undimensioned.
+  const netDeductionBuckets = new Map<string, number>()
+
   for (const emp of run.employees) {
     // Base salary and additions go to the employee-type account
     const salaryAccount = getEmployeeSalaryAccount(emp.employment_type)
@@ -175,7 +223,12 @@ async function createSalaryEntry(
     const BENEFIT_TYPES = ['benefit_car', 'benefit_housing', 'benefit_meals', 'benefit_wellness', 'benefit_bike', 'benefit_other']
     let lineItemTotal = 0
     for (const li of emp.line_items) {
-      if (li.is_net_deduction || li.is_gross_deduction) continue
+      if (li.is_net_deduction) {
+        const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
+        netDeductionBuckets.set(account, (netDeductionBuckets.get(account) ?? 0) + li.amount)
+        continue
+      }
+      if (li.is_gross_deduction) continue
       if (BENEFIT_TYPES.includes(li.item_type)) continue // No cash flow for förmånsvärden
       const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
       addExpense(account, dimensions, li.amount)
@@ -214,6 +267,20 @@ async function createSalaryEntry(
         dimensions: bucket.dimensions,
       })
     }
+  }
+
+  // Net deduction settlement lines. Payslip amounts are negative (withheld
+  // from the employee), which credits the account; a positive correction
+  // books as a debit repayment.
+  for (const [account, amount] of netDeductionBuckets) {
+    const rounded = roundOre(Math.abs(amount))
+    if (rounded === 0) continue
+    lines.push({
+      account_number: account,
+      debit_amount: amount > 0 ? rounded : 0,
+      credit_amount: amount < 0 ? rounded : 0,
+      line_description: `${desc}: ${accountLabel(account)}`,
+    })
   }
 
   // Credit: Tax withholding
@@ -595,6 +662,10 @@ function accountLabel(account: string): string {
     '7322': 'Traktamenten skattepliktiga',
     '7331': 'Bilersättningar skattefria',
     '7332': 'Bilersättningar skattepliktiga',
+    '7385': 'Kostnader för fri bil',
+    '1613': 'Övriga förskott',
+    '2794': 'Fackföreningsavgifter',
+    '2799': 'Övriga löneavdrag',
   }
   return labels[account] || `Konto ${account}`
 }
