@@ -171,10 +171,25 @@ function isValidState(value: unknown): value is SessionTimeoutState {
 }
 
 async function importSigningKey(secret: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
+  // The signing key is HKDF-derived with a purpose-bound info string, never
+  // the raw secret: the SUPABASE_SERVICE_ROLE_KEY fallback must not use the
+  // privileged credential itself as an HMAC key.
+  const baseKey = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
+    'HKDF',
+    false,
+    ['deriveKey'],
+  )
+  return crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new Uint8Array(32),
+      info: new TextEncoder().encode(SIGNING_CONTEXT),
+    },
+    baseKey,
+    { name: 'HMAC', hash: 'SHA-256', length: 256 },
     false,
     ['sign', 'verify'],
   )
