@@ -695,7 +695,7 @@ processing_activities:
       - representation_attendee   # tredjepart: namn + företag i representationssvar
     data_categories:
       - user.contact.phone_number   # HMAC-hash med peppar + AES-256-GCM + mask; aldrig i klartext i DB
-      - user.communication_content  # chattext och rå webhook-payload, 90 dagars retention
+      - user.communication_content  # chattext och webhook-payload utan avsändarnummer, 90 dagars retention
       - user.document               # kvittofiler, 7 år WORM enligt BFL 7 kap
       - user.name                   # deltagarnamn i representationssvar (tredjepart)
       - user.activity_timestamp
@@ -729,6 +729,12 @@ processing_activities:
       #     phone_masked bevaras för unikhetshistorik respektive visning)
       #   kvittofilen                              7 år, WORM (BFL 7 kap),
       #     hanteras av dokumentarkivet, ej av denna cron
+      #   kontoradering (art 17)                   omedelbart, inte via cron:
+      #     anonymize_user_account revokerar och kryptoshreddar kopplingen,
+      #     nollställer body_text/raw_payload på kopplingens meddelanden och
+      #     raderar engångskoder (migration 20260803090000). auth.users
+      #     gravsätts i stället för att raderas, så tabellens ON DELETE
+      #     CASCADE utlöses aldrig av sig själv
       duration: differentiated_per_data_category
       basis: gdpr_storage_limitation_and_bfl_7_kap
       stored_in:
@@ -752,3 +758,5 @@ processing_activities:
       - llm_reads_answers_as_untrusted_data_no_tools
       - receipt_files_worm_protected_bfl
       - opt_out_stop_keyword_honored
+      - muted_senders_no_content_persistence
+      - account_deletion_revokes_and_shreds_whatsapp_link
