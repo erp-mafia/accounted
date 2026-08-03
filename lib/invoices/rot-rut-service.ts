@@ -44,6 +44,7 @@ export async function listRotRutCandidates(
   supabase: SupabaseClient,
   companyId: string,
   type: DeductionType,
+  today = new Date().toISOString().slice(0, 10),
 ): Promise<
   | { ok: true; eligible: RotRutCandidateSummary[]; blocked: RotRutBlockedSummary[] }
   | { ok: false; dbError: unknown }
@@ -74,7 +75,7 @@ export async function listRotRutCandidates(
   for (const invoice of (invoices ?? []) as unknown as InvoiceWithCustomer[]) {
     if (activeInvoiceIds.has(invoice.id)) continue
 
-    const result = evaluateInvoiceForFile(type, invoice)
+    const result = evaluateInvoiceForFile(type, invoice, { today })
     if (result.ok) {
       eligible.push({
         invoice_id: invoice.id,
