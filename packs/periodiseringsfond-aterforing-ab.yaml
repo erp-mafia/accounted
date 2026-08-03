@@ -8,9 +8,12 @@ meta:
   entity_type: aktiebolag
   description: >-
     Återföring av periodiseringsfond (senast efter 6 år).
+  legal_note: >-
+    Återföring sker från den äldsta fonden först. Bokas på 2110 Periodiseringsfonder,
+    eller på det årsmärkta kontot (2120-2129) om fonderna följs per år.
 lines:
-  - account: '2113'
-    label: 'Periodiseringsfond'
+  - account: '2110'
+    label: 'Periodiseringsfonder'
     side: debit
     type: business
     ratio: 1.0

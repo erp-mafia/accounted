@@ -8,14 +8,18 @@ meta:
   entity_type: aktiebolag
   description: >-
     Avsättning till periodiseringsfond vid bokslut. Max 25% av överskottet.
+  legal_note: >-
+    Bokas på 2110 Periodiseringsfonder. Ett bolag som följer varje års fond separat bokar
+    i stället på det årsmärkta kontot (2120-2129, där 2126 = beskattningsår 2026).
+    Max 25 % av överskottet för aktiebolag. Återförs senast efter sex år.
 lines:
   - account: '8811'
     label: 'Avsättning periodiseringsfond'
     side: debit
     type: business
     ratio: 1.0
-  - account: '2113'
-    label: 'Periodiseringsfond'
+  - account: '2110'
+    label: 'Periodiseringsfonder'
     side: credit
     type: business
     ratio: 1.0

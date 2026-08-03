@@ -4,16 +4,38 @@ import { loadPacks, packToLibraryRow, sortPacks } from '@/lib/packs/load'
 import seeded from './fixtures/seeded-system-templates.json'
 
 /**
- * The port out of migration 20260413160000 must be LOSSLESS.
+ * The pack catalogue must not drift from the seeded templates by ACCIDENT.
  *
  * The fixture is not hand-written: it was read out of a Postgres that had all
  * 548 migrations applied, so it is exactly the JSONB the database holds today.
- * If `packs/*.yaml` reproduces it byte for byte, then swapping the seeded rows
- * for the pack files (phase 2b) is a no-op for every existing company.
+ * The port was lossless when it landed, which is what makes phase 2b (swapping
+ * the seeded rows for the loader) a no-op for existing companies.
  *
- * This is the test that makes the format change safe to ship. If it fails, the
- * catalogue has drifted from production and the loader must not be switched on.
+ * Templates have since been fixed on purpose. Each deliberate change is listed
+ * in INTENTIONAL_DIVERGENCES with its reason, and the list is policed from both
+ * sides: a pack NOT listed must still match the seed exactly, and a pack that
+ * IS listed must actually differ. So an unnoticed edit fails the build, and a
+ * stale entry cannot linger after a template is reverted.
  */
+
+/**
+ * Packs that deliberately no longer match what migration 20260413160000 seeds.
+ * Every entry is a defect found by the pack validator and fixed with a domain
+ * source cited in the commit.
+ */
+const INTENTIONAL_DIVERGENCES: Record<string, string> = {
+  loneutbetalning:
+    'Seeded version debited 2710 @0.3 + 2920 @0.12 + 7010 @1.0 against a single 1.0 credit, ' +
+    'so it totalled 1.42x the amount and could never post. Rebuilt per the swedish-payroll ' +
+    'skill: Debit 7010 gross, Credit 2710 tax, Credit 1930 net. The 2920 semesterlöneskuld ' +
+    'line moved out because vacation accrual is its own verifikat (7290/2920).',
+  'periodiseringsfond-avsattning-ab':
+    'Seeded version used account 2113, i.e. the fund for tax year 2013 under the pre-2020 ' +
+    'year-tagged block. Those funds had to be reversed years ago and the account is not in ' +
+    'BAS 2026, so the template could not resolve. Now uses 2110 Periodiseringsfonder, which ' +
+    'does not rot annually; the legal_note points at the year-tagged 2120-2129 alternative.',
+  'periodiseringsfond-aterforing-ab': 'Same 2113 fix as periodiseringsfond-avsattning-ab.',
+}
 
 interface SeededTemplate {
   name: string
@@ -52,12 +74,37 @@ describe('pack catalogue is a lossless port of the seeded system templates', () 
     expect(packs.length).toBeGreaterThan(0)
   })
 
-  it('reproduces exactly the templates the migration seeds', () => {
-    const fromPacks = packs.map((p) => canonical(packToLibraryRow(p.pack))).sort()
-    const fromDb = (seeded as SeededTemplate[]).map(canonical).sort()
+  it('reproduces the seeded templates exactly, except where we deliberately fixed one', () => {
+    const unchanged = packs.filter((p) => !(p.pack.meta.slug in INTENTIONAL_DIVERGENCES))
+    const changedNames = new Set(
+      packs
+        .filter((p) => p.pack.meta.slug in INTENTIONAL_DIVERGENCES)
+        .map((p) => p.pack.meta.name),
+    )
+
+    const fromPacks = unchanged.map((p) => canonical(packToLibraryRow(p.pack))).sort()
+    const fromDb = (seeded as SeededTemplate[])
+      .filter((t) => !changedNames.has(t.name))
+      .map(canonical)
+      .sort()
 
     expect(fromPacks).toHaveLength(fromDb.length)
     expect(fromPacks).toEqual(fromDb)
+  })
+
+  it('every declared divergence actually diverges, so the list cannot go stale', () => {
+    const byName = new Map((seeded as SeededTemplate[]).map((t) => [t.name, canonical(t)]))
+
+    for (const slug of Object.keys(INTENTIONAL_DIVERGENCES)) {
+      const pack = packs.find((p) => p.pack.meta.slug === slug)
+      expect(pack, `${slug} is in INTENTIONAL_DIVERGENCES but no such pack exists`).toBeDefined()
+      const seededForm = byName.get(pack!.pack.meta.name)
+      expect(seededForm, `no seeded template named "${pack!.pack.meta.name}"`).toBeDefined()
+      expect(
+        canonical(packToLibraryRow(pack!.pack)),
+        `${slug} is listed as diverging but matches the seed: remove its entry`,
+      ).not.toBe(seededForm)
+    }
   })
 
   it('covers all 26 seeded templates, none added and none dropped', () => {
