@@ -5286,6 +5286,7 @@
     "th_due": "Due",
     "th_amount": "Amount",
     "th_status": "Status",
+    "sort_by": "Sort by {column}",
     "create_invoice_desc": "Regular customer invoice",
     "create_recurring": "Recurring invoice",
     "create_recurring_desc": "Created automatically, e.g. every month",

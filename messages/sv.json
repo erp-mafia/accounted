@@ -5286,6 +5286,7 @@
     "th_due": "Förfaller",
     "th_amount": "Belopp",
     "th_status": "Status",
+    "sort_by": "Sortera efter {column}",
     "create_invoice_desc": "Vanlig kundfaktura",
     "create_recurring": "Återkommande faktura",
     "create_recurring_desc": "Skapas automatiskt, till exempel varje månad",
