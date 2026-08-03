@@ -51,6 +51,13 @@
  *      extensionRegistry.get('<id>') so a disabled extension never exposes a
  *      live surface (allowlisted file-set, may only shrink). Implementation
  *      and rationale in extension-route-guards.mjs.
+ *   8. hand-rolled-invariant: a shared format rule (BAS account number, ISO
+ *      date, four-digit fiscal year) spelled out inline instead of imported
+ *      from lib/invariants/. The BAS account rule was written out at 20 sites
+ *      and the ISO date rule at 68, with error messages that differed per site;
+ *      the four Skatteverket-bound org-number paths disagreed outright about
+ *      what "valid" meant, which is the kind of drift a customer only discovers
+ *      when a filing fails at the deadline. Tracked as a count.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -82,6 +89,25 @@ const RAW_AUTH_RE = /\.auth\.getUser\(/
 // so accept either `<` or `(` after the name.
 const GUARD_RE = /requireAuth\(|withRouteContext[<(]/
 const NAIVE_ROUND_RE = /Math\.round\([^\n]*\*\s*100\s*\)\s*\/\s*100/
+
+// 8. hand-rolled-invariant. Shared format contracts live in lib/invariants/
+// (account number, ISO date, four-digit fiscal year, org number). Before that
+// module the BAS account rule was written out at 20 sites and the ISO date rule
+// at 68, with error messages that differed per site, and the four
+// Skatteverket-bound org-number paths did not agree on what "valid" meant.
+//
+// Only the two unambiguous regex families are counted. An org-number
+// digit-strip is too varied in shape to match reliably by regex; the
+// cross-path test in lib/invariants/__tests__/org-number-cross-path.test.ts is
+// the guard on that one instead.
+const HAND_ROLLED_INVARIANT_RES = [
+  // /^\d{4}$/ or /^[0-9]{4}$/  → accountNumberSchema or fiscalYearSchema
+  /\/\^(?:\\d|\[0-9\])\{4\}\$\//,
+  // /^\d{4}-\d{2}-\d{2}$/      → isoDateSchema or ISO_DATE_RE
+  /\/\^(?:\\d|\[0-9\])\{4\}-(?:\\d|\[0-9\])\{2\}-(?:\\d|\[0-9\])\{2\}\$\//,
+]
+// The sanctioned home of these rules: must not count against itself.
+const INVARIANT_EXEMPT_PREFIX = 'lib/invariants/'
 
 function walk(dir, exts, out = []) {
   let entries
@@ -226,6 +252,31 @@ function countNaiveRound() {
     if (ROUND_EXEMPT.has(rel(f))) continue
     for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
       if (NAIVE_ROUND_RE.test(line)) count++
+    }
+  }
+  return count
+}
+
+/**
+ * Occurrences of a shared format rule written out by hand instead of imported
+ * from lib/invariants/. Counted, not file-setted: the campaign lowers the
+ * number file by file and the count may only go down.
+ */
+function countHandRolledInvariants() {
+  const files = [
+    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  let count = 0
+  for (const f of files) {
+    const relPath = rel(f)
+    if (relPath.startsWith(INVARIANT_EXEMPT_PREFIX)) continue
+    // Tests legitimately spell out the pattern they are asserting about.
+    if (relPath.includes('__tests__/') || relPath.endsWith('.test.ts')) continue
+    for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
+      if (HAND_ROLLED_INVARIANT_RES.some((re) => re.test(line))) count++
     }
   }
   return count
@@ -563,6 +614,7 @@ function findRawUserErrors() {
 const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
+  handRolledInvariants: countHandRolledInvariants(),
   ledgerScanningReports: findLedgerScanningReports(),
   directJelInsert: findDirectJelInserts(),
   pinnedDepViolations: findPinnedDepViolations(),
@@ -579,6 +631,7 @@ if (isUpdate) {
       'Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: both reach 0 (A1 route-auth campaign, D1 rounding codemod).',
     rawRouteAuth: { count: current.rawRouteAuth.length, files: current.rawRouteAuth },
     naiveOreRound: { count: current.naiveOreRound },
+    handRolledInvariants: { count: current.handRolledInvariants },
     ledgerScanningReports: {
       count: current.ledgerScanningReports.length,
       files: current.ledgerScanningReports,
@@ -672,6 +725,20 @@ if (current.sekLabelledAmounts.length) {
   console.error(
     '  → pass the record\'s currency as the second argument, formatCurrency(amount, record.currency),\n' +
       '    or format the SEK twin (record.amount_sek / record.total_sek) when one exists.',
+  )
+}
+
+// 1e2. hand-rolled-invariant: counted, may only go down.
+if (current.handRolledInvariants > (baseline.handRolledInvariants?.count ?? Infinity)) {
+  failed = true
+  console.error(
+    `\n✗ hand-rolled-invariant: ${current.handRolledInvariants} inline copies of a shared format rule ` +
+      `(baseline ${baseline.handRolledInvariants?.count}):`,
+  )
+  console.error(
+    '  → import the rule instead: accountNumberSchema / isoDateSchema / saneIsoDateSchema /\n' +
+      '    fiscalYearSchema from @/lib/invariants/zod, or the ACCOUNT_NUMBER_RE / ISO_DATE_RE\n' +
+      '    constants from @/lib/invariants. See lib/invariants/README.md.',
   )
 }
 
@@ -772,5 +839,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted).`,
 )
