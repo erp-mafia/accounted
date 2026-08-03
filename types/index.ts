@@ -650,8 +650,11 @@ export interface Customer {
   customer_number: string | null
 
   // Contact
+  contact_person: string | null
   email: string | null
   phone: string | null
+  invoice_email_cc_addresses: string[] | null
+  invoice_email_bcc_addresses: string[] | null
 
   // Address
   address_line1: string | null
@@ -1303,8 +1306,11 @@ export interface CreateCustomerInput {
   name: string
   customer_type: CustomerType
   customer_number?: string | null
+  contact_person?: string | null
   email?: string
   phone?: string
+  invoice_email_cc_addresses?: string[] | null
+  invoice_email_bcc_addresses?: string[] | null
   address_line1?: string
   address_line2?: string
   postal_code?: string

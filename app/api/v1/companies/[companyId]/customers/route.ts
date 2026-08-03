@@ -233,8 +233,11 @@ const CustomerCreated = z.object({
   name: z.string(),
   customer_type: CustomerType,
   customer_number: z.string().nullable(),
+  contact_person: z.string().nullable(),
   email: z.string().nullable(),
   phone: z.string().nullable(),
+  invoice_email_cc_addresses: z.array(z.string()).nullable(),
+  invoice_email_bcc_addresses: z.array(z.string()).nullable(),
   address_line1: z.string().nullable(),
   address_line2: z.string().nullable(),
   postal_code: z.string().nullable(),
@@ -253,7 +256,7 @@ const CustomerCreated = z.object({
 // Drop vat_number_validated_at: declared in neither CustomerCreated nor
 // CustomerDetail; an internal timestamp with no documented consumer.
 const CUSTOMER_RESPONSE_COLUMNS =
-  'id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 registerEndpoint({
   operation: 'customers.create',
@@ -341,8 +344,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           name: body.name,
           customer_type: body.customer_type,
           customer_number: body.customer_number || null,
+          contact_person: body.contact_person ?? null,
           email: body.email ?? null,
           phone: body.phone ?? null,
+          invoice_email_cc_addresses: body.invoice_email_cc_addresses ?? null,
+          invoice_email_bcc_addresses: body.invoice_email_bcc_addresses ?? null,
           address_line1: body.address_line1 ?? null,
           address_line2: body.address_line2 ?? null,
           postal_code: body.postal_code ?? null,
@@ -388,8 +394,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         // Empty string clears the customer number, same as an explicit null
         // (matches the internal /api/customers route).
         customer_number: body.customer_number || null,
+        contact_person: body.contact_person ?? null,
         email: body.email ?? null,
         phone: body.phone ?? null,
+        invoice_email_cc_addresses: body.invoice_email_cc_addresses ?? null,
+        invoice_email_bcc_addresses: body.invoice_email_bcc_addresses ?? null,
         address_line1: body.address_line1 ?? null,
         address_line2: body.address_line2 ?? null,
         postal_code: body.postal_code ?? null,

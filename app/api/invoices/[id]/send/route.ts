@@ -226,6 +226,8 @@ export const POST = withRouteContext(
       to: customer.email,
       configuredCc: company.invoice_email_cc_addresses,
       configuredBcc: company.invoice_email_bcc_addresses,
+      customerCc: customer.invoice_email_cc_addresses,
+      customerBcc: customer.invoice_email_bcc_addresses,
       // This value comes from company settings or the authenticated sender. It
       // is fixed routing, not an arbitrary request-controlled recipient.
       legacyCc: company.email || user.email,

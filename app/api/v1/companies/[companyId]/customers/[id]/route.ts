@@ -34,8 +34,11 @@ const CustomerDetail = z.object({
   name: z.string(),
   customer_type: z.string(),
   customer_number: z.string().nullable(),
+  contact_person: z.string().nullable(),
   email: z.string().nullable(),
   phone: z.string().nullable(),
+  invoice_email_cc_addresses: z.array(z.string()).nullable(),
+  invoice_email_bcc_addresses: z.array(z.string()).nullable(),
   address_line1: z.string().nullable(),
   address_line2: z.string().nullable(),
   postal_code: z.string().nullable(),
@@ -57,7 +60,7 @@ const OPEN_INVOICE_STATUSES = ['sent', 'partially_paid', 'overdue']
 // Explicit projection. Excludes user_id, company_id (internal scoping),
 // and vat_number_validated_at (internal timestamp not in the public schema).
 const CUSTOMER_DETAIL_COLUMNS =
-  'id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 const OPEN_INVOICE_COLUMNS =
   'id, invoice_number, invoice_date, due_date, status, currency, total, remaining_amount'
@@ -296,8 +299,11 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     for (const key of [
       'name',
       'customer_type',
+      'contact_person',
       'email',
       'phone',
+      'invoice_email_cc_addresses',
+      'invoice_email_bcc_addresses',
       'address_line1',
       'address_line2',
       'postal_code',

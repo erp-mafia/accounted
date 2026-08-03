@@ -56,7 +56,7 @@ const BulkCreateResponse = z.object({
 // Same projection as the single-create endpoint: keeps response shapes
 // identical so callers can union the two surfaces transparently.
 const CUSTOMER_RESPONSE_COLUMNS =
-  'id, name, customer_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
+  'id, name, customer_type, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, default_payment_terms, notes, archived_at, created_at, updated_at'
 
 registerEndpoint({
   operation: 'customers.bulk-create',
@@ -127,8 +127,11 @@ async function createOneCustomer(
           id: null,
           name: input.name,
           customer_type: input.customer_type,
+          contact_person: input.contact_person ?? null,
           email: input.email ?? null,
           phone: input.phone ?? null,
+          invoice_email_cc_addresses: input.invoice_email_cc_addresses ?? null,
+          invoice_email_bcc_addresses: input.invoice_email_bcc_addresses ?? null,
           address_line1: input.address_line1 ?? null,
           address_line2: input.address_line2 ?? null,
           postal_code: input.postal_code ?? null,
@@ -172,8 +175,11 @@ async function createOneCustomer(
       company_id: companyId,
       name: input.name,
       customer_type: input.customer_type,
+      contact_person: input.contact_person ?? null,
       email: input.email ?? null,
       phone: input.phone ?? null,
+      invoice_email_cc_addresses: input.invoice_email_cc_addresses ?? null,
+      invoice_email_bcc_addresses: input.invoice_email_bcc_addresses ?? null,
       address_line1: input.address_line1 ?? null,
       address_line2: input.address_line2 ?? null,
       postal_code: input.postal_code ?? null,
