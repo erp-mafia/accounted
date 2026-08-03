@@ -18,3 +18,11 @@ lib/bokslut/ixbrl/taxonomy/generated/*.json text eol=lf linguist-generated=true
 # the working tree matches what the generators write.
 lib/extensions/_generated/** text eol=lf linguist-generated=true
 *.snap text eol=lf linguist-generated=true
+
+# DECISIONS.md is an append-only log that every concurrent PR writes to, so
+# two PRs touching it always conflict at EOF. That is worse than it sounds:
+# GitHub runs ZERO Actions on a conflicting PR, so `gh pr checks` returns a
+# short all-pass list that looks green while nothing actually ran. A union
+# merge keeps both sides' lines (the file has no ordering contract beyond
+# the date prefix), which is exactly the right semantics for an append log.
+DECISIONS.md merge=union
