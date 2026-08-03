@@ -16,7 +16,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { AlertTriangle, Check, Copy, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 import type { CompanyInboundDomain, InboundDomainDnsRecord } from '@/types'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useFormat } from '@/lib/hooks/use-format'
 import { useCompany } from '@/contexts/CompanyContext'
 import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
@@ -45,6 +45,7 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
   const { toast } = useToast()
   const t = useTranslations('inbox_custom_domain')
   const { locale, formatDateLong } = useFormat()
+  const errorLocale = locale as ErrorLocale
   const { role } = useCompany()
   const canManage = role === 'owner' || role === 'admin'
   const [isLoading, setIsLoading] = useState(true)
@@ -97,13 +98,13 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
     } catch (err) {
       toast({
         title: t('claim_error_title'),
-        description: err instanceof Error ? getUserErrorMessage(err, { locale }) : t('try_again'),
+        description: err instanceof Error ? getUserErrorMessage(err, { locale: errorLocale }) : t('try_again'),
         variant: 'destructive',
       })
     } finally {
       setIsClaiming(false)
     }
-  }, [domainInput, locale, t, toast])
+  }, [domainInput, errorLocale, t, toast])
 
   const handleVerify = useCallback(async () => {
     setIsChecking(true)
@@ -120,13 +121,13 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
     } catch (err) {
       toast({
         title: t('verify_error_title'),
-        description: err instanceof Error ? getUserErrorMessage(err, { locale }) : t('try_again'),
+        description: err instanceof Error ? getUserErrorMessage(err, { locale: errorLocale }) : t('try_again'),
         variant: 'destructive',
       })
     } finally {
       setIsChecking(false)
     }
-  }, [locale, t, toast])
+  }, [errorLocale, t, toast])
 
   const handleRemove = useCallback(async () => {
     if (!domain) return
@@ -141,13 +142,13 @@ export default function InboxCustomDomainDialog({ open, onOpenChange }: Props) {
     } catch (err) {
       toast({
         title: t('remove_error_title'),
-        description: err instanceof Error ? getUserErrorMessage(err, { locale }) : t('try_again'),
+        description: err instanceof Error ? getUserErrorMessage(err, { locale: errorLocale }) : t('try_again'),
         variant: 'destructive',
       })
     } finally {
       setIsRemoving(false)
     }
-  }, [domain, locale, t, toast])
+  }, [domain, errorLocale, t, toast])
 
   const handleCopy = useCallback(
     async (value: string) => {
