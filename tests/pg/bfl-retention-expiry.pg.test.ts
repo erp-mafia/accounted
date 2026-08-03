@@ -25,15 +25,23 @@ describe('BFL retention expiry', () => {
        ORDER BY trigger.tgname`,
     )
 
-    expect(result.rows.map((row) => row.trigger_name)).toEqual([
-      'calculate_retention_expiry',
-      'enforce_period_start_day',
-      'zz_set_bfl_retention_expiry',
+    expect(result.rows).toEqual([
+      {
+        trigger_name: 'calculate_retention_expiry',
+        trigger_definition:
+          'CREATE TRIGGER calculate_retention_expiry BEFORE INSERT OR UPDATE ON public.fiscal_periods FOR EACH ROW EXECUTE FUNCTION calculate_retention_expiry()',
+      },
+      {
+        trigger_name: 'enforce_period_start_day',
+        trigger_definition:
+          'CREATE TRIGGER enforce_period_start_day BEFORE INSERT OR UPDATE OF company_id, period_start ON public.fiscal_periods FOR EACH ROW EXECUTE FUNCTION enforce_first_of_month_for_subsequent_periods()',
+      },
+      {
+        trigger_name: 'zz_set_bfl_retention_expiry',
+        trigger_definition:
+          'CREATE TRIGGER zz_set_bfl_retention_expiry BEFORE INSERT OR UPDATE ON public.fiscal_periods FOR EACH ROW EXECUTE FUNCTION set_bfl_retention_expiry()',
+      },
     ])
-    expect(
-      result.rows.find((row) => row.trigger_name === 'enforce_period_start_day')
-        ?.trigger_definition,
-    ).toContain('UPDATE OF company_id, period_start')
   })
 
   it('retains a fiscal year through the end of the seventh following calendar year', async () => {

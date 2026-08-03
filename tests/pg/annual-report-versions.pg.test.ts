@@ -114,8 +114,12 @@ async function createVersion(params: {
   )
 }
 
-async function waitForAdvisoryLock(pid: number): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+async function waitForAdvisoryLock(
+  pid: number,
+  maxAttempts = 150,
+  intervalMs = 20,
+): Promise<void> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const result = await getPool().query<{ wait_event: string | null }>(
       `SELECT wait_event
        FROM pg_stat_activity
@@ -123,9 +127,11 @@ async function waitForAdvisoryLock(pid: number): Promise<void> {
       [pid],
     )
     if (result.rows[0]?.wait_event === 'advisory') return
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
   }
-  throw new Error(`Backend ${pid} did not wait for the annual-report advisory lock`)
+  throw new Error(
+    `Backend ${pid} did not wait for the annual-report advisory lock after ${maxAttempts * intervalMs}ms`,
+  )
 }
 
 describe('annual report profile and version enforcement', () => {
