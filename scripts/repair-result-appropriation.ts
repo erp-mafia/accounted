@@ -43,6 +43,7 @@
 import { config } from 'dotenv'
 config({ path: '.env.local' })
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { fetchAllRows } from '../lib/supabase/fetch-all'
 import {
   assessHistoricalResultRepair,
   getHistoricalResultRepairScopeError,
@@ -53,7 +54,13 @@ import {
 
 function arg(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`)
-  return index >= 0 ? process.argv[index + 1] : undefined
+  if (index < 0) return undefined
+  const value = process.argv[index + 1]
+  if (value === undefined || value.startsWith('--')) {
+    console.error(`--${name} requires a value`)
+    process.exit(1)
+  }
+  return value
 }
 
 const ONLY_COMPANY_ID = arg('company-id')
@@ -110,29 +117,33 @@ console.log('---------------------------------------------------------\n')
 async function listCompanyIds(): Promise<string[]> {
   if (ONLY_COMPANY_ID) return [ONLY_COMPANY_ID]
 
-  const { data, error } = await supabase
-    .from('companies')
-    .select('id')
-    .order('created_at', { ascending: true })
-  if (error) throw new Error(`Failed to list companies: ${error.message}`)
-  return (data as Array<{ id: string }>).map((company) => company.id)
+  const rows = await fetchAllRows<{ id: string }>(({ from, to }) =>
+    supabase
+      .from('companies')
+      .select('id')
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  return rows.map((company) => company.id)
 }
 
 async function listOpenPeriods(
   companyId: string,
 ): Promise<Array<{ id: string; name: string }>> {
-  let query = supabase
-    .from('fiscal_periods')
-    .select('id, name')
-    .eq('company_id', companyId)
-    .eq('is_closed', false)
-    .is('locked_at', null)
+  const rows = await fetchAllRows<{ id: string; name: string }>(({ from, to }) => {
+    let query = supabase
+      .from('fiscal_periods')
+      .select('id, name')
+      .eq('company_id', companyId)
+      .eq('is_closed', false)
+      .is('locked_at', null)
 
-  if (ONLY_PERIOD_ID) query = query.eq('id', ONLY_PERIOD_ID)
+    if (ONLY_PERIOD_ID) query = query.eq('id', ONLY_PERIOD_ID)
 
-  const { data, error } = await query.order('period_start', { ascending: true })
-  if (error) throw new Error(`Failed to list open periods for ${companyId}: ${error.message}`)
-  return (data as Array<{ id: string; name: string }>) ?? []
+    return query.order('period_start', { ascending: true }).range(from, to)
+  })
+  return rows
 }
 
 function describeAssessment(assessment: HistoricalResultRepairAssessment): string {
@@ -253,6 +264,9 @@ async function main() {
     console.log(
       '\nCommit mode requires one reviewed --company-id, --period-id, and --user-id.',
     )
+  }
+  if (failed > 0) {
+    process.exitCode = 1
   }
 }
 
