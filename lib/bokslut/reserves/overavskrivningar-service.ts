@@ -43,7 +43,7 @@ export function compute30Rule(input: Compute30RuleInput): {
 
 /**
  * 20-regeln: varje årsanskaffning får skrivas av med 20 % under 5 år. Lägsta
- * skattemässigt restvärde är summan av 20 % × ((5 − offset) / 5) × anskaffningar
+ * skattemässigt restvärde är summan av 20 % × (4 − offset) × anskaffningar
  * från år (innevarande − offset).
  *
  * Returns the allowed depreciation if 20-rule is used as the sole basis,
@@ -52,12 +52,15 @@ export function compute30Rule(input: Compute30RuleInput): {
 export function compute20Rule(input: Compute20RuleInput): {
   minimumResidual: number
 } {
-  // Residual per cohort = anskaffningskostnad × (5 − ageInYears) / 5.
-  // ageInYears 0 = current year (residual 100 %), 4 = oldest still-live (20 %).
+  // The current acquisition period consumes the first 20 percent deduction.
+  // Closing residuals are therefore 80, 60, 40, 20 and 0 percent.
   let residual = 0
   for (let offset = 0; offset < OVERAVSKRIVNING_20_RULE_YEARS; offset++) {
     const cost = input.acquisitionCostByYearOffset[offset] ?? 0
-    const remainingFraction = (OVERAVSKRIVNING_20_RULE_YEARS - offset) / OVERAVSKRIVNING_20_RULE_YEARS
+    const remainingFraction = Math.max(
+      0,
+      (OVERAVSKRIVNING_20_RULE_YEARS - offset - 1) / OVERAVSKRIVNING_20_RULE_YEARS,
+    )
     residual += cost * remainingFraction
   }
   return { minimumResidual: Math.round(residual * 100) / 100 }

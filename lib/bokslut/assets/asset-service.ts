@@ -5,7 +5,7 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
 import type {
   Asset,
   AssetCategory,
-  DepreciationMethod,
+  WritableDepreciationMethod,
   K3Component,
   CreateJournalEntryLineInput,
   JournalEntry,
@@ -46,15 +46,13 @@ export interface CreateAssetInput {
   acquisition_cost: number
   salvage_value?: number
   useful_life_months: number
-  depreciation_method?: DepreciationMethod
-  /** Required when depreciation_method = 'restvardesavskrivning_25'. */
-  restvarde_target?: number | null
+  depreciation_method?: WritableDepreciationMethod
+  restvarde_target?: null
   bas_asset_account?: string
   bas_accumulated_account?: string
   bas_expense_account?: string
   /** K3 component depreciation (BFNAR 2012:1 ch.17.4). When non-null, the
-   *  engine sums per-component linear depreciation instead of applying
-   *  `depreciation_method` to the asset as a whole. The API layer rejects
+   *  engine sums per-component linear depreciation. The API layer rejects
    *  writes for K2 companies with K3_REQUIRED_FOR_COMPONENTS. */
   k3_components?: K3Component[] | null
   notes?: string
@@ -74,12 +72,6 @@ export async function createAsset(
   input: CreateAssetInput,
 ): Promise<Asset> {
   const defaults = DEFAULT_ACCOUNTS_BY_CATEGORY[input.category]
-  const method: DepreciationMethod = input.depreciation_method ?? 'linear'
-  // The DB CHECK constraint enforces the biconditional between method and
-  // restvarde_target. Pass null explicitly when not restvärde so a stale
-  // value never leaks through.
-  const restvarde =
-    method === 'restvardesavskrivning_25' ? input.restvarde_target ?? null : null
   const row = {
     user_id: userId,
     company_id: companyId,
@@ -89,8 +81,8 @@ export async function createAsset(
     acquisition_cost: input.acquisition_cost,
     salvage_value: input.salvage_value ?? 0,
     useful_life_months: input.useful_life_months,
-    depreciation_method: method,
-    restvarde_target: restvarde,
+    depreciation_method: 'linear' as const,
+    restvarde_target: null,
     bas_asset_account: input.bas_asset_account ?? defaults.asset,
     bas_accumulated_account: input.bas_accumulated_account ?? defaults.accumulated,
     bas_expense_account: input.bas_expense_account ?? defaults.expense,
@@ -195,15 +187,13 @@ export interface UpdateAssetInput {
    *  legitimate *prospective* change and stays allowed after depreciation. */
   salvage_value?: number
   useful_life_months?: number
-  depreciation_method?: DepreciationMethod
-  /** Editable as long as method=restvärdeavskrivning. Set to null when
-   *  switching back to a non-restvärde method (the DB CHECK enforces). */
-  restvarde_target?: number | null
+  depreciation_method?: WritableDepreciationMethod
+  restvarde_target?: null
   bas_asset_account?: string
   bas_accumulated_account?: string
   bas_expense_account?: string
   /** K3 component breakdown. Pass null to clear an existing breakdown
-   *  (engine then falls back to depreciation_method). The route handler
+   *  (engine then falls back to ordinary linear depreciation). The route handler
    *  enforces accounting_framework='k3' + sum validation before delegating. */
   k3_components?: K3Component[] | null
 }
@@ -298,7 +288,7 @@ export async function updateAsset(
   assetId: string,
   inputParam: UpdateAssetInput,
 ): Promise<Asset> {
-  // Copy so we can adjust restvarde_target without mutating the caller's object.
+  // Copy so category-driven account defaults do not mutate the caller's object.
   let input: UpdateAssetInput = { ...inputParam }
 
   // Almost every meaningful patch needs the current row (range checks, the
@@ -308,7 +298,6 @@ export async function updateAsset(
     input.acquisition_date !== undefined ||
     input.acquisition_cost !== undefined ||
     input.depreciation_method !== undefined ||
-    input.restvarde_target !== undefined ||
     input.bas_asset_account !== undefined ||
     input.bas_accumulated_account !== undefined ||
     input.bas_expense_account !== undefined
@@ -404,44 +393,6 @@ export async function updateAsset(
     if (finalAsset === finalAccumulated) {
       throw new Error(
         'bas_asset_account and bas_accumulated_account must be different accounts',
-      )
-    }
-  }
-
-  // ── Method / restvärde-target biconditional ───────────────────────
-  // Required iff restvärdeavskrivning. Resolve final method+target+cost across
-  // the merged row (existing + patch) so we can null the target when switching
-  // away, require it when switching in, and re-check the floor when the cost
-  // itself is being corrected.
-  if (
-    input.depreciation_method !== undefined ||
-    input.restvarde_target !== undefined ||
-    input.acquisition_cost !== undefined
-  ) {
-    if (!existing) throw new Error('Asset not found')
-    const finalMethod = input.depreciation_method ?? existing.depreciation_method
-    const finalTarget =
-      input.restvarde_target !== undefined ? input.restvarde_target : existing.restvarde_target
-    const finalCost =
-      input.acquisition_cost !== undefined ? input.acquisition_cost : Number(existing.acquisition_cost)
-    if (finalMethod === 'restvardesavskrivning_25' && (finalTarget === null || finalTarget === undefined)) {
-      throw new Error(
-        'restvarde_target krävs när avskrivningsmetoden är restvärdeavskrivning (25 %).',
-      )
-    }
-    if (finalMethod !== 'restvardesavskrivning_25' && finalTarget !== null && finalTarget !== undefined) {
-      // Auto-null the target when switching away from restvärde so the DB
-      // CHECK doesn't reject the update.
-      input = { ...input, restvarde_target: null }
-    }
-    if (
-      finalMethod === 'restvardesavskrivning_25' &&
-      finalTarget !== null &&
-      finalTarget !== undefined &&
-      Number(finalTarget) >= Number(finalCost)
-    ) {
-      throw new Error(
-        'restvarde_target måste vara lägre än anskaffningsvärdet: annars finns inget kvar att skriva av.',
       )
     }
   }

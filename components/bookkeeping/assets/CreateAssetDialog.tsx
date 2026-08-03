@@ -22,7 +22,7 @@ import { Loader2, Plus, X } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { formatCurrency } from '@/lib/utils'
-import type { AssetCategory, DepreciationMethod, K3Component } from '@/types'
+import type { AssetCategory, K3Component } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface CreateAssetDialogProps {
@@ -67,29 +67,6 @@ const CATEGORY_OPTIONS: { value: AssetCategory; label: string; defaultYears: num
   { value: 'other_tangible', label: 'Övrig materiell tillgång', defaultYears: 5 },
 ]
 
-const DEPRECIATION_METHOD_OPTIONS: { value: DepreciationMethod; label: string; hint: string }[] = [
-  {
-    value: 'linear',
-    label: 'Linjär',
-    hint: 'Planenlig raklinje över nyttjandeperioden (ÅRL 4 kap 4§).',
-  },
-  {
-    value: 'declining_balance_30',
-    label: 'Räkenskapsenlig 30 %',
-    hint: 'Huvudregeln (IL 18 kap 13§): 30 % degressivt på avskrivningsunderlaget.',
-  },
-  {
-    value: 'declining_balance_20',
-    label: 'Räkenskapsenlig 20 %',
-    hint: 'Kompletteringsregeln (IL 18 kap 17§): 20 % degressivt. Vanlig för byggnader.',
-  },
-  {
-    value: 'restvardesavskrivning_25',
-    label: 'Restvärdeavskrivning 25 %',
-    hint: 'IL 18 kap 13§ st.3: 25 % degressivt ner till angivet restvärde.',
-  },
-]
-
 export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAssetDialogProps) {
   const { toast } = useToast()
   // useCompanyOptional so the dialog still works in tests / storyboards
@@ -104,8 +81,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
   )
   const [acquisitionCost, setAcquisitionCost] = useState('')
   const [usefulLifeYears, setUsefulLifeYears] = useState('5')
-  const [depreciationMethod, setDepreciationMethod] = useState<DepreciationMethod>('linear')
-  const [restvardeTarget, setRestvardeTarget] = useState('')
   // K3 component depreciation. `useComponents` toggles the advanced section;
   // null when disabled, an array (possibly empty during editing) when enabled.
   const [useComponents, setUseComponents] = useState(false)
@@ -118,10 +93,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
     const option = CATEGORY_OPTIONS.find((o) => o.value === next)
     if (option) setUsefulLifeYears(option.defaultYears.toString())
   }
-
-  const isRestvarde = depreciationMethod === 'restvardesavskrivning_25'
-  const methodHint =
-    DEPRECIATION_METHOD_OPTIONS.find((o) => o.value === depreciationMethod)?.hint ?? ''
 
   const totalComponentCost = useMemo(() => {
     return componentRows.reduce((sum, row) => {
@@ -160,19 +131,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
     if (!name.trim() || !Number.isFinite(cost) || cost <= 0 || !Number.isFinite(years) || years <= 0) {
       setError('Fyll i namn, anskaffningsvärde och avskrivningstid.')
       return
-    }
-    let restvardeTargetNumber: number | null = null
-    if (isRestvarde) {
-      const parsed = parseFloat(restvardeTarget)
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        setError('Ange ett restvärde (0 kr eller högre).')
-        return
-      }
-      if (parsed >= cost) {
-        setError('Restvärdet måste vara lägre än anskaffningsvärdet.')
-        return
-      }
-      restvardeTargetNumber = parsed
     }
     // K3 components: only when both the framework permits (gate at API)
     // and the user opted into the section. Empty array is invalid (the
@@ -239,10 +197,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
           acquisition_date: acquisitionDate,
           acquisition_cost: cost,
           useful_life_months: years * 12,
-          depreciation_method: depreciationMethod,
-          ...(restvardeTargetNumber !== null
-            ? { restvarde_target: restvardeTargetNumber }
-            : {}),
           ...(componentsPayload !== null ? { k3_components: componentsPayload } : {}),
         }),
       })
@@ -255,8 +209,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       // Reset form for next entry
       setName('')
       setAcquisitionCost('')
-      setDepreciationMethod('linear')
-      setRestvardeTarget('')
       setUseComponents(false)
       setComponentRows([])
       onCreated()
@@ -340,44 +292,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               För skattemässig avskrivning kan annan livslängd gälla (IL 18-20 kap).
             </p>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="asset-method">Avskrivningsmetod</Label>
-            <Select
-              value={depreciationMethod}
-              onValueChange={(v) => setDepreciationMethod(v as DepreciationMethod)}
-            >
-              <SelectTrigger id="asset-method">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {DEPRECIATION_METHOD_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">{methodHint}</p>
-          </div>
-          {isRestvarde && (
-            <div className="space-y-1.5">
-              <Label htmlFor="asset-restvarde">Restvärde (kr)</Label>
-              <Input
-                id="asset-restvarde"
-                type="number"
-                min="0"
-                step="1"
-                value={restvardeTarget}
-                onChange={(e) => setRestvardeTarget(e.target.value)}
-                placeholder="t.ex. 5000"
-                className="tabular-nums"
-              />
-              <p className="text-xs text-muted-foreground">
-                Avskrivningen stannar när bokfört värde når restvärdet. Restvärdet
-                måste vara lägre än anskaffningsvärdet.
-              </p>
-            </div>
-          )}
           {isK3 && (
             <div className="space-y-3 rounded-md border border-border bg-muted/20 p-4">
               <div className="flex items-start justify-between gap-4">

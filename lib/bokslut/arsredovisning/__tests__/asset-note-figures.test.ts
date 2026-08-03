@@ -105,28 +105,6 @@ describe('computeAssetNoteFigures', () => {
     expect(f).toEqual({ ibAck: 146_000, aretsAvskrivning: 0, avgaendeAck: 0 })
   })
 
-  it('applies declining_balance_30 on the posted book value', () => {
-    const asset = makeAsset({
-      acquisition_date: '2024-01-01',
-      acquisition_cost: 100_000,
-      depreciation_method: 'declining_balance_30',
-    })
-    const f = figuresFor(asset, [posted('asset-1', 'fp2024', 30_000)])
-    // Book value 70,000 * 30% = 21,000
-    expect(f).toEqual({ ibAck: 30_000, aretsAvskrivning: 21_000, avgaendeAck: 0 })
-  })
-
-  it('floors restvardesavskrivning_25 at the restvarde target', () => {
-    const asset = makeAsset({
-      acquisition_date: '2024-01-01',
-      acquisition_cost: 100_000,
-      depreciation_method: 'restvardesavskrivning_25',
-      restvarde_target: 50_000,
-    })
-    const f = figuresFor(asset, [posted('asset-1', 'fp2024', 50_000)])
-    expect(f).toEqual({ ibAck: 50_000, aretsAvskrivning: 0, avgaendeAck: 0 })
-  })
-
   it('sums K3 component depreciation via the engine fallback', () => {
     const asset = makeAsset({
       acquisition_date: '2025-01-01',

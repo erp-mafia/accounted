@@ -31,15 +31,15 @@ describe('compute20Rule', () => {
       // current year, year-1, year-2, year-3, year-4
       acquisitionCostByYearOffset: [100_000, 100_000, 100_000, 100_000, 100_000],
     })
-    // residuals: 100×(5/5) + 100×(4/5) + 100×(3/5) + 100×(2/5) + 100×(1/5) = 100+80+60+40+20 = 300
-    expect(result.minimumResidual).toBe(300_000)
+    // Closing residuals after the annual deduction: 80+60+40+20+0 = 200.
+    expect(result.minimumResidual).toBe(200_000)
   })
 
   it('skips cohorts where no acquisitions happened', () => {
     const result = compute20Rule({
       acquisitionCostByYearOffset: [50_000, 0, 0, 0, 0],
     })
-    expect(result.minimumResidual).toBe(50_000)
+    expect(result.minimumResidual).toBe(40_000)
   })
 })
 

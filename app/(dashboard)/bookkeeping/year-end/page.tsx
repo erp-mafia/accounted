@@ -65,6 +65,7 @@ export default function YearEndPage() {
   const [executing, setExecuting] = useState(false)
   const [executeError, setExecuteError] = useState<string | null>(null)
   const [result, setResult] = useState<YearEndResult | null>(null)
+  const [navigationBlocked, setNavigationBlocked] = useState(false)
 
   // ---- Load eligible periods ----
   useEffect(() => {
@@ -231,6 +232,7 @@ export default function YearEndPage() {
                 annotation: `${p.period_start} till ${p.period_end}`,
               }))}
               value={selectedPeriodId}
+              disabled={navigationBlocked}
               onChange={(value) => {
                 setSelectedPeriodId(value)
                 setStep('preflight')
@@ -296,13 +298,13 @@ export default function YearEndPage() {
                 type="button"
                 role="tab"
                 aria-selected={s === step}
-                disabled={i >= currentStepIndex}
+                disabled={navigationBlocked || i >= currentStepIndex}
                 onClick={() => {
-                  if (i < currentStepIndex) setStep(s)
+                  if (!navigationBlocked && i < currentStepIndex) setStep(s)
                 }}
                 className={cn(
                   'group flex shrink-0 items-center gap-2 text-left',
-                  i >= currentStepIndex && 'cursor-default',
+                  (navigationBlocked || i >= currentStepIndex) && 'cursor-default',
                 )}
               >
                 <span
@@ -357,6 +359,7 @@ export default function YearEndPage() {
           periodId={selectedPeriodId}
           onBack={() => setStep('accruals')}
           onContinue={goToPreview}
+          onNavigationBlockedChange={setNavigationBlocked}
         />
       )}
 
