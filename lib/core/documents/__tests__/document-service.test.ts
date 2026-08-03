@@ -29,10 +29,16 @@ function makeClient(storageOverrides: Record<string, unknown> = {}) {
       createBucket: vi.fn().mockResolvedValue({ data: { name: 'documents' }, error: null }),
       from: vi.fn().mockReturnValue({
         upload: vi.fn().mockResolvedValue({ data: {}, error: null }),
+        createSignedUploadUrl: vi.fn().mockResolvedValue({
+          data: { signedUrl: 'https://example.com/signed-upload' },
+          error: null,
+        }),
         download: vi.fn().mockResolvedValue({
           data: new Blob(['test content']),
           error: null,
         }),
+        list: vi.fn().mockResolvedValue({ data: [], error: null }),
+        move: vi.fn().mockResolvedValue({ data: {}, error: null }),
         remove: vi.fn().mockResolvedValue({ data: [], error: null }),
         getPublicUrl: vi.fn().mockReturnValue({
           data: { publicUrl: 'https://example.com/file.pdf' },
@@ -59,6 +65,14 @@ import {
   verifyIntegrity,
   validateDocumentMagicBytes,
   buildDocumentStoragePath,
+  buildPendingDocumentStoragePath,
+  buildReservedDocumentStoragePath,
+  cleanupExpiredPendingDocumentUploads,
+  createPendingDocumentUpload,
+  completePendingDocumentUpload,
+  computeSHA256,
+  PENDING_DOCUMENT_UPLOAD_RETENTION_MS,
+  SIGNED_DOCUMENT_UPLOAD_TTL_MS,
   isCompanyScopedDocumentPath,
   companyScopedDocumentPath,
   legacyDocumentPath,
@@ -312,6 +326,163 @@ describe('uploadDocument', () => {
   })
 })
 
+describe('model-free signed document uploads', () => {
+  const company = '11111111-1111-4111-8111-111111111111'
+  const user = '22222222-2222-4222-8222-222222222222'
+  const uploadId = '33333333-3333-4333-8333-333333333333'
+
+  it('creates a company-scoped signed upload reservation with a two-hour expiry', async () => {
+    const now = Date.parse('2026-08-03T10:00:00.000Z')
+    const createSignedUploadUrl = vi.fn().mockResolvedValue({
+      data: { signedUrl: 'https://storage.example/upload?token=signed' },
+      error: null,
+    })
+    const supabase = makeClient({ createSignedUploadUrl })
+
+    const reservation = await createPendingDocumentUpload(
+      supabase as never,
+      company,
+      user,
+      uploadId,
+      'Leverantör faktura.pdf',
+      now,
+    )
+
+    expect(createSignedUploadUrl).toHaveBeenCalledWith(
+      `documents/${company}/${user}/pending/${uploadId}_Leverant_r_faktura.pdf`,
+      { upsert: false },
+    )
+    expect(reservation).toEqual({
+      uploadId,
+      signedUrl: 'https://storage.example/upload?token=signed',
+      expiresAt: new Date(now + SIGNED_DOCUMENT_UPLOAD_TTL_MS).toISOString(),
+    })
+  })
+
+  it('adopts uploaded bytes under the reserved UUID and permanent WORM path', async () => {
+    const buffer = pdfBuffer('presigned upload')
+    const document = makeDocumentAttachment({
+      id: uploadId,
+      user_id: user,
+      company_id: company,
+      file_name: 'invoice.pdf',
+      mime_type: 'application/pdf',
+      storage_path: buildReservedDocumentStoragePath(company, user, uploadId, 'invoice.pdf'),
+      sha256_hash: await computeSHA256(buffer),
+    })
+    results = [
+      { data: null, error: null },
+      { data: document, error: null },
+    ]
+
+    const move = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const download = vi.fn().mockResolvedValue({ data: new Blob([buffer]), error: null })
+    serviceClientOverride = makeClient({ download, move })
+
+    const completed = await completePendingDocumentUpload(
+      makeClient() as never,
+      company,
+      user,
+      uploadId,
+      'invoice.pdf',
+      'application/pdf',
+    )
+
+    expect(completed.document.id).toBe(uploadId)
+    expect(move).toHaveBeenCalledWith(
+      buildPendingDocumentStoragePath(company, user, uploadId, 'invoice.pdf'),
+      buildReservedDocumentStoragePath(company, user, uploadId, 'invoice.pdf'),
+    )
+  })
+
+  it('returns the existing immutable document on retry after verifying its hash', async () => {
+    const buffer = pdfBuffer('already complete')
+    const document = makeDocumentAttachment({
+      id: uploadId,
+      user_id: user,
+      company_id: company,
+      file_name: 'invoice.pdf',
+      mime_type: 'application/pdf',
+      storage_path: buildReservedDocumentStoragePath(company, user, uploadId, 'invoice.pdf'),
+      sha256_hash: await computeSHA256(buffer),
+    })
+    results = [{ data: document, error: null }]
+
+    const move = vi.fn().mockResolvedValue({ data: {}, error: null })
+    serviceClientOverride = makeClient({
+      download: vi.fn().mockResolvedValue({ data: new Blob([buffer]), error: null }),
+      move,
+    })
+
+    const completed = await completePendingDocumentUpload(
+      makeClient() as never,
+      company,
+      user,
+      uploadId,
+      'invoice.pdf',
+      'application/pdf',
+    )
+
+    expect(completed.document).toEqual(document)
+    expect(move).not.toHaveBeenCalled()
+  })
+
+  it('removes corrupt pending bytes before rejecting completion', async () => {
+    results = [{ data: null, error: null }]
+    const pendingPath = buildPendingDocumentStoragePath(company, user, uploadId, 'invoice.pdf')
+    const remove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({
+      download: vi.fn().mockResolvedValue({ data: new Blob(['not a pdf']), error: null }),
+      remove,
+    })
+
+    await expect(
+      completePendingDocumentUpload(
+        makeClient() as never,
+        company,
+        user,
+        uploadId,
+        'invoice.pdf',
+        'application/pdf',
+      ),
+    ).rejects.toThrow(/kunde inte verifieras/)
+    expect(remove).toHaveBeenCalledWith([pendingPath])
+  })
+
+  it('cleans only expired pending objects in a bounded company and user prefix', async () => {
+    const now = Date.parse('2026-08-03T10:00:00.000Z')
+    const remove = vi.fn().mockResolvedValue({ data: [], error: null })
+    const list = vi.fn().mockResolvedValue({
+      data: [
+        {
+          id: 'old-object',
+          name: `${uploadId}_old.pdf`,
+          created_at: new Date(now - PENDING_DOCUMENT_UPLOAD_RETENTION_MS - 1).toISOString(),
+        },
+        {
+          id: 'new-object',
+          name: `${uploadId}_new.pdf`,
+          created_at: new Date(now - 60_000).toISOString(),
+        },
+      ],
+      error: null,
+    })
+    serviceClientOverride = makeClient({ list, remove })
+
+    const removed = await cleanupExpiredPendingDocumentUploads(company, user, now)
+
+    expect(list).toHaveBeenCalledWith(`documents/${company}/${user}/pending`, {
+      limit: 100,
+      offset: 0,
+      sortBy: { column: 'created_at', order: 'asc' },
+    })
+    expect(remove).toHaveBeenCalledWith([
+      `documents/${company}/${user}/pending/${uploadId}_old.pdf`,
+    ])
+    expect(removed).toBe(1)
+  })
+})
+
 describe('createNewVersion', () => {
   it('increments version and supersedes previous', async () => {
     const current = makeDocumentAttachment({
@@ -423,6 +594,16 @@ describe('storage key layout helpers', () => {
     )
     expect(buildDocumentStoragePath(company, user, 'faktura 2026-05.pdf', 1700000000000)).toBe(
       `documents/${company}/${user}/1700000000000_faktura_2026-05.pdf`,
+    )
+  })
+
+  it('builds deterministic pending and permanent keys for a reserved upload', () => {
+    const uploadId = '33333333-3333-4333-8333-333333333333'
+    expect(buildPendingDocumentStoragePath(company, user, uploadId, 'faktura 1.pdf')).toBe(
+      `documents/${company}/${user}/pending/${uploadId}_faktura_1.pdf`,
+    )
+    expect(buildReservedDocumentStoragePath(company, user, uploadId, 'faktura 1.pdf')).toBe(
+      `documents/${company}/${user}/${uploadId}_faktura_1.pdf`,
     )
   })
 

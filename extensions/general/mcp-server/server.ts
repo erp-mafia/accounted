@@ -169,7 +169,12 @@ import {
   generateInvoiceEmailText,
   generateInvoiceEmailSubject,
 } from '@/lib/email/invoice-templates'
-import { uploadDocument, MAX_DOCUMENT_SIZE } from '@/lib/core/documents/document-service'
+import {
+  completePendingDocumentUpload,
+  createPendingDocumentUpload,
+  uploadDocument,
+  MAX_DOCUMENT_SIZE,
+} from '@/lib/core/documents/document-service'
 import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 // Skatteverket filing tools (PR5). Cross-extension lib import, same sanctioned
 // pattern as invoice-inbox above: the CI guard only checks lib/, app/api/,
@@ -288,6 +293,143 @@ const VALID_CATEGORIES = [
 const VALID_VAT_TREATMENTS = [
   'standard_25', 'reduced_12', 'reduced_6', 'reverse_charge', 'export', 'exempt',
 ] as const
+
+const MCP_DOCUMENT_MIME_TYPES = [
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/heic',
+  'image/webp',
+] as const
+
+const MCP_DOCUMENT_MIME_TYPE_SET = new Set<string>(MCP_DOCUMENT_MIME_TYPES)
+
+function resolveMcpDocumentMimeType(fileName: string, requestedMimeType: unknown): string {
+  let mimeType = typeof requestedMimeType === 'string' ? requestedMimeType : undefined
+  if (!mimeType) {
+    const extension = fileName.split('.').pop()?.toLowerCase()
+    const mimeMap: Record<string, string> = {
+      pdf: 'application/pdf',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      png: 'image/png',
+      heic: 'image/heic',
+      webp: 'image/webp',
+    }
+    mimeType = extension ? mimeMap[extension] : undefined
+    if (!mimeType) throw new Error(`Cannot infer MIME type from extension: .${extension}`)
+  }
+  if (!MCP_DOCUMENT_MIME_TYPE_SET.has(mimeType)) {
+    throw new Error(`Unsupported file type: ${mimeType}. Allowed: PDF, JPEG, PNG, HEIC, WebP`)
+  }
+  return mimeType
+}
+
+interface DocumentInboxResult {
+  document_id: string
+  inbox_item_id: string
+  status: string
+  extracted_data: Record<string, unknown>
+  matched_supplier_id: string | null
+}
+
+async function findCompletedDocumentInboxItem(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  inboxItemId: string
+): Promise<DocumentInboxResult | null> {
+  const { data, error } = await supabase
+    .from('invoice_inbox_items')
+    .select('id, document_id, status, extracted_data, matched_supplier_id')
+    .eq('id', inboxItemId)
+    .eq('company_id', companyId)
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) throw new Error(`Failed to check completed document upload: ${error.message}`)
+  if (!data) return null
+  if (data.document_id !== inboxItemId) {
+    throw new Error('Upload ID collides with an unrelated inbox item')
+  }
+  return {
+    document_id: data.document_id,
+    inbox_item_id: data.id,
+    status: data.status,
+    extracted_data: (data.extracted_data ?? {}) as Record<string, unknown>,
+    matched_supplier_id: data.matched_supplier_id,
+  }
+}
+
+async function createDocumentInboxItem(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  documentId: string,
+  fileName: string,
+  mimeType: string,
+  buffer: Buffer,
+  reservedInboxItemId?: string
+): Promise<DocumentInboxResult> {
+  if (reservedInboxItemId) {
+    const existing = await findCompletedDocumentInboxItem(
+      supabase,
+      companyId,
+      userId,
+      reservedInboxItemId,
+    )
+    if (existing) return existing
+  }
+
+  const { data: extracted } = await extractInvoiceFields({ buffer, mimeType, fileName })
+
+  let matchedSupplierId: string | null = null
+  if (extracted.supplier.orgNumber) {
+    const { data: supplier } = await supabase
+      .from('suppliers')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('org_number', extracted.supplier.orgNumber)
+      .limit(1)
+      .maybeSingle()
+    if (supplier) matchedSupplierId = supplier.id
+  }
+
+  const { data: inbox, error: inboxError } = await supabase
+    .from('invoice_inbox_items')
+    .insert({
+      ...(reservedInboxItemId ? { id: reservedInboxItemId } : {}),
+      company_id: companyId,
+      user_id: userId,
+      status: 'received',
+      source: 'upload',
+      document_id: documentId,
+      extracted_data: extracted as unknown as Record<string, unknown>,
+      matched_supplier_id: matchedSupplierId,
+    })
+    .select('id, status')
+    .single()
+
+  if (inboxError) {
+    if (reservedInboxItemId) {
+      const concurrent = await findCompletedDocumentInboxItem(
+        supabase,
+        companyId,
+        userId,
+        reservedInboxItemId,
+      )
+      if (concurrent) return concurrent
+    }
+    throw new Error(`Failed to create inbox item: ${inboxError.message}`)
+  }
+
+  return {
+    document_id: documentId,
+    inbox_item_id: inbox.id,
+    status: inbox.status,
+    extracted_data: extracted as unknown as Record<string, unknown>,
+    matched_supplier_id: matchedSupplierId,
+  }
+}
 
 // ── Pending operations staging ───────────────────────────────
 
@@ -9055,9 +9197,147 @@ export const tools: McpTool[] = [
   // ── Document Inbox Tools ────────────────────────────────────
 
   {
+    name: 'gnubok_create_document_upload',
+    title: 'Create Document Upload',
+    description: 'Create a short-lived URL for a model-free document upload. PUT the raw file bytes (max 10 MB) to upload_url, then call gnubok_complete_document_upload with the same upload_id and file_name.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        file_name: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 255,
+          description: 'File name with extension, for example "faktura.pdf"',
+        },
+        mime_type: {
+          type: 'string',
+          enum: [...MCP_DOCUMENT_MIME_TYPES],
+          description: 'MIME type. Optional when it can be inferred from the file extension.',
+        },
+      },
+      required: ['file_name'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        upload_id: { type: 'string' },
+        upload_url: { type: 'string' },
+        expires_at: { type: 'string' },
+      },
+      required: ['upload_id', 'upload_url', 'expires_at'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase) {
+      const fileName = args.file_name as string
+      // Validation only: reject unsupported types before handing out a signed
+      // URL. The resolved value is re-derived identically at complete time.
+      resolveMcpDocumentMimeType(fileName, args.mime_type)
+      const uploadId = crypto.randomUUID()
+      const reservation = await createPendingDocumentUpload(
+        supabase,
+        companyId,
+        userId,
+        uploadId,
+        fileName,
+      )
+      return {
+        upload_id: reservation.uploadId,
+        upload_url: reservation.signedUrl,
+        expires_at: reservation.expiresAt,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_complete_document_upload',
+    title: 'Complete Document Upload',
+    description: 'Validate and archive bytes sent to the URL from gnubok_create_document_upload, run AI extraction and create the inbox item. Idempotent: safe to retry with the same upload_id.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        upload_id: {
+          type: 'string',
+          format: 'uuid',
+          description: 'Reserved UUID returned by gnubok_create_document_upload',
+        },
+        file_name: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 255,
+          description: 'The same file name used to create the upload URL',
+        },
+        mime_type: {
+          type: 'string',
+          enum: [...MCP_DOCUMENT_MIME_TYPES],
+          description: 'MIME type. Optional when it can be inferred from the file extension.',
+        },
+      },
+      required: ['upload_id', 'file_name'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        document_id: { type: 'string' },
+        inbox_item_id: { type: 'string' },
+        status: { type: 'string' },
+        extracted_data: { type: 'object' },
+        matched_supplier_id: { type: 'string' },
+      },
+      required: ['document_id', 'inbox_item_id', 'status'],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async execute(args, companyId, userId, supabase) {
+      const uploadId = args.upload_id as string
+      const fileName = args.file_name as string
+      const mimeType = resolveMcpDocumentMimeType(fileName, args.mime_type)
+
+      const existingInbox = await findCompletedDocumentInboxItem(
+        supabase,
+        companyId,
+        userId,
+        uploadId,
+      )
+      if (existingInbox) return existingInbox
+
+      const completed = await completePendingDocumentUpload(
+        supabase,
+        companyId,
+        userId,
+        uploadId,
+        fileName,
+        mimeType,
+      )
+      return createDocumentInboxItem(
+        supabase,
+        companyId,
+        userId,
+        completed.document.id,
+        fileName,
+        mimeType,
+        Buffer.from(completed.buffer),
+        uploadId,
+      )
+    },
+  },
+
+  {
     name: 'gnubok_upload_document',
     title: 'Upload Document to Inbox',
-    description: 'Upload a PDF/JPEG/PNG/HEIC/WebP (max 20 MB) to the inbox. Runs AI field extraction (Bedrock OCR): requires the AI capability.',
+    description: 'Legacy inline-base64 upload for small files (max 10 MB). Prefer gnubok_create_document_upload so raw bytes bypass the model. Runs AI field extraction: requires the AI capability.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9089,28 +9369,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const fileName = args.file_name as string
       const base64Content = args.file_content_base64 as string
-      let mimeType = args.mime_type as string | undefined
-
-      if (!mimeType) {
-        const ext = fileName.split('.').pop()?.toLowerCase()
-        const mimeMap: Record<string, string> = {
-          pdf: 'application/pdf',
-          jpg: 'image/jpeg',
-          jpeg: 'image/jpeg',
-          png: 'image/png',
-          heic: 'image/heic',
-          webp: 'image/webp',
-        }
-        mimeType = ext ? mimeMap[ext] : undefined
-        if (!mimeType) throw new Error(`Cannot infer MIME type from extension: .${ext}`)
-      }
-
-      const allowedMimeTypes = new Set([
-        'application/pdf', 'image/jpeg', 'image/png', 'image/heic', 'image/webp',
-      ])
-      if (!allowedMimeTypes.has(mimeType)) {
-        throw new Error(`Unsupported file type: ${mimeType}. Allowed: PDF, JPEG, PNG, HEIC, WebP`)
-      }
+      const mimeType = resolveMcpDocumentMimeType(fileName, args.mime_type)
 
       const buffer = Buffer.from(base64Content, 'base64')
       if (buffer.byteLength > MAX_DOCUMENT_SIZE) {
@@ -9122,48 +9381,15 @@ export const tools: McpTool[] = [
         buffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
         type: mimeType,
       }, { upload_source: 'api' })
-
-      const { data: extracted } = await extractInvoiceFields({
-        buffer,
-        mimeType,
+      return createDocumentInboxItem(
+        supabase,
+        companyId,
+        userId,
+        doc.id,
         fileName,
-      })
-
-      let matchedSupplierId: string | null = null
-      if (extracted.supplier.orgNumber) {
-        const { data: s } = await supabase
-          .from('suppliers')
-          .select('id')
-          .eq('company_id', companyId)
-          .eq('org_number', extracted.supplier.orgNumber)
-          .limit(1)
-          .maybeSingle()
-        if (s) matchedSupplierId = s.id
-      }
-
-      const { data: inbox, error: inboxError } = await supabase
-        .from('invoice_inbox_items')
-        .insert({
-          company_id: companyId,
-          user_id: userId,
-          status: 'received',
-          source: 'upload',
-          document_id: doc.id,
-          extracted_data: extracted as unknown as Record<string, unknown>,
-          matched_supplier_id: matchedSupplierId,
-        })
-        .select('id, status')
-        .single()
-
-      if (inboxError) throw new Error(`Failed to create inbox item: ${inboxError.message}`)
-
-      return {
-        document_id: doc.id,
-        inbox_item_id: inbox.id,
-        status: inbox.status,
-        extracted_data: extracted,
-        matched_supplier_id: matchedSupplierId,
-      }
+        mimeType,
+        buffer,
+      )
     },
   },
 
