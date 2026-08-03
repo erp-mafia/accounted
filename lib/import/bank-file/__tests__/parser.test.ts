@@ -2161,6 +2161,7 @@ describe('Wise format', () => {
     expect(result.transactions).toHaveLength(1)
     expect(result.transactions[0].raw_line).toBe('TRANSFER-2247230173')
     expect(result.stats.skipped_rows).toBe(1)
+    expect(result.issues.some((issue) => /unsupported status "CANCELLED"/.test(issue.message))).toBe(true)
   })
 })
 
@@ -2180,9 +2181,39 @@ describe('Wise format hardening', () => {
     ].join(',')
   }
 
-  it('fails hard on an unsupported Direction (e.g. NEUTRAL conversion)', () => {
-    const csv = [WISE_HEADER, row({ id: 'PLAN_ORDER-9', direction: 'NEUTRAL', scur: 'USD', tcur: 'SEK' })].join('\n')
-    expect(() => parseBankFile(csv, 'wise.csv')).toThrow(/unsupported Direction "NEUTRAL"/)
+  it('skips and surfaces an unsupported Direction without aborting valid rows', () => {
+    const csv = [
+      WISE_HEADER,
+      row({ id: 'PLAN_ORDER-9', direction: 'NEUTRAL', scur: 'USD', tcur: 'SEK' }),
+      row({ id: 'TRANSFER-2' }),
+    ].join('\n')
+    const result = parseBankFile(csv, 'wise.csv')
+
+    expect(result.transactions).toHaveLength(1)
+    expect(result.transactions[0].raw_line).toBe('TRANSFER-2')
+    expect(result.stats.skipped_rows).toBe(1)
+    expect(result.issues.some((issue) => /unsupported Direction "NEUTRAL"/.test(issue.message))).toBe(true)
+  })
+
+  it('skips and surfaces a cross-currency row instead of importing one side', () => {
+    const csv = [
+      WISE_HEADER,
+      row({ id: 'TRANSFER-FX', direction: 'OUT', samt: '100', scur: 'USD', tamt: '900', tcur: 'SEK' }),
+    ].join('\n')
+    const result = parseBankFile(csv, 'wise.csv')
+
+    expect(result.transactions).toHaveLength(0)
+    expect(result.stats.skipped_rows).toBe(1)
+    expect(result.issues.some((issue) => /Cross-currency Wise row TRANSFER-FX \(USD to SEK\)/.test(issue.message))).toBe(true)
+  })
+
+  it('surfaces a REFUNDED row instead of silently dropping it', () => {
+    const csv = [WISE_HEADER, row({ id: 'TRANSFER-REFUND', status: 'REFUNDED' })].join('\n')
+    const result = parseBankFile(csv, 'wise.csv')
+
+    expect(result.transactions).toHaveLength(0)
+    expect(result.stats.skipped_rows).toBe(1)
+    expect(result.issues.some((issue) => /unsupported status "REFUNDED"/.test(issue.message))).toBe(true)
   })
 
   it('does not import a row with a blank status', () => {
@@ -2213,5 +2244,186 @@ describe('Wise format hardening', () => {
     expect(result.transactions).toHaveLength(1)
     expect(result.transactions[0].raw_line).toBe('TRANSFER-1')
     expect(result.issues.some((iss) => /no currency/.test(iss.message))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Wise per-currency balance statement
+// ---------------------------------------------------------------------------
+
+const WISE_STATEMENT_HEADER =
+  '"TransferWise ID",Date,Amount,Currency,Description,"Payment Reference","Running Balance","Exchange From","Exchange To","Exchange Rate","Payer Name","Payee Name","Payee Account Number",Merchant,"Card Last Four Digits","Card Holder Full Name",Attachment,Note,"Total fees"'
+
+function wiseStatementRow(over: Partial<Record<string, string>> = {}): string {
+  const fields: Record<string, string> = {
+    id: 'TRANSFER-100',
+    date: '01/08/2026',
+    amount: '1250.50',
+    currency: 'SEK',
+    description: 'Received money from Example AB',
+    reference: 'INV-100',
+    balance: '5000.50',
+    exchangeFrom: '',
+    exchangeTo: '',
+    exchangeRate: '',
+    payerName: 'Example AB',
+    payeeName: '',
+    payeeAccount: '',
+    merchant: '',
+    cardLastFour: '',
+    cardHolder: '',
+    attachment: '',
+    note: '',
+    totalFees: '0',
+    ...over,
+  }
+  return [
+    fields.id,
+    fields.date,
+    fields.amount,
+    fields.currency,
+    fields.description,
+    fields.reference,
+    fields.balance,
+    fields.exchangeFrom,
+    fields.exchangeTo,
+    fields.exchangeRate,
+    fields.payerName,
+    fields.payeeName,
+    fields.payeeAccount,
+    fields.merchant,
+    fields.cardLastFour,
+    fields.cardHolder,
+    fields.attachment,
+    fields.note,
+    fields.totalFees,
+  ].join(',')
+}
+
+const WISE_STATEMENT_CSV = [
+  WISE_STATEMENT_HEADER,
+  wiseStatementRow(),
+  wiseStatementRow({
+    id: 'CARD-200',
+    date: '02-08-2026',
+    amount: '-49.90',
+    description: '',
+    reference: '',
+    balance: '4950.60',
+    payerName: '',
+    merchant: 'Corner Shop',
+    note: 'Lunch',
+  }),
+  wiseStatementRow({
+    id: 'FEE-TRANSFER-300',
+    date: '03.08.2026',
+    amount: '-2.20',
+    description: 'Wise Charges for: TRANSFER-300',
+    reference: '',
+    balance: '4948.40',
+    payerName: '',
+    payeeName: 'Wise',
+  }),
+  wiseStatementRow({
+    id: 'TRANSFER-300',
+    date: '2026-08-04',
+    amount: '-100',
+    description: 'Sent money to Supplier AB',
+    reference: 'BILL-300',
+    balance: '4848.40',
+    payerName: '',
+    payeeName: 'Supplier AB',
+    totalFees: '0.35',
+  }),
+].join('\n')
+
+describe('Wise balance statement format', () => {
+  const byId = (transactions: ParsedBankTransaction[], id: string) =>
+    transactions.find((transaction) => transaction.raw_line === id)
+
+  it('auto-detects the distinct balance statement header', () => {
+    const format = detectFileFormat(WISE_STATEMENT_CSV, 'statement_123_SEK_2026.csv')
+    expect(format?.id).toBe('wise_statement')
+  })
+
+  it('parses signed movements, balances, counterparties, notes, and date variants', () => {
+    const result = parseBankFile(WISE_STATEMENT_CSV, 'statement_123_SEK_2026.csv')
+
+    expect(result.format).toBe('wise_statement')
+    expect(result.transactions).toHaveLength(4)
+    expect(byId(result.transactions, 'TRANSFER-100:SEK')).toMatchObject({
+      date: '2026-08-01',
+      amount: 1250.5,
+      currency: 'SEK',
+      balance: 5000.5,
+      reference: 'INV-100',
+      counterparty: 'Example AB',
+    })
+    expect(byId(result.transactions, 'CARD-200:SEK')).toMatchObject({
+      date: '2026-08-02',
+      amount: -49.9,
+      description: 'Corner Shop - Lunch',
+      counterparty: 'Corner Shop',
+    })
+    expect(byId(result.transactions, 'FEE-TRANSFER-300:SEK')).toMatchObject({
+      date: '2026-08-03',
+      amount: -2.2,
+      counterparty: 'Wise',
+    })
+    expect(byId(result.transactions, 'TRANSFER-300:SEK')?.description).toContain(
+      'Wise avgift: 0.35 SEK',
+    )
+    expect(result.date_from).toBe('2026-08-01')
+    expect(result.date_to).toBe('2026-08-04')
+    expect(result.stats).toMatchObject({
+      total_rows: 4,
+      parsed_rows: 4,
+      skipped_rows: 0,
+      total_income: 1250.5,
+      total_expenses: -152.1,
+    })
+  })
+
+  it('imports explicit fee rows exactly once and does not synthesize extra movements', () => {
+    const result = parseBankFile(WISE_STATEMENT_CSV, 'statement.csv')
+
+    expect(result.transactions.filter((transaction) => transaction.amount === -2.2)).toHaveLength(1)
+    expect(result.transactions).toHaveLength(4)
+  })
+
+  it('qualifies stable IDs by statement currency', () => {
+    const sek = parseBankFile(
+      [WISE_STATEMENT_HEADER, wiseStatementRow()].join('\n'),
+      'statement_SEK.csv',
+    ).transactions[0]
+    const usd = parseBankFile(
+      [
+        WISE_STATEMENT_HEADER,
+        wiseStatementRow({ currency: 'USD', amount: '125', balance: '500' }),
+      ].join('\n'),
+      'statement_USD.csv',
+    ).transactions[0]
+
+    expect(generateExternalId(sek, 'wise_statement', 0)).toBe(
+      'wise_statement_TRANSFER-100:SEK',
+    )
+    expect(generateExternalId(usd, 'wise_statement', 0)).toBe(
+      'wise_statement_TRANSFER-100:USD',
+    )
+  })
+
+  it('skips malformed movements while retaining non-fatal metadata warnings', () => {
+    const csv = [
+      WISE_STATEMENT_HEADER,
+      wiseStatementRow({ id: 'BAD-AMOUNT', amount: '12abc' }),
+      wiseStatementRow({ id: 'GOOD', balance: 'not-a-balance', totalFees: 'fee?' }),
+    ].join('\n')
+    const result = parseBankFile(csv, 'statement.csv')
+
+    expect(result.transactions).toHaveLength(1)
+    expect(result.stats.skipped_rows).toBe(1)
+    expect(result.issues.some((issue) => /Invalid amount on BAD-AMOUNT/.test(issue.message))).toBe(true)
+    expect(result.issues.some((issue) => /Invalid running balance on GOOD/.test(issue.message))).toBe(true)
+    expect(result.issues.some((issue) => /Invalid total fees on GOOD/.test(issue.message))).toBe(true)
   })
 })

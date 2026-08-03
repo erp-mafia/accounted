@@ -6128,7 +6128,8 @@
     "cloud_row_title": "Molnsynkronisering",
     "cloud_row_description": "Löpande säkerhetskopia av arkivet till Google Drive",
     "help_text": "Här samlas alla vägar in och ut: bankkoppling, filimporter och flytt från andra system, samt export av SIE och säkerhetskopior. Varje import granskas innan något bokförs.",
-    "pgnote": "Varje import går genom samma steg: ladda upp, mappa kolumner, granska, resultat. Inget bokförs utan att du ser det först."
+    "pgnote": "Varje import går genom samma steg: ladda upp, mappa kolumner, granska, resultat. Inget bokförs utan att du ser det först.",
+    "bank_format_wise_statement": "Wise kontoutdrag"
   },
   "annualReportStudio": {
     "choose": "Välj",

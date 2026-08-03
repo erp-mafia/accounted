@@ -6128,7 +6128,8 @@
     "cloud_row_title": "Cloud sync",
     "cloud_row_description": "Continuous backup of the archive to Google Drive",
     "help_text": "Every way in and out lives here: bank connections, file imports and migrations from other systems, plus SIE export and backups. Every import is reviewed before anything is booked.",
-    "pgnote": "Every import goes through the same steps: upload, map columns, review, result. Nothing is booked without you seeing it first."
+    "pgnote": "Every import goes through the same steps: upload, map columns, review, result. Nothing is booked without you seeing it first.",
+    "bank_format_wise_statement": "Wise balance statement"
   },
   "annualReportStudio": {
     "choose": "Välj",

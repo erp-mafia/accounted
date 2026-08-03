@@ -67,6 +67,11 @@ const SEB_CSV = [
   '2024-01-13;2024-01-13;12347;LÖNEUTBETALNING;25000,00;12877,17',
 ].join('\n')
 
+const WISE_STATEMENT_CSV = [
+  '"TransferWise ID",Date,Amount,Currency,Description,"Payment Reference","Running Balance","Exchange From","Exchange To","Exchange Rate","Payer Name","Payee Name","Payee Account Number",Merchant,"Card Last Four Digits","Card Holder Full Name",Attachment,Note,"Total fees"',
+  'TRANSFER-100,01/08/2026,1250.50,SEK,Received money from Example AB,INV-100,5000.50,,,,Example AB,,,,,,,,0',
+].join('\n')
+
 type MockResult = { data?: unknown; error?: unknown }
 type RecordedCall = { table: string; method: string; args: unknown[] }
 
@@ -100,9 +105,18 @@ function makeRequest(options?: {
   body?: FormData | string
   auth?: boolean
   search?: string
+  fileContent?: string
+  filename?: string
 }): Request {
   const fd = new FormData()
-  fd.append('file', new File([SEB_CSV], 'kontoutdrag.csv', { type: 'text/csv' }))
+  fd.append(
+    'file',
+    new File(
+      [options?.fileContent ?? SEB_CSV],
+      options?.filename ?? 'kontoutdrag.csv',
+      { type: 'text/csv' },
+    ),
+  )
   const init: RequestInit = {
     method: 'POST',
     body: options?.body ?? fd,
@@ -183,6 +197,23 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
     expect(ingestMock).not.toHaveBeenCalled()
+  })
+
+  it('accepts a forced Wise balance statement and preserves its scoped provenance', async () => {
+    const res = await callRoute({
+      search: '?format=wise_statement',
+      fileContent: WISE_STATEMENT_CSV,
+      filename: 'statement_123_SEK_2026.csv',
+    })
+
+    expect(res.status).toBe(202)
+    expect(ingestedRows()).toHaveLength(1)
+    expect(ingestedRows()[0]).toMatchObject({
+      import_source: 'csv_wise_statement',
+      external_id: 'wise_statement_TRANSFER-100:SEK',
+      amount: 1250.5,
+      currency: 'SEK',
+    })
   })
 
   it('returns 404 when the key user is not a member of the company in the URL', async () => {
