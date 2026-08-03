@@ -475,7 +475,7 @@ export function calculateSalary(
 
   // ─── Step 8: Employer contributions (avgifter) ───
   const avgifterCalc = calculateAvgifterRate(input, config, paymentYear)
-  const avgifterBasis = r(grossSalary + totalBenefits)
+  const avgifterBasis = input.fSkattStatus === 'f_skatt' ? 0 : r(grossSalary + totalBenefits)
 
   // Handle salary caps for youth and växa-stöd:
   // Reduced rate applies only up to the cap, standard rate on the rest
@@ -631,6 +631,16 @@ export function calculateAvgifterRate(
   paymentYear: number
 ): AvgifterCalculation {
   const steps: CalculationStep[] = []
+
+  if (input.fSkattStatus === 'f_skatt') {
+    steps.push({
+      label: 'Avgiftskategori',
+      formula: 'F-skatt: inga arbetsgivaravgifter',
+      input: {},
+      output: null,
+    })
+    return { rate: 0, amount: 0, basis: 0, category: 'exempt', steps }
+  }
 
   // Decrypt personnummer to calculate age
   let pnr: string

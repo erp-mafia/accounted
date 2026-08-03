@@ -23,7 +23,9 @@ import {
   proposeAteforing,
 } from '@/lib/bokslut/reserves/periodiseringsfond-service'
 import { proposeOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-service'
+import { calculateOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-calculator'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
+import { roundOre } from '@/lib/money'
 import {
   buildDispositionsProposal,
   buildLatentTaxProposal,
@@ -243,6 +245,13 @@ export const POST = withRouteContext(
 
       return NextResponse.json({ data: { created } })
     } catch (err) {
+      if (err instanceof OveravskrivningarConflictError) {
+        return errorResponseFromCode('CONFLICT', opLog, {
+          requestId,
+          messageSv: err.message,
+          messageEn: err.messageEn,
+        })
+      }
       if (err instanceof TaxProvisionConflictError) {
         return errorResponseFromCode('CONFLICT', opLog, {
           requestId,
@@ -292,6 +301,16 @@ class TaxProvisionConflictError extends Error {
     readonly expectedAmount: number,
   ) {
     super('Booked corporate tax differs from the current calculation')
+  }
+}
+
+class OveravskrivningarConflictError extends Error {
+  constructor(
+    message: string,
+    readonly messageEn: string,
+  ) {
+    super(message)
+    this.name = 'OveravskrivningarConflictError'
   }
 }
 
@@ -442,11 +461,43 @@ async function computeProposal(
       if (result.proposals.length === 0) return null
       return mergeAteforingProposals(result.proposals)
     }
-    case 'overavskrivningar':
-      return proposeOveravskrivningar({
-        additionalAmount: item.additionalAmount,
-        category: item.category,
+    case 'overavskrivningar': {
+      if (item.category && item.category !== 'machinery_equipment') {
+        throw new OveravskrivningarConflictError(
+          'Den automatiska beräkningen omfattar endast maskiner och inventarier enligt IL 18 kap.',
+          'The automatic calculation only covers machinery and equipment under Chapter 18 of the Income Tax Act.',
+        )
+      }
+      const calculation = await calculateOveravskrivningar({
+        supabase,
+        companyId,
+        fiscalPeriod: period,
       })
+      if (calculation.status === 'blocked') {
+        throw new OveravskrivningarConflictError(
+          calculation.warning ?? 'Överavskrivningen kan inte beräknas säkert.',
+          'The excess depreciation cannot be calculated safely.',
+        )
+      }
+      if (!calculation.proposal) return null
+
+      const requested = roundOre(item.additionalAmount)
+      const maximum = calculation.proposal.signedAmount ?? calculation.proposal.amount
+      const invalidIncrease = maximum > 0 && (requested <= 0 || requested > maximum)
+      const invalidRelease = maximum < 0 && requested !== maximum
+      if (invalidIncrease || invalidRelease) {
+        throw new OveravskrivningarConflictError(
+          'Beloppet är inte längre giltigt. Ladda om bokslutet och använd den aktuella beräkningen.',
+          'The amount is no longer valid. Reload the year-end flow and use the current calculation.',
+        )
+      }
+
+      return proposeOveravskrivningar({
+        additionalAmount: requested,
+        category: 'machinery_equipment',
+        computation: calculation.proposal.computation,
+      })
+    }
     case 'uppskjuten_skatt':
       // Server-only: recompute from current TB (which already reflects any
       // 21xx postings that committed earlier in this batch). The client

@@ -14,6 +14,7 @@
  */
 
 import type { IxbrlArsredovisningInput } from '../types'
+import { isOrgNumberShaped, hasInvalidOrgNumberCheckDigit } from '@/lib/invariants/org-number'
 
 export interface PreflightIssue {
   /** Bolagsverket kontrollera code where one exists, else our own ACC-xxx. */
@@ -53,10 +54,35 @@ const RULES: Rule[] = [
     input.company.name.trim().length === 0
       ? issue('1020', 'error', 'Företagsnamnet saknas i årsredovisningen.')
       : null,
-  (input) =>
-    /^\d{6}-?\d{4}$/.test(input.company.orgNumber.trim())
-      ? null
-      : issue('1035', 'error', `Organisationsnumret "${input.company.orgNumber}" är inte giltigt (förväntat format NNNNNN-NNNN).`),
+  // Shared rule (lib/invariants/org-number.ts), so this validator agrees with
+  // the AGI, KU10 and SRU export paths about what a valid org number is. The
+  // previous local regex rejected the 12-digit form outright and skipped the
+  // check digit, so a company stored in 12-digit form could file AGI all year
+  // and then fail here with a message that did not say why.
+  (input) => {
+    const orgNumber = input.company.orgNumber.trim()
+    if (!isOrgNumberShaped(orgNumber)) {
+      return issue(
+        '1035',
+        'error',
+        `Organisationsnumret "${input.company.orgNumber}" är inte giltigt (förväntat format NNNNNN-NNNN).`,
+      )
+    }
+    // Warn, not error, deliberately. A wrong check digit is almost certainly a
+    // typo and Bolagsverket will reject it, so the user should see it. But
+    // whether every org number Bolagsverket accepts satisfies Luhn is a Swedish
+    // domain question we have not verified against a primary source, and an
+    // 'error' here blocks Skicka in. We do not block a statutory filing on an
+    // unverified assumption: surface it and let the user judge.
+    if (hasInvalidOrgNumberCheckDigit(orgNumber)) {
+      return issue(
+        '1035',
+        'warn',
+        `Organisationsnumret "${input.company.orgNumber}" har fel kontrollsiffra. Kontrollera sista siffran.`,
+      )
+    }
+    return null
+  },
   (input) =>
     input.forvaltningsberattelse.allmantOmVerksamheten.trim().length === 0
       ? issue('1051', 'error', 'Förvaltningsberättelsen saknas (Allmänt om verksamheten är tom).')

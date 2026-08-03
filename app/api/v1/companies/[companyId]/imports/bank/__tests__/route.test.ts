@@ -67,6 +67,17 @@ const SEB_CSV = [
   '2024-01-13;2024-01-13;12347;LÖNEUTBETALNING;25000,00;12877,17',
 ].join('\n')
 
+const WISE_STATEMENT_CSV = [
+  '"TransferWise ID",Date,Amount,Currency,Description,"Payment Reference","Running Balance","Exchange From","Exchange To","Exchange Rate","Payer Name","Payee Name","Payee Account Number",Merchant,"Card Last Four Digits","Card Holder Full Name",Attachment,Note,"Total fees"',
+  'TRANSFER-100,01/08/2026,1250.50,SEK,Received money from Example AB,INV-100,5000.50,,,,Example AB,,,,,,,,0',
+].join('\n')
+
+const WISE_TRANSACTION_HISTORY_WITH_UNSAFE_ROW = [
+  'ID,Status,Direction,"Created on","Finished on","Source fee amount","Source fee currency","Target fee amount","Target fee currency","Source name","Source amount (after fees)","Source currency","Target name","Target amount (after fees)","Target currency","Exchange rate",Reference,Batch,"Created by",Category,Note',
+  'PLAN_ORDER-9,COMPLETED,NEUTRAL,"2026-08-01 10:00:00","2026-08-01 10:00:00",,,,,Wise,100,USD,Wise,900,SEK,9,,,,General,',
+  'TRANSFER-2,COMPLETED,IN,"2026-08-02 10:00:00","2026-08-02 10:00:00",,,,,Example AB,100,SEK,Accounted AB,100,SEK,1,,,,General,',
+].join('\n')
+
 type MockResult = { data?: unknown; error?: unknown }
 type RecordedCall = { table: string; method: string; args: unknown[] }
 
@@ -100,9 +111,18 @@ function makeRequest(options?: {
   body?: FormData | string
   auth?: boolean
   search?: string
+  fileContent?: string
+  filename?: string
 }): Request {
   const fd = new FormData()
-  fd.append('file', new File([SEB_CSV], 'kontoutdrag.csv', { type: 'text/csv' }))
+  fd.append(
+    'file',
+    new File(
+      [options?.fileContent ?? SEB_CSV],
+      options?.filename ?? 'kontoutdrag.csv',
+      { type: 'text/csv' },
+    ),
+  )
   const init: RequestInit = {
     method: 'POST',
     body: options?.body ?? fd,
@@ -182,6 +202,41 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(ingestMock).not.toHaveBeenCalled()
+  })
+
+  it('accepts a forced Wise balance statement and preserves its scoped provenance', async () => {
+    const res = await callRoute({
+      search: '?format=wise_statement',
+      fileContent: WISE_STATEMENT_CSV,
+      filename: 'statement_123_SEK_2026.csv',
+    })
+
+    expect(res.status).toBe(202)
+    expect(ingestedRows()).toHaveLength(1)
+    expect(ingestedRows()[0]).toMatchObject({
+      import_source: 'csv_wise_statement',
+      external_id: 'wise_TRANSFER-100',
+      amount: 1250.5,
+      currency: 'SEK',
+    })
+  })
+
+  it('rejects a Wise file when any movement cannot be imported safely', async () => {
+    const res = await callRoute({
+      search: '?format=wise',
+      fileContent: WISE_TRANSACTION_HISTORY_WITH_UNSAFE_ROW,
+      filename: 'transaction-history.csv',
+    })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.issues).toContainEqual(
+      expect.objectContaining({ severity: 'error', message: expect.stringMatching(/NEUTRAL/) }),
+    )
+    expect(body.error.details.issues.length).toBeLessThanOrEqual(20)
+    expect(body.error.details.issue_count).toBe(1)
     expect(ingestMock).not.toHaveBeenCalled()
   })
 

@@ -151,6 +151,9 @@ async function bookLoadedRun(
       total_net: run.total_net as number,
       total_avgifter: run.total_avgifter as number,
       total_vacation_accrual: run.total_vacation_accrual as number,
+      // Use the exact payroll-rate snapshot approved with this run. Reading
+      // current config here could change SLP between calculation and booking.
+      calculation_params: run.calculation_params as Record<string, unknown> | null,
       employees: roster.map((sre) => ({
         employee_id: sre.employee_id,
         employment_type: sre.employee?.employment_type || 'employee',

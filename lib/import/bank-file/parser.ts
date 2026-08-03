@@ -18,6 +18,7 @@ import { skandiaFormat } from './formats/skandia'
 import { lunarFormat } from './formats/lunar'
 import { northmillFormat } from './formats/northmill'
 import { wiseFormat } from './formats/wise'
+import { wiseStatementFormat } from './formats/wise-statement'
 import { camt053Format } from './formats/camt053'
 import { genericCSVFormat } from './formats/generic-csv'
 
@@ -40,6 +41,7 @@ const FORMATS: BankFileFormat[] = [
   lunarFormat,
   northmillFormat,
   wiseFormat,
+  wiseStatementFormat,
   genericCSVFormat,
 ]
 
@@ -148,6 +150,10 @@ export function generateExternalId(
   // `-fee` suffix for fee rows) in raw_line: use it so re-importing the same
   // statement dedups exactly instead of relying on the row hash.
   if (formatId === 'wise' && tx.raw_line) {
+    return `wise_${tx.raw_line}`
+  }
+
+  if (formatId === 'wise_statement' && tx.raw_line) {
     return `wise_${tx.raw_line}`
   }
 

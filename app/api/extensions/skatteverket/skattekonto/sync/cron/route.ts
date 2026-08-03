@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { verifyCronSecret } from '@/lib/auth/cron'
-import { hasCapability } from '@/lib/entitlements/has-capability'
+import { getCompanyIdsWithCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from '@/extensions/general/skatteverket/lib/skattekonto-sync'
@@ -14,10 +14,13 @@ import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/
 import { listVerifiedCompanies, markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { currentSkvEnvironment, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 ensureInitialized()
 
 export const maxDuration = 60
+
+const MAX_COMPANIES_PER_RUN = 50
 
 /**
  * GET /api/extensions/skatteverket/skattekonto/sync/cron
@@ -69,17 +72,21 @@ export async function GET(request: Request) {
   // company_id (multi-tenant refactor). Rows flagged needs_reconsent are
   // excluded: SKV's per-flow refresh tokens live 65 minutes, so a connection
   // that failed with a terminal auth error can never heal on its own.
-  const { data: tokens, error: tokensError } = await supabase
-    .from('skatteverket_tokens')
-    .select('user_id, company_id, expires_at, refresh_count')
-    .eq('status', 'active')
-    .order('expires_at', { ascending: true })
-    .limit(50)
-
-  if (tokensError) {
+  let tokens
+  try {
+    tokens = await fetchAllRows(
+      ({ from, to }) => supabase
+        .from('skatteverket_tokens')
+        .select('user_id, company_id, expires_at, refresh_count')
+        .eq('status', 'active')
+        .order('expires_at', { ascending: true })
+        .order('user_id', { ascending: true })
+        .range(from, to),
+      { dedupeBy: token => token.user_id },
+    )
+  } catch (error) {
     console.error('[skattekonto-sync-cron] Failed to fetch tokens', {
-      message: tokensError.message,
-      code: tokensError.code,
+      message: error instanceof Error ? error.message : String(error),
     })
     return NextResponse.json({ error: 'Failed to fetch tokens' }, { status: 500 })
   }
@@ -91,7 +98,7 @@ export async function GET(request: Request) {
 
   type WorkItem = { companyId: string; userId: string; source: 'system' | 'user' }
   const tokenByCompany = new Map<string, string>()
-  for (const token of tokens ?? []) {
+  for (const token of tokens) {
     if (token.company_id) tokenByCompany.set(token.company_id as string, token.user_id as string)
   }
 
@@ -105,7 +112,7 @@ export async function GET(request: Request) {
     systemCompanyIds.add(company.company_id)
     work.push({ companyId: company.company_id, userId, source: 'system' })
   }
-  for (const token of tokens ?? []) {
+  for (const token of tokens) {
     const companyId = token.company_id as string | null
     if (!companyId) {
       console.warn('[skattekonto-sync-cron] token without company_id skipped', {
@@ -120,6 +127,32 @@ export async function GET(request: Request) {
   if (work.length === 0) {
     return NextResponse.json({ message: 'No connected companies', processed: 0 })
   }
+
+  let entitledCompanyIds
+  try {
+    entitledCompanyIds = await getCompanyIdsWithCapability(
+      supabase,
+      work.map(item => item.companyId),
+      CAPABILITY.skatteverket,
+    )
+  } catch (error) {
+    console.error('[skattekonto-sync-cron] Failed to resolve entitled companies', {
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return NextResponse.json({ error: 'Failed to resolve entitlements' }, { status: 500 })
+  }
+
+  // Limit the eligible work list, not the raw token list. Expired trials and
+  // disabled modules must not occupy all 50 positions ahead of paying firms.
+  const entitledWork = work
+    .filter(item => entitledCompanyIds.has(item.companyId))
+    .slice(0, MAX_COMPANIES_PER_RUN)
+
+  console.info('[skattekonto-sync-cron] Work list built', {
+    candidates: work.length,
+    entitledCompanies: entitledCompanyIds.size,
+    selected: entitledWork.length,
+  })
 
   const startTime = Date.now()
   const TIME_BUDGET_MS = 50_000
@@ -140,7 +173,7 @@ export async function GET(request: Request) {
   // failure, skip the remaining system-mode entries this run.
   let systemAuthFailed = false
 
-  for (const item of work) {
+  for (const item of entitledWork) {
     if (Date.now() - startTime > TIME_BUDGET_MS) {
       console.log(`[skattekonto-sync-cron] Time budget reached after ${results.length} companies`)
       break
@@ -150,11 +183,6 @@ export async function GET(request: Request) {
 
     if (source === 'system' && systemAuthFailed) {
       results.push({ userId, companyId, source, status: 'system_auth_failed', error: 'skipped after first failure' })
-      continue
-    }
-
-    if (!(await hasCapability(supabase, companyId, CAPABILITY.skatteverket))) {
-      console.info('[skattekonto-sync-cron] skip: capability not entitled', { companyId })
       continue
     }
 
