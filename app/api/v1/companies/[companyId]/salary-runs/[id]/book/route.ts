@@ -190,8 +190,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
             'salary (gross + tax withholding + net payment)',
             'arbetsgivaravgifter',
             ...(totalVacation > 0 || totalVacationAvgifter > 0 ? ['vacation accrual'] : []),
-            // Pension cannot be detected without the engine: we'd need
-            // to inspect line_items for löneväxling. Omitted from preview.
+            ...((employees as Array<{ line_items: Array<{ item_type: string; amount: number }> | null }>).some(
+              (employee) =>
+                (employee.line_items || []).some(
+                  (line) =>
+                    line.item_type === 'gross_deduction_pension' &&
+                    Math.round(Math.abs(line.amount) * 100) !== 0,
+                ),
+            )
+              ? ['pension provision and SLP']
+              : []),
           ],
           note: 'A live call posts 2-4 verifikationer atomically via createSalaryRunEntries. Voucher numbers are assigned at commit time.',
         },
@@ -234,6 +242,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         total_net: (run as { total_net: number }).total_net,
         total_avgifter: (run as { total_avgifter: number }).total_avgifter,
         total_vacation_accrual: (run as { total_vacation_accrual: number }).total_vacation_accrual,
+        calculation_params: (run as { calculation_params: Record<string, unknown> | null }).calculation_params,
         employees: (employees as EmpRow[]).map((sre) => ({
           employee_id: sre.employee_id,
           employment_type: sre.employee?.employment_type || 'employee',
