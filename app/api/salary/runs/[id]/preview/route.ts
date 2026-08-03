@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { SALARY_ACCOUNTS, getLineItemAccount } from '@/lib/salary/account-mapping'
+import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput } from '@/types'
 
 ensureInitialized()
@@ -43,10 +44,19 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Build salary entry preview
     const salaryLines: CreateJournalEntryLineInput[] = []
     const expenseByAccount = new Map<string, number>()
+    // Net deductions book as settlement lines on their mapped liability or
+    // receivable account, mirroring createSalaryEntry; they must not merge
+    // into the 7xxx expense buckets.
+    const netDeductionByAccount = new Map<string, number>()
 
     for (const sre of employees) {
       for (const li of sre.line_items || []) {
-        if (li.is_net_deduction || li.is_gross_deduction) continue
+        if (li.is_net_deduction) {
+          const account = li.account_number || getLineItemAccount(li.item_type, sre.employee?.employment_type || 'employee')
+          netDeductionByAccount.set(account, (netDeductionByAccount.get(account) || 0) + li.amount)
+          continue
+        }
+        if (li.is_gross_deduction) continue
         const account = li.account_number || getLineItemAccount(li.item_type, sre.employee?.employment_type || 'employee')
         expenseByAccount.set(account, (expenseByAccount.get(account) || 0) + li.amount)
       }
@@ -58,6 +68,17 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         account_number: account,
         debit_amount: amount > 0 ? Math.round(amount * 100) / 100 : 0,
         credit_amount: amount < 0 ? Math.round(Math.abs(amount) * 100) / 100 : 0,
+        line_description: `${desc}`,
+      })
+    }
+
+    for (const [account, amount] of netDeductionByAccount) {
+      const rounded = roundOre(Math.abs(amount))
+      if (rounded === 0) continue
+      salaryLines.push({
+        account_number: account,
+        debit_amount: amount > 0 ? rounded : 0,
+        credit_amount: amount < 0 ? rounded : 0,
         line_description: `${desc}`,
       })
     }

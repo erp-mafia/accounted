@@ -45,11 +45,15 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
   traktamente_taxable: '7322',
   mileage_taxfree: '7331',
   mileage_taxable: '7332',
-  // Net deductions
-  net_deduction_advance: '7210',
-  net_deduction_union: '7210',
+  // Net deductions (nettolöneavdrag): withheld from the payout and owed to a
+  // third party, so the default account is the credit-side settlement account,
+  // not a 7xxx salary expense. Advance repayments credit the receivable (1613),
+  // union fees credit 2794, benefit co-payments reduce the benefit cost (7385),
+  // everything else lands on 2799 Övriga löneavdrag.
+  net_deduction_advance: '1613',
+  net_deduction_union: '2794',
   net_deduction_benefit_payment: '7385',
-  net_deduction_other: '7210',
+  net_deduction_other: '2799',
   // Other
   correction: '7210',
   other: '7210',
