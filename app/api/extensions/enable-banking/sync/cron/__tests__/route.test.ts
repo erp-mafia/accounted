@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
   probeSessionHealth: vi.fn(),
   syncAccountTransactions: vi.fn(),
-  hasCapability: vi.fn(),
+  getCompanyIdsWithCapability: vi.fn(),
   runReconciliation: vi.fn(),
 }))
 
@@ -46,7 +46,7 @@ vi.mock('@/extensions/general/enable-banking/lib/sync', () => ({
 }))
 
 vi.mock('@/lib/entitlements/has-capability', () => ({
-  hasCapability: (...args: unknown[]) => mocks.hasCapability(...args),
+  getCompanyIdsWithCapability: (...args: unknown[]) => mocks.getCompanyIdsWithCapability(...args),
 }))
 
 vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
@@ -101,7 +101,7 @@ function makeClient(state: ClientState) {
       }
 
       const chain: Record<string, unknown> = {}
-      const passthrough = ['select', 'not', 'lt', 'gte', 'order', 'limit']
+      const passthrough = ['select', 'not', 'lt', 'gte', 'order', 'limit', 'range']
       for (const method of passthrough) chain[method] = vi.fn(() => chain)
       chain.eq = vi.fn((col: string, value: unknown) => {
         filters[col] = value
@@ -156,7 +156,9 @@ beforeEach(() => {
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
   state = { active: [], probeCandidates: [], updates: [] }
   mocks.createClient.mockImplementation(() => makeClient(state))
-  mocks.hasCapability.mockResolvedValue(true)
+  mocks.getCompanyIdsWithCapability.mockImplementation(
+    async (_supabase: unknown, companyIds: string[]) => new Set(companyIds),
+  )
   mocks.syncAccountTransactions.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
   mocks.probeSessionHealth.mockResolvedValue('unknown')
 })
@@ -256,7 +258,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: session health probe', (
     // The silent skip that let a dead connection sit at 'active' for days.
     state.active = [connection()]
     state.probeCandidates = [connection()]
-    mocks.hasCapability.mockResolvedValue(false)
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set())
     mocks.probeSessionHealth.mockResolvedValue('dead')
 
     await GET(cronRequest())
@@ -264,6 +266,37 @@ describe('GET /api/extensions/enable-banking/sync/cron: session health probe', (
     expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
     expect(mocks.probeSessionHealth).toHaveBeenCalledWith('sess-1')
     expect(state.updates[0].payload).toMatchObject({ status: 'expired' })
+  })
+
+  it('selects an entitled connection after fifty ineligible queue rows', async () => {
+    state.active = [
+      ...Array.from({ length: 50 }, (_, index) => connection({
+        id: `free-${index}`,
+        company_id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      })),
+      connection({ id: 'paid-connection', company_id: '11111111-1111-4111-8111-111111111111' }),
+    ]
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(
+      new Set(['11111111-1111-4111-8111-111111111111']),
+    )
+
+    const response = await GET(cronRequest())
+
+    expect(response.status).toBe(200)
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
+    expect(mocks.syncAccountTransactions.mock.calls[0][3]).toBe('paid-connection')
+    await expect(response.json()).resolves.toMatchObject({ processed: 1 })
+  })
+
+  it('applies the fifty-connection cap after entitlement filtering', async () => {
+    state.active = Array.from({ length: 51 }, (_, index) => connection({
+      id: `paid-${index}`,
+      company_id: `11111111-1111-4111-8111-${String(index).padStart(12, '0')}`,
+    }))
+
+    await GET(cronRequest())
+
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(50)
   })
 
   it('probes a connection whose accounts are all deselected', async () => {

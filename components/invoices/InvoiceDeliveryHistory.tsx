@@ -18,6 +18,7 @@ export type InvoiceDeliveryView = Pick<
   | 'provider_status'
   | 'provider_status_at'
   | 'provider_status_detail'
+  | 'provider_recipient_statuses'
   | 'error_code'
   | 'document_attachment_id'
   | 'attachment_filename'
@@ -108,6 +109,22 @@ export function InvoiceDeliveryHistory({
               const isEmailSend = !isManual && delivery.status === 'sent'
               const recipientCount =
                 delivery.to_addresses.length + delivery.cc_addresses.length
+              const recipientStatuses = delivery.provider_recipient_statuses ?? {}
+              const hasRecipientStatuses = Object.keys(recipientStatuses).length > 0
+              const recipientRows = [
+                ...delivery.to_addresses.map((address, index) => ({
+                  address,
+                  label: t('delivery_to_label'),
+                  reference: `to:${index + 1}`,
+                  outcome: recipientStatuses[`to:${index + 1}`],
+                })),
+                ...delivery.cc_addresses.map((address, index) => ({
+                  address,
+                  label: t('delivery_cc_label'),
+                  reference: `cc:${index + 1}`,
+                  outcome: recipientStatuses[`cc:${index + 1}`],
+                })),
+              ]
 
               return (
                 <details key={delivery.id} className="group rounded-lg border bg-card">
@@ -161,14 +178,60 @@ export function InvoiceDeliveryHistory({
                               )}
                             </div>
                             <p className="mt-1 text-xs text-muted-foreground">
-                              {t(`delivery_status_explanation_${outcome}`)}
+                              {hasRecipientStatuses
+                                ? t('delivery_recipient_statuses_summary')
+                                : t(`delivery_status_explanation_${outcome}`)}
                             </p>
+                            {hasRecipientStatuses && (
+                              <div className="mt-3 border-t pt-3">
+                                <p className="mb-2 text-xs font-medium">
+                                  {t('delivery_recipient_statuses_label')}
+                                </p>
+                                <ul className="space-y-2">
+                                  {recipientRows.map((recipient) => (
+                                    <li
+                                      key={recipient.reference}
+                                      className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"
+                                    >
+                                      <span className="min-w-0 break-all text-xs">
+                                        <span className="text-muted-foreground">
+                                          {recipient.label}:
+                                        </span>{' '}
+                                        {recipient.address}
+                                      </span>
+                                      {recipient.outcome ? (
+                                        <span className="flex items-center gap-2">
+                                          {recipient.outcome.status === 'delivered' ? (
+                                            <span className="text-xs text-muted-foreground">
+                                              {t('delivery_status_delivered')}
+                                            </span>
+                                          ) : (
+                                            <Badge variant={outcomeVariant[recipient.outcome.status]}>
+                                              {t(`delivery_status_${recipient.outcome.status}`)}
+                                            </Badge>
+                                          )}
+                                          <span className="text-xs text-muted-foreground tabular-nums">
+                                            {formatTimestamp(recipient.outcome.status_at)}
+                                          </span>
+                                        </span>
+                                      ) : (
+                                        <span className="text-xs text-muted-foreground">
+                                          {t('delivery_recipient_status_unknown')}
+                                        </span>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
                             {delivery.provider_status_detail && (
                               <p className="mt-2 break-words text-xs text-muted-foreground">
                                 {t('delivery_provider_reason_label')}: {delivery.provider_status_detail}
                               </p>
                             )}
-                            {recipientCount > 1 && delivery.provider_status && (
+                            {recipientCount > 1
+                              && delivery.provider_status
+                              && !hasRecipientStatuses && (
                               <p className="mt-2 text-xs text-muted-foreground">
                                 {t('delivery_status_whole_send_note')}
                               </p>
