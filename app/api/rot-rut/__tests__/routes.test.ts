@@ -232,6 +232,36 @@ describe('POST /api/rot-rut/payout-file', () => {
     expect(body.error.code).toBe('ROT_RUT_INVOICES_BLOCKED')
   })
 
+  it('rejects a file that mixes payment years', async () => {
+    const otherInvoiceId = '33333333-3333-4333-8333-333333333333'
+    enqueue({
+      data: [
+        makePaidRotInvoice(),
+        makePaidRotInvoice({
+          id: otherInvoiceId,
+          invoice_number: 'F-2025',
+          paid_at: '2025-12-30T10:00:00Z',
+        }),
+      ],
+    })
+
+    const response = await payoutFilePOST(
+      createMockRequest('/api/rot-rut/payout-file', {
+        method: 'POST',
+        body: { deduction_type: 'rot', invoice_ids: [INVOICE_ID, otherInvoiceId] },
+      }),
+    )
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { blockers: Array<{ code: string }> } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('ROT_RUT_INVOICES_BLOCKED')
+    expect(body.error.details?.blockers).toEqual([
+      expect.objectContaining({ invoice_id: otherInvoiceId, code: 'MIXED_PAYMENT_YEARS' }),
+    ])
+  })
+
   it('returns 404 when an invoice id does not belong to the company', async () => {
     enqueue({ data: [] })
     const response = await payoutFilePOST(

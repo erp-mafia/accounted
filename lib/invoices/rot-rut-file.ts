@@ -78,8 +78,11 @@ const WORK_TYPE_ELEMENTS: Record<DeductionType, ReadonlyArray<{
 export type RotRutBlockerCode =
   | 'NOT_PAID'
   | 'MISSING_PAYMENT_DATE'
+  | 'FUTURE_PAYMENT_DATE'
   | 'NO_DEDUCTION_OF_TYPE'
   | 'MIXED_DEDUCTION_TYPES'
+  | 'MIXED_PAYMENT_YEARS'
+  | 'TOO_MANY_CASES'
   | 'MISSING_PERSONNUMMER'
   | 'PERSONNUMMER_UNREADABLE'
   | 'MISSING_EXCHANGE_RATE'
@@ -167,6 +170,7 @@ export function normalizeBrfOrgNr(raw: string): string | null {
 export function evaluateInvoiceForFile(
   type: DeductionType,
   invoice: Invoice,
+  options: { today?: string } = {},
 ): { ok: true; value: EvaluatedArende } | { ok: false; blocker: RotRutBlocker } {
   const block = (code: RotRutBlockerCode, message: string): { ok: false; blocker: RotRutBlocker } => ({
     ok: false,
@@ -197,6 +201,12 @@ export function evaluateInvoiceForFile(
   const paidDate = invoice.paid_at ? String(invoice.paid_at).slice(0, 10) : null
   if (!paidDate) {
     return block('MISSING_PAYMENT_DATE', 'Fakturan saknar betalningsdatum.')
+  }
+  if (options.today && paidDate > options.today) {
+    return block(
+      'FUTURE_PAYMENT_DATE',
+      `Fakturans betalningsdatum (${paidDate}) ligger i framtiden och kan inte skickas till Skatteverket ännu.`,
+    )
   }
 
   if (!invoice.deduction_personnummer_encrypted) {
@@ -386,9 +396,29 @@ export function buildRotRutFile(params: {
   const warnings: string[] = []
 
   for (const invoice of invoices) {
-    const result = evaluateInvoiceForFile(type, invoice)
+    const result = evaluateInvoiceForFile(type, invoice, { today })
     if (!result.ok) {
       blockers.push(result.blocker)
+      continue
+    }
+    const paymentYear = result.value.arende.betalnings_datum.slice(0, 4)
+    const filePaymentYear = evaluated[0]?.arende.betalnings_datum.slice(0, 4)
+    if (filePaymentYear && paymentYear !== filePaymentYear) {
+      blockers.push({
+        invoice_id: invoice.id,
+        invoice_number: invoice.invoice_number ?? null,
+        code: 'MIXED_PAYMENT_YEARS',
+        message: `Fakturan betalades ${paymentYear}, men filen innehåller redan betalningar från ${filePaymentYear}. Skatteverket kräver en separat fil per betalningsår.`,
+      })
+      continue
+    }
+    if (evaluated.length >= 100) {
+      blockers.push({
+        invoice_id: invoice.id,
+        invoice_number: invoice.invoice_number ?? null,
+        code: 'TOO_MANY_CASES',
+        message: 'Skatteverket tillåter högst 100 ärenden per fil. Skapa ytterligare en fil för resten.',
+      })
       continue
     }
     evaluated.push(result.value)

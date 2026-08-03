@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: periodiseringsfond-aterforing-ab
+  order: 25
+  name: 'Periodiseringsfond återföring (AB)'
+  category: year_end
+  entity_type: aktiebolag
+  description: >-
+    Återföring av periodiseringsfond (senast efter 6 år).
+lines:
+  - account: '2113'
+    label: 'Periodiseringsfond'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '8819'
+    label: 'Återföring periodiseringsfond'
+    side: credit
+    type: business
+    ratio: 1.0

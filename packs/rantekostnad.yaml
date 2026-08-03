@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: rantekostnad
+  order: 7
+  name: 'Räntekostnad'
+  category: financial
+  entity_type: all
+  description: >-
+    Ränta på lån eller kredit.
+lines:
+  - account: '8410'
+    label: 'Räntekostnader'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '1930'
+    label: 'Företagskonto'
+    side: credit
+    type: settlement
+    ratio: 1.0

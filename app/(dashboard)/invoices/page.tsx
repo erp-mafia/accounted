@@ -39,6 +39,7 @@ import {
   ReceiptText,
   Repeat,
   FileInput,
+  FileDown,
 } from 'lucide-react'
 import { EmptyInvoices } from '@/components/ui/empty-state'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -64,6 +65,10 @@ function NewInvoiceDialogLoading() {
 const NewInvoiceDialog = dynamic(
   () => import('@/components/invoices/NewInvoiceDialog'),
   { loading: NewInvoiceDialogLoading },
+)
+
+const RotRutPayoutDialog = dynamic(
+  () => import('@/components/invoices/RotRutPayoutDialog'),
 )
 
 const INITIAL_VISIBLE_ROWS = 100
@@ -180,9 +185,12 @@ export default function InvoicesPage() {
   const copyFromId = searchParams.get('copy')
   const showNewInvoice = searchParams.has('new') || copyFromId !== null
   const openSelfBilled = searchParams.has('self')
+  const showRotRutPayout = searchParams.has('rot-rut')
   const closeNewInvoice = () => router.replace('/invoices', { scroll: false })
   const openNewInvoice = () => router.push('/invoices?new=1', { scroll: false })
   const openNewSelfBilled = () => router.push('/invoices?new=1&self=1', { scroll: false })
+  const closeRotRutPayout = () => router.replace('/invoices', { scroll: false })
+  const openRotRutPayout = () => router.push('/invoices?rot-rut=1', { scroll: false })
 
   async function fetchInvoices() {
     if (!company) return
@@ -370,15 +378,27 @@ export default function InvoicesPage() {
 
   return (
     <div className="space-y-8">
-      {/* Page header (concept scene 15): title + Ny faktura split button */}
+      {/* Page header (concept scene 15): title + invoice actions */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        <SplitButton
-          key={uiStateLoaded ? 'loaded' : 'initial'}
-          persistKey="invoices"
-          initialModeKey={resolveInitialMode(uiState, 'invoices', CREATE_MODES, 'faktura')}
-          options={createOptions}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={openRotRutPayout}
+            disabled={!canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+          >
+            <FileDown className="mr-2 h-4 w-4" />
+            {t('rot_rut_payout_action')}
+          </Button>
+          <SplitButton
+            key={uiStateLoaded ? 'loaded' : 'initial'}
+            persistKey="invoices"
+            initialModeKey={resolveInitialMode(uiState, 'invoices', CREATE_MODES, 'faktura')}
+            options={createOptions}
+          />
+        </div>
       </div>
 
       {/* Toolbar: one status chip-picker (founder direction: the status
@@ -601,6 +621,15 @@ export default function InvoicesPage() {
           selfBilled={openSelfBilled}
           onOpenChange={(open) => {
             if (!open) closeNewInvoice()
+          }}
+        />
+      )}
+      {showRotRutPayout && (
+        <RotRutPayoutDialog
+          open
+          canWrite={canWrite}
+          onOpenChange={(open) => {
+            if (!open) closeRotRutPayout()
           }}
         />
       )}
