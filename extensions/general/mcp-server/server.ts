@@ -138,6 +138,7 @@ import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliatio
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { createInvoicePaymentJournalEntry, createInvoiceCashEntry, createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
+import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
 import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
 import { importRotRutBeslutFile } from '@/lib/invoices/rot-rut-beslut-import'
 import { RotRutBeslutFileSchema } from '@/lib/api/schemas'
@@ -5447,6 +5448,19 @@ export const tools: McpTool[] = [
                 type: ['string', 'null'],
                 description: 'Provider reason text for a failure, with address local parts masked.',
               },
+              provider_recipient_statuses: {
+                type: 'object',
+                description: 'PII-free outcomes keyed by stable To/CC positions such as to:1 and cc:1. BCC is never included.',
+                additionalProperties: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    status: { type: 'string' },
+                    status_at: { type: 'string' },
+                  },
+                  required: ['status', 'status_at'],
+                },
+              },
               error_code: { type: ['string', 'null'] },
               to_addresses: {
                 type: 'array',
@@ -5513,6 +5527,7 @@ export const tools: McpTool[] = [
         provider_status: string | null
         provider_status_at: string | null
         provider_status_detail: string | null
+        provider_recipient_statuses: Record<string, { status: string; status_at: string }> | null
         error_code: string | null
         attachment_filename: string | null
         sent_at: string | null
@@ -5527,6 +5542,9 @@ export const tools: McpTool[] = [
         provider_status: row.provider_status ?? null,
         provider_status_at: row.provider_status_at ?? null,
         provider_status_detail: row.provider_status_detail ?? null,
+        provider_recipient_statuses: sanitizeDeliveryRecipientStatuses(
+          row.provider_recipient_statuses,
+        ),
         error_code: row.error_code ?? null,
         to_addresses: row.to_addresses ?? [],
         cc_addresses: row.cc_addresses ?? [],
