@@ -16,6 +16,21 @@
 -- bad ones. If a new table needs upgrade coverage, add it here only once it has
 -- been in main long enough that the merge-base always has it.
 --
+-- CI FIXTURE ONLY. NEVER a template for real data.
+-- ------------------------------------------------
+-- The inserts below write `journal_entries` with status='posted' and their
+-- lines directly, bypassing lib/bookkeeping/engine.ts and the atomic
+-- commit_journal_entry RPC. That is legitimate here and ONLY here: this runs
+-- against a throwaway CI database that is destroyed with the job, so there is
+-- no verifikationsnummer sequence to keep gapless and no retention obligation
+-- (BFL 5 kap 6-7 §). Seeding this way is the only way to hand the migrations
+-- pre-existing posted rows to break.
+--
+-- Do not copy this pattern into a seed script, a migration, a repair script, or
+-- anything that touches a real database. Every production journal write goes
+-- through the engine (CLAUDE.md Hard Rule 2). If you need posted entries in a
+-- real database, use the engine.
+--
 -- Fixed UUIDs so assert.sql can find the rows without threading state.
 
 BEGIN;
