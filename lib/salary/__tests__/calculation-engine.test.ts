@@ -1064,6 +1064,8 @@ describe('calculateAvgifterRate', () => {
     )
 
     expect(result.rate).toBe(0)
+    expect(result.amount).toBe(0)
+    expect(result.basis).toBe(0)
     expect(result.category).toBe('exempt')
     expect(result.steps).toEqual([
       expect.objectContaining({
