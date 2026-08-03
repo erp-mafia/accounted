@@ -397,7 +397,10 @@ async function createDocumentInboxItem(
   const { data: inbox, error: inboxError } = await supabase
     .from('invoice_inbox_items')
     .insert({
-      ...(reservedInboxItemId ? { id: reservedInboxItemId } : {}),
+      // Literal payload keeps the no-phantom-columns scanner able to resolve
+      // every column; the legacy path gets an explicit UUID instead of the DB
+      // default.
+      id: reservedInboxItemId ?? crypto.randomUUID(),
       company_id: companyId,
       user_id: userId,
       status: 'received',
