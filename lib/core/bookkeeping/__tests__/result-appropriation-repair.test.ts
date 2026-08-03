@@ -29,6 +29,7 @@ function snapshot(
     lockedAt: null,
     openingBalanceEntryId: 'opening-1',
     openingBalanceEntryValid: true,
+    openingBalanceVoucherLabel: 'A1',
     requiredAccountsActive: true,
     existingPostedAppropriation: false,
     resultAccountLines: [
@@ -63,6 +64,8 @@ describe('classifyHistoricalResultRepair', () => {
         credit_amount: 125_000,
       }),
     ])
+    expect(result.plan?.openingBalanceEntryId).toBe('opening-1')
+    expect(result.plan?.openingBalanceVoucherLabel).toBe('A1')
   })
 
   it('plans the current posted loss in the opposite direction', () => {

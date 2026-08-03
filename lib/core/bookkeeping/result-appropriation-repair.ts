@@ -29,6 +29,8 @@ export interface HistoricalResultRepairSnapshot {
   lockedAt: string | null
   openingBalanceEntryId: string | null
   openingBalanceEntryValid: boolean
+  /** "A1"-style voucher label of the opening-balance entry, for the underlag reference. */
+  openingBalanceVoucherLabel: string | null
   requiredAccountsActive: boolean
   existingPostedAppropriation: boolean
   resultAccountLines: Array<{
@@ -48,6 +50,9 @@ export interface HistoricalResultRepairPlan {
   amount: number
   direction: 'profit' | 'loss'
   lines: CreateJournalEntryLineInput[]
+  /** The validated opening-balance entry the repair reclassifies: the verifikat's underlag. */
+  openingBalanceEntryId: string
+  openingBalanceVoucherLabel: string | null
 }
 
 interface HistoricalResultRepairAssessmentBase {
@@ -207,6 +212,8 @@ export function classifyHistoricalResultRepair(
     amount,
     direction: currentNet > 0 ? 'profit' : 'loss',
     lines: resultLines(currentNet),
+    openingBalanceEntryId: openingEntryId,
+    openingBalanceVoucherLabel: snapshot.openingBalanceVoucherLabel,
   }
   return { ...base, status: 'safe', reason: 'ready', plan }
 }
@@ -262,6 +269,7 @@ export async function assessHistoricalResultRepair(
     lockedAt: period.locked_at,
     openingBalanceEntryId,
     openingBalanceEntryValid: false,
+    openingBalanceVoucherLabel: null,
     requiredAccountsActive: false,
     existingPostedAppropriation: Boolean(existingResult.data),
     resultAccountLines: [],
@@ -280,7 +288,7 @@ export async function assessHistoricalResultRepair(
   const [openingEntryResult, requiredAccountsResult, resultAccountLines] = await Promise.all([
     supabase
       .from('journal_entries')
-      .select('id, status, source_type')
+      .select('id, status, source_type, voucher_series, voucher_number')
       .eq('id', openingBalanceEntryId)
       .eq('company_id', companyId)
       .eq('fiscal_period_id', periodId)
@@ -320,6 +328,10 @@ export async function assessHistoricalResultRepair(
     ...baseSnapshot,
     openingBalanceEntryValid:
       openingEntry?.status === 'posted' && openingEntry.source_type === 'opening_balance',
+    openingBalanceVoucherLabel:
+      openingEntry?.voucher_series != null && openingEntry.voucher_number != null
+        ? `${openingEntry.voucher_series}${openingEntry.voucher_number}`
+        : null,
     requiredAccountsActive:
       activeAccounts.has(RESULT_ACCOUNT) && activeAccounts.has(PRIOR_RESULT_ACCOUNT),
     resultAccountLines,
@@ -371,12 +383,20 @@ export async function postHistoricalResultRepair(
   const assessment = await assessHistoricalResultRepair(supabase, companyId, periodId)
   if (assessment.status !== 'safe') return { assessment, entry: null }
 
+  // BFL 5 kap 6-7 §§: the verifikat must reference its underlag. For this
+  // historical repair the underlag is the validated opening-balance entry,
+  // linked machine-readably via source_id and human-readably in the note.
+  const underlagLabel = assessment.plan.openingBalanceVoucherLabel
+    ? `verifikat ${assessment.plan.openingBalanceVoucherLabel}`
+    : `verifikat ${assessment.plan.openingBalanceEntryId}`
   const entry = await createJournalEntry(supabase, companyId, userId, {
     fiscal_period_id: periodId,
     entry_date: assessment.plan.periodStart,
     description: `Omföring av föregående års resultat (${RESULT_ACCOUNT} → ${PRIOR_RESULT_ACCOUNT})`,
     source_type: 'result_appropriation',
+    source_id: assessment.plan.openingBalanceEntryId,
     voucher_series: 'A',
+    notes: `Underlag: ingående balans, ${underlagLabel} (${assessment.plan.openingBalanceEntryId}). Historisk rättelse av kvarliggande föregående års resultat på ${RESULT_ACCOUNT}.`,
     lines: assessment.plan.lines,
   })
 
