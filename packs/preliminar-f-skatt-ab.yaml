@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: preliminar-f-skatt-ab
+  order: 19
+  name: 'Preliminär F-skatt (AB)'
+  category: tax_account
+  entity_type: aktiebolag
+  description: >-
+    Betalning av preliminär bolagsskatt från skattekontot.
+lines:
+  - account: '2518'
+    label: 'Betald F-skatt'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '1630'
+    label: 'Skattekonto'
+    side: credit
+    type: settlement
+    ratio: 1.0
