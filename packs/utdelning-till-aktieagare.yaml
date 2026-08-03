@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: utdelning-till-aktieagare
+  order: 12
+  name: 'Utdelning till aktieägare'
+  category: private_transfer
+  entity_type: aktiebolag
+  description: >-
+    Utbetalning av beslutad utdelning till aktieägare.
+lines:
+  - account: '2898'
+    label: 'Outtagen utdelning'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '1930'
+    label: 'Företagskonto'
+    side: credit
+    type: settlement
+    ratio: 1.0
