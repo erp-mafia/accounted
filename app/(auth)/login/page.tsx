@@ -22,6 +22,12 @@ import {
   INVITE_PROBLEM_MESSAGE_KEYS,
 } from '@/lib/auth/consume-invite-cookie'
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
+import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
+import {
+  isSessionAuthMethod,
+  setSessionAuthMethodHint,
+  type SessionTimeoutReason,
+} from '@/lib/auth/session-timeout-shared'
 
 const branding = getBranding()
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
@@ -47,6 +53,7 @@ function LoginPageContent() {
   const [isLoading, setIsLoading] = useState(false)
   const [isEmailSent, setIsEmailSent] = useState(false)
   const [showResetPassword, setShowResetPassword] = useState(false)
+  const [showPasswordFallback, setShowPasswordFallback] = useState(false)
   const [resetCooldownUntil, setResetCooldownUntil] = useState<number | null>(null)
   const [resetCooldownRemaining, setResetCooldownRemaining] = useState(0)
   const [bankIdNoAccount, setBankIdNoAccount] = useState<{ givenName?: string; surname?: string } | null>(null)
@@ -55,6 +62,11 @@ function LoginPageContent() {
   const searchParams = useSearchParams()
   const callbackError = searchParams.get('error')
   const callbackFlow = searchParams.get('flow')
+  const reasonParam = searchParams.get('reason')
+  const timeoutReason: SessionTimeoutReason | null =
+    reasonParam === 'idle' || reasonParam === 'absolute' ? reasonParam : null
+  const methodParam = searchParams.get('method')
+  const requestedMethod = isSessionAuthMethod(methodParam) ? methodParam : 'password'
   // Post-login destination, set e.g. by the MCP OAuth authorize endpoint
   // (/login?next=/api/mcp-oauth/authorize?...). Sanitized to a same-origin
   // relative path; '/' means no explicit destination.
@@ -65,6 +77,10 @@ function LoginPageContent() {
   const tCommon = useTranslations('common')
   const tInvite = useTranslations('invite')
   const errorLocale = useLocale() as ErrorLocale
+
+  useEffect(() => {
+    if (timeoutReason) resetAnalyticsIdentity()
+  }, [timeoutReason])
 
   // Accept a pending invite, if any, and report a non-definitive failure.
   // Returns true when the caller should land the user in the app directly.
@@ -107,6 +123,7 @@ function LoginPageContent() {
 
     if (result.error === 'service_unavailable') {
       setBankIdUnavailable(true)
+      setShowPasswordFallback(true)
       return
     }
 
@@ -135,6 +152,8 @@ function LoginPageContent() {
           })
           return
         }
+
+        setSessionAuthMethodHint('bankid')
 
         // Check for pending invite token
         if (await acceptPendingInvite()) {
@@ -188,6 +207,8 @@ function LoginPageContent() {
         })
         return
       }
+
+      setSessionAuthMethodHint('password')
 
       // Check MFA status
       const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
@@ -266,6 +287,14 @@ function LoginPageContent() {
       setIsLoading(false)
     }
   }
+
+  const isBankIdReauth = timeoutReason !== null &&
+    requestedMethod === 'bankid' &&
+    bankIdEnabled
+  const showPasswordLogin = !isBankIdReauth ||
+    showPasswordFallback ||
+    bankIdUnavailable ||
+    bankIdNoAccount !== null
 
   // Email sent confirmation screen
   if (isEmailSent) {
@@ -402,6 +431,18 @@ function LoginPageContent() {
         </div>
 
         <div className="rounded-lg border bg-card p-6">
+          {timeoutReason && (
+            <div
+              className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30"
+              role="alert"
+            >
+              <p className="text-sm font-medium text-amber-900 dark:text-amber-100">
+                {timeoutReason === 'idle'
+                  ? tAuth('session_idle')
+                  : tAuth('session_absolute')}
+              </p>
+            </div>
+          )}
           {callbackError === 'auth_error' && (
             <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
               {callbackFlow === 'recovery' ? (
@@ -457,14 +498,25 @@ function LoginPageContent() {
                   <BankIdAuth mode="login" onComplete={handleBankIdComplete} />
                 </div>
               )}
-              <div className="relative mb-5">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t" />
+              {isBankIdReauth && !showPasswordLogin ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="mb-5 w-full text-muted-foreground"
+                  onClick={() => setShowPasswordFallback(true)}
+                >
+                  {tAuth('use_password_instead')}
+                </Button>
+              ) : (
+                <div className="relative mb-5">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-2 text-muted-foreground">{tAuth('or_email_divider')}</span>
+                  </div>
                 </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">{tAuth('or_email_divider')}</span>
-                </div>
-              </div>
+              )}
             </>
           )}
           {bankIdUnavailable && (
@@ -477,6 +529,8 @@ function LoginPageContent() {
               </p>
             </div>
           )}
+          {showPasswordLogin && (
+            <>
           <form onSubmit={handlePasswordLogin} className="space-y-5">
             <div className="space-y-2">
               <Label htmlFor="email">{tAuth('email_label')}</Label>
@@ -547,6 +601,8 @@ function LoginPageContent() {
               {tAuth('no_account')}
             </Link>
           </Button>
+            </>
+          )}
         </div>
 
         <p className="mt-4 text-center text-xs text-muted-foreground leading-relaxed">

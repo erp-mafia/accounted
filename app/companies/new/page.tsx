@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import OnboardingBackdrop from '@/components/onboarding/OnboardingBackdrop'
 import OnboardingJourney from '@/components/onboarding/journey/OnboardingJourney'
+import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,6 +37,7 @@ export default async function NewCompanyPage() {
 
   return (
     <div className="min-h-screen bg-background">
+      <SessionTimeoutController />
       <OnboardingBackdrop />
       <OnboardingJourney teamId={teamId} mode="add" />
     </div>

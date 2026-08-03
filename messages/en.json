@@ -270,6 +270,9 @@
     "login_failed_title": "Sign in failed",
     "login_failed_bankid": "Could not complete BankID sign in.",
     "login_invalid_credentials": "Wrong email or password.",
+    "session_idle": "You were inactive. Sign in again.",
+    "session_absolute": "Your session expired for security reasons.",
+    "use_password_instead": "Sign in with email instead",
     "reset_title": "Reset password",
     "reset_subtitle": "Enter your email and we'll send you a reset link",
     "reset_button": "Send reset link",
@@ -300,6 +303,13 @@
     "terms_link": "terms",
     "terms_and": "and",
     "privacy_link": "privacy policy"
+  },
+  "session_timeout": {
+    "warning_title": "You will be signed out soon",
+    "idle_warning": "For your security, you will be signed out in {seconds} seconds. Continue to stay signed in.",
+    "absolute_warning": "This session reaches its security limit in {seconds} seconds. Sign in again to continue.",
+    "continue": "Continue",
+    "sign_in_again": "Sign in again"
   },
   "settings_intro": {
     "account": "Your personal details and security. Applies to you, not the company.",

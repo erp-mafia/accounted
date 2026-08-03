@@ -270,6 +270,9 @@
     "login_failed_title": "Inloggning misslyckades",
     "login_failed_bankid": "Kunde inte slutföra BankID-inloggningen.",
     "login_invalid_credentials": "Fel e-post eller lösenord.",
+    "session_idle": "Du har varit inaktiv. Logga in igen.",
+    "session_absolute": "Sessionen har upphört av säkerhetsskäl.",
+    "use_password_instead": "Logga in med e-post i stället",
     "reset_title": "Återställ lösenord",
     "reset_subtitle": "Ange din e-postadress så skickar vi en återställningslänk",
     "reset_button": "Skicka återställningslänk",
@@ -300,6 +303,13 @@
     "terms_link": "villkor",
     "terms_and": "och",
     "privacy_link": "integritetspolicy"
+  },
+  "session_timeout": {
+    "warning_title": "Du loggas snart ut",
+    "idle_warning": "Av säkerhetsskäl loggas du ut om {seconds} sekunder. Fortsätt för att vara inloggad.",
+    "absolute_warning": "Sessionens säkerhetsgräns nås om {seconds} sekunder. Logga in igen för att fortsätta.",
+    "continue": "Fortsätt",
+    "sign_in_again": "Logga in igen"
   },
   "settings_intro": {
     "account": "Dina personliga uppgifter och din säkerhet. Gäller dig, inte företaget.",

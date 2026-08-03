@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { Settings } from 'lucide-react'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import OnboardingBackdrop from '@/components/onboarding/OnboardingBackdrop'
+import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
 
 export default async function OnboardingLayout({
   children,
@@ -35,6 +36,7 @@ export default async function OnboardingLayout({
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center">
+      {user && <SessionTimeoutController />}
       <OnboardingBackdrop />
 
       <div className="relative z-10 w-full max-w-lg px-5">
