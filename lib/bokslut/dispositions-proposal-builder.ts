@@ -21,6 +21,7 @@ import {
   proposeAvsattning,
   proposeAteforing,
 } from './reserves/periodiseringsfond-service'
+import { calculateOveravskrivningar } from './reserves/overavskrivningar-calculator'
 import type { CompletedDisposition, DispositionsProposal, ProposedDisposition } from './types'
 import type { AccountingFramework } from '@/types'
 
@@ -89,6 +90,7 @@ export async function buildDispositionsProposal(
 
   const proposals: ProposedDisposition[] = []
   const completedDispositions: CompletedDisposition[] = []
+  const warnings: string[] = []
 
   // Dispositions already POSTED in this period (a partially completed
   // bokslut run) are excluded from resultBeforeTax like all year_end
@@ -123,6 +125,31 @@ export async function buildDispositionsProposal(
   proposals.push(...ateforing.proposals)
   const ateforingTotal = ateforing.proposals.reduce((sum, p) => sum + p.amount, 0)
 
+  const overavskrivningar = await calculateOveravskrivningar({
+    supabase,
+    companyId,
+    fiscalPeriod: period,
+    entityType,
+  })
+  if (overavskrivningar.warning) warnings.push(overavskrivningar.warning)
+  if (overavskrivningar.proposal) proposals.push(overavskrivningar.proposal)
+  if (
+    !overavskrivningar.proposal
+    && overavskrivningar.status === 'ready'
+    && Math.abs(overavskrivningar.currentPeriodChange) >= 0.01
+  ) {
+    completedDispositions.push({
+      kind: 'overavskrivningar',
+      label: 'Förändring av överavskrivningar',
+      amount: Math.abs(overavskrivningar.currentPeriodChange),
+      status: 'booked',
+      warnings: [],
+    })
+  }
+  const overavskrivningarResultEffect = -(
+    overavskrivningar.proposal?.signedAmount ?? 0
+  )
+
   // SLP already posted in this period (resumed run): don't re-propose it
   // (that would book it twice) and don't subtract it twice below (its
   // effect is already inside postedEffect.total).
@@ -150,6 +177,7 @@ export async function buildDispositionsProposal(
   // proposed återföringar and schablonintäkt, minus deductible SLP.
   const taxableBeforeAvsattning =
     normalizedResultBeforeTax + postedEffect.total + alreadyProvisioned + ateforingTotal
+    + overavskrivningarResultEffect
     + ateforing.schablonintaktAmount - (slp?.amount ?? 0)
     + taxAdjustments.nonDeductibleExpenses - taxAdjustments.nonTaxableIncome
   const avsattning = alreadyProvisioned > 0
@@ -182,6 +210,7 @@ export async function buildDispositionsProposal(
   // diverges from what the sequential commit books and from ÅR/INK2.
   const resultAfterDispositions =
     normalizedResultBeforeTax + postedEffect.total + ateforingTotal
+    + overavskrivningarResultEffect
     - (avsattning?.amount ?? 0) - (slp?.amount ?? 0)
 
   const bolagsskatt = await calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
@@ -232,6 +261,7 @@ export async function buildDispositionsProposal(
     proposals,
     taxAdjustments,
     completedDispositions,
+    warnings,
   }
 }
 
@@ -267,13 +297,8 @@ export async function buildLatentTaxProposal(params: {
     .reduce((s, r) => s + (r.closing_credit - r.closing_debit), 0)
 
   // Pending 21xx postings from the proposals that will commit alongside
-  // latent tax. Avsättning adds to the reserves (credit 21xx), återföring
-  // removes (debit 21xx).
+  // latent tax. Credits add to reserves and debits remove them.
   for (const p of proposalsBeforeLatentTax) {
-    if (
-      p.kind !== 'periodiseringsfond_avsattning'
-      && p.kind !== 'periodiseringsfond_ateforing'
-    ) continue
     for (const line of p.lines) {
       if (!line.account_number.startsWith('21')) continue
       untaxedReserves += (line.credit_amount ?? 0) - (line.debit_amount ?? 0)

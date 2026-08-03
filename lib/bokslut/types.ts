@@ -21,6 +21,9 @@ export interface ProposedDisposition {
   description: string
   /** SEK amount displayed in the card header. Always a positive number. */
   amount: number
+  /** Signed posting amount when direction matters while `amount` remains a
+   *  positive display value. Used by over-depreciation releases. */
+  signedAmount?: number
   /** Final voucher lines if the user accepts. Already balanced. */
   lines: CreateJournalEntryLineInput[]
   /** Soft warnings the UI surfaces beside the card (e.g. forced p-fond reversal,
@@ -81,4 +84,6 @@ export interface DispositionsProposal {
   proposals: ProposedDisposition[]
   taxAdjustments?: TaxAdjustmentSnapshot
   completedDispositions?: CompletedDisposition[]
+  /** Non-blocking calculation warnings surfaced in the statutory wizard. */
+  warnings?: string[]
 }
