@@ -152,7 +152,7 @@ describe('calculateSalary', () => {
     expect(result.taxWithheld).toBe(12000) // 30% of 40000
   })
 
-  it('applies f-skatt with 0% withholding', () => {
+  it('exempts F-skatt compensation from withholding and employer contributions', () => {
     const result = calculateSalary(
       makeBasicInput({ fSkattStatus: 'f_skatt' }),
       config2026,
@@ -161,6 +161,12 @@ describe('calculateSalary', () => {
 
     expect(result.taxWithheld).toBe(0)
     expect(result.netSalary).toBe(40000)
+    expect(result.avgifterRate).toBe(0)
+    expect(result.avgifterAmount).toBe(0)
+    expect(result.avgifterBasis).toBe(0)
+    expect(result.avgifterCategory).toBe('exempt')
+    expect(result.vacationAccrualAvgifter).toBe(0)
+    expect(result.totalEmployerCost).toBe(result.grossSalary + result.vacationAccrual)
   })
 
   it('applies unverified flat 30%', () => {
@@ -1050,6 +1056,25 @@ describe('calculateSjuklon', () => {
 })
 
 describe('calculateAvgifterRate', () => {
+  it('returns the exempt rate for F-skatt before age-based rules', () => {
+    const result = calculateAvgifterRate(
+      makeBasicInput({ fSkattStatus: 'f_skatt', personnummer: 'mock_senior_person' }),
+      config2026,
+      2026
+    )
+
+    expect(result.rate).toBe(0)
+    expect(result.amount).toBe(0)
+    expect(result.basis).toBe(0)
+    expect(result.category).toBe('exempt')
+    expect(result.steps).toEqual([
+      expect.objectContaining({
+        label: 'Avgiftskategori',
+        output: null,
+      }),
+    ])
+  })
+
   it('returns standard rate for normal employee', () => {
     const result = calculateAvgifterRate(
       makeBasicInput(),
