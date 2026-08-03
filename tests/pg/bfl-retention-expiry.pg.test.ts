@@ -3,6 +3,39 @@ import { getPool } from './setup'
 import { insertAuthUser, insertCompany, insertFiscalPeriod } from './fixtures'
 
 describe('BFL retention expiry', () => {
+  it('runs the corrected retention trigger after the original migration 017 trigger', async () => {
+    const result = await getPool().query<{
+      trigger_name: string
+      trigger_definition: string
+    }>(
+      `SELECT
+         trigger.tgname AS trigger_name,
+         pg_get_triggerdef(trigger.oid) AS trigger_definition
+       FROM pg_trigger trigger
+       JOIN pg_class target ON target.oid = trigger.tgrelid
+       JOIN pg_namespace schema ON schema.oid = target.relnamespace
+       WHERE schema.nspname = 'public'
+         AND target.relname = 'fiscal_periods'
+         AND NOT trigger.tgisinternal
+         AND trigger.tgname IN (
+           'calculate_retention_expiry',
+           'zz_set_bfl_retention_expiry',
+           'enforce_period_start_day'
+         )
+       ORDER BY trigger.tgname`,
+    )
+
+    expect(result.rows.map((row) => row.trigger_name)).toEqual([
+      'calculate_retention_expiry',
+      'enforce_period_start_day',
+      'zz_set_bfl_retention_expiry',
+    ])
+    expect(
+      result.rows.find((row) => row.trigger_name === 'enforce_period_start_day')
+        ?.trigger_definition,
+    ).toContain('UPDATE OF company_id, period_start')
+  })
+
   it('retains a fiscal year through the end of the seventh following calendar year', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
