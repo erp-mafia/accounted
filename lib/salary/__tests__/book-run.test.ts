@@ -41,6 +41,7 @@ const makeRun = (overrides: Record<string, unknown> = {}) => ({
   total_net: 23000,
   total_avgifter: 9426,
   total_vacation_accrual: 0,
+  calculation_params: { slpRate: 0.2426 },
   ...overrides,
 })
 
@@ -194,5 +195,11 @@ describe('bookPaidSalaryRun', () => {
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.data.entryIds).toEqual(['je-1', 'je-2'])
     expect(createSalaryRunEntries).toHaveBeenCalledTimes(1)
+    expect(createSalaryRunEntries).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ calculation_params: { slpRate: 0.2426 } }),
+    )
   })
 })
