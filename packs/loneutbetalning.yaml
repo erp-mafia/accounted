@@ -1,0 +1,31 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: loneutbetalning
+  order: 15
+  name: 'Löneutbetalning'
+  category: salary
+  entity_type: aktiebolag
+  description: >-
+    Utbetalning av nettolön till anställd.
+lines:
+  - account: '2710'
+    label: 'Personalskatt'
+    side: debit
+    type: business
+    ratio: 0.3
+  - account: '2920'
+    label: 'Upplupna semesterlöner'
+    side: debit
+    type: business
+    ratio: 0.12
+  - account: '7010'
+    label: 'Löner'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '1930'
+    label: 'Företagskonto'
+    side: credit
+    type: settlement
+    ratio: 1.0

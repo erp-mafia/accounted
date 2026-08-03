@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: arbetsgivaravgifter
+  order: 14
+  name: 'Arbetsgivaravgifter'
+  category: salary
+  entity_type: aktiebolag
+  description: >-
+    Bokföring av arbetsgivaravgifter (31,42% av bruttolön).
+lines:
+  - account: '7510'
+    label: 'Arbetsgivaravgifter'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '2731'
+    label: 'Avräkning sociala avgifter'
+    side: credit
+    type: business
+    ratio: 1.0
