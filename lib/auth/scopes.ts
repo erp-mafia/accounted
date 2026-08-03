@@ -39,6 +39,8 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // Companies
   'GET /api/v1/companies': 'companies:read',
   'GET /api/v1/companies/:companyId': 'companies:read',
+  'POST /api/v1/companies/:companyId/settings/logo/upload-url': 'companies:write',
+  'POST /api/v1/companies/:companyId/settings/logo/complete': 'companies:write',
 
   // Operations (async long-running tasks)
   'GET /api/v1/operations/:id': 'operations:read',

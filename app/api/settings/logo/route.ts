@@ -3,12 +3,16 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { LOGO_UPLOAD_MAX_BYTES, LOGO_UPLOAD_MAX_MB } from '@/lib/invoices/branding-constants'
-
-const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/svg+xml', 'image/webp']
+import {
+  LOGO_BUCKET,
+  cleanupPreviousCompanyLogos,
+  createLogoStoragePath,
+  isLogoMimeType,
+} from '@/lib/invoices/company-logo'
 
 export const POST = withRouteContext(
   'settings.logo.upload',
-  async (request, { supabase, companyId }) => {
+  async (request, { supabase, companyId, log }) => {
     const formData = await request.formData()
     const file = formData.get('file') as File | null
 
@@ -16,7 +20,7 @@ export const POST = withRouteContext(
       return NextResponse.json({ error: 'Ingen fil angiven' }, { status: 400 })
     }
 
-    if (!ALLOWED_TYPES.includes(file.type)) {
+    if (!isLogoMimeType(file.type)) {
       return NextResponse.json({ error: 'Otillåten filtyp. Tillåtna: PNG, JPG, SVG, WebP.' }, { status: 400 })
     }
 
@@ -25,41 +29,21 @@ export const POST = withRouteContext(
     }
 
     const buffer = Buffer.from(await file.arrayBuffer())
-    const mimeToExt: Record<string, string> = {
-      'image/png': 'png',
-      'image/jpeg': 'jpg',
-      'image/svg+xml': 'svg',
-      'image/webp': 'webp',
-    }
-    const ext = mimeToExt[file.type] ?? 'png'
-    const storagePath = `${companyId}/logo-${Date.now()}.${ext}`
+    const storagePath = createLogoStoragePath(companyId, file.type)
 
     const serviceClient = createServiceClient()
+    const logoBucket = serviceClient.storage.from(LOGO_BUCKET)
 
-    // Remove any previous logo files for this company so we don't pile up orphans.
-    const { data: existing } = await serviceClient.storage
-      .from('logos')
-      .list(companyId)
-    if (existing && existing.length > 0) {
-      await serviceClient.storage
-        .from('logos')
-        .remove(existing.map((f) => `${companyId}/${f.name}`))
-    }
-
-    const { error: uploadError } = await serviceClient.storage
-      .from('logos')
-      .upload(storagePath, buffer, {
+    const { error: uploadError } = await logoBucket.upload(storagePath, buffer, {
         contentType: file.type,
-        upsert: true,
+        upsert: false,
       })
 
     if (uploadError) {
       return NextResponse.json({ error: `Uppladdning misslyckades: ${getUserErrorMessage(uploadError)}` }, { status: 500 })
     }
 
-    const { data: urlData } = serviceClient.storage
-      .from('logos')
-      .getPublicUrl(storagePath)
+    const { data: urlData } = logoBucket.getPublicUrl(storagePath)
 
     // Update company settings
     const { error: updateError } = await supabase
@@ -68,7 +52,16 @@ export const POST = withRouteContext(
       .eq('company_id', companyId)
 
     if (updateError) {
+      // The previous logo remains active. Remove only the unreferenced upload.
+      await logoBucket.remove([storagePath])
       return NextResponse.json({ error: 'Kunde inte uppdatera inställningar' }, { status: 500 })
+    }
+
+    const cleanupError = await cleanupPreviousCompanyLogos(logoBucket, companyId, storagePath)
+    if (cleanupError) {
+      log.warn('Failed to clean up superseded company logos', cleanupError as Error, {
+        storagePath,
+      })
     }
 
     return NextResponse.json({ data: { logo_url: urlData.publicUrl } })
@@ -89,11 +82,11 @@ export const DELETE = withRouteContext(
     if (settings?.logo_url) {
       const serviceClient = createServiceClient()
       const { data: existing } = await serviceClient.storage
-        .from('logos')
+        .from(LOGO_BUCKET)
         .list(companyId)
       if (existing && existing.length > 0) {
         await serviceClient.storage
-          .from('logos')
+          .from(LOGO_BUCKET)
           .remove(existing.map((f) => `${companyId}/${f.name}`))
       }
     }

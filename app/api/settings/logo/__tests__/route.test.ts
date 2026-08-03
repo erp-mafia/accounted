@@ -19,13 +19,14 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
+const serviceBucket = {
+  list: vi.fn().mockResolvedValue({ data: [], error: null }),
+  remove: vi.fn().mockResolvedValue({ data: [], error: null }),
+  upload: vi.fn().mockResolvedValue({ data: {}, error: null }),
+  getPublicUrl: vi.fn().mockReturnValue({ data: { publicUrl: 'https://cdn.example.com/logo.png' } }),
+}
 const serviceStorage = {
-  from: vi.fn().mockReturnValue({
-    list: vi.fn().mockResolvedValue({ data: [], error: null }),
-    remove: vi.fn().mockResolvedValue({ data: [], error: null }),
-    upload: vi.fn().mockResolvedValue({ data: {}, error: null }),
-    getPublicUrl: vi.fn().mockReturnValue({ data: { publicUrl: 'https://cdn.example.com/logo.png' } }),
-  }),
+  from: vi.fn().mockReturnValue(serviceBucket),
 }
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
@@ -118,5 +119,19 @@ describe('POST /api/settings/logo', () => {
 
     expect(status).toBe(200)
     expect(body.data.logo_url).toBe('https://cdn.example.com/logo.png')
+    expect(serviceBucket.upload).toHaveBeenCalledBefore(serviceBucket.list)
+  })
+
+  it('keeps the previous logo active when the settings update fails', async () => {
+    enqueue({ error: new Error('database unavailable') })
+
+    const response = await POST(makeFormRequest(), { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(500)
+    expect(serviceBucket.list).not.toHaveBeenCalled()
+    expect(serviceBucket.remove).toHaveBeenCalledWith([
+      expect.stringMatching(/^company-1\/logo-upload-[0-9a-f-]{36}\.png$/),
+    ])
   })
 })

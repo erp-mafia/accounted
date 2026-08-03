@@ -1943,6 +1943,36 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kopplingen misslyckades.',
     message_en: 'Failed to link document to journal entry.',
   },
+  LOGO_UPLOAD_URL_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Det gick inte att skapa uppladdningslänken för logotypen.',
+    message_en: 'Failed to create the signed logo upload URL.',
+  },
+  LOGO_UPLOAD_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Den uppladdade logotypen kunde inte hittas.',
+    message_en: 'The uploaded logo could not be found.',
+  },
+  LOGO_UPLOAD_TOO_LARGE: {
+    httpStatus: 400,
+    message_sv: 'Logotypen är för stor.',
+    message_en: 'The uploaded logo exceeds the size limit.',
+  },
+  LOGO_UPLOAD_UNSUPPORTED_TYPE: {
+    httpStatus: 400,
+    message_sv: 'Logotypens filtyp stöds inte.',
+    message_en: 'The uploaded logo file type is not supported.',
+  },
+  LOGO_ACTIVATION_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Logotypen kunde inte aktiveras.',
+    message_en: 'Failed to activate the uploaded logo.',
+  },
+  LOGO_SETTINGS_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Företagets logotypinställningar kunde inte hittas.',
+    message_en: 'The company logo settings could not be found.',
+  },
 }
 
 const CUSTOMER: Record<string, StructuredErrorEntry> = {

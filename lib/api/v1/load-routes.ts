@@ -14,6 +14,8 @@
 // Phase 1 surface.
 import '@/app/api/v1/health/route'
 import '@/app/api/v1/companies/route'
+import '@/app/api/v1/companies/[companyId]/settings/logo/upload-url/route'
+import '@/app/api/v1/companies/[companyId]/settings/logo/complete/route'
 
 // Phase 4 PR-2 (foundation): async operations polling endpoint.
 import '@/app/api/v1/operations/[id]/route'
