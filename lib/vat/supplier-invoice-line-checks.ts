@@ -18,6 +18,21 @@ export function isLegalVatRate(rate: number): boolean {
 }
 
 /**
+ * Convert a supplier-invoice VAT rate to the database's decimal-fraction
+ * unit without changing the underlying rate. Values above 1 are interpreted
+ * as percentages, while values already between 0 and 1 pass through. This is
+ * intentionally a unit normalizer, not a Swedish-rate validator: imported
+ * foreign VAT such as 19 % must remain 0.19 instead of being rewritten.
+ */
+export function normalizeVatRateToFraction(rate: unknown): number {
+  const n = Number(rate)
+  if (!Number.isFinite(n) || n < 0) return 0
+
+  const fraction = n > 1 ? n / 100 : n
+  return fraction <= 1 ? fraction : 0
+}
+
+/**
  * Normalize a VAT rate that may arrive percent-shaped (25, 12, 6: the AI
  * extraction contract and stale staged pending_operations params) to the
  * decimal-fraction convention used by supplier_invoice_items (0.25, 0.12,
@@ -28,11 +43,9 @@ export function isLegalVatRate(rate: number): boolean {
  * to a supplier invoice.
  */
 export function normalizeVatRateToDecimal(rate: unknown): number {
-  const n = Number(rate)
-  if (!Number.isFinite(n)) return 0
   // roundOre is 2-decimal rounding: exactly the snap a decimal fraction of an
   // integer percent needs (25 / 100 must land on the legal-set double).
-  const decimal = roundOre(n > 1 ? n / 100 : n)
+  const decimal = roundOre(normalizeVatRateToFraction(rate))
   return isLegalVatRate(decimal) ? decimal : 0
 }
 

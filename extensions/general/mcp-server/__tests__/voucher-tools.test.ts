@@ -481,6 +481,110 @@ describe('gnubok_correct_entry: registration', () => {
       ),
     ).rejects.toThrow(/not balanced/i)
   })
+
+  it('shows preserved currency, tax, and dimension metadata in the correction preview', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { dimensions_enabled: false }, error: null })
+    enqueue({
+      data: {
+        id: '11111111-1111-4111-8111-111111111111',
+        status: 'posted',
+        entry_date: '2026-05-12',
+        description: 'Foreign purchase',
+        voucher_number: 12,
+        voucher_series: 'A',
+        fiscal_period_id: 'fp-1',
+        fiscal_periods: { name: '2026', is_closed: false, locked_at: null },
+        lines: [
+          {
+            account_number: '5420',
+            debit_amount: 1000,
+            credit_amount: 0,
+            line_description: 'Software',
+            currency: 'EUR',
+            amount_in_currency: 90,
+            exchange_rate: 11.111111,
+            tax_code: 'EU_SERVICE',
+            dimensions: { '6': 'P001' },
+            cost_center: null,
+            project: 'P001',
+          },
+          {
+            account_number: '1930',
+            debit_amount: 0,
+            credit_amount: 1000,
+            line_description: 'Settlement',
+            currency: 'EUR',
+            amount_in_currency: 90,
+            exchange_rate: 11.111111,
+            tax_code: null,
+            dimensions: {},
+            cost_center: null,
+            project: null,
+          },
+        ],
+      },
+      error: null,
+    })
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
+    enqueue({ data: { id: 'op-correct-1' }, error: null })
+
+    const replacementLines = [
+      {
+        account_number: '5420',
+        debit_amount: 1000,
+        credit_amount: 0,
+        line_description: 'Software',
+        currency: 'EUR',
+        amount_in_currency: 90,
+        exchange_rate: 11.111111,
+        tax_code: 'EU_SERVICE',
+        dimensions: { '6': 'P001' },
+      },
+      {
+        account_number: '1931',
+        debit_amount: 0,
+        credit_amount: 1000,
+        line_description: 'Settlement',
+        currency: 'EUR',
+        amount_in_currency: 90,
+        exchange_rate: 11.111111,
+        dimensions: {},
+      },
+    ]
+
+    const result = (await correctEntry.execute(
+      {
+        entry_id: '11111111-1111-4111-8111-111111111111',
+        lines: replacementLines,
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      preview: {
+        original: { lines: Array<Record<string, unknown>> }
+        correction: { lines: Array<Record<string, unknown>> }
+      }
+    }
+
+    expect(result.preview.original.lines[0]).toMatchObject({
+      currency: 'EUR',
+      amount_in_currency: 90,
+      exchange_rate: 11.111111,
+      tax_code: 'EU_SERVICE',
+      dimensions: { '6': 'P001' },
+      project: 'P001',
+    })
+    expect(result.preview.correction.lines[0]).toMatchObject({
+      currency: 'EUR',
+      amount_in_currency: 90,
+      exchange_rate: 11.111111,
+      tax_code: 'EU_SERVICE',
+      dimensions: { '6': 'P001' },
+    })
+  })
 })
 
 describe('gnubok_reverse_journal_entry: staging gates', () => {

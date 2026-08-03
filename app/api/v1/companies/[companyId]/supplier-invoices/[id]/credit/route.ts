@@ -28,6 +28,7 @@ import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoic
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
+import { normalizeVatRateToFraction } from '@/lib/vat/supplier-invoice-line-checks'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AccountingMethod, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
@@ -219,7 +220,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         line_total: item.line_total,
         account_number: item.account_number,
         vat_code: item.vat_code,
-        vat_rate: item.vat_rate,
+        vat_rate: normalizeVatRateToFraction(item.vat_rate),
         vat_amount: item.vat_amount,
         reverse_charge_rate: item.reverse_charge_rate,
       }))
@@ -314,7 +315,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       line_total: item.line_total,
       account_number: item.account_number,
       vat_code: item.vat_code,
-      vat_rate: item.vat_rate,
+      vat_rate: normalizeVatRateToFraction(item.vat_rate),
       vat_amount: item.vat_amount,
       // Preserve the self-assessed RC rate so the credit note reverses fiktiv
       // moms at the same rate the original was booked at.
@@ -356,7 +357,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           ctx.companyId!,
           ctx.userId,
           creditNote as unknown as SupplierInvoice,
-          creditItems as unknown as SupplierInvoiceItem[],
+          typed.items as unknown as SupplierInvoiceItem[],
           supplierRow?.supplier_type ?? 'swedish_business',
           supplierRow?.name,
         )

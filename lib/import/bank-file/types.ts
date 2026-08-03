@@ -54,6 +54,7 @@ export type BankFileFormatId =
   | 'lunar'
   | 'northmill'
   | 'wise'
+  | 'wise_statement'
   | 'generic_csv'
   | 'camt053'
 

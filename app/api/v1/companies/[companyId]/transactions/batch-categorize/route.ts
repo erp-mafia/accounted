@@ -19,6 +19,8 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CategorizeTransactionSchema } from '@/lib/api/schemas'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
+import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import {
   getTemplateById,
   buildMappingResultFromTemplate,
@@ -186,6 +188,29 @@ async function categorizeOne(
       entityType,
       input.vat_treatment,
     )
+  }
+  try {
+    const settlementAccount = await resolveSettlementAccount(
+      supabase,
+      companyId,
+      transaction.cash_account_id,
+      log,
+    )
+    mappingResult = applySettlementAccount(mappingResult, settlementAccount)
+  } catch (err) {
+    log.error('batch-categorize: settlement account lookup failed', err as Error, {
+      request_index: index,
+      transactionId,
+    })
+    return {
+      ok: false,
+      request_index: index,
+      transaction_id: transactionId,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: isBookkeepingError(err) ? getErrorMessage(err, { context: 'transaction' }) : getErrorMessage(err),
+      },
+    }
   }
   // Dimensions: an explicitly supplied bag tags the business lines of the
   // generated verifikat (bank/VAT legs stay untagged).

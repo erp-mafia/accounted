@@ -15,19 +15,27 @@ import {
 /**
  * MCP tools that invoke a paid capability directly (no stage→commit round-trip),
  * so they are gated at DISPATCH only and have no commit-time (operation-map)
- * counterpart. gnubok_upload_document runs Bedrock OCR inline via
- * extractInvoiceFields: it never stages a pending_operation.
+ * counterpart. The document upload tools run Bedrock OCR inline via
+ * extractInvoiceFields: they never stage a pending_operation.
  */
-const DISPATCH_ONLY_MCP_TOOLS = new Set<string>(['gnubok_upload_document'])
+const DISPATCH_ONLY_MCP_TOOLS = new Set<string>([
+  'gnubok_upload_document',
+  'gnubok_create_document_upload',
+  'gnubok_complete_document_upload',
+])
 
 describe('MCP_TOOL_CAPABILITY_MAP', () => {
-  it('gates exactly the paid MCP tools (3 external-service staging tools + the AI OCR tool)', () => {
+  it('gates exactly the paid MCP tools (3 external-service staging tools + the AI OCR tools)', () => {
     expect(MCP_TOOL_CAPABILITY_MAP).toEqual({
       gnubok_send_invoice: CAPABILITY.email_send,
       gnubok_vat_declaration_submit: CAPABILITY.skatteverket,
       gnubok_agi_submit: CAPABILITY.skatteverket,
-      // Dispatch-only AI tool: inline Bedrock OCR, no staged operation.
+      // Dispatch-only AI tools: inline Bedrock OCR, no staged operation. The
+      // signed-URL pair is gated at create AND complete so a free-tier key can
+      // neither reserve nor finalize a paid extraction.
       gnubok_upload_document: CAPABILITY.ai,
+      gnubok_create_document_upload: CAPABILITY.ai,
+      gnubok_complete_document_upload: CAPABILITY.ai,
     })
   })
 

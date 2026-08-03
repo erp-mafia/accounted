@@ -56,6 +56,9 @@ function sanitizeFileName(name: string): string {
  */
 export const DOCUMENTS_BUCKET = 'documents'
 const DOCUMENTS_PATH_ROOT = 'documents'
+export const SIGNED_DOCUMENT_UPLOAD_TTL_MS = 2 * 60 * 60 * 1000
+export const PENDING_DOCUMENT_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000
+const PENDING_DOCUMENT_UPLOAD_CLEANUP_LIMIT = 100
 
 /** Build a company-scoped storage key for a new upload. */
 export function buildDocumentStoragePath(
@@ -65,6 +68,26 @@ export function buildDocumentStoragePath(
   timestamp: number = Date.now()
 ): string {
   return `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/${timestamp}_${sanitizeFileName(fileName)}`
+}
+
+/** Build the temporary key targeted by a signed, model-free upload. */
+export function buildPendingDocumentStoragePath(
+  companyId: string,
+  userId: string,
+  uploadId: string,
+  fileName: string
+): string {
+  return `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/pending/${uploadId}_${sanitizeFileName(fileName)}`
+}
+
+/** Build the permanent WORM key for a completed signed upload. */
+export function buildReservedDocumentStoragePath(
+  companyId: string,
+  userId: string,
+  uploadId: string,
+  fileName: string
+): string {
+  return `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/${uploadId}_${sanitizeFileName(fileName)}`
 }
 
 /** True when the key already sits under the company-scoped prefix. */
@@ -319,6 +342,231 @@ async function ensureDocumentsBucket(): Promise<void> {
   }
 
   bucketVerified = true
+}
+
+/**
+ * Remove a bounded batch of abandoned signed-upload objects. Pending objects
+ * are not accounting records and have no document_attachments row. Completed
+ * documents are moved out of this prefix before the immutable row is created.
+ */
+export async function cleanupExpiredPendingDocumentUploads(
+  companyId: string,
+  userId: string,
+  now: number = Date.now()
+): Promise<number> {
+  const serviceClient = createServiceClientNoCookies()
+  const prefix = `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/pending`
+  const storage = serviceClient.storage.from(DOCUMENTS_BUCKET)
+  const { data, error } = await storage.list(prefix, {
+    limit: PENDING_DOCUMENT_UPLOAD_CLEANUP_LIMIT,
+    offset: 0,
+    sortBy: { column: 'created_at', order: 'asc' },
+  })
+  if (error || !data) return 0
+
+  const cutoff = now - PENDING_DOCUMENT_UPLOAD_RETENTION_MS
+  const expiredPaths = data
+    .filter((item) => {
+      if (!item.id || !item.created_at) return false
+      const createdAt = Date.parse(item.created_at)
+      return Number.isFinite(createdAt) && createdAt < cutoff
+    })
+    .map((item) => `${prefix}/${item.name}`)
+
+  if (expiredPaths.length === 0) return 0
+  const { error: removeError } = await storage.remove(expiredPaths)
+  return removeError ? 0 : expiredPaths.length
+}
+
+export interface PendingDocumentUploadReservation {
+  uploadId: string
+  signedUrl: string
+  expiresAt: string
+}
+
+/**
+ * Reserve a company-scoped object key and create a short-lived upload URL.
+ * The returned URL accepts the raw file bytes via PUT without authentication.
+ */
+export async function createPendingDocumentUpload(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  uploadId: string,
+  fileName: string,
+  now: number = Date.now()
+): Promise<PendingDocumentUploadReservation> {
+  await ensureDocumentsBucket()
+  await cleanupExpiredPendingDocumentUploads(companyId, userId, now)
+
+  const storagePath = buildPendingDocumentStoragePath(companyId, userId, uploadId, fileName)
+  const { data, error } = await supabase.storage
+    .from(DOCUMENTS_BUCKET)
+    .createSignedUploadUrl(storagePath, { upsert: false })
+
+  if (error || !data?.signedUrl) {
+    throw new Error(`Failed to create document upload URL: ${error?.message ?? 'no URL returned'}`)
+  }
+
+  return {
+    uploadId,
+    signedUrl: data.signedUrl,
+    expiresAt: new Date(now + SIGNED_DOCUMENT_UPLOAD_TTL_MS).toISOString(),
+  }
+}
+
+export interface CompletedPendingDocumentUpload {
+  document: DocumentAttachment
+  buffer: ArrayBuffer
+}
+
+async function findReservedDocument(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  uploadId: string
+): Promise<DocumentAttachment | null> {
+  const { data, error } = await supabase
+    .from('document_attachments')
+    .select('*')
+    .eq('id', uploadId)
+    .eq('company_id', companyId)
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) throw new Error(`Failed to check document upload: ${error.message}`)
+  return data as DocumentAttachment | null
+}
+
+function validateReservedDocumentMetadata(
+  document: DocumentAttachment,
+  fileName: string,
+  mimeType: string
+): void {
+  if (document.file_name !== fileName || document.mime_type !== mimeType) {
+    throw new Error('Upload ID was already completed with different file metadata')
+  }
+}
+
+async function validatePendingDocumentBytes(
+  buffer: ArrayBuffer,
+  mimeType: string
+): Promise<string> {
+  if (buffer.byteLength === 0) throw new Error('Uploaded file is empty')
+  if (buffer.byteLength > MAX_DOCUMENT_SIZE) {
+    throw new Error(`File too large (max ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB)`)
+  }
+  const magicError = validateDocumentMagicBytes(buffer, mimeType)
+  if (magicError) throw new Error(magicError)
+  return computeSHA256(buffer)
+}
+
+/**
+ * Adopt bytes uploaded through a signed URL into the WORM document archive.
+ * The reserved UUID becomes the document id, making retries and concurrent
+ * completion calls converge on the same immutable row.
+ */
+export async function completePendingDocumentUpload(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  uploadId: string,
+  fileName: string,
+  mimeType: string,
+  now: number = Date.now()
+): Promise<CompletedPendingDocumentUpload> {
+  const serviceClient = createServiceClientNoCookies()
+  const storage = serviceClient.storage.from(DOCUMENTS_BUCKET)
+  const pendingPath = buildPendingDocumentStoragePath(companyId, userId, uploadId, fileName)
+  const permanentPath = buildReservedDocumentStoragePath(companyId, userId, uploadId, fileName)
+
+  const existing = await findReservedDocument(supabase, companyId, userId, uploadId)
+  if (existing) {
+    validateReservedDocumentMetadata(existing, fileName, mimeType)
+    const { data, error } = await storage.download(existing.storage_path)
+    if (error || !data) {
+      throw new Error(`Failed to read completed document upload: ${error?.message ?? 'no data returned'}`)
+    }
+    const buffer = await data.arrayBuffer()
+    const hash = await validatePendingDocumentBytes(buffer, mimeType)
+    if (hash !== existing.sha256_hash) throw new Error('Completed document failed its integrity check')
+    return { document: existing, buffer }
+  }
+
+  await cleanupExpiredPendingDocumentUploads(companyId, userId, now)
+
+  let sourcePath = pendingPath
+  let { data: blob, error: downloadError } = await storage.download(pendingPath)
+  if (downloadError || !blob) {
+    const permanentDownload = await storage.download(permanentPath)
+    blob = permanentDownload.data
+    downloadError = permanentDownload.error
+    sourcePath = permanentPath
+  }
+  if (downloadError || !blob) {
+    throw new Error('Document upload was not found or has expired. Create a new upload URL and try again.')
+  }
+
+  const buffer = await blob.arrayBuffer()
+  let sha256Hash: string
+  try {
+    sha256Hash = await validatePendingDocumentBytes(buffer, mimeType)
+  } catch (error) {
+    await storage.remove([sourcePath])
+    throw error
+  }
+
+  if (sourcePath === pendingPath) {
+    const { error: moveError } = await storage.move(pendingPath, permanentPath)
+    if (moveError) {
+      const permanentDownload = await storage.download(permanentPath)
+      if (permanentDownload.error || !permanentDownload.data) {
+        throw new Error(`Failed to finalize document upload: ${moveError.message}`)
+      }
+    }
+  }
+
+  const { data, error } = await supabase
+    .from('document_attachments')
+    .insert({
+      id: uploadId,
+      user_id: userId,
+      company_id: companyId,
+      storage_path: permanentPath,
+      file_name: fileName,
+      file_size_bytes: buffer.byteLength,
+      mime_type: mimeType,
+      sha256_hash: sha256Hash,
+      version: 1,
+      is_current_version: true,
+      uploaded_by: userId,
+      upload_source: 'api',
+      digitization_date: new Date(now).toISOString(),
+      journal_entry_id: null,
+      journal_entry_line_id: null,
+    })
+    .select()
+    .single()
+
+  if (error) {
+    const concurrent = await findReservedDocument(supabase, companyId, userId, uploadId)
+    if (concurrent) {
+      validateReservedDocumentMetadata(concurrent, fileName, mimeType)
+      if (concurrent.sha256_hash !== sha256Hash) {
+        throw new Error('Upload ID was completed with different file content')
+      }
+      return { document: concurrent, buffer }
+    }
+    await storage.remove([permanentPath])
+    throw new Error(`Failed to create document record: ${error.message}`)
+  }
+
+  const document = data as DocumentAttachment
+  await eventBus.emit({
+    type: 'document.uploaded',
+    payload: { document, userId, companyId },
+  })
+
+  return { document, buffer }
 }
 
 /**
