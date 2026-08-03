@@ -71,6 +71,22 @@ describe('sortInvoiceList', () => {
 
   it('sorts the rounded amount displayed in the list', () => {
     const invoices = [
+      makeInvoice({ id: 'larger', invoice_date: '2024-07-02', total: 11.6 }),
+      makeInvoice({ id: 'smaller', invoice_date: '2024-07-01', total: 10.4 }),
+    ]
+
+    expect(sort(invoices, { column: 'amount', direction: 'asc' }, true).map((i) => i.id)).toEqual([
+      'smaller',
+      'larger',
+    ])
+    expect(sort(invoices, { column: 'amount', direction: 'desc' }, true).map((i) => i.id)).toEqual([
+      'larger',
+      'smaller',
+    ])
+  })
+
+  it('breaks rounded-amount ties by newest invoice date while unrounded totals still order', () => {
+    const invoices = [
       makeInvoice({ id: 'newer', invoice_date: '2024-07-02', total: 10.49 }),
       makeInvoice({ id: 'older', invoice_date: '2024-07-01', total: 10.01 }),
     ]
