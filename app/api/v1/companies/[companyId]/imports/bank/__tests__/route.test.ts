@@ -232,9 +232,11 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('VALIDATION_ERROR')
-    expect(body.error.details.issues).toEqual([
+    expect(body.error.details.issues).toContainEqual(
       expect.objectContaining({ severity: 'error', message: expect.stringMatching(/NEUTRAL/) }),
-    ])
+    )
+    expect(body.error.details.issues.length).toBeLessThanOrEqual(20)
+    expect(body.error.details.issue_count).toBe(1)
     expect(ingestMock).not.toHaveBeenCalled()
   })
 

@@ -180,12 +180,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const parseResult = parseBankFile(content, file.name, format)
     const blockingIssues = parseResult.issues.filter((issue) => issue.severity === 'error')
     if (blockingIssues.length > 0) {
+      // Cap the reported rows so a large malformed file cannot balloon the
+      // error payload or the log sink; issue_count carries the full total.
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: {
           field: 'file',
           message: 'The bank file contains rows that cannot be imported safely.',
-          issues: blockingIssues,
+          issues: blockingIssues.slice(0, 20),
+          issue_count: blockingIssues.length,
         },
       })
     }
