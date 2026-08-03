@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice } from '@/types'
+import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import {
   buildRotRutFile,
   evaluateInvoiceForFile,
@@ -44,7 +45,9 @@ export async function listRotRutCandidates(
   supabase: SupabaseClient,
   companyId: string,
   type: DeductionType,
-  today = new Date().toISOString().slice(0, 10),
+  // Europe/Stockholm, not UTC: this date gates FUTURE_PAYMENT_DATE and the
+  // 31 January begäran deadline, both defined by Swedish calendar days.
+  today = getSwedishLocalDate(),
 ): Promise<
   | { ok: true; eligible: RotRutCandidateSummary[]; blocked: RotRutBlockedSummary[] }
   | { ok: false; dbError: unknown }
@@ -134,7 +137,7 @@ export async function createRotRutPayoutRequest(
     today?: string
   },
 ): Promise<CreateRotRutRequestResult> {
-  const today = params.today ?? new Date().toISOString().slice(0, 10)
+  const today = params.today ?? getSwedishLocalDate()
   const name = (params.name ?? `${params.type.toUpperCase()} ${today}`).slice(0, 16)
 
   const { data: invoices, error: invoicesError } = await supabase
