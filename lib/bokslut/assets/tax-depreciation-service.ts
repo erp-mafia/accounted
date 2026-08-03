@@ -156,7 +156,7 @@ export async function loadTaxDepreciationView(
       && !population.cohortHistoryComplete
     )
   ) {
-    result = computeTaxDepreciation({
+    const baseInput = {
       method,
       selectedRule: method === 'rakenskapsenlig' ? selectedRule ?? undefined : undefined,
       openingTaxValue,
@@ -164,8 +164,17 @@ export async function loadTaxDepreciationView(
       disposals: population.disposals,
       periodMonths: population.periodMonths,
       cohorts: population.cohorts,
-      electedDeduction: snapshot?.deduction,
-    })
+    }
+    try {
+      result = computeTaxDepreciation({ ...baseInput, electedDeduction: snapshot?.deduction })
+    } catch (error) {
+      // A saved election can exceed the statutory maximum when the
+      // predecessor's closing value later changed. The view must surface
+      // that as a stale snapshot, not crash: recompute the statutory result
+      // and let the snapshot comparison flag the divergence.
+      if (!(error instanceof Error && /electedDeduction/.test(error.message))) throw error
+      result = computeTaxDepreciation(baseInput)
+    }
   }
 
   const status = missingPreviousSnapshot

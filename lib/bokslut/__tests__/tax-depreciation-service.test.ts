@@ -207,18 +207,25 @@ describe('tax depreciation opening continuity', () => {
   it('marks a saved successor stale when the previous closing value changes', () => {
     const changedPrevious = { ...currentSnapshot, closingTaxValue: 65_000 }
     const opening = resolveTaxDepreciationOpening(currentSnapshot, changedPrevious, true)
-    const recomputed = computeTaxDepreciation({
-      method: 'rakenskapsenlig',
-      selectedRule: 'huvudregel_30',
+    expect(opening.value).toBe(65_000)
+
+    const staleInput = {
+      method: 'rakenskapsenlig' as const,
+      selectedRule: 'huvudregel_30' as const,
       openingTaxValue: opening.value ?? 0,
       additions: 0,
       disposals: 0,
       periodMonths: 12,
       cohorts: [],
-      electedDeduction: currentSnapshot.deduction,
-    })
-
-    expect(opening.value).toBe(65_000)
+    }
+    // The saved 20 000 kr election now exceeds the statutory maximum
+    // (30% of 65 000 = 19 500), so recomputing with it must reject...
+    expect(() =>
+      computeTaxDepreciation({ ...staleInput, electedDeduction: currentSnapshot.deduction }),
+    ).toThrow(/electedDeduction/)
+    // ...and the statutory recomputation no longer matches the snapshot,
+    // which is what flags it as stale in the view.
+    const recomputed = computeTaxDepreciation(staleInput)
     expect(taxDepreciationSnapshotMatches(currentSnapshot, recomputed)).toBe(false)
   })
 
