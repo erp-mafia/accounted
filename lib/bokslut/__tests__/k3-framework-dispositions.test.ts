@@ -20,9 +20,14 @@ vi.mock('@/lib/reports/trial-balance', () => ({
   generateTrialBalance: vi.fn(),
 }))
 
+vi.mock('@/lib/bokslut/reserves/overavskrivningar-calculator', () => ({
+  calculateOveravskrivningar: vi.fn(),
+}))
+
 import { buildDispositionsProposal } from '../dispositions-proposal-builder'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { calculateOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-calculator'
 
 interface ChainableMock {
   from: ReturnType<typeof vi.fn>
@@ -138,6 +143,15 @@ function makeSupabase(opts: {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(calculateOveravskrivningar).mockResolvedValue({
+    status: 'not_applicable',
+    proposal: null,
+    warning: null,
+    currentReserve: 0,
+    currentPeriodChange: 0,
+    targetReserve: 0,
+    maximumSignedChange: 0,
+  })
   // Zero result so the builder doesn't propose a new avsättning: keeps the
   // 21xx balance stable at the trial-balance value, which makes the latent
   // tax math testable in isolation.
@@ -209,6 +223,80 @@ describe('buildDispositionsProposal: K3 framework', () => {
     const bolagsskatt = result.proposals.find((p) => p.kind === 'bolagsskatt')
     expect(avsattning?.amount).toBe(250_000)
     expect(bolagsskatt?.amount).toBe(154_500)
+  })
+
+  it('includes excess depreciation in the periodiseringsfond and tax bases', async () => {
+    vi.mocked(generateIncomeStatement).mockResolvedValue({
+      net_result: 1_000_000,
+    } as Awaited<ReturnType<typeof generateIncomeStatement>>)
+    vi.mocked(calculateOveravskrivningar).mockResolvedValue({
+      status: 'ready',
+      proposal: {
+        kind: 'overavskrivningar',
+        label: 'Överavskrivningar',
+        description: 'Skillnad mellan bokförd och skattemässig avskrivning.',
+        amount: 100_000,
+        signedAmount: 100_000,
+        lines: [
+          { account_number: '8853', debit_amount: 100_000, credit_amount: 0 },
+          { account_number: '2153', debit_amount: 0, credit_amount: 100_000 },
+        ],
+        warnings: [],
+      },
+      warning: null,
+      currentReserve: 0,
+      currentPeriodChange: 0,
+      targetReserve: 100_000,
+      maximumSignedChange: 100_000,
+    })
+
+    const supabase = makeSupabase({ entityType: 'aktiebolag', accountingFramework: 'k2' })
+    const result = await buildDispositionsProposal(
+      supabase as unknown as Parameters<typeof buildDispositionsProposal>[0],
+      'co',
+      'fp1',
+    )
+
+    const avsattning = result.proposals.find((p) => p.kind === 'periodiseringsfond_avsattning')
+    const bolagsskatt = result.proposals.find((p) => p.kind === 'bolagsskatt')
+    expect(avsattning?.amount).toBe(225_000)
+    expect(bolagsskatt?.amount).toBe(139_050)
+  })
+
+  it('includes a pending 2153 increase in the K3 latent tax proposal', async () => {
+    vi.mocked(calculateOveravskrivningar).mockResolvedValue({
+      status: 'ready',
+      proposal: {
+        kind: 'overavskrivningar',
+        label: 'Överavskrivningar',
+        description: 'Skillnad mellan bokförd och skattemässig avskrivning.',
+        amount: 10_000,
+        signedAmount: 10_000,
+        lines: [
+          { account_number: '8853', debit_amount: 10_000, credit_amount: 0 },
+          { account_number: '2153', debit_amount: 0, credit_amount: 10_000 },
+        ],
+        warnings: [],
+      },
+      warning: null,
+      currentReserve: 0,
+      currentPeriodChange: 0,
+      targetReserve: 10_000,
+      maximumSignedChange: 10_000,
+    })
+
+    const supabase = makeSupabase({ entityType: 'aktiebolag', accountingFramework: 'k3' })
+    const result = await buildDispositionsProposal(
+      supabase as unknown as Parameters<typeof buildDispositionsProposal>[0],
+      'co',
+      'fp1',
+    )
+
+    const latentTax = result.proposals.find((p) => p.kind === 'uppskjuten_skatt')
+    expect(latentTax?.amount).toBe(22_660)
+    expect(latentTax?.computation).toEqual(
+      expect.objectContaining({ untaxedReserves: 110_000, target2240: 22_660 }),
+    )
   })
 
   it('does NOT add an uppskjuten_skatt proposal for K2 aktiebolag', async () => {
