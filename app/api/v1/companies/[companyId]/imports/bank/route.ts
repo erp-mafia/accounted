@@ -62,6 +62,7 @@ registerEndpoint({
   pitfalls: [
     'File size cap: 10 MB. Larger files require splitting client-side.',
     '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, wise_statement, generic_csv, camt053.',
+    'Wise transaction-history rows with refunded or unknown statuses, unknown directions, or different source and target currencies are rejected instead of guessed. Import the matching per-currency Wise balance statements.',
     'Duplicate detection is by external_id (composed from format + date + description + amount + row index, or the camt.053 entry reference / Wise transfer id where the file carries one); a re-import of the same file typically deduplicates rather than creating doubles.',
     'BFL 5 kap 6-7 §§ note: this endpoint creates `transactions` rows (the underlag for a verifikation), NOT verifikationer themselves. The verifikation content requirements are in BFL 5 kap 6-7 §§; until each transaction is matched to an invoice/supplier-invoice (POST /transactions/{id}/match-*) or categorised (POST /transactions/{id}/categorize), the bookkeeping obligation isn\'t discharged. A successful import here means the data is ingested: not booked.',
     'A successful import returns operation_id; poll /operations/{id} for the final ingested/duplicates/errors counts.',
@@ -177,6 +178,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     const parseResult = parseBankFile(content, file.name, format)
+    const blockingIssues = parseResult.issues.filter((issue) => issue.severity === 'error')
+    if (blockingIssues.length > 0) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'file',
+          message: 'The bank file contains rows that cannot be imported safely.',
+          issues: blockingIssues,
+        },
+      })
+    }
     if (parseResult.transactions.length === 0) {
       return v1ErrorResponseFromCode('BANK_FILE_NO_TRANSACTIONS', ctx.log, {
         requestId: ctx.requestId,

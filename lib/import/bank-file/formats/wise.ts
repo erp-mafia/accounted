@@ -127,10 +127,14 @@ export const wiseFormat: BankFileFormat = {
       // Only settled movements affect the balance. A blank/missing status is
       // NOT completed, so it must not slip through: require an exact match.
       if (status !== 'COMPLETED') {
+        const isKnownNonSettledStatus = status === 'CANCELLED' || status === 'PENDING'
         issues.push({
           row: i + 1,
           message: `Wise row ${wiseId || i + 1} has unsupported status "${status || 'blank'}"; skipped`,
-          severity: 'warning',
+          // Cancelled and pending rows have not settled. A refund, chargeback,
+          // blank status, or new Wise status can represent a real movement, so
+          // it must block the file until a real export pins its sign semantics.
+          severity: isKnownNonSettledStatus ? 'warning' : 'error',
         })
         skippedRows++
         continue
@@ -145,7 +149,7 @@ export const wiseFormat: BankFileFormat = {
         issues.push({
           row: i + 1,
           message: `Wise row ${wiseId || i + 1} has unsupported Direction "${at(idx.direction) || 'blank'}"; skipped`,
-          severity: 'warning',
+          severity: 'error',
         })
         skippedRows++
         continue
@@ -162,7 +166,7 @@ export const wiseFormat: BankFileFormat = {
         issues.push({
           row: i + 1,
           message: `Cross-currency Wise row ${wiseId || i + 1} (${sourceCurrency} to ${targetCurrency}) requires per-currency balance statements; skipped`,
-          severity: 'warning',
+          severity: 'error',
         })
         skippedRows++
         continue

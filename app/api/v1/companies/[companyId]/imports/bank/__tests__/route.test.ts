@@ -72,6 +72,12 @@ const WISE_STATEMENT_CSV = [
   'TRANSFER-100,01/08/2026,1250.50,SEK,Received money from Example AB,INV-100,5000.50,,,,Example AB,,,,,,,,0',
 ].join('\n')
 
+const WISE_TRANSACTION_HISTORY_WITH_UNSAFE_ROW = [
+  'ID,Status,Direction,"Created on","Finished on","Source fee amount","Source fee currency","Target fee amount","Target fee currency","Source name","Source amount (after fees)","Source currency","Target name","Target amount (after fees)","Target currency","Exchange rate",Reference,Batch,"Created by",Category,Note',
+  'PLAN_ORDER-9,COMPLETED,NEUTRAL,"2026-08-01 10:00:00","2026-08-01 10:00:00",,,,,Wise,100,USD,Wise,900,SEK,9,,,,General,',
+  'TRANSFER-2,COMPLETED,IN,"2026-08-02 10:00:00","2026-08-02 10:00:00",,,,,Example AB,100,SEK,Accounted AB,100,SEK,1,,,,General,',
+].join('\n')
+
 type MockResult = { data?: unknown; error?: unknown }
 type RecordedCall = { table: string; method: string; args: unknown[] }
 
@@ -210,10 +216,26 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
     expect(ingestedRows()).toHaveLength(1)
     expect(ingestedRows()[0]).toMatchObject({
       import_source: 'csv_wise_statement',
-      external_id: 'wise_statement_TRANSFER-100:SEK',
+      external_id: 'wise_TRANSFER-100',
       amount: 1250.5,
       currency: 'SEK',
     })
+  })
+
+  it('rejects a Wise file when any movement cannot be imported safely', async () => {
+    const res = await callRoute({
+      search: '?format=wise',
+      fileContent: WISE_TRANSACTION_HISTORY_WITH_UNSAFE_ROW,
+      filename: 'transaction-history.csv',
+    })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.issues).toEqual([
+      expect.objectContaining({ severity: 'error', message: expect.stringMatching(/NEUTRAL/) }),
+    ])
+    expect(ingestMock).not.toHaveBeenCalled()
   })
 
   it('returns 404 when the key user is not a member of the company in the URL', async () => {

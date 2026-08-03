@@ -2161,7 +2161,12 @@ describe('Wise format', () => {
     expect(result.transactions).toHaveLength(1)
     expect(result.transactions[0].raw_line).toBe('TRANSFER-2247230173')
     expect(result.stats.skipped_rows).toBe(1)
-    expect(result.issues.some((issue) => /unsupported status "CANCELLED"/.test(issue.message))).toBe(true)
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        severity: 'warning',
+        message: expect.stringMatching(/unsupported status "CANCELLED"/),
+      }),
+    )
   })
 })
 
@@ -2192,7 +2197,12 @@ describe('Wise format hardening', () => {
     expect(result.transactions).toHaveLength(1)
     expect(result.transactions[0].raw_line).toBe('TRANSFER-2')
     expect(result.stats.skipped_rows).toBe(1)
-    expect(result.issues.some((issue) => /unsupported Direction "NEUTRAL"/.test(issue.message))).toBe(true)
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        severity: 'error',
+        message: expect.stringMatching(/unsupported Direction "NEUTRAL"/),
+      }),
+    )
   })
 
   it('skips and surfaces a cross-currency row instead of importing one side', () => {
@@ -2204,7 +2214,12 @@ describe('Wise format hardening', () => {
 
     expect(result.transactions).toHaveLength(0)
     expect(result.stats.skipped_rows).toBe(1)
-    expect(result.issues.some((issue) => /Cross-currency Wise row TRANSFER-FX \(USD to SEK\)/.test(issue.message))).toBe(true)
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        severity: 'error',
+        message: expect.stringMatching(/Cross-currency Wise row TRANSFER-FX \(USD to SEK\)/),
+      }),
+    )
   })
 
   it('surfaces a REFUNDED row instead of silently dropping it', () => {
@@ -2213,7 +2228,12 @@ describe('Wise format hardening', () => {
 
     expect(result.transactions).toHaveLength(0)
     expect(result.stats.skipped_rows).toBe(1)
-    expect(result.issues.some((issue) => /unsupported status "REFUNDED"/.test(issue.message))).toBe(true)
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        severity: 'error',
+        message: expect.stringMatching(/unsupported status "REFUNDED"/),
+      }),
+    )
   })
 
   it('does not import a row with a blank status', () => {
@@ -2221,6 +2241,7 @@ describe('Wise format hardening', () => {
     const result = parseBankFile(csv, 'wise.csv')
     expect(result.transactions).toHaveLength(0)
     expect(result.stats.skipped_rows).toBe(1)
+    expect(result.issues[0].severity).toBe('error')
   })
 
   it('rejects a partially numeric amount instead of coercing it', () => {
@@ -2351,7 +2372,7 @@ describe('Wise balance statement format', () => {
 
     expect(result.format).toBe('wise_statement')
     expect(result.transactions).toHaveLength(4)
-    expect(byId(result.transactions, 'TRANSFER-100:SEK')).toMatchObject({
+    expect(byId(result.transactions, 'TRANSFER-100')).toMatchObject({
       date: '2026-08-01',
       amount: 1250.5,
       currency: 'SEK',
@@ -2359,18 +2380,18 @@ describe('Wise balance statement format', () => {
       reference: 'INV-100',
       counterparty: 'Example AB',
     })
-    expect(byId(result.transactions, 'CARD-200:SEK')).toMatchObject({
+    expect(byId(result.transactions, 'CARD-200')).toMatchObject({
       date: '2026-08-02',
       amount: -49.9,
       description: 'Corner Shop - Lunch',
       counterparty: 'Corner Shop',
     })
-    expect(byId(result.transactions, 'FEE-TRANSFER-300:SEK')).toMatchObject({
+    expect(byId(result.transactions, 'FEE-TRANSFER-300')).toMatchObject({
       date: '2026-08-03',
       amount: -2.2,
       counterparty: 'Wise',
     })
-    expect(byId(result.transactions, 'TRANSFER-300:SEK')?.description).toContain(
+    expect(byId(result.transactions, 'TRANSFER-300')?.description).toContain(
       'Wise avgift: 0.35 SEK',
     )
     expect(result.date_from).toBe('2026-08-01')
@@ -2391,24 +2412,65 @@ describe('Wise balance statement format', () => {
     expect(result.transactions).toHaveLength(4)
   })
 
-  it('qualifies stable IDs by statement currency', () => {
-    const sek = parseBankFile(
-      [WISE_STATEMENT_HEADER, wiseStatementRow()].join('\n'),
-      'statement_SEK.csv',
-    ).transactions[0]
-    const usd = parseBankFile(
+  it('shares ordinary movement IDs with transaction history across formats', () => {
+    const statement = parseBankFile(
       [
         WISE_STATEMENT_HEADER,
-        wiseStatementRow({ currency: 'USD', amount: '125', balance: '500' }),
+        wiseStatementRow({
+          id: 'TRANSFER-2247230173',
+          currency: 'USD',
+          amount: '2500',
+          balance: '5000',
+        }),
       ].join('\n'),
       'statement_USD.csv',
     ).transactions[0]
+    const history = parseBankFile(WISE_CSV, 'wise.csv').transactions.find(
+      (transaction) => transaction.raw_line === 'TRANSFER-2247230173',
+    )!
 
-    expect(generateExternalId(sek, 'wise_statement', 0)).toBe(
-      'wise_statement_TRANSFER-100:SEK',
+    expect(generateExternalId(statement, 'wise_statement', 0)).toBe(
+      generateExternalId(history, 'wise', 0),
     )
-    expect(generateExternalId(usd, 'wise_statement', 0)).toBe(
-      'wise_statement_TRANSFER-100:USD',
+  })
+
+  it('qualifies conversion legs by statement currency', () => {
+    const conversion = (currency: string) =>
+      parseBankFile(
+        [
+          WISE_STATEMENT_HEADER,
+          wiseStatementRow({
+            id: 'PLAN_ORDER-9',
+            currency,
+            exchangeFrom: '100 USD',
+            exchangeTo: '900 SEK',
+            exchangeRate: '9',
+          }),
+        ].join('\n'),
+        `statement_${currency}.csv`,
+      ).transactions[0]
+
+    expect(generateExternalId(conversion('SEK'), 'wise_statement', 0)).toBe(
+      'wise_PLAN_ORDER-9:SEK',
+    )
+    expect(generateExternalId(conversion('USD'), 'wise_statement', 0)).toBe(
+      'wise_PLAN_ORDER-9:USD',
+    )
+  })
+
+  it('blocks a duplicate scoped Wise movement ID within one statement', () => {
+    const result = parseBankFile(
+      [WISE_STATEMENT_HEADER, wiseStatementRow(), wiseStatementRow()].join('\n'),
+      'statement.csv',
+    )
+
+    expect(result.transactions).toHaveLength(1)
+    expect(result.stats.skipped_rows).toBe(1)
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        severity: 'error',
+        message: 'Duplicate Wise movement ID TRANSFER-100; skipped',
+      }),
     )
   })
 

@@ -154,7 +154,7 @@ export function generateExternalId(
   }
 
   if (formatId === 'wise_statement' && tx.raw_line) {
-    return `wise_statement_${tx.raw_line}`
+    return `wise_${tx.raw_line}`
   }
 
   // For CSV formats, create a composite hash

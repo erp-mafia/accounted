@@ -77,12 +77,16 @@ export const wiseStatementFormat: BankFileFormat = {
       description: col('description'),
       paymentReference: col('payment reference'),
       runningBalance: col('running balance'),
+      exchangeFrom: col('exchange from'),
+      exchangeTo: col('exchange to'),
       payerName: col('payer name'),
       payeeName: col('payee name'),
       merchant: col('merchant'),
       note: col('note'),
       totalFees: col('total fees'),
     }
+
+    const seenWiseMovements = new Set<string>()
 
     if (REQUIRED_HEADERS.some((header) => col(header) === -1)) {
       issues.push({
@@ -184,6 +188,30 @@ export const wiseStatementFormat: BankFileFormat = {
         }
       }
 
+      // Ordinary movements use the same canonical Wise ID as the transaction
+      // history export, preventing an overlapping import from creating a
+      // second transaction. Conversions can reuse one ID across currency
+      // statements, so their independently signed legs stay currency-scoped.
+      const hasExchangeDetails = Boolean(
+        at(idx.exchangeFrom).trim() || at(idx.exchangeTo).trim(),
+      )
+      const stableMovementId = wiseId
+        ? hasExchangeDetails
+          ? `${wiseId}:${currency}`
+          : wiseId
+        : undefined
+
+      if (stableMovementId && seenWiseMovements.has(stableMovementId)) {
+        issues.push({
+          row: rowNumber,
+          message: `Duplicate Wise movement ID ${stableMovementId}; skipped`,
+          severity: 'error',
+        })
+        skippedRows++
+        continue
+      }
+      if (stableMovementId) seenWiseMovements.add(stableMovementId)
+
       transactions.push({
         date,
         description: descriptionParts.join(' - '),
@@ -192,9 +220,7 @@ export const wiseStatementFormat: BankFileFormat = {
         balance,
         reference: reference || null,
         counterparty: counterparty || null,
-        // A Wise conversion can reuse an ID across per-currency statements.
-        // Currency keeps each balance movement stable and independently dedupable.
-        raw_line: wiseId ? `${wiseId}:${currency}` : undefined,
+        raw_line: stableMovementId,
       })
     }
 
