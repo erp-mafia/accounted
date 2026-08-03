@@ -1,7 +1,8 @@
 import type { ProposedDisposition } from '../types'
+import { roundOre } from '@/lib/money'
 
-/** 30-rule (huvudregel, IL 18 kap 13 §): restvärde minst 70 % av (ingående
- *  bokfört värde + årets anskaffningar − årets försäljningar och utrangeringar). */
+/** 30-rule (huvudregel, IL 18 kap 13 §): restvärde minst 70 % av ingående
+ *  bokfört värde plus årets anskaffningar minus årets försäljningar. */
 export const OVERAVSKRIVNING_30_RULE = 0.7
 
 /** 20-rule (kompletteringsregel, IL 18 kap 17 §): restvärde minst 0 % efter
@@ -9,16 +10,18 @@ export const OVERAVSKRIVNING_30_RULE = 0.7
 export const OVERAVSKRIVNING_20_RULE_YEARS = 5
 
 export interface Compute30RuleInput {
-  /** IB bokfört värde maskiner & inventarier (12xx netto). */
+  /** IB skattemässigt värde maskiner & inventarier. */
   openingBookValue: number
   /** Årets anskaffningar (debet på anskaffningskonto, t.ex. 1220). */
   additions: number
   /** Försäljningsvärde och utrangering av tillgångar (kredit på anskaffningskonto). */
   disposals: number
+  /** Räkenskapsperiodens längd. 30 % proportioneras för perioder som inte är 12 månader. */
+  fiscalPeriodMonths?: number
 }
 
 export interface Compute20RuleInput {
-  /** Anskaffningskostnad per anskaffningsår, från (innevarande år − 4) till
+  /** Anskaffningskostnad per anskaffningsår, från innevarande år minus 4 till
    *  innevarande år. Index 0 = innevarande år. */
   acquisitionCostByYearOffset: [number, number, number, number, number]
 }
@@ -32,19 +35,21 @@ export function compute30Rule(input: Compute30RuleInput): {
   minimumResidual: number
   maxAllowedAccumulated: number
 } {
-  const base = input.openingBookValue + input.additions - input.disposals
-  const minimumResidual = Math.round(base * OVERAVSKRIVNING_30_RULE * 100) / 100
+  const base = Math.max(0, input.openingBookValue + input.additions - input.disposals)
+  const periodMonths = input.fiscalPeriodMonths ?? 12
+  const depreciationRate = Math.min(1, 0.3 * (periodMonths / 12))
+  const minimumResidual = roundOre(base * (1 - depreciationRate))
   return {
     base,
     minimumResidual,
-    maxAllowedAccumulated: Math.round((base - minimumResidual) * 100) / 100,
+    maxAllowedAccumulated: roundOre(base - minimumResidual),
   }
 }
 
 /**
  * 20-regeln: varje årsanskaffning får skrivas av med 20 % under 5 år. Lägsta
- * skattemässigt restvärde är summan av 20 % × ((5 − offset) / 5) × anskaffningar
- * från år (innevarande − offset).
+ * skattemässigt restvärde är anskaffningskostnaden minus 20 % per tolvmånadersperiod,
+ * inklusive anskaffningsperioden.
  *
  * Returns the allowed depreciation if 20-rule is used as the sole basis,
  * computed against ALL still-active 20-rule cohorts.
@@ -52,15 +57,37 @@ export function compute30Rule(input: Compute30RuleInput): {
 export function compute20Rule(input: Compute20RuleInput): {
   minimumResidual: number
 } {
-  // Residual per cohort = anskaffningskostnad × (5 − ageInYears) / 5.
-  // ageInYears 0 = current year (residual 100 %), 4 = oldest still-live (20 %).
+  return compute20RuleForFiscalPeriods({
+    acquisitionCostByPeriod: input.acquisitionCostByYearOffset,
+    fiscalPeriodMonths: [12, 12, 12, 12, 12],
+  })
+}
+
+export interface Compute20RuleForFiscalPeriodsInput {
+  /** Anskaffningskostnad per period. Index 0 är innevarande period. */
+  acquisitionCostByPeriod: number[]
+  /** Periodlängd per motsvarande period, nyaste först. */
+  fiscalPeriodMonths: number[]
+}
+
+/**
+ * Kompletteringsregeln writes off 20 % per twelve fiscal months, including
+ * the acquisition period. Supplying actual period lengths handles shortened
+ * and extended fiscal years without shifting the acquisition cohort by a year.
+ */
+export function compute20RuleForFiscalPeriods(
+  input: Compute20RuleForFiscalPeriodsInput,
+): { minimumResidual: number } {
   let residual = 0
-  for (let offset = 0; offset < OVERAVSKRIVNING_20_RULE_YEARS; offset++) {
-    const cost = input.acquisitionCostByYearOffset[offset] ?? 0
-    const remainingFraction = (OVERAVSKRIVNING_20_RULE_YEARS - offset) / OVERAVSKRIVNING_20_RULE_YEARS
-    residual += cost * remainingFraction
+  for (let offset = 0; offset < input.acquisitionCostByPeriod.length; offset++) {
+    const cost = input.acquisitionCostByPeriod[offset] ?? 0
+    const elapsedMonths = input.fiscalPeriodMonths
+      .slice(0, offset + 1)
+      .reduce((sum, months) => sum + months, 0)
+    const depreciatedFraction = Math.min(1, elapsedMonths / 60)
+    residual += cost * (1 - depreciatedFraction)
   }
-  return { minimumResidual: Math.round(residual * 100) / 100 }
+  return { minimumResidual: roundOre(residual) }
 }
 
 /**
@@ -102,7 +129,8 @@ export interface OveravskrivningarInput {
   /** Föreslagen ökning av ackumulerade överavskrivningar. Positivt belopp
    *  ökar ackumulerade-kontot (debet 88xx), negativt minskar (kredit 88xx). */
   additionalAmount: number
-  /** Account pair to use. Defaults to maskiner & inventarier (8853 / 2153):    *  the only category where överavskrivningar is common in K2 SME. Override
+  /** Account pair to use. Defaults to maskiner & inventarier (8853 / 2153),
+   *  the only category where överavskrivningar is common in K2 SME. Override
    *  for buildings or immateriella tillgångar when relevant. */
   category?: OveravskrivningCategory
   /** Visa beräkningens bakgrund i UI:t. Helt fritt format. */
@@ -127,7 +155,7 @@ const CATEGORY_LABELS: Record<OveravskrivningCategory, string> = {
 }
 
 export function proposeOveravskrivningar(input: OveravskrivningarInput): ProposedDisposition | null {
-  const amount = Math.round(input.additionalAmount)
+  const amount = roundOre(input.additionalAmount)
   if (amount === 0) return null
 
   const category = input.category ?? 'machinery_equipment'
@@ -140,6 +168,7 @@ export function proposeOveravskrivningar(input: OveravskrivningarInput): Propose
       label: `Ökning av överavskrivningar (${categoryLabel})`,
       description: `Debet ${accounts.expense}, kredit ${accounts.accumulated}. Bokför skattemässig avskrivning utöver planenlig.`,
       amount,
+      signedAmount: amount,
       lines: [
         {
           account_number: accounts.expense,
@@ -155,7 +184,7 @@ export function proposeOveravskrivningar(input: OveravskrivningarInput): Propose
         },
       ],
       warnings: [],
-      computation: input.computation,
+      computation: { ...input.computation, additionalAmount: amount },
     }
   }
 
@@ -166,6 +195,7 @@ export function proposeOveravskrivningar(input: OveravskrivningarInput): Propose
     label: `Upplösning av överavskrivningar (${categoryLabel})`,
     description: `Debet ${accounts.accumulated}, kredit ${accounts.expense}. Återför tidigare gjord överavskrivning.`,
     amount: absAmount,
+    signedAmount: -absAmount,
     lines: [
       {
         account_number: accounts.accumulated,
@@ -181,6 +211,7 @@ export function proposeOveravskrivningar(input: OveravskrivningarInput): Propose
       },
     ],
     warnings: ['Negativ förändring återför tidigare överavskrivning och ökar skattepliktigt resultat.'],
-    computation: input.computation,
+    computation: { ...input.computation, additionalAmount: -absAmount },
+    required: true,
   }
 }
