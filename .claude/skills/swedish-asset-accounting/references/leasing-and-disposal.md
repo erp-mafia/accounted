@@ -79,23 +79,19 @@ Regardless of whether the lease is capitalized in accounting.
 
 Asset must be depreciated up to the disposal date before calculating gain/loss.
 
-### Booking Pattern (Sale of Inventory)
+### Booking Pattern
 
-**Step 1 - Record sale with VAT:**
-```
-Debit  1510 Kundfordran          [sale price incl. 25% VAT]
-Credit 2611 Utgående moms 25%    [VAT amount]
-Credit 3973 Vinst avyttring      [sale price ex VAT] (or Debit 7973 if loss)
-```
+Use one balanced entry after depreciation through the disposal date. The gain
+or loss equals `försäljningspris ex moms − bokfört restvärde`.
 
-**Step 2 - Remove asset from books:**
 ```
-Debit  1229 Ack. avskr. inventarier  [accumulated depreciation]
-Debit  7973 Förlust avyttring        [remaining book value] (or Credit 3973 if already used above)
-Credit 1221 Inventarier              [original acquisition cost]
+Debit  1510 Kundfordran                 [gross proceeds]
+Debit  1229 Ack. avskr. inventarier     [accumulated depreciation]
+Debit  7973 Förlust vid avyttring       [only for a loss]
+Credit 1221 Inventarier                 [original acquisition cost]
+Credit 2611 Utgående moms 25%           [output VAT]
+Credit 3973 Vinst vid avyttring         [only for a gain]
 ```
-
-**Alternative (net method):** Some systems use a combined entry. The gain/loss equals: `försäljningspris ex moms − bokfört restvärde`.
 
 ### Gain/Loss Accounts
 
@@ -114,17 +110,15 @@ Asset: anskaffningsvärde 50,000 kr, ack. avskr. 10,000 kr (book value 40,000 kr
 Sold for 56,000 kr ex VAT.
 
 ```
-Debit  1510  70,000  (56,000 + 14,000 VAT)
-Credit 2611  14,000  (25% moms)
-Credit 3973  16,000  (gain: 56,000 − 40,000)
+Debit  1510  70,000  (gross proceeds)
 Debit  1229  10,000  (remove accumulated depreciation)
 Credit 1221  50,000  (remove asset at cost)
-Debit  7973  40,000  (book value to loss account)
+Credit 2611  14,000  (25% output VAT)
+Credit 3973  16,000  (gain: 56,000 − 40,000)
 ```
 
-Net effect on income: 3973 16,000 credit + 7973 40,000 debit = 3973 16,000 gain (after netting with book value removal, the two 7973 entries cancel).
-
-**Note:** Many Swedish systems handle this more cleanly by netting directly. The above shows the full debit/credit flow.
+Debits and credits are both 80,000. The 16,000 credit is the complete income
+statement effect of the disposal.
 
 ---
 
@@ -157,19 +151,30 @@ Credit 1221  [full amount]
 ### Exceptions
 
 1. **Verksamhetsöverlåtelse (business transfer, ML 5 kap. 38 §):** No VAT when transferring entire business or independent branch.
-2. **No original input VAT deduction:** No output VAT on sale if input VAT was never deducted.
+2. **No original input VAT deduction (ML 10 kap. 37 §):** The exemption applies only when no part of the input VAT was deductible, including VAT on significant later additions to the asset.
 3. **Real property (fastighet):** Generally VAT-exempt sales.
 
 ### Jämkning (VAT Adjustment Rules, ML 15 kap.)
 
-Applies to capital goods where significant input VAT was deducted:
+Applies to investment goods based on total original input VAT, whether or not
+the full amount was deducted:
 
-| Asset type | Correction period | Threshold (ingående moms) |
+| Asset type | Adjustment period | Threshold (input VAT) |
 |---|---|---|
 | Byggnader | 10 years | ≥ 100,000 kr |
 | Maskiner/inventarier | 5 years | ≥ 50,000 kr |
 
-If a building is sold outside a business transfer, seller must repay remaining investment VAT in one lump sum for the rest of the correction period.
+The acquisition or completion tax year counts as year 1. The disposal tax year
+also counts. A one-time adjustment uses:
+
+`original input VAT × change in deduction percentage × remaining years / total years`
+
+No adjustment is made when the change is less than 5 percentage points. A
+positive adjustment on a taxable sale of movable property is capped at 25% of
+the sale price excluding VAT. In a qualifying business transfer under ML 5
+kap. 38 §, the acquirer takes over the adjustment rights and obligations when
+the statutory conditions are met. An adjustment document with the information
+required by ML 15 kap. 28-31 §§ must be prepared and retained.
 
 ---
 

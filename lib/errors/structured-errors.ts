@@ -3115,6 +3115,44 @@ const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
 }
 
 const ASSETS: Record<string, StructuredErrorEntry> = {
+  ASSET_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Tillgången kunde inte hittas.',
+    message_en: 'Asset not found.',
+  },
+  ASSET_ALREADY_DISPOSED: {
+    httpStatus: 409,
+    message_sv: 'Tillgången är redan avyttrad.',
+    message_en: 'The asset has already been disposed.',
+  },
+  ASSET_DISPOSAL_BLOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Avyttringen kan inte bokföras eftersom avskrivningar redan finns för samma eller en senare period. Återför den felaktiga avskrivningen med storno först.',
+    message_en:
+      'The disposal cannot be posted because depreciation already exists for the same or a later period. Reverse the incorrect depreciation first.',
+  },
+  ASSET_JAMKNING_DATA_REQUIRED: {
+    httpStatus: 422,
+    message_sv:
+      'Ange ursprunglig ingående moms och ursprunglig avdragsprocent för att bedöma justering enligt ML 15 kap.',
+    message_en:
+      'Enter the original input VAT and original deduction percentage to assess adjustment under ML chapter 15.',
+  },
+  ASSET_ADJUSTMENT_DOCUMENT_REQUIRED: {
+    httpStatus: 422,
+    message_sv:
+      'Bekräfta att en justeringshandling upprättas när justeringsskyldigheten överförs.',
+    message_en:
+      'Confirm that an adjustment document is prepared when the adjustment obligation is transferred.',
+  },
+  ASSET_BUSINESS_TRANSFER_CONFIRMATION_REQUIRED: {
+    httpStatus: 422,
+    message_sv:
+      'Bekräfta att överlåtelsen omfattar en hel verksamhet eller självständig verksamhetsgren och uppfyller villkoren i ML 5 kap. 38 §.',
+    message_en:
+      'Confirm that the transfer covers an entire business or independent branch and meets the conditions in ML chapter 5, section 38.',
+  },
   ASSET_CORRECTION_BLOCKED: {
     httpStatus: 409,
     message_sv:

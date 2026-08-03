@@ -1,6 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
-import { listAssets } from './asset-service'
 import type {
   Asset,
   FiscalPeriod,
@@ -272,6 +271,9 @@ export async function proposeAnnualPostings(
   companyId: string,
   fiscalPeriodId: string,
 ): Promise<DepreciationProposal> {
+  // Loaded here to keep the pure depreciation calculator reusable from the
+  // asset disposal service without creating a module initialization cycle.
+  const { listAssets } = await import('./asset-service')
   const [periodResult, assets, currentSchedulesResult, priorSchedulesResult] = await Promise.all([
     supabase
       .from('fiscal_periods')

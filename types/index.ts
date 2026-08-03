@@ -3319,6 +3319,9 @@ export type DepreciationMethod =
   | 'declining_balance_20'
   | 'restvardesavskrivning_25'
 
+export type AssetDisposalType = 'sale' | 'scrap' | 'business_transfer'
+export type AssetJamkningDirection = 'increase' | 'decrease' | 'none' | 'transferred'
+
 /**
  * K3 component (BFNAR 2012:1 ch 17.4: komponentavskrivning). When a
  * substantial asset (typically real estate) has significant components with
@@ -3363,6 +3366,10 @@ export interface Asset {
   restvarde_target: number | null
   disposed_at: string | null
   disposed_proceeds: number | null
+  /** How the asset left the register. Null for legacy disposal records. */
+  disposal_type?: AssetDisposalType | null
+  /** Posted voucher that atomically completed the disposal. */
+  disposal_journal_entry_id?: string | null
   /** Output VAT on disposal proceeds (ML 3 kap 3 § / 7 kap 3 §). Defaults to
    *  0: only nonzero when the sale was momspliktig. The VAT account
    *  (2611/2621/2631) is derived from disposed_vat_treatment. */
@@ -3371,9 +3378,7 @@ export interface Asset {
    *  without VAT data. Constrained by DB CHECK to the same enum as
    *  VatTreatment. */
   disposed_vat_treatment: VatTreatment | null
-  /** Jämkning amount per ML 8a kap 7 §: input VAT paid back on disposal
-   *  inside the correction period. Defaults to 0; positive number = debt
-   *  to the state booked on 2641 credit. */
+  /** Absolute input VAT adjustment under ML (2023:200), chapter 15. */
   jamkning_amount: number
   /** Remaining months in the korrigeringstid at disposal date. Audit
    *  metadata only: the booking sits on the journal entry. */
@@ -3384,6 +3389,12 @@ export interface Asset {
   /** Original input VAT that was deducted at acquisition. Audit metadata
    *  the user supplies (or the system derives from the supplier invoice). */
   jamkning_original_input_vat: number | null
+  /** Current-law adjustment metadata. Old month fields remain for legacy rows. */
+  jamkning_direction?: AssetJamkningDirection | null
+  jamkning_remaining_years?: number | null
+  jamkning_total_years?: number | null
+  jamkning_original_deduction_percent?: number | null
+  jamkning_new_deduction_percent?: number | null
   /** K3 component depreciation (BFNAR 2012:1 ch.17.4). When non-null, the
    *  depreciation engine sums per-component linear depreciation instead of
    *  applying `depreciation_method` to the asset as a whole. Null for K2
