@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: beraknad-bolagsskatt
+  order: 23
+  name: 'Beräknad bolagsskatt'
+  category: year_end
+  entity_type: aktiebolag
+  description: >-
+    Bokföring av beräknad inkomstskatt vid bokslut.
+lines:
+  - account: '8910'
+    label: 'Skatt på årets resultat'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '2512'
+    label: 'Beräknad inkomstskatt'
+    side: credit
+    type: business
+    ratio: 1.0
