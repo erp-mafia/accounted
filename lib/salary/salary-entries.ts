@@ -8,6 +8,7 @@ import {
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { SALARY_ACCOUNTS, getLineItemAccount } from './account-mapping'
+import { calculateLoneVaxlingPensionProvision } from './lonevaxling'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -58,7 +59,45 @@ interface SalaryRunData {
   total_net: number
   total_avgifter: number
   total_vacation_accrual: number
+  calculation_params?: Record<string, unknown> | null
   employees: SalaryRunEmployee[]
+}
+
+function resolveLoneVaxlingPension(run: SalaryRunData): SalaryRunData {
+  const snapshotSlpRate = run.calculation_params?.slpRate
+
+  return {
+    ...run,
+    employees: run.employees.map((employee) => {
+      // Preserve the explicit amounts accepted by this low-level API. Current
+      // booking callers omit them and derive from the frozen line-item set.
+      if (
+        employee.pension_contribution !== undefined ||
+        employee.pension_slp !== undefined
+      ) {
+        return employee
+      }
+
+      const salaryReduction = employee.line_items
+        .filter((line) => line.item_type === 'gross_deduction_pension')
+        .reduce((sum, line) => sum + line.amount, 0)
+
+      if (roundOre(Math.abs(salaryReduction)) === 0) return employee
+      if (typeof snapshotSlpRate !== 'number') {
+        throw new Error('Salary run calculation snapshot is missing the SLP rate')
+      }
+
+      const provision = calculateLoneVaxlingPensionProvision(
+        salaryReduction,
+        snapshotSlpRate,
+      )
+      return {
+        ...employee,
+        pension_contribution: provision.pensionContribution,
+        pension_slp: provision.slpOnPension,
+      }
+    }),
+  }
 }
 
 /**
@@ -81,6 +120,7 @@ export async function createSalaryRunEntries(
   vacationEntry: JournalEntry | null
   pensionEntry: JournalEntry | null
 }> {
+  const postingRun = resolveLoneVaxlingPension(run)
   const entryDate = run.payment_date
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
   if (!fiscalPeriodId) {
@@ -90,25 +130,25 @@ export async function createSalaryRunEntries(
   const periodLabel = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
   const desc = `Lön ${periodLabel}`
 
-  await ensureSalaryAccountsExist(supabase, companyId, userId, run)
+  await ensureSalaryAccountsExist(supabase, companyId, userId, postingRun)
 
   // ─── Entry 1: Salary (brutto, skatt, netto) ───
   const salaryEntry = await createSalaryEntry(
-    supabase, companyId, userId, run, fiscalPeriodId, desc
+    supabase, companyId, userId, postingRun, fiscalPeriodId, desc
   )
 
   // ─── Entry 2: Arbetsgivaravgifter ───
   const avgifterEntry = await createAvgifterEntry(
-    supabase, companyId, userId, run, fiscalPeriodId, desc
+    supabase, companyId, userId, postingRun, fiscalPeriodId, desc
   )
 
   // ─── Entry 3: Vacation accrual (if any) ───
   let vacationEntry: JournalEntry | null = null
-  const totalVacation = run.employees.reduce((sum, e) => sum + e.vacation_accrual, 0)
-  const totalVacationAvgifter = run.employees.reduce((sum, e) => sum + e.vacation_accrual_avgifter, 0)
+  const totalVacation = postingRun.employees.reduce((sum, e) => sum + e.vacation_accrual, 0)
+  const totalVacationAvgifter = postingRun.employees.reduce((sum, e) => sum + e.vacation_accrual_avgifter, 0)
   if (totalVacation > 0 || totalVacationAvgifter > 0) {
     vacationEntry = await createVacationEntry(
-      supabase, companyId, userId, run, fiscalPeriodId, desc, totalVacation, totalVacationAvgifter
+      supabase, companyId, userId, postingRun, fiscalPeriodId, desc, totalVacation, totalVacationAvgifter
     )
   }
 
@@ -117,11 +157,11 @@ export async function createSalaryRunEntries(
   // Debit 7410 Pensionsförsäkringspremier / Credit 2740 Skuld pensionsförsäkringar
   // Debit 7533 Särskild löneskatt / Credit 2514 Beräknad särskild löneskatt
   let pensionEntry: JournalEntry | null = null
-  const totalPension = run.employees.reduce((sum, e) => sum + (e.pension_contribution || 0), 0)
-  const totalSlp = run.employees.reduce((sum, e) => sum + (e.pension_slp || 0), 0)
+  const totalPension = postingRun.employees.reduce((sum, e) => sum + (e.pension_contribution || 0), 0)
+  const totalSlp = postingRun.employees.reduce((sum, e) => sum + (e.pension_slp || 0), 0)
   if (totalPension > 0) {
     pensionEntry = await createPensionEntry(
-      supabase, companyId, userId, run, fiscalPeriodId, desc, totalPension, totalSlp
+      supabase, companyId, userId, postingRun, fiscalPeriodId, desc, totalPension, totalSlp
     )
   }
 

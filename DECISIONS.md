@@ -2,6 +2,8 @@
 
 One line per decision: `[YYYY-MM-DD] <decision>: <why>`. Appended by agents and humans when a non-obvious choice is made (approach picked over an alternative, dependency declined, action stopped by a CLAUDE.md rule). Read before re-litigating a past decision.
 
+[2026-08-03] Issue #317 derives löneväxling pension and SLP at the shared salary-entry boundary from the frozen salary_runs.calculation_params rate snapshot: this fixes dashboard, MCP, and v1 booking without a schema migration, and prevents a live config change from altering an already reviewed run between calculation and posting.
+
 [2026-08-01] Invoice payment dates stored in timestamptz use a shared UTC-noon representation: `paid_at` has date-only business semantics, and noon preserves the selected or bank transaction date when formatted in UTC, Europe/Stockholm, and all negative UTC offsets through UTC-12; UTC midnight displays as the prior day in American time zones.
 [2026-08-01] Privately paid supplier-invoice creation stays outside the payment-date correction: that flow deliberately journals on the invoice date while its optional out-of-pocket payment date can differ, so changing only `paid_at` would require a separate Swedish accounting semantics decision.
 

@@ -83,6 +83,7 @@ function makeRun(employees: ReturnType<typeof makeEmployee>[]) {
     total_net: employees.reduce((s, e) => s + e.net_salary, 0),
     total_avgifter: employees.reduce((s, e) => s + e.avgifter_amount, 0),
     total_vacation_accrual: employees.reduce((s, e) => s + e.vacation_accrual, 0),
+    calculation_params: { slpRate: 0.2426 },
     employees,
   }
 }
@@ -273,6 +274,36 @@ describe('salary entries: dimensions propagation (PR8)', () => {
     const slpLines = linesOn(pension, '7533')
     expect(slpLines).toHaveLength(2)
     expect(linesOn(pension, '2514')[0].credit_amount).toBe(770.01)
+    assertBalanced(pension)
+  })
+
+  it('derives pension + SLP from gross_deduction_pension line items', async () => {
+    const run = makeRun([
+      makeEmployee({
+        employee_id: 'a',
+        default_dimensions: { '1': 'KS01' },
+        line_items: [
+          {
+            item_type: 'gross_deduction_pension',
+            amount: -2000,
+            account_number: '7218',
+            is_net_deduction: false,
+            is_gross_deduction: true,
+          },
+        ],
+      }),
+    ])
+
+    const result = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const pension = entryByDescription('Pensionsavsättning')
+
+    expect(result.pensionEntry).not.toBeNull()
+    expect(linesOn(pension, '7410')).toEqual([
+      expect.objectContaining({ debit_amount: 2116, dimensions: { '1': 'KS01' } }),
+    ])
+    expect(linesOn(pension, '2740')[0].credit_amount).toBe(2116)
+    expect(linesOn(pension, '7533')[0].debit_amount).toBe(513.34)
+    expect(linesOn(pension, '2514')[0].credit_amount).toBe(513.34)
     assertBalanced(pension)
   })
 
