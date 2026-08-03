@@ -1014,8 +1014,13 @@ async function processAnswerMessage(
     const target = await resolveAnswerTarget(supabase, conversation, quotedWamid)
     if (!target) {
       // The question disappeared between webhook routing and processing
-      // (TTL sweep or a concurrent answer): plain fallback.
-      await sendText(supabase, { to, body: copy.m16Fallback(), template: TEMPLATE.m16Fallback, ...replyBase })
+      // (TTL sweep or a concurrent answer): plain fallback. NOT on a
+      // re-claim though: a worker that died after applying the answer and
+      // sending its confirm leaves the row 'processing', and the retry would
+      // then follow that confirm with "I did not understand".
+      if (row.attempts === 0) {
+        await sendText(supabase, { to, body: copy.m16Fallback(), template: TEMPLATE.m16Fallback, ...replyBase })
+      }
       await markStatus(supabase, row.id, 'done')
       return { kind: 'answer', conversationId: conversation.id }
     }
@@ -1189,8 +1194,11 @@ async function processAnswerMessage(
     await markStatus(supabase, row.id, 'done', { inboxItemId: target.inboxItemId })
     return { kind: 'answer', conversationId: conversation.id }
   } catch (err) {
-    // No M18 here: that copy is about files. An answer that failed to
-    // process stays silent; the sweep may retry (attempts < 3).
+    // No M18 here: that copy is about files. This catch is a programming
+    // -error net, not a retry hook: every dependency on the answer path
+    // degrades instead of throwing (interpretChatAnswer returns {ok:false},
+    // sends never throw, supabase-js returns errors), and 'error' is
+    // terminal for the sweep, which claims only 'received'/'processing'.
     log.error('WhatsApp answer processing failed', err, { messageId: row.id })
     try {
       await markStatus(supabase, row.id, 'error', {

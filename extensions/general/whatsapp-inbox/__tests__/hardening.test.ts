@@ -444,6 +444,55 @@ describe('text reply while a re-send question is open', () => {
   })
 })
 
+describe('answer worker re-claims', () => {
+  it('does not follow a delivered confirm with the M16 fallback', async () => {
+    // A worker that died after applying the answer leaves the row
+    // 'processing'; the sweep re-runs it and the question now resolves to
+    // nothing, which used to send "I did not understand" right after the
+    // confirmation the user already received.
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({
+      data: makeRow({
+        id: 'msg-t1',
+        message_type: 'text',
+        body_text: 'Lunch med Anna Berg',
+        media_id: null,
+        attempts: 1,
+      }),
+    })
+    mock.enqueue({ data: { id: 'msg-t1' } }) // claim
+    mock.enqueue({ data: makeLink() })
+    mock.enqueue({ data: makeConversation({ state: 'idle', context: {} }) })
+    mock.enqueue({ data: null }) // markStatus done
+
+    await processInboundMessage(mock.supabase as unknown as SupabaseClient, 'msg-t1')
+
+    expect(sendTextMock).not.toHaveBeenCalled()
+  })
+
+  it('still explains itself on a first attempt with nothing to answer', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({
+      data: makeRow({
+        id: 'msg-t1',
+        message_type: 'text',
+        body_text: 'kan du bokföra allt åt mig?',
+        media_id: null,
+        attempts: 0,
+      }),
+    })
+    mock.enqueue({ data: { id: 'msg-t1' } })
+    mock.enqueue({ data: makeLink() })
+    mock.enqueue({ data: makeConversation({ state: 'idle', context: {} }) })
+    mock.enqueue({ data: null })
+
+    await processInboundMessage(mock.supabase as unknown as SupabaseClient, 'msg-t1')
+
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    expect(sendTextMock.mock.calls[0][1].template).toBe(TEMPLATE.m16Fallback)
+  })
+})
+
 describe('48h company-question expiry', () => {
   it('keeps the parked receipts recoverable by a late answer', async () => {
     const mock = createQueuedMockSupabase()
