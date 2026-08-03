@@ -21,7 +21,8 @@
  * Everything else is skipped or printed for manual review. Periods without an
  * explicit opening-balance entry are never reconstructed from cumulative
  * history. All writes use the bookkeeping engine and commit mode re-assesses
- * the period immediately before posting.
+ * the period immediately before posting. The --user-id the entry is
+ * attributed to must be a member of the company.
  *
  * Usage:
  *   # Preview every company. Read-only.

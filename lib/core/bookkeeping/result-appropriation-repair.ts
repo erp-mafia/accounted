@@ -327,6 +327,34 @@ export async function assessHistoricalResultRepair(
 }
 
 /**
+ * The posted entry is attributed to userId. Require an actual membership row
+ * so a mistyped uuid cannot attribute a financial journal entry to a user
+ * outside the company (service-role scripts bypass RLS, so nothing else
+ * would catch it).
+ */
+export async function assertRepairAttributionUser(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('company_members')
+    .select('user_id')
+    .eq('company_id', companyId)
+    .eq('user_id', userId)
+    .limit(1)
+    .maybeSingle()
+  if (error) {
+    throw new Error(`Failed to verify company membership: ${error.message}`)
+  }
+  if (!data) {
+    throw new Error(
+      `User ${userId} is not a member of company ${companyId}: refusing to attribute the repair entry`,
+    )
+  }
+}
+
+/**
  * Re-assess immediately before posting and write only an unambiguous plan.
  * All journal writes still pass through the bookkeeping engine.
  */
@@ -339,6 +367,7 @@ export async function postHistoricalResultRepair(
   assessment: HistoricalResultRepairAssessment
   entry: JournalEntry | null
 }> {
+  await assertRepairAttributionUser(supabase, companyId, userId)
   const assessment = await assessHistoricalResultRepair(supabase, companyId, periodId)
   if (assessment.status !== 'safe') return { assessment, entry: null }
 

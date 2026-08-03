@@ -8,7 +8,9 @@ vi.mock('@/lib/bookkeeping/entry-lines', () => ({
   fetchEntryLines: vi.fn(),
 }))
 
+import type { SupabaseClient } from '@supabase/supabase-js'
 import {
+  assertRepairAttributionUser,
   classifyHistoricalResultRepair,
   getHistoricalResultRepairScopeError,
   type HistoricalResultRepairSnapshot,
@@ -252,6 +254,43 @@ describe('classifyHistoricalResultRepair', () => {
       reason: 'no_result_to_move',
       plan: null,
     })
+  })
+})
+
+function membershipSupabase(row: { user_id: string } | null, error: { message: string } | null = null) {
+  const maybeSingle = vi.fn().mockResolvedValue({ data: row, error })
+  const limit = vi.fn().mockReturnValue({ maybeSingle })
+  const eqUser = vi.fn().mockReturnValue({ limit })
+  const eqCompany = vi.fn().mockReturnValue({ eq: eqUser })
+  const select = vi.fn().mockReturnValue({ eq: eqCompany })
+  const from = vi.fn().mockReturnValue({ select })
+  return { client: { from } as unknown as SupabaseClient, from }
+}
+
+describe('assertRepairAttributionUser', () => {
+  it('accepts a user with a membership row in the company', async () => {
+    const { client, from } = membershipSupabase({ user_id: 'user-1' })
+
+    await expect(
+      assertRepairAttributionUser(client, 'company-1', 'user-1'),
+    ).resolves.toBeUndefined()
+    expect(from).toHaveBeenCalledWith('company_members')
+  })
+
+  it('refuses to attribute the entry to a non-member', async () => {
+    const { client } = membershipSupabase(null)
+
+    await expect(
+      assertRepairAttributionUser(client, 'company-1', 'outsider'),
+    ).rejects.toThrow('not a member of company')
+  })
+
+  it('surfaces membership lookup failures instead of posting blind', async () => {
+    const { client } = membershipSupabase(null, { message: 'connection reset' })
+
+    await expect(
+      assertRepairAttributionUser(client, 'company-1', 'user-1'),
+    ).rejects.toThrow('Failed to verify company membership: connection reset')
   })
 })
 
