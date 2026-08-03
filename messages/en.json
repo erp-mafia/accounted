@@ -3306,7 +3306,10 @@
     "delivery_status_explanation_suppressed": "The email provider has blocked this address after an earlier bounce or spam complaint, so the message was never sent.",
     "delivery_status_whole_send_note": "This applies to the whole send, not to individual recipients.",
     "delivery_provider_status_label": "Delivery status",
-    "delivery_provider_reason_label": "Reason from the recipient"
+    "delivery_provider_reason_label": "Reason from the recipient",
+    "delivery_recipient_statuses_label": "Status per recipient",
+    "delivery_recipient_statuses_summary": "The overall status shows the most serious reported outcome. Each recipient's result is shown below.",
+    "delivery_recipient_status_unknown": "No delivery report yet"
   },
   "invoice_credit": {
     "back": "Back",

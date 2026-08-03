@@ -3306,7 +3306,10 @@
     "delivery_status_explanation_suppressed": "Adressen är spärrad hos e-posttjänsten efter tidigare studs eller spam-anmälan, så mailet skickades aldrig.",
     "delivery_status_whole_send_note": "Beskedet gäller hela utskicket, inte enskilda mottagare.",
     "delivery_provider_status_label": "Leveransstatus",
-    "delivery_provider_reason_label": "Besked från mottagaren"
+    "delivery_provider_reason_label": "Besked från mottagaren",
+    "delivery_recipient_statuses_label": "Status per mottagare",
+    "delivery_recipient_statuses_summary": "Den övergripande statusen visar det allvarligaste beskedet. Resultatet för varje mottagare visas nedan.",
+    "delivery_recipient_status_unknown": "Inget leveransbesked ännu"
   },
   "invoice_credit": {
     "back": "Tillbaka",
