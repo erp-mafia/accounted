@@ -34,6 +34,10 @@ const BOUNCED_ROW = {
   provider_status: 'bounced',
   provider_status_at: '2026-07-20T10:00:00+00:00',
   provider_status_detail: 'smtp; 550 5.1.1 ***@example.com recipient rejected',
+  provider_recipient_statuses: {
+    'to:1': { status: 'bounced', status_at: '2026-07-20T10:00:00+00:00' },
+    'cc:1': { status: 'delivered', status_at: '2026-07-20T09:59:00+00:00' },
+  },
   error_code: null,
   document_attachment_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
   attachment_filename: 'faktura-1042.pdf',
@@ -114,6 +118,10 @@ describe('gnubok_get_invoice_deliveries: execute', () => {
     expect(delivery.provider_status).toBe('bounced')
     expect(delivery.provider_status_at).toBe('2026-07-20T10:00:00+00:00')
     expect(delivery.provider_status_detail).toContain('550 5.1.1')
+    expect(delivery.provider_recipient_statuses).toEqual({
+      'to:1': { status: 'bounced', status_at: '2026-07-20T10:00:00+00:00' },
+      'cc:1': { status: 'delivered', status_at: '2026-07-20T09:59:00+00:00' },
+    })
     expect(delivery.error_code).toBeNull()
     expect(delivery.to_addresses).toEqual(['***@example.com'])
     expect(delivery.cc_addresses).toEqual(['***@example.org'])
@@ -160,6 +168,14 @@ describe('gnubok_get_invoice_deliveries: execute', () => {
           body_text: 'LEAKED-BODY-TEXT',
           body_html: '<p>LEAKED-BODY-HTML</p>',
           bcc_addresses: ['leaked.bcc@example.net'],
+          provider_recipient_statuses: {
+            ...BOUNCED_ROW.provider_recipient_statuses,
+            'bcc:1': { status: 'bounced', status_at: '2026-07-20T10:00:00+00:00' },
+            'leaked.bcc@example.net': {
+              status: 'bounced',
+              status_at: '2026-07-20T10:00:00+00:00',
+            },
+          },
         },
       ],
     })
@@ -178,6 +194,7 @@ describe('gnubok_get_invoice_deliveries: execute', () => {
     expect(serialized).not.toContain('LEAKED-BODY-HTML')
     expect(serialized).not.toContain('leaked.bcc')
     expect(serialized).not.toContain('bcc_addresses')
+    expect(serialized).not.toContain('bcc:1')
   })
 
   it('throws Invoice not found for an invoice outside the routed company', async () => {

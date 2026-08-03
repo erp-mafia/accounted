@@ -19,7 +19,8 @@
  *   this parser never converts.
  * - Wise fees are a real cost, so a non-zero source/target fee becomes its OWN
  *   negative transaction ("Wise avgift") rather than being folded or dropped.
- * - Only COMPLETED rows are imported; pending/cancelled/refunded rows are skipped.
+ * - Only COMPLETED rows are imported; other statuses are skipped with a visible
+ *   parse issue so refunds and chargebacks are never silently lost.
  * - The stable Wise ID (TRANSFER-…, PLAN_ORDER-…) is carried in `raw_line` so
  *   generateExternalId can key dedup on it instead of a row hash (fee rows get
  *   an `<id>-fee` / `<id>-tgtfee` suffix).
@@ -126,26 +127,54 @@ export const wiseFormat: BankFileFormat = {
       // Only settled movements affect the balance. A blank/missing status is
       // NOT completed, so it must not slip through: require an exact match.
       if (status !== 'COMPLETED') {
+        const isKnownNonSettledStatus = status === 'CANCELLED' || status === 'PENDING'
+        issues.push({
+          row: i + 1,
+          message: `Wise row ${wiseId || i + 1} has unsupported status "${status || 'blank'}"; skipped`,
+          // Cancelled and pending rows have not settled. A refund, chargeback,
+          // blank status, or new Wise status can represent a real movement, so
+          // it must block the file until a real export pins its sign semantics.
+          severity: isKnownNonSettledStatus ? 'warning' : 'error',
+        })
         skippedRows++
         continue
       }
 
       // Direction drives the sign. An unrecognized value (blank, or NEUTRAL for
       // a balance conversion/cashback, or anything Wise adds later) must NOT be
-      // guessed: silently treating it as income mis-signs real money. Fail the
-      // whole import so it surfaces (the parse route turns this throw into
-      // BANK_FILE_PARSE_FAILED). Proper conversion handling is tracked in #1019.
+      // guessed: silently treating it as income mis-signs real money. Skip only
+      // this row and surface the reason so other valid rows remain importable.
       const direction = at(idx.direction).toUpperCase()
       if (direction !== 'IN' && direction !== 'OUT') {
-        throw new Error(
-          `Wise import: unsupported Direction "${at(idx.direction)}" on ${wiseId || `row ${i + 1}`}`,
-        )
+        issues.push({
+          row: i + 1,
+          message: `Wise row ${wiseId || i + 1} has unsupported Direction "${at(idx.direction) || 'blank'}"; skipped`,
+          severity: 'error',
+        })
+        skippedRows++
+        continue
       }
       const isOut = direction === 'OUT'
 
+      const sourceCurrency = at(idx.sourceCurrency).trim().toUpperCase()
+      const targetCurrency = at(idx.targetCurrency).trim().toUpperCase()
+      if (
+        /^[A-Z]{3}$/.test(sourceCurrency) &&
+        /^[A-Z]{3}$/.test(targetCurrency) &&
+        sourceCurrency !== targetCurrency
+      ) {
+        issues.push({
+          row: i + 1,
+          message: `Cross-currency Wise row ${wiseId || i + 1} (${sourceCurrency} to ${targetCurrency}) requires per-currency balance statements; skipped`,
+          severity: 'error',
+        })
+        skippedRows++
+        continue
+      }
+
       // Book the side that moved on the balance: target for IN, source for OUT.
       // Never invent a currency: a missing/malformed one is a bad row, skip it.
-      const currency = (isOut ? at(idx.sourceCurrency) : at(idx.targetCurrency)).trim().toUpperCase()
+      const currency = isOut ? sourceCurrency : targetCurrency
       if (!/^[A-Z]{3}$/.test(currency)) {
         issues.push({ row: i + 1, message: `Missing/invalid currency on ${wiseId || 'row'}`, severity: 'warning' })
         skippedRows++

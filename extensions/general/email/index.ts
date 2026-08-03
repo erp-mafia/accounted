@@ -56,13 +56,14 @@ export const emailExtension: Extension = {
         }
 
         const { data, error } = await createServiceClientNoCookies().rpc(
-          'apply_invoice_delivery_provider_status',
+          'apply_invoice_delivery_provider_event',
           {
             p_provider: 'resend',
             p_provider_message_id: report.providerMessageId,
             p_status: report.status,
             p_occurred_at: report.occurredAt,
             p_detail: report.detail,
+            p_recipient_addresses: report.recipients,
           },
         )
 

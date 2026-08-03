@@ -225,6 +225,7 @@ describe('list_invoice_delivery_summaries_for_service: masked result', () => {
       expect(row.provider).toBe('resend')
       expect(row.provider_status).toBe('bounced')
       expect(row.provider_status_at).not.toBeNull()
+      expect(row.provider_recipient_statuses).toEqual({})
       expect(row.attachment_filename).toBe('faktura-1042.pdf')
       expect(row.sent_at).not.toBeNull()
       expect(row.failed_at).toBeNull()
@@ -250,6 +251,7 @@ describe('list_invoice_delivery_summaries_for_service: masked result', () => {
           'provider_status',
           'provider_status_at',
           'provider_status_detail',
+          'provider_recipient_statuses',
           'error_code',
           'document_attachment_id',
           'attachment_filename',
