@@ -39,6 +39,33 @@ describe('evaluateAnnualReportEligibility', () => {
     expect(result.issues).toEqual([])
   })
 
+  it('blocks EUR reports before they can be finalized or filed digitally', () => {
+    const profile = completeProfile()
+    profile.reporting_currency = 'EUR'
+    const result = evaluateAnnualReportEligibility({
+      entityType: 'aktiebolag',
+      framework: 'k2',
+      periodStart: '2026-01-01',
+      periodEnd: '2026-12-31',
+      profile,
+      metrics,
+    })
+
+    expect(result.k2_eligible).toBe(false)
+    expect(result.digital_filing_eligible).toBe(false)
+    expect(result.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: 'AR-SCOPE-CURRENCY', severity: 'error' }),
+      ]),
+    )
+    expect(result.digital_issues.filter((item) => item.code === 'AR-SCOPE-CURRENCY')).toHaveLength(
+      1,
+    )
+    expect(
+      result.digital_issues.filter((item) => item.code === 'AR-DIGITAL-CURRENCY'),
+    ).toHaveLength(0)
+  })
+
   it('does not treat unanswered legal facts as false', () => {
     const result = evaluateAnnualReportEligibility({
       entityType: 'aktiebolag',
