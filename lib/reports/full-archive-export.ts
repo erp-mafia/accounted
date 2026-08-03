@@ -780,6 +780,18 @@ export interface MasterDataTableSpec {
    */
   via?: { parent: string; fk: string }
   /**
+   * PostgREST select list for a narrow projection. Defaults to `*`.
+   *
+   * Only for tables where part of the row is räkenskapsinformation and the
+   * rest is workflow state that has no place in a portable archive (see
+   * invoice_inbox_items). Must include the page key.
+   *
+   * Additive only, like `denormalize`: an archive already handed to a revisor
+   * must keep every key it shipped with, so append columns and never drop
+   * one.
+   */
+  columns?: string
+  /**
    * Parent columns copied onto every child row as `<prefix><column>`.
    *
    * A child line row carries money but no unit: `invoice_items.line_total` is
@@ -838,6 +850,28 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     denormalize: { prefix: 'supplier_invoice_', columns: ['currency', 'exchange_rate'] },
   },
   { name: 'supplier_invoice_payments', file: 'supplier_invoice_payments.json' },
+  // Underlag intake: the chat answers behind a verifikat.
+  //
+  // A projection, not the whole table. `channel_context` holds the human
+  // answers the WhatsApp bot collected (representation deltagare + syfte +
+  // raw_answer), and it is the ONLY complete copy: the verifikat line carries
+  // a 220-char render that drops whole names ("… och N till"), and Skatte-
+  // verket's dokumentationskrav wants every deltagare. Without this file a
+  // company that leaves with its archive keeps an incomplete representation
+  // trail. The booking columns come along so each answer can be tied to the
+  // verifikat it belongs to.
+  //
+  // Everything else on the row (email bodies, OCR output, error messages,
+  // retry state) is inbox workflow state and stays out; the documents
+  // themselves are in dokument/.
+  {
+    name: 'invoice_inbox_items',
+    file: 'invoice_inbox_items.json',
+    orderBy: 'created_at',
+    columns:
+      'id, created_at, source, status, document_id, matched_transaction_id, ' +
+      'created_journal_entry_id, created_supplier_invoice_id, channel_context',
+  },
   // Receipts
   { name: 'receipts', file: 'receipts.json', orderBy: 'receipt_date' },
   // `receipts` has no exchange_rate column, so only the currency is copied:
@@ -960,7 +994,6 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   graph_transaction_counterparties: 'derived AI context graph, regenerable',
   idempotency_keys: 'infrastructure',
   inbox_rate_counters: 'infrastructure',
-  invoice_inbox_items: 'inbox workflow state; the files live in document_attachments',
   mcp_tasks: 'MCP task handles: transient tool-call state with a 1-hour TTL',
   metered_events: 'billing telemetry',
   notification_log: 'notification dedup log',
@@ -1077,7 +1110,7 @@ async function writeMasterData(
         : t.via
           ? await fetchChildTableRows(supabase, companyId, t)
           : await fetchAllRows<Record<string, unknown>>(({ from, to }) => {
-            let q = supabase.from(t.name).select('*').eq('company_id', companyId)
+            let q = supabase.from(t.name).select(t.columns ?? '*').eq('company_id', companyId)
             if (t.orderBy) {
               q = q.order(t.orderBy, { ascending: true })
             }
@@ -1086,7 +1119,15 @@ async function writeMasterData(
             // silently SKIPS/DUPLICATES rows across page boundaries: data loss in
             // a statutory 7-year retention archive. dedupeBy is defense-in-depth
             // against the duplicate case.
-            return q.order(pageKey, { ascending: true }).range(from, to)
+            //
+            // The select list is built at runtime (spec.columns), so
+            // PostgREST's literal-string type inference cannot resolve it and
+            // falls back to an error type; the runtime shape is the declared
+            // columns, by construction. Same cast as fetchChildTableRows.
+            return q.order(pageKey, { ascending: true }).range(from, to) as unknown as PromiseLike<{
+              data: Record<string, unknown>[] | null
+              error: { message: string } | null
+            }>
           }, { dedupeBy: (r) => String(r[pageKey]) })
       data.file(t.file, JSON.stringify(rows, null, 2))
     } catch (err) {
