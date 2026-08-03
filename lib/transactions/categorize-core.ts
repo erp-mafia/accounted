@@ -24,6 +24,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
+import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -329,9 +331,16 @@ export async function categorizeMatchedTransaction(
   const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
   const fiscalYearStartMonth = settings?.fiscal_year_start_month ?? 1
 
-  const mappingResult = buildMappingResultFromCategory(
+  let mappingResult = buildMappingResultFromCategory(
     category, transaction as Transaction, isBusiness, entityType, vatTreatment, vatAmount
   )
+  const settlementAccount = await resolveSettlementAccount(
+    supabase,
+    companyId,
+    transaction.cash_account_id,
+    log,
+  )
+  mappingResult = applySettlementAccount(mappingResult, settlementAccount)
   // Dimensions PR7: tag the business lines of the generated verifikat.
   if (dimensions && Object.keys(dimensions).length > 0) {
     mappingResult.dimensions = dimensions

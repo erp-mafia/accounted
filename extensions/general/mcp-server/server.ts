@@ -18,6 +18,8 @@ import { createLogger } from '@/lib/logger'
 import { roundOre, sumOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
+import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate, findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
@@ -784,7 +786,7 @@ async function categorizeTransactionCore(
   const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
 
   // Build mapping
-  const mappingResult = buildMappingResultFromCategory(
+  let mappingResult = buildMappingResultFromCategory(
     category,
     transaction as Transaction,
     isBusiness,
@@ -792,6 +794,13 @@ async function categorizeTransactionCore(
     vatTreatment,
     vatAmount
   )
+  const settlementAccount = await resolveSettlementAccount(
+    supabase,
+    companyId,
+    transaction.cash_account_id,
+    log,
+  )
+  mappingResult = applySettlementAccount(mappingResult, settlementAccount)
 
   if (!mappingResult.debit_account || !mappingResult.credit_account) {
     throw new Error(
@@ -13920,13 +13929,21 @@ export const tools: McpTool[] = [
           debit_amount: number | string
           credit_amount: number | string
           line_description: string | null
+          currency: string | null
+          amount_in_currency: number | string | null
+          exchange_rate: number | string | null
+          tax_code: string | null
+          dimensions: Record<string, string> | null
+          cost_center: string | null
+          project: string | null
         }> | null
       }
       const { data, error: origErr } = await supabase
         .from('journal_entries')
         .select(
           'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, ' +
-          'fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(name, is_closed, locked_at), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
+          'fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(name, is_closed, locked_at), ' +
+          'lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, exchange_rate, tax_code, dimensions, cost_center, project)'
         )
         .eq('id', entryId)
         .eq('company_id', companyId)
@@ -13974,6 +13991,14 @@ export const tools: McpTool[] = [
               debit_amount: Number(l.debit_amount),
               credit_amount: Number(l.credit_amount),
               line_description: l.line_description,
+              currency: l.currency,
+              amount_in_currency:
+                l.amount_in_currency != null ? Number(l.amount_in_currency) : null,
+              exchange_rate: l.exchange_rate != null ? Number(l.exchange_rate) : null,
+              tax_code: l.tax_code,
+              dimensions: l.dimensions,
+              cost_center: l.cost_center,
+              project: l.project,
             })),
           },
           correction: {
@@ -13985,7 +14010,13 @@ export const tools: McpTool[] = [
               debit_amount: l.debit_amount,
               credit_amount: l.credit_amount,
               line_description: l.line_description ?? null,
+              currency: l.currency ?? null,
+              amount_in_currency: l.amount_in_currency ?? null,
+              exchange_rate: l.exchange_rate ?? null,
+              tax_code: l.tax_code ?? null,
               dimensions: l.dimensions ?? null,
+              cost_center: l.cost_center ?? null,
+              project: l.project ?? null,
             })),
           },
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),

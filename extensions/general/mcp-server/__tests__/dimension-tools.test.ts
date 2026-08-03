@@ -722,6 +722,41 @@ describe('gnubok_create_invoice: dimensions bag', () => {
 })
 
 describe('gnubok_categorize_transaction: dimensions bag', () => {
+  it('shows the linked cash account in the staged preview', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -500,
+      cash_account_id: 'cash-1',
+    })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: { ledger_account: '1931' }, error: null })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-cat-settlement' }, error: null })
+
+    const result = (await categorizeTransaction.execute(
+      { transaction_id: 'tx-1', category: 'expense_office', allow_duplicate: true },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as {
+      staged: boolean
+      preview: {
+        credit_account: string
+        lines: Array<{ account_number: string; credit_amount: number }>
+      }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.credit_account).toBe('1931')
+    expect(result.preview.lines).toContainEqual(
+      expect.objectContaining({ account_number: '1931', credit_amount: 500 }),
+    )
+  })
+
   it('resolves the bag and stages it as params.dimensions with the echo in the preview', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inserts = captureInserts(supabase)
