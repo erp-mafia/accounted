@@ -8,7 +8,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
-import { normalizeVatRateToFraction } from '@/lib/vat/supplier-invoice-line-checks'
+import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
 import type { Currency, CustomerType, ExchangeRate, SupplierType, VatTreatment } from '@/types'
 import type {
   CustomerDto,
