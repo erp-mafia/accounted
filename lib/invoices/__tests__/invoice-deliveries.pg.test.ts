@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import type { PoolClient } from 'pg'
-import { getPool, withUserContext } from '@/tests/pg/setup'
+import { getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
 import { insertAuthUser, insertCompanyMember, seedCompany } from '@/tests/pg/fixtures'
 
 async function withServiceRoleContext<T>(
@@ -886,7 +886,10 @@ describe('invoice_deliveries.pg: provider delivery outcome', () => {
       bccAddresses: ['archive.secret@example.net'],
     })
 
-    await withServiceRoleContext(userId, (client) => client.query(
+    // The applied event must survive into the member's read below, so this
+    // uses the committing service-role helper: the rollback-scoped
+    // withServiceRoleContext only supports asserting inside its own callback.
+    await runAsServiceRole((client) => client.query(
       `SELECT public.apply_invoice_delivery_provider_event(
                 'resend', $1, 'bounced', now(), NULL,
                 ARRAY['archive.secret@example.net', 'unknown@example.org']
