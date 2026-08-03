@@ -135,7 +135,7 @@ export const PREVIOUS: TrialBalancePair = {
 export function makeInput(): IxbrlArsredovisningInput {
   const mapping = mapTrialBalancesToK2(CURRENT, PREVIOUS)
   return {
-    company: { name: 'Testbolaget AB', orgNumber: '556999-9999', city: 'Sundsvall' },
+    company: { name: 'Testbolaget AB', orgNumber: '556999-9997', city: 'Sundsvall' },
     period: { start: '2025-01-01', end: '2025-12-31' },
     previousPeriod: { start: '2024-01-01', end: '2024-12-31' },
     isFirstFiscalYear: false,

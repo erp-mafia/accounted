@@ -1,4 +1,5 @@
 import type { VatPeriodType } from '@/types'
+import { toRedovisare12 } from '@/lib/invariants/org-number'
 
 /**
  * Convert a Accounted org_number to Skatteverket's 12-digit "redovisare" format.
@@ -6,27 +7,18 @@ import type { VatPeriodType } from '@/types'
  * Rules:
  * - Organisationsnummer (10 digits, e.g. 5020000013): prefix with "16" → 165020000013
  * - Personnummer (10 digits, e.g. 8501011234): prefix with "19" or "20" based on century
- * - Strip any hyphens before processing
+ * - Separators (hyphens and spaces) are stripped before processing
+ *
+ * Delegates to `lib/invariants/org-number.ts` so that this converter, the AGI
+ * and KU10 generators, and the årsredovisning validator cannot drift apart.
+ * The previous local implementation stripped hyphens only and threw on any
+ * input containing a space.
  */
 export function formatRedovisare(
   orgNumber: string,
   entityType: 'enskild_firma' | 'aktiebolag'
 ): string {
-  const clean = orgNumber.replace(/-/g, '')
-
-  if (clean.length === 12) return clean
-
-  if (clean.length !== 10) {
-    throw new Error(`Ogiltigt organisationsnummer: ${orgNumber} (förväntar 10 eller 12 siffror)`)
-  }
-
-  if (entityType === 'aktiebolag') return `16${clean}`
-
-  // Enskild firma: personnummer
-  const yearDigits = parseInt(clean.substring(0, 2), 10)
-  const currentTwoDigitYear = new Date().getFullYear() % 100
-  const prefix = yearDigits > currentTwoDigitYear ? '19' : '20'
-  return `${prefix}${clean}`
+  return toRedovisare12(orgNumber, entityType)
 }
 
 /**
