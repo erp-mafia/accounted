@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: aktieagarlan-insattning
+  order: 8
+  name: 'Aktieägarlån — insättning'
+  category: private_transfer
+  entity_type: aktiebolag
+  description: >-
+    Ägaren sätter in pengar som lån till bolaget.
+lines:
+  - account: '1930'
+    label: 'Företagskonto'
+    side: debit
+    type: settlement
+    ratio: 1.0
+  - account: '2893'
+    label: 'Skuld till aktieägare'
+    side: credit
+    type: business
+    ratio: 1.0
