@@ -104,6 +104,28 @@ describe('validateAnnualReportCompleteness', () => {
     expect(result.error_count).toBe(0)
   })
 
+  it('keeps an unsupported reporting currency blocking at signing stage', () => {
+    const value = input('signing')
+    const currencyIssue = {
+      code: 'AR-SCOPE-CURRENCY',
+      severity: 'error' as const,
+      section: 'scope' as const,
+      message: 'Accounteds årsredovisningsflöde stöder ännu endast SEK som redovisningsvaluta.',
+    }
+    value.eligibility = {
+      ...eligibility,
+      k2_eligible: false,
+      digital_filing_eligible: false,
+      issues: [currencyIssue],
+      digital_issues: [currencyIssue],
+    }
+
+    const result = validateAnnualReportCompleteness(value)
+
+    expect(result.ok).toBe(false)
+    expect(result.issues).toEqual(expect.arrayContaining([currencyIssue]))
+  })
+
   it('does not infer an unanswered disclosure confirmation', () => {
     const value = input('draft')
     value.disclosures.securities_pledged_confirmed = false
