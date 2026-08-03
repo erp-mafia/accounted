@@ -1,0 +1,630 @@
+[
+  {
+    "name": "Försäljning EU-tjänster (B2B)",
+    "description": "Tjänsteförsäljning till annat EU-land (B2B). Ingen moms — kunden redovisar omvänd skattskyldighet.",
+    "category": "eu_trade",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "settlement",
+        "label": "Kundfordringar",
+        "ratio": 1.0,
+        "account": "1510"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Försäljning tjänster EU",
+        "ratio": 1.0,
+        "account": "3308"
+      }
+    ]
+  },
+  {
+    "name": "Försäljning export (utanför EU)",
+    "description": "Försäljning till land utanför EU. Momsfritt.",
+    "category": "eu_trade",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "settlement",
+        "label": "Kundfordringar",
+        "ratio": 1.0,
+        "account": "1510"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Försäljning export",
+        "ratio": 1.0,
+        "account": "3305"
+      }
+    ]
+  },
+  {
+    "name": "Inköp EU-tjänster, omvänd moms 25%",
+    "description": "Köp av tjänster från annat EU-land. Omvänd skattskyldighet — du redovisar både utgående och ingående moms.",
+    "category": "eu_trade",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "IT-tjänster",
+        "ratio": 1.0,
+        "account": "6540"
+      },
+      {
+        "side": "credit",
+        "type": "vat",
+        "label": "Utgående moms omvänd skattskyldighet 25%",
+        "account": "2614",
+        "vat_rate": 0.25
+      },
+      {
+        "side": "debit",
+        "type": "vat",
+        "label": "Beräknad ingående moms 25%",
+        "account": "2645",
+        "vat_rate": 0.25
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      }
+    ]
+  },
+  {
+    "name": "Inköp EU-varor, omvänd moms 25%",
+    "description": "Köp av varor från annat EU-land. Omvänd skattskyldighet — du redovisar både utgående och ingående moms.",
+    "category": "eu_trade",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Varuinköp",
+        "ratio": 1.0,
+        "account": "4010"
+      },
+      {
+        "side": "credit",
+        "type": "vat",
+        "label": "Utgående moms omvänd skattskyldighet 25%",
+        "account": "2614",
+        "vat_rate": 0.25
+      },
+      {
+        "side": "debit",
+        "type": "vat",
+        "label": "Beräknad ingående moms 25%",
+        "account": "2645",
+        "vat_rate": 0.25
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      }
+    ]
+  },
+  {
+    "name": "Bankavgift",
+    "description": "Månadsavgift eller transaktionsavgift från banken.",
+    "category": "financial",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Bankkostnader",
+        "ratio": 1.0,
+        "account": "6570"
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      }
+    ]
+  },
+  {
+    "name": "Ränteintäkt",
+    "description": "Ränta från sparkonto eller bank.",
+    "category": "financial",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Ränteintäkter",
+        "ratio": 1.0,
+        "account": "8311"
+      }
+    ]
+  },
+  {
+    "name": "Räntekostnad",
+    "description": "Ränta på lån eller kredit.",
+    "category": "financial",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Räntekostnader",
+        "ratio": 1.0,
+        "account": "8410"
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      }
+    ]
+  },
+  {
+    "name": "Aktieägarlån — insättning",
+    "description": "Ägaren sätter in pengar som lån till bolaget.",
+    "category": "private_transfer",
+    "entity_type": "aktiebolag",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Skuld till aktieägare",
+        "ratio": 1.0,
+        "account": "2893"
+      }
+    ]
+  },
+  {
+    "name": "Aktieägarlån — återbetalning",
+    "description": "Bolaget betalar tillbaka lån till ägaren.",
+    "category": "private_transfer",
+    "entity_type": "aktiebolag",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Skuld till aktieägare",
+        "ratio": 1.0,
+        "account": "2893"
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      }
+    ]
+  },
+  {
+    "name": "Eget insättning",
+    "description": "Privat insättning till företagskontot (enskild firma).",
+    "category": "private_transfer",
+    "entity_type": "enskild_firma",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Egna insättningar",
+        "ratio": 1.0,
+        "account": "2018"
+      }
+    ]
+  },
+  {
+    "name": "Eget uttag",
+    "description": "Privat uttag från företagskontot (enskild firma).",
+    "category": "private_transfer",
+    "entity_type": "enskild_firma",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Egna uttag",
+        "ratio": 1.0,
+        "account": "2013"
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      }
+    ]
+  },
+  {
+    "name": "Utdelning till aktieägare",
+    "description": "Utbetalning av beslutad utdelning till aktieägare.",
+    "category": "private_transfer",
+    "entity_type": "aktiebolag",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Outtagen utdelning",
+        "ratio": 1.0,
+        "account": "2898"
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      }
+    ]
+  },
+  {
+    "name": "Representation (avdragsgill, 25% moms)",
+    "description": "Extern representation med avdragsgill moms. Max 300 kr/person exkl. moms.",
+    "category": "representation",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Representation avdragsgill",
+        "ratio": 0.8,
+        "account": "6072"
+      },
+      {
+        "side": "debit",
+        "type": "vat",
+        "label": "Ingående moms",
+        "account": "2641",
+        "vat_rate": 0.25
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      }
+    ]
+  },
+  {
+    "name": "Arbetsgivaravgifter",
+    "description": "Bokföring av arbetsgivaravgifter (31,42% av bruttolön).",
+    "category": "salary",
+    "entity_type": "aktiebolag",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Arbetsgivaravgifter",
+        "ratio": 1.0,
+        "account": "7510"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Avräkning sociala avgifter",
+        "ratio": 1.0,
+        "account": "2731"
+      }
+    ]
+  },
+  {
+    "name": "Löneutbetalning",
+    "description": "Utbetalning av nettolön till anställd.",
+    "category": "salary",
+    "entity_type": "aktiebolag",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Personalskatt",
+        "ratio": 0.3,
+        "account": "2710"
+      },
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Upplupna semesterlöner",
+        "ratio": 0.12,
+        "account": "2920"
+      },
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Löner",
+        "ratio": 1.0,
+        "account": "7010"
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      }
+    ]
+  },
+  {
+    "name": "Arbetsgivaravgifter via skattekonto",
+    "description": "Arbetsgivaravgifter som dras från skattekontot.",
+    "category": "tax_account",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Avräkning sociala avgifter",
+        "ratio": 1.0,
+        "account": "2731"
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Skattekonto",
+        "ratio": 1.0,
+        "account": "1630"
+      }
+    ]
+  },
+  {
+    "name": "Insättning skattekonto",
+    "description": "Betalning från företagskonto till skattekontot hos Skatteverket.",
+    "category": "tax_account",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Skattekonto",
+        "ratio": 1.0,
+        "account": "1630"
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      }
+    ]
+  },
+  {
+    "name": "Momsbetalning via skattekonto",
+    "description": "Moms som dras från skattekontot efter momsdeklaration.",
+    "category": "tax_account",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Redovisningskonto moms",
+        "ratio": 1.0,
+        "account": "2650"
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Skattekonto",
+        "ratio": 1.0,
+        "account": "1630"
+      }
+    ]
+  },
+  {
+    "name": "Preliminär F-skatt (AB)",
+    "description": "Betalning av preliminär bolagsskatt från skattekontot.",
+    "category": "tax_account",
+    "entity_type": "aktiebolag",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Betald F-skatt",
+        "ratio": 1.0,
+        "account": "2518"
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Skattekonto",
+        "ratio": 1.0,
+        "account": "1630"
+      }
+    ]
+  },
+  {
+    "name": "Preliminär F-skatt (EF)",
+    "description": "Betalning av preliminär F-skatt från skattekontot (enskild firma).",
+    "category": "tax_account",
+    "entity_type": "enskild_firma",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Egna skatter",
+        "ratio": 1.0,
+        "account": "2012"
+      },
+      {
+        "side": "credit",
+        "type": "settlement",
+        "label": "Skattekonto",
+        "ratio": 1.0,
+        "account": "1630"
+      }
+    ]
+  },
+  {
+    "name": "Skatteåterbäring",
+    "description": "Återbetalning från skattekontot till företagskonto.",
+    "category": "tax_account",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "settlement",
+        "label": "Företagskonto",
+        "ratio": 1.0,
+        "account": "1930"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Skattekonto",
+        "ratio": 1.0,
+        "account": "1630"
+      }
+    ]
+  },
+  {
+    "name": "Momsredovisning (nettning)",
+    "description": "Nettning av momskonton vid momsdeklaration. Justera konton och belopp efter din deklaration.",
+    "category": "vat",
+    "entity_type": "all",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Utgående moms 25%",
+        "ratio": 0.5,
+        "account": "2611"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Ingående moms",
+        "ratio": 0.3,
+        "account": "2641"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Redovisningskonto moms",
+        "ratio": 0.2,
+        "account": "2650"
+      }
+    ]
+  },
+  {
+    "name": "Beräknad bolagsskatt",
+    "description": "Bokföring av beräknad inkomstskatt vid bokslut.",
+    "category": "year_end",
+    "entity_type": "aktiebolag",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Skatt på årets resultat",
+        "ratio": 1.0,
+        "account": "8910"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Beräknad inkomstskatt",
+        "ratio": 1.0,
+        "account": "2512"
+      }
+    ]
+  },
+  {
+    "name": "Periodiseringsfond avsättning (AB)",
+    "description": "Avsättning till periodiseringsfond vid bokslut. Max 25% av överskottet.",
+    "category": "year_end",
+    "entity_type": "aktiebolag",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Avsättning periodiseringsfond",
+        "ratio": 1.0,
+        "account": "8811"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Periodiseringsfond",
+        "ratio": 1.0,
+        "account": "2113"
+      }
+    ]
+  },
+  {
+    "name": "Periodiseringsfond återföring (AB)",
+    "description": "Återföring av periodiseringsfond (senast efter 6 år).",
+    "category": "year_end",
+    "entity_type": "aktiebolag",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Periodiseringsfond",
+        "ratio": 1.0,
+        "account": "2113"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Återföring periodiseringsfond",
+        "ratio": 1.0,
+        "account": "8819"
+      }
+    ]
+  },
+  {
+    "name": "Överavskrivning inventarier",
+    "description": "Bokföring av överavskrivning (skillnad räkenskapsenlig vs planenlig).",
+    "category": "year_end",
+    "entity_type": "aktiebolag",
+    "lines": [
+      {
+        "side": "debit",
+        "type": "business",
+        "label": "Förändring överavskrivning",
+        "ratio": 1.0,
+        "account": "8850"
+      },
+      {
+        "side": "credit",
+        "type": "business",
+        "label": "Ackumulerade överavskrivningar",
+        "ratio": 1.0,
+        "account": "2150"
+      }
+    ]
+  }
+]
