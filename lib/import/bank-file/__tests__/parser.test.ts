@@ -2474,6 +2474,43 @@ describe('Wise balance statement format', () => {
     )
   })
 
+  it('accepts netted-fee statements in either ordering without continuity warnings', () => {
+    const oldestFirst = parseBankFile(WISE_STATEMENT_CSV, 'statement.csv')
+    const rows = WISE_STATEMENT_CSV.split('\n')
+    const newestFirst = parseBankFile(
+      [rows[0], ...rows.slice(1).reverse()].join('\n'),
+      'statement.csv',
+    )
+
+    for (const result of [oldestFirst, newestFirst]) {
+      expect(result.transactions).toHaveLength(4)
+      expect(result.issues.filter((issue) => /Running balance break/.test(issue.message))).toEqual([])
+    }
+  })
+
+  it('warns when the balance moves by more than Amount (fees not netted)', () => {
+    const csv = [
+      WISE_STATEMENT_HEADER,
+      wiseStatementRow({ id: 'IN-1', amount: '100', balance: '1100' }),
+      wiseStatementRow({
+        id: 'OUT-2',
+        date: '02/08/2026',
+        amount: '-50',
+        balance: '1049.65',
+        totalFees: '0.35',
+      }),
+    ].join('\n')
+    const result = parseBankFile(csv, 'statement.csv')
+
+    expect(result.transactions).toHaveLength(2)
+    expect(
+      result.issues.some(
+        (issue) =>
+          issue.severity === 'warning' && /Running balance break at OUT-2/.test(issue.message),
+      ),
+    ).toBe(true)
+  })
+
   it('skips malformed movements while retaining non-fatal metadata warnings', () => {
     const csv = [
       WISE_STATEMENT_HEADER,

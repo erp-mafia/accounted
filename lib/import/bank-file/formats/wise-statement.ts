@@ -4,6 +4,13 @@
  * Unlike Wise's multi-currency transaction-history export, balance statements
  * carry a signed Amount for one balance. That signed value is the authoritative
  * bank movement, so this parser never derives the sign from transfer metadata.
+ *
+ * "Total fees" is a breakdown of Amount, not an extra charge: the Running
+ * Balance moves by exactly Amount per row, so booking the fee as its own
+ * transaction (as wise.ts does for the "(after fees)" history export) would
+ * double-count it here. The fee is kept in the description as underlag, and a
+ * running-balance continuity check warns if a statement ever violates the
+ * netted-fee assumption.
  */
 
 import type {
@@ -87,6 +94,9 @@ export const wiseStatementFormat: BankFileFormat = {
     }
 
     const seenWiseMovements = new Set<string>()
+    // Continuity chain for the netted-fee guard: reset whenever a row is
+    // skipped or lacks a balance, so gaps never produce false warnings.
+    let previousMovement: { balance: number; amount: number } | null = null
 
     if (REQUIRED_HEADERS.some((header) => col(header) === -1)) {
       issues.push({
@@ -125,11 +135,13 @@ export const wiseStatementFormat: BankFileFormat = {
       if (!date) {
         issues.push({ row: rowNumber, message: `Invalid date on ${rowLabel}`, severity: 'warning' })
         skippedRows++
+        previousMovement = null
         continue
       }
       if (!Number.isFinite(amount) || amount === 0) {
         issues.push({ row: rowNumber, message: `Invalid amount on ${rowLabel}`, severity: 'warning' })
         skippedRows++
+        previousMovement = null
         continue
       }
       if (!/^[A-Z]{3}$/.test(currency)) {
@@ -139,6 +151,7 @@ export const wiseStatementFormat: BankFileFormat = {
           severity: 'warning',
         })
         skippedRows++
+        previousMovement = null
         continue
       }
 
@@ -208,9 +221,30 @@ export const wiseStatementFormat: BankFileFormat = {
           severity: 'error',
         })
         skippedRows++
+        previousMovement = null
         continue
       }
       if (stableMovementId) seenWiseMovements.add(stableMovementId)
+
+      // Netted-fee guard: on adjacent parsed rows the balance must move by
+      // exactly the signed Amount (statements can be oldest-first or
+      // newest-first, so accept either direction). A break means Amount does
+      // not equal the balance movement, e.g. fees charged on top of Amount,
+      // and the file needs manual review before booking.
+      if (balance !== null && previousMovement !== null) {
+        const oldestFirst =
+          roundOre(previousMovement.balance + roundedAmount) === balance
+        const newestFirst =
+          roundOre(balance + previousMovement.amount) === previousMovement.balance
+        if (!oldestFirst && !newestFirst) {
+          issues.push({
+            row: rowNumber,
+            message: `Running balance break at ${rowLabel}: the signed amount does not match the balance change (fees may not be netted into Amount); verify against the Wise balance before booking`,
+            severity: 'warning',
+          })
+        }
+      }
+      previousMovement = balance !== null ? { balance, amount: roundedAmount } : null
 
       transactions.push({
         date,
