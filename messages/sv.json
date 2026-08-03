@@ -5381,6 +5381,7 @@
     "download_excel": "Ladda ner Excel",
     "download_csv": "Ladda ner CSV",
     "download_xml": "Ladda ner XML-fil",
+    "latest_posted_vouchers": "Senaste bokförda verifikat",
     "pdf_download_failed_title": "PDF:en kunde inte skapas",
     "pdf_download_timeout": "Servern svarade inte i tid. Ingen PDF sparades. Försök igen.",
     "pdf_download_network": "Ingen kontakt med servern. Ingen PDF sparades. Kontrollera din internetanslutning och försök igen.",
