@@ -6,7 +6,7 @@
  *   1. Decodes the file (UTF-8 / Windows-1252 auto-detected).
  *   2. Detects the bank file format (SEB / Swedbank / Nordea / Handelsbanken
  *      / Lansforsakringar / Lunar / ICA Banken / Skandia / CAMT053 /
- *      Nordea Business / generic CSV), or honors the optional `format`
+ *      Nordea Business / Wise / generic CSV), or honors the optional `format`
  *      override.
  *   3. Parses transactions.
  *   4. Records a `bank_file_imports` row and ingests transactions via
@@ -54,14 +54,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/imports/bank',
   summary: 'Import a bank-file (CSV / XML / CAMT053).',
   description:
-    'Accepts a bank statement file (UTF-8 / Windows-1252, up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.',
+    'Accepts a bank statement file (UTF-8 / Windows-1252, up to 10 MB) as multipart/form-data. Auto-detects the bank format (SEB, Swedbank, Handelsbanken, Nordea, Nordea Business, Lansforsakringar, Lunar, ICA Banken, Skandia, Wise transaction history, Wise balance statement, CAMT053, generic CSV) or honors a `format` override. Parses transactions, ingests them into the `transactions` table (NOT into journal entries: see BFL note in pitfalls), and emits `transaction.synced` events. Returns operation_id for polling.',
   useWhen:
     'Importing a bank statement export for a period. Common with PSD2 bank connections that don\'t auto-sync, or for legacy bank accounts.',
   doNotUseFor:
     'SIE bookkeeping import (use /imports/sie). Auto-bank sync (use the enable-banking extension). Single-transaction creation (use POST /transactions/ingest with a 1-element array).',
   pitfalls: [
     'File size cap: 10 MB. Larger files require splitting client-side.',
-    '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, generic_csv, camt053.',
+    '`format` query parameter is optional; auto-detection works for all supported banks. Pass `format` only to force a specific format. Accepted values: seb, swedbank, handelsbanken, nordea, nordea_business, lansforsakringar, ica_banken, skandia, lunar, northmill, wise, wise_statement, generic_csv, camt053.',
+    'Wise transaction-history rows with refunded or unknown statuses, unknown directions, or different source and target currencies are rejected instead of guessed. Import the matching per-currency Wise balance statements.',
     'Duplicate detection is by external_id (composed from format + date + description + amount + row index, or the camt.053 entry reference / Wise transfer id where the file carries one); a re-import of the same file typically deduplicates rather than creating doubles.',
     'BFL 5 kap 6-7 §§ note: this endpoint creates `transactions` rows (the underlag for a verifikation), NOT verifikationer themselves. The verifikation content requirements are in BFL 5 kap 6-7 §§; until each transaction is matched to an invoice/supplier-invoice (POST /transactions/{id}/match-*) or categorised (POST /transactions/{id}/categorize), the bookkeeping obligation isn\'t discharged. A successful import here means the data is ingested: not booked.',
     'A successful import returns operation_id; poll /operations/{id} for the final ingested/duplicates/errors counts.',
@@ -137,6 +138,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       'lunar',
       'northmill',
       'wise',
+      'wise_statement',
       'generic_csv',
       'camt053',
     ])
@@ -176,6 +178,20 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
 
     const parseResult = parseBankFile(content, file.name, format)
+    const blockingIssues = parseResult.issues.filter((issue) => issue.severity === 'error')
+    if (blockingIssues.length > 0) {
+      // Cap the reported rows so a large malformed file cannot balloon the
+      // error payload or the log sink; issue_count carries the full total.
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'file',
+          message: 'The bank file contains rows that cannot be imported safely.',
+          issues: blockingIssues.slice(0, 20),
+          issue_count: blockingIssues.length,
+        },
+      })
+    }
     if (parseResult.transactions.length === 0) {
       return v1ErrorResponseFromCode('BANK_FILE_NO_TRANSACTIONS', ctx.log, {
         requestId: ctx.requestId,
