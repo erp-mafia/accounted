@@ -1,0 +1,21 @@
+# Konteringspaket. Schema: lib/packs/schema.ts
+# Validated by `npm run validate:packs` (CI gate).
+meta:
+  slug: periodiseringsfond-avsattning-ab
+  order: 24
+  name: 'Periodiseringsfond avsättning (AB)'
+  category: year_end
+  entity_type: aktiebolag
+  description: >-
+    Avsättning till periodiseringsfond vid bokslut. Max 25% av överskottet.
+lines:
+  - account: '8811'
+    label: 'Avsättning periodiseringsfond'
+    side: debit
+    type: business
+    ratio: 1.0
+  - account: '2113'
+    label: 'Periodiseringsfond'
+    side: credit
+    type: business
+    ratio: 1.0

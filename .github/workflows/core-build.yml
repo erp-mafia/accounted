@@ -58,6 +58,16 @@ jobs:
         # down as the A1 (route auth) and D1 (rounding) migrations land.
         run: npm run check:guards
 
+      - name: Validate konteringspaket catalogue
+        # The system booking templates are data files under packs/ rather than
+        # rows frozen inside a migration. This gate is what makes that safe: it
+        # checks the schema, that every BAS account actually exists in the 2026
+        # chart, and that each pack BALANCES when applied through the real
+        # applyTemplate(). PR #1321 shipped seeded reference data that
+        # contradicted the engine; that class of bug is structurally valid and
+        # only a semantic check catches it.
+        run: npm run validate:packs
+
       - name: Check no core imports from extensions
         run: |
           VIOLATIONS=$(grep -r "from '@/extensions/" lib/ app/api/ components/ --include="*.ts" --include="*.tsx" \

@@ -395,6 +395,16 @@ describe('eligibility blockers', () => {
     if (!result.ok) expect(result.blocker.code).toBe('MISSING_PAYMENT_DATE')
   })
 
+  it('FUTURE_PAYMENT_DATE when the recorded payment is after today', () => {
+    const result = evaluateInvoiceForFile(
+      'rot',
+      makeRotInvoice({ paid_at: '2026-07-03T10:00:00Z' }),
+      { today: TODAY },
+    )
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.blocker.code).toBe('FUTURE_PAYMENT_DATE')
+  })
+
   it('NO_DEDUCTION_OF_TYPE when the invoice has no lines of the requested type', () => {
     const result = evaluateInvoiceForFile('rut', makeRotInvoice())
     expect(result.ok).toBe(false)
@@ -549,6 +559,49 @@ describe('eligibility blockers', () => {
     expect(result.blockers[0].invoice_number).toBe('F-BAD')
     expect(result.xml).not.toBeNull()
   })
+
+  it('MIXED_PAYMENT_YEARS when one file spans more than one payment year', () => {
+    const result = buildRotRutFile({
+      type: 'rot',
+      name: 'Två år',
+      invoices: [
+        makeRotInvoice({ id: 'invoice-2026', invoice_number: 'F-2026' }),
+        makeRotInvoice({
+          id: 'invoice-2025',
+          invoice_number: 'F-2025',
+          paid_at: '2025-12-30T10:00:00Z',
+        }),
+      ],
+      today: TODAY,
+    })
+
+    expect(result.arenden).toHaveLength(1)
+    expect(result.blockers).toEqual([
+      expect.objectContaining({ invoice_id: 'invoice-2025', code: 'MIXED_PAYMENT_YEARS' }),
+    ])
+  })
+
+  it('TOO_MANY_CASES when a file contains more than 100 cases', () => {
+    // Reuse one encrypted synthetic personnummer. Creating 101 independent
+    // ciphertexts would benchmark the KDF rather than the file-size rule.
+    const baseInvoice = makeRotInvoice()
+    const invoices = Array.from({ length: 101 }, (_, index) => ({
+      ...baseInvoice,
+      id: `invoice-${index + 1}`,
+      invoice_number: `F-${index + 1}`,
+    }))
+    const result = buildRotRutFile({
+      type: 'rot',
+      name: 'För många',
+      invoices,
+      today: TODAY,
+    })
+
+    expect(result.arenden).toHaveLength(100)
+    expect(result.blockers).toEqual([
+      expect.objectContaining({ invoice_id: 'invoice-101', code: 'TOO_MANY_CASES' }),
+    ])
+  }, 30_000)
 
   it('returns xml: null when nothing is eligible', () => {
     const result = buildRotRutFile({
