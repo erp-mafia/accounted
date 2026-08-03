@@ -192,6 +192,32 @@ describe('salary entries: net deductions', () => {
     expect(linesOn(salary, '2890')[0].credit_amount).toBe(600)
     assertBalanced(salary)
   })
+
+  it('books a positive correction as a debit repayment', async () => {
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 30000,
+        tax_withheld: 7000,
+        net_salary: 23200,
+        line_items: [
+          {
+            item_type: 'net_deduction_union',
+            amount: 200,
+            account_number: null,
+            is_net_deduction: true,
+            is_gross_deduction: false,
+          },
+        ],
+      }),
+    ])
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+
+    expect(linesOn(salary, '2794')[0].debit_amount).toBe(200)
+    expect(linesOn(salary, '2794')[0].credit_amount).toBe(0)
+    assertBalanced(salary)
+  })
 })
 
 describe('salary entries: dimensions propagation (PR8)', () => {

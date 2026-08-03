@@ -622,7 +622,7 @@ function accountLabel(account: string): string {
     '7322': 'Traktamenten skattepliktiga',
     '7331': 'Bilersättningar skattefria',
     '7332': 'Bilersättningar skattepliktiga',
-    '7385': 'Bilförmån',
+    '7385': 'Kostnader för fri bil',
     '1613': 'Övriga förskott',
     '2794': 'Fackföreningsavgifter',
     '2799': 'Övriga löneavdrag',
