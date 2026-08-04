@@ -80,23 +80,8 @@ export type PreviewTaxDepreciationInput = Omit<
 export class TaxDepreciationValidationError extends Error {}
 export class TaxDepreciationPeriodLockedError extends Error {}
 
-const PERIOD_COLUMNS = [
-  'id',
-  'name',
-  'period_start',
-  'period_end',
-  'previous_period_id',
-  'is_closed',
-  'locked_at',
-  'closing_entry_id',
-  'tax_depreciation_method',
-  'tax_depreciation_rule',
-  'tax_depreciation_opening_value',
-  'tax_depreciation_base',
-  'tax_depreciation_deduction',
-  'tax_depreciation_closing_value',
-  'tax_depreciation_calculation',
-].join(', ')
+// Literal select string at each call site: the no-phantom-columns guard can only
+// verify columns it can resolve statically.
 
 export async function loadTaxDepreciationView(
   supabase: SupabaseClient,
@@ -106,7 +91,9 @@ export async function loadTaxDepreciationView(
   const [periodResult, assets] = await Promise.all([
     supabase
       .from('fiscal_periods')
-      .select(PERIOD_COLUMNS)
+      .select(
+        'id, name, period_start, period_end, previous_period_id, is_closed, locked_at, closing_entry_id, tax_depreciation_method, tax_depreciation_rule, tax_depreciation_opening_value, tax_depreciation_base, tax_depreciation_deduction, tax_depreciation_closing_value, tax_depreciation_calculation'
+      )
       .eq('id', fiscalPeriodId)
       .eq('company_id', companyId)
       .single(),
@@ -118,7 +105,9 @@ export async function loadTaxDepreciationView(
   const current = periodResult.data as TaxPeriodRow
   const periodsResult = await supabase
     .from('fiscal_periods')
-    .select(PERIOD_COLUMNS)
+    .select(
+        'id, name, period_start, period_end, previous_period_id, is_closed, locked_at, closing_entry_id, tax_depreciation_method, tax_depreciation_rule, tax_depreciation_opening_value, tax_depreciation_base, tax_depreciation_deduction, tax_depreciation_closing_value, tax_depreciation_calculation'
+      )
     .eq('company_id', companyId)
     .lte('period_end', current.period_end)
     .order('period_start', { ascending: true })
@@ -397,14 +386,18 @@ async function calculateWithElection(
   const [periodResult, assets, periodsResult] = await Promise.all([
     supabase
       .from('fiscal_periods')
-      .select(PERIOD_COLUMNS)
+      .select(
+        'id, name, period_start, period_end, previous_period_id, is_closed, locked_at, closing_entry_id, tax_depreciation_method, tax_depreciation_rule, tax_depreciation_opening_value, tax_depreciation_base, tax_depreciation_deduction, tax_depreciation_closing_value, tax_depreciation_calculation'
+      )
       .eq('id', fiscalPeriodId)
       .eq('company_id', companyId)
       .single(),
     listAssets(supabase, companyId),
     supabase
       .from('fiscal_periods')
-      .select(PERIOD_COLUMNS)
+      .select(
+        'id, name, period_start, period_end, previous_period_id, is_closed, locked_at, closing_entry_id, tax_depreciation_method, tax_depreciation_rule, tax_depreciation_opening_value, tax_depreciation_base, tax_depreciation_deduction, tax_depreciation_closing_value, tax_depreciation_calculation'
+      )
       .eq('company_id', companyId)
       .order('period_start', { ascending: true }),
   ])
