@@ -168,12 +168,17 @@ If you already have nginx / a managed load balancer / Cloudflare in front, skip 
 
 The self-hosted image ships with all extensions enabled (except Enable Banking, which requires private PSD2 credentials). Each extension activates when you provide its env vars: without them, the app works normally and the feature is simply unavailable.
 
-### AI Features (ai-categorization, ai-chat, receipt-ocr, invoice-inbox)
+### AI Features (document-extraction, invoice-inbox, AI assistant)
+
+All AI runs Claude via AWS Bedrock; provide AWS credentials with Bedrock model access to Claude:
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=eu-north-1
 ```
+
+`ANTHROPIC_API_KEY` and `OPENAI_API_KEY` from earlier versions are no longer used (plain-key support is tracked in [#1406](https://github.com/erp-mafia/accounted/issues/1406)). See [SELF-HOSTING.md](./SELF-HOSTING.md#ai-features) for optional model overrides.
 
 ### Email (invoice sending, reminders)
 

@@ -26,11 +26,16 @@ const REQUIRED_CORE_VARS = [
 // fallback in extensions/general/enable-banking/lib/jwt.ts (_PRODUCTION ||
 // base) so Vercel prod (which only sets the _PRODUCTION variants) doesn't
 // warn on every cold start.
+// AI features run Claude via AWS Bedrock (see lib/agent/composer/client.ts and
+// extensions/general/invoice-inbox/lib/extract-invoice-fields.ts), so the
+// static AWS keys are what actually gates them. On AWS infrastructure the SDK
+// can also resolve credentials from the provider chain (instance profile,
+// IRSA), in which case this warning is a false positive; it is log-only.
 const REQUIRED_EXTENSION_VARS: ReadonlyArray<readonly string[]> = [
   ['ENABLE_BANKING_APP_ID_PRODUCTION', 'ENABLE_BANKING_APP_ID'],
   ['ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', 'ENABLE_BANKING_PRIVATE_KEY'],
-  ['ANTHROPIC_API_KEY'],
-  ['OPENAI_API_KEY'],
+  ['AWS_ACCESS_KEY_ID'],
+  ['AWS_SECRET_ACCESS_KEY'],
 ] as const
 
 function validateEnvironment(): void {
