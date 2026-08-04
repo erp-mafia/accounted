@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { requireAuth } from '@/lib/auth/require-auth'
 import {
+  createSessionTimeoutState,
   evaluateSessionTimeout,
   getSessionTimeoutConfig,
   sessionStateMatchesUser,
@@ -12,7 +13,9 @@ import {
   verifySessionTimeoutState,
 } from '@/lib/auth/session-timeout'
 import {
+  SESSION_AUTH_METHOD_HINT_COOKIE,
   SESSION_TIMEOUT_COOKIE,
+  isSessionAuthMethod,
   type SessionTimeoutReason,
 } from '@/lib/auth/session-timeout-shared'
 
@@ -69,7 +72,29 @@ async function heartbeat(updateActivity: boolean): Promise<NextResponse> {
   const sessionId = await getSessionId(auth.supabase)
 
   if (!state || !sessionStateMatchesUser(state, auth.user.id, sessionId)) {
-    return expiredResponse('absolute')
+    // Mirror middleware initialization: a missing or session-mismatched
+    // cookie means the timeout state has not been established for this
+    // session yet, not that the session expired.
+    const hintedMethod = cookieStore.get(SESSION_AUTH_METHOD_HINT_COOKIE)?.value
+    const freshState = createSessionTimeoutState({
+      userId: auth.user.id,
+      sessionId,
+      method: isSessionAuthMethod(hintedMethod) ? hintedMethod : 'password',
+      now,
+    })
+    const response = NextResponse.json({
+      data: toSessionTimeoutClientState(freshState, config, now),
+    })
+    response.headers.set('Cache-Control', 'no-store')
+    const signedFresh = await signSessionTimeoutState(freshState)
+    if (signedFresh) {
+      response.cookies.set(
+        SESSION_TIMEOUT_COOKIE,
+        signedFresh,
+        sessionTimeoutCookieOptions(),
+      )
+    }
+    return response
   }
 
   const reason = evaluateSessionTimeout(state, config, now)
@@ -84,11 +109,14 @@ async function heartbeat(updateActivity: boolean): Promise<NextResponse> {
   response.headers.set('Cache-Control', 'no-store')
 
   if (updateActivity) {
-    response.cookies.set(
-      SESSION_TIMEOUT_COOKIE,
-      await signSessionTimeoutState(nextState),
-      sessionTimeoutCookieOptions(),
-    )
+    const signedNext = await signSessionTimeoutState(nextState)
+    if (signedNext) {
+      response.cookies.set(
+        SESSION_TIMEOUT_COOKIE,
+        signedNext,
+        sessionTimeoutCookieOptions(),
+      )
+    }
   }
 
   return response

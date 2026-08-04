@@ -151,7 +151,9 @@ describe('updateSession redirect destinations', () => {
           ? {}
           : { lastActivityAt: args.lastActivityAt }),
       }
-      return signSessionTimeoutState(stateValue)
+      const signed = await signSessionTimeoutState(stateValue)
+      if (!signed) throw new Error('test signing secret missing')
+      return signed
     }
 
     it('initializes a signed, session-bound cookie for an existing session', async () => {

@@ -80,7 +80,19 @@ describe('signed session timeout state', () => {
 
     const signed = await signSessionTimeoutState(state, SIGNING_ENV)
 
-    await expect(verifySessionTimeoutState(signed, SIGNING_ENV)).resolves.toEqual(state)
+    expect(signed).not.toBeNull()
+    await expect(verifySessionTimeoutState(signed!, SIGNING_ENV)).resolves.toEqual(state)
+  })
+
+  it('returns null instead of throwing when no signing secret is configured', async () => {
+    const state = createSessionTimeoutState({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      method: 'password',
+      now: 1000,
+    })
+
+    await expect(signSessionTimeoutState(state, {})).resolves.toBeNull()
   })
 
   it('rejects payload and signature tampering', async () => {
@@ -91,7 +103,7 @@ describe('signed session timeout state', () => {
       now: 1000,
     })
     const signed = await signSessionTimeoutState(state, SIGNING_ENV)
-    const [payload, signature] = signed.split('.')
+    const [payload, signature] = signed!.split('.')
 
     await expect(
       verifySessionTimeoutState(`${payload}x.${signature}`, SIGNING_ENV),
@@ -112,6 +124,25 @@ describe('signed session timeout state', () => {
     expect(sessionStateMatchesUser(state, 'user-1', 'session-1')).toBe(true)
     expect(sessionStateMatchesUser(state, 'user-2', 'session-1')).toBe(false)
     expect(sessionStateMatchesUser(state, 'user-1', 'session-2')).toBe(false)
+  })
+
+  it('treats an unresolved current session id as a mismatch for bound state', () => {
+    const bound = createSessionTimeoutState({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      method: 'password',
+      now: 1000,
+    })
+    const unbound = createSessionTimeoutState({
+      userId: 'user-1',
+      sessionId: null,
+      method: 'password',
+      now: 1000,
+    })
+
+    expect(sessionStateMatchesUser(bound, 'user-1', null)).toBe(false)
+    expect(sessionStateMatchesUser(unbound, 'user-1', null)).toBe(true)
+    expect(sessionStateMatchesUser(unbound, 'user-1', 'session-2')).toBe(true)
   })
 })
 

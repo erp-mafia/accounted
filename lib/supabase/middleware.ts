@@ -120,13 +120,15 @@ export async function updateSession(request: NextRequest) {
       })
       const signedState = await signSessionTimeoutState(state)
 
-      request.cookies.set(SESSION_TIMEOUT_COOKIE, signedState)
-      supabaseResponse.cookies.set(
-        SESSION_TIMEOUT_COOKIE,
-        signedState,
-        sessionTimeoutCookieOptions(),
-      )
-      clearAuthMethodHint(request, supabaseResponse)
+      if (signedState) {
+        request.cookies.set(SESSION_TIMEOUT_COOKIE, signedState)
+        supabaseResponse.cookies.set(
+          SESSION_TIMEOUT_COOKIE,
+          signedState,
+          sessionTimeoutCookieOptions(),
+        )
+        clearAuthMethodHint(request, supabaseResponse)
+      }
     } else {
       const timeoutReason = evaluateSessionTimeout(
         verifiedState,

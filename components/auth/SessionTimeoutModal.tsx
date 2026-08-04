@@ -39,7 +39,7 @@ export function SessionTimeoutModal({
             <ShieldAlert className="h-5 w-5" aria-hidden="true" />
           </div>
           <DialogTitle>{t('warning_title')}</DialogTitle>
-          <DialogDescription aria-live="polite">
+          <DialogDescription>
             {reason === 'idle'
               ? t('idle_warning', { seconds })
               : t('absolute_warning', { seconds })}

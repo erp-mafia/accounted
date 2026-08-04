@@ -65,7 +65,7 @@ describe('session heartbeat route', () => {
         ? {}
         : { lastActivityAt: args.lastActivityAt }),
     }
-    mocks.cookieValue = await signSessionTimeoutState(state)
+    mocks.cookieValue = (await signSessionTimeoutState(state)) ?? undefined
     return state
   }
 
@@ -99,15 +99,32 @@ describe('session heartbeat route', () => {
     })
   })
 
-  it('rejects an expired or session-mismatched state', async () => {
+  it('rejects an expired state', async () => {
     const now = Date.now()
     await setState({ startedAt: now - 60_000, lastActivityAt: now - 1 })
-    expect((await GET()).status).toBe(401)
+    const expired = await GET()
+    expect(expired.status).toBe(401)
+    expect(expired.headers.get('x-session-timeout-reason')).toBe('absolute')
+  })
+
+  it('initializes fresh state for a missing or mismatched cookie like middleware', async () => {
+    const missing = await GET()
+    expect(missing.status).toBe(200)
+    const initialized = missing.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
+    expect(initialized).toBeTruthy()
+    await expect(verifySessionTimeoutState(initialized)).resolves.toMatchObject({
+      userId: 'user-1',
+      sessionId: 'session-1',
+    })
 
     await setState({ sessionId: 'another-session' })
     const mismatch = await GET()
-    expect(mismatch.status).toBe(401)
-    expect(mismatch.headers.get('x-session-timeout-reason')).toBe('absolute')
+    expect(mismatch.status).toBe(200)
+    const reminted = mismatch.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
+    expect(reminted).toBeTruthy()
+    await expect(verifySessionTimeoutState(reminted)).resolves.toMatchObject({
+      sessionId: 'session-1',
+    })
   })
 
   it('passes through the existing authentication error', async () => {

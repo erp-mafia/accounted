@@ -202,15 +202,27 @@ async function importSigningKey(secret: string): Promise<CryptoKey> {
 export async function signSessionTimeoutState(
   state: SessionTimeoutState,
   env: Environment = process.env,
-): Promise<string> {
-  const payload = encodePayload(state)
-  const key = await importSigningKey(getSigningSecret(env))
-  const signature = await crypto.subtle.sign(
-    'HMAC',
-    key,
-    new TextEncoder().encode(`${SIGNING_CONTEXT}${payload}`),
-  )
-  return `${payload}.${bytesToBase64Url(new Uint8Array(signature))}`
+): Promise<string | null> {
+  // A missing signing secret must degrade the timeout feature, never crash
+  // authenticated requests: verifySessionTimeoutState already returns null in
+  // the same misconfiguration, so returning null here keeps both halves of
+  // the feature consistently disabled.
+  try {
+    const payload = encodePayload(state)
+    const key = await importSigningKey(getSigningSecret(env))
+    const signature = await crypto.subtle.sign(
+      'HMAC',
+      key,
+      new TextEncoder().encode(`${SIGNING_CONTEXT}${payload}`),
+    )
+    return `${payload}.${bytesToBase64Url(new Uint8Array(signature))}`
+  } catch (error) {
+    console.error(
+      '[session-timeout] signing failed; timeout state not persisted',
+      error,
+    )
+    return null
+  }
 }
 
 export async function verifySessionTimeoutState(
@@ -289,8 +301,12 @@ export function sessionStateMatchesUser(
   sessionId: string | null,
 ): boolean {
   if (state.userId !== userId) return false
-  if (state.sessionId && sessionId) return state.sessionId === sessionId
-  return true
+  if (state.sessionId === null) return true
+  // The state is bound to a specific Supabase session. If the current session
+  // id cannot be resolved it is unknown, not a wildcard: report a mismatch so
+  // the caller mints a fresh state instead of accepting another session's.
+  if (sessionId === null) return false
+  return state.sessionId === sessionId
 }
 
 export function apiRequestSkipsSessionTimeout(
