@@ -35,6 +35,7 @@ import { createLogger } from '@/lib/logger'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import {
   buildCustomerMetadataEnrichment,
+  type CustomerMetadataEnrichment,
   type ExistingCustomerMetadata,
 } from './customer-metadata'
 import {
@@ -222,7 +223,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           row: Record<string, unknown>
         }
         const pending: PendingCustomer[] = []
-        const pendingEnrichments: { id: string; changes: Record<string, unknown> }[] = []
+        const pendingEnrichments: { id: string; changes: CustomerMetadataEnrichment }[] = []
 
         for (const customer of customers) {
           if (!customer.active) {
@@ -294,7 +295,13 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           const outcomes = await Promise.all(batch.map(async ({ id, changes }) => {
             const { data, error } = await supabase
               .from('customers')
-              .update(changes)
+              // Object literal, not the record itself: absent keys serialize
+              // away, and the phantom-column guard can resolve the columns.
+              .update({
+                contact_person: changes.contact_person,
+                invoice_email_cc_addresses: changes.invoice_email_cc_addresses,
+                invoice_email_bcc_addresses: changes.invoice_email_bcc_addresses,
+              })
               .eq('id', id)
               .eq('company_id', companyId)
               .select('id')
