@@ -4734,6 +4734,7 @@
   "company_switcher": {
     "company_label": "Company",
     "default_company_name": "My business",
+    "choose_company": "Select company",
     "add_company": "Add company",
     "error_no_access": "You don't have access to this company.",
     "error_switch_failed": "The company switch could not be saved. Please try again.",

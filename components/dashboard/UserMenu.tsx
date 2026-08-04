@@ -164,7 +164,9 @@ export default function UserMenu({
   }, [open, companiesOpen, close])
 
   const handleSwitch = async (companyId: string) => {
-    if (company && companyId === company.id) {
+    // In the cockpit nothing is "current": picking any company, including the
+    // technically-active one, must enter it (full navigation to its start).
+    if (!cockpitMode && company && companyId === company.id) {
       close()
       return
     }
@@ -243,9 +245,9 @@ export default function UserMenu({
               </div>
             )}
 
-            {/* Company switcher flyout. Hidden in the cockpit: no company is
-                "active" there; clients are entered from the Klienter list. */}
-            {!cockpitMode && (
+            {/* Company switcher flyout. In the cockpit no company reads as
+                active (neutral label, no check mark); picking one enters it
+                like the Klienter list does. */}
             <div className="relative px-1 pt-1">
               <button
                 type="button"
@@ -255,7 +257,9 @@ export default function UserMenu({
               >
                 <Building2 className="h-4 w-4 flex-shrink-0" />
                 <span className="flex-1 truncate">
-                  {company?.name || tSwitcher('default_company_name')}
+                  {cockpitMode
+                    ? tSwitcher('choose_company')
+                    : company?.name || tSwitcher('default_company_name')}
                 </span>
                 <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 opacity-50" />
               </button>
@@ -280,36 +284,39 @@ export default function UserMenu({
                         {tSwitcher('no_results')}
                       </p>
                     )}
-                    {filteredCompanies.map(({ company: c, role }) => (
-                      <button
-                        key={c.id}
-                        onClick={() => handleSwitch(c.id)}
-                        disabled={isPending}
-                        role="option"
-                        aria-selected={c.id === company?.id}
-                        className={cn(
-                          'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
-                          c.id === company?.id
-                            ? 'bg-secondary/60 text-foreground'
-                            : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
-                          isPending && 'opacity-50',
-                        )}
-                      >
-                        <Building2 className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-                        <span className="min-w-0 flex-1 truncate">{c.name}</span>
-                        {role !== 'owner' && (
-                          <span className="flex-shrink-0 text-[10px] text-muted-foreground/60">
-                            {role}
-                          </span>
-                        )}
-                        {c.id === company?.id && (
-                          <Check className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
-                        )}
-                        {isPending && c.id !== company?.id && (
-                          <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-muted-foreground" />
-                        )}
-                      </button>
-                    ))}
+                    {filteredCompanies.map(({ company: c, role }) => {
+                      const isCurrent = !cockpitMode && c.id === company?.id
+                      return (
+                        <button
+                          key={c.id}
+                          onClick={() => handleSwitch(c.id)}
+                          disabled={isPending}
+                          role="option"
+                          aria-selected={isCurrent}
+                          className={cn(
+                            'flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] leading-snug transition-colors',
+                            isCurrent
+                              ? 'bg-secondary/60 text-foreground'
+                              : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
+                            isPending && 'opacity-50',
+                          )}
+                        >
+                          <Building2 className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                          <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                          {role !== 'owner' && (
+                            <span className="flex-shrink-0 text-[10px] text-muted-foreground/60">
+                              {role}
+                            </span>
+                          )}
+                          {isCurrent && (
+                            <Check className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
+                          )}
+                          {isPending && !isCurrent && (
+                            <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-muted-foreground" />
+                          )}
+                        </button>
+                      )
+                    })}
                   </div>
                   {/* Companies homed on another domain (home-domain rule,
                       WL-01): subtle, non-clickable signpost entries. */}
@@ -343,7 +350,6 @@ export default function UserMenu({
                 </div>
               )}
             </div>
-            )}
 
             {/* Account links */}
             <div className="px-1 pb-1">

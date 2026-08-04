@@ -4734,6 +4734,7 @@
   "company_switcher": {
     "company_label": "Företag",
     "default_company_name": "Min verksamhet",
+    "choose_company": "Välj bolag",
     "add_company": "Lägg till företag",
     "error_no_access": "Du har inte tillgång till detta företag.",
     "error_switch_failed": "Företagsbytet kunde inte sparas. Försök igen.",
