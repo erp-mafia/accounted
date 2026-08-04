@@ -7,8 +7,12 @@ import { createLogger } from '@/lib/logger'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
+import { ensureInitialized } from '@/lib/init'
 import { buildSandboxCustomers } from './customers'
+import { seedSandboxJournalEntries } from './journal-entries'
 import { buildSandboxPendingOperations } from './pending-operations'
+
+ensureInitialized()
 
 // Anonymous sign-in is enabled in all environments so visitors can try the
 // product; a per-/24 cap on the seed endpoint keeps a single network from
@@ -357,135 +361,25 @@ export async function POST(request: Request) {
 
     if (itemsError) throw itemsError
 
-    // 8. Resolve account IDs for journal entries
-    const { data: accounts } = await supabase
-      .from('chart_of_accounts')
-      .select('id, account_number')
-      .eq('company_id', companyId)
-      .in('account_number', ['1510', '1930', '2611', '3001'])
-
-    const accountMap = Object.fromEntries(
-      (accounts ?? []).map(a => [a.account_number, a.id])
-    )
-
-    // 9. Create journal entries (inserted directly, not via engine, to avoid event emission)
-    const { data: voucherNum1 } = await supabase.rpc('next_voucher_number', {
-      p_company_id: companyId,
-      p_fiscal_period_id: fiscalPeriod.id,
-      p_series: 'A',
+    // 8. Create journal entries through the bookkeeping engine. The engine
+    // owns draft creation, line insertion, balance validation, atomic voucher
+    // numbering, posting, and lifecycle events.
+    //
+    // The P&L line carries demo dimensions ({"1":"BUTIK","6":"P001"}) so
+    // the register's "antal taggade rader", voucher-detail badges, and the
+    // dimension P&L report light up in the sandbox. cost_center/project are
+    // GENERATED from the bag since the PR9 cutover.
+    const { paymentEntry: je2 } = await seedSandboxJournalEntries({
+      supabase,
+      companyId,
+      userId,
+      fiscalPeriodId: fiscalPeriod.id,
+      invoiceId: invoiceMap['F-2026001'],
+      invoiceEntryDate: toDateStr(thirtyDaysAgo),
+      paymentEntryDate: toDateStr(fifteenDaysAgo),
     })
 
-    const { data: je1, error: je1Error } = await supabase
-      .from('journal_entries')
-      .insert({
-        user_id: userId,
-        company_id: companyId,
-        fiscal_period_id: fiscalPeriod.id,
-        voucher_number: voucherNum1 ?? 1,
-        voucher_series: 'A',
-        entry_date: toDateStr(thirtyDaysAgo),
-        description: 'Faktura F-2026001, Björk & Partner AB',
-        source_type: 'invoice_created',
-        source_id: invoiceMap['F-2026001'],
-        status: 'posted',
-        committed_at: toDateStr(thirtyDaysAgo),
-      })
-      .select('id')
-      .single()
-
-    if (je1Error) throw je1Error
-
-    const { data: voucherNum2 } = await supabase.rpc('next_voucher_number', {
-      p_company_id: companyId,
-      p_fiscal_period_id: fiscalPeriod.id,
-      p_series: 'A',
-    })
-
-    const { data: je2, error: je2Error } = await supabase
-      .from('journal_entries')
-      .insert({
-        user_id: userId,
-        company_id: companyId,
-        fiscal_period_id: fiscalPeriod.id,
-        voucher_number: voucherNum2 ?? 2,
-        voucher_series: 'A',
-        entry_date: toDateStr(fifteenDaysAgo),
-        description: 'Betalning faktura F-2026001, Björk & Partner AB',
-        source_type: 'invoice_paid',
-        source_id: invoiceMap['F-2026001'],
-        status: 'posted',
-        committed_at: toDateStr(fifteenDaysAgo),
-      })
-      .select('id')
-      .single()
-
-    if (je2Error) throw je2Error
-
-    // 10. Create journal entry lines. The P&L line carries demo dimensions
-    // ({"1":"BUTIK","6":"P001"}) so the register's "antal taggade rader",
-    // voucher-detail badges, and the dimension P&L report light up in the
-    // sandbox. cost_center/project are GENERATED from the bag since the PR9
-    // cutover: writing them explicitly would error.
-    const revenueDims = { '1': 'BUTIK', '6': 'P001' }
-    const { error: jelError } = await supabase
-      .from('journal_entry_lines')
-      .insert([
-        // JE1: Invoice creation, Debit AR, Credit Revenue + VAT
-        // NB: `dimensions` must be set explicitly on EVERY row: same PostgREST
-        // bulk-insert normalization as paid_amount below: omitting it on some
-        // rows while one row sets it sends null (violating NOT NULL) instead
-        // of falling through to the schema default '{}'.
-        {
-          journal_entry_id: je1.id,
-          account_number: '1510',
-          account_id: accountMap['1510'] ?? null,
-          debit_amount: 18750,
-          credit_amount: 0,
-          sort_order: 0,
-          dimensions: {},
-        },
-        {
-          journal_entry_id: je1.id,
-          account_number: '3001',
-          account_id: accountMap['3001'] ?? null,
-          debit_amount: 0,
-          credit_amount: 15000,
-          sort_order: 1,
-          dimensions: revenueDims,
-        },
-        {
-          journal_entry_id: je1.id,
-          account_number: '2611',
-          account_id: accountMap['2611'] ?? null,
-          debit_amount: 0,
-          credit_amount: 3750,
-          sort_order: 2,
-          dimensions: {},
-        },
-        // JE2: Invoice payment, Debit Bank, Credit AR
-        {
-          journal_entry_id: je2.id,
-          account_number: '1930',
-          account_id: accountMap['1930'] ?? null,
-          debit_amount: 18750,
-          credit_amount: 0,
-          sort_order: 0,
-          dimensions: {},
-        },
-        {
-          journal_entry_id: je2.id,
-          account_number: '1510',
-          account_id: accountMap['1510'] ?? null,
-          debit_amount: 0,
-          credit_amount: 18750,
-          sort_order: 1,
-          dimensions: {},
-        },
-      ])
-
-    if (jelError) throw jelError
-
-    // 11. Create transactions
+    // 9. Create transactions
     const { data: txRows, error: txError } = await supabase
       .from('transactions')
       .insert([

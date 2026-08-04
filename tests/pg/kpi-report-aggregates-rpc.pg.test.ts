@@ -78,35 +78,49 @@ async function insertJournalEntry(params: {
   lines: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
   const id = randomUUID()
+  const status = params.status ?? 'posted'
+  const client = await getPool().connect()
   // Insert directly, bypassing commit_journal_entry's voucher sequencing:
   // fine for a read-side RPC that only aggregates line/account references.
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status, reverses_id, correction_of_id)
-     VALUES ($1, $2, $3, $4, $5, 'A', $6, 'KPI RPC test', $7, $8, $9, $10)`,
-    [
-      id,
-      params.userId,
-      params.companyId,
-      params.fiscalPeriodId,
-      params.voucherNumber,
-      params.entryDate ?? '2026-03-15',
-      params.sourceType ?? 'manual',
-      params.status ?? 'posted',
-      params.reversesId ?? null,
-      params.correctionOfId ?? null,
-    ],
-  )
-  for (const line of params.lines) {
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines
-         (journal_entry_id, account_number, debit_amount, credit_amount)
-       VALUES ($1, $2, $3, $4)`,
-      [id, line.account, line.debit, line.credit],
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status, reverses_id, correction_of_id)
+       VALUES ($1, $2, $3, $4, $5, 'A', $6, 'KPI RPC test', $7, $8, $9, $10)`,
+      [
+        id,
+        params.userId,
+        params.companyId,
+        params.fiscalPeriodId,
+        params.voucherNumber,
+        params.entryDate ?? '2026-03-15',
+        params.sourceType ?? 'manual',
+        status,
+        params.reversesId ?? null,
+        params.correctionOfId ?? null,
+      ],
     )
+    for (const line of params.lines) {
+      await client.query(
+        `INSERT INTO public.journal_entry_lines
+           (journal_entry_id, account_number, debit_amount, credit_amount)
+         VALUES ($1, $2, $3, $4)`,
+        [id, line.account, line.debit, line.credit],
+      )
+    }
+    if (status === 'posted') {
+      await client.query('SET CONSTRAINTS check_balance_on_posted_insert IMMEDIATE')
+    }
+    await client.query('COMMIT')
+    return id
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
   }
-  return id
 }
 
 async function seedCompany() {
@@ -165,6 +179,8 @@ async function seedFullScenario() {
     lines: [
       { account: '8310', debit: 0, credit: 200 },
       { account: '8410', debit: 500, credit: 0 },
+      // Balance outside classes 3-8 so the monthly assertions stay focused.
+      { account: '2999', debit: 0, credit: 300 },
     ],
   })
 
@@ -265,7 +281,11 @@ describe('get_kpi_report_aggregates RPC', () => {
     await insertJournalEntry({
       ...ctx, voucherNumber: 2, sourceType: 'storno', entryDate: '2026-04-02',
       reversesId: plainReversed,
-      lines: [{ account: '5010', debit: 0, credit: 100 }],
+      lines: [
+        { account: '5010', debit: 0, credit: 100 },
+        // Keep the posted storno balanced without changing the asserted P&L account.
+        { account: '2999', debit: 100, credit: 0 },
+      ],
     })
 
     const payload = await callRpc(ctx.companyId, ctx.fiscalPeriodId)

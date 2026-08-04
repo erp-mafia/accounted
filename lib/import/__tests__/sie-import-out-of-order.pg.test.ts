@@ -36,63 +36,73 @@ async function insertPostedEntry(params: {
   reversesId?: string | null
 }): Promise<string> {
   const id = randomUUID()
-  const voucher = await getPool().query<{ next_number: number }>(
-    `SELECT COALESCE(MAX(voucher_number), 0) + 1 AS next_number
-       FROM public.journal_entries
-      WHERE company_id = $1
-        AND fiscal_period_id = $2
-        AND voucher_series = 'A'`,
-    [params.companyId, params.fiscalPeriodId],
-  )
+  const client = await getClient()
+  try {
+    await client.query('BEGIN')
+    const voucher = await client.query<{ next_number: number }>(
+      `SELECT COALESCE(MAX(voucher_number), 0) + 1 AS next_number
+         FROM public.journal_entries
+        WHERE company_id = $1
+          AND fiscal_period_id = $2
+          AND voucher_series = 'A'`,
+      [params.companyId, params.fiscalPeriodId],
+    )
 
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number,
-        voucher_series, entry_date, description, source_type, status, reverses_id)
-     VALUES ($1, $2, $3, $4, $5, 'A', $6, $7, $8, 'posted', $9)`,
-    [
-      id,
-      params.userId,
-      params.companyId,
-      params.fiscalPeriodId,
-      voucher.rows[0]!.next_number,
-      params.entryDate,
-      params.description,
-      params.sourceType,
-      params.reversesId ?? null,
-    ],
-  )
-
-  await getPool().query(
-    `INSERT INTO public.voucher_sequences
-       (company_id, user_id, fiscal_period_id, voucher_series, last_number)
-     VALUES ($1, $2, $3, 'A', $4)
-     ON CONFLICT (company_id, fiscal_period_id, voucher_series)
-     DO UPDATE SET last_number = GREATEST(
-       public.voucher_sequences.last_number,
-       EXCLUDED.last_number
-     )`,
-    [
-      params.companyId,
-      params.userId,
-      params.fiscalPeriodId,
-      voucher.rows[0]!.next_number,
-    ],
-  )
-
-  for (const line of params.lines) {
-    await getPool().query(
-      `INSERT INTO public.journal_entry_lines
-         (journal_entry_id, account_number, debit_amount, credit_amount, line_description)
-       VALUES ($1, $2, $3, $4, $5)`,
+    await client.query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number,
+          voucher_series, entry_date, description, source_type, status, reverses_id)
+       VALUES ($1, $2, $3, $4, $5, 'A', $6, $7, $8, 'posted', $9)`,
       [
         id,
-        line.account_number,
-        line.debit_amount,
-        line.credit_amount,
-        line.line_description ?? null,
+        params.userId,
+        params.companyId,
+        params.fiscalPeriodId,
+        voucher.rows[0]!.next_number,
+        params.entryDate,
+        params.description,
+        params.sourceType,
+        params.reversesId ?? null,
       ],
     )
+
+    await client.query(
+      `INSERT INTO public.voucher_sequences
+         (company_id, user_id, fiscal_period_id, voucher_series, last_number)
+       VALUES ($1, $2, $3, 'A', $4)
+       ON CONFLICT (company_id, fiscal_period_id, voucher_series)
+       DO UPDATE SET last_number = GREATEST(
+         public.voucher_sequences.last_number,
+         EXCLUDED.last_number
+       )`,
+      [
+        params.companyId,
+        params.userId,
+        params.fiscalPeriodId,
+        voucher.rows[0]!.next_number,
+      ],
+    )
+
+    for (const line of params.lines) {
+      await client.query(
+        `INSERT INTO public.journal_entry_lines
+           (journal_entry_id, account_number, debit_amount, credit_amount, line_description)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          id,
+          line.account_number,
+          line.debit_amount,
+          line.credit_amount,
+          line.line_description ?? null,
+        ],
+      )
+    }
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
   }
 
   return id

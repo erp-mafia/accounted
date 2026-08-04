@@ -14,7 +14,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import { getPool } from '@/tests/pg/setup'
+import { getClient, getPool } from '@/tests/pg/setup'
 import {
   insertAuthUser,
   insertCompany,
@@ -64,20 +64,30 @@ async function seedPostedVoucher(params: {
 }): Promise<string> {
   const id = randomUUID()
   const amount = params.amount ?? 1000
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Inbetalning', 'manual', 'posted')`,
-    [id, params.userId, params.companyId, params.fiscalPeriodId, Math.floor(Math.random() * 100000)],
-  )
-  await getPool().query(
-    `INSERT INTO public.journal_entry_lines
-       (journal_entry_id, account_number, debit_amount, credit_amount)
-     VALUES ($1, '1930', $2, 0),
-            ($1, '1510', 0, $2)`,
-    [id, amount],
-  )
+  const client = await getClient()
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Inbetalning', 'manual', 'posted')`,
+      [id, params.userId, params.companyId, params.fiscalPeriodId, Math.floor(Math.random() * 100000)],
+    )
+    await client.query(
+      `INSERT INTO public.journal_entry_lines
+         (journal_entry_id, account_number, debit_amount, credit_amount)
+       VALUES ($1, '1930', $2, 0),
+              ($1, '1510', 0, $2)`,
+      [id, amount],
+    )
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
   return id
 }
 
@@ -96,20 +106,30 @@ async function seedVoucherDebitCredit(params: {
 }): Promise<string> {
   const id = randomUUID()
   const amount = params.amount ?? 1000
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Inbetalning', 'manual', 'posted')`,
-    [id, params.userId, params.companyId, params.fiscalPeriodId, Math.floor(Math.random() * 100000)],
-  )
-  await getPool().query(
-    `INSERT INTO public.journal_entry_lines
-       (journal_entry_id, account_number, debit_amount, credit_amount)
-     VALUES ($1, $2, $3, 0),
-            ($1, $4, 0, $3)`,
-    [id, params.debitAccount, amount, params.creditAccount],
-  )
+  const client = await getClient()
+  try {
+    await client.query('BEGIN')
+    await client.query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+          entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, $5, 'A', '2026-05-05', 'Inbetalning', 'manual', 'posted')`,
+      [id, params.userId, params.companyId, params.fiscalPeriodId, Math.floor(Math.random() * 100000)],
+    )
+    await client.query(
+      `INSERT INTO public.journal_entry_lines
+         (journal_entry_id, account_number, debit_amount, credit_amount)
+       VALUES ($1, $2, $3, 0),
+              ($1, $4, 0, $3)`,
+      [id, params.debitAccount, amount, params.creditAccount],
+    )
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
   return id
 }
 

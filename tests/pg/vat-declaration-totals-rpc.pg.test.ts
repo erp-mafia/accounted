@@ -20,7 +20,12 @@
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool } from './setup'
-import { insertAuthUser, insertCompany, insertFiscalPeriod } from './fixtures'
+import {
+  insertAuthUser,
+  insertCompany,
+  insertFiscalPeriod,
+  insertPostedJournalEntry,
+} from './fixtures'
 
 // Mirrors the TS call site (lib/reports/vat-declaration.ts): a small
 // representative slice of ACCOUNT_RUTA is enough since the full list is a
@@ -28,6 +33,9 @@ import { insertAuthUser, insertCompany, insertFiscalPeriod } from './fixtures'
 const RUTA_ACCOUNTS = ['2611', '2621', '2641', '2645', '3001']
 const NET_ACCOUNTS = ['2650', '1650']
 const ALL_ACCOUNTS = [...RUTA_ACCOUNTS, ...NET_ACCOUNTS]
+// This account keeps intentionally narrow VAT fixtures balanced without
+// entering the account set asserted by this read-side RPC suite.
+const VAT_FIXTURE_BALANCING_ACCOUNT = '2999'
 
 interface RpcPayload {
   totals: Array<{ account_number: string; debit: number; credit: number }>
@@ -68,6 +76,23 @@ async function insertJournalEntry(params: {
   entryDate?: string
   lines: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
+  if ((params.status ?? 'posted') === 'posted') {
+    return insertPostedJournalEntry({
+      userId: params.userId,
+      companyId: params.companyId,
+      fiscalPeriodId: params.fiscalPeriodId,
+      voucherNumber: params.voucherNumber,
+      entryDate: params.entryDate ?? '2026-03-15',
+      description: 'VAT RPC test',
+      sourceType: params.sourceType ?? 'manual',
+      lines: params.lines.map((line) => ({
+        accountNumber: line.account,
+        debitAmount: line.debit,
+        creditAmount: line.credit,
+      })),
+    })
+  }
+
   const id = randomUUID()
   // Insert directly, bypassing commit_journal_entry's voucher sequencing —
   // fine for a read-side RPC that only aggregates line/account references.
@@ -151,11 +176,17 @@ describe('get_vat_declaration_totals RPC', () => {
     })
     await insertJournalEntry({
       ...ctx, voucherNumber: 2, entryDate: '2025-12-31',
-      lines: [{ account: '2611', debit: 0, credit: 777 }],
+      lines: [
+        { account: '2611', debit: 0, credit: 777 },
+        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 777, credit: 0 },
+      ],
     })
     await insertJournalEntry({
       ...ctx, voucherNumber: 3, entryDate: '2026-06-30',
-      lines: [{ account: '2611', debit: 0, credit: 100 }],
+      lines: [
+        { account: '2611', debit: 0, credit: 100 },
+        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 100, credit: 0 },
+      ],
     })
 
     const payload = await callRpc(ctx.companyId, '2026-01-01', '2026-12-31')
@@ -168,7 +199,10 @@ describe('get_vat_declaration_totals RPC', () => {
 
     await insertJournalEntry({
       ...ctx, voucherNumber: 1, sourceType: 'invoice_created',
-      lines: [{ account: '2611', debit: 0, credit: 2500 }],
+      lines: [
+        { account: '2611', debit: 0, credit: 2500 },
+        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 2500, credit: 0 },
+      ],
     })
     // The app's own settlement flow: tagged, filtered by source_type alone.
     await insertJournalEntry({
@@ -198,6 +232,7 @@ describe('get_vat_declaration_totals RPC', () => {
         { account: '2611', debit: 0, credit: 2500 },
         { account: '2641', debit: 1000, credit: 0 },
         { account: '3001', debit: 0, credit: 10000 },
+        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 11500, credit: 0 },
       ],
     })
     // Manual settlement clearing the period to 2650, booked without the
@@ -236,7 +271,10 @@ describe('get_vat_declaration_totals RPC', () => {
 
     await insertJournalEntry({
       ...ctx, voucherNumber: 1, sourceType: 'invoice_created',
-      lines: [{ account: '2611', debit: 0, credit: 100 }],
+      lines: [
+        { account: '2611', debit: 0, credit: 100 },
+        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 100, credit: 0 },
+      ],
     })
     // The tagged settlement itself is filtered by source_type; its storno
     // reversal is untagged and would otherwise re-credit 2611.
@@ -281,7 +319,10 @@ describe('get_vat_declaration_totals RPC', () => {
 
     await insertJournalEntry({
       ...ctx, voucherNumber: 1, sourceType: 'invoice_created',
-      lines: [{ account: '2611', debit: 0, credit: 100 }],
+      lines: [
+        { account: '2611', debit: 0, credit: 100 },
+        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 100, credit: 0 },
+      ],
     })
     // Paying last period's VAT debt: 2650 against the bank account.
     await insertJournalEntry({
@@ -305,11 +346,17 @@ describe('get_vat_declaration_totals RPC', () => {
 
     await insertJournalEntry({
       ...a, voucherNumber: 1,
-      lines: [{ account: '2611', debit: 0, credit: 100 }],
+      lines: [
+        { account: '2611', debit: 0, credit: 100 },
+        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 100, credit: 0 },
+      ],
     })
     await insertJournalEntry({
       ...b, voucherNumber: 1,
-      lines: [{ account: '2611', debit: 0, credit: 999 }],
+      lines: [
+        { account: '2611', debit: 0, credit: 999 },
+        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 999, credit: 0 },
+      ],
     })
 
     const payload = await callRpc(a.companyId)

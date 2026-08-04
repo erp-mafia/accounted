@@ -21,6 +21,7 @@ import {
   insertCompany,
   insertCompanyMember,
   insertFiscalPeriod,
+  insertPostedJournalEntry,
 } from './fixtures'
 
 async function insertAsset(params: {
@@ -86,21 +87,19 @@ async function insertPostedEntry(params: {
   fiscalPeriodId: string
   voucherNumber?: number
 }): Promise<string> {
-  const id = randomUUID()
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', '2025-12-31', 'Test', 'year_end', 'posted')`,
-    [id, params.userId, params.companyId, params.fiscalPeriodId, params.voucherNumber ?? 1],
-  )
-  await getPool().query(
-    `INSERT INTO public.journal_entry_lines
-       (journal_entry_id, account_number, debit_amount, credit_amount)
-     VALUES ($1, '7832', 12000, 0), ($1, '1229', 0, 12000)`,
-    [id],
-  )
-  return id
+  return insertPostedJournalEntry({
+    userId: params.userId,
+    companyId: params.companyId,
+    fiscalPeriodId: params.fiscalPeriodId,
+    voucherNumber: params.voucherNumber ?? 1,
+    entryDate: '2025-12-31',
+    description: 'Test',
+    sourceType: 'year_end',
+    lines: [
+      { accountNumber: '7832', debitAmount: 12000, creditAmount: 0 },
+      { accountNumber: '1229', debitAmount: 0, creditAmount: 12000 },
+    ],
+  })
 }
 
 let companyA: { userId: string; companyId: string; fiscalPeriodId: string }
