@@ -243,6 +243,33 @@ describe('generateAGIXml: Individuppgift (IU)', () => {
   })
 })
 
+describe('generateAGIXml: F-skatt payee IU (FK131)', () => {
+  // Data layer (generate-declaration.ts) zeroes grossSalary for F-skatt
+  // payees and routes the cash to fSkattPayment: the same payment must
+  // never appear as both FK011 (underlag AG) and FK131 (ej underlag SA).
+  const fSkattEmployee: AGIEmployeeData = {
+    personnummer: 'emp2_encrypted',
+    specificationNumber: 3,
+    grossSalary: 0,
+    taxWithheld: 0,
+    avgifterBasis: 0,
+    fSkattPayment: 15000,
+  }
+
+  it('emits KontantErsattningEjUlagSA FK131 with the payment amount', () => {
+    const xml = generateAGIXml(company, [fSkattEmployee], totals)
+    expect(xml).toContain(
+      '<gem:KontantErsattningEjUlagSA faltkod="131">15000</gem:KontantErsattningEjUlagSA>'
+    )
+  })
+
+  it('does not emit FK011 or FK001 for the F-skatt payment', () => {
+    const xml = generateAGIXml(company, [fSkattEmployee], totals)
+    expect(xml).not.toContain('faltkod="011"')
+    expect(xml).not.toContain('faltkod="001"')
+  })
+})
+
 describe('generateAGIXml: fail-fast on missing data', () => {
   it('throws AGIIncompleteDataError when org number is missing', () => {
     const bad = { ...company, orgNumber: '' }

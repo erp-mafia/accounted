@@ -338,13 +338,14 @@ export async function generateAgiDeclaration(
         personnummer: emp?.personnummer ?? '',
         specificationNumber: emp?.specification_number ?? 0,
         removed: Boolean(sre.removed_from_agi),
-        grossSalary: sre.gross_salary,
+        grossSalary: isFSkatt ? 0 : sre.gross_salary,
         taxWithheld: effectiveTax,
         avgifterBasis: effectiveAvgifterBasis,
         fSkattPayment: isFSkatt ? sre.gross_salary : undefined,
-        // F-skatt payees: cash goes to FK131 and benefits to the ej-UlagSA
-        // variants (FK132/FK133/FK134/FK137/FK138/FK139). Regular employees
-        // get FK011 + FK012/FK013/FK015/FK018/FK041/FK043.
+        // F-skatt payees: cash goes to FK131 ONLY (grossSalary is zeroed so
+        // FK011 is never emitted for the same payment) and benefits to the
+        // ej-UlagSA variants (FK132/FK133/FK134/FK137/FK138/FK139). Regular
+        // employees get FK011 + FK012/FK013/FK015/FK018/FK041/FK043.
         benefitsExcludedFromSAUnderlag: isFSkatt ? true : undefined,
         benefitCar: benefitCar > 0 ? benefitCar : undefined,
         benefitFuel: benefitFuel > 0 ? benefitFuel : undefined,
