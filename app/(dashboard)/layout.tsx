@@ -26,6 +26,7 @@ import {
   getDashboardAuthContext,
   getDashboardCompanyId,
   getDashboardSettings,
+  getDashboardTeamMemberships,
   getResolvedDashboardAgentProfile,
 } from './request-context'
 
@@ -73,17 +74,13 @@ export default async function DashboardLayout({
   // Team membership (with the team row embedded) only depends on user.id,
   // so it resolves in parallel, this layout is on the critical path of
   // every dashboard page, so sequential round-trips are wall-clock time.
-  const [companyId, headerStore, { data: teamMemberships }] = await Promise.all([
+  // The memberships come from the request-cached getDashboardTeamMemberships
+  // so the home page's byrå landing redirect reuses the same single query.
+  const [companyId, headerStore, teamMemberships] = await Promise.all([
     getDashboardCompanyId(),
     // Read the pathname forwarded by middleware so we can branch on it.
     headers(),
-    // ALL team memberships: multi-team membership (own personal team + byrå
-    // team) is the supported shape after WL-08; the old `.limit(1)` picked an
-    // arbitrary row and could hide a consultant's byrå membership.
-    supabase
-      .from('team_members')
-      .select('team_id, role, teams:team_id(*)')
-      .eq('user_id', user.id),
+    getDashboardTeamMemberships(),
   ])
 
   const pathname = headerStore.get('x-pathname') ?? ''
@@ -92,12 +89,7 @@ export default async function DashboardLayout({
   )
 
   // Team now carries `kind` directly (types/index.ts, WL-08).
-  type TeamMembershipRow = {
-    team_id: string
-    role: string
-    teams: Team | null
-  }
-  const membershipRows = (teamMemberships ?? []) as unknown as TeamMembershipRow[]
+  const membershipRows = teamMemberships
   const byraMembership = membershipRows.find((m) => m.teams?.kind === 'byra') ?? null
   // Byrå team membership gates the cockpit ("Klienter" nav + /clients).
   const byraTeam: ByraTeamRef | null = byraMembership?.teams

@@ -16,12 +16,19 @@
 import Link from 'next/link'
 import Image from 'next/image'
 import { useBranding } from '@/lib/branding/brand-context'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 
 export function BrandHomeLink({ showLabel = false }: { showLabel?: boolean }) {
   const { appName, logoUrl, logoPath, brand } = useBranding()
   const label = brand ? brand.appName : null
+  // Byrå owners/admins home to the cockpit, never to "/" (which would open
+  // whatever client company happens to be active). Members and everyone
+  // outside a byrå keep the legacy home link.
+  const byraTeam = useCompanyOptional()?.byraTeam
+  const homeHref =
+    byraTeam && (byraTeam.role === 'owner' || byraTeam.role === 'admin') ? '/byra' : '/'
   return (
-    <Link href="/" aria-label={appName} className="flex items-center gap-2 rounded-lg">
+    <Link href={homeHref} aria-label={appName} className="flex items-center gap-2 rounded-lg">
       {logoUrl ? (
         <Image
           src={logoUrl}
