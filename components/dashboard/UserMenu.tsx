@@ -351,20 +351,32 @@ export default function UserMenu({
               )}
             </div>
 
-            {/* Account links */}
+            {/* Account links. From the cockpit, settings open in byrå scope
+                (?ctx=byra): account-level sections only; Abonnemang is
+                company-scoped and hidden there. */}
             <div className="px-1 pb-1">
-              <Link href="/settings" onClick={close} className={menuRow}>
+              <Link
+                href={cockpitMode ? '/settings/account?ctx=byra' : '/settings'}
+                onClick={close}
+                className={menuRow}
+              >
                 <Settings className="h-4 w-4 flex-shrink-0" />
                 {tNav('settings')}
               </Link>
-              <Link href="/settings/team" onClick={close} className={menuRow}>
+              <Link
+                href={cockpitMode ? '/settings/team?ctx=byra' : '/settings/team'}
+                onClick={close}
+                className={menuRow}
+              >
                 <Users className="h-4 w-4 flex-shrink-0" />
                 {tNav('members_roles')}
               </Link>
-              <Link href="/settings/billing" onClick={close} className={menuRow}>
-                <CreditCard className="h-4 w-4 flex-shrink-0" />
-                {tNav('subscription')}
-              </Link>
+              {!cockpitMode && (
+                <Link href="/settings/billing" onClick={close} className={menuRow}>
+                  <CreditCard className="h-4 w-4 flex-shrink-0" />
+                  {tNav('subscription')}
+                </Link>
+              )}
               <div className="my-1 border-t border-border/60" />
               <Link href="/help" onClick={close} className={menuRow}>
                 <HelpCircle className="h-4 w-4 flex-shrink-0" />

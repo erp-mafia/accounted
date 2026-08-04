@@ -46,6 +46,10 @@ const BillingSettingsContent = dynamic(() =>
   import('./BillingSettingsContent').then((module) => ({ default: module.BillingSettingsContent })),
   { loading: SettingsLoadingSkeleton },
 )
+const TeamSettingsContent = dynamic(() =>
+  import('../TeamPanel').then((module) => ({ default: module.TeamPanel })),
+  { loading: SettingsLoadingSkeleton },
+)
 
 /**
  * Single source of truth mapping a settings section id to the component that
@@ -66,6 +70,7 @@ export const SETTINGS_SECTIONS: Record<string, ComponentType> = {
   assistant: AssistantSettingsContent,
   api: ApiSettingsContent,
   billing: BillingSettingsContent,
+  team: TeamSettingsContent,
 }
 
 export type SettingsSectionId = keyof typeof SETTINGS_SECTIONS

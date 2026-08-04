@@ -358,7 +358,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   // Byrå-scope surfaces, not company surfaces: they must stay reachable even
   // when the active company is unresolved.
   const ALWAYS_ENABLED = new Set(['/settings', '/clients', '/byra', '/byra/automations', '/byra/kpi'])
-  const isItemEnabled = (href: string) => hasCompany || ALWAYS_ENABLED.has(href)
+  const isItemEnabled = (href: string) => {
+    const base = href.split('?')[0]
+    return hasCompany || ALWAYS_ENABLED.has(base) || base.startsWith('/settings')
+  }
   type ExpandableGroup = Exclude<GroupKey, 'top'>
 
   // Sidebar collapse (64px icon rail). The width is CSS-variable-driven:
@@ -1253,7 +1256,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
               <div className="space-y-0.5">
                 {([
-                  { href: '/settings', labelKey: 'settings' as NavLabelKey, icon: Settings },
+                  // Cockpit: settings open in byrå scope (account-level
+                  // sections only), same as the desktop user menu.
+                  { href: cockpitMode ? '/settings/account?ctx=byra' : '/settings', labelKey: 'settings' as NavLabelKey, icon: Settings },
                   { href: '/help', labelKey: 'help' as NavLabelKey, icon: HelpCircle },
                 ]).map((item) => {
                   const Icon = item.icon

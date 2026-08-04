@@ -15,7 +15,7 @@
 -- 20260519180000_enforce_team_membership_in_create_company.sql: any member
 -- of a personal team may attach a company to it (in practice the sole owner;
 -- ensure_user_team creates one personal team per user). Only teams with
--- kind = 'byra' (20260801100000) get the stricter role check.
+-- kind = 'byra' (20260804110000) get the stricter role check.
 
 CREATE OR REPLACE FUNCTION public.create_company_with_owner(
   p_name text,
