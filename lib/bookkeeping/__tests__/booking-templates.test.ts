@@ -426,7 +426,10 @@ describe('buildMappingResultFromTemplate', () => {
     const tx = makeTransaction({ amount: -1120 })
     const result = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
 
-    expect(result.debit_account).toBe('5820')
+    // 5830 Kost och logi, not 5820 Hyrbilskostnader. This assertion used to
+    // read 5820, which pinned a real bug: the Hotell template posted hotel
+    // nights into car hire. It balanced, so nothing ever complained.
+    expect(result.debit_account).toBe('5830')
     expect(result.vat_lines).toHaveLength(1)
     expect(result.vat_lines[0].account_number).toBe('2641')
     expect(result.vat_lines[0].debit_amount).toBe(120) // 1120 * 0.12 / 1.12 = 120
