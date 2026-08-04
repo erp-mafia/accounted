@@ -45,6 +45,8 @@ import {
   Library,
   BookCheck,
   Briefcase,
+  ArrowLeft,
+  Workflow,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { BrandHomeLink } from '@/components/branding/BrandHomeLink'
@@ -126,6 +128,8 @@ type NavLabelKey =
   | 'help'
   | 'settings'
   | 'clients'
+  | 'automations'
+  | 'back_to_clients'
 
 // Nav layout (July 2026, UI-migration concept, dev_docs/ui_migration_plan.md
 // PR 2): same routes, concept structure.
@@ -227,6 +231,24 @@ const navItems: NavItem[] = [
   { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', fold: 'bokslut', entityOnly: 'enskild_firma' },
 ]
 
+// Byrå cockpit sidebar (lean mode): while a byrå team member is on a
+// cockpit route (client overview + the /byra pages) the sidebar shows only
+// these four byrå-scope entries instead of the full company nav. Entering a
+// company (performCompanySwitch from the client list) is a hard navigation
+// to a company route, which swaps the full list back in.
+const cockpitNavItems: NavItem[] = [
+  { href: '/byra', labelKey: 'home', icon: Home, group: 'top' },
+  { href: '/clients', labelKey: 'clients', icon: Briefcase, group: 'top' },
+  { href: '/byra/automations', labelKey: 'automations', icon: Workflow, group: 'top' },
+  { href: '/byra/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'top' },
+]
+
+// Cockpit routes are byrå-scope, not company-scope: they decide which
+// sidebar variant renders and stay enabled without an active company.
+const COCKPIT_PATHS = ['/byra', '/clients']
+const isCockpitPath = (pathname: string) =>
+  COCKPIT_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))
+
 // Fold header presentation (label + icon). The fold rows themselves come
 // from navItems entries carrying the matching `fold` key.
 const foldConfig: Record<FoldKey, { labelKey: string; icon: typeof LayoutDashboard }> = {
@@ -318,9 +340,12 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   }, [trialEndsAt])
 
   const hasCompany = !!company
-  // /clients is a byrå-scope surface, not a company surface: it must stay
-  // reachable even when the active company is unresolved.
-  const ALWAYS_ENABLED = new Set(['/settings', '/clients'])
+  // Byrå cockpit mode: lean sidebar on cockpit routes, full sidebar (with a
+  // back-to-clients link) once the member is inside a company.
+  const cockpitMode = !!byraTeam && isCockpitPath(pathname)
+  // Byrå-scope surfaces, not company surfaces: they must stay reachable even
+  // when the active company is unresolved.
+  const ALWAYS_ENABLED = new Set(['/settings', '/clients', '/byra', '/byra/automations', '/byra/kpi'])
   const isItemEnabled = (href: string) => hasCompany || ALWAYS_ENABLED.has(href)
   type ExpandableGroup = Exclude<GroupKey, 'top'>
 
@@ -373,6 +398,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   const isActive = (href: string) => {
     if (href === '/') {
       return pathname === '/'
+    }
+    // Cockpit Hem: exact match so /byra/automations and /byra/kpi light up
+    // their own rows only.
+    if (href === '/byra') {
+      return pathname === '/byra'
     }
     if (href === '/salary') {
       return pathname === '/salary' || pathname.startsWith('/salary/runs')
@@ -482,7 +512,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
   const isEmployer = entityType === 'aktiebolag' || paysSalaries
 
-  const filteredItems = navItems.filter(item => {
+  const filteredItems = (cockpitMode ? cockpitNavItems : navItems).filter(item => {
     if (item.hidden) return false
     if (hiddenNavHrefs.has(item.href)) return false
     // Payroll (employerOnly) is hidden until the company is an employer, an
@@ -498,9 +528,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // Entity-gated statutory surfaces: INK2/ÅR for aktiebolag, NE for
     // enskild firma; the page for the other form doesn't exist.
     if (item.entityOnly && item.entityOnly !== entityType) return false
-    // Byrå cockpit: only byrå team members see Klienter (WL-14; the page
-    // redirects and the API 403s for everyone else).
-    if (item.byraOnly && !byraTeam) return false
+    // Byrå cockpit: the Klienter entry lives in the lean cockpit sidebar
+    // (cockpitNavItems); in company mode the pinned back-to-clients link
+    // replaces it, and non-byrå users never see it (WL-14).
+    if (item.byraOnly) return false
     // Hide the Assistent (/chat) tab until the agent is built: mirrors the
     // floating AgentTrigger and avoids a nav entry that only bounces to the
     // home checklist (chat/layout redirects unverified users to /).
@@ -516,26 +547,31 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   // The TIC workspace (/e/general/tic, labelled "Företagsprofil") surfaces
   // the same Bolagsuppgifter now shown under Inställningar → Företagsprofil.
   // Drop it from the nav so the company profile lives in exactly one place.
-  const visibleExtensionNavItems = extensionNavItems.filter(
-    (i) => i.href !== '/e/general/tic',
-  )
+  // Extension workspaces are company surfaces: none in cockpit mode.
+  const visibleExtensionNavItems = cockpitMode
+    ? []
+    : extensionNavItems.filter((i) => i.href !== '/e/general/tic')
 
-  const sidebarGroups: { key: ExpandableGroup; items: NavItem[] }[] = [
-    { key: 'arbeta', items: filteredItems.filter((i) => i.group === 'arbeta') },
-    { key: 'analys', items: filteredItems.filter((i) => i.group === 'analys') },
-    { key: 'data', items: filteredItems.filter((i) => i.group === 'data') },
-    { key: 'skatt', items: filteredItems.filter((i) => i.group === 'skatt') },
-  ]
+  const sidebarGroups: { key: ExpandableGroup; items: NavItem[] }[] = cockpitMode
+    ? []
+    : [
+        { key: 'arbeta', items: filteredItems.filter((i) => i.group === 'arbeta') },
+        { key: 'analys', items: filteredItems.filter((i) => i.group === 'analys') },
+        { key: 'data', items: filteredItems.filter((i) => i.group === 'data') },
+        { key: 'skatt', items: filteredItems.filter((i) => i.group === 'skatt') },
+      ]
 
   // Flat leaf list for the collapsed 64px icon rail: fold children render
   // as plain icons (group headers and fold headers disappear).
   const railItems = [...topItems, ...sidebarGroups.flatMap(({ items }) => items)]
 
-  const allMobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = [
-    { href: '/', labelKey: 'home', icon: Home },
-    { href: '/chat', labelKey: 'assistant', icon: Sparkles },
-    { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight },
-  ]
+  const allMobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = cockpitMode
+    ? cockpitNavItems.map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
+    : [
+        { href: '/', labelKey: 'home', icon: Home },
+        { href: '/chat', labelKey: 'assistant', icon: Sparkles },
+        { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight },
+      ]
   // Same gate as the sidebar: no Assistent tab until the agent is built.
   const mobileNavItems = allMobileNavItems.filter(
     (item) => item.href !== '/chat' || agentIdentity.isVerified,
@@ -740,6 +776,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 )}
                 aria-label={tNav('main_navigation')}
               >
+                {/* Rail counterpart of the back-to-clients link. */}
+                {byraTeam &&
+                  !cockpitMode &&
+                  renderRailItem({ href: '/clients', labelKey: 'back_to_clients', icon: ArrowLeft })}
                 {railItems.map((item) => renderRailItem(item))}
                 {visibleExtensionNavItems.map((item) => {
                   const Icon = resolveIcon(item.icon)
@@ -778,6 +818,21 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               )}
               aria-label={tNav('main_navigation')}
             >
+              {/* Byrå members inside a company: pinned route back to the
+                  cockpit, above everything, separated by a hairline. */}
+              {byraTeam && !cockpitMode && (
+                <div className="mb-2">
+                  <Link
+                    href="/clients"
+                    className="group flex items-center px-3 py-[7px] text-[13px] rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors duration-150"
+                  >
+                    <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0 text-muted-foreground group-hover:text-foreground" />
+                    <span className="flex-1">{tNav('back_to_clients')}</span>
+                  </Link>
+                  <div className="mx-3 mt-2 border-t border-border/60" />
+                </div>
+              )}
+
               {/* Top section: flat, no header. Hem, Assistent. */}
               <div className="mb-4 space-y-px">
                 {topItems.map((item) => renderSidebarItem(item))}
@@ -1008,6 +1063,20 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
             {/* Navigation */}
             <div className="px-2">
+              {/* Byrå members inside a company: route back to the cockpit. */}
+              {byraTeam && !cockpitMode && (
+                <div className="mb-1.5">
+                  <Link
+                    href="/clients"
+                    onClick={closeMobileMenu}
+                    className="flex items-center gap-3 px-3 min-h-[44px] rounded-lg text-foreground active:bg-muted/60 transition-colors"
+                  >
+                    <ArrowLeft className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
+                    <span className="text-sm flex-1">{tNav('back_to_clients')}</span>
+                  </Link>
+                  <div className="mx-3 mt-1.5 h-px bg-border/30" />
+                </div>
+              )}
               {/* Top items (Hem, Assistent) */}
               <div className="space-y-0.5">
                 {topItems.map((item) => {

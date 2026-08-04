@@ -376,7 +376,7 @@ export default async function DashboardLayout({
     brandByTeam,
     hostBrandTeamId: hostBrand?.teamId ?? null,
   })
-  const SIGNPOST_ALLOWED_PATHS = ['/settings/account', '/clients']
+  const SIGNPOST_ALLOWED_PATHS = ['/settings/account', '/clients', '/byra']
   const showSignpost =
     !activeCompanyHomed &&
     !SIGNPOST_ALLOWED_PATHS.some((p) => pathname.startsWith(p))

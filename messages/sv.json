@@ -77,6 +77,8 @@
     "agent_knowledge": "Vad din agent vet",
     "bureau": "Byrå",
     "clients": "Klienter",
+    "automations": "Automationer",
+    "back_to_clients": "Tillbaka till klienter",
     "kpi": "Nyckeltal",
     "invoice_inbox": "Underlag",
     "invoices": "Kundfakturor",
@@ -4773,6 +4775,20 @@
     "empty": "Inga klientbolag ännu. Skapa det första via Nytt klientbolag.",
     "no_matches": "Inga klienter matchar filtret.",
     "enter_failed": "Det gick inte att öppna klienten"
+  },
+  "byra": {
+    "home_title": "Hem",
+    "stats_clients": "Klientbolag",
+    "stats_attention": "Behöver åtgärd",
+    "stats_deadlines": "Brådskande deadlines",
+    "deadlines_title": "Närmaste deadlines",
+    "deadlines_empty": "Inga öppna deadlines.",
+    "automations_title": "Automationer",
+    "automations_empty_title": "Inga automationer ännu",
+    "automations_empty_description": "Här kommer du kunna sätta upp automatiska flöden för dina klientbolag.",
+    "kpi_title": "Nyckeltal",
+    "kpi_empty_title": "Inget att visa ännu",
+    "kpi_empty_description": "Här kommer en samlad nyckeltalsvy för alla klientbolag, med filter per bolag och period."
   },
   "transactions": {
     "counterparty_suggestion_gone_title": "Motparten är inte längre tillgänglig",

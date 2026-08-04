@@ -77,6 +77,8 @@
     "agent_knowledge": "What your agent knows",
     "bureau": "Bureau",
     "clients": "Clients",
+    "automations": "Automations",
+    "back_to_clients": "Back to clients",
     "kpi": "KPIs",
     "invoice_inbox": "Documents",
     "invoices": "Customer invoices",
@@ -4773,6 +4775,20 @@
     "empty": "No client companies yet. Create the first one via New client company.",
     "no_matches": "No clients match the filter.",
     "enter_failed": "Could not open the client"
+  },
+  "byra": {
+    "home_title": "Home",
+    "stats_clients": "Client companies",
+    "stats_attention": "Needs action",
+    "stats_deadlines": "Urgent deadlines",
+    "deadlines_title": "Upcoming deadlines",
+    "deadlines_empty": "No open deadlines.",
+    "automations_title": "Automations",
+    "automations_empty_title": "No automations yet",
+    "automations_empty_description": "Automated workflows for your client companies will live here.",
+    "kpi_title": "Key figures",
+    "kpi_empty_title": "Nothing to show yet",
+    "kpi_empty_description": "A combined key-figure view across all client companies, filterable by company and period, will live here."
   },
   "transactions": {
     "counterparty_suggestion_gone_title": "That counterparty is no longer available",
