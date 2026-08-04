@@ -142,6 +142,19 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     /already has a journal entry/i,
     'Transaktionen är redan bokförd. Ångra kategoriseringen om du vill ändra den.',
   ],
+  [
+    // GoTrue rejects supabase.auth.signUp with this when the installation
+    // runs with disable_signup (closed self-hosted instances). The invitee
+    // cannot fix it themselves: point them to whoever runs the installation.
+    /signups? not allowed/i,
+    'Kontoregistrering är avstängd på den här installationen. Kontakta den som bjöd in dig eller din administratör för att få ett konto.',
+  ],
+  [
+    // GoTrue could not send its own mail (admin invite, confirmation,
+    // recovery): almost always missing SMTP configuration on self-hosted.
+    /error sending (invite|confirmation|recovery|magic link) email/i,
+    'E-postmeddelandet kunde inte skickas av autentiseringstjänsten. Kontrollera installationens SMTP-inställningar och försök igen.',
+  ],
 ]
 
 /**

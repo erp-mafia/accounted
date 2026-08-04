@@ -5,6 +5,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getEmailService } from '@/lib/email/service'
 import {
   generateInviteEmailSubject,
@@ -97,6 +98,66 @@ export const POST = withRouteContext(
     const { token, hash } = generateInviteToken()
     const expiresAt = getInviteExpiry()
 
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+
+    // Self-hosted installations that turn public signup off in GoTrue
+    // (disable_signup) set AUTH_SIGNUPS_DISABLED=true to mirror that config:
+    // GoTrue offers no clean server-side read of the setting. Without this,
+    // an invitee with no account is routed to /register, where
+    // supabase.auth.signUp is rejected with "Signups not allowed for this
+    // instance" and the invite dead-ends. Provision the account via the auth
+    // admin invite API instead. Hosted keeps the flag unset: nothing in this
+    // block runs and behavior is unchanged.
+    const signupsDisabled = process.env.AUTH_SIGNUPS_DISABLED === 'true'
+    let userProvisioned = false
+    if (signupsDisabled) {
+      const { data: emailExists, error: existsError } = await serviceClient.rpc(
+        'check_email_exists',
+        { email_to_check: email },
+      )
+      if (existsError) {
+        // GoTrue is the authority: attempt provisioning anyway and let a
+        // duplicate surface there instead of silently skipping the invitee.
+        log.warn('check_email_exists failed; attempting provisioning anyway', {
+          message: existsError.message,
+        })
+      }
+
+      if (!emailExists) {
+        // Provision BEFORE the invitation row is written: a failure here
+        // leaves nothing half-created behind, so the admin can retry cleanly
+        // after fixing the cause (typically GoTrue SMTP configuration).
+        // The redirect lands the invitee back on the invite page with a
+        // session; /auth/callback routes type=invite verifications to the
+        // set-password surface first.
+        const { error: provisionError } = await serviceClient.auth.admin.inviteUserByEmail(
+          email,
+          { redirectTo: `${appUrl}/invite/${token}` },
+        )
+
+        if (provisionError) {
+          const alreadyRegistered =
+            provisionError.code === 'email_exists' ||
+            /already been registered/i.test(provisionError.message)
+          if (!alreadyRegistered) {
+            // Never report a silently-successful invite when the invitee
+            // cannot actually get an account.
+            log.error('invitee auth provisioning failed', new Error(provisionError.message), {
+              to: email,
+            })
+            return NextResponse.json(
+              { error: getErrorMessage(provisionError, { context: 'auth', statusCode: 502 }) },
+              { status: 502 },
+            )
+          }
+          // The account exists after all (stale check_email_exists answer):
+          // proceed exactly as for an existing user.
+        } else {
+          userProvisioned = true
+        }
+      }
+    }
+
     // Upsert invitation
     if (existingInvite) {
       const { error } = await serviceClient
@@ -134,7 +195,6 @@ export const POST = withRouteContext(
     // Send email. email_sent is surfaced in the response so the UI can tell
     // the user when the invitation exists but the mail never went out:
     // previously a send failure was invisible (invite looked sent).
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
     const emailService = getEmailService()
     let emailSent = false
     if (emailService.isConfigured()) {
@@ -172,6 +232,7 @@ export const POST = withRouteContext(
         email,
         status: 'pending',
         email_sent: emailSent,
+        user_provisioned: userProvisioned,
         ...(isDev && { inviteUrl: devInviteUrl }),
       },
     })
