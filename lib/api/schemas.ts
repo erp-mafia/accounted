@@ -2776,6 +2776,11 @@ const openingBalancesShape = {
   ytd_tax: z.number().min(0).default(0),
   ytd_net: z.number().min(0).default(0),
   vacation_paid_days_remaining: z.number().min(0).max(40).default(0),
+  // Paid days already taken in the CURRENT vacation year under the previous
+  // system. The ledger's cutover-year row derives entitled = remaining +
+  // taken_this_year and folds this into taken_days; remaining keeps meaning
+  // "remaining at cutover".
+  vacation_days_taken_this_year: z.number().min(0).max(40).default(0),
   vacation_saved_days_by_year: z
     .record(fiscalYearSchema, z.number().min(0).max(40))
     .default({}),

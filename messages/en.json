@@ -6135,6 +6135,8 @@
     "opening_balances_ytd_net": "Net salary (SEK)",
     "opening_balances_vacation_heading": "Vacation",
     "opening_balances_days_remaining": "Paid days left this year",
+    "opening_balances_days_taken": "Paid days taken this year",
+    "opening_balances_days_taken_hint": "Paid vacation days already taken this year in the previous payroll system.",
     "opening_balances_liability": "Vacation pay liability (2920)",
     "opening_balances_liability_avgifter": "Charges on the liability (2940)",
     "opening_balances_saved_heading": "Saved days per earning year",

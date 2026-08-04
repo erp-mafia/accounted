@@ -33,6 +33,7 @@ const OpeningBalancesResponse = z.object({
   ytd_tax: z.number(),
   ytd_net: z.number(),
   vacation_paid_days_remaining: z.number(),
+  vacation_days_taken_this_year: z.number(),
   vacation_saved_days_by_year: z.record(z.string(), z.number()),
   opening_semester_liability: z.number(),
   opening_semester_liability_avgifter: z.number(),
@@ -114,7 +115,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id/opening-balances',
   summary: 'Set an employee\'s payroll cutover opening balances.',
   description:
-    'Full-replace upsert of the cutover state: YTD gross/tax/net for the cutover year, paid vacation days remaining, sparade dagar keyed by origin year (5-year rule), opening semesterlöneskuld SEK (+avgifter), and karens periods not covered by imported absence rows. cutover_date must be the first of a month in the current or previous year, on/after employment_start.',
+    'Full-replace upsert of the cutover state: YTD gross/tax/net for the cutover year, paid vacation days remaining, paid days already taken this vacation year, sparade dagar keyed by origin year (5-year rule), opening semesterlöneskuld SEK (+avgifter), and karens periods not covered by imported absence rows. cutover_date must be the first of a month in the current or previous year, on/after employment_start.',
   useWhen:
     'Onboarding one employee during a mid-year migration from Fortnox/Visma/etc. For whole-company onboarding, prefer the bulk PUT /employees/opening-balances.',
   doNotUseFor:
