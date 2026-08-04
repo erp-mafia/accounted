@@ -219,6 +219,8 @@ export interface CustomerDto {
   customerNumber: string;
   type?: CustomerType;
   party: PartyDto;
+  invoiceEmailCcAddresses?: string[];
+  invoiceEmailBccAddresses?: string[];
   deliveryAddresses?: PostalAddress[];
   financialDimensions?: FinancialDimensionRef[];
   active: boolean;

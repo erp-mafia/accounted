@@ -9,6 +9,7 @@ import { AgentSheetProvider } from '@/components/agent/AgentSheetProvider'
 import AgentTrigger from '@/components/agent/AgentTrigger'
 import LazyCommandPalette from '@/components/common/LazyCommandPalette'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
+import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider } from '@/contexts/CompanyContext'
@@ -108,6 +109,7 @@ export default async function DashboardLayout({
           trialEndsAt: null,
         }}
       >
+        <SessionTimeoutController />
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-screen bg-frame md:flex md:flex-col">
@@ -205,6 +207,7 @@ export default async function DashboardLayout({
 
     return (
       <CompanyProvider value={companyContextValue}>
+        <SessionTimeoutController />
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-screen bg-frame md:flex md:flex-col">
@@ -284,6 +287,7 @@ export default async function DashboardLayout({
 
   return (
     <CompanyProvider value={companyContextValue}>
+      <SessionTimeoutController />
       <AgentSheetProvider
         identity={{
           displayName: agentProfileIdentity?.display_name ?? null,

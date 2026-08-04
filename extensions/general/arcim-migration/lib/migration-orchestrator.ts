@@ -34,6 +34,11 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import {
+  buildCustomerMetadataEnrichment,
+  type CustomerMetadataEnrichment,
+  type ExistingCustomerMetadata,
+} from './customer-metadata'
+import {
   mapCustomer,
   mapSupplier,
   mapSalesInvoice,
@@ -66,6 +71,7 @@ export interface MigrationOptions {
  * PostgREST's practical size limit while minimising round-trips.
  */
 const INSERT_CHUNK_SIZE = 500
+const ENRICHMENT_CONCURRENCY = 10
 
 function emitProgress(options: MigrationOptions, progress: MigrationProgress) {
   options.onProgress?.(progress)
@@ -188,20 +194,27 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         const customers = await fetchCustomersDirect(provider, accessToken, providerCompanyId)
 
         // One bulk read instead of N `.eq('org_number', ...)` lookups.
-        const existingCustomers = await fetchAllRows<{ id: string; org_number: string | null; name: string | null }>(
+        type ExistingCustomer = ExistingCustomerMetadata & {
+          id: string
+          org_number: string | null
+          name: string | null
+        }
+        const existingCustomers = await fetchAllRows<ExistingCustomer>(
           ({ from, to }) =>
             supabase
               .from('customers')
-              .select('id, org_number, name')
+              .select('id, org_number, name, contact_person, invoice_email_cc_addresses, invoice_email_bcc_addresses')
               .eq('company_id', companyId)
               .range(from, to)
         )
+        const existingCustomerById = new Map(existingCustomers.map((row) => [row.id, row]))
         for (const row of existingCustomers) {
           if (row.org_number) orgNumberToCustomerId.set(row.org_number, row.id)
           if (row.name) nameToCustomerId.set(row.name, row.id)
         }
 
         let imported = 0
+        let updated = 0
         let skipped = 0
         const skipReasons: SkipReasons = {}
 
@@ -210,6 +223,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           row: Record<string, unknown>
         }
         const pending: PendingCustomer[] = []
+        const pendingEnrichments: { id: string; changes: CustomerMetadataEnrichment }[] = []
 
         for (const customer of customers) {
           if (!customer.active) {
@@ -230,8 +244,17 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               : undefined
           if (existingCustomerId) {
             customerIdMap.set(customer.id, existingCustomerId)
-            skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
-            skipped++
+            const existingCustomer = existingCustomerById.get(existingCustomerId)
+            const mapped = mapCustomer(customer, userId, companyId)
+            const changes = existingCustomer
+              ? buildCustomerMetadataEnrichment(existingCustomer, mapped)
+              : null
+            if (changes) {
+              pendingEnrichments.push({ id: existingCustomerId, changes })
+            } else {
+              skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+              skipped++
+            }
             continue
           }
 
@@ -265,7 +288,41 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        results.customers = { total: customers.length, imported, skipped, skipReasons }
+        // A rerun can match hundreds of legacy customers. Update only rows
+        // that actually have new provider metadata, with bounded concurrency,
+        // so enrichment neither overwrites edits nor serializes the migration.
+        for (const batch of chunk(pendingEnrichments, ENRICHMENT_CONCURRENCY)) {
+          const outcomes = await Promise.all(batch.map(async ({ id, changes }) => {
+            const { data, error } = await supabase
+              .from('customers')
+              // Object literal, not the record itself: absent keys serialize
+              // away, and the phantom-column guard can resolve the columns.
+              .update({
+                contact_person: changes.contact_person,
+                invoice_email_cc_addresses: changes.invoice_email_cc_addresses,
+                invoice_email_bcc_addresses: changes.invoice_email_bcc_addresses,
+              })
+              .eq('id', id)
+              .eq('company_id', companyId)
+              .select('id')
+              .maybeSingle()
+            return { data, error }
+          }))
+
+          for (const outcome of outcomes) {
+            if (outcome.error || !outcome.data) {
+              if (outcome.error) {
+                console.error('[migration] Customer metadata enrichment failed:', outcome.error.message)
+              }
+              skipReasons.failed = (skipReasons.failed ?? 0) + 1
+              skipped++
+            } else {
+              updated++
+            }
+          }
+        }
+
+        results.customers = { total: customers.length, imported, updated, skipped, skipReasons }
       } catch (err) {
         console.error('Failed to import customers:', err)
       }

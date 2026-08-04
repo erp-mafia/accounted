@@ -100,8 +100,15 @@ export const PATCH = withRouteContext(
     if (body.customer_type !== undefined) updateData.customer_type = body.customer_type
     // Empty string clears the customer number, same as an explicit null.
     if (body.customer_number !== undefined) updateData.customer_number = body.customer_number || null
+    if (body.contact_person !== undefined) updateData.contact_person = body.contact_person
     if (body.email !== undefined) updateData.email = body.email
     if (body.phone !== undefined) updateData.phone = body.phone
+    if (body.invoice_email_cc_addresses !== undefined) {
+      updateData.invoice_email_cc_addresses = body.invoice_email_cc_addresses
+    }
+    if (body.invoice_email_bcc_addresses !== undefined) {
+      updateData.invoice_email_bcc_addresses = body.invoice_email_bcc_addresses
+    }
     if (body.address_line1 !== undefined) updateData.address_line1 = body.address_line1
     if (body.address_line2 !== undefined) updateData.address_line2 = body.address_line2
     if (body.postal_code !== undefined) updateData.postal_code = body.postal_code

@@ -289,6 +289,8 @@ export type BookkeepingOperation =
   | 'create_draft_entry'
   | 'create_entry_lines'
   | 'commit_entry'
+  | 'commit_asset_disposal'
+  | 'fetch_asset_disposal_entry'
   | 'create_reversal_entry'
   | 'create_reversal_lines'
   | 'post_reversal_entry'

@@ -74,7 +74,7 @@ export interface SkipReasons {
  */
 export interface MigrationResults {
   companyInfo?: { imported: boolean }
-  customers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
+  customers?: { total: number; imported: number; updated?: number; skipped: number; skipReasons?: SkipReasons }
   suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
   salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; fxUnresolved?: number }
   supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; fxUnresolved?: number }

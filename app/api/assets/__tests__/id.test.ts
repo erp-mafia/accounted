@@ -29,15 +29,19 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 
 vi.mock('@/lib/bokslut/assets/asset-service', () => ({
+  createAsset: vi.fn(),
+  listAssets: vi.fn(),
   getAsset: vi.fn(),
   updateAsset: vi.fn(),
 }))
 
-import { getAsset, updateAsset } from '@/lib/bokslut/assets/asset-service'
+import { createAsset, getAsset, updateAsset } from '@/lib/bokslut/assets/asset-service'
 import { GET, PATCH } from '../[id]/route'
+import { POST } from '../route'
 
 const mockGetAsset = vi.mocked(getAsset)
 const mockUpdateAsset = vi.mocked(updateAsset)
+const mockCreateAsset = vi.mocked(createAsset)
 const routeParams = { params: Promise.resolve({ id: 'asset-1' }) }
 
 beforeEach(() => {
@@ -71,7 +75,60 @@ describe('GET /api/assets/[id]', () => {
   })
 })
 
+describe('POST /api/assets', () => {
+  it('rejects legacy per-asset tax depreciation methods with 400', async () => {
+    const response = await POST(createMockRequest('/api/assets', {
+      method: 'POST',
+      body: {
+        name: 'Maskin',
+        category: 'machinery',
+        acquisition_date: '2025-01-01',
+        acquisition_cost: 100_000,
+        useful_life_months: 60,
+        depreciation_method: 'declining_balance_30',
+      },
+    }))
+
+    expect(response.status).toBe(400)
+  })
+
+  it('creates a valid asset with ordinary linear depreciation', async () => {
+    mockCreateAsset.mockResolvedValue({ id: 'asset-new', depreciation_method: 'linear' } as never)
+    const response = await POST(createMockRequest('/api/assets', {
+      method: 'POST',
+      body: {
+        name: 'Maskin',
+        category: 'machinery',
+        acquisition_date: '2025-01-01',
+        acquisition_cost: 100_000,
+        useful_life_months: 60,
+        depreciation_method: 'linear',
+      },
+    }))
+
+    expect(response.status).toBe(200)
+    expect(mockCreateAsset).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({ depreciation_method: 'linear' }),
+    )
+  })
+})
+
 describe('PATCH /api/assets/[id]', () => {
+  it('rejects legacy per-asset tax depreciation methods with 400', async () => {
+    const req = createMockRequest('/api/assets/asset-1', {
+      method: 'PATCH',
+      body: { depreciation_method: 'declining_balance_30' },
+    })
+
+    const { status } = await parseJsonResponse(await PATCH(req, routeParams))
+
+    expect(status).toBe(400)
+    expect(mockUpdateAsset).not.toHaveBeenCalled()
+  })
+
   it('rejects an invalid body (non-positive acquisition_cost) with 400', async () => {
     const req = createMockRequest('/api/assets/asset-1', {
       method: 'PATCH',

@@ -330,8 +330,7 @@ describe('computeAnnualDepreciation: K3 dispatch', () => {
   it('routes to component depreciation when k3_components is non-empty', () => {
     const asset = makeAsset({
       acquisition_cost: 1_000_000,
-      // method+life on the asset would compute different number: engine should ignore them
-      depreciation_method: 'declining_balance_30',
+      // Asset-level life would compute a different number: components win.
       useful_life_months: 60,
       k3_components: [
         { name: 'Tak', cost: 300_000, useful_life_months: 240 },

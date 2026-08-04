@@ -6,7 +6,7 @@ import { validateBody } from '@/lib/api/validate'
 import { K3ComponentSchema } from '@/lib/api/schemas'
 import { createAsset, listAssets } from '@/lib/bokslut/assets/asset-service'
 import { validateComponents } from '@/lib/bokslut/assets/k3-components'
-import type { AssetCategory, DepreciationMethod } from '@/types'
+import type { AssetCategory, WritableDepreciationMethod } from '@/types'
 
 const ASSET_CATEGORIES: readonly AssetCategory[] = [
   'immaterial',
@@ -19,14 +19,8 @@ const ASSET_CATEGORIES: readonly AssetCategory[] = [
   'other_tangible',
 ] as const
 
-// All four depreciation methods are now implemented by the engine. The DB
-// CHECK constraint mirrors this list (see
-// 20260526120100_restvardeavskrivning.sql).
-const DEPRECIATION_METHODS: readonly DepreciationMethod[] = [
+const DEPRECIATION_METHODS: readonly WritableDepreciationMethod[] = [
   'linear',
-  'declining_balance_30',
-  'declining_balance_20',
-  'restvardesavskrivning_25',
 ] as const
 
 const CreateAssetSchema = z
@@ -40,13 +34,12 @@ const CreateAssetSchema = z
     salvage_value: z.number().nonnegative().optional(),
     useful_life_months: z.number().int().positive(),
     depreciation_method: z
-      .enum(DEPRECIATION_METHODS as unknown as [DepreciationMethod, ...DepreciationMethod[]])
+      .enum(DEPRECIATION_METHODS as unknown as [
+        WritableDepreciationMethod,
+        ...WritableDepreciationMethod[],
+      ])
       .optional(),
-    // Restvärde-target floor for restvärdeavskrivning. Required iff
-    // depreciation_method = 'restvardesavskrivning_25'. The DB CHECK enforces
-    // the same biconditional; we mirror it in the API for an early, Swedish
-    // error message rather than a Postgres check_violation surfacing.
-    restvarde_target: z.number().nonnegative().nullable().optional(),
+    restvarde_target: z.null().optional(),
     bas_asset_account: z.string().regex(/^\d{4}$/).optional(),
     bas_accumulated_account: z.string().regex(/^\d{4}$/).optional(),
     bas_expense_account: z.string().regex(/^\d{4}$/).optional(),
@@ -63,7 +56,6 @@ const CreateAssetSchema = z
     // outside the legitimate range for the asset category so the chart stays
     // BAS-aligned and INK2R mappings continue to work.
     validateBasOverrides(value, ctx)
-    validateRestvardeTarget(value, ctx)
     validateK3Components(value, ctx)
   })
 
@@ -84,45 +76,6 @@ function validateK3Components(
       code: z.ZodIssueCode.custom,
       path: ['k3_components'],
       message,
-    })
-  }
-}
-
-function validateRestvardeTarget(
-  value: {
-    depreciation_method?: DepreciationMethod
-    restvarde_target?: number | null
-    acquisition_cost?: number
-  },
-  ctx: z.RefinementCtx,
-): void {
-  const isRestvarde = value.depreciation_method === 'restvardesavskrivning_25'
-  const hasTarget = value.restvarde_target !== undefined && value.restvarde_target !== null
-  if (isRestvarde && !hasTarget) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['restvarde_target'],
-      message: 'restvarde_target krävs när avskrivningsmetoden är restvärdeavskrivning (25 %).',
-    })
-  }
-  if (!isRestvarde && hasTarget) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['restvarde_target'],
-      message: 'restvarde_target får bara anges för restvärdeavskrivning (25 %).',
-    })
-  }
-  if (
-    isRestvarde &&
-    hasTarget &&
-    value.acquisition_cost !== undefined &&
-    (value.restvarde_target as number) >= value.acquisition_cost
-  ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['restvarde_target'],
-      message:
-        'restvarde_target måste vara lägre än anskaffningsvärdet: annars finns inget kvar att skriva av.',
     })
   }
 }

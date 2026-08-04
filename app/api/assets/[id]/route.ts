@@ -6,7 +6,7 @@ import { validateBody } from '@/lib/api/validate'
 import { K3ComponentSchema } from '@/lib/api/schemas'
 import { getAsset, updateAsset } from '@/lib/bokslut/assets/asset-service'
 import { validateComponents } from '@/lib/bokslut/assets/k3-components'
-import type { AssetCategory, DepreciationMethod } from '@/types'
+import type { AssetCategory, WritableDepreciationMethod } from '@/types'
 
 const ASSET_CATEGORIES: readonly AssetCategory[] = [
   'immaterial',
@@ -19,11 +19,8 @@ const ASSET_CATEGORIES: readonly AssetCategory[] = [
   'other_tangible',
 ] as const
 
-const DEPRECIATION_METHODS: readonly DepreciationMethod[] = [
+const DEPRECIATION_METHODS: readonly WritableDepreciationMethod[] = [
   'linear',
-  'declining_balance_30',
-  'declining_balance_20',
-  'restvardesavskrivning_25',
 ] as const
 
 const UpdateAssetSchema = z
@@ -42,9 +39,12 @@ const UpdateAssetSchema = z
     salvage_value: z.number().nonnegative().optional(),
     useful_life_months: z.number().int().positive().optional(),
     depreciation_method: z
-      .enum(DEPRECIATION_METHODS as unknown as [DepreciationMethod, ...DepreciationMethod[]])
+      .enum(DEPRECIATION_METHODS as unknown as [
+        WritableDepreciationMethod,
+        ...WritableDepreciationMethod[],
+      ])
       .optional(),
-    restvarde_target: z.number().nonnegative().nullable().optional(),
+    restvarde_target: z.null().optional(),
     bas_asset_account: z.string().regex(/^\d{4}$/).optional(),
     bas_accumulated_account: z.string().regex(/^\d{4}$/).optional(),
     bas_expense_account: z.string().regex(/^\d{4}$/).optional(),
@@ -54,34 +54,6 @@ const UpdateAssetSchema = z
     // value; the cross-sum check needs the asset's acquisition_cost so it runs
     // in the PATCH handler below, which can read the existing row.
     k3_components: z.array(K3ComponentSchema).nullable().optional(),
-  })
-  .superRefine((value, ctx) => {
-    // Enforce the method/target biconditional when EITHER field is supplied.
-    // We can't see the existing row from a zod refinement, so the
-    // application-level updateAsset() carries the cross-row check; here we
-    // only catch the obviously inconsistent combinations within a single
-    // PATCH body.
-    const hasMethod = value.depreciation_method !== undefined
-    const hasTarget = value.restvarde_target !== undefined
-    if (!hasMethod && !hasTarget) return
-
-    const isRestvarde = value.depreciation_method === 'restvardesavskrivning_25'
-    const targetIsSet = value.restvarde_target !== null && value.restvarde_target !== undefined
-
-    if (hasMethod && isRestvarde && hasTarget && !targetIsSet) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['restvarde_target'],
-        message: 'restvarde_target krävs när avskrivningsmetoden är restvärdeavskrivning (25 %).',
-      })
-    }
-    if (hasMethod && !isRestvarde && hasTarget && targetIsSet) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['restvarde_target'],
-        message: 'restvarde_target får bara anges för restvärdeavskrivning (25 %).',
-      })
-    }
   })
 
 export const GET = withRouteContext(

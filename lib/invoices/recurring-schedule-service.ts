@@ -495,6 +495,8 @@ async function sendInvoiceFromSchedule(
     to: invoice.customer.email,
     configuredCc: company.invoice_email_cc_addresses,
     configuredBcc: company.invoice_email_bcc_addresses,
+    customerCc: invoice.customer.invoice_email_cc_addresses,
+    customerBcc: invoice.customer.invoice_email_bcc_addresses,
     legacyCc: company.email,
   })
   if (exceedsInvoiceEmailRecipientLimit(recipients)) {

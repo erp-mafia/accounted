@@ -6,6 +6,8 @@ export interface ResolveInvoiceEmailRecipientsInput {
   to: string | readonly string[]
   configuredCc?: readonly string[] | null
   configuredBcc?: readonly string[] | null
+  customerCc?: readonly string[] | null
+  customerBcc?: readonly string[] | null
   legacyCc?: string | null
   additionalCc?: readonly string[]
   additionalBcc?: readonly string[]
@@ -36,6 +38,8 @@ export interface InvoiceEmailRecipientCollision {
     | 'to'
     | 'configured_cc'
     | 'configured_bcc'
+    | 'customer_cc'
+    | 'customer_bcc'
     | 'additional_cc'
     | 'additional_bcc'
 }
@@ -83,11 +87,15 @@ export function resolveInvoiceEmailRecipients(
     : input.configuredCc
 
   const cc = uniqueAddresses(
-    [...fixedCc, ...(input.additionalCc ?? [])],
+    [...fixedCc, ...(input.customerCc ?? []), ...(input.additionalCc ?? [])],
     used,
   )
   const bcc = uniqueAddresses(
-    [...(input.configuredBcc ?? []), ...(input.additionalBcc ?? [])],
+    [
+      ...(input.configuredBcc ?? []),
+      ...(input.customerBcc ?? []),
+      ...(input.additionalBcc ?? []),
+    ],
     used,
   )
 
@@ -119,9 +127,17 @@ export function findAdditionalInvoiceRecipientCollisions(
     const key = normalizedKey(address)
     if (key && !occupied.has(key)) occupied.set(key, 'configured_cc')
   }
+  for (const address of input.customerCc ?? []) {
+    const key = normalizedKey(address)
+    if (key && !occupied.has(key)) occupied.set(key, 'customer_cc')
+  }
   for (const address of input.configuredBcc ?? []) {
     const key = normalizedKey(address)
     if (key && !occupied.has(key)) occupied.set(key, 'configured_bcc')
+  }
+  for (const address of input.customerBcc ?? []) {
+    const key = normalizedKey(address)
+    if (key && !occupied.has(key)) occupied.set(key, 'customer_bcc')
   }
 
   const collisions: InvoiceEmailRecipientCollision[] = []
