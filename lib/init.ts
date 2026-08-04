@@ -28,9 +28,10 @@ const REQUIRED_CORE_VARS = [
 // warn on every cold start.
 // AI features run Claude via AWS Bedrock (see lib/agent/composer/client.ts and
 // extensions/general/invoice-inbox/lib/extract-invoice-fields.ts), so the
-// static AWS keys are what actually gates them. On AWS infrastructure the SDK
-// can also resolve credentials from the provider chain (instance profile,
-// IRSA), in which case this warning is a false positive; it is log-only.
+// static AWS keys are what actually gates them. The assistant's client can
+// fall back to the AWS credential provider chain (instance profile, IRSA),
+// but document extraction requires both static keys, so this log-only warning
+// stays useful even on AWS infrastructure.
 const REQUIRED_EXTENSION_VARS: ReadonlyArray<readonly string[]> = [
   ['ENABLE_BANKING_APP_ID_PRODUCTION', 'ENABLE_BANKING_APP_ID'],
   ['ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', 'ENABLE_BANKING_PRIVATE_KEY'],

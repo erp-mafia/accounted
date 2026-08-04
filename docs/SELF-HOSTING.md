@@ -199,7 +199,7 @@ BEDROCK_OPUS_MODEL_ID=...                      # optional: assistant model, heav
 BEDROCK_SONNET_MODEL_ID=...                    # optional: assistant model, standard intents
 ```
 
-When running on AWS infrastructure the SDK also falls back to the standard credential provider chain (instance profile, IRSA), so the two static keys can be omitted there.
+Set the two static keys explicitly. The AI assistant's client can fall back to the standard AWS credential provider chain (instance profile, IRSA) when they are absent, but document extraction requires `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` and silently returns empty results without them.
 
 Without working credentials the rest of the app runs normally: uploads are stored but not auto-interpreted, and the AI assistant cannot answer.
 

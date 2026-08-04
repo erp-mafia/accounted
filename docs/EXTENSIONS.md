@@ -322,9 +322,6 @@ extensions/                           ← Extension source code (opt-in via conf
       manifest.json
       index.ts
       lib/
-    invoice-inbox/
-      manifest.json
-      index.ts
     calendar/
       manifest.json
       index.ts
