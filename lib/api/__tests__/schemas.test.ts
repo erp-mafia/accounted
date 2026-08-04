@@ -629,6 +629,9 @@ describe('CreateCustomerSchema', () => {
     const result = CreateCustomerSchema.safeParse(validCustomer({
       email: 'billing@acme.se',
       phone: '+46701234567',
+      contact_person: 'Anna Andersson',
+      invoice_email_cc_addresses: ['finance@acme.se'],
+      invoice_email_bcc_addresses: ['archive@acme.se'],
       address_line1: 'Storgatan 1',
       address_line2: 'Box 123',
       postal_code: '111 22',
@@ -680,6 +683,20 @@ describe('CreateCustomerSchema', () => {
 
   it('rejects non-integer payment terms', () => {
     const result = CreateCustomerSchema.safeParse(validCustomer({ default_payment_terms: 30.5 }))
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects more than 19 customer invoice copy recipients across CC and BCC', () => {
+    const result = CreateCustomerSchema.safeParse(validCustomer({
+      invoice_email_cc_addresses: Array.from(
+        { length: 10 },
+        (_, index) => `copy-${index}@example.test`,
+      ),
+      invoice_email_bcc_addresses: Array.from(
+        { length: 10 },
+        (_, index) => `archive-${index}@example.test`,
+      ),
+    }))
     expect(result.success).toBe(false)
   })
 })
@@ -2147,6 +2164,13 @@ describe('UpdateCustomerSchema', () => {
 
   it('rejects invalid customer_type in partial update', () => {
     const result = UpdateCustomerSchema.safeParse({ customer_type: 'government' })
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects an invalid customer invoice copy address', () => {
+    const result = UpdateCustomerSchema.safeParse({
+      invoice_email_cc_addresses: ['not-an-email'],
+    })
     expect(result.success).toBe(false)
   })
 })

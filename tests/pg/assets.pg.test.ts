@@ -396,15 +396,17 @@ describe('RLS: cross-company isolation', () => {
 // can't loosen them without us noticing.
 describe('assets: disposal VAT + jämkning constraints', () => {
   it('accepts a disposed_vat_treatment from the allowed enum', async () => {
+    // Disposal attributes are written in the same UPDATE that transitions the
+    // asset to disposed: once disposed_at is set, the post-disposal
+    // immutability trigger (20260803226000) freezes them.
     const assetId = await insertAsset({
       userId: companyA.userId,
       companyId: companyA.companyId,
-      disposedAt: '2025-12-31',
-      disposedProceeds: 100_000,
     })
     await getPool().query(
       `UPDATE public.assets
-         SET disposed_proceeds_vat = 20000, disposed_vat_treatment = 'standard_25'
+         SET disposed_at = '2025-12-31', disposed_proceeds = 100000,
+             disposed_proceeds_vat = 20000, disposed_vat_treatment = 'standard_25'
        WHERE id = $1`,
       [assetId],
     )
@@ -420,12 +422,13 @@ describe('assets: disposal VAT + jämkning constraints', () => {
     const assetId = await insertAsset({
       userId: companyA.userId,
       companyId: companyA.companyId,
-      disposedAt: '2025-12-31',
-      disposedProceeds: 100_000,
     })
     await expect(
       getPool().query(
-        `UPDATE public.assets SET disposed_vat_treatment = 'reduced_999' WHERE id = $1`,
+        `UPDATE public.assets
+           SET disposed_at = '2025-12-31', disposed_proceeds = 100000,
+               disposed_vat_treatment = 'reduced_999'
+         WHERE id = $1`,
         [assetId],
       ),
     ).rejects.toThrow(/check/i)
@@ -435,18 +438,34 @@ describe('assets: disposal VAT + jämkning constraints', () => {
     const assetId = await insertAsset({
       userId: companyA.userId,
       companyId: companyA.companyId,
-      disposedAt: '2025-12-31',
-      disposedProceeds: 100_000,
     })
     // Treatment NULL + VAT > 0 must violate the consistency CHECK.
     await expect(
       getPool().query(
         `UPDATE public.assets
-           SET disposed_proceeds_vat = 20000, disposed_vat_treatment = NULL
+           SET disposed_at = '2025-12-31', disposed_proceeds = 100000,
+               disposed_proceeds_vat = 20000, disposed_vat_treatment = NULL
          WHERE id = $1`,
         [assetId],
       ),
     ).rejects.toThrow(/check|consistency/i)
+  })
+
+  it('freezes disposal attributes once the asset is disposed', async () => {
+    const assetId = await insertAsset({
+      userId: companyA.userId,
+      companyId: companyA.companyId,
+      disposedAt: '2025-12-31',
+      disposedProceeds: 100_000,
+    })
+    await expect(
+      getPool().query(
+        `UPDATE public.assets
+           SET disposed_proceeds_vat = 20000, disposed_vat_treatment = 'standard_25'
+         WHERE id = $1`,
+        [assetId],
+      ),
+    ).rejects.toThrow(/disposed asset/i)
   })
 
   it('accepts zero VAT with null treatment (legacy / non-VAT disposal)', async () => {
@@ -469,12 +488,12 @@ describe('assets: disposal VAT + jämkning constraints', () => {
     const assetId = await insertAsset({
       userId: companyA.userId,
       companyId: companyA.companyId,
-      disposedAt: '2025-12-31',
-      disposedProceeds: 60_000,
     })
     await getPool().query(
       `UPDATE public.assets
-         SET jamkning_amount = 8000,
+         SET disposed_at = '2025-12-31',
+             disposed_proceeds = 60000,
+             jamkning_amount = 8000,
              jamkning_remaining_months = 24,
              jamkning_total_months = 60,
              jamkning_original_input_vat = 20000

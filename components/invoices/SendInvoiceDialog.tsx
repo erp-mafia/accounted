@@ -178,11 +178,7 @@ export default function SendInvoiceDialog({
           settingsResult.data?.invoice_email_cc_addresses
           ?? (legacyCc ? [legacyCc] : []),
         )
-        setFixedBcc(
-          canCustomizeRecipients
-            ? settingsResult.data?.invoice_email_bcc_addresses ?? []
-            : [],
-        )
+        setFixedBcc(settingsResult.data?.invoice_email_bcc_addresses ?? [])
         setPeriodName(periodResult.data?.name || '')
         setDeferBooking(!!settingsResult.data?.defer_invoice_booking)
         setShouldBookOnIssue(bookOnIssue)
@@ -235,10 +231,19 @@ export default function SendInvoiceDialog({
   )
   const invalidAdditionalRecipient = [...additionalCc, ...additionalBcc]
     .find((address) => !EMAIL_PATTERN.test(address))
+  const fixedRecipients = resolveInvoiceEmailRecipients({
+    to: invoice.customer.email ?? '',
+    configuredCc: fixedCc,
+    configuredBcc: fixedBcc,
+    customerCc: invoice.customer.invoice_email_cc_addresses,
+    customerBcc: invoice.customer.invoice_email_bcc_addresses,
+  })
   const resolvedRecipients = resolveInvoiceEmailRecipients({
     to: invoice.customer.email ?? '',
     configuredCc: fixedCc,
     configuredBcc: fixedBcc,
+    customerCc: invoice.customer.invoice_email_cc_addresses,
+    customerBcc: invoice.customer.invoice_email_bcc_addresses,
     additionalCc,
     additionalBcc,
   })
@@ -494,12 +499,12 @@ export default function SendInvoiceDialog({
                   </p>
                   <p className="text-muted-foreground">
                     <span className="font-medium text-foreground">{t('recipient_fixed_cc_label')}:</span>{' '}
-                    {fixedCc.length > 0 ? fixedCc.join(', ') : t('recipient_none')}
+                    {fixedRecipients.cc.length > 0 ? fixedRecipients.cc.join(', ') : t('recipient_none')}
                   </p>
                   {canCustomizeRecipients && (
                     <p className="text-muted-foreground">
                       <span className="font-medium text-foreground">{t('recipient_fixed_bcc_label')}:</span>{' '}
-                      {fixedBcc.length > 0 ? fixedBcc.join(', ') : t('recipient_none')}
+                      {fixedRecipients.bcc.length > 0 ? fixedRecipients.bcc.join(', ') : t('recipient_none')}
                     </p>
                   )}
                 </div>

@@ -29,11 +29,14 @@ import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import type {
+  AssetDisposalType,
+  AssetJamkningDirection,
   CreateJournalEntryInput,
   CreateJournalEntryLineInput,
   JournalEntry,
   JournalEntryLine,
   JournalEntrySourceType,
+  VatTreatment,
 } from '@/types'
 
 const log = createLogger('bookkeeping.engine')
@@ -666,6 +669,123 @@ export async function commitEntry(
     payload: { entry: result, userId, companyId },
   })
 
+  return result
+}
+
+export interface CommitAssetDisposalInput {
+  asset_id: string
+  fiscal_period_id: string
+  disposal_type: AssetDisposalType
+  disposed_at: string
+  disposed_proceeds: number
+  proceeds_vat: number
+  vat_treatment: VatTreatment | null
+  current_depreciation: number
+  jamkning_amount: number
+  jamkning_direction: AssetJamkningDirection
+  jamkning_remaining_years: number | null
+  jamkning_total_years: number | null
+  jamkning_original_input_vat: number | null
+  jamkning_original_deduction_percent: number | null
+  jamkning_new_deduction_percent: number | null
+}
+
+/**
+ * Commit a prepared asset-disposal draft and update the asset register in the
+ * same database transaction. The dedicated RPC delegates voucher numbering to
+ * commit_journal_entry, so disposal cannot leave a posted voucher without the
+ * corresponding immutable register state.
+ */
+export async function commitAssetDisposal(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  entryId: string | null,
+  input: CommitAssetDisposalInput,
+): Promise<JournalEntry | null> {
+  const actor = getActor()
+  const { error } = await supabase.rpc('commit_asset_disposal', {
+    p_company_id: companyId,
+    p_asset_id: input.asset_id,
+    p_entry_id: entryId,
+    p_fiscal_period_id: input.fiscal_period_id,
+    p_disposal_type: input.disposal_type,
+    p_disposed_at: input.disposed_at,
+    p_disposed_proceeds: input.disposed_proceeds,
+    p_proceeds_vat: input.proceeds_vat,
+    p_vat_treatment: input.vat_treatment,
+    p_current_depreciation: input.current_depreciation,
+    p_jamkning_amount: input.jamkning_amount,
+    p_jamkning_direction: input.jamkning_direction,
+    p_jamkning_remaining_years: input.jamkning_remaining_years,
+    p_jamkning_total_years: input.jamkning_total_years,
+    p_jamkning_original_input_vat: input.jamkning_original_input_vat,
+    p_jamkning_original_deduction_percent: input.jamkning_original_deduction_percent,
+    p_jamkning_new_deduction_percent: input.jamkning_new_deduction_percent,
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
+  })
+
+  if (error) {
+    log.error('commit_asset_disposal RPC failed', error, {
+      operation: 'commit_asset_disposal',
+      companyId,
+      userId,
+      entityType: 'asset',
+      entityId: input.asset_id,
+      journalEntryId: entryId,
+      pgCode: (error as { code?: string }).code,
+    })
+    throw new BookkeepingDatabaseError('commit_asset_disposal', error.message)
+  }
+
+  if (!entryId) return null
+
+  // The RPC has already committed the voucher and the register update at this
+  // point. A transient reload failure must not masquerade as a failed
+  // disposal, so retry once and log the divergence before surfacing it.
+  let completeEntry: JournalEntry | null = null
+  let lastFetchError: { message: string } | null = null
+  for (let attempt = 0; attempt < 2 && !completeEntry; attempt++) {
+    const { data, error: fetchError } = await supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('id', entryId)
+      .eq('company_id', companyId)
+      .single()
+    if (data && !fetchError) {
+      completeEntry = data as JournalEntry
+    } else {
+      lastFetchError = fetchError ?? { message: 'posted entry not found' }
+    }
+  }
+
+  if (!completeEntry) {
+    log.error(
+      'asset disposal committed but posted entry reload failed',
+      lastFetchError,
+      {
+        operation: 'commit_asset_disposal',
+        companyId,
+        userId,
+        entityType: 'asset',
+        entityId: input.asset_id,
+        journalEntryId: entryId,
+      },
+    )
+    throw new BookkeepingDatabaseError(
+      'fetch_asset_disposal_entry',
+      `disposal voucher is committed but could not be reloaded: ${
+        lastFetchError?.message ?? 'posted entry not found'
+      }`,
+    )
+  }
+
+  const result = completeEntry
+  await eventBus.emit({
+    type: 'journal_entry.committed',
+    payload: { entry: result, userId, companyId },
+  })
   return result
 }
 

@@ -824,8 +824,11 @@ export const CreateCustomerSchema = z.object({
     .max(32, 'Customer number must be 32 characters or fewer')
     .nullable()
     .optional(),
+  contact_person: z.string().trim().max(200).nullable().optional(),
   email: z.string().email('Invalid email address').optional(),
   phone: z.string().optional(),
+  invoice_email_cc_addresses: invoiceEmailAddressList.nullable().optional(),
+  invoice_email_bcc_addresses: invoiceEmailAddressList.nullable().optional(),
   address_line1: z.string().optional(),
   address_line2: z.string().optional(),
   postal_code: z.string().optional(),
@@ -849,14 +852,28 @@ export const CreateCustomerSchema = z.object({
       message: 'Personal number is only allowed for individual customers',
     })
   }
+  if (
+    (customer.invoice_email_cc_addresses?.length ?? 0)
+    + (customer.invoice_email_bcc_addresses?.length ?? 0)
+    > MAX_INVOICE_EMAIL_COPY_RECIPIENTS
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['invoice_email_cc_addresses'],
+      message: `At most ${MAX_INVOICE_EMAIL_COPY_RECIPIENTS} customer invoice copy recipients are allowed in total`,
+    })
+  }
 })
 
 export const UpdateCustomerSchema = z.object({
   name: z.string().min(1, 'Customer name is required').optional(),
   customer_type: CustomerTypeSchema.optional(),
   customer_number: z.string().trim().max(32).nullable().optional(),
+  contact_person: z.string().trim().max(200).nullable().optional(),
   email: z.string().email('Invalid email address').optional(),
   phone: z.string().optional(),
+  invoice_email_cc_addresses: invoiceEmailAddressList.nullable().optional(),
+  invoice_email_bcc_addresses: invoiceEmailAddressList.nullable().optional(),
   address_line1: z.string().optional(),
   address_line2: z.string().optional(),
   postal_code: z.string().optional(),
@@ -883,6 +900,18 @@ export const UpdateCustomerSchema = z.object({
   language: z.enum(['sv', 'en']).optional(),
   default_payment_terms: z.number().int().positive().optional(),
   notes: z.string().optional(),
+}).superRefine((customer, ctx) => {
+  if (
+    (customer.invoice_email_cc_addresses?.length ?? 0)
+    + (customer.invoice_email_bcc_addresses?.length ?? 0)
+    > MAX_INVOICE_EMAIL_COPY_RECIPIENTS
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['invoice_email_cc_addresses'],
+      message: `At most ${MAX_INVOICE_EMAIL_COPY_RECIPIENTS} customer invoice copy recipients are allowed in total`,
+    })
+  }
 })
 
 // ============================================================

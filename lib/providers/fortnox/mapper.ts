@@ -14,6 +14,33 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
   return { value: value ?? 0, currencyCode: currency };
 }
 
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function providerEmailAddresses(
+  raw: Record<string, unknown>,
+  field: string,
+): string[] | undefined {
+  if (!(field in raw)) return undefined;
+
+  const value = raw[field];
+  const parts = Array.isArray(value)
+    ? value.flatMap((item) => typeof item === 'string' ? item.split(/[\n,;]+/) : [])
+    : typeof value === 'string'
+      ? value.split(/[\n,;]+/)
+      : [];
+  const seen = new Set<string>();
+
+  return parts.flatMap((part) => {
+    const address = part.trim();
+    const key = address.toLocaleLowerCase('en-US');
+    if (!key || seen.has(key)) return [];
+    seen.add(key);
+    return [address];
+  });
+}
+
 /**
  * Single source of truth for "is this invoice fully settled?", used by BOTH
  * deriveInvoiceStatus and the paymentStatus.paid flag so they can never diverge.
@@ -52,8 +79,11 @@ function buildParty(name: string, orgNumber?: string, address?: Record<string, u
       companyIdSchemeId: 'SE:ORGNR',
     } : undefined,
     contact: {
-      email: (address?.['Email'] ?? address?.['EmailInvoice']) as string | undefined,
-      telephone: address?.['Phone1'] as string | undefined,
+      name: nonEmptyString(address?.['YourReference']),
+      // EmailInvoice is the delivery address. Email is the general contact
+      // fallback and must not override an invoice-specific address.
+      email: nonEmptyString(address?.['EmailInvoice']) ?? nonEmptyString(address?.['Email']),
+      telephone: nonEmptyString(address?.['Phone1']),
     },
   };
 }
@@ -188,6 +218,8 @@ export function mapFortnoxToCustomer(raw: Record<string, unknown>): CustomerDto 
     customerNumber: String(raw['CustomerNumber'] ?? ''),
     type: raw['Type'] === 'PRIVATE' ? 'private' : 'company',
     party: buildParty(name, orgNumber, raw),
+    invoiceEmailCcAddresses: providerEmailAddresses(raw, 'EmailInvoiceCC'),
+    invoiceEmailBccAddresses: providerEmailAddresses(raw, 'EmailInvoiceBCC'),
     active: raw['Active'] !== false,
     vatNumber: raw['VATNumber'] as string | undefined,
     defaultPaymentTermsDays: raw['TermsOfPayment'] != null ? Number(raw['TermsOfPayment']) : undefined,

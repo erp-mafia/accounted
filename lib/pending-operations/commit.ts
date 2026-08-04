@@ -2163,6 +2163,8 @@ async function commitSendInvoice(
     to: customer.email,
     configuredCc: company.invoice_email_cc_addresses,
     configuredBcc: company.invoice_email_bcc_addresses,
+    customerCc: customer.invoice_email_cc_addresses,
+    customerBcc: customer.invoice_email_bcc_addresses,
     legacyCc: company.email || userEmail,
   })
   if (exceedsInvoiceEmailRecipientLimit(recipients)) {

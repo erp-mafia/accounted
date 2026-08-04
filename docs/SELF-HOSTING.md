@@ -24,7 +24,7 @@ In the Supabase dashboard under **Authentication > URL Configuration**:
 
 Accounted uses email + password authentication with magic link as a fallback. The default Supabase email auth settings work out of the box. For production, configure a custom SMTP provider under **Authentication > SMTP Settings** to avoid Supabase's built-in rate limits.
 
-MFA (two-factor authentication via TOTP) is **not enforced** for self-hosted deployments: the Docker image sets `NEXT_PUBLIC_SELF_HOSTED=true` by default, which disables MFA enforcement. Users can still optionally enable 2FA in Settings > Säkerhet if they wish.
+MFA (two-factor authentication via TOTP) is **not enforced** for self-hosted deployments: the Docker image sets `NEXT_PUBLIC_SELF_HOSTED=true` by default, which disables MFA enforcement. Users can still optionally enable 2FA in Settings > Säkerhet if they wish. Idle and absolute session timeouts are also off by default for self-hosted installs; operators can opt in with the variables below.
 
 ## 3. Apply Database Migrations
 
@@ -92,6 +92,22 @@ CRON_SECRET=<generate with: openssl rand -hex 32>
 ```
 
 `NEXT_PUBLIC_APP_URL` must match your public-facing URL. It is used in invoice reminder emails, calendar feed links, and PSD2 callbacks. If left as a placeholder, links will be broken.
+
+Hosted Accounted sessions default to a 30-minute idle limit, a 12-hour absolute
+limit, and a warning 2 minutes before expiry. Self-hosted installations leave
+both limits disabled unless you opt in (values are milliseconds):
+
+```bash
+NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS=1800000
+NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS=43200000
+NEXT_PUBLIC_SESSION_WARNING_MS=120000
+```
+
+Set either timeout to `0` to disable only that limit. Timeout state is signed
+with `SUPABASE_SERVICE_ROLE_KEY` by default; set `SESSION_TIMEOUT_SECRET` to a
+separate random value if you want to rotate it independently. Changing either
+signing secret invalidates existing timeout cookies and requires users to sign
+in again.
 
 ## 5. Start the Application
 

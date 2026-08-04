@@ -89,7 +89,7 @@ interface SkipReasons {
 
 interface MigrationResults {
   companyInfo?: { imported: boolean }
-  customers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
+  customers?: { total: number; imported: number; updated?: number; skipped: number; skipReasons?: SkipReasons }
   suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
   salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
   supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
@@ -1497,7 +1497,7 @@ function ResultStep({
   // Check if anything meaningful was imported via entities
   // Company info is always re-fetched (upsert) so it doesn't count as "new"
   const entityImported = results && (
-    (results.customers && (results.customers.imported > 0 || results.customers.skipped > 0)) ||
+    (results.customers && (results.customers.imported > 0 || (results.customers.updated ?? 0) > 0 || results.customers.skipped > 0)) ||
     (results.suppliers && (results.suppliers.imported > 0 || results.suppliers.skipped > 0)) ||
     (results.salesInvoices && (results.salesInvoices.imported > 0 || results.salesInvoices.skipped > 0)) ||
     (results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0))
@@ -1559,7 +1559,7 @@ function ResultStep({
       {/* ── API import results (company info, customers, etc.) ── */}
       {results && (() => {
         const hasCompanyInfo = results.companyInfo?.imported
-        const hasCustomers = results.customers && (results.customers.imported > 0 || results.customers.skipped > 0)
+        const hasCustomers = results.customers && (results.customers.imported > 0 || (results.customers.updated ?? 0) > 0 || results.customers.skipped > 0)
         const hasSuppliers = results.suppliers && (results.suppliers.imported > 0 || results.suppliers.skipped > 0)
         const hasSalesInvoices = results.salesInvoices && (results.salesInvoices.imported > 0 || results.salesInvoices.skipped > 0)
         const hasSupplierInvoices = results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0)
@@ -1587,7 +1587,9 @@ function ResultStep({
                   icon={<Users className="h-4 w-4" />}
                   label="Kunder"
                   status="success"
-                  statusText={`${results.customers!.imported} importerade`}
+                  statusText={results.customers!.updated
+                    ? `${results.customers!.imported} importerade, ${results.customers!.updated} kompletterade`
+                    : `${results.customers!.imported} importerade`}
                   detail={results.customers!.skipped > 0 ? formatSkipReasons(results.customers!.skipReasons, 'customer') ?? `${results.customers!.skipped} hoppades över` : undefined}
                 />
               )}
