@@ -6135,6 +6135,8 @@
     "opening_balances_ytd_net": "Nettolön (SEK)",
     "opening_balances_vacation_heading": "Semester",
     "opening_balances_days_remaining": "Betalda dagar kvar i år",
+    "opening_balances_days_taken": "Uttagna betalda dagar i år",
+    "opening_balances_days_taken_hint": "Betalda semesterdagar som redan tagits ut i år i det tidigare lönesystemet.",
     "opening_balances_liability": "Semesterlöneskuld (2920)",
     "opening_balances_liability_avgifter": "Avgifter på skulden (2940)",
     "opening_balances_saved_heading": "Sparade dagar per intjänandeår",

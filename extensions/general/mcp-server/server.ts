@@ -11811,7 +11811,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_set_employee_opening_balances',
     title: 'Set Employee Opening Balances (Cutover)',
-    description: 'Stage payroll cutover state per employee: YTD gross/tax/net, vacation days remaining, sparade dagar by origin year, opening semesterlöneskuld SEK, karens adjustment. An omitted field keeps its stored value; send 0 to clear it. Locked after a booked run.',
+    description: 'Stage payroll cutover state per employee: YTD gross/tax/net, vacation days remaining and taken this year, sparade dagar by origin year, opening semesterlöneskuld SEK, karens adjustment. An omitted field keeps its stored value; send 0 to clear it. Locked after a booked run.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -11830,6 +11830,7 @@ export const tools: McpTool[] = [
               ytd_tax: { type: 'number' },
               ytd_net: { type: 'number' },
               vacation_paid_days_remaining: { type: 'number' },
+              vacation_days_taken_this_year: { type: 'number', description: 'Paid days already taken this vacation year under the previous system (0-40)' },
               vacation_saved_days_by_year: { type: 'object', description: 'Origin year -> days, e.g. {"2025": 5}; {} clears' },
               opening_semester_liability: { type: 'number', description: 'SEK on 2920 (report-only; booked via SIE)' },
               opening_semester_liability_avgifter: { type: 'number', description: 'SEK on 2940' },
@@ -11845,9 +11846,9 @@ export const tools: McpTool[] = [
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async execute(args, companyId, userId, supabase, actor) {
       // Sparse merge, NOT full replace. OpeningBalancesBulkSchema carries a
-      // .default() on all eight non-key fields (and .partial() would not strip
+      // .default() on all nine non-key fields (and .partial() would not strip
       // them: Zod applies defaults through it), so parsing the caller's args
-      // straight into the 9-column upsert resets ytd_tax, ytd_net, vacation
+      // straight into the 10-column upsert resets ytd_tax, ytd_net, vacation
       // days, sparade dagar, the opening semesterlöneskuld and the karens
       // adjustment to 0 whenever an agent corrects a single figure. Same
       // defence as gnubok_update_employee: keep only the keys actually sent,
@@ -11875,7 +11876,8 @@ export const tools: McpTool[] = [
 
       const MERGEABLE_FIELDS = [
         'ytd_gross', 'ytd_tax', 'ytd_net',
-        'vacation_paid_days_remaining', 'vacation_saved_days_by_year',
+        'vacation_paid_days_remaining', 'vacation_days_taken_this_year',
+        'vacation_saved_days_by_year',
         'opening_semester_liability', 'opening_semester_liability_avgifter',
         'karens_periods_adjustment',
       ] as const
