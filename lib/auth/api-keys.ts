@@ -23,7 +23,7 @@ export const API_KEY_SCOPES = {
   'payroll:write':      { label: 'Löner: skriv',        description: 'Skapa lönekörning, beräkna, generera AGI (3 verktyg)' },
   // v1 REST API: added Phase 1
   'companies:read':     { label: 'Företag: läs',        description: 'Lista och visa företagsprofiler som API-nyckeln har tillgång till' },
-  'companies:write':    { label: 'Företag: skriv',      description: 'Uppdatera företagsinställningar via stagade verktyg' },
+  'companies:write':    { label: 'Företag: skriv',      description: 'Uppdatera företagsinställningar via stagade verktyg eller REST-endpointen PATCH /api/v1/companies/{companyId}/settings' },
   'events:read':        { label: 'Händelser: läs',      description: 'Polla händelseloggen (event_log) som webhook-fallback' },
   'webhooks:manage':    { label: 'Webhooks: hantera',   description: 'Skapa, lista, uppdatera och radera webhook-prenumerationer' },
   'operations:read':    { label: 'Operationer: läs',    description: 'Hämta status för långkörande operationer (importer, bokslut, omvärdering)' },

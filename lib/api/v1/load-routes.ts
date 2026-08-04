@@ -161,4 +161,7 @@ import '@/app/api/v1/companies/[companyId]/dimensions/[id]/values/[valueId]/rout
 // #895: articles read (artikelregister) for invoice line linkage.
 import '@/app/api/v1/companies/[companyId]/articles/route'
 
+// #1348: company-settings write (PATCH, MCP-tool-identical field set).
+import '@/app/api/v1/companies/[companyId]/settings/route'
+
 export {}

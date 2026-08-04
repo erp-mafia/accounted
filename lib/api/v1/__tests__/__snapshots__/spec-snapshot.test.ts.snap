@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `123`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `124`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -69,6 +69,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "PATCH /api/v1/companies/:companyId/invoices/:id",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
+  "PATCH /api/v1/companies/:companyId/settings",
   "PATCH /api/v1/companies/:companyId/supplier-invoices/:id",
   "PATCH /api/v1/companies/:companyId/suppliers/:id",
   "PATCH /api/v1/companies/:companyId/webhooks/:id",
@@ -134,6 +135,7 @@ exports[`v1 spec snapshot > matches the recorded scope catalogue > endpoint-scop
 [
   "bookkeeping:write",
   "companies:read",
+  "companies:write",
   "compliance:read",
   "customers:read",
   "customers:write",
