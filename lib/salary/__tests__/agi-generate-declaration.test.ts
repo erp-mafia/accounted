@@ -200,3 +200,48 @@ describe('generateAgiDeclaration: F-skatt payee (FK131 only, issue #315)', () =>
     expect(result.xml).not.toContain('faltkod="011"')
   })
 })
+
+describe('generateAgiDeclaration: avgifter overrides on an F-skatt row are ignored', () => {
+  // Regression for the CodeRabbit finding on #1402: computed avgifter are
+  // already 0 for f_skatt rows, but advanced-mode overrides used to coalesce
+  // past that (override ?? computed) at three aggregation points, restoring
+  // social charges for pay whose IU simultaneously asserts FK131.
+  const REGULAR_OVERRIDE_ROW = {
+    ...REGULAR_ROW,
+    avgifter_basis_override: 30000,
+    avgifter_amount_override: 9426,
+  }
+  const F_SKATT_OVERRIDE_ROW = {
+    ...F_SKATT_ROW,
+    avgifter_basis_override: 15000,
+    avgifter_amount_override: 4713,
+  }
+
+  it('excludes F-skatt overrides from FK487, totals and avgifterByCategory while regular overrides still apply', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, [REGULAR_OVERRIDE_ROW, F_SKATT_OVERRIDE_ROW])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    // The regular employee's override flows through (the override mechanism
+    // itself must keep working); the F-skatt row's override is ignored.
+    expect(result.totals.totalAvgifterBasis).toBe(30000)
+    expect(result.totals.totalAvgifterAmount).toBe(9426)
+    expect(result.totals.avgifterByCategory).toEqual({
+      standard: { basis: 30000, amount: 9426 },
+    })
+    expect(result.xml).toContain(
+      '<gem:SummaArbAvgSlf faltkod="487">9426</gem:SummaArbAvgSlf>',
+    )
+
+    // The F-skatt IU itself is unchanged: FK131 with the payment, no FK011.
+    const fSkattIu = iuBlockFor(result.xml, '198506159876')
+    expect(fSkattIu).toContain(
+      '<gem:KontantErsattningEjUlagSA faltkod="131">15000</gem:KontantErsattningEjUlagSA>',
+    )
+    expect(fSkattIu).not.toContain('faltkod="011"')
+  })
+})
