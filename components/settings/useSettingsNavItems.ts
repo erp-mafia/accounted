@@ -49,7 +49,7 @@ const GROUP_ORDER: SettingsGroupKey[] = ['account', 'company', 'accounting', 'sa
  * availability from the generated enabled-extensions set.
  */
 export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: SettingsNavGroup[] } {
-  const { company, isSandbox } = useCompany()
+  const { company, isSandbox, byraTeam } = useCompany()
   const { identity } = useAgentSheet()
   const byraScope = useByraSettingsScope()
   const t = useTranslations('settings_nav')
@@ -66,6 +66,9 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
     // Byrå scope: members & roles is the one byrå-level section; billing is
     // company-scoped (team-billed byråer have no per-company subscription).
     { id: 'team', href: '/settings/team', label: t('team'), group: 'account', show: byraScope },
+    // Varumärke (WL-17): byrå owner/admin edits the brand logo; members see
+    // nothing (the section would be read-only noise for them).
+    { id: 'brand', href: '/settings/brand', label: t('brand'), group: 'account', show: byraScope && !!byraTeam && (byraTeam.role === 'owner' || byraTeam.role === 'admin') },
     { id: 'billing', href: '/settings/billing', label: t('billing'), group: 'account', show: !byraScope },
     { id: 'company', href: '/settings/company', label: t('company'), group: 'company', show: hasCompany },
     { id: 'bookkeeping', href: '/settings/bookkeeping', label: t('bookkeeping'), group: 'accounting', show: hasCompany },

@@ -757,8 +757,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
             )}
           >
             {/* Brand mark (WL-12 slice A3): brand logo on branded hosts,
-                the exact legacy image everywhere else. */}
-            <BrandHomeLink />
+                the exact legacy image everywhere else. The expanded sidebar
+                also shows the brand domain prefix beside the mark. */}
+            <BrandHomeLink showLabel={!collapsed} />
             <button
               type="button"
               onClick={toggleCollapsed}
