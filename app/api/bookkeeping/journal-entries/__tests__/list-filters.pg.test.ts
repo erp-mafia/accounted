@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
-import { seedCompany, insertBalancedLines } from '@/tests/pg/fixtures'
+import { seedCompany } from '@/tests/pg/fixtures'
 
 // Covers the p_exclude_draft / p_collapse_corrections / p_series params on
 // list_fiscal_period_entries_with_related (migrations 20260621130500 +
@@ -15,8 +15,10 @@ import { seedCompany, insertBalancedLines } from '@/tests/pg/fixtures'
 // total_count must stay in lockstep with the filtered set so pagination holds.
 describe('list_fiscal_period_entries_with_related: draft + correction filters', () => {
   // Insert a journal_entry directly so we can set the storno/correction link
-  // columns the fixtures don't expose. Posted/reversed rows get balanced lines
-  // so any deferred balance check is satisfied.
+  // columns the fixtures don't expose. Header and balanced lines go in ONE
+  // transaction: check_balance_on_posted_insert is deferred to commit, so a
+  // posted header committed alone (autocommit per query) is rejected with
+  // "has zero total" before the lines could ever land.
   async function insertEntry(p: {
     userId: string
     companyId: string
@@ -32,27 +34,45 @@ describe('list_fiscal_period_entries_with_related: draft + correction filters', 
     withLines?: boolean
   }): Promise<string> {
     const id = randomUUID()
-    await getPool().query(
-      `INSERT INTO public.journal_entries
-         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-          entry_date, description, source_type, status, reverses_id, correction_of_id)
-       VALUES ($1,$2,$3,$4,$5,$11,$12,$6,$7,$8,$9,$10)`,
-      [
-        id,
-        p.userId,
-        p.companyId,
-        p.fiscalPeriodId,
-        p.voucherNumber,
-        p.description,
-        p.sourceType,
-        p.status,
-        p.reversesId ?? null,
-        p.correctionOfId ?? null,
-        p.voucherSeries ?? 'A',
-        p.entryDate ?? '2026-06-01',
-      ],
-    )
-    if (p.withLines) await insertBalancedLines(id)
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(
+        `INSERT INTO public.journal_entries
+           (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
+            entry_date, description, source_type, status, reverses_id, correction_of_id)
+         VALUES ($1,$2,$3,$4,$5,$11,$12,$6,$7,$8,$9,$10)`,
+        [
+          id,
+          p.userId,
+          p.companyId,
+          p.fiscalPeriodId,
+          p.voucherNumber,
+          p.description,
+          p.sourceType,
+          p.status,
+          p.reversesId ?? null,
+          p.correctionOfId ?? null,
+          p.voucherSeries ?? 'A',
+          p.entryDate ?? '2026-06-01',
+        ],
+      )
+      if (p.withLines) {
+        await client.query(
+          `INSERT INTO public.journal_entry_lines
+             (journal_entry_id, account_number, debit_amount, credit_amount)
+           VALUES ($1, '1930', 1000, 0),
+                  ($1, '3001', 0, 1000)`,
+          [id],
+        )
+      }
+      await client.query('COMMIT')
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw err
+    } finally {
+      client.release()
+    }
     return id
   }
 
