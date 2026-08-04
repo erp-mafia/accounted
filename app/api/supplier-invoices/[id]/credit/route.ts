@@ -8,6 +8,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { SupplierInvoice, SupplierInvoiceItem, AccountingMethod } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { normalizeVatRateToFraction } from '@/lib/vat/supplier-invoice-line-checks'
 
 ensureInitialized()
 
@@ -85,7 +86,7 @@ export const POST = withRouteContext(
       line_total: item.line_total,
       account_number: item.account_number,
       vat_code: item.vat_code,
-      vat_rate: item.vat_rate,
+      vat_rate: normalizeVatRateToFraction(item.vat_rate),
       vat_amount: item.vat_amount,
       // Preserve the self-assessed RC rate so the credit-note verifikat
       // reverses fiktiv moms at the same rate the original was booked at.

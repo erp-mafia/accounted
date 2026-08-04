@@ -108,6 +108,119 @@ beforeEach(() => {
   mockedCreateEntry.mockClear()
 })
 
+describe('salary entries: net deductions', () => {
+  it('credits a union-fee liability and keeps the salary entry balanced', async () => {
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 40000,
+        tax_withheld: 12000,
+        net_salary: 27500,
+        line_items: [
+          {
+            item_type: 'net_deduction_union',
+            amount: -500,
+            account_number: null,
+            is_net_deduction: true,
+            is_gross_deduction: false,
+          },
+        ],
+      }),
+    ])
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+
+    expect(linesOn(salary, '7210')[0].debit_amount).toBe(40000)
+    expect(linesOn(salary, '2710')[0].credit_amount).toBe(12000)
+    expect(linesOn(salary, '1930')[0].credit_amount).toBe(27500)
+    expect(linesOn(salary, '2794')[0].credit_amount).toBe(500)
+    assertBalanced(salary)
+  })
+
+  it('uses BAS-specific defaults and preserves an explicit account override', async () => {
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 40000,
+        tax_withheld: 10000,
+        net_salary: 28000,
+        line_items: [
+          {
+            item_type: 'net_deduction_advance',
+            amount: -200,
+            account_number: null,
+            is_net_deduction: true,
+            is_gross_deduction: false,
+          },
+          {
+            item_type: 'net_deduction_union',
+            amount: -300,
+            account_number: null,
+            is_net_deduction: true,
+            is_gross_deduction: false,
+          },
+          {
+            item_type: 'net_deduction_benefit_payment',
+            amount: -400,
+            account_number: null,
+            is_net_deduction: true,
+            is_gross_deduction: false,
+          },
+          {
+            item_type: 'net_deduction_other',
+            amount: -500,
+            account_number: null,
+            is_net_deduction: true,
+            is_gross_deduction: false,
+          },
+          {
+            item_type: 'net_deduction_other',
+            amount: -600,
+            account_number: '2890',
+            is_net_deduction: true,
+            is_gross_deduction: false,
+          },
+        ],
+      }),
+    ])
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+
+    expect(linesOn(salary, '1613')[0].credit_amount).toBe(200)
+    expect(linesOn(salary, '2794')[0].credit_amount).toBe(300)
+    expect(linesOn(salary, '7385')[0].credit_amount).toBe(400)
+    expect(linesOn(salary, '2799')[0].credit_amount).toBe(500)
+    expect(linesOn(salary, '2890')[0].credit_amount).toBe(600)
+    assertBalanced(salary)
+  })
+
+  it('books a positive correction as a debit repayment', async () => {
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 30000,
+        tax_withheld: 7000,
+        net_salary: 23200,
+        line_items: [
+          {
+            item_type: 'net_deduction_union',
+            amount: 200,
+            account_number: null,
+            is_net_deduction: true,
+            is_gross_deduction: false,
+          },
+        ],
+      }),
+    ])
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+
+    expect(linesOn(salary, '2794')[0].debit_amount).toBe(200)
+    expect(linesOn(salary, '2794')[0].credit_amount).toBe(0)
+    assertBalanced(salary)
+  })
+})
+
 describe('salary entries: dimensions propagation (PR8)', () => {
   it('splits the salary expense per employee bag; tax and bank legs stay untagged', async () => {
     const run = makeRun([

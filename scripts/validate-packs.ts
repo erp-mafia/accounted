@@ -51,22 +51,11 @@ const PROBE_AMOUNTS = [100, 1000, 1234.56, 99.99, 3333.33]
  * deserves its own review rather than riding along inside a file-format change.
  */
 const KNOWN_BROKEN: Record<string, string> = {
-  loneutbetalning:
-    'Does not balance: debits total 1.42x the amount (2710 @0.3 + 2920 @0.12 + 7010 @1.0) ' +
-    'against a single 1.0 credit, so applying it can never produce a postable verifikat. ' +
-    'Per the swedish-payroll skill the correct shape is Debit 7010 gross, Credit 2710 tax, ' +
-    'Credit 1930 net, and the 2920 semesterlöneskuld line belongs to a separate accrual entry. ' +
-    'Fixing it changes what the template posts: needs a domain sign-off.',
-  'periodiseringsfond-avsattning-ab':
-    'References account 2113, which is not in BAS 2026 and is not seeded into any company chart, ' +
-    'so the template cannot resolve. BAS 2026 has 2110 Periodiseringsfonder. Remapping it is a ' +
-    'domain decision (the 211x accounts are year-tagged).',
-  'periodiseringsfond-aterforing-ab':
-    'Same 2113 problem as periodiseringsfond-avsattning-ab.',
-  'preliminar-f-skatt-ef':
-    'References account 2012, which is not in BAS 2026 and is not seeded into any company chart. ' +
-    'The neighbouring egna-uttag accounts that do exist are 2011/2013/2017/2018. Picking the right ' +
-    'one is a domain decision.',
+  // Empty, and that is the point: the four templates ported out of migration
+  // 20260413160000 with real defects (an unbalanced salary template, and
+  // accounts that could not resolve) were fixed rather than accepted. The list
+  // may only shrink; the validator fails if an entry here validates cleanly, so
+  // a stale quarantine cannot linger.
 }
 
 interface Failure {

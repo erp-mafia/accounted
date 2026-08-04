@@ -59,7 +59,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
       userId: 'user-1',
       companyId: '11111111-1111-4111-8111-111111111111',
       // Holds the SCOPES for every paid tool under test (send_invoice →
-      // invoices:write, agi_submit → skatteverket:write, upload_document →
+      // invoices:write, agi_submit → skatteverket:write, document uploads →
       // transactions:write) so the scope gate passes and the CAPABILITY gate is
       // what we exercise.
       scopes: ['invoices:write', 'skatteverket:write', 'reports:read', 'transactions:write'],
@@ -152,16 +152,23 @@ describe('MCP capability gate', () => {
     expect(mockHasCapability).toHaveBeenCalledWith(expect.anything(), '11111111-1111-4111-8111-111111111111', 'skatteverket')
   })
 
-  it('blocks gnubok_upload_document when ai is not entitled: the paid Bedrock OCR path', async () => {
-    // gnubok_upload_document runs extractInvoiceFields (Bedrock OCR) inline in
-    // its handler, NOT through the entitlement-gated uploadAndExtract. The
-    // central dispatch map is therefore the ONLY paywall on this transport.
-    // This test locks it so a free-tier connector key can never reach OCR.
+  it.each([
+    ['gnubok_create_document_upload', { file_name: 'faktura.pdf' }],
+    [
+      'gnubok_complete_document_upload',
+      {
+        upload_id: '33333333-3333-4333-8333-333333333333',
+        file_name: 'faktura.pdf',
+        mime_type: 'application/pdf',
+      },
+    ],
+    ['gnubok_upload_document', { file_name: 'faktura.pdf', file_content_base64: 'JVBERi0=' }],
+  ])('blocks %s when ai is not entitled', async (toolName, args) => {
+    // The central dispatch map is the paywall for every MCP document-upload
+    // step, so a free-tier connector key can never reach the paid OCR flow.
     mockHasCapability.mockResolvedValue(false)
 
-    const response = await handleMcpRequest(
-      mcpToolCall('gnubok_upload_document', { file_name: 'faktura.pdf', file_content_base64: 'JVBERi0=' }),
-    )
+    const response = await handleMcpRequest(mcpToolCall(toolName, args))
     const { isError, payload } = await parsedToolResult(response)
 
     expect(isError).toBe(true)

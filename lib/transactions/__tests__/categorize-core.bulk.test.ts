@@ -247,6 +247,43 @@ describe('bulkBookMatchedInboxItems: booking', () => {
     )
   })
 
+  it('books against the linked cash account instead of the 1930 mapping default', async () => {
+    const supabase = queuedSupabase([
+      { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null } },
+      {
+        data: {
+          id: 'tx-1',
+          date: '2026-06-01',
+          amount: -700.28,
+          currency: 'SEK',
+          cash_account_id: 'cash-1',
+          journal_entry_id: null,
+        },
+      },
+      { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } },
+      { data: { ledger_account: '1931' } },
+      { data: [{ id: 'fp-1' }] },
+      { error: null },
+      { data: [] },
+    ])
+
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1'],
+      category: 'expense_software',
+    })
+
+    expect(skipped).toEqual([])
+    expect(booked).toHaveLength(1)
+    expect(mockCreateJE).toHaveBeenCalledWith(
+      expect.anything(),
+      'c1',
+      'u1',
+      expect.objectContaining({ id: 'tx-1', cash_account_id: 'cash-1' }),
+      expect.objectContaining({ debit_account: '5420', credit_account: '1931' }),
+      undefined,
+    )
+  })
+
   it('forwards the shared dimensions bag onto every booked mapping result', async () => {
     // Fresh mapping object per call: the core mutates it in place, and a
     // shared fixture would leak dimensions across tests.
