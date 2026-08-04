@@ -44,6 +44,10 @@ interface UserMenuProps {
   userEmail: string | null
   isSandbox: boolean
   collapsed: boolean
+  // Byrå cockpit (lean sidebar): the cockpit is above the companies, so the
+  // widget shows no active company and no company-switcher flyout; entering
+  // a client happens through the Klienter list instead.
+  cockpitMode?: boolean
   onLogout: () => void
 }
 
@@ -69,6 +73,7 @@ export default function UserMenu({
   userEmail,
   isSandbox,
   collapsed,
+  cockpitMode = false,
   onLogout,
 }: UserMenuProps) {
   const { company, companies, isSandbox: companyCtxSandbox, foreignCompanies = [] } = useCompany()
@@ -207,7 +212,7 @@ export default function UserMenu({
               <span className="block truncate text-[13px] font-medium text-foreground leading-tight">
                 {userName?.trim() || userEmail || tNav('mitt_konto')}
               </span>
-              {company && (
+              {company && !cockpitMode && (
                 <span className="block truncate text-[11px] text-muted-foreground leading-tight">
                   {company.name}
                 </span>
@@ -238,7 +243,9 @@ export default function UserMenu({
               </div>
             )}
 
-            {/* Company switcher flyout */}
+            {/* Company switcher flyout. Hidden in the cockpit: no company is
+                "active" there; clients are entered from the Klienter list. */}
+            {!cockpitMode && (
             <div className="relative px-1 pt-1">
               <button
                 type="button"
@@ -336,6 +343,7 @@ export default function UserMenu({
                 </div>
               )}
             </div>
+            )}
 
             {/* Account links */}
             <div className="px-1 pb-1">

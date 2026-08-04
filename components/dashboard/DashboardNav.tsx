@@ -341,8 +341,20 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
   const hasCompany = !!company
   // Byrå cockpit mode: lean sidebar on cockpit routes, full sidebar (with a
-  // back-to-clients link) once the member is inside a company.
-  const cockpitMode = !!byraTeam && isCockpitPath(pathname)
+  // back-to-clients link) once the member is inside a company. Settings opens
+  // as a modal OVER the current surface (intercepted route), so while the
+  // pathname is /settings/* the sidebar keeps the mode of the page underneath
+  // instead of flipping to the company nav behind the modal.
+  const onSettings = pathname.startsWith('/settings')
+  const onCockpitPath = isCockpitPath(pathname)
+  // Previous-render memory via the adjust-state-during-render pattern
+  // (react.dev: storing information from previous renders); a ref would be
+  // simpler but refs must not be read or written during render.
+  const [lastNonSettingsCockpit, setLastNonSettingsCockpit] = useState(false)
+  if (!onSettings && onCockpitPath !== lastNonSettingsCockpit) {
+    setLastNonSettingsCockpit(onCockpitPath)
+  }
+  const cockpitMode = !!byraTeam && (onSettings ? lastNonSettingsCockpit : onCockpitPath)
   // Byrå-scope surfaces, not company surfaces: they must stay reachable even
   // when the active company is unresolved.
   const ALWAYS_ENABLED = new Set(['/settings', '/clients', '/byra', '/byra/automations', '/byra/kpi'])
@@ -948,6 +960,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 userEmail={userEmail}
                 isSandbox={isSandbox}
                 collapsed={collapsed}
+                cockpitMode={cockpitMode}
                 onLogout={() => void handleLogout()}
               />
             </div>
