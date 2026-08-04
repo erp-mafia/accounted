@@ -181,6 +181,64 @@ describe('generateBalanceSheet', () => {
     expect(report.total_equity_liabilities).toBe(32500)
   })
 
+  it('does not double-count arets resultat when a resultatavslut on 2099 has its counter-line outside class 3-8 (issue #1333)', async () => {
+    // Production shape from issue #1333: a resultatavslut was posted on an
+    // open year, crediting 2099 with the year's result while the counter-line
+    // landed on a class 9 account. 2099 already carries the result inside the
+    // class 2 sections; the synthetic "Arets resultat" section must not add it
+    // again. The class 9 row offsets the class 3-8 net so periodResult is 0.
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '1930', account_name: 'Företagskonto', account_class: 1, closing_debit: 105000, closing_credit: 0 }),
+        makeRow({ account_number: '2010', account_name: 'Eget kapital', account_class: 2, closing_credit: 100000, closing_debit: 0 }),
+        makeRow({ account_number: '2099', account_name: 'Årets resultat', account_class: 2, closing_credit: 5000, closing_debit: 0 }),
+        makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, closing_credit: 5000, closing_debit: 0 }),
+        makeRow({ account_number: '9999', account_name: 'Motkonto resultatavslut', account_class: 9, closing_debit: 5000, closing_credit: 0 }),
+      ],
+      totalDebit: 110000,
+      totalCredit: 110000,
+      isBalanced: true,
+    })
+
+    const report = await generateBalanceSheet(supabase, 'company-1', 'period-1')
+
+    expect(report.total_assets).toBe(105000)
+    expect(report.total_equity_liabilities).toBe(105000)
+    // No synthetic section: 2099 already holds the result inside Eget kapital
+    const syntheticSection = report.equity_liability_sections.find(s => s.title === 'Årets resultat')
+    expect(syntheticSection).toBeUndefined()
+    const equitySection = report.equity_liability_sections.find(s => s.title === 'Eget kapital')!
+    expect(equitySection.subtotal).toBe(105000)
+    expect(report.imbalance_diagnosis).toBeUndefined()
+    expect(mockFindUntransferred).not.toHaveBeenCalled()
+  })
+
+  it('includes rows with null account_class in the period result so they offset a mangled resultatavslut', async () => {
+    // Same shape as above but the counter-line sits on an account whose
+    // class could not be resolved (null). The negated class 1-2 filter must
+    // keep it in the period result so the resultatavslut self-cancels.
+    mockTrialBalance.mockResolvedValue({
+      rows: [
+        makeRow({ account_number: '1930', account_name: 'Företagskonto', account_class: 1, closing_debit: 105000, closing_credit: 0 }),
+        makeRow({ account_number: '2010', account_name: 'Eget kapital', account_class: 2, closing_credit: 100000, closing_debit: 0 }),
+        makeRow({ account_number: '2099', account_name: 'Årets resultat', account_class: 2, closing_credit: 5000, closing_debit: 0 }),
+        makeRow({ account_number: '3001', account_name: 'Försäljning', account_class: 3, closing_credit: 5000, closing_debit: 0 }),
+        makeRow({ account_number: '0999', account_name: 'Motkonto utan klass', account_class: null as unknown as number, closing_debit: 5000, closing_credit: 0 }),
+      ],
+      totalDebit: 110000,
+      totalCredit: 110000,
+      isBalanced: true,
+    })
+
+    const report = await generateBalanceSheet(supabase, 'company-1', 'period-1')
+
+    expect(report.total_assets).toBe(105000)
+    expect(report.total_equity_liabilities).toBe(105000)
+    expect(report.equity_liability_sections.find(s => s.title === 'Årets resultat')).toBeUndefined()
+    expect(report.imbalance_diagnosis).toBeUndefined()
+    expect(mockFindUntransferred).not.toHaveBeenCalled()
+  })
+
   it('handles negative asset balance (net credit on class 1 account)', async () => {
     mockTrialBalance.mockResolvedValue({
       rows: [
