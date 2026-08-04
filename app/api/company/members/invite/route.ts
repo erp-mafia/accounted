@@ -25,6 +25,19 @@ const InviteSchema = z.object({
 })
 
 /**
+ * First local-part character + *** + domain, e.g. "j***@example.com".
+ * Keeps invitee PII out of the log record while leaving enough to tell
+ * WHICH invite failed. The logger's own redaction would otherwise replace
+ * a raw address with [REDACTED_EMAIL] (lib/observability/redact.ts); the
+ * masked form does not match that email pattern, so it survives intact.
+ */
+function maskEmail(email: string): string {
+  const at = email.indexOf('@')
+  if (at <= 0) return '***'
+  return `${email[0]}***${email.slice(at)}`
+}
+
+/**
  * POST /api/company/members/invite
  * Invite a user to the current company (e.g., a client as viewer).
  * Only company owners and admins can invite.
@@ -143,7 +156,7 @@ export const POST = withRouteContext(
             // Never report a silently-successful invite when the invitee
             // cannot actually get an account.
             log.error('invitee auth provisioning failed', new Error(provisionError.message), {
-              to: email,
+              to: maskEmail(email),
             })
             return NextResponse.json(
               { error: getErrorMessage(provisionError, { context: 'auth', statusCode: 502 }) },

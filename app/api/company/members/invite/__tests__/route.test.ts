@@ -220,7 +220,7 @@ describe('POST /api/company/members/invite: AUTH_SIGNUPS_DISABLED provisioning',
     expect(body.data.email_sent).toBe(true)
   })
 
-  it('flag on + provisioning fails: surfaces a Swedish error, sends nothing', async () => {
+  it('flag on + provisioning fails: surfaces a Swedish error, sends nothing, logs a masked address', async () => {
     process.env.AUTH_SIGNUPS_DISABLED = 'true'
     enqueue({ data: { role: 'owner' } }) // caller membership
     enqueue({ data: [] }) // existing members
@@ -234,6 +234,7 @@ describe('POST /api/company/members/invite: AUTH_SIGNUPS_DISABLED provisioning',
       status: 500,
     })
     inviteUserByEmailMock.mockResolvedValue({ data: { user: null }, error: authError })
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const { status, body } = await parseJsonResponse<{ error: string }>(
       await post({ email: 'client@example.com' })
@@ -242,6 +243,15 @@ describe('POST /api/company/members/invite: AUTH_SIGNUPS_DISABLED provisioning',
     expect(status).toBe(502)
     expect(body.error).toContain('SMTP')
     expect(sendEmailMock).not.toHaveBeenCalled()
+    // The failure log carries only a masked invitee address (PII stays out
+    // of the log record; the mask survives the logger's own redaction).
+    const logged = consoleErrorSpy.mock.calls
+      .flat()
+      .map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)))
+      .join(' ')
+    expect(logged).toContain('c***@example.com')
+    expect(logged).not.toContain('client@example.com')
+    consoleErrorSpy.mockRestore()
   })
 
   it('flag on + existence check errors (RPC missing): warns and provisions anyway', async () => {
