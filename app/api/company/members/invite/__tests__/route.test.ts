@@ -244,6 +244,39 @@ describe('POST /api/company/members/invite: AUTH_SIGNUPS_DISABLED provisioning',
     expect(sendEmailMock).not.toHaveBeenCalled()
   })
 
+  it('flag on + existence check errors (RPC missing): warns and provisions anyway', async () => {
+    process.env.AUTH_SIGNUPS_DISABLED = 'true'
+    enqueue({ data: { role: 'owner' } }) // caller membership
+    enqueue({ data: [] }) // existing members
+    enqueue({ data: null }) // existing invite
+    enqueue({ data: { name: 'Acme AB' } }) // company name
+    // The exact failure shape a deployment without migration
+    // 20260804140000 produces: PostgREST cannot find the function.
+    enqueue({
+      data: null,
+      error: {
+        message: 'Could not find the function public.check_email_exists(email_to_check) in the schema cache',
+        code: 'PGRST202',
+      },
+    }) // rpc check_email_exists -> error
+    enqueue({ data: null }) // insert invitation
+
+    const { status, body } = await parseJsonResponse<{
+      data: { email_sent: boolean; user_provisioned: boolean }
+    }>(await post({ email: 'client@example.com' }))
+
+    // The route logs a warning and treats GoTrue as the authority: it
+    // attempts provisioning anyway rather than silently skipping the
+    // invitee, and a duplicate would surface from GoTrue itself.
+    expect(status).toBe(200)
+    expect(serviceSupabase.rpc).toHaveBeenCalledWith('check_email_exists', {
+      email_to_check: 'client@example.com',
+    })
+    expect(inviteUserByEmailMock).toHaveBeenCalledTimes(1)
+    expect(body.data.user_provisioned).toBe(true)
+    expect(body.data.email_sent).toBe(true)
+  })
+
   it('flag on + admin reports the email already registered: treated as existing account', async () => {
     process.env.AUTH_SIGNUPS_DISABLED = 'true'
     enqueue({ data: { role: 'owner' } }) // caller membership
