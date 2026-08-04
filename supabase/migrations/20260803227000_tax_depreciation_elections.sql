@@ -136,16 +136,19 @@ BEGIN
         USING ERRCODE = 'check_violation';
     END IF;
   ELSE
+    -- Judge the post-write state: NEW.disposed_at also catches an UPDATE that
+    -- reverses a disposal on a grandfathered non-linear row, which would
+    -- otherwise reactivate it with a tax-method label.
     IF NEW.depreciation_method <> 'linear' AND (
       OLD.depreciation_method IS DISTINCT FROM NEW.depreciation_method
-      OR OLD.disposed_at IS NULL
+      OR NEW.disposed_at IS NULL
     ) THEN
       RAISE EXCEPTION 'Asset depreciation_method must be linear; tax depreciation is elected per fiscal period'
         USING ERRCODE = 'check_violation';
     END IF;
     IF NEW.restvarde_target IS NOT NULL AND (
       OLD.restvarde_target IS DISTINCT FROM NEW.restvarde_target
-      OR OLD.disposed_at IS NULL
+      OR NEW.disposed_at IS NULL
     ) THEN
       RAISE EXCEPTION 'Asset restvarde_target is deprecated; tax rest value is calculated per fiscal period'
         USING ERRCODE = 'check_violation';

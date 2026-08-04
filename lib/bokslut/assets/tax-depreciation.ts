@@ -127,6 +127,16 @@ export function computeTaxDepreciation(input: TaxDepreciationInput): TaxDeprecia
     throw new Error('selectedRule is required for rakenskapsenlig depreciation')
   }
 
+  // IL 18 kap. 17 §: the 20-rule's lowest permitted closing value is derived
+  // from acquisition-year cohorts. With a positive basis but no cohort at all,
+  // the reduce degenerates to a full write-off, which is not a computation the
+  // cohort evidence supports; refuse instead of silently deducting everything.
+  if (input.selectedRule === 'kompletteringsregel_20' && cohorts.length === 0 && basis > 0) {
+    throw new Error(
+      'kompletteringsregel_20 requires at least one acquisition cohort for a non-zero basis',
+    )
+  }
+
   const mainRate = 0.3 * (input.periodMonths / 12)
   const mainDeduction = roundOre(Math.min(basis, basis * mainRate))
   const mainClosing = roundOre(basis - mainDeduction)

@@ -322,6 +322,7 @@ function TaxDepreciationCard({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const requestVersion = useRef(0)
+  const saveSequence = useRef(0)
 
   useEffect(() => {
     requestVersion.current += 1
@@ -440,6 +441,7 @@ function TaxDepreciationCard({
     }
     setSaving(true)
     const version = ++requestVersion.current
+    const saveId = ++saveSequence.current
     try {
       const response = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/depreciation`, {
         method: 'PUT',
@@ -467,7 +469,11 @@ function TaxDepreciationCard({
       if (version !== requestVersion.current) return
       setSaveError(err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel')
     } finally {
-      if (version === requestVersion.current) setSaving(false)
+      // A successful save triggers onSaved -> parent load -> new view prop,
+      // which bumps requestVersion before this finally runs. Gate on the
+      // save sequence instead so the card never stays stuck busy after its
+      // own save completes.
+      if (saveId === saveSequence.current) setSaving(false)
     }
   }
 

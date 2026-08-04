@@ -6,7 +6,19 @@ ALTER TABLE public.fiscal_periods
   CHECK (
     tax_depreciation_method IS NULL
     OR (
-      tax_depreciation_deduction <= tax_depreciation_base
+      -- Completeness first: SQL NULL semantics would let a partially
+      -- populated snapshot slip past the arithmetic comparisons below
+      -- (NULL operands make the whole expression NULL, which passes CHECK).
+      tax_depreciation_opening_value IS NOT NULL
+      AND tax_depreciation_base IS NOT NULL
+      AND tax_depreciation_deduction IS NOT NULL
+      AND tax_depreciation_closing_value IS NOT NULL
+      AND tax_depreciation_calculation IS NOT NULL
+      AND (
+        tax_depreciation_method <> 'rakenskapsenlig'
+        OR tax_depreciation_rule IS NOT NULL
+      )
+      AND tax_depreciation_deduction <= tax_depreciation_base
       AND tax_depreciation_closing_value
         = tax_depreciation_base - tax_depreciation_deduction
       AND (tax_depreciation_calculation ->> 'version')::integer >= 2

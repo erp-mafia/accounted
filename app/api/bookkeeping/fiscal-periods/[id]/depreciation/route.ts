@@ -32,21 +32,21 @@ const TaxElectionSchema = z
   .superRefine((value, ctx) => {
     if (value.method === 'rakenskapsenlig' && !value.selected_rule) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['selected_rule'],
         message: 'Välj 30-procentsregeln eller 20-procentsregeln.',
       })
     }
     if (value.method === 'restvarde' && value.selected_rule) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['selected_rule'],
         message: 'Restvärdeavskrivning har ingen kompletteringsregel.',
       })
     }
     if (value.method === 'rakenskapsenlig' && value.book_conformity_confirmed !== true) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['book_conformity_confirmed'],
         message: 'Bekräfta att avdraget motsvarar bokslutets totala avskrivning.',
       })
@@ -62,21 +62,21 @@ const TaxPreviewQuerySchema = z
   .superRefine((value, ctx) => {
     if (!value.tax_method && (value.tax_rule || value.opening_tax_value !== undefined)) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['tax_method'],
         message: 'tax_method is required for a tax depreciation preview.',
       })
     }
     if (value.tax_method === 'rakenskapsenlig' && !value.tax_rule) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['tax_rule'],
         message: 'tax_rule is required for räkenskapsenlig depreciation.',
       })
     }
     if (value.tax_method === 'restvarde' && value.tax_rule) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: 'custom',
         path: ['tax_rule'],
         message: 'tax_rule is not valid for restvärdeavskrivning.',
       })
