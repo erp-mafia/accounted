@@ -14,13 +14,28 @@ import 'server-only'
 
 import { headers } from 'next/headers'
 import { getBranding } from './service'
-import { resolveBrandByHost, type Brand } from './resolve'
+import { normalizeHost, resolveBrandByHost, type Brand } from './resolve'
+
+/**
+ * Local dev override (WL-17): host-based resolution can never brand
+ * localhost (no brands row exists for it), which made branding untestable in
+ * local dev. Setting BRAND_DEV_DOMAIN=<brands.domain> in .env.local makes
+ * localhost render that brand. Guarded on the literal local hosts, so the
+ * variable can never rebrand a real domain even if it leaks into a deployed
+ * environment. UI-only: the middleware home-domain rule still sees the real
+ * host, so company partitioning stays un-overridden.
+ */
+const LOCAL_DEV_HOSTS = new Set(['localhost', '127.0.0.1'])
 
 /** The brand serving the current request, or null on default/unknown hosts. */
 export async function resolveRequestBrand(): Promise<Brand | null> {
   const requestHeaders = await headers()
   const host = requestHeaders.get('host')
   if (!host) return null
+  const devDomain = process.env.BRAND_DEV_DOMAIN
+  if (devDomain && LOCAL_DEV_HOSTS.has(normalizeHost(host))) {
+    return resolveBrandByHost(devDomain)
+  }
   return resolveBrandByHost(host)
 }
 

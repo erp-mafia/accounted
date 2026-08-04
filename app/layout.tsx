@@ -9,7 +9,6 @@ import {
   Source_Sans_3,
   Work_Sans,
 } from "next/font/google";
-import { headers } from "next/headers";
 import Script from "next/script";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
@@ -23,7 +22,7 @@ import { SWRProvider } from "@/components/providers/SWRProvider";
 import { ScrollbarReveal } from "@/components/ScrollbarReveal";
 import { ensureInitialized } from "@/lib/init";
 import { getBranding } from "@/lib/branding/service";
-import { resolveBrandByHost, type Brand } from "@/lib/branding/resolve";
+import { resolveRequestBrand } from "@/lib/branding/request-brand";
 import { buildBrandVarsCss } from "@/lib/branding/brand-style";
 import { getBrandFontPair } from "@/lib/branding/fonts";
 import { BrandProvider } from "@/lib/branding/brand-context";
@@ -34,19 +33,11 @@ import "./globals.css";
 
 const log = createLogger("branding");
 
-/**
- * Resolve the brand serving this request from the Host header (WL-12: the
- * lookup runs in the root layout, not middleware). Null on the canonical
- * domain and on any unknown host; every branded byte below is gated on this,
- * which is what keeps default hosts byte-identical to today. The resolver
- * caches per host (~60s TTL) so this costs one query per TTL window.
- */
-async function resolveRequestBrand(): Promise<Brand | null> {
-  const requestHeaders = await headers();
-  const host = requestHeaders.get("host");
-  if (!host) return null;
-  return resolveBrandByHost(host);
-}
+// Brand resolution (WL-12: the lookup runs in the root layout, not
+// middleware) lives in lib/branding/request-brand.ts, shared with every
+// other server component so the BRAND_DEV_DOMAIN dev override applies
+// uniformly. The layout used to carry a private copy of the function, which
+// silently skipped that override.
 
 // Load extensions before metadata/viewport functions read the branding service.
 // Without this, an extension that calls registerBrandingService() at its module
