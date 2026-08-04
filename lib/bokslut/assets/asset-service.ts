@@ -781,26 +781,38 @@ export async function disposeAsset(
   if (!asset) throw new AssetNotFoundError()
   if (asset.disposed_at) throw new AssetAlreadyDisposedError()
 
-  const [periodsResult, schedulesResult] = await Promise.all([
-    supabase
-      .from('fiscal_periods')
-      .select('id, period_start, period_end')
-      .eq('company_id', companyId),
-    supabase
-      .from('depreciation_schedules')
-      .select('fiscal_period_id, planned_depreciation, journal_entry_id')
-      .eq('company_id', companyId)
-      .eq('asset_id', assetId),
-  ])
-  if (periodsResult.error) {
-    throw new Error(`Failed to load fiscal periods: ${periodsResult.error.message}`)
+  // Paginated past PostgREST's silent 1000-row cap. A truncated period list
+  // can drop input.fiscal_period_id (false "Fiscal period not found") and
+  // starves the later_depreciation_posted guard of period start dates.
+  let periods: Array<Pick<FiscalPeriod, 'id' | 'period_start' | 'period_end'>>
+  let scheduleRows: DisposalScheduleRow[]
+  try {
+    ;[periods, scheduleRows] = await Promise.all([
+      fetchAllRows<Pick<FiscalPeriod, 'id' | 'period_start' | 'period_end'>>(
+        ({ from, to }) =>
+          supabase
+            .from('fiscal_periods')
+            .select('id, period_start, period_end')
+            .eq('company_id', companyId)
+            .order('period_start', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to),
+      ),
+      fetchAllRows<DisposalScheduleRow>(({ from, to }) =>
+        supabase
+          .from('depreciation_schedules')
+          .select('fiscal_period_id, planned_depreciation, journal_entry_id')
+          .eq('company_id', companyId)
+          .eq('asset_id', assetId)
+          .order('fiscal_period_id', { ascending: true })
+          .range(from, to),
+      ),
+    ])
+  } catch (error) {
+    throw new Error(
+      `Failed to load disposal context: ${error instanceof Error ? error.message : String(error)}`,
+    )
   }
-  if (schedulesResult.error) {
-    throw new Error(`Failed to load depreciation schedules: ${schedulesResult.error.message}`)
-  }
-  const periods = (periodsResult.data ?? []) as Array<
-    Pick<FiscalPeriod, 'id' | 'period_start' | 'period_end'>
-  >
   const fiscalPeriod = periods.find((period) => period.id === input.fiscal_period_id)
   if (!fiscalPeriod) throw new Error('Fiscal period not found')
   const plan = buildAssetDisposalPlan({
@@ -808,7 +820,7 @@ export async function disposeAsset(
     input,
     fiscalPeriod,
     periods,
-    schedules: (schedulesResult.data ?? []) as DisposalScheduleRow[],
+    schedules: scheduleRows,
   })
 
   // K3 component breakdown: when the asset was depreciated per-component,
@@ -855,7 +867,7 @@ export async function disposeAsset(
         current_depreciation: plan.currentDepreciation,
         jamkning_amount: plan.jamkning.amount,
         jamkning_direction: plan.jamkning.direction,
-        jamkning_remaining_years: plan.jamkning.remainingYears || null,
+        jamkning_remaining_years: plan.jamkning.remainingYears ?? null,
         jamkning_total_years: plan.jamkning.totalYears || null,
         jamkning_original_input_vat: input.jamkning_original_input_vat ?? null,
         jamkning_original_deduction_percent:

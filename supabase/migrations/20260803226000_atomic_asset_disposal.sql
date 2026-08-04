@@ -7,23 +7,33 @@
 
 ALTER TABLE public.assets
   ADD COLUMN IF NOT EXISTS disposal_type text,
-  ADD COLUMN IF NOT EXISTS disposal_journal_entry_id uuid
-    REFERENCES public.journal_entries(id) ON DELETE RESTRICT,
+  ADD COLUMN IF NOT EXISTS disposal_journal_entry_id uuid,
   ADD COLUMN IF NOT EXISTS jamkning_direction text,
   ADD COLUMN IF NOT EXISTS jamkning_remaining_years integer,
   ADD COLUMN IF NOT EXISTS jamkning_total_years integer,
   ADD COLUMN IF NOT EXISTS jamkning_original_deduction_percent numeric(5, 2),
   ADD COLUMN IF NOT EXISTS jamkning_new_deduction_percent numeric(5, 2);
 
+-- All constrained columns are new and NULL for existing rows, so validation
+-- can never fail. Add every constraint NOT VALID and validate separately:
+-- an immediate FK validation takes SHARE ROW EXCLUSIVE on journal_entries (a
+-- hot table) and each plain CHECK scans assets under a blocking lock, while
+-- VALIDATE CONSTRAINT only needs SHARE UPDATE EXCLUSIVE and does not block
+-- writes.
 ALTER TABLE public.assets
+  DROP CONSTRAINT IF EXISTS assets_disposal_journal_entry_id_fkey,
+  ADD CONSTRAINT assets_disposal_journal_entry_id_fkey
+    FOREIGN KEY (disposal_journal_entry_id)
+    REFERENCES public.journal_entries(id) ON DELETE RESTRICT
+    NOT VALID,
   DROP CONSTRAINT IF EXISTS assets_disposal_type_check,
   ADD CONSTRAINT assets_disposal_type_check CHECK (
     disposal_type IS NULL OR disposal_type IN ('sale', 'scrap', 'business_transfer')
-  ),
+  ) NOT VALID,
   DROP CONSTRAINT IF EXISTS assets_jamkning_direction_check,
   ADD CONSTRAINT assets_jamkning_direction_check CHECK (
     jamkning_direction IS NULL OR jamkning_direction IN ('increase', 'decrease', 'none', 'transferred')
-  ),
+  ) NOT VALID,
   DROP CONSTRAINT IF EXISTS assets_jamkning_years_check,
   ADD CONSTRAINT assets_jamkning_years_check CHECK (
     (jamkning_remaining_years IS NULL OR jamkning_remaining_years >= 0)
@@ -33,12 +43,18 @@ ALTER TABLE public.assets
       OR jamkning_total_years IS NULL
       OR jamkning_remaining_years <= jamkning_total_years
     )
-  ),
+  ) NOT VALID,
   DROP CONSTRAINT IF EXISTS assets_jamkning_percent_check,
   ADD CONSTRAINT assets_jamkning_percent_check CHECK (
     (jamkning_original_deduction_percent IS NULL OR jamkning_original_deduction_percent BETWEEN 0 AND 100)
     AND (jamkning_new_deduction_percent IS NULL OR jamkning_new_deduction_percent BETWEEN 0 AND 100)
-  );
+  ) NOT VALID;
+
+ALTER TABLE public.assets VALIDATE CONSTRAINT assets_disposal_journal_entry_id_fkey;
+ALTER TABLE public.assets VALIDATE CONSTRAINT assets_disposal_type_check;
+ALTER TABLE public.assets VALIDATE CONSTRAINT assets_jamkning_direction_check;
+ALTER TABLE public.assets VALIDATE CONSTRAINT assets_jamkning_years_check;
+ALTER TABLE public.assets VALIDATE CONSTRAINT assets_jamkning_percent_check;
 
 CREATE OR REPLACE FUNCTION public.enforce_asset_post_disposal_immutability()
 RETURNS trigger
@@ -122,13 +138,35 @@ DECLARE
     ''
   );
 BEGIN
+  -- NULL-safe membership guard (20260703180000): never the raw
+  -- "NOT IN (SELECT user_company_ids())" form, which is NULL-unsafe.
   IF v_jwt_role IN ('anon', 'authenticated')
      AND (
-       p_company_id NOT IN (SELECT public.user_company_ids())
+       NOT public.caller_is_company_member(p_company_id)
        OR NOT public.current_user_can_write()
      ) THEN
     RAISE EXCEPTION 'unauthorized asset disposal for company %', p_company_id
       USING ERRCODE = '42501';
+  END IF;
+
+  -- Disposal metadata invariants. The values are derived server-side by the
+  -- same planner that builds the draft entry, but the RPC is independently
+  -- callable, so reject internally inconsistent register metadata here.
+  IF coalesce(p_disposed_proceeds, 0) < 0 OR coalesce(p_proceeds_vat, 0) < 0 THEN
+    RAISE EXCEPTION 'Disposal proceeds and VAT must be non-negative'
+      USING ERRCODE = '23514';
+  END IF;
+  IF p_proceeds_vat > 0 AND p_vat_treatment IS NULL THEN
+    RAISE EXCEPTION 'Disposal VAT requires a VAT treatment'
+      USING ERRCODE = '23514';
+  END IF;
+  IF p_proceeds_vat > p_disposed_proceeds THEN
+    RAISE EXCEPTION 'Disposal VAT cannot exceed gross proceeds'
+      USING ERRCODE = '23514';
+  END IF;
+  IF p_disposal_type = 'scrap' AND coalesce(p_disposed_proceeds, 0) <> 0 THEN
+    RAISE EXCEPTION 'Scrapping (utrangering) cannot carry proceeds'
+      USING ERRCODE = '23514';
   END IF;
 
   SELECT a.user_id
@@ -246,10 +284,12 @@ BEGIN
   IF p_entry_id IS NOT NULL THEN
     SELECT committed.voucher_number
       INTO v_voucher_number
+      -- commit_method must be one of journal_entries_commit_method_check's
+      -- allowed values; the disposal dialog is a user-accepted commit.
       FROM public.commit_journal_entry(
         p_company_id,
         p_entry_id,
-        'asset_disposal',
+        'user_accept',
         NULL,
         p_actor_type,
         p_actor_label

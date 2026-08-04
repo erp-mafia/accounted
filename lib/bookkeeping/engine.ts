@@ -29,11 +29,14 @@ import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import type {
+  AssetDisposalType,
+  AssetJamkningDirection,
   CreateJournalEntryInput,
   CreateJournalEntryLineInput,
   JournalEntry,
   JournalEntryLine,
   JournalEntrySourceType,
+  VatTreatment,
 } from '@/types'
 
 const log = createLogger('bookkeeping.engine')
@@ -672,14 +675,14 @@ export async function commitEntry(
 export interface CommitAssetDisposalInput {
   asset_id: string
   fiscal_period_id: string
-  disposal_type: 'sale' | 'scrap' | 'business_transfer'
+  disposal_type: AssetDisposalType
   disposed_at: string
   disposed_proceeds: number
   proceeds_vat: number
-  vat_treatment: string | null
+  vat_treatment: VatTreatment | null
   current_depreciation: number
   jamkning_amount: number
-  jamkning_direction: 'increase' | 'decrease' | 'none' | 'transferred'
+  jamkning_direction: AssetJamkningDirection
   jamkning_remaining_years: number | null
   jamkning_total_years: number | null
   jamkning_original_input_vat: number | null
@@ -738,21 +741,47 @@ export async function commitAssetDisposal(
 
   if (!entryId) return null
 
-  const { data: completeEntry, error: fetchError } = await supabase
-    .from('journal_entries')
-    .select('*, lines:journal_entry_lines(*)')
-    .eq('id', entryId)
-    .eq('company_id', companyId)
-    .single()
+  // The RPC has already committed the voucher and the register update at this
+  // point. A transient reload failure must not masquerade as a failed
+  // disposal, so retry once and log the divergence before surfacing it.
+  let completeEntry: JournalEntry | null = null
+  let lastFetchError: { message: string } | null = null
+  for (let attempt = 0; attempt < 2 && !completeEntry; attempt++) {
+    const { data, error: fetchError } = await supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('id', entryId)
+      .eq('company_id', companyId)
+      .single()
+    if (data && !fetchError) {
+      completeEntry = data as JournalEntry
+    } else {
+      lastFetchError = fetchError ?? { message: 'posted entry not found' }
+    }
+  }
 
-  if (fetchError || !completeEntry) {
+  if (!completeEntry) {
+    log.error(
+      'asset disposal committed but posted entry reload failed',
+      lastFetchError,
+      {
+        operation: 'commit_asset_disposal',
+        companyId,
+        userId,
+        entityType: 'asset',
+        entityId: input.asset_id,
+        journalEntryId: entryId,
+      },
+    )
     throw new BookkeepingDatabaseError(
       'fetch_asset_disposal_entry',
-      fetchError?.message ?? 'posted entry not found',
+      `disposal voucher is committed but could not be reloaded: ${
+        lastFetchError?.message ?? 'posted entry not found'
+      }`,
     )
   }
 
-  const result = completeEntry as JournalEntry
+  const result = completeEntry
   await eventBus.emit({
     type: 'journal_entry.committed',
     payload: { entry: result, userId, companyId },

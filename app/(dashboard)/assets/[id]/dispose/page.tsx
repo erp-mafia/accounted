@@ -43,6 +43,14 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100
 }
 
+// Accept Swedish-formatted amounts ("125 000,50") as well as dot decimals.
+function parseAmount(raw: string): number | null {
+  const normalized = raw.replace(/\s/g, '').replace(',', '.')
+  if (normalized === '') return null
+  const value = Number(normalized)
+  return Number.isFinite(value) ? value : null
+}
+
 export default function DisposeAssetPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const t = useTranslations('assets.disposal')
@@ -119,7 +127,10 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
     }
   }, [disposalType])
 
-  const proceedsNumber = Number(proceeds) || 0
+  const parsedProceeds = parseAmount(proceeds)
+  const proceedsNumber = parsedProceeds ?? 0
+  const proceedsInvalid =
+    disposalType !== 'scrap' && proceeds.trim() !== '' && parsedProceeds === null
   const vatAmount =
     disposalType === 'sale' && vatTreatment === 'standard_25'
       ? round2(proceedsNumber * (0.25 / 1.25))
@@ -366,7 +377,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
         <Link href="/assets"><Button variant="secondary" disabled={submitting}>{t('cancel')}</Button></Link>
         <Button
           onClick={handleSubmit}
-          disabled={!canWrite || submitting || !periodId || periodLocked || missingJamkningData || (disposalType === 'business_transfer' && !businessTransferConfirmed) || (transferNeedsDocument && !adjustmentDocumentConfirmed)}
+          disabled={!canWrite || submitting || !periodId || periodLocked || proceedsInvalid || missingJamkningData || (disposalType === 'business_transfer' && !businessTransferConfirmed) || (transferNeedsDocument && !adjustmentDocumentConfirmed)}
           title={!canWrite ? t('write_required') : undefined}
         >
           {!canWrite && <Lock className="mr-1 h-4 w-4" />}
