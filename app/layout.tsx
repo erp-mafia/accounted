@@ -23,15 +23,11 @@ import { ScrollbarReveal } from "@/components/ScrollbarReveal";
 import { ensureInitialized } from "@/lib/init";
 import { getBranding } from "@/lib/branding/service";
 import { resolveRequestBrand } from "@/lib/branding/request-brand";
-import { buildBrandVarsCss } from "@/lib/branding/brand-style";
 import { getBrandFontPair } from "@/lib/branding/fonts";
 import { BrandProvider } from "@/lib/branding/brand-context";
 import { toPublicBrand } from "@/lib/branding/public-brand";
-import { createLogger } from "@/lib/logger";
 import { APP_TIME_ZONE } from "@/i18n/config";
 import "./globals.css";
-
-const log = createLogger("branding");
 
 // Brand resolution (WL-12: the lookup runs in the root layout, not
 // middleware) lives in lib/branding/request-brand.ts, shared with every
@@ -139,9 +135,8 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export async function generateViewport(): Promise<Viewport> {
-  const brand = await resolveRequestBrand();
   return {
-    themeColor: brand?.brandColor ?? getBranding().themeColor,
+    themeColor: getBranding().themeColor,
     width: "device-width",
     initialScale: 1,
     viewportFit: "cover",
@@ -158,19 +153,11 @@ export default async function RootLayout({
   const locale = await getLocale();
   const messages = await getMessages();
 
-  // Render-time accessibility guard (WL-02): a brand color that fails the
-  // WCAG gate renders WITHOUT the variable override (fail open to the default
-  // theme; name/logo branding still applies). buildBrandVarsCss returns null
-  // exactly in that case, and `data-brand` is only stamped when the block
-  // renders, so the selectors never activate without their variables.
-  const brandCss = brand ? buildBrandVarsCss(brand) : null;
-  if (brand && !brandCss) {
-    log.warn("brand color failed the accessibility gate; rendering default theme", {
-      brandId: brand.id,
-      domain: brand.domain,
-      brandColor: brand.brandColor,
-    });
-  }
+  // Brand COLOR theming deliberately removed (founder call 2026-08-04):
+  // white-label is logo + app name + domain only; every host renders the
+  // standard editorial-monochrome theme. buildBrandVarsCss and the
+  // brands.brand_color/chrome_color columns stay dormant for a future
+  // opt-in, but nothing stamps data-brand anymore.
 
   // Curated font menu (WL-03): inline style on <html> beats the :root
   // declarations in globals.css. Null (default pair or unknown key) means no
@@ -182,7 +169,6 @@ export default async function RootLayout({
       lang={locale}
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} ${hedvigSerif.variable} ${brandFontVariables}`}
-      data-brand={brandCss ? "" : undefined}
       style={
         fontPair
           ? ({
@@ -193,9 +179,6 @@ export default async function RootLayout({
       }
     >
       <head>
-        {brandCss ? (
-          <style id="brand-vars" dangerouslySetInnerHTML={{ __html: brandCss }} />
-        ) : null}
         <link rel="apple-touch-icon" href={branding.appleTouchIconPath} />
         {brand?.logoUrl ? <link rel="icon" href={brand.logoUrl} /> : null}
       </head>
