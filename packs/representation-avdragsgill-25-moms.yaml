@@ -1,24 +1,44 @@
 # Konteringspaket. Schema: lib/packs/schema.ts
 # Validated by `npm run validate:packs` (CI gate).
+#
+# The slug still says "avdragsgill". That is deliberate: a slug is an
+# identifier, not a label (packs/README.md). Renaming it would retire this
+# template and insert a new one, breaking every company's booking_template_usage
+# history for it. The NAME is what users read, and that is now correct.
 meta:
   slug: representation-avdragsgill-25-moms
   order: 13
-  name: 'Representation (avdragsgill, 25% moms)'
+  name: 'Representation, måltid (ej avdragsgill)'
   category: representation
   entity_type: all
   description: >-
-    Extern representation med avdragsgill moms. Max 300 kr/person exkl. moms.
+    Extern representation, måltid. Kostnaden är inte avdragsgill vid
+    inkomstbeskattningen; momsen är avdragsgill upp till ett tak per person.
+  legal_note: >-
+    Avdraget för måltidsrepresentation vid inkomstbeskattningen slopades 2017,
+    därför bokas hela kostnaden på 6072 Representation, ej avdragsgill.
+    Momsen är avdragsgill på ett underlag om högst 300 kr exkl. moms per person
+    och tillfälle. Mallen känner inte antalet deltagare och kan därför inte
+    räkna ut taket: kontrollera momsraden manuellt mot antalet personer, och
+    använd schablonbeloppet när måltiden innehåller både mat och alkohol.
+    Enklare förtäring (max 60 kr per person) är en annan situation och bokas
+    på 6071 Representation, avdragsgill. Momssatsen 12 % avser restaurang-
+    och cateringtjänster; kontrollera satsen mot underlaget, den beror på vad
+    som köpts och inte på mallen.
+# ratio 0.892857 = 1/1.12: the cost line is the amount NET of the VAT that the
+# vat line extracts from the same VAT-inclusive total. It is arithmetic tied to
+# vat_rate, not a deductibility percentage. Change one and you must change both.
 lines:
   - account: '6072'
-    label: 'Representation avdragsgill'
+    label: 'Representation, ej avdragsgill'
     side: debit
     type: business
-    ratio: 0.8
+    ratio: 0.892857
   - account: '2641'
-    label: 'Ingående moms'
+    label: 'Ingående moms (justera mot taket)'
     side: debit
     type: vat
-    vat_rate: 0.25
+    vat_rate: 0.12
   - account: '1930'
     label: 'Företagskonto'
     side: credit

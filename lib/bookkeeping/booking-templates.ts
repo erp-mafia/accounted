@@ -268,7 +268,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'vehicle',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '5614',
+    debit_account: '5619',  // 5614 does not exist in BAS 2026 (the 561x run skips it), so every
+    // booking through this template failed with AccountsNotInChartError.
+    // 5619 is the sibling 'Övriga kostnader för personbilar och mc'.
     credit_account: '1930',
     vat_treatment: 'standard_25',
     vat_rate: 0.25,
@@ -341,7 +343,8 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'it_software',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '5421',
+    debit_account: '5420',  // 5421 does not exist in BAS 2026. 5420 Programvaror is what the two
+    // sibling SaaS templates already use.
     credit_account: '1930',
     vat_treatment: 'reverse_charge',
     vat_rate: 0,
@@ -538,7 +541,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'travel',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '5820',
+    debit_account: '5830',  // 5820 is Hyrbilskostnader (rental car). This template is Hotell, so it
+    // posted hotel nights into car hire: it balanced and was silently wrong.
+    // 5830 is 'Kost och logi'.
     credit_account: '1930',
     vat_treatment: 'reduced_12',
     vat_rate: 0.12,

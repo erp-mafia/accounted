@@ -23,18 +23,42 @@ import seeded from './fixtures/seeded-system-templates.json'
  * Every entry is a defect found by the pack validator and fixed with a domain
  * source cited in the commit.
  */
-const INTENTIONAL_DIVERGENCES: Record<string, string> = {
-  loneutbetalning:
-    'Seeded version debited 2710 @0.3 + 2920 @0.12 + 7010 @1.0 against a single 1.0 credit, ' +
+interface Divergence {
+  /**
+   * The name this template carried in the seed. Needed because a fix may rename
+   * it, and the seeded fixture predates pack_slug so name is the only join key
+   * available there. Exactly the fragility that made pack_slug the sync's key.
+   */
+  seededName: string
+  reason: string
+}
+
+const INTENTIONAL_DIVERGENCES: Record<string, Divergence> = {
+  loneutbetalning: {
+    seededName: 'Löneutbetalning',
+    reason:
+      'Seeded version debited 2710 @0.3 + 2920 @0.12 + 7010 @1.0 against a single 1.0 credit, ' +
     'so it totalled 1.42x the amount and could never post. Rebuilt per the swedish-payroll ' +
     'skill: Debit 7010 gross, Credit 2710 tax, Credit 1930 net. The 2920 semesterlöneskuld ' +
     'line moved out because vacation accrual is its own verifikat (7290/2920).',
-  'periodiseringsfond-avsattning-ab':
-    'Seeded version used account 2113, i.e. the fund for tax year 2013 under the pre-2020 ' +
+  },
+  'periodiseringsfond-avsattning-ab': {
+    seededName: 'Periodiseringsfond avsättning (AB)',
+    reason:
+      'Seeded version used account 2113, i.e. the fund for tax year 2013 under the pre-2020 ' +
     'year-tagged block. Those funds had to be reversed years ago and the account is not in ' +
     'BAS 2026, so the template could not resolve. Now uses 2110 Periodiseringsfonder, which ' +
     'does not rot annually; the legal_note points at the year-tagged 2120-2129 alternative.',
-  'periodiseringsfond-aterforing-ab': 'Same 2113 fix as periodiseringsfond-avsattning-ab.',
+  },
+  'periodiseringsfond-aterforing-ab': {
+    seededName: 'Periodiseringsfond återföring (AB)',
+    reason: 'Same 2113 fix as periodiseringsfond-avsattning-ab.',
+  },
+  'representation-avdragsgill-25-moms': {
+    seededName: 'Representation (avdragsgill, 25% moms)',
+    reason:
+      'Seeded version booked to 6072 (Representation, EJ avdragsgill) while naming and labelling itself "avdragsgill", which is the exact confusion the swedish-vat skill lists under Representation errors. The account was right and the words were wrong: meal representation stopped being income-tax deductible in 2017. Renamed to match, VAT moved from 25% to the 12% restaurang rate our own static representation_external template already used (with the net ratio 1/1.12 that pairs with it), and a legal_note added for the 300 kr per person VAT cap, which this format cannot compute because it has no participant count. Slug deliberately unchanged: it is an identifier, not a label.',
+  },
 }
 
 interface SeededTemplate {
@@ -76,11 +100,7 @@ describe('pack catalogue is a lossless port of the seeded system templates', () 
 
   it('reproduces the seeded templates exactly, except where we deliberately fixed one', () => {
     const unchanged = packs.filter((p) => !(p.pack.meta.slug in INTENTIONAL_DIVERGENCES))
-    const changedNames = new Set(
-      packs
-        .filter((p) => p.pack.meta.slug in INTENTIONAL_DIVERGENCES)
-        .map((p) => p.pack.meta.name),
-    )
+    const changedNames = new Set(Object.values(INTENTIONAL_DIVERGENCES).map((d) => d.seededName))
 
     const fromPacks = unchanged.map((p) => canonical(packToLibraryRow(p.pack))).sort()
     const fromDb = (seeded as SeededTemplate[])
@@ -95,11 +115,11 @@ describe('pack catalogue is a lossless port of the seeded system templates', () 
   it('every declared divergence actually diverges, so the list cannot go stale', () => {
     const byName = new Map((seeded as SeededTemplate[]).map((t) => [t.name, canonical(t)]))
 
-    for (const slug of Object.keys(INTENTIONAL_DIVERGENCES)) {
+    for (const [slug, divergence] of Object.entries(INTENTIONAL_DIVERGENCES)) {
       const pack = packs.find((p) => p.pack.meta.slug === slug)
       expect(pack, `${slug} is in INTENTIONAL_DIVERGENCES but no such pack exists`).toBeDefined()
-      const seededForm = byName.get(pack!.pack.meta.name)
-      expect(seededForm, `no seeded template named "${pack!.pack.meta.name}"`).toBeDefined()
+      const seededForm = byName.get(divergence.seededName)
+      expect(seededForm, `no seeded template named "${divergence.seededName}"`).toBeDefined()
       expect(
         canonical(packToLibraryRow(pack!.pack)),
         `${slug} is listed as diverging but matches the seed: remove its entry`,
