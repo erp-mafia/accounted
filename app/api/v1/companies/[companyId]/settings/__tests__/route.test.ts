@@ -221,6 +221,53 @@ describe('PATCH /api/v1/companies/:companyId/settings', () => {
     expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 
+  it('returns 400 for a body that is not valid JSON', async () => {
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const req = new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: 'Bearer test-fixture-not-a-real-key',
+        'Content-Type': 'application/json',
+        'Idempotency-Key': 'abcd1234-4444-4abc-8def-1234567890ab',
+      },
+      body: '{"bank_name": not-json',
+    })
+
+    const res = await updateSettings(req, companyParams(COMPANY_ID))
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details).toEqual({ field: 'body', message: 'Body is not valid JSON.' })
+    expect(supabaseMock.captured.update).toHaveLength(0)
+  })
+
+  it.each([
+    ['a bare array', [{ bank_name: 'X' }]],
+    ['a bare string', 'bank_name=X'],
+    ['a bare number', 42],
+    ['null', null],
+  ])('returns 400 for a JSON body that is not an object (%s)', async (_label, jsonBody) => {
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await updateSettings(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, jsonBody),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details).toEqual({ field: 'body', message: 'Body must be a JSON object.' })
+    expect(supabaseMock.captured.update).toHaveLength(0)
+  })
+
   it('rejects an empty body (at least one field required)', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
@@ -337,6 +384,46 @@ describe('PATCH /api/v1/companies/:companyId/settings', () => {
     expect(updatePayload.contact_person).toBeUndefined()
     // The response projection reads the column back.
     expect(supabaseMock.captured.selects['company_settings']?.[0]).toContain('default_our_reference')
+  })
+
+  it('keeps unsupplied fields undefined (never null) in the update payload', async () => {
+    // The route builds a literal 13-column update payload where unsupplied
+    // fields are undefined; supabase-js JSON serialization drops them, so
+    // the stored values survive a partial PATCH. A future `?? null` on that
+    // payload would silently CLEAR every column the caller did not send
+    // (null is a real write that empties the column). This test pins the
+    // undefined-not-null contract and fails on any such regression.
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      company_settings: { data: { ...SAMPLE_SETTINGS, bank_name: 'Nya Banken' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await updateSettings(
+      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
+        bank_name: 'Nya Banken',
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(supabaseMock.captured.update).toHaveLength(1)
+    const updatePayload = supabaseMock.captured.update[0] as Record<string, unknown>
+    expect(updatePayload.bank_name).toBe('Nya Banken')
+
+    const unsuppliedKeys = Object.keys(updatePayload).filter((key) => key !== 'bank_name')
+    // Guard the guard: the literal payload declares every column, so the
+    // unsupplied set must be non-empty for the loop below to prove anything.
+    expect(unsuppliedKeys.length).toBeGreaterThan(0)
+    for (const key of unsuppliedKeys) {
+      expect(
+        updatePayload[key],
+        `unsupplied column "${key}" must be undefined in the update payload, never null`,
+      ).toBeUndefined()
+    }
+    // What actually reaches PostgREST after JSON serialization: only the
+    // supplied column remains.
+    expect(JSON.parse(JSON.stringify(updatePayload))).toEqual({ bank_name: 'Nya Banken' })
   })
 
   it('dry-run merges the proposed changes with the current row and writes nothing', async () => {

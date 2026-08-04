@@ -182,7 +182,9 @@ registerEndpoint({
     },
   },
   scope: 'companies:write',
-  risk: 'low',
+  // Matches lib/pending-operations/risk-tiers.ts (update_company_settings):
+  // payment settings control where customers send money on future invoices.
+  risk: 'medium',
   idempotent: true,
   reversible: true,
   dryRunSupported: true,
