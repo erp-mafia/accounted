@@ -18,9 +18,24 @@
  * - Everything else on the Ej K2 list (uppskjuten skatt 1370/2240/8940,
  *   verkligt värde, säkringsredovisning, aktiverade ränteutgifter, ...) is
  *   excluded for unrelated reasons. Those get a generic message: what the
- *   chart says, and that it requires K3. No paragraph reference is invented
+ *   chart says, and that it presumes K3. No paragraph reference is invented
  *   for them, since citing punkt 10.4 on a deferred-tax account would put a
  *   factually wrong legal claim in front of the user.
+ *
+ * Two things the messages deliberately do NOT do:
+ *
+ * - They never assert which framework the company applies. The routes read
+ *   companies.accounting_framework without checking the read error, so a
+ *   transient failure resolves to "not K3" for a company that IS on K3;
+ *   phrasing the rejection as a fact about the account keeps a failed read
+ *   from turning into a false claim about the customer's regelverk.
+ * - They never propose switching regelverk as the remedy. Moving a company
+ *   from K2 to K3 pulls in komponentavskrivning and uppskjuten skatt and
+ *   rewrites the whole årsredovisning; it is not a fix for one misdirected
+ *   account. The remedy offered is the lawful account instead: an ACQUIRED
+ *   intangible belongs on 1090, which K2 permits
+ *   (.claude/skills/swedish-year-end-closing/references/k2-vs-k3.md:24,
+ *   "Only acquired intangibles may be recognized").
  */
 import { getBASReference, type BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
 
@@ -70,25 +85,24 @@ export function k2ExcludedAccountMessages(
   account: BASReferenceAccount,
 ): K2ExcludedAccountMessages {
   const label = `${account.account_number} (${account.account_name})`
-  const switchSv = 'Byt regelverk under Inställningar → Bokföring om företaget tillämpar K3.'
-  const switchEn =
-    'Switch the accounting framework under Settings → Bookkeeping if the company applies K3.'
 
   if (isEgenupparbetadImmateriell(account)) {
     return {
       message_sv:
-        `Konto ${label} kräver K3: egenupparbetade immateriella tillgångar får inte ` +
-        `aktiveras enligt K2 (BFNAR 2016:10 punkt 10.4). ${switchSv}`,
+        `Konto ${label} är reserverat för egenupparbetade utvecklingsutgifter, som bara får ` +
+        `aktiveras enligt K3 (BFNAR 2016:10 punkt 10.4). En förvärvad immateriell tillgång ` +
+        `bokförs på 1090 (Övriga immateriella anläggningstillgångar).`,
       message_en:
-        `Account ${label} requires K3: internally generated intangible assets may not be ` +
-        `capitalized under K2 (BFNAR 2016:10 paragraph 10.4). ${switchEn}`,
+        `Account ${label} is reserved for internally generated development expenditure, which ` +
+        `may only be capitalized under K3 (BFNAR 2016:10 paragraph 10.4). An acquired ` +
+        `intangible asset belongs on 1090 (Övriga immateriella anläggningstillgångar).`,
     }
   }
 
   return {
-    message_sv: `Konto ${label} är markerat Ej K2 i BAS-kontoplanen och kräver K3. ${switchSv}`,
+    message_sv: `Konto ${label} är markerat Ej K2 i BAS-kontoplanen och förutsätter K3.`,
     message_en:
-      `Account ${label} is marked Ej K2 in the BAS chart of accounts and requires the K3 ` +
-      `framework. ${switchEn}`,
+      `Account ${label} is marked Ej K2 in the BAS chart of accounts and presumes the K3 ` +
+      `framework.`,
   }
 }

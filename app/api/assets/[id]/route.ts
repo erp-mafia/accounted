@@ -7,7 +7,7 @@ import { K3ComponentSchema } from '@/lib/api/schemas'
 import {
   getAsset,
   updateAsset,
-  DEFAULT_ACCOUNTS_BY_CATEGORY,
+  defaultAccountsForCategory,
 } from '@/lib/bokslut/assets/asset-service'
 import { validateComponents } from '@/lib/bokslut/assets/k3-components'
 import {
@@ -146,9 +146,12 @@ export const PATCH = withRouteContext(
     // an explicit override outside the category range lands here first.
     // The final accounts mirror updateAsset()'s resolution: a category
     // change without explicit accounts realigns the triple to the new
-    // category's defaults. Patches that leave category and accounts alone
-    // skip the gate entirely, so legacy assets already sitting on an
-    // excluded account stay editable (name, notes, useful life, ...).
+    // category's framework-aware defaults, so recategorizing to "Immateriell
+    // tillgång" lands a K2 company on the acquired pair 1090/1099 and passes.
+    // Only a deliberate override onto an Ej K2 account trips the gate.
+    // Patches that leave category and accounts alone skip the gate entirely,
+    // so legacy assets already sitting on an excluded account stay editable
+    // (name, notes, useful life, ...).
     const touchesAccounts =
       validation.data.category !== undefined ||
       validation.data.bas_asset_account !== undefined ||
@@ -173,7 +176,10 @@ export const PATCH = withRouteContext(
           validation.data.bas_asset_account === undefined &&
           validation.data.bas_accumulated_account === undefined &&
           validation.data.bas_expense_account === undefined
-        const defaults = DEFAULT_ACCOUNTS_BY_CATEGORY[finalCategory]
+        const defaults = defaultAccountsForCategory(
+          finalCategory,
+          company?.accounting_framework,
+        )
         const excluded = findK2ExcludedAccount([
           validation.data.bas_asset_account ??
             (categoryDefaultsApply ? defaults.asset : existing.bas_asset_account),

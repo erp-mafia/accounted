@@ -7,7 +7,7 @@ import { K3ComponentSchema } from '@/lib/api/schemas'
 import {
   createAsset,
   listAssets,
-  DEFAULT_ACCOUNTS_BY_CATEGORY,
+  defaultAccountsForCategory,
 } from '@/lib/bokslut/assets/asset-service'
 import { validateComponents } from '@/lib/bokslut/assets/k3-components'
 import {
@@ -210,10 +210,12 @@ export const POST = withRouteContext(
     //    the field so the user knows their input was discarded.
     // 2. K2_EXCLUDED_ACCOUNT: accounts flagged k2_excluded ("Ej K2") in the
     //    BAS reference may not carry assets under K2. Checked on the RESOLVED
-    //    accounts (explicit override or category default) so a K2 company
-    //    cannot land on 1010/1019 through the immaterial defaults either. The
-    //    guard supplies the message: the egenupparbetade-immateriella group
-    //    cites BFNAR 2016:10 punkt 10.4, other Ej K2 accounts do not.
+    //    accounts, mirroring what createAsset() will persist: an explicit
+    //    override, or the framework-aware category default (a non-K3 company's
+    //    immaterial default is the acquired pair 1090/1099, which is lawful,
+    //    so only a deliberate override can trip this). The guard supplies the
+    //    message: the egenupparbetade group cites BFNAR 2016:10 punkt 10.4,
+    //    other Ej K2 accounts do not.
     const { data: company } = await supabase
       .from('companies')
       .select('accounting_framework')
@@ -236,7 +238,10 @@ export const POST = withRouteContext(
       )
     }
     if (!isK3Company) {
-      const defaults = DEFAULT_ACCOUNTS_BY_CATEGORY[validation.data.category]
+      const defaults = defaultAccountsForCategory(
+        validation.data.category,
+        company?.accounting_framework,
+      )
       const excluded = findK2ExcludedAccount([
         validation.data.bas_asset_account ?? defaults.asset,
         validation.data.bas_accumulated_account ?? defaults.accumulated,

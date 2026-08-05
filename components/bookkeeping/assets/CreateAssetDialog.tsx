@@ -67,18 +67,12 @@ const CATEGORY_OPTIONS: { value: AssetCategory; label: string; defaultYears: num
   { value: 'other_tangible', label: 'Övrig materiell tillgång', defaultYears: 5 },
 ]
 
-// The server-side default pair for 'immaterial' is 1010/1019
-// (Utvecklingsutgifter), which BFNAR 2016:10 punkt 10.4 reserves for K3:
-// egenupparbetade immateriella tillgångar får inte aktiveras enligt K2.
-// For non-K3 companies the dialog therefore books intangibles on the generic
-// PURCHASED pair instead: 1090 Övriga immateriella anläggningstillgångar /
-// 1099 Ackumulerade avskrivningar på övriga immateriella
-// anläggningstillgångar. The API rejects K2 writes onto Ej K2 accounts
-// (K2_EXCLUDED_ACCOUNT), so without this override the create would 422.
-const K2_IMMATERIAL_ACCOUNTS = {
-  bas_asset_account: '1090',
-  bas_accumulated_account: '1099',
-} as const
+// No account override here on purpose. The server resolves the immaterial
+// default per framework (defaultAccountsForCategory in
+// lib/bokslut/assets/asset-service.ts): 1090/1099 for K2, 1010/1019 for K3.
+// Sending an explicit pair from this dialog would duplicate that rule on a
+// second surface, and the edit dialog (which has no account inputs at all)
+// could never mirror it. The hint below just tells the user where it lands.
 
 export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAssetDialogProps) {
   const { toast } = useToast()
@@ -210,7 +204,6 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
           acquisition_date: acquisitionDate,
           acquisition_cost: cost,
           useful_life_months: years * 12,
-          ...(category === 'immaterial' && !isK3 ? K2_IMMATERIAL_ACCOUNTS : {}),
           ...(componentsPayload !== null ? { k3_components: componentsPayload } : {}),
         }),
       })

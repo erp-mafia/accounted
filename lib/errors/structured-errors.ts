@@ -3184,9 +3184,9 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
   K2_EXCLUDED_ACCOUNT: {
     httpStatus: 422,
     message_sv:
-      'Kontot är markerat Ej K2 i BAS-kontoplanen och kräver K3. Byt regelverk under Inställningar → Bokföring om företaget tillämpar K3.',
+      'Kontot är markerat Ej K2 i BAS-kontoplanen och förutsätter K3. Välj ett konto som är tillåtet enligt K2.',
     message_en:
-      'The account is marked Ej K2 in the BAS chart of accounts and requires the K3 framework. Switch the accounting framework under Settings → Bookkeeping if the company applies K3.',
+      'The account is marked Ej K2 in the BAS chart of accounts and presumes the K3 framework. Pick an account that K2 permits.',
   },
 }
 
