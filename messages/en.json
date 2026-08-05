@@ -6417,7 +6417,8 @@
     "remove_signer": "Ta bort undertecknare",
     "signer_removed": "Undertecknaren har tagits bort",
     "signer_remove_error": "Kunde inte ta bort undertecknaren",
-    "no_digital_version": "Ingen undertecknad version är godkänd för digital inlämning. Kontrollera versionens blockerare i årsredovisningsstudion eller använd pappersflödet."
+    "no_digital_version": "Ingen undertecknad version är godkänd för digital inlämning. Kontrollera versionens blockerare i årsredovisningsstudion eller använd pappersflödet.",
+    "k3_draft_notice": "K3-dokumentet är ännu ett granskningsutkast och kan inte låsas eller lämnas in via Accounted. Upprätta och lämna in årsredovisningen på papper tills hela upplysningsmatrisen är implementerad och granskad."
   },
   "empty": {
     "invoices_title": "No invoices yet",

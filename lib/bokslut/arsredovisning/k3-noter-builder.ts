@@ -49,10 +49,19 @@ export function buildK3RedovisningsPrinciper(
       'Komponentavskrivning: Materiella anläggningstillgångar med betydande komponenter som har väsentligt olika nyttjandeperioder delas upp och varje komponent skrivs av separat. Anskaffningsvärdet fördelas på komponenterna baserat på relativ andel av tillgångens värde.',
     )
   }
+  // The uppskjuten skatt and leasing paragraphs below describe what the
+  // engine actually books today: deferred tax is recognized only on
+  // obeskattade reserver at the current 20.6 percent rate
+  // (lib/bokslut/tax-provision/latent-tax-calculator.ts) and no code
+  // capitalizes leases, so every lease is expensed as operational. Do not
+  // restore broader policy claims (balansrakningsmetoden over all temporary
+  // differences, finance-lease capitalization) unless the engine actually
+  // implements them: a signed AR must not assert policies the books do not
+  // follow.
   paragraphs.push(
-    'Uppskjuten skatt: Uppskjuten skatt redovisas enligt balansräkningsmetoden för temporära skillnader mellan redovisade och skattemässiga värden på tillgångar och skulder. Uppskjuten skatt värderas till nominellt belopp utan diskontering och beräknas utifrån den skattesats som är beslutad på balansdagen.',
+    'Uppskjuten skatt: Uppskjuten skatt hänförlig till obeskattade reserver särredovisas inte i juridisk person, utan obeskattade reserver redovisas inklusive uppskjuten skatteskuld.',
     'Intäktsredovisning: Intäkter redovisas till det verkliga värdet av det som erhållits eller kommer att erhållas och redovisas när väsentliga risker och förmåner har överförts till köparen, beloppet kan mätas tillförlitligt och det är sannolikt att de ekonomiska fördelarna tillfaller företaget.',
-    'Leasing: Leasingavtal klassificeras som finansiell eller operationell leasing. Operationella leasingavgifter redovisas linjärt i resultaträkningen under leasingperioden. Finansiella leasingavtal redovisas som anläggningstillgång med motsvarande skuld i balansräkningen.',
+    'Leasing: Samtliga leasingavtal redovisas som operationella leasingavtal. Leasingavgifterna kostnadsförs linjärt i resultaträkningen över leasingperioden.',
     'Finansiella instrument: Finansiella instrument redovisas initialt till anskaffningsvärde inklusive transaktionskostnader. Kundfordringar värderas till det belopp som beräknas inflyta. Övriga finansiella tillgångar och skulder redovisas till upplupet anskaffningsvärde.',
   )
   return {
@@ -86,7 +95,7 @@ export function buildUppskjutenSkattNot(params: {
   const fmt = (n: number) =>
     Math.round(n).toLocaleString('sv-SE')
   const lines: string[] = [
-    'Uppskjuten skatteskuld avser i huvudsak temporära skillnader på obeskattade reserver (periodiseringsfonder och överavskrivningar), beräknad med skattesatsen 20,6 %.',
+    'Uppskjuten skatteskuld avser i huvudsak temporära skillnader på obeskattade reserver (t.ex. periodiseringsfonder och överavskrivningar), beräknad med skattesatsen 20,6 %.',
     '',
     `Ingående saldo (2240): ${fmt(latentTaxOpening)} kr`,
     `Årets förändring (8940): ${fmt(latentTaxChange)} kr`,

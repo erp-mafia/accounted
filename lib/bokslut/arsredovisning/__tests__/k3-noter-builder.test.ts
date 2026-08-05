@@ -19,6 +19,27 @@ describe('buildK3RedovisningsPrinciper', () => {
     expect(note.body).toContain('Finansiella instrument')
   })
 
+  it('describes uppskjuten skatt per K3 29.37: not separately recognised in juridisk person', () => {
+    const note = buildK3RedovisningsPrinciper(false)
+    // The engine books NO deferred tax on obeskattade reserver (K3 29.37:
+    // gross in juridisk person; the split belongs to koncernredovisning).
+    // The note states that policy and must not claim balansrakningsmetoden
+    // or any recognised uppskjuten skatteskuld on the reserves.
+    expect(note.body).toContain('särredovisas inte i juridisk person')
+    expect(note.body).toContain('inklusive uppskjuten skatteskuld')
+    expect(note.body).not.toMatch(/balansräkningsmetoden/)
+    expect(note.body).not.toMatch(/temporära skillnader mellan redovisade och skattemässiga värden/)
+  })
+
+  it('describes leasing as expensed operational leases, no finance-lease capitalization claim', () => {
+    const note = buildK3RedovisningsPrinciper(false)
+    expect(note.body).toContain('operationella leasingavtal')
+    expect(note.body).toContain('kostnadsförs linjärt')
+    // No code capitalizes leases, so the note must not assert that finance
+    // leases are recognized as assets with a corresponding liability.
+    expect(note.body).not.toMatch(/anläggningstillgång med motsvarande skuld/)
+  })
+
   it('OMITS the komponentavskrivning paragraph when no asset has components', () => {
     const note = buildK3RedovisningsPrinciper(false)
     expect(note.body).not.toMatch(/Komponentavskrivning/)
