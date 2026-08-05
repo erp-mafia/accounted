@@ -53,13 +53,31 @@ function tracingHosts(): string[] {
  *    `seenSurvey_*` flags straight to localStorage, bypassing this setting:
  *    that is functional UI state ("don't ask again"), not tracking.
  *
- * 3. `maskTextSelector: '*'` (PostHog's documented way to mask ALL text) on
- *    top of the default `maskAllInputs`. This is an accounting app: org
- *    numbers (which for an enskild firma ARE the owner's personnummer),
- *    customer names, balances and invoice amounts are rendered as ordinary
- *    text, and PostHog masks inputs but NOT text by default. Replays are for
- *    seeing WHERE a user gets stuck, never WHAT their books say.
+ * 3. Mask-by-default text masking. `maskTextSelector: '*'` routes EVERY text
+ *    node through `maskTextFn`, which masks unless a `data-ph-unmask`
+ *    ancestor opts the node back in. This is an accounting app: org numbers
+ *    (which for a sole proprietorship ARE the owner's personal identity
+ *    number), customer names, balances and invoice amounts are rendered as
+ *    ordinary text, and PostHog masks inputs but NOT text by default.
+ *    Replays are for seeing WHERE a user gets stuck, never WHAT their books
+ *    say.
+ *
+ *    `data-ph-unmask` is for static chrome only (nav labels, headings,
+ *    button text from i18n). User data nested inside an unmasked container
+ *    (active company name, user email, badge counts) gets `data-ph-mask`,
+ *    which wins because `closest()` finds the NEAREST tagged ancestor: when
+ *    both attributes land on the same element, mask still wins.
+ *    Anything untagged stays masked, so a forgotten tag fails safe.
+ *
+ *    The shared form label primitive (`components/ui/label.tsx`) carries
+ *    `data-ph-unmask` by default, so replays show WHICH field a user is
+ *    filling in while `maskAllInputs` keeps the typed value hidden. A call
+ *    site whose label text is user data (e.g. user-defined dimension names)
+ *    must add `data-ph-mask`.
  */
+function maskText(text: string): string {
+  return text.replace(/\S/g, '*')
+}
 if (warnIfAnalyticsMisconfigured() && isAnalyticsEnabled()) {
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN!, {
     api_host: '/rl',
@@ -74,6 +92,13 @@ if (warnIfAnalyticsMisconfigured() && isAnalyticsEnabled()) {
     session_recording: {
       maskAllInputs: true,
       maskTextSelector: '*',
+      maskTextFn: (text: string, element?: HTMLElement): string => {
+        const tagged = element?.closest('[data-ph-unmask],[data-ph-mask]')
+        if (!tagged || tagged.hasAttribute('data-ph-mask')) {
+          return maskText(text)
+        }
+        return text
+      },
     },
     debug: process.env.NODE_ENV === 'development',
   })

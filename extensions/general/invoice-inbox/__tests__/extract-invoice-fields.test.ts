@@ -12,6 +12,25 @@ vi.mock('@anthropic-ai/bedrock-sdk', () => {
   return { default: FakeBedrock }
 })
 
+// sharp is imported lazily by normalizeImageForExtraction. The default mock
+// (no implementation → TypeError on .rotate()) mimics a build without HEIF
+// support: normalization fails, the original buffer flows on. Individual
+// tests install a working chain via sharpMock.mockImplementationOnce.
+const sharpMock = vi.fn()
+vi.mock('sharp', () => ({
+  default: (...args: unknown[]) => sharpMock(...args),
+}))
+
+function workingSharpChain(outputBuffer: Buffer) {
+  const chain = {
+    rotate: vi.fn(() => chain),
+    resize: vi.fn(() => chain),
+    jpeg: vi.fn(() => chain),
+    toBuffer: vi.fn().mockResolvedValue(outputBuffer),
+  }
+  return chain
+}
+
 const ORIG_AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID
 const ORIG_AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY
 
@@ -180,6 +199,134 @@ describe('extractInvoiceFields', () => {
       fileName: 'f.pdf',
     })
     expect(data.lineItems[0].accountSuggestion).toBeNull()
+  })
+
+  // ── Receipt-aware classification fields (2026-08) ──────────
+
+  it('parses the classification fields when the model returns them', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        documentKind: 'receipt',
+        merchantCategory: 'restaurant',
+        legibility: 'good',
+        purchaseTime: '12:41',
+        payment: { method: 'card', cardLast4: '1234' },
+        totals: { ...VALID_RESULT.totals, roundingAmount: -0.25 },
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kvitto.pdf',
+    })
+    expect(data.documentKind).toBe('receipt')
+    expect(data.merchantCategory).toBe('restaurant')
+    expect(data.legibility).toBe('good')
+    expect(data.purchaseTime).toBe('12:41')
+    expect(data.payment).toEqual({ method: 'card', cardLast4: '1234' })
+    expect(data.totals.roundingAmount).toBe(-0.25)
+  })
+
+  it('still parses cached outputs from before the classification fields existed', async () => {
+    // VALID_RESULT has none of the new fields: the whole document must
+    // validate, not fall back to the empty result.
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'old.pdf',
+    })
+    expect(data.supplier.name).toBe('Anthropic, PBC')
+    expect(data.documentKind).toBeUndefined()
+  })
+
+  it('degrades hallucinated classification values to null instead of failing the parse', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse({
+        ...VALID_RESULT,
+        documentKind: 'parking_ticket',
+        merchantCategory: 'nightclub',
+        legibility: 'excellent',
+        purchaseTime: '25:99',
+        payment: { method: 'bitcoin', cardLast4: 'abcd' },
+        totals: { ...VALID_RESULT.totals, roundingAmount: 'noll' },
+      })
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kvitto.pdf',
+    })
+    // Amounts survived: the junk classification did not sink the document.
+    expect(data.totals.total).toBe(6.25)
+    expect(data.documentKind).toBeNull()
+    expect(data.merchantCategory).toBeNull()
+    expect(data.legibility).toBeNull()
+    expect(data.purchaseTime).toBeNull()
+    expect(data.payment).toEqual({ method: null, cardLast4: null })
+    expect(data.totals.roundingAmount).toBeNull()
+  })
+
+  // ── Image normalization (HEIC transcode + oversized downscale) ──
+
+  it('transcodes HEIC to JPEG and extracts when sharp can decode it', async () => {
+    const converted = Buffer.from('converted-jpeg-bytes')
+    sharpMock.mockImplementationOnce(() => workingSharpChain(converted))
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('heic-bytes'),
+      mimeType: 'image/heic',
+      fileName: 'photo.heic',
+    })
+
+    expect(mockCreate).toHaveBeenCalledOnce()
+    const content = mockCreate.mock.calls[0][0].messages[0].content
+    expect(content[0].source.media_type).toBe('image/jpeg')
+    expect(content[0].source.data).toBe(converted.toString('base64'))
+    expect(data.supplier.name).toBe('Anthropic, PBC')
+  })
+
+  it('downscales oversized JPEGs before sending to Bedrock', async () => {
+    const converted = Buffer.from('downscaled-jpeg')
+    sharpMock.mockImplementationOnce(() => workingSharpChain(converted))
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+
+    await extractInvoiceFields({
+      buffer: Buffer.alloc(5 * 1024 * 1024, 1),
+      mimeType: 'image/jpeg',
+      fileName: 'big-photo.jpg',
+    })
+
+    expect(sharpMock).toHaveBeenCalledOnce()
+    const content = mockCreate.mock.calls[0][0].messages[0].content
+    expect(content[0].source.data).toBe(converted.toString('base64'))
+  })
+
+  it('keeps the original buffer when downscaling an oversized image fails', async () => {
+    // Default sharpMock throws: the original 5 MB buffer is still attempted.
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+
+    await extractInvoiceFields({
+      buffer: Buffer.alloc(5 * 1024 * 1024, 1),
+      mimeType: 'image/jpeg',
+      fileName: 'big-photo.jpg',
+    })
+
+    expect(mockCreate).toHaveBeenCalledOnce()
+    const content = mockCreate.mock.calls[0][0].messages[0].content
+    expect(content[0].source.media_type).toBe('image/jpeg')
+  })
+
+  it('does not invoke sharp for normal-sized supported images', async () => {
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    await extractInvoiceFields({
+      buffer: Buffer.from('JPEG'),
+      mimeType: 'image/jpeg',
+      fileName: 'photo.jpg',
+    })
+    expect(sharpMock).not.toHaveBeenCalled()
   })
 
   // Restore env vars so other test files aren't affected.

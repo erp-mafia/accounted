@@ -131,5 +131,21 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "hasOwnData": true,
           "subscriptionNotice": "Denna integration kräver ett eget Stripe-konto. Stripes transaktionsavgifter tillkommer enligt ditt avtal med Stripe."
     },
+    {
+          "slug": "whatsapp-inbox",
+          "name": "WhatsApp-inkorg",
+          "sector": "general",
+          "category": "import",
+          "icon": "MessageCircle",
+          "dataPattern": "both",
+          "description": "Skicka kvitton som foto eller PDF till Accounteds WhatsApp-nummer: de landar i Underlag med avlästa fält",
+          "longDescription": "Koppla ditt mobilnummer med en engångskod och skicka sedan kvitton direkt i WhatsApp. Varje kvitto laddas upp till dokumentarkivet, fält som belopp och datum läses av med AI, och du får en bekräftelse i chatten. Bokföringen sker som vanligt i appen.",
+          "readsCoreTables": [
+                "company_members",
+                "document_attachments",
+                "invoice_inbox_items"
+          ],
+          "hasOwnData": true
+    },
   ],
 }

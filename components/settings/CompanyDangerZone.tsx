@@ -126,7 +126,8 @@ export function CompanyDangerZone() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            <Label htmlFor="company-delete-confirm">
+            {/* data-ph-mask: the label interpolates the company name */}
+            <Label data-ph-mask="" htmlFor="company-delete-confirm">
               {t.rich('danger_confirm_label', {
                 companyName: company.name,
                 strong: (chunks) => <strong>{chunks}</strong>,

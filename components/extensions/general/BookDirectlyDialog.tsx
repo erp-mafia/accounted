@@ -32,13 +32,18 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
-import type { BASAccount, BookingTemplateLibrary, CashAccount, FiscalPeriod, InvoiceExtractionResult } from '@/types'
+import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
+import type { BASAccount, BookingTemplateLibrary, CashAccount, FiscalPeriod, InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
   id: string
   document_id: string | null
   matched_transaction_id: string | null
   extracted_data: InvoiceExtractionResult | null
+  // Verified human answers from the delivering chat (WhatsApp items):
+  // prefills the notes field so representation deltagare + syfte reach the
+  // verifikat. Absent for email/upload items.
+  channel_context?: InboxChannelContext | null
 }
 
 interface PickerTransaction {
@@ -225,7 +230,16 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     const supplier = item.extracted_data?.supplier?.name?.trim() || ''
     const invoiceNum = item.extracted_data?.invoice?.invoiceNumber?.trim() || ''
     setDescription([supplier, invoiceNum].filter(Boolean).join(' · ') || 'Bokföring från inkorg')
-    setNotes('')
+    // WhatsApp items: prefill with the rendered chat context (representation
+    // deltagare + syfte, sender note) so it lands on the verifikat unless the
+    // user edits it away. This is the one place the photo caption is included:
+    // the user reads it here and can change or delete it before booking, which
+    // no other path offers (see channel-context-notes.ts).
+    //
+    // The dialog always submits the field, empty string included, so clearing
+    // the prefill really clears it: the server only defaults when the field is
+    // absent from the request.
+    setNotes(renderChannelContextNotes(item.channel_context, { includeCaption: true }) ?? '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, item.id])
 
@@ -506,7 +520,11 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       fiscal_period_id: periodId,
       entry_date: entryDate,
       description: description.trim(),
-      notes: notes.trim() || undefined,
+      // Always send the field, '' included: the server treats an absent
+      // `notes` as "default it from the chat context" and a present one as
+      // the user's own value. Sending undefined for a cleared prefill would
+      // resurrect the text the user just deleted onto an immutable verifikat.
+      notes: notes.trim(),
       lines: lines.map((l) => ({
         account_number: l.account_number.trim(),
         debit_amount: parseFloat(l.debit_amount) || 0,
