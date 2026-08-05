@@ -155,8 +155,8 @@ export async function settleInvoicePayment(
   // The generated cash entry (createInvoiceCashEntry) books the FULL invoice
   // and takes no payment amount, so a never-booked kontantmetoden invoice can
   // only be settled in full from a fully unpaid state. Partials used to book
-  // the entire revenue + moms against a smaller bank movement (ML 13 kap 8 §
-  // puts each installment's moms in its own receipt period), and completing a
+  // the entire revenue + moms against a smaller bank movement (bokslutsmetoden
+  // reports moms at payment, per installment), and completing a
   // prior partial would book the full total a second time. Custom lines are
   // NOT exempt: the dialog pre-fills the same full-invoice shape, so lines
   // would book the identical error under a user-shaped label.

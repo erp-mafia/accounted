@@ -2544,8 +2544,8 @@ async function commitMatchTransactionInvoice(
   // Reject cash-method partials and part-paid completions on never-booked
   // invoices BEFORE the irreversible storno below. The old fallback booked an
   // accrual-style clearing entry against an EMPTY 1510 (negative receivable,
-  // no revenue, no moms: ML 13 kap 8 § puts each installment's moms in its
-  // own receipt period), and the cash builder books the FULL invoice, so
+  // no revenue, no moms: bokslutsmetoden reports moms at payment, per
+  // installment), and the cash builder books the FULL invoice, so
   // neither shape is bookable here. Mirrors the dashboard and v1 match routes.
   const cashBlock = cashPartialBlockReason({
     invoiceAlreadyBooked,

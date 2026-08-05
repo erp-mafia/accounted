@@ -424,8 +424,8 @@ export const POST = withRouteContext(
     // Reject cash-method partial payments and part-paid completions for pure
     // kontantmetoden invoices (no prior JE), mirroring the v1 route. The old
     // partial fallback booked an accrual-style clearing entry against an
-    // EMPTY 1510 (negative receivable, no revenue, no moms: ML 13 kap 8 §
-    // puts each installment's moms in its own receipt period), and the
+    // EMPTY 1510 (negative receivable, no revenue, no moms: bokslutsmetoden
+    // reports moms at payment, per installment), and the
     // "resolved on final payment" theory was wrong: createInvoiceCashEntry
     // never touches 1510 and books the FULL total, so the final payment
     // double-debited the bank account instead. When the invoice was already

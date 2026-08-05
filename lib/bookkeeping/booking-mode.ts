@@ -32,8 +32,9 @@ export function booksInvoicesOnIssue(
  * unpaid state:
  *
  * - a partial payment would book the whole invoice against a smaller bank
- *   movement and declare the whole VAT at once, but under kontantmetoden each
- *   installment's moms belongs to its own receipt period (ML 13 kap 8 §);
+ *   movement and declare the whole VAT at once, but bokslutsmetoden reports
+ *   moms at payment, so each installment's moms belongs to its own receipt
+ *   period;
  * - completing a previously part-paid invoice would book the full total a
  *   second time on the settlement account.
  *

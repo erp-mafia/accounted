@@ -335,9 +335,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // The generated cash entry books the FULL invoice and takes no payment
     // amount: reject partials and part-paid completions for never-booked
-    // kontantmetoden invoices (mirrors the v1 match-invoice guard; under
-    // kontantmetoden each installment's moms belongs to its own receipt
-    // period, ML 13 kap 8 §). Custom lines are not exempt: they would book
+    // kontantmetoden invoices (mirrors the v1 match-invoice guard;
+    // bokslutsmetoden reports moms at payment, so each installment's moms
+    // belongs to its own receipt period). Custom lines are not exempt: they would book
     // the same full-invoice shape under a user-shaped label.
     const cashBlock = cashPartialBlockReason({
       invoiceAlreadyBooked,
