@@ -56,10 +56,11 @@ function tracingHosts(): string[] {
  * 3. Mask-by-default text masking. `maskTextSelector: '*'` routes EVERY text
  *    node through `maskTextFn`, which masks unless a `data-ph-unmask`
  *    ancestor opts the node back in. This is an accounting app: org numbers
- *    (which for an enskild firma ARE the owner's personnummer), customer
- *    names, balances and invoice amounts are rendered as ordinary text, and
- *    PostHog masks inputs but NOT text by default. Replays are for seeing
- *    WHERE a user gets stuck, never WHAT their books say.
+ *    (which for a sole proprietorship ARE the owner's personal identity
+ *    number), customer names, balances and invoice amounts are rendered as
+ *    ordinary text, and PostHog masks inputs but NOT text by default.
+ *    Replays are for seeing WHERE a user gets stuck, never WHAT their books
+ *    say.
  *
  *    `data-ph-unmask` is for static chrome only (nav labels, headings,
  *    button text from i18n). User data nested inside an unmasked container
