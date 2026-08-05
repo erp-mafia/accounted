@@ -77,9 +77,13 @@ const SV = {
       'Två tips: skicka som _dokument_ (gem-ikonen) för bästa skärpa, och en fil per kvitto. Flersidiga kvitton skickas som PDF.'
     const outro =
       'Jag är en AI-assistent. Skriv *hjälp* för mänsklig support, *stopp* för att koppla från.'
+    // Two real ways to route a receipt, and the old copy named only one,
+    // which read as if the per-receipt path did not exist. Own paragraph:
+    // run together with the outro it read as a single sentence.
     const multi =
       companyCount > 1
-        ? `Du är med i ${companyCount} företag i Accounted. Välj standardföretag i panelen så hamnar kvitton rätt. `
+        ? `Du är med i ${companyCount} företag i Accounted. Välj antingen ett standardföretag i panelen, ` +
+          'eller skicka ett kvitto i taget så frågar jag vilket företag det gäller direkt efter varje kvitto.\n\n'
         : ''
     return `${intro}\n\n${tips}\n\n${multi}${outro}`
   },
@@ -206,7 +210,8 @@ const EN: typeof SV = {
       'I am an AI assistant. Type *hjälp* for human support, *stopp* to disconnect.'
     const multi =
       companyCount > 1
-        ? `You belong to ${companyCount} companies in Accounted. Pick a default company in the panel so receipts land in the right one. `
+        ? `You belong to ${companyCount} companies in Accounted. Either pick a default company in the panel, ` +
+          'or send one receipt at a time and I will ask which company it belongs to right after each one.\n\n'
         : ''
     return `${intro}\n\n${tips}\n\n${multi}${outro}`
   },
