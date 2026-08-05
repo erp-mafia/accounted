@@ -1035,15 +1035,12 @@ export default function ArsredovisningPage() {
               </Button>
             </span>
           </div>
-          <div
-            inert={INLAMNING_COMING_SOON}
-            aria-hidden={INLAMNING_COMING_SOON}
-            className={
-              INLAMNING_COMING_SOON
-                ? 'pointer-events-none select-none blur-[3px] opacity-60 space-y-4'
-                : 'space-y-4'
-            }
-          >
+          {/* The warning list stays SHARP even while direct submission is
+              gated: the warnings describe problems in the user's own report
+              (unmapped accounts, resultat vs 2099, AGM dates) and apply to
+              the paper PDF just as much as to digital inlämning. Blurring
+              them alongside the coming-soon Bolagsverket parts made the
+              pre-submission checklist unreadable in the default config. */}
           {data.warnings.length > 0 && (
             <div className="space-y-1 border-t border-border/60 pt-3 text-xs">
               <p className="font-medium">Innan inlämning till Bolagsverket:</p>
@@ -1054,13 +1051,20 @@ export default function ArsredovisningPage() {
               </ul>
             </div>
           )}
-          <p className="text-xs text-muted-foreground">
+          <p
+            inert={INLAMNING_COMING_SOON}
+            aria-hidden={INLAMNING_COMING_SOON}
+            className={
+              INLAMNING_COMING_SOON
+                ? 'pointer-events-none select-none blur-[3px] opacity-60 text-xs text-muted-foreground'
+                : 'text-xs text-muted-foreground'
+            }
+          >
             <strong className="text-foreground">Digital inlämning är frivillig.</strong> Den görs som iXBRL genom en
             ansluten programvara. Accounteds direktinlämning förblir stängd tills avtal,
             certifikat och Bolagsverkets acceptanstest är klara. PDF-flödet ovan är den
             separata vägen för pappersinlämning.
           </p>
-          </div>
         </div>
       </section>
 
