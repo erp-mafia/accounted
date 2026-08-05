@@ -217,6 +217,60 @@ describe('answer flow (text rows through processInboundMessage)', () => {
     expect(confirm.inboxItemId).toBe('item-9')
   })
 
+  // Skatteverket needs participants AND purpose. An answer with only the
+  // names used to be accepted silently, leaving the deduction undocumented
+  // (found in the first live receipt, 2026-08-05).
+  it('participants without a purpose: asks once for the purpose and keeps the question open', async () => {
+    interpretMock.mockResolvedValue({
+      ok: true,
+      data: {
+        is_denial: false,
+        participants: [{ name: 'Elias Karlsson', company: 'Canguro Media' }],
+        purpose: null,
+        event_date: null,
+        note: null,
+      },
+    })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeTextRow('Elias Karlsson från Canguro Media') })
+    enqueue({ data: { id: 'msg-t1' } })
+    enqueue({ data: makeLink() })
+    enqueue({ data: awaitingConversation('representation') })
+    enqueue({ data: openItemContext('representation') })
+    enqueue({ data: null }) // item update
+    enqueue({ data: null }) // conversation update
+    enqueue({ data: { company_id: 'company-1', correlation_id: null } })
+    enqueue({ data: awaitingConversation('representation', { state: 'idle', context: {} }) })
+    enqueue({ data: null }) // markStatus
+
+    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-t1')
+
+    const itemPatch = findCalls('invoice_inbox_items', 'update')[0][0] as {
+      channel_context: {
+        representation: { participants: unknown[]; purpose: string | null }
+        pending_question?: { status?: string }
+      }
+    }
+    // Names are kept, and the question stays OPEN for the missing half.
+    expect(itemPatch.channel_context.representation.participants).toHaveLength(1)
+    expect(itemPatch.channel_context.representation.purpose).toBeNull()
+    expect(itemPatch.channel_context.pending_question?.status).toBe('open')
+
+    // The follow-up asks only for the purpose, never for the names again.
+    const reply = sendTextMock.mock.calls[0][1]
+    expect(reply.template).toBe(TEMPLATE.m8RepNeedPurpose)
+    expect(reply.body).toContain('Elias Karlsson (Canguro Media)')
+    expect(reply.body.toLowerCase()).toContain('syftet')
+
+    // Conversation must NOT go idle, or the next reply draws the fallback.
+    const conversationPatch = findCalls('whatsapp_conversations', 'update')[0][0] as {
+      state: string
+      context: { pending_question?: unknown }
+    }
+    expect(conversationPatch.state).toBe('awaiting_representation')
+    expect(conversationPatch.context.pending_question).toBeDefined()
+  })
+
   it('garbage interpretation degrades to raw-note storage + M8 partial (no retry, no error)', async () => {
     interpretMock.mockResolvedValue({ ok: false })
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()

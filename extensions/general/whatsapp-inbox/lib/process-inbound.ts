@@ -1044,6 +1044,9 @@ async function processAnswerMessage(
     const nowIso = new Date().toISOString()
     let confirmBody: string
     let confirmTemplate: TemplateId
+    /** Set when the answer named participants but no purpose: the question
+     *  stays open for exactly one targeted follow-up. */
+    let keepOpenForPurpose = false
 
     if (target.type === 'representation' && text.toLowerCase() === 'nej') {
       // Exact 'nej' short-circuits WITHOUT an LLM call.
@@ -1096,25 +1099,48 @@ async function processAnswerMessage(
           ((interpretation.data.participants?.length ?? 0) > 0 || interpretation.data.purpose)
         ) {
           const data = interpretation.data
-          await updateItemContext(supabase, target.inboxItemId, (itemContext) => ({
-            ...itemContext,
-            representation: {
-              participants: data.participants ?? [],
-              purpose: data.purpose,
-              event_date: data.event_date,
-              raw_answer: text,
-              answered_at: nowIso,
-            },
-            ...(data.note ? { user_note: data.note } : {}),
-            pending_question: itemContext.pending_question
-              ? { ...itemContext.pending_question, status: 'answered' }
-              : undefined,
-          }))
-          confirmBody = copy.m8RepConfirmed({
-            participants: renderParticipants(data.participants ?? []),
-            purpose: data.purpose,
+          await updateItemContext(supabase, target.inboxItemId, (itemContext) => {
+            // Skatteverket wants participants AND purpose; an answer with
+            // only the names used to be accepted silently, leaving the
+            // deduction undocumented. Ask once more for the missing half,
+            // and only once: if a previous answer already wrote a
+            // representation block, take whatever we have and stop.
+            const isFirstAnswer = itemContext.representation == null
+            keepOpenForPurpose =
+              isFirstAnswer && (data.participants?.length ?? 0) > 0 && !data.purpose
+            return {
+              ...itemContext,
+              representation: {
+                participants: data.participants ?? [],
+                // A follow-up must not erase a purpose captured earlier.
+                purpose: data.purpose ?? itemContext.representation?.purpose ?? null,
+                event_date: data.event_date ?? itemContext.representation?.event_date ?? null,
+                raw_answer: itemContext.representation
+                  ? `${itemContext.representation.raw_answer}\n${text}`
+                  : text,
+                answered_at: nowIso,
+              },
+              ...(data.note ? { user_note: data.note } : {}),
+              pending_question: itemContext.pending_question
+                ? {
+                    ...itemContext.pending_question,
+                    status: keepOpenForPurpose ? 'open' : 'answered',
+                  }
+                : undefined,
+            }
           })
-          confirmTemplate = TEMPLATE.m8RepConfirmed
+          if (keepOpenForPurpose) {
+            confirmBody = copy.m8RepNeedPurpose({
+              participants: renderParticipants(data.participants ?? []),
+            })
+            confirmTemplate = TEMPLATE.m8RepNeedPurpose
+          } else {
+            confirmBody = copy.m8RepConfirmed({
+              participants: renderParticipants(data.participants ?? []),
+              purpose: data.purpose ?? null,
+            })
+            confirmTemplate = TEMPLATE.m8RepConfirmed
+          }
         } else {
           await updateItemContext(supabase, target.inboxItemId, (itemContext) => ({
             ...itemContext,
@@ -1165,10 +1191,17 @@ async function processAnswerMessage(
         recent_questions: markRecentQuestion(currentContext, target.inboxItemId, 'answered'),
       }
       nextState = current.state
-      if (!target.late && currentContext.pending_question?.inbox_item_id === target.inboxItemId) {
+      if (
+        !target.late &&
+        !keepOpenForPurpose &&
+        currentContext.pending_question?.inbox_item_id === target.inboxItemId
+      ) {
         delete patchContext.pending_question
         nextState = 'idle'
       }
+      // keepOpenForPurpose: leave the pending question and the awaiting
+      // state in place so the next free-text reply routes back to this same
+      // receipt instead of drawing the M16 fallback.
       return { state: nextState, context: patchContext }
     })
 
