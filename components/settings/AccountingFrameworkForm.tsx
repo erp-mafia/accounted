@@ -106,8 +106,8 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
             K2 är standard för mindre bolag och innebär förenklade regler. K3 krävs när
             bolaget når två av tre tröskelvärden (nettoomsättning &gt; 80 MSEK, tillgångar
             &gt; 40 MSEK, eller fler än 50 anställda). K3 ställer högre krav: kassaflödesanalys,
-            komponentavskrivning på materiella anläggningstillgångar och redovisning av
-            uppskjuten skatt på obeskattade reserver (79,4 % eget kapital / 20,6 % skuld).
+            komponentavskrivning på materiella anläggningstillgångar och mer omfattande noter.
+            Obeskattade reserver redovisas brutto i juridisk person enligt K3 punkt 29.37.
           </>
         }
       >
@@ -153,8 +153,9 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
               ) : (
                 <>
                   <span className="block">
-                    K3 medför löpande att kassaflödesanalys upprättas, komponentavskrivning
-                    används och uppskjuten skatt redovisas separat (konto 2240 / 8940).
+                    K3 medför löpande att kassaflödesanalys upprättas, att
+                    komponentavskrivning kan användas och att årsredovisningen får ett
+                    utökat notinnehåll.
                   </span>
                   <span className="block">
                     Bytet är permanent enligt rekommendation. Fortsätt?
