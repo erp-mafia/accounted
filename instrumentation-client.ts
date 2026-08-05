@@ -65,8 +65,15 @@ function tracingHosts(): string[] {
  *    `data-ph-unmask` is for static chrome only (nav labels, headings,
  *    button text from i18n). User data nested inside an unmasked container
  *    (active company name, user email, badge counts) gets `data-ph-mask`,
- *    which wins because `closest()` finds the NEAREST tagged ancestor.
+ *    which wins because `closest()` finds the NEAREST tagged ancestor: when
+ *    both attributes land on the same element, mask still wins.
  *    Anything untagged stays masked, so a forgotten tag fails safe.
+ *
+ *    The shared form label primitive (`components/ui/label.tsx`) carries
+ *    `data-ph-unmask` by default, so replays show WHICH field a user is
+ *    filling in while `maskAllInputs` keeps the typed value hidden. A call
+ *    site whose label text is user data (e.g. user-defined dimension names)
+ *    must add `data-ph-mask`.
  */
 function maskText(text: string): string {
   return text.replace(/\S/g, '*')
