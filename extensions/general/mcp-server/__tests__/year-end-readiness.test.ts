@@ -71,6 +71,12 @@ describe('gnubok_year_end_readiness: execute', () => {
   it('classifies common error strings into structured kinds', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue({
       ready: false,
+      blockers: [
+        { code: 'DRAFT_ENTRIES', message: '3 utkast måste bokföras eller raderas innan bokslut' },
+        { code: 'UNEXPLAINED_VOUCHER_GAP', message: 'Oförklarat verifikationsnummerglapp i serie A: 5-7' },
+        { code: 'TRIAL_BALANCE_UNBALANCED', message: 'Råbalansen balanserar inte: debet=100, kredit=200' },
+        { code: 'SEQUENCE_COUNTER_BEHIND', message: 'Sequence counter integrity error in series A: counter=3 but max voucher=5' },
+      ],
       errors: [
         // Current Swedish wording from validateYearEndReadiness…
         '3 utkast måste bokföras eller raderas innan bokslut',
@@ -118,6 +124,7 @@ describe('gnubok_year_end_readiness: execute', () => {
   it('skips preview when not requested even if ready', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue({
       ready: true,
+      blockers: [],
       errors: [],
       warnings: [],
       draftCount: 0,
@@ -148,6 +155,7 @@ describe('gnubok_year_end_readiness: execute', () => {
   it('returns the preview when include_preview=true and ready', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue({
       ready: true,
+      blockers: [],
       errors: [],
       warnings: [],
       draftCount: 0,

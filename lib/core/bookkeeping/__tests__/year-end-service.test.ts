@@ -279,6 +279,44 @@ describe('validateYearEndReadiness', () => {
     const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
     expect(result.ready).toBe(false)
     expect(result.errors.some((e: string) => e.includes('utkast'))).toBe(true)
+    expect(result.blockers.some((b) => b.code === 'DRAFT_ENTRIES')).toBe(true)
+    // errors is the message mirror of blockers: same order, same strings.
+    expect(result.errors).toEqual(result.blockers.map((b) => b.message))
+  })
+
+  it('returns a coded PERIOD_NOT_FOUND blocker when the period is missing', async () => {
+    results = [{ data: null, error: { message: 'not found' } }]
+
+    const supabase = makeClient()
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-x')
+    expect(result.ready).toBe(false)
+    expect(result.blockers).toEqual([
+      { code: 'PERIOD_NOT_FOUND', message: 'Räkenskapsperioden hittades inte' },
+    ])
+    expect(result.errors).toEqual(['Räkenskapsperioden hittades inte'])
+  })
+
+  it('codes closed-period, existing closing entry, and continuity blockers', async () => {
+    const period = {
+      ...makeFiscalPeriod({ id: 'fp-1', is_closed: true, closing_entry_id: 'ce-1' }),
+      continuity_verified: false,
+    }
+    results = noGapResults(period)
+
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 0,
+      totalCredit: 0,
+    } as never)
+
+    const supabase = makeClient()
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+    expect(result.ready).toBe(false)
+    const codes = result.blockers.map((b) => b.code)
+    expect(codes).toContain('PERIOD_ALREADY_CLOSED')
+    expect(codes).toContain('CLOSING_ENTRY_EXISTS')
+    expect(codes).toContain('CONTINUITY_MISMATCH')
   })
 
   it('returns errors when trial balance is unbalanced', async () => {
@@ -297,6 +335,7 @@ describe('validateYearEndReadiness', () => {
     expect(result.ready).toBe(false)
     expect(result.trialBalanceBalanced).toBe(false)
     expect(result.errors.some((e: string) => e.includes('Råbalansen balanserar inte'))).toBe(true)
+    expect(result.blockers.some((b) => b.code === 'TRIAL_BALANCE_UNBALANCED')).toBe(true)
   })
 
   it('returns error when period has not yet ended', async () => {
@@ -319,6 +358,7 @@ describe('validateYearEndReadiness', () => {
     const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
     expect(result.ready).toBe(false)
     expect(result.errors.some((e: string) => e.includes('slutdatumet har inte passerat'))).toBe(true)
+    expect(result.blockers.some((b) => b.code === 'PERIOD_NOT_ENDED')).toBe(true)
   })
 
   it('warns on explained voucher gaps', async () => {
@@ -400,6 +440,7 @@ describe('validateYearEndReadiness', () => {
     const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
     expect(result.ready).toBe(false)
     expect(result.errors.some((e: string) => e.includes('Oförklarat verifikationsnummerglapp'))).toBe(true)
+    expect(result.blockers.some((b) => b.code === 'UNEXPLAINED_VOUCHER_GAP')).toBe(true)
     expect(result.unexplainedGaps).toHaveLength(1)
     expect(result.unexplainedGaps[0]).toEqual({ gap_start: 5, gap_end: 7, series: 'A' })
   })
@@ -481,6 +522,7 @@ describe('validateYearEndReadiness', () => {
     const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
     expect(result.ready).toBe(false)
     expect(result.errors.some((e: string) => e.includes('Nummerserien i serie'))).toBe(true)
+    expect(result.blockers.some((b) => b.code === 'SEQUENCE_COUNTER_BEHIND')).toBe(true)
     expect(result.sequenceMismatches).toHaveLength(1)
     expect(result.sequenceMismatches[0]).toEqual({ series: 'A', sequenceCounter: 5, actualMax: 10 })
   })
@@ -563,6 +605,7 @@ describe('validateYearEndReadiness', () => {
     const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
     expect(result.ready).toBe(false)
     expect(result.errors.some((e: string) => e.includes('redan ingående balanser bokförda'))).toBe(true)
+    expect(result.blockers.some((b) => b.code === 'NEXT_PERIOD_HAS_IB')).toBe(true)
   })
 })
 

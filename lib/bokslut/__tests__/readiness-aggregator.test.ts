@@ -68,6 +68,7 @@ function makeSupabase(handlers: {
 function baseValidation(overrides: Partial<YearEndValidation> = {}): YearEndValidation {
   return {
     ready: true,
+    blockers: [],
     errors: [],
     warnings: [],
     draftCount: 0,
@@ -118,6 +119,7 @@ describe('buildBokslutReadinessReport', () => {
 
     expect(report.ready).toBe(true)
     expect(report.blockers).toEqual([])
+    expect(report.blockerItems).toEqual([])
     expect(report.entityType).toBe('aktiebolag')
     // Phase 3 handles depreciation + bolagsskatt + p-fond automatically: only
     // the accruals reminder should remain (Phase 4 will replace it).
@@ -181,6 +183,9 @@ describe('buildBokslutReadinessReport', () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(
       baseValidation({
         ready: false,
+        blockers: [
+          { code: 'DRAFT_ENTRIES', message: '3 utkast måste bokföras eller raderas innan bokslut' },
+        ],
         errors: ['3 utkast måste bokföras eller raderas innan bokslut'],
         draftCount: 3,
       }),
@@ -195,6 +200,11 @@ describe('buildBokslutReadinessReport', () => {
 
     expect(report.ready).toBe(false)
     expect(report.blockers).toHaveLength(1)
+    // The code+message pairs pass through untouched so the wizard can match
+    // remediation links on the stable code.
+    expect(report.blockerItems).toEqual([
+      { code: 'DRAFT_ENTRIES', message: '3 utkast måste bokföras eller raderas innan bokslut' },
+    ])
     expect(report.draftCount).toBe(3)
   })
 

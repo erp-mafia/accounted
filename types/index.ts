@@ -3394,8 +3394,36 @@ export interface SequenceMismatch {
 // Year-End Closing Types (Årsbokslut)
 // ============================================================
 
+/**
+ * Stable machine codes for year-end readiness blockers. One code per
+ * blockers.push site in validateYearEndReadiness: the wizard matches on
+ * these to attach remediation links, so codes must never be renamed once
+ * shipped. The Swedish message stays the display text.
+ */
+export type YearEndBlockerCode =
+  | 'PERIOD_NOT_FOUND'
+  | 'PERIOD_NOT_ENDED'
+  | 'PERIOD_ALREADY_CLOSED'
+  | 'CLOSING_ENTRY_EXISTS'
+  | 'DRAFT_ENTRIES'
+  | 'UNEXPLAINED_VOUCHER_GAP'
+  | 'SEQUENCE_COUNTER_BEHIND'
+  | 'TRIAL_BALANCE_UNBALANCED'
+  | 'CONTINUITY_MISMATCH'
+  | 'NEXT_PERIOD_HAS_IB'
+
+export interface YearEndBlocker {
+  code: YearEndBlockerCode
+  /** Swedish, user-facing: bokslut is a stays-Swedish surface. */
+  message: string
+}
+
 export interface YearEndValidation {
   ready: boolean
+  /** Blocking errors with stable machine codes. */
+  blockers: YearEndBlocker[]
+  /** Blocker messages only; mirrors `blockers`. Kept so existing consumers
+   *  of the string list (v1 compliance check, MCP tool) stay unchanged. */
   errors: string[]
   warnings: string[]
   draftCount: number
