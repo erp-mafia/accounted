@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-payment-lines'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -144,6 +145,22 @@ export const GET = withRouteContext(
     const fullSettlement =
       transaction.currency !== si.currency ||
       txAmountAbs >= remainingInvoiceCurrency - 0.005
+
+    // The POST handler rejects cash-method partials and part-paid completions
+    // for never-booked invoices (the cash builder books the full invoice), so
+    // refuse to preview lines it will never book.
+    const cashBlock = cashPartialBlockReason({
+      invoiceAlreadyBooked: siAlreadyBooked,
+      accountingMethod,
+      priorPaidAmount: (si as { paid_amount?: number | null }).paid_amount,
+      paysRemainingInFull: fullSettlement,
+    })
+    if (cashBlock) {
+      return errorResponseFromCode('SI_CASH_PARTIAL_UNSUPPORTED', log, {
+        requestId,
+        details: { reason: cashBlock },
+      })
+    }
 
     const lines: PreviewLine[] = []
     let entryType: 'clearing' | 'cash' = 'clearing'
