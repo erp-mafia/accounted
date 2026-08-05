@@ -1383,6 +1383,12 @@ export const BookInboxItemDirectlySchema = z.object({
   fiscal_period_id: uuid,
   entry_date: isoDate,
   description: z.string().min(1, 'Beskrivning krävs'),
+  // `.optional()` here carries meaning the route depends on: ABSENT means
+  // "caller has no opinion", so the route may default the notes from the
+  // item's chat context, while an explicit '' means the user cleared the
+  // prefilled note and nothing must be written back onto the verifikat.
+  // Keep it `.optional()`, never `.default('')` or a min(1): both would
+  // collapse those two cases into one.
   notes: z.string().max(2000).optional(),
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'Minst två rader krävs för dubbel bokföring'),
   transaction_id: uuid.optional(),

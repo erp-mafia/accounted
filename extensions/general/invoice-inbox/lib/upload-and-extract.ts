@@ -109,6 +109,24 @@ export interface EmailMeta {
   resendAttachmentId?: string | null
 }
 
+// Chat-channel provenance (whatsapp-inbox extension). When present, the inbox
+// row links back to the delivering whatsapp_messages row and seeds
+// channel_context (kept OUT of extracted_data: retry-extraction overwrites
+// that container wholesale, and chat context must survive it).
+export interface ChannelMeta {
+  whatsappMessageId?: string
+  caption?: string | null
+}
+
+// Captions are attacker-adjacent free text from a chat client: strip control
+// characters and cap length before they land in a jsonb column read by the UI.
+function sanitiseCaption(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  // eslint-disable-next-line no-control-regex
+  const cleaned = raw.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim().slice(0, 500)
+  return cleaned || null
+}
+
 // ── Shared helper: upload + extract + create inbox item ──────
 
 export async function uploadAndExtract(
@@ -116,14 +134,20 @@ export async function uploadAndExtract(
   userId: string,
   companyId: string,
   file: { name: string; buffer: ArrayBuffer; type: string },
-  source: 'upload' | 'email',
+  source: 'upload' | 'email' | 'whatsapp',
   emailMeta?: EmailMeta,
   // Pre-match the new inbox item to a bank transaction. Set when the caller
   // already knows which transaction this receipt belongs to (e.g. the
   // VerifyAndBookOverlay opened from a transaction row's paperclip or from
   // a transaction-anchored chat). Skipped silently if missing.
   matchedTransactionId?: string | null,
-  opts: { skipExtraction?: boolean } = {},
+  opts: {
+    skipExtraction?: boolean
+    channelMeta?: ChannelMeta
+    /** Overrides the system actor id on the DocumentIngested history event.
+     *  Omitted = today's behavior (resend-inbound for email, user otherwise). */
+    actorId?: string
+  } = {},
 ) {
   const correlationId = crypto.randomUUID()
 
@@ -132,7 +156,7 @@ export async function uploadAndExtract(
     buffer: file.buffer,
     type: file.type,
   }, {
-    upload_source: source === 'email' ? 'email' : 'file_upload',
+    upload_source: source === 'email' ? 'email' : source === 'whatsapp' ? 'whatsapp' : 'file_upload',
   })
 
   try {
@@ -148,7 +172,11 @@ export async function uploadAndExtract(
         mime_type: file.type,
         size_bytes: file.buffer.byteLength,
       },
-      actor: source === 'email' ? { type: 'system', id: 'resend-inbound' } : { type: 'user', id: userId },
+      actor: opts.actorId
+        ? { type: 'system', id: opts.actorId }
+        : source === 'email'
+          ? { type: 'system', id: 'resend-inbound' }
+          : { type: 'user', id: userId },
       occurredAt: new Date(),
     })
   } catch (err) {
@@ -256,6 +284,13 @@ export async function uploadAndExtract(
         : null,
       correlation_id: correlationId,
       matched_transaction_id: matchedTransactionId ?? null,
+      // Chat-channel provenance. Explicit nulls (not a conditional spread)
+      // keep the payload statically checkable; a null insert is identical to
+      // omitting the column, so the email/upload behavior is unchanged.
+      whatsapp_message_id: opts.channelMeta?.whatsappMessageId ?? null,
+      channel_context: opts.channelMeta
+        ? { channel: 'whatsapp', caption: sanitiseCaption(opts.channelMeta.caption) }
+        : null,
     })
     .select('*')
     .single()

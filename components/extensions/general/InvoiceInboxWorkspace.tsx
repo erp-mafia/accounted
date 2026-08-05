@@ -35,6 +35,7 @@ import {
   X,
   ChevronDown,
   Sparkles,
+  MessageCircle,
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -44,7 +45,8 @@ import { copyInboxAddress, type AddressCopyState } from '@/components/extensions
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
-import type { InvoiceExtractionResult } from '@/types'
+import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
+import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
 import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
@@ -61,7 +63,7 @@ type AccountingMethod = 'accrual' | 'cash'
 interface InboxItem {
   id: string
   status: 'received' | 'error'
-  source: 'email' | 'upload'
+  source: 'email' | 'upload' | 'whatsapp'
   created_at: string
   email_from: string | null
   email_subject: string | null
@@ -84,6 +86,10 @@ interface InboxItem {
   // Distinct from status='error' (extraction failed) and from extracted_data
   // having empty fields (extraction ran but found nothing).
   extraction_skipped: boolean
+  // Verified human answers from the delivering chat (source='whatsapp'):
+  // photo caption, representation deltagare + syfte, sender note, and the
+  // open-question state. Null/absent for email and upload items.
+  channel_context?: InboxChannelContext | null
   // Set client-side only while a manual upload is in flight. Replaced by a
   // real server-side row once the AI extraction completes.
   isPlaceholder?: boolean
@@ -1349,6 +1355,7 @@ function InboxRow({
       checkbox visible (otherwise it's hover-only on desktop). */
   anyChecked: boolean
 }) {
+  const t = useTranslations('inbox_workspace')
   const amount = pickAmount(item)
   const supplierName = pickSupplierName(item)
   const isPlaceholder = !!item.isPlaceholder
@@ -1356,6 +1363,11 @@ function InboxRow({
   const isErrored = status === 'error'
   const isBooked = status === 'booked'
   const isLinkedToTransaction = status === 'linked'
+  // A chat question the sender never answered (48h TTL hit): the missing
+  // info should be completed here instead. Quiet hint, not a status: the
+  // item still books normally. Booked items drop the reminder.
+  const hasUnansweredQuestion =
+    !isBooked && item.channel_context?.pending_question?.status === 'moved_to_app'
 
   return (
     <li
@@ -1396,6 +1408,8 @@ function InboxRow({
             <Loader2 className="h-3 w-3 text-muted-foreground shrink-0 animate-spin" />
           ) : item.source === 'email' ? (
             <Mail className="h-3 w-3 text-muted-foreground shrink-0" />
+          ) : item.source === 'whatsapp' ? (
+            <MessageCircle className="h-3 w-3 text-muted-foreground shrink-0" />
           ) : (
             <Upload className="h-3 w-3 text-muted-foreground shrink-0" />
           )}
@@ -1417,9 +1431,16 @@ function InboxRow({
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           {isPlaceholder ? (
             <span className="italic">Tolkar dokument med AI…</span>
-          ) : item.extraction_skipped ? (
+          ) : item.extraction_skipped || hasUnansweredQuestion ? (
             <span className="flex items-center gap-1.5 min-w-0">
-              <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
+              {item.extraction_skipped && (
+                <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
+              )}
+              {hasUnansweredQuestion && (
+                <Badge variant="outline" className="font-normal text-attn border-attn/40">
+                  {t('wa_question_badge')}
+                </Badge>
+              )}
               <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
             </span>
           ) : (
@@ -1780,6 +1801,24 @@ function FieldsRail({
   const [isRetrying, setIsRetrying] = useState(false)
   const t = useTranslations('inbox_workspace')
 
+  // WhatsApp chat context: verified human answers captured by the intake bot
+  // (photo caption, representation deltagare + syfte, sender note). Rendered
+  // as read-only provenance above the editable fields, mirroring the email
+  // metadata block. `moved_to_app` means the bot asked a question in the chat
+  // that was never answered (48h TTL): the missing info should be completed
+  // here before booking.
+  const waCtx = item.source === 'whatsapp' ? item.channel_context ?? null : null
+  const waParticipants = (waCtx?.representation?.participants ?? [])
+    .map(renderChannelParticipant)
+    .filter((n) => n.length > 0)
+  const waPurpose = waCtx?.representation?.purpose?.trim() || null
+  const waCaption = waCtx?.caption?.trim() || null
+  const waNote = waCtx?.user_note?.trim() || null
+  const waUnanswered =
+    !isResolved && waCtx?.pending_question?.status === 'moved_to_app'
+  const showWaBlock =
+    waParticipants.length > 0 || !!waPurpose || !!waCaption || !!waNote || waUnanswered
+
   // Surface a quiet hint when extraction caught a supplier name but no existing
   // supplier matched. The actual creation flow lives on the leverantörsfaktura
   // form (Skapa & välj), so we don't render a separate button here.
@@ -1837,6 +1876,42 @@ function FieldsRail({
               <span className="text-muted-foreground w-14 shrink-0">Mottaget</span>
               <span>{new Date(item.email_received_at).toLocaleString('sv-SE')}</span>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* WhatsApp chat context (see waCtx derivation above). */}
+      {showWaBlock && (
+        <div className="border-b px-4 py-3 text-xs space-y-1">
+          <h3 className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-2">
+            {t('wa_block_title')}
+          </h3>
+          {waCaption && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-20 shrink-0">{t('wa_caption_label')}</span>
+              <span className="break-words min-w-0">{waCaption}</span>
+            </div>
+          )}
+          {waParticipants.length > 0 && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-20 shrink-0">{t('wa_participants_label')}</span>
+              <span className="break-words min-w-0">{waParticipants.join(', ')}</span>
+            </div>
+          )}
+          {waPurpose && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-20 shrink-0">{t('wa_purpose_label')}</span>
+              <span className="break-words min-w-0">{waPurpose}</span>
+            </div>
+          )}
+          {waNote && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-20 shrink-0">{t('wa_note_label')}</span>
+              <span className="break-words min-w-0">{waNote}</span>
+            </div>
+          )}
+          {waUnanswered && (
+            <AttnLine className="pt-1">{t('wa_question_unanswered')}</AttnLine>
           )}
         </div>
       )}

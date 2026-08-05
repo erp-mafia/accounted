@@ -66,6 +66,18 @@ Resolution order (last wins): **defaults → env vars → extension override**.
 | `RESEND_INBOUND_WEBHOOK_SECRET` | Verifies the `/inbound` webhook signature from Resend |
 | `RESEND_DELIVERY_WEBHOOK_SECRET` | Verifies the `/delivery-status` webhook signature from Resend. Optional: without it, invoice delivery history shows "sent" but never the delivery outcome |
 
+### WhatsApp (when the `whatsapp-inbox` extension is enabled)
+
+| Env var | Purpose |
+|---|---|
+| `WHATSAPP_ACCESS_TOKEN` | Meta system-user permanent token (`whatsapp_business_messaging` scope only) |
+| `WHATSAPP_PHONE_NUMBER_ID` | Graph object id of your WhatsApp Business number |
+| `WHATSAPP_APP_SECRET` | Verifies `X-Hub-Signature-256` on the `/webhook` POST |
+| `WHATSAPP_VERIFY_TOKEN` | Shared secret for the GET subscription handshake (also entered in the Meta app dashboard) |
+| `WHATSAPP_PHONE_HASH_KEY` | Random pepper for phone lookup hashes (`openssl rand -hex 32`) |
+| `WHATSAPP_PHONE_ENCRYPTION_KEY` | 32-byte hex AES-256-GCM key for phone numbers at rest (`openssl rand -hex 32`) |
+| `WHATSAPP_PUBLIC_NUMBER` | Optional: the public number as E.164 digits (e.g. `46766867041`) for the wa.me deep link in settings; unset = resolved from the Graph API |
+
 ## Things you MUST NOT change
 
 These are stable contracts. Renaming them breaks existing data, sessions, or external clients (npm package consumers, MCP connectors, browser sessions, invite links). Leave them alone in your fork:

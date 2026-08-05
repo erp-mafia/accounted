@@ -50,6 +50,7 @@ import {
 } from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
 import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
 import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
@@ -57,7 +58,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { simpleParser } from 'mailparser'
-import type { InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import type { InboxChannelContext, InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 const MAX_ATTACHMENTS_PER_EMAIL = 20
 
@@ -275,7 +276,7 @@ export const invoiceInboxExtension: Extension = {
             email_received_at, email_body_text, error_message,
             created_supplier_invoice_id,
             matched_transaction_id, created_journal_entry_id,
-            resend_email_id, extraction_skipped
+            resend_email_id, extraction_skipped, channel_context
           `)
           .eq('company_id', ctx.companyId)
           .order('created_at', { ascending: false })
@@ -1772,7 +1773,20 @@ export const invoiceInboxExtension: Extension = {
             total_sek: totalSek,
             remaining_amount: total,
             document_id: item.document_id || null,
-            notes: body.notes || null,
+            // WhatsApp-sourced items: when the request carries NO notes field
+            // at all, default to the rendered chat context (representation
+            // deltagare + syfte, sender note) so the human answers from the
+            // chat reach the leverantörsfaktura. Presence decides, not
+            // truthiness: `notes: ""` is an explicit clear and stays empty
+            // (same rule as book-direct, where the value lands on an
+            // immutable verifikat). The caption is excluded: this form never
+            // shows the chat context, so nobody reviewed it.
+            notes:
+              body.notes === undefined
+                ? renderChannelContextNotes(
+                    (item as { channel_context?: InboxChannelContext | null }).channel_context,
+                  )
+                : body.notes.trim() || null,
           })
           .select()
           .single()
@@ -2022,7 +2036,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: item, error: fetchError } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('id, document_id, status, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id, correlation_id')
+          .select('id, document_id, status, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id, correlation_id, channel_context')
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .maybeSingle()
@@ -2074,6 +2088,24 @@ export const invoiceInboxExtension: Extension = {
           transaction = tx
         }
 
+        // WhatsApp-sourced items: when the request carries NO notes field at
+        // all, default to the rendered chat context (representation deltagare
+        // + syfte, sender note) so the audit text reaches the verifikat even
+        // through clients that never saw the chat (MCP, older UI).
+        //
+        // Presence decides, not truthiness: `notes: ""` is the UI saying the
+        // user emptied the field, and resurrecting the prefill there would
+        // write text onto an immutable verifikat against an explicit user
+        // action (removable only via rättelse). So an empty string clears,
+        // and only an absent field defaults. The caption is excluded: this
+        // path can run without a human ever seeing the string.
+        const effectiveNotes =
+          body.notes === undefined
+            ? renderChannelContextNotes(
+                (item as { channel_context?: InboxChannelContext | null }).channel_context,
+              ) ?? undefined
+            : body.notes.trim() || undefined
+
         // Create the journal entry via the engine. Source-tracks back to
         // the inbox item so the audit trail is preserved even when no
         // transaction is involved.
@@ -2085,7 +2117,7 @@ export const invoiceInboxExtension: Extension = {
             description: body.description,
             source_type: transaction ? 'bank_transaction' : 'inbox_item',
             source_id: transaction ? transaction.id : item.id,
-            notes: body.notes,
+            notes: effectiveNotes,
             lines: body.lines,
           })
         } catch (err) {
