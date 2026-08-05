@@ -36,10 +36,19 @@ import type {
  *   paragraph. K3 ch.17.4 makes component depreciation mandatory when the
  *   components have meaningfully different useful lives; otherwise the
  *   paragraph would be misleading and is omitted.
+ * @param hasRecognizedDeferredTax: true when the trial balance actually
+ *   carries a deferred-tax balance on 2240 (or a movement on 8940), i.e.
+ *   exactly when buildUppskjutenSkattNot is emitted. The two notes MUST be
+ *   driven by the same signal: a policy paragraph that denies any separately
+ *   recognized deferred tax on obeskattade reserver cannot sit in the same
+ *   document as a note disclosing that very balance. The caller derives the
+ *   flag once (build-data.ts) and passes it to both.
  */
-export function buildK3RedovisningsPrinciper(
-  hasComponents: boolean,
-): NoteEntry {
+export function buildK3RedovisningsPrinciper(params: {
+  hasComponents: boolean
+  hasRecognizedDeferredTax: boolean
+}): NoteEntry {
+  const { hasComponents, hasRecognizedDeferredTax } = params
   const paragraphs: string[] = [
     'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen (1995:1554) och Bokföringsnämndens allmänna råd BFNAR 2012:1 Årsredovisning och koncernredovisning (K3).',
     'Värderingsprinciper: Tillgångar och skulder värderas till anskaffningsvärde om inget annat anges. Materiella anläggningstillgångar redovisas till anskaffningsvärde med avdrag för ackumulerade avskrivningar och eventuella nedskrivningar. Avskrivning sker linjärt över tillgångens bedömda nyttjandeperiod.',
@@ -50,18 +59,31 @@ export function buildK3RedovisningsPrinciper(
     )
   }
   // The uppskjuten skatt and leasing paragraphs below describe what the
-  // engine actually books today: deferred tax is recognized only on
-  // obeskattade reserver at the current 20.6 percent rate
-  // (lib/bokslut/tax-provision/latent-tax-calculator.ts) and no code
-  // capitalizes leases, so every lease is expensed as operational. Do not
-  // restore broader policy claims (balansrakningsmetoden over all temporary
+  // BOOKS show, never a policy the document cannot back up. No code
+  // capitalizes leases, so every lease is expensed as operational under the
+  // K3 20.29 exemption available to a juridisk person. Do not restore
+  // broader policy claims (balansrakningsmetoden over all temporary
   // differences, finance-lease capitalization) unless the engine actually
   // implements them: a signed AR must not assert policies the books do not
   // follow.
+  //
+  // Deferred tax has two mutually exclusive cases, decided by the same
+  // signal that decides whether buildUppskjutenSkattNot is emitted:
+  //   - no 2240/8940 activity: the reserves are carried gross, which is what
+  //     K3 29.37 permits in juridisk person, and the paragraph says so.
+  //   - a 2240 balance exists (K3 dispositions, legacy postings or imported
+  //     history): denying the split would contradict both the balansrakning
+  //     and the "Uppskjutna skatter" note, so the paragraph discloses the
+  //     recognized liability and points at that note.
+  // Neither branch claims HOW the balance was measured or where it came
+  // from: an imported provision may have been booked at 22 or 21.4 percent
+  // by another system, and this builder cannot tell the cases apart.
   paragraphs.push(
-    'Uppskjuten skatt: Uppskjuten skatt hänförlig till obeskattade reserver särredovisas inte i juridisk person, utan obeskattade reserver redovisas inklusive uppskjuten skatteskuld.',
+    hasRecognizedDeferredTax
+      ? 'Uppskjuten skatt: Uppskjuten skatteskuld hänförlig till obeskattade reserver redovisas på konto 2240. Ingående saldo, årets förändring och utgående saldo framgår av noten Uppskjutna skatter.'
+      : 'Uppskjuten skatt: Uppskjuten skatt hänförlig till obeskattade reserver särredovisas inte i juridisk person, utan obeskattade reserver redovisas inklusive uppskjuten skatteskuld.',
     'Intäktsredovisning: Intäkter redovisas till det verkliga värdet av det som erhållits eller kommer att erhållas och redovisas när väsentliga risker och förmåner har överförts till köparen, beloppet kan mätas tillförlitligt och det är sannolikt att de ekonomiska fördelarna tillfaller företaget.',
-    'Leasing: Samtliga leasingavtal redovisas som operationella leasingavtal. Leasingavgifterna kostnadsförs linjärt i resultaträkningen över leasingperioden.',
+    'Leasing: Årsredovisningen avser en juridisk person och någon koncernredovisning upprättas inte. Samtliga leasingavtal redovisas som operationella leasingavtal med stöd av undantaget i K3 punkt 20.29, som medger att även finansiella leasingavtal redovisas som operationella i juridisk person. Leasingavgifterna kostnadsförs linjärt i resultaträkningen över leasingperioden.',
     'Finansiella instrument: Finansiella instrument redovisas initialt till anskaffningsvärde inklusive transaktionskostnader. Kundfordringar värderas till det belopp som beräknas inflyta. Övriga finansiella tillgångar och skulder redovisas till upplupet anskaffningsvärde.',
   )
   return {
@@ -82,6 +104,17 @@ export function buildK3RedovisningsPrinciper(
  *
  * The closing must equal opening + change. Caller passes raw figures; the
  * note formats them with thousand-separators and the appropriate sign.
+ *
+ * Emitted only when such a balance actually exists (K3 bokslutsdisposition,
+ * legacy postings or imported history). The body reports the figures and
+ * does NOT claim they were measured at the current 20.6 percent rate: an
+ * imported provision may have been booked at 21.4 or 22 percent by another
+ * system, and the balance is disclosed here exactly as it stands.
+ *
+ * Whenever this note is emitted, buildK3RedovisningsPrinciper MUST be built
+ * with hasRecognizedDeferredTax: true, or note 1 would deny the very split
+ * this note discloses. build-data.ts derives both from one call to
+ * deriveLatentTaxMovement so the pair cannot drift.
  */
 export function buildUppskjutenSkattNot(params: {
   noteNumber: number
@@ -95,7 +128,7 @@ export function buildUppskjutenSkattNot(params: {
   const fmt = (n: number) =>
     Math.round(n).toLocaleString('sv-SE')
   const lines: string[] = [
-    'Uppskjuten skatteskuld avser i huvudsak temporära skillnader på obeskattade reserver (t.ex. periodiseringsfonder och överavskrivningar), beräknad med skattesatsen 20,6 %.',
+    'Posten avser uppskjuten skatteskuld hänförlig till obeskattade reserver, redovisad på konto 2240.',
     '',
     `Ingående saldo (2240): ${fmt(latentTaxOpening)} kr`,
     `Årets förändring (8940): ${fmt(latentTaxChange)} kr`,

@@ -7,9 +7,23 @@ import {
   buildUppskjutenSkattNot,
 } from '../k3-noter-builder'
 
+/** Default: no komponentavskrivning, no legacy 2240 balance. */
+function principles(
+  overrides: Partial<{
+    hasComponents: boolean
+    hasRecognizedDeferredTax: boolean
+  }> = {},
+) {
+  return buildK3RedovisningsPrinciper({
+    hasComponents: false,
+    hasRecognizedDeferredTax: false,
+    ...overrides,
+  })
+}
+
 describe('buildK3RedovisningsPrinciper', () => {
   it('always includes the K3 framework citation and the standard policy paragraphs', () => {
-    const note = buildK3RedovisningsPrinciper(false)
+    const note = principles()
     expect(note.number).toBe(1)
     expect(note.title).toBe('Redovisnings- och värderingsprinciper')
     expect(note.body).toContain('BFNAR 2012:1')
@@ -20,7 +34,7 @@ describe('buildK3RedovisningsPrinciper', () => {
   })
 
   it('describes uppskjuten skatt per K3 29.37: not separately recognised in juridisk person', () => {
-    const note = buildK3RedovisningsPrinciper(false)
+    const note = principles()
     // The engine books NO deferred tax on obeskattade reserver (K3 29.37:
     // gross in juridisk person; the split belongs to koncernredovisning).
     // The note states that policy and must not claim balansrakningsmetoden
@@ -29,26 +43,86 @@ describe('buildK3RedovisningsPrinciper', () => {
     expect(note.body).toContain('inklusive uppskjuten skatteskuld')
     expect(note.body).not.toMatch(/balansräkningsmetoden/)
     expect(note.body).not.toMatch(/temporära skillnader mellan redovisade och skattemässiga värden/)
+    // With no 2240 balance the note must not reference one.
+    expect(note.body).not.toMatch(/2240/)
   })
 
-  it('describes leasing as expensed operational leases, no finance-lease capitalization claim', () => {
-    const note = buildK3RedovisningsPrinciper(false)
+  it('discloses the recognised 2240 liability instead when the books carry one', () => {
+    const note = principles({ hasRecognizedDeferredTax: true })
+    expect(note.body).toContain('konto 2240')
+    expect(note.body).toContain('Uppskjutna skatter')
+    // The gross-reserve claim is the OTHER branch: keeping it here would
+    // deny the liability disclosed two notes down.
+    expect(note.body).not.toContain('särredovisas inte')
+    // The builder cannot know how an imported or legacy provision was
+    // measured, so the paragraph asserts no rate and no origin.
+    expect(note.body).not.toMatch(/20,6/)
+    expect(note.body).not.toMatch(/beräknad/)
+  })
+
+  it('describes leasing as expensed operational leases under the K3 20.29 juridisk-person exemption', () => {
+    const note = principles()
     expect(note.body).toContain('operationella leasingavtal')
     expect(note.body).toContain('kostnadsförs linjärt')
+    // The blanket operational treatment is only available to a juridisk
+    // person (K3 punkt 20.29); it is not the general K3 rule and is not
+    // available in koncernredovisning, so the note must state the basis.
+    expect(note.body).toContain('juridisk person')
+    expect(note.body).toContain('K3 punkt 20.29')
+    expect(note.body).toContain('koncernredovisning upprättas inte')
     // No code capitalizes leases, so the note must not assert that finance
     // leases are recognized as assets with a corresponding liability.
     expect(note.body).not.toMatch(/anläggningstillgång med motsvarande skuld/)
   })
 
   it('OMITS the komponentavskrivning paragraph when no asset has components', () => {
-    const note = buildK3RedovisningsPrinciper(false)
+    const note = principles()
     expect(note.body).not.toMatch(/Komponentavskrivning/)
   })
 
   it('INCLUDES the komponentavskrivning paragraph when an asset has components', () => {
-    const note = buildK3RedovisningsPrinciper(true)
+    const note = principles({ hasComponents: true })
     expect(note.body).toMatch(/Komponentavskrivning/)
     expect(note.body).toMatch(/betydande komponenter/)
+  })
+})
+
+describe('K3 noter: the two deferred-tax notes never contradict each other', () => {
+  it('company WITHOUT a legacy 2240 balance: policy denies the split and no movement note exists', () => {
+    // build-data omits buildUppskjutenSkattNot entirely when the trial
+    // balance has no 2240/8940 activity, so the only deferred-tax statement
+    // in the document is the policy paragraph.
+    const note = principles({ hasRecognizedDeferredTax: false })
+    expect(note.body).toContain(
+      'Uppskjuten skatt hänförlig till obeskattade reserver särredovisas inte i juridisk person',
+    )
+    expect(note.body).not.toMatch(/2240/)
+    expect(note.body).not.toMatch(/8940/)
+  })
+
+  it('company WITH a 2240 balance: policy paragraph and movement note tell one story', () => {
+    const policy = principles({ hasRecognizedDeferredTax: true })
+    const movement = buildUppskjutenSkattNot({
+      noteNumber: 4,
+      latentTaxOpening: 50_000,
+      latentTaxChange: 20_600,
+      latentTaxClosing: 70_600,
+    })
+    // Both notes recognise the same liability on the same account.
+    expect(policy.body).toContain('konto 2240')
+    expect(movement.body).toContain('konto 2240')
+    expect(policy.body).toContain('obeskattade reserver')
+    expect(movement.body).toContain('obeskattade reserver')
+    // The policy paragraph must NOT carry the denial while the movement note
+    // discloses exactly that split: that is the contradiction this pins.
+    expect(policy.body).not.toContain('särredovisas inte')
+    expect(policy.body).not.toContain(
+      'obeskattade reserver redovisas inklusive uppskjuten skatteskuld',
+    )
+    // Neither note asserts a measurement rate for a balance whose origin
+    // (K3 disposition, legacy posting, SIE import) the builder cannot see.
+    expect(policy.body).not.toMatch(/20,6/)
+    expect(movement.body).not.toMatch(/20,6/)
   })
 })
 
@@ -93,14 +167,20 @@ describe('buildUppskjutenSkattNot', () => {
     expect(note.body).toMatch(/Utgående saldo.*60/)
   })
 
-  it('mentions the 20.6% latent tax rate so readers understand the figures', () => {
+  it('reports the balance without claiming a rate it cannot verify', () => {
     const note = buildUppskjutenSkattNot({
       noteNumber: 1,
-      latentTaxOpening: 0,
+      latentTaxOpening: 50_000,
       latentTaxChange: 0,
-      latentTaxClosing: 0,
+      latentTaxClosing: 50_000,
     })
-    expect(note.body).toMatch(/20,6/)
+    expect(note.body).toContain('konto 2240')
+    expect(note.body).toContain('obeskattade reserver')
+    // A balance can come from the K3 disposition, a legacy posting or an SIE
+    // import measured at 22 or 21,4 percent: asserting 20,6 percent would be
+    // a claim about numbers this builder did not produce.
+    expect(note.body).not.toMatch(/20,6/)
+    expect(note.body).not.toMatch(/skattesats/)
   })
 })
 

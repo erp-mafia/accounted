@@ -333,6 +333,86 @@ describe('buildArsredovisningData: K3', () => {
     expect(uppskjuten!.body).toMatch(/Utgående saldo.*70/)
   })
 
+  it('makes the principles note acknowledge the 2240 balance the movement note discloses', async () => {
+    // The planted trial balance carries a legacy 2240/8940 pair, so the
+    // document contains BOTH notes. They must tell one story: the policy
+    // paragraph may not deny a separately recognised deferred tax on
+    // obeskattade reserver while the next note discloses exactly that.
+    const supabase = makeSupabase({ accountingFramework: 'k3' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    const principles = data.noter.find((n) => n.title.startsWith('Redovisnings'))!
+    const uppskjuten = data.noter.find((n) => n.title === 'Uppskjutna skatter')!
+    expect(uppskjuten).toBeDefined()
+    expect(principles.body).toContain('konto 2240')
+    expect(principles.body).toContain('Uppskjutna skatter')
+    expect(principles.body).not.toContain('särredovisas inte')
+  })
+
+  it('denies the split in the principles note when no 2240/8940 activity exists', async () => {
+    // What the engine produces today: no deferred tax is booked, so there is
+    // no movement note and the policy paragraph states the gross treatment.
+    mockedTrialBalance.mockResolvedValue({
+      rows: [],
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    })
+    const supabase = makeSupabase({ accountingFramework: 'k3' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.noter.find((n) => n.title === 'Uppskjutna skatter')).toBeUndefined()
+    const principles = data.noter.find((n) => n.title.startsWith('Redovisnings'))!
+    expect(principles.body).toContain(
+      'Uppskjuten skatt hänförlig till obeskattade reserver särredovisas inte i juridisk person',
+    )
+    expect(principles.body).not.toMatch(/2240/)
+  })
+
+  it('keeps the pair consistent when the provision is fully reversed to a zero closing balance', async () => {
+    // Opening 50 000, reversed in full: the movement note is still emitted,
+    // so the principles paragraph must stay on the "recognised" branch and
+    // must not assert a closing balance that no longer exists.
+    mockedTrialBalance.mockResolvedValue({
+      rows: [
+        {
+          account_number: '2240',
+          account_name: 'Uppskjuten skatteskuld',
+          account_class: 2,
+          opening_debit: 0,
+          opening_credit: 50_000,
+          period_debit: 50_000,
+          period_credit: 0,
+          closing_debit: 0,
+          closing_credit: 0,
+        },
+        {
+          account_number: '8940',
+          account_name: 'Uppskjuten skatt',
+          account_class: 8,
+          opening_debit: 0,
+          opening_credit: 0,
+          period_debit: 0,
+          period_credit: 50_000,
+          closing_debit: 0,
+          closing_credit: 50_000,
+        },
+      ],
+      totalDebit: 50_000,
+      totalCredit: 50_000,
+      isBalanced: true,
+    })
+    const supabase = makeSupabase({ accountingFramework: 'k3' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    const uppskjuten = data.noter.find((n) => n.title === 'Uppskjutna skatter')!
+    expect(uppskjuten).toBeDefined()
+    expect(uppskjuten.body).toMatch(/Utgående saldo \(2240\): 0 kr/)
+    const principles = data.noter.find((n) => n.title.startsWith('Redovisnings'))!
+    expect(principles.body).not.toContain('särredovisas inte')
+    expect(principles.body).not.toContain('i balansräkningen')
+  })
+
   it('emits an Eventualförpliktelser note', async () => {
     const supabase = makeSupabase({ accountingFramework: 'k3' })
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient

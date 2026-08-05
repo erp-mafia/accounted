@@ -807,6 +807,66 @@ async function buildK2Noter(
   return { notes, warnings }
 }
 
+interface LatentTaxMovement {
+  /** Opening balance on 2240 (credit-normal, so positive = liability). */
+  opening: number
+  /** Year movement, taken from 8940 when the account was used. */
+  change: number
+  /** Closing balance on 2240. */
+  closing: number
+}
+
+/**
+ * Derive the uppskjuten-skatt movement from the current-period full trial
+ * balance: 2240 (latent tax liability) and 8940 (latent tax expense).
+ *
+ * Returns `movement: null` when the company has no such activity at all,
+ * which is the normal case: a 2240 balance only appears when the K3
+ * uppskjuten-skatt disposition was posted, or from legacy postings and
+ * imported history. Both the redovisningsprinciper paragraph and the
+ * "Uppskjutna skatter" note are driven by this one result, so they can never
+ * disagree about whether a deferred tax on obeskattade reserver is
+ * separately recognized.
+ *
+ * `ok: false` means the figures could not be read at all; the caller warns
+ * rather than blocking the document.
+ */
+function deriveLatentTaxMovement(
+  tbFullRows: TrialBalanceRow[],
+): { ok: true; movement: LatentTaxMovement | null } | { ok: false } {
+  try {
+    const row2240 = tbFullRows.find((r) => r.account_number === '2240')
+    const row8940 = tbFullRows.find((r) => r.account_number === '8940')
+    // 2240 is credit-normal liability: opening = opening_credit - opening_debit
+    const opening2240 = row2240
+      ? (row2240.opening_credit || 0) - (row2240.opening_debit || 0)
+      : 0
+    const closing2240 = row2240
+      ? (row2240.closing_credit || 0) - (row2240.closing_debit || 0)
+      : 0
+    // 8940 is an expense (debit-normal): movement = period_debit - period_credit
+    // A positive movement = additional avsättning (cost incurred = liability
+    // grew). The 2240 balance moves by the same magnitude (with opposite
+    // sign convention since 2240 is on the credit side).
+    const change8940 = row8940
+      ? (row8940.period_debit || 0) - (row8940.period_credit || 0)
+      : closing2240 - opening2240
+    if (opening2240 === 0 && closing2240 === 0 && change8940 === 0) {
+      return { ok: true, movement: null }
+    }
+    return {
+      ok: true,
+      movement: {
+        opening: opening2240,
+        change: change8940,
+        closing: closing2240,
+      },
+    }
+  } catch {
+    return { ok: false }
+  }
+}
+
 /**
  * Build the K3 note set (BFNAR 2012:1). Differs from K2 in:
  *   - Verbose redovisningsprinciper covering all K3 measurement principles
@@ -918,7 +978,24 @@ async function buildK3Noter(
   })
   const adaptedAssets = assets.map(adaptAsset)
   const hasComponents = anyAssetHasComponents(adaptedAssets)
-  notes.push(buildK3RedovisningsPrinciper(hasComponents))
+  // The deferred-tax figures are derived BEFORE note 1 is built, even though
+  // the "Uppskjutna skatter" note is emitted further down as note 4: the
+  // redovisningsprinciper paragraph has to describe the same reality that
+  // note discloses. One derivation feeds both, so no code path can produce a
+  // policy paragraph denying a split the following note then discloses.
+  const latentTax = deriveLatentTaxMovement(tbFullRows)
+  if (!latentTax.ok) {
+    warnings.push(
+      'Uppskjutna skatter-noten kunde inte beräknas automatiskt. Kontrollera kontot 2240 och kör om bokslutet.',
+    )
+  }
+  const latentTaxMovement = latentTax.ok ? latentTax.movement : null
+  notes.push(
+    buildK3RedovisningsPrinciper({
+      hasComponents,
+      hasRecognizedDeferredTax: latentTaxMovement !== null,
+    }),
+  )
 
   // 2. Aktiekapital (shared with K2 logic: K3 punkt 18.x mandates the same
   // disclosure for AB).
@@ -992,42 +1069,18 @@ async function buildK3Noter(
   }
 
   // 4. Uppskjutna skatter. K3 ch.29 requires disclosure of opening,
-  // movement, and closing balance of uppskjuten skatteskuld. We derive
-  // these from the current-period full trial balance (passed in by the
-  // caller, which already fetched it for the statements) for 2240 (latent
-  // tax liability) and 8940 (latent tax expense).
-  try {
-    const rows = tbFullRows
-    const row2240 = rows.find((r) => r.account_number === '2240')
-    const row8940 = rows.find((r) => r.account_number === '8940')
-    // 2240 is credit-normal liability: opening = opening_credit - opening_debit
-    const opening2240 = row2240
-      ? (row2240.opening_credit || 0) - (row2240.opening_debit || 0)
-      : 0
-    const closing2240 = row2240
-      ? (row2240.closing_credit || 0) - (row2240.closing_debit || 0)
-      : 0
-    // 8940 is an expense (debit-normal): movement = period_debit - period_credit
-    // A positive movement = additional avsättning (cost incurred = liability
-    // grew). The 2240 balance moves by the same magnitude (with opposite
-    // sign convention since 2240 is on the credit side).
-    const change8940 = row8940
-      ? (row8940.period_debit || 0) - (row8940.period_credit || 0)
-      : closing2240 - opening2240
-    if (opening2240 !== 0 || closing2240 !== 0 || change8940 !== 0) {
-      notes.push(
-        buildUppskjutenSkattNot({
-          noteNumber: notes.length + 1,
-          latentTaxOpening: opening2240,
-          latentTaxChange: change8940,
-          latentTaxClosing: closing2240,
-        }),
-      )
-    }
-  } catch {
-    // Trial-balance failure should not block the document; flag as warning.
-    warnings.push(
-      'Uppskjutna skatter-noten kunde inte beräknas automatiskt. Kontrollera kontot 2240 och kör om bokslutet.',
+  // movement, and closing balance of uppskjuten skatteskuld. The figures
+  // were derived above (deriveLatentTaxMovement) so that note 1 and this
+  // note tell the same story; a null movement means no 2240/8940 activity
+  // exists and the note is omitted.
+  if (latentTaxMovement) {
+    notes.push(
+      buildUppskjutenSkattNot({
+        noteNumber: notes.length + 1,
+        latentTaxOpening: latentTaxMovement.opening,
+        latentTaxChange: latentTaxMovement.change,
+        latentTaxClosing: latentTaxMovement.closing,
+      }),
     )
   }
 
