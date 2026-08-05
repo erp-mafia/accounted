@@ -47,6 +47,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
+import { selectInboxFields } from '@/lib/documents/inbox-field-visibility'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
 import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
@@ -2465,9 +2466,21 @@ export function EditableFieldsList({
 
   const vatRows = useMemo(() => data.vatBreakdown ?? [], [data.vatBreakdown])
 
+  const [showAllFields, setShowAllFields] = useState(false)
+  const { shown: shownFields, hiddenCount } = useMemo(
+    () =>
+      selectInboxFields({
+        documentKind: data.documentKind ?? null,
+        fields: FIELD_DEFS,
+        hasValue: (key) => (drafts[key as FieldKey] ?? '').trim() !== '',
+        showAll: showAllFields,
+      }),
+    [data, drafts, showAllFields]
+  )
+
   return (
     <div className="space-y-2">
-      {FIELD_DEFS.map((f) => (
+      {shownFields.map((f) => (
         <div key={f.key} className="flex flex-col gap-0.5">
           <div className="flex items-center justify-between gap-2">
             <label
@@ -2497,6 +2510,15 @@ export function EditableFieldsList({
           />
         </div>
       ))}
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAllFields(true)}
+          className="text-[11px] text-muted-foreground hover:text-foreground hover:underline pt-1"
+        >
+          Visa fakturafält ({hiddenCount})
+        </button>
+      )}
       {vatRows.length > 0 && (
         <div className="pt-2 border-t mt-3">
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">
