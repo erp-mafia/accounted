@@ -12803,6 +12803,7 @@ export const tools: McpTool[] = [
         else if (/has not yet ended|slutdatumet har inte passerat/i.test(message)) kind = 'period_not_ended'
         else if (/closing entry already exists|Bokslutsverifikation finns redan/i.test(message)) kind = 'closing_entry_exists'
         else if (/continuity check failed|IB\/UB-kontinuiteten/i.test(message)) kind = 'opening_balance_continuity'
+        else if (/opening balances already posted|redan ingående balanser bokförda/i.test(message)) kind = 'next_period_ib_posted'
         else if (/Fiscal period not found|Räkenskapsperioden hittades inte/i.test(message)) kind = 'period_not_found'
         return { kind, severity: 'high' as const, message }
       })
