@@ -4,6 +4,7 @@ import {
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-payment-lines'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planSupplierPayment } from '@/lib/invoices/apply-supplier-payment'
@@ -239,6 +240,28 @@ export const POST = withRouteContext(
           exchangeRateDifference,
           invoiceCurrency: invoice.currency,
           transactionCurrency: transaction.currency,
+        },
+      })
+    }
+
+    // Same-currency partials and part-paid completions are equally unbookable
+    // under kontantmetoden (createSupplierInvoiceCashEntry books the FULL
+    // invoice, so a partial bank amount would over-book the expense): reject
+    // them too, not only the FX case above. Custom lines are not exempt: the
+    // dialog pre-fills the same full-invoice shape.
+    const cashBlock = cashPartialBlockReason({
+      invoiceAlreadyBooked: siAlreadyBooked,
+      accountingMethod,
+      priorPaidAmount: (invoice as { paid_amount?: number | null }).paid_amount,
+      paysRemainingInFull: fullSettlement,
+    })
+    if (cashBlock) {
+      return errorResponseFromCode('SI_CASH_PARTIAL_UNSUPPORTED', txLog, {
+        requestId,
+        details: {
+          reason: cashBlock,
+          payment_amount: txAmountAbs,
+          remaining_amount: invoice.remaining_amount,
         },
       })
     }

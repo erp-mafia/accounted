@@ -3403,6 +3403,14 @@ export interface YearEndValidation {
   unexplainedGaps: VoucherGap[]
   sequenceMismatches: SequenceMismatch[]
   trialBalanceBalanced: boolean
+  /**
+   * Bank transactions in the period with no verifikat (untriaged +
+   * business-confirmed-but-unbooked). Blocking: lockPeriod refuses to lock
+   * over them, so surfacing the count here stops executeYearEndClosing from
+   * aborting mid-flow at the lock step. Optional: absent on the early
+   * period-not-found return.
+   */
+  unbookedTransactionCount?: number
 }
 
 export interface YearEndPreview {

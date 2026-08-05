@@ -686,25 +686,23 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: cash method + FX',
     expect(mockCreateCashEntry).not.toHaveBeenCalled()
   })
 
-  it('does NOT absorb öre under the cash method: a SEK sub-krona diff stays partial', async () => {
+  it('does NOT absorb öre under the cash method: a SEK sub-krona diff is rejected as partial', async () => {
     // Kontantmetoden books the full invoice via the cash entry (not the bank
     // amount), so folding the 0,25 to 3740 would hide a 1930 discrepancy. The
-    // öre band is accrual-only; here the invoice stays partially_paid.
+    // öre band is accrual-only. Previously the sub-krona shortfall booked the
+    // FULL cash entry while leaving the invoice partially_paid (an over-book
+    // the invoice could never recover from); now it is rejected outright.
     enqueueHappyPath({
       transaction: { amount: -11231, currency: 'SEK' },
       invoice: { currency: 'SEK', remaining_amount: 11231.25 },
       accountingMethod: 'cash',
     })
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
-    const { status, body } = await parseJsonResponse<{
-      invoice_status: string
-      remaining_amount: number
-    }>(res)
-    expect(status).toBe(200)
-    expect(mockCreateCashEntry).toHaveBeenCalledTimes(1)
-    expect(mockCreateJournalEntry).not.toHaveBeenCalled() // no 3740 clearing entry
-    expect(body.invoice_status).toBe('partially_paid')
-    expect(body.remaining_amount).toBe(0.25)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CASH_PARTIAL_UNSUPPORTED')
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 })
 

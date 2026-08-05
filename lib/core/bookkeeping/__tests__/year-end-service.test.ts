@@ -225,6 +225,9 @@ vi.mock('@/lib/bookkeeping/currency-revaluation', () => ({
 vi.mock('../period-service', () => ({
   lockPeriod: vi.fn(),
   closePeriod: vi.fn(),
+  // Default: clean books. Individual tests override to simulate unbooked
+  // transactions or a failed check (fail-closed).
+  countUnbookedInPeriod: vi.fn().mockResolvedValue({ untriaged: 0, businessUnbooked: 0 }),
   createNextPeriod: vi.fn(),
   findNextPeriod: vi.fn().mockResolvedValue(null),
 }))
@@ -232,7 +235,7 @@ vi.mock('../period-service', () => ({
 import { validateYearEndReadiness, previewYearEndClosing } from '../year-end-service'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import { findNextPeriod } from '../period-service'
+import { countUnbookedInPeriod, findNextPeriod } from '../period-service'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -319,6 +322,50 @@ describe('validateYearEndReadiness', () => {
     const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
     expect(result.ready).toBe(false)
     expect(result.errors.some((e: string) => e.includes('slutdatumet har inte passerat'))).toBe(true)
+  })
+
+  it('blocks when the period contains unbooked bank transactions', async () => {
+    // Previously only lockPeriod caught this, at step 7 of the execute flow,
+    // AFTER the closing entry had posted: readiness said ready: true and the
+    // run aborted mid-flow. The count must block up front.
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = noGapResults(period)
+
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 0,
+      totalCredit: 0,
+    } as never)
+    vi.mocked(countUnbookedInPeriod).mockResolvedValueOnce({ untriaged: 2, businessUnbooked: 1 })
+
+    const supabase = makeClient()
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+    expect(result.ready).toBe(false)
+    expect(result.unbookedTransactionCount).toBe(3)
+    expect(result.errors.some((e: string) => e.includes('3 transaktioner i perioden saknar bokföring'))).toBe(true)
+  })
+
+  it('fails closed when the unbooked-transaction check cannot run', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = noGapResults(period)
+
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 0,
+      totalCredit: 0,
+    } as never)
+    vi.mocked(countUnbookedInPeriod).mockRejectedValueOnce(new Error('query failed'))
+
+    const supabase = makeClient()
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+    expect(result.ready).toBe(false)
+    expect(
+      result.errors.some((e: string) =>
+        e.includes('Kontrollen av obokförda transaktioner kunde inte genomföras'),
+      ),
+    ).toBe(true)
   })
 
   it('warns on explained voucher gaps', async () => {

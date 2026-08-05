@@ -27,6 +27,7 @@ import {
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
@@ -290,6 +291,28 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // accounting_method.
     const siAlreadyBooked = !!(typed as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
+
+    // createSupplierInvoiceCashEntry books the FULL invoice and takes no
+    // payment amount: reject partials and part-paid completions for
+    // never-booked kontantmetoden invoices instead of over-booking the
+    // expense. Fires in dry-run too, so a preview cannot mask the rejection.
+    const cashBlock = cashPartialBlockReason({
+      invoiceAlreadyBooked: siAlreadyBooked,
+      accountingMethod,
+      priorPaidAmount: typed.paid_amount,
+      paysRemainingInFull: newStatus === 'paid',
+    })
+    if (cashBlock) {
+      return v1ErrorResponseFromCode('SI_CASH_PARTIAL_UNSUPPORTED', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          reason: cashBlock,
+          payment_amount: paymentAmount,
+          paid_amount: typed.paid_amount,
+          remaining_amount: typed.remaining_amount,
+        },
+      })
+    }
 
     // FX-required validation. Whenever the registration JE used the invoice's
     // exchange rate to compute subtotal_sek (i.e. the SI was booked under
