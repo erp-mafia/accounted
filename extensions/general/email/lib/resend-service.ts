@@ -51,8 +51,11 @@ export class ResendEmailService implements EmailService {
     // Resend's API does its own validation, but defense in depth: both fromName
     // (user-controlled, from company settings) and appName (admin-controlled,
     // from branding) flow into the From header. fromAddress is only ever set
-    // by lib/email/brand-sender.ts for VERIFIED brand sender domains: when
-    // present the mail rides the brand domain and the "via" pattern is skipped.
+    // by lib/email/brand-sender.ts for VERIFIED brand sender domains.
+    // A fromName WITHOUT a fromAddress (a brand riding the platform address)
+    // shows the brand name ALONE (founder call 2026-08-05: no "via <platform>"
+    // in the display name; the platform stays visible in the actual From
+    // address until the brand verifies its own sender domain).
     const safeAppName = sanitizeHeaderPart(getBranding().appName)
     const safeFromName = fromName ? sanitizeHeaderPart(fromName) : null
     const safeFromAddress = fromAddress ? sanitizeHeaderPart(fromAddress) : null
@@ -61,7 +64,7 @@ export class ResendEmailService implements EmailService {
         ? `${safeFromName} <${safeFromAddress}>`
         : safeFromAddress
       : safeFromName
-        ? `${safeFromName} via ${safeAppName} <${DEFAULT_FROM_EMAIL}>`
+        ? `${safeFromName} <${DEFAULT_FROM_EMAIL}>`
         : `${safeAppName} <${DEFAULT_FROM_EMAIL}>`
 
     try {

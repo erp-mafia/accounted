@@ -1,6 +1,7 @@
 /**
  * From-header composition in the Resend service, including the WL-04 chain:
- * explicit fromAddress (verified brand domain) > "via" fallback > default.
+ * explicit fromAddress (verified brand domain) > brand name on the platform
+ * address (no "via <platform>", founder call 2026-08-05) > default.
  */
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 
@@ -41,10 +42,10 @@ describe('ResendEmailService From composition', () => {
     )
   })
 
-  it('renders the via-platform pattern for fromName without fromAddress', async () => {
+  it('renders the brand name alone for fromName without fromAddress', async () => {
     await service.sendEmail({ ...BASE, fromName: 'Siffra' })
     expect(sendMock).toHaveBeenCalledWith(
-      expect.objectContaining({ from: 'Siffra via Accounted <noreply@gnubok.se>' }),
+      expect.objectContaining({ from: 'Siffra <noreply@gnubok.se>' }),
     )
   })
 

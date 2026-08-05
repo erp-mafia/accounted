@@ -10,8 +10,8 @@
  *   1. Brand with a VERIFIED Resend sender domain and an authEmailFrom
  *      address: send from the brand address with the brand app name.
  *   2. Brand without a verified sender domain: ride the platform default
- *      address with the "<Brand> via <Platform>" display pattern that
- *      already exists in the Resend service (fromName set, no fromAddress).
+ *      address with the brand name alone as the display name (fromName set,
+ *      no fromAddress; no "via <platform>", founder call 2026-08-05).
  *      DMARC-clean: the From domain stays ours.
  *   3. No brand: platform defaults (fromName/fromAddress/replyTo all null,
  *      the email service renders "<Platform> <RESEND_FROM_EMAIL>").

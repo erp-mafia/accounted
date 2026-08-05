@@ -5,9 +5,9 @@
  *   - branded company  -> brand sender + brand-domain links + no platform
  *                         ("Accounted") leakage in the mail body
  *   - unbranded company-> today's output, unchanged
- *   - unverified sender domain -> the "via Accounted" fallback (fromName set,
- *                         no fromAddress; the Resend service renders the via
- *                         pattern from the platform address)
+ *   - unverified sender domain -> platform-address fallback (fromName set,
+ *                         no fromAddress; the Resend service renders the brand
+ *                         name alone over the platform address)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Brand } from '@/lib/branding/resolve'
