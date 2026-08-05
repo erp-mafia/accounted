@@ -53,7 +53,7 @@ describe('GET /api/transactions/[id]/match-invoice/preview', () => {
   // invoice previewed a cash entry (Dr 1930 / Cr 30xx) while the POST: which
   // converts first: commits the clearing entry (Dr 1930 / Cr 1510). The user
   // approved one verifikat and a different one was booked.
-  it('cross-currency partial under kontantmetoden previews a clearing entry, not a cash entry', async () => {
+  it('cross-currency partial under kontantmetoden is rejected like the POST handler', async () => {
     const tx = makeTransaction({
       id: 'tx-1',
       amount: 1000,
@@ -82,24 +82,17 @@ describe('GET /api/transactions/[id]/match-invoice/preview', () => {
     })
     const response = await GET(request, createMockRouteParams({ id: 'tx-1' }))
     const { status, body } = await parseJsonResponse<{
-      entry_type: string
-      is_fully_paid: boolean
-      lines: Array<{ account_number: string }>
-      fx_conversion: { required: boolean; paid_in_invoice_currency?: number }
+      error: { code: string; details?: { reason?: string } }
     }>(response)
 
-    expect(status).toBe(200)
-    // The crux of the bug: NOT a cash entry, NOT fully paid.
-    expect(body.entry_type).toBe('clearing')
-    expect(body.is_fully_paid).toBe(false)
-    // Clearing lines clear 1510 and never recognise revenue on a 30xx account.
-    const accounts = body.lines.map((l) => l.account_number)
-    expect(accounts).toContain('1510')
-    expect(accounts).not.toContain('3001')
-    // FX surfaced with the invoice-currency equivalent (1000 / 10.45 ≈ 95.69),
-    // matching what the POST handler accumulates.
-    expect(body.fx_conversion.required).toBe(true)
-    expect(body.fx_conversion.paid_in_invoice_currency).toBeCloseTo(95.69, 1)
+    // The preview must never show a verifikat the POST refuses to book: a
+    // partial payment of a never-booked kontantmetoden invoice is rejected on
+    // both surfaces (the old clearing fallback credited an empty 1510 with no
+    // revenue and no moms). The original PR #615 regression (preview showing
+    // cash while POST books clearing) stays covered: both now agree.
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')
+    expect(body.error.details?.reason).toBe('partial_payment')
   })
 
   // Guard the cash path the fix reorders around: a same-currency full payment

@@ -12,7 +12,8 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2, MessageCircle, ExternalLink } from 'lucide-react'
+import { Loader2, ExternalLink } from 'lucide-react'
+import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -206,7 +207,7 @@ export function WhatsAppLinkPanel() {
               {minted.waLink ? (
                 <Button asChild type="button" size="sm">
                   <a href={minted.waLink} target="_blank" rel="noreferrer">
-                    <MessageCircle className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                    <WhatsAppMark size={16} className="mr-1.5" />
                     {t('open_whatsapp')}
                     <ExternalLink className="ml-1.5 h-3.5 w-3.5" aria-hidden="true" />
                   </a>
