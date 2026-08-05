@@ -677,7 +677,9 @@ function AutoStep({
                 />
                 <div className="flex-1 space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
+                    {/* data-ph-mask: source_label is counterparty name + invoice number */}
                     <Label
+                      data-ph-mask=""
                       htmlFor={`auto-${key}`}
                       className="text-sm font-medium cursor-pointer select-none"
                     >

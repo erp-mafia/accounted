@@ -74,7 +74,8 @@ export default function LineDimensionFields({
     <div className={stacked ? 'space-y-3' : 'grid grid-cols-2 gap-3'}>
       {fields.map((field) => (
         <div key={field.sieDimNo}>
-          <Label className="text-xs text-muted-foreground">{field.label}</Label>
+          {/* data-ph-mask: the label is the user's own dimension name, not chrome */}
+          <Label data-ph-mask="" className="text-xs text-muted-foreground">{field.label}</Label>
           <div className="mt-1">
             <DimensionCombobox
               sieDimNo={field.sieDimNo}
