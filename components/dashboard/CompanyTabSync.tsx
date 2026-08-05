@@ -130,12 +130,18 @@ export default function CompanyTabSync() {
 
     guardStore.tabCompanyId = currentCompanyId
     guardStore.observedCompanyId = null
-    guardStore.notifyBlocked = () => setMismatch(true)
+    guardStore.notifyBlocked = () => {
+      // A self-initiated switch is hard-navigating this tab away: blocked
+      // stray writes still get their 409, but the "switched in another tab"
+      // dialog would just flash over the tab's own page load.
+      if (!guardStore.selfSwitchTargetId) setMismatch(true)
+    }
     installFetchGuard()
 
     const observe = (observedId: string | null | undefined) => {
       if (observedId === null || observedId === undefined) return
       guardStore.observedCompanyId = observedId
+      if (observedId === guardStore.selfSwitchTargetId) return
       if (isTabMismatch(currentCompanyId, observedId)) {
         setMismatch(true)
       }
@@ -182,6 +188,10 @@ export default function CompanyTabSync() {
     // Layer 3: pageshow (persisted === true): bfcache restore
     const handlePageShow = (event: PageTransitionEvent) => {
       if (event.persisted) {
+        // A bfcache-restored page renders the OLD company after this tab's
+        // own switch (back-navigation): the self-switch marker must not keep
+        // suppressing the dialog here.
+        guardStore.selfSwitchTargetId = null
         void checkServer()
       }
     }
@@ -195,6 +205,7 @@ export default function CompanyTabSync() {
       guardStore.tabCompanyId = null
       guardStore.observedCompanyId = null
       guardStore.notifyBlocked = null
+      guardStore.selfSwitchTargetId = null
       uninstallFetchGuard()
     }
   }, [currentCompanyId])

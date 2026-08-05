@@ -63,16 +63,36 @@ export const guardStore: {
    * sanctioned call is identified by this flag rather than by id.
    */
   companySwitchInFlight: boolean
+  /**
+   * Set when THIS tab initiated a switch to the given company and is
+   * hard-navigating there. The switch broadcast loops back into the
+   * initiating tab (BroadcastChannel delivers to every same-name channel in
+   * the same context except the posting object), which would raise the
+   * "switched in another tab" dialog over the tab's own navigation. While
+   * set, CompanyTabSync suppresses the dialog; mutation blocking stays
+   * active. Cleared on bfcache restore (pageshow persisted): a restored page
+   * renders the OLD company and must get the full guard back.
+   */
+  selfSwitchTargetId: string | null
 } = {
   tabCompanyId: null,
   observedCompanyId: null,
   notifyBlocked: null,
   companySwitchInFlight: false,
+  selfSwitchTargetId: null,
 }
 
 /** Flagged by performCompanySwitch around the sanctioned switch action. */
 export function markCompanySwitchInFlight(inFlight: boolean): void {
   guardStore.companySwitchInFlight = inFlight
+}
+
+/**
+ * Flagged by performCompanySwitch after the switch persisted, right before
+ * it broadcasts and hard-navigates: this tab's own switch, not a foreign one.
+ */
+export function markSelfSwitchTarget(companyId: string | null): void {
+  guardStore.selfSwitchTargetId = companyId
 }
 
 /**

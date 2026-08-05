@@ -6,6 +6,7 @@ import {
   TAB_SYNC_STORAGE_KEY,
   encodeStorageValue,
   markCompanySwitchInFlight,
+  markSelfSwitchTarget,
 } from '@/lib/company/tab-guard'
 
 /**
@@ -40,6 +41,13 @@ export async function performCompanySwitch(
   if (result.error) {
     return { error: result.error }
   }
+  // This tab's own switch: the broadcast below loops back into this tab's
+  // CompanyTabSync (BroadcastChannel delivers to every same-name channel in
+  // the same context except the posting object), and without this marker the
+  // guard would raise its blocking dialog over the hard navigation already
+  // in flight. The marker suppresses only the dialog; stray mutations from
+  // this tab are still blocked until the reload lands.
+  markSelfSwitchTarget(companyId)
   // Notify every other open tab of the same user so their tab guard can
   // react (blocking dialog, WL-09). BroadcastChannel is the live signal;
   // the localStorage write is the fallback (storage events fire in every

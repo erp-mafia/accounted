@@ -6,6 +6,7 @@ import {
   guardStore,
   isTabMismatch,
   markCompanySwitchInFlight,
+  markSelfSwitchTarget,
   requestHasNextActionHeader,
   shouldBlockMutation,
 } from '../tab-guard'
@@ -201,6 +202,15 @@ describe('requestHasNextActionHeader', () => {
       }),
     ).toBe(false)
     expect(requestHasNextActionHeader(new URL('http://localhost/x'))).toBe(false)
+  })
+})
+
+describe('markSelfSwitchTarget', () => {
+  it('sets and clears the self-switch marker on the store', () => {
+    markSelfSwitchTarget('company-2')
+    expect(guardStore.selfSwitchTargetId).toBe('company-2')
+    markSelfSwitchTarget(null)
+    expect(guardStore.selfSwitchTargetId).toBeNull()
   })
 })
 
