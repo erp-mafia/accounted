@@ -1722,6 +1722,11 @@ export interface AccrualSchedule {
   posting_floor_date: string
   status: AccrualScheduleStatus
   description: string | null
+  // Dimensions bag ({sie_dim_no: object_code}) copied from the origin line
+  // (invoice default_dimensions merged with the item bag); carried onto both
+  // dissolution lines. jsonb DEFAULT '{}'. Optional in TS for pre-migration
+  // fixtures.
+  dimensions?: Record<string, string>
   created_at: string
   updated_at: string
   // Relations
