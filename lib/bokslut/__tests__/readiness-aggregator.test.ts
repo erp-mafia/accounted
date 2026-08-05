@@ -12,9 +12,19 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   getReconciliationStatus: vi.fn(),
 }))
 
+vi.mock('@/lib/reports/ar-reconciliation', () => ({
+  generateARReconciliation: vi.fn(),
+}))
+
+vi.mock('@/lib/reports/supplier-reconciliation', () => ({
+  generateReconciliation: vi.fn(),
+}))
+
 import { buildBokslutReadinessReport } from '../readiness-aggregator'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
+import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
+import { generateReconciliation as generateAPReconciliation } from '@/lib/reports/supplier-reconciliation'
 
 const CASH_ACCOUNT_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 
@@ -101,8 +111,27 @@ const RECON_CLEAN = {
   unmatched_gl_line_count: 0,
 }
 
+const AR_CLEAN = {
+  ar_ledger_total: 0,
+  account_1510_balance: 0,
+  difference: 0,
+  is_reconciled: true,
+  unconverted_fx_count: 0,
+}
+
+const AP_CLEAN = {
+  supplier_ledger_total: 0,
+  account_2440_balance: 0,
+  difference: 0,
+  is_reconciled: true,
+  unconverted_fx_count: 0,
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
+  // Default: clean tie-outs. Individual tests override to simulate mismatches.
+  vi.mocked(generateARReconciliation).mockResolvedValue(AR_CLEAN)
+  vi.mocked(generateAPReconciliation).mockResolvedValue(AP_CLEAN)
 })
 
 describe('buildBokslutReadinessReport', () => {
@@ -261,5 +290,78 @@ describe('buildBokslutReadinessReport', () => {
 
     expect(report.entityType).toBe('aktiebolag')
     expect(report.reminders.find((r) => r.code === 'ef_skatt_via_ne')).toBeUndefined()
+  })
+
+  it('surfaces AR and AP tie-out mismatches as warning reminders for accrual companies', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
+    vi.mocked(generateARReconciliation).mockResolvedValue({
+      ...AR_CLEAN,
+      ar_ledger_total: 25000,
+      account_1510_balance: 20000,
+      difference: 5000,
+      is_reconciled: false,
+    })
+    vi.mocked(generateAPReconciliation).mockResolvedValue({
+      ...AP_CLEAN,
+      is_reconciled: false,
+      unconverted_fx_count: 2,
+    })
+    const supabase = makeSupabase({
+      period: { data: PERIOD, error: null },
+      settings: { data: { entity_type: 'aktiebolag', accounting_method: 'accrual' }, error: null },
+    })
+
+    const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
+
+    const ar = report.reminders.find((r) => r.code === 'ar_reconciliation_mismatch')
+    expect(ar?.severity).toBe('warning')
+    expect(ar?.message).toContain('5000.00 kr')
+    expect(ar?.href).toBe('/reports/kundreskontra')
+    const ap = report.reminders.find((r) => r.code === 'ap_reconciliation_mismatch')
+    expect(ap?.severity).toBe('warning')
+    // Unconvertible FX rows make the difference figure unreliable: the message
+    // must say the tie-out could not run, not report a phantom difference.
+    expect(ap?.message).toContain('saknar valutakurs')
+    expect(ap?.href).toBe('/reports/supplier-ledger')
+    // Warnings never flip readiness.
+    expect(report.ready).toBe(true)
+    expect(vi.mocked(generateARReconciliation)).toHaveBeenCalledWith(supabase, 'co-1', 'fp-1')
+  })
+
+  it('skips the AR/AP tie-outs entirely for kontantmetoden companies', async () => {
+    // Under the cash method open invoices are deliberately not on 1510/2440,
+    // so the tie-out is permanently unreconciled by construction and would
+    // only mislead.
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
+    const supabase = makeSupabase({
+      period: { data: PERIOD, error: null },
+      settings: { data: { entity_type: 'enskild_firma', accounting_method: 'cash' }, error: null },
+    })
+
+    const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
+
+    expect(vi.mocked(generateARReconciliation)).not.toHaveBeenCalled()
+    expect(vi.mocked(generateAPReconciliation)).not.toHaveBeenCalled()
+    expect(report.reminders.find((r) => r.code === 'ar_reconciliation_mismatch')).toBeUndefined()
+    expect(report.reminders.find((r) => r.code === 'ap_reconciliation_mismatch')).toBeUndefined()
+  })
+
+  it('degrades gracefully when a tie-out query fails', async () => {
+    vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+    vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
+    vi.mocked(generateARReconciliation).mockRejectedValue(new Error('boom'))
+    const supabase = makeSupabase({
+      period: { data: PERIOD, error: null },
+      settings: { data: { entity_type: 'aktiebolag', accounting_method: 'accrual' }, error: null },
+    })
+
+    const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
+
+    expect(report.ready).toBe(true)
+    expect(report.reminders.find((r) => r.code === 'ar_reconciliation_mismatch')).toBeUndefined()
+    // The AP side still ran and reported clean independently of the AR failure.
+    expect(vi.mocked(generateAPReconciliation)).toHaveBeenCalled()
   })
 })

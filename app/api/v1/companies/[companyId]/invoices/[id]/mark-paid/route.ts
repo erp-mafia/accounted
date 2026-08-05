@@ -38,6 +38,7 @@ import {
   createInvoicePaymentJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
@@ -331,6 +332,30 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const { newPaidAmount, newRemaining, newStatus, isFullyPaid } = payment.plan
     const isPartial = customLines !== undefined && !isFullyPaid
+
+    // The generated cash entry books the FULL invoice and takes no payment
+    // amount: reject partials and part-paid completions for never-booked
+    // kontantmetoden invoices (mirrors the v1 match-invoice guard;
+    // bokslutsmetoden reports moms at payment, so each installment's moms
+    // belongs to its own receipt period). Custom lines are not exempt: they would book
+    // the same full-invoice shape under a user-shaped label.
+    const cashBlock = cashPartialBlockReason({
+      invoiceAlreadyBooked,
+      accountingMethod,
+      priorPaidAmount: typed.paid_amount,
+      paysRemainingInFull: isFullyPaid,
+    })
+    if ((!typed.document_type || typed.document_type === 'invoice') && cashBlock) {
+      return v1ErrorResponseFromCode('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          reason: cashBlock,
+          payment_amount: paymentAmountInInvoiceCurrency,
+          paid_amount: typed.paid_amount ?? 0,
+          invoice_total: typed.total,
+        },
+      })
+    }
 
     // Duplicate-payment guard: surface a likely-matching unlinked inbound
     // bank transaction before booking (or before dry-run preview, so a

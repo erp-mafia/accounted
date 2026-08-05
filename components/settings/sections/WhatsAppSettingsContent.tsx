@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { WhatsAppLinkPanel } from '@/components/extensions/general/WhatsAppLinkPanel'
+import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
 
 export function WhatsAppSettingsContent() {
@@ -10,7 +11,11 @@ export function WhatsAppSettingsContent() {
 
   return (
     <div>
-      <SettingsSectionHeader title={tNav('whatsapp')} intro={tIntro('whatsapp')} />
+      <SettingsSectionHeader
+        title={tNav('whatsapp')}
+        intro={tIntro('whatsapp')}
+        mark={<WhatsAppMark size={26} />}
+      />
       <WhatsAppLinkPanel />
     </div>
   )
