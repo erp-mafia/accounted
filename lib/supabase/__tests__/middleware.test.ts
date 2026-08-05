@@ -279,7 +279,7 @@ describe('updateSession redirect destinations', () => {
 
   // ── No-company branch: the byrå cockpit exception ─────────────────────
 
-  describe('byrå owners/admins with zero companies', () => {
+  describe('byrå team members with zero companies', () => {
     beforeEach(() => {
       state.user = SIGNED_IN
       // No resolvable company at all (fresh byrå, no client memberships).
@@ -306,12 +306,12 @@ describe('updateSession redirect destinations', () => {
       }
     })
 
-    it('keeps the onboarding redirect for a plain byrå member', async () => {
+    it('steers a plain byrå member to the cockpit too (any role counts)', async () => {
       state.byraMemberships = [{ role: 'member', teams: { kind: 'byra' } }]
 
       const response = await run('/')
 
-      expect(new URL(locationOf(response)!).pathname).toBe('/onboarding')
+      expect(new URL(locationOf(response)!).pathname).toBe('/byra')
     })
 
     it('keeps the onboarding redirect for non-byrå users', async () => {

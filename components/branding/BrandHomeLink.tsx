@@ -21,12 +21,11 @@ import { useCompanyOptional } from '@/contexts/CompanyContext'
 export function BrandHomeLink({ showLabel = false }: { showLabel?: boolean }) {
   const { appName, logoUrl, logoPath, brand } = useBranding()
   const label = brand ? brand.appName : null
-  // Byrå owners/admins home to the cockpit, never to "/" (which would open
-  // whatever client company happens to be active). Members and everyone
-  // outside a byrå keep the legacy home link.
+  // Byrå team members (any role) home to the cockpit, never to "/" (which
+  // would open whatever client company happens to be active). Everyone
+  // outside a byrå keeps the legacy home link.
   const byraTeam = useCompanyOptional()?.byraTeam
-  const homeHref =
-    byraTeam && (byraTeam.role === 'owner' || byraTeam.role === 'admin') ? '/byra' : '/'
+  const homeHref = byraTeam ? '/byra' : '/'
   return (
     <Link href={homeHref} aria-label={appName} className="flex items-center gap-2 rounded-lg">
       {logoUrl ? (

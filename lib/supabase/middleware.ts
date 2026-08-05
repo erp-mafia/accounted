@@ -270,10 +270,11 @@ export async function updateSession(request: NextRequest) {
       return supabaseResponse
     }
 
-    // Byrå owners/admins with zero client companies (a fresh byrå) home to
-    // the EMPTY cockpit, never to the company onboarding wizard: clients are
-    // created from the cockpit, and forcing the wizard here would make the
-    // byrå owner create a personal company just to get in. Cockpit-shaped
+    // Byrå team members (any role: widened from owner/admin, founder call
+    // 2026-08-05) with zero client companies (a fresh byrå) home to the
+    // EMPTY cockpit, never to the company onboarding wizard: clients are
+    // created from the cockpit, and forcing the wizard here would make a
+    // byrå user create a personal company just to get in. Cockpit-shaped
     // paths pass through (the dashboard layout renders its no-company shell);
     // everything else is steered to /byra. API requests pass through so the
     // routes' own guards answer with JSON instead of an HTML redirect.
@@ -283,10 +284,8 @@ export async function updateSession(request: NextRequest) {
       .select('role, teams:team_id!inner(kind)')
       .eq('user_id', user.id)
       .eq('teams.kind', 'byra')
-    const isByraAdmin = (byraRows ?? []).some(
-      (r: { role: string }) => r.role === 'owner' || r.role === 'admin',
-    )
-    if (isByraAdmin) {
+    const isByraMember = (byraRows ?? []).length > 0
+    if (isByraMember) {
       const isByraNoCompanyAllowed =
         pathname.startsWith('/byra') ||
         pathname.startsWith('/clients') ||
