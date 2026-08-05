@@ -195,7 +195,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
 // which dispatches to this handler: no duplicate call needed here.
-import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor } from '@/types'
+import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, YearEndBlockerCode } from '@/types'
 
 // ── Actor context ────────────────────────────────────────────
 
@@ -1712,6 +1712,51 @@ const RC_COMPLETENESS_CODES = new Set<VatDeclarationCheck['code']>([
   'RC_OUTPUT_MISSING',
   'RC_INPUT_VAT_MISMATCH',
 ])
+
+/**
+ * gnubok_year_end_readiness: YearEndBlockerCode to the blocker `kind` this
+ * tool publishes. The kinds are the public contract agents switch on, so they
+ * are deliberately NOT the codes themselves: a code may be renamed or split
+ * without breaking a consumer, as long as it keeps mapping to the same kind.
+ *
+ * UNBOOKED_CHECK_FAILED shares 'unbooked_transactions' with the real count:
+ * the fail-closed variant means "we could not tell", and an agent should react
+ * to it the same way (go look at the transactions, then re-run readiness).
+ */
+const YEAR_END_BLOCKER_KIND: Record<YearEndBlockerCode, string> = {
+  PERIOD_NOT_FOUND: 'period_not_found',
+  PERIOD_NOT_ENDED: 'period_not_ended',
+  PERIOD_ALREADY_CLOSED: 'period_already_closed',
+  CLOSING_ENTRY_EXISTS: 'closing_entry_exists',
+  DRAFT_ENTRIES: 'draft_entries',
+  UNEXPLAINED_VOUCHER_GAP: 'unexplained_voucher_gap',
+  SEQUENCE_COUNTER_BEHIND: 'sequence_mismatch',
+  TRIAL_BALANCE_UNBALANCED: 'trial_balance_unbalanced',
+  CONTINUITY_MISMATCH: 'opening_balance_continuity',
+  NEXT_PERIOD_HAS_IB: 'next_period_ib_posted',
+  UNBOOKED_TRANSACTIONS: 'unbooked_transactions',
+  UNBOOKED_CHECK_FAILED: 'unbooked_transactions',
+}
+
+/**
+ * Wording fallback for a blocker whose code is not in YEAR_END_BLOCKER_KIND.
+ * Kept so an unmapped or legacy English message still routes somewhere useful
+ * instead of collapsing to 'other'.
+ */
+function classifyYearEndBlockerMessage(message: string): string {
+  if (/draft journal entries|utkast måste bokföras/i.test(message)) return 'draft_entries'
+  if (/unbooked transaction|saknar bokföring|obokförda transaktioner/i.test(message)) return 'unbooked_transactions'
+  if (/voucher gap|verifikationsnummerglapp/i.test(message)) return 'unexplained_voucher_gap'
+  if (/Sequence counter integrity|Nummerserien i serie/i.test(message)) return 'sequence_mismatch'
+  if (/Trial balance is not balanced|Råbalansen balanserar inte/i.test(message)) return 'trial_balance_unbalanced'
+  if (/already closed|redan stängd/i.test(message)) return 'period_already_closed'
+  if (/has not yet ended|slutdatumet har inte passerat/i.test(message)) return 'period_not_ended'
+  if (/closing entry already exists|Bokslutsverifikation finns redan/i.test(message)) return 'closing_entry_exists'
+  if (/continuity check failed|IB\/UB-kontinuiteten/i.test(message)) return 'opening_balance_continuity'
+  if (/opening balances already posted|redan ingående balanser bokförda/i.test(message)) return 'next_period_ib_posted'
+  if (/Fiscal period not found|Räkenskapsperioden hittades inte/i.test(message)) return 'period_not_found'
+  return 'other'
+}
 
 interface VatCloseSanityAnomaly {
   kind: 'output_vat_ratio_drift' | 'input_vat_ratio_drift' | 'revenue_drop' | 'revenue_spike'
@@ -12786,27 +12831,18 @@ export const tools: McpTool[] = [
 
       const validation = await validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId)
 
-      // Reshape error strings into structured blockers so the agent (and any
-      // dashboard) can render and act on each one independently. The lib
-      // returns flat strings; we tag each with a `kind` heuristic for routing.
-      // validateYearEndReadiness emits Swedish messages (the bokslut wizard
-      // renders them verbatim); English alternates are kept as fallback so
-      // classification never regresses if an older message slips through.
-      const blockers = validation.errors.map((message) => {
-        let kind: string = 'other'
-        if (/draft journal entries|utkast måste bokföras/i.test(message)) kind = 'draft_entries'
-        else if (/unbooked transaction|saknar bokföring|obokförda transaktioner/i.test(message)) kind = 'unbooked_transactions'
-        else if (/voucher gap|verifikationsnummerglapp/i.test(message)) kind = 'unexplained_voucher_gap'
-        else if (/Sequence counter integrity|Nummerserien i serie/i.test(message)) kind = 'sequence_mismatch'
-        else if (/Trial balance is not balanced|Råbalansen balanserar inte/i.test(message)) kind = 'trial_balance_unbalanced'
-        else if (/already closed|redan stängd/i.test(message)) kind = 'period_already_closed'
-        else if (/has not yet ended|slutdatumet har inte passerat/i.test(message)) kind = 'period_not_ended'
-        else if (/closing entry already exists|Bokslutsverifikation finns redan/i.test(message)) kind = 'closing_entry_exists'
-        else if (/continuity check failed|IB\/UB-kontinuiteten/i.test(message)) kind = 'opening_balance_continuity'
-        else if (/opening balances already posted|redan ingående balanser bokförda/i.test(message)) kind = 'next_period_ib_posted'
-        else if (/Fiscal period not found|Räkenskapsperioden hittades inte/i.test(message)) kind = 'period_not_found'
-        return { kind, severity: 'high' as const, message }
-      })
+      // Reshape the lib's blockers into structured entries so the agent (and
+      // any dashboard) can render and act on each one independently. Routing
+      // keys off the stable YearEndBlockerCode via YEAR_END_BLOCKER_KIND, so a
+      // reworded Swedish message no longer silently reclassifies as 'other'.
+      // The `kind` strings are this tool's public contract: never rename one.
+      // A blocker with no mapped code falls back to the wording heuristic
+      // (which also catches legacy English messages), then to 'other'.
+      const blockers = validation.blockers.map(({ code, message }) => ({
+        kind: YEAR_END_BLOCKER_KIND[code] ?? classifyYearEndBlockerMessage(message),
+        severity: 'high' as const,
+        message,
+      }))
 
       let preview = null
       if (includePreview && validation.ready) {

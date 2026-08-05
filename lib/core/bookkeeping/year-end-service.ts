@@ -62,10 +62,12 @@ export async function validateYearEndReadiness(
     .eq('company_id', companyId)
     .single()
 
-  // The error/warning strings below are Swedish: they render verbatim in the
+  // The blocker/warning strings below are Swedish: they render verbatim in the
   // bokslut wizard (a "stays Swedish" surface per .claude/rules/i18n.md).
-  // The MCP year_end_readiness tool classifies them by regex; keep
-  // extensions/general/mcp-server/server.ts in sync when changing wording.
+  // Blockers are routed on `code`, never on the wording, so rewording a
+  // message is safe. Adding a NEW code is not: the MCP year_end_readiness tool
+  // maps every YearEndBlockerCode to its public `kind`, so a new code needs a
+  // matching entry in extensions/general/mcp-server/server.ts.
   if (fetchError || !period) {
     const notFound: YearEndBlocker[] = [
       { code: 'PERIOD_NOT_FOUND', message: 'Räkenskapsperioden hittades inte' },
@@ -357,15 +359,17 @@ export async function validateYearEndReadiness(
     )
     unbookedTransactionCount = unbooked.untriaged + unbooked.businessUnbooked
     if (unbookedTransactionCount > 0) {
-      errors.push(
-        `${unbookedTransactionCount} transaktioner i perioden saknar bokföring: bokför dem eller markera dem som privata innan bokslut`,
-      )
+      blockers.push({
+        code: 'UNBOOKED_TRANSACTIONS',
+        message: `${unbookedTransactionCount} transaktioner i perioden saknar bokföring: bokför dem eller markera dem som privata innan bokslut`,
+      })
     }
   } catch (err) {
     log.warn('unbooked-transaction readiness check failed', err as Error)
-    errors.push(
-      'Kontrollen av obokförda transaktioner kunde inte genomföras: försök igen',
-    )
+    blockers.push({
+      code: 'UNBOOKED_CHECK_FAILED',
+      message: 'Kontrollen av obokförda transaktioner kunde inte genomföras: försök igen',
+    })
   }
 
   return {

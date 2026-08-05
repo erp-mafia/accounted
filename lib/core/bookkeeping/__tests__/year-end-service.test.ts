@@ -384,6 +384,10 @@ describe('validateYearEndReadiness', () => {
     expect(result.ready).toBe(false)
     expect(result.unbookedTransactionCount).toBe(3)
     expect(result.errors.some((e: string) => e.includes('3 transaktioner i perioden saknar bokföring'))).toBe(true)
+    // The code is what the wizard and the MCP tool route on: losing it would
+    // silently drop the remediation link and the 'unbooked_transactions' kind.
+    expect(result.blockers.some((b) => b.code === 'UNBOOKED_TRANSACTIONS')).toBe(true)
+    expect(result.errors).toEqual(result.blockers.map((b) => b.message))
   })
 
   it('fails closed when the unbooked-transaction check cannot run', async () => {
@@ -406,6 +410,8 @@ describe('validateYearEndReadiness', () => {
         e.includes('Kontrollen av obokförda transaktioner kunde inte genomföras'),
       ),
     ).toBe(true)
+    expect(result.blockers.some((b) => b.code === 'UNBOOKED_CHECK_FAILED')).toBe(true)
+    expect(result.errors).toEqual(result.blockers.map((b) => b.message))
   })
 
   it('warns on explained voucher gaps', async () => {

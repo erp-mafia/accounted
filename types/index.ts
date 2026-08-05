@@ -3411,6 +3411,8 @@ export type YearEndBlockerCode =
   | 'TRIAL_BALANCE_UNBALANCED'
   | 'CONTINUITY_MISMATCH'
   | 'NEXT_PERIOD_HAS_IB'
+  | 'UNBOOKED_TRANSACTIONS'
+  | 'UNBOOKED_CHECK_FAILED'
 
 export interface YearEndBlocker {
   code: YearEndBlockerCode
