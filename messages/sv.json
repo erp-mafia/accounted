@@ -4786,7 +4786,7 @@
     "deadlines_title": "Närmaste deadlines",
     "deadlines_empty": "Inga öppna deadlines.",
     "automations_title": "Automationer",
-    "automations_intro": "Här kommer du kunna sätta upp automatiska flöden för dina klientbolag. Det här är vad som är på väg:",
+    "automations_intro": "Här kommer du kunna sätta upp automatiska flöden för dina klientbolag.",
     "automations_card_digest_title": "Måndagsöversikt",
     "automations_card_digest_desc": "Varje måndag: ett mejl med läget för alla klientbolag, obokfört, inkorg och veckans deadlines.",
     "automations_card_deadlines_title": "Deadline-bevakning",

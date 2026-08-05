@@ -4786,7 +4786,7 @@
     "deadlines_title": "Upcoming deadlines",
     "deadlines_empty": "No open deadlines.",
     "automations_title": "Automations",
-    "automations_intro": "This is where you'll set up automated workflows for your client companies. Here's what's coming:",
+    "automations_intro": "This is where you'll set up automated workflows for your client companies.",
     "automations_card_digest_title": "Monday briefing",
     "automations_card_digest_desc": "Every Monday: one email with the state of all client companies, unbooked items, inbox and the week's deadlines.",
     "automations_card_deadlines_title": "Deadline watch",
