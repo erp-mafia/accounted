@@ -2335,6 +2335,8 @@ export function EditableFieldsList({
   // from the extraction) and flips to user-verified once the user edits it:
   // mirrors the create form's AiFilledIndicator. Reset when switching items.
   const [edited, setEdited] = useState<Partial<Record<FieldKey, boolean>>>({})
+  // Per-document fold for the invoice-only fields on a receipt.
+  const [showAllFields, setShowAllFields] = useState(false)
   const timersRef = useRef<Partial<Record<FieldKey, ReturnType<typeof setTimeout>>>>({})
   // Last-known server values per field. Used to detect when the server
   // normalises a value (currency upper-cased, whitespace trimmed) so we can
@@ -2352,6 +2354,10 @@ export function EditableFieldsList({
     setDrafts(seeded)
     lastServerRef.current = seeded
     setEdited({})
+    // The "Visa fakturafält" fold is per document: without this, expanding
+    // it on one receipt leaves the invoice fields open on the next one,
+    // which reads as if that document had them too.
+    setShowAllFields(false)
     return () => {
       for (const t of Object.values(timersRef.current)) {
         if (t) clearTimeout(t)
@@ -2466,7 +2472,6 @@ export function EditableFieldsList({
 
   const vatRows = useMemo(() => data.vatBreakdown ?? [], [data.vatBreakdown])
 
-  const [showAllFields, setShowAllFields] = useState(false)
   const { shown: shownFields, hiddenCount } = useMemo(
     () =>
       selectInboxFields({
