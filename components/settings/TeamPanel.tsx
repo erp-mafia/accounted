@@ -10,11 +10,25 @@ import { useToast } from '@/components/ui/use-toast'
 import {
   SettingsGroup,
   SettingsInput,
-  SettingsSelect,
 } from '@/components/settings/SettingsRows'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { parseTeamMembersPayload } from '@/components/settings/members-payload'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { formatDateLong } from '@/lib/utils'
+import { cn, formatDateLong } from '@/lib/utils'
+
+// Role dropdowns use the Radix Select for its styled popup (the native
+// <select> list cannot be styled and clashes with the panel), but the
+// TRIGGER keeps the flat quiet SettingsSelect look: borderless, dashed
+// underline on hover, no box. Shared by the member rows and the invite form.
+const ROLE_TRIGGER_CLASS =
+  'h-auto w-auto shrink-0 gap-1.5 rounded-none border-0 border-b border-dashed border-transparent bg-transparent px-0 py-1 text-sm ' +
+  'hover:border-border focus:border-solid focus:border-foreground/50 focus:ring-0'
 
 interface TeamMember {
   id: string
@@ -279,17 +293,23 @@ export function TeamPanel() {
               )}
             </p>
             {roleEditable ? (
-              <SettingsSelect
+              <Select
                 value={member.role}
-                onChange={(e) => void handleRoleChange(member, e.target.value)}
+                onValueChange={(value) => void handleRoleChange(member, value)}
                 disabled={changingRoleId === member.id}
-                aria-label={t('role_change_aria', { email: member.email })}
-                className="text-xs"
               >
-                {isOwner && <option value="owner">{t('role_owner')}</option>}
-                <option value="admin">{t('role_admin')}</option>
-                <option value="member">{t('role_member')}</option>
-              </SettingsSelect>
+                <SelectTrigger
+                  className={cn(ROLE_TRIGGER_CLASS, 'text-xs')}
+                  aria-label={t('role_change_aria', { email: member.email })}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {isOwner && <SelectItem value="owner">{t('role_owner')}</SelectItem>}
+                  <SelectItem value="admin">{t('role_admin')}</SelectItem>
+                  <SelectItem value="member">{t('role_member')}</SelectItem>
+                </SelectContent>
+              </Select>
             ) : (
               <span className="shrink-0 text-xs text-muted-foreground">
                 {roleLabel(member.role)}
@@ -371,14 +391,15 @@ export function TeamPanel() {
             required
             className="border-border sm:flex-1"
           />
-          <SettingsSelect
-            value={inviteRole}
-            onChange={(e) => setInviteRole(e.target.value)}
-            aria-label={t('invite_role_label')}
-          >
-            <option value="member">{t('role_member')}</option>
-            <option value="admin">{t('role_admin')}</option>
-          </SettingsSelect>
+          <Select value={inviteRole} onValueChange={setInviteRole}>
+            <SelectTrigger className={ROLE_TRIGGER_CLASS} aria-label={t('invite_role_label')}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="end">
+              <SelectItem value="member">{t('role_member')}</SelectItem>
+              <SelectItem value="admin">{t('role_admin')}</SelectItem>
+            </SelectContent>
+          </Select>
           <Button type="submit" size="sm" disabled={isSending || !inviteEmail.trim()}>
             {isSending ? (
               <Loader2 className="h-4 w-4 animate-spin" />
