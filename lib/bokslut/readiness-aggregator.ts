@@ -5,7 +5,10 @@ import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope
 import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
 import { generateReconciliation as generateAPReconciliation } from '@/lib/reports/supplier-reconciliation'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
+import { createLogger } from '@/lib/logger'
 import type { YearEndValidation } from '@/types'
+
+const log = createLogger('bokslut-readiness')
 
 export type ReminderSeverity = 'info' | 'warning'
 
@@ -164,6 +167,16 @@ export async function buildBokslutReadinessReport(
       generateARReconciliation(supabase, companyId, fiscalPeriodId),
       generateAPReconciliation(supabase, companyId, fiscalPeriodId),
     ])
+    // A failed tie-out degrades to "no reminder" (these are advisory), but a
+    // silently swallowed failure is indistinguishable from "reconciled" in
+    // the report, so the rejection must at least be traceable in logs
+    // (compliance review on the avstämning controls, BFNAR 2013:2 kap 8).
+    if (arResult.status === 'rejected') {
+      log.warn('AR tie-out (kundreskontra vs 1510) failed; reminder omitted', arResult.reason)
+    }
+    if (apResult.status === 'rejected') {
+      log.warn('AP tie-out (leverantörsreskontra vs 2440) failed; reminder omitted', apResult.reason)
+    }
     if (arResult.status === 'fulfilled' && !arResult.value.is_reconciled) {
       reminders.push({
         code: 'ar_reconciliation_mismatch',
