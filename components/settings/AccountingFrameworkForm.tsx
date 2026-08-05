@@ -33,9 +33,12 @@ interface AccountingFrameworkFormProps {
  *
  * UX rules (regulatory area: kept in Swedish):
  *   - Default is K2 (matches the column default and BFNAR 2016:10 baseline).
- *   - Switching K2 → K3 fires a confirmation dialog. The recommendation per
- *     BFN is that the choice is permanent for the company once made; we
- *     surface that as a warning, not a block, so the user can still revert.
+ *   - Switching in either direction fires a confirmation dialog. K2 → K3
+ *     warns about the added obligations; the recommendation per BFN is that
+ *     the choice is permanent once made, surfaced as a warning, not a block.
+ *     K3 → K2 warns about what the system does NOT do: uppskjuten skatt
+ *     (2240/8940) balances and komponentavskrivningar are not unwound
+ *     automatically, and the K3 årsredovisning content stops applying.
  *   - The save is its own request (PATCH /api/company/current): separate
  *     from /api/settings because the column lives on companies, not on
  *     company_settings.
@@ -88,13 +91,9 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
   function handleChange(next: string) {
     const value = next as AccountingFramework
     if (value === selected) return
-    // K2 → K3 is the consequential direction: confirm before persisting.
-    if (selected === 'k2' && value === 'k3') {
-      setPending(value)
-      return
-    }
-    setSelected(value)
-    void persist(value)
+    // Both directions are consequential: K2 → K3 adds obligations, K3 → K2
+    // leaves K3-only balances behind. Confirm before persisting either way.
+    setPending(value)
   }
 
   return (
@@ -137,15 +136,31 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Byta till K3?</DialogTitle>
+            <DialogTitle>{pending === 'k2' ? 'Byta till K2?' : 'Byta till K3?'}</DialogTitle>
             <DialogDescription className="space-y-2 pt-2">
-              <span className="block">
-                K3 medför löpande att kassaflödesanalys upprättas, komponentavskrivning
-                används och uppskjuten skatt redovisas separat (konto 2240 / 8940).
-              </span>
-              <span className="block">
-                Bytet är permanent enligt rekommendation. Fortsätt?
-              </span>
+              {pending === 'k2' ? (
+                <>
+                  <span className="block">
+                    Bokförda saldon för uppskjuten skatt (konto 2240 / 8940) och gjorda
+                    komponentavskrivningar återförs inte automatiskt: de måste hanteras
+                    manuellt.
+                  </span>
+                  <span className="block">
+                    Årsredovisningens K3-innehåll (kassaflödesanalys, K3-noter och
+                    uppskjuten skatt) gäller inte längre. Fortsätt?
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="block">
+                    K3 medför löpande att kassaflödesanalys upprättas, komponentavskrivning
+                    används och uppskjuten skatt redovisas separat (konto 2240 / 8940).
+                  </span>
+                  <span className="block">
+                    Bytet är permanent enligt rekommendation. Fortsätt?
+                  </span>
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -168,6 +183,8 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
                 </>
+              ) : pending === 'k2' ? (
+                'Byt till K2'
               ) : (
                 'Byt till K3'
               )}
