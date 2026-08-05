@@ -270,6 +270,35 @@ export async function updateSession(request: NextRequest) {
       return supabaseResponse
     }
 
+    // Byrå owners/admins with zero client companies (a fresh byrå) home to
+    // the EMPTY cockpit, never to the company onboarding wizard: clients are
+    // created from the cockpit, and forcing the wizard here would make the
+    // byrå owner create a personal company just to get in. Cockpit-shaped
+    // paths pass through (the dashboard layout renders its no-company shell);
+    // everything else is steered to /byra. API requests pass through so the
+    // routes' own guards answer with JSON instead of an HTML redirect.
+    // The query runs only in the rare no-company state: zero hot-path cost.
+    const { data: byraRows } = await supabase
+      .from('team_members')
+      .select('role, teams:team_id!inner(kind)')
+      .eq('user_id', user.id)
+      .eq('teams.kind', 'byra')
+    const isByraAdmin = (byraRows ?? []).some(
+      (r: { role: string }) => r.role === 'owner' || r.role === 'admin',
+    )
+    if (isByraAdmin) {
+      const isByraNoCompanyAllowed =
+        pathname.startsWith('/byra') ||
+        pathname.startsWith('/clients') ||
+        pathname.startsWith('/companies/new') ||
+        pathname.startsWith('/settings') ||
+        pathname.startsWith('/api/')
+      if (isByraNoCompanyAllowed) {
+        return supabaseResponse
+      }
+      return NextResponse.redirect(new URL('/byra', request.url))
+    }
+
     // Enrichment lives in the user-keyed `bankid_enrichment` table (migration
     // 20260506160000), it cannot live in extension_data, which is
     // company-scoped, and the user has no company yet on this path.

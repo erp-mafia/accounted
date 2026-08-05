@@ -113,9 +113,21 @@ export default async function DashboardLayout({
 
   // No companies: redirect to onboarding, except for allowed escape-hatch
   // routes (so the user can still reach /settings/account to delete their
-  // account after archiving their last company).
+  // account after archiving their last company) and byrå owners/admins,
+  // whose home is the EMPTY cockpit (mirrors the middleware's byrå
+  // exception): they render the no-company shell on cockpit routes and are
+  // steered to /byra everywhere else, never to the company wizard.
   if (!companyId) {
-    if (!isNoCompanyAllowed) {
+    const isByraAdmin =
+      !!byraTeam && (byraTeam.role === 'owner' || byraTeam.role === 'admin')
+    const isByraShellPath =
+      pathname.startsWith('/byra') ||
+      pathname.startsWith('/clients') ||
+      pathname.startsWith('/settings')
+    if (!isNoCompanyAllowed && !(isByraAdmin && isByraShellPath)) {
+      if (isByraAdmin) {
+        redirect('/byra')
+      }
       redirect('/onboarding')
     }
 

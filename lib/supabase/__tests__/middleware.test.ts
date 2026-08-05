@@ -25,6 +25,10 @@ const state = vi.hoisted(() => ({
     }>
     error: unknown
   },
+  // Rows the team_members query resolves to (the byrå exception in the
+  // no-company branch awaits an eq-terminated chain, so the from() mock
+  // makes exactly that table thenable).
+  byraMemberships: [] as Array<{ role: string; teams: { kind: string } }>,
 }))
 
 vi.mock('@supabase/ssr', () => ({
@@ -41,11 +45,19 @@ vi.mock('@supabase/ssr', () => ({
       },
     },
     rpc: vi.fn(async () => state.company),
-    from: vi.fn(() => {
+    from: vi.fn((table: string) => {
       const chain: Record<string, unknown> = {}
       const self = new Proxy(chain, {
         get: (_t, prop) => {
-          if (prop === 'then') return undefined
+          if (prop === 'then') {
+            // The byrå-membership lookup awaits its filter chain directly
+            // (no .maybeSingle terminal), so team_members must be thenable.
+            if (table === 'team_members') {
+              return (resolve: (v: unknown) => void) =>
+                resolve({ data: state.byraMemberships, error: null })
+            }
+            return undefined
+          }
           if (prop === 'maybeSingle' || prop === 'single') {
             return async () => ({ data: null, error: null })
           }
@@ -86,6 +98,7 @@ describe('updateSession redirect destinations', () => {
       data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false }],
       error: null,
     }
+    state.byraMemberships = []
     delete process.env.NEXT_PUBLIC_REQUIRE_MFA
     delete process.env.NEXT_PUBLIC_SELF_HOSTED
   })
@@ -261,6 +274,52 @@ describe('updateSession redirect destinations', () => {
       const response = await run('/select-company')
 
       expect(response.status).toBe(200)
+    })
+  })
+
+  // ── No-company branch: the byrå cockpit exception ─────────────────────
+
+  describe('byrå owners/admins with zero companies', () => {
+    beforeEach(() => {
+      state.user = SIGNED_IN
+      // No resolvable company at all (fresh byrå, no client memberships).
+      state.company = {
+        data: [{ company_id: null, locale: 'sv', used_fallback: true }],
+        error: null,
+      }
+    })
+
+    it('steers a byrå owner from the dashboard root to the empty cockpit, not onboarding', async () => {
+      state.byraMemberships = [{ role: 'owner', teams: { kind: 'byra' } }]
+
+      const response = await run('/')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/byra')
+    })
+
+    it('lets a byrå admin through to cockpit routes', async () => {
+      state.byraMemberships = [{ role: 'admin', teams: { kind: 'byra' } }]
+
+      for (const path of ['/byra', '/clients', '/companies/new-client', '/settings/brand']) {
+        const response = await run(path)
+        expect(response.status).toBe(200)
+      }
+    })
+
+    it('keeps the onboarding redirect for a plain byrå member', async () => {
+      state.byraMemberships = [{ role: 'member', teams: { kind: 'byra' } }]
+
+      const response = await run('/')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/onboarding')
+    })
+
+    it('keeps the onboarding redirect for non-byrå users', async () => {
+      state.byraMemberships = []
+
+      const response = await run('/')
+
+      expect(new URL(locationOf(response)!).pathname).toBe('/onboarding')
     })
   })
 
