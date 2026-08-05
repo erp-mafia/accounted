@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -347,6 +347,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   // instead of flipping to the company nav behind the modal.
   const onSettings = pathname.startsWith('/settings')
   const onCockpitPath = isCockpitPath(pathname)
+  // Settings opened from the cockpit carry ?ctx=byra (user menu / mobile
+  // nav links, preserved by SettingsRail). It is the signal that SURVIVES a
+  // hard refresh, when the previous-surface memory below starts over at
+  // false and the sidebar used to flip to the full company nav.
+  const ctxByra = useSearchParams().get('ctx') === 'byra'
   // Previous-render memory via the adjust-state-during-render pattern
   // (react.dev: storing information from previous renders); a ref would be
   // simpler but refs must not be read or written during render.
@@ -354,7 +359,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
   if (!onSettings && onCockpitPath !== lastNonSettingsCockpit) {
     setLastNonSettingsCockpit(onCockpitPath)
   }
-  const cockpitMode = !!byraTeam && (onSettings ? lastNonSettingsCockpit : onCockpitPath)
+  const cockpitMode =
+    !!byraTeam && (onSettings ? lastNonSettingsCockpit || ctxByra : onCockpitPath)
   // Byrå-scope surfaces, not company surfaces: they must stay reachable even
   // when the active company is unresolved.
   const ALWAYS_ENABLED = new Set(['/settings', '/clients', '/byra', '/byra/automations', '/byra/kpi'])
