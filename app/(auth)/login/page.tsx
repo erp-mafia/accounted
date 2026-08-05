@@ -557,11 +557,24 @@ function LoginPageContent() {
 
         <p className="mt-4 text-center text-xs text-muted-foreground leading-relaxed">
           {tAuth('terms_prefix')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
+          {/* The platform's terms live on the marketing site; the privacy
+              policy is the in-app /privacy page (host-relative, so it works
+              on branded byrå domains too). New tab: don't lose login state. */}
+          <a
+            href="https://accounted.se/terms"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
             {tAuth('terms_link')}
           </a>{' '}
           {tAuth('terms_and')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
+          <a
+            href="/privacy"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
             {tAuth('privacy_link')}
           </a>
           .

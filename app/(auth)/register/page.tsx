@@ -595,11 +595,23 @@ function RegisterPageContent() {
 
         <p className="mt-4 text-center text-xs text-muted-foreground leading-relaxed">
           {t('terms_prefix')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
+          {/* Same targets as the login page: platform terms on the marketing
+              site, in-app /privacy (host-relative for branded domains). */}
+          <a
+            href="https://accounted.se/terms"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
             {t('terms_link')}
           </a>{' '}
           {t('terms_and')}{' '}
-          <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
+          <a
+            href="/privacy"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2 hover:text-foreground transition-colors"
+          >
             {t('privacy_link')}
           </a>
           .
