@@ -67,6 +67,19 @@ const CATEGORY_OPTIONS: { value: AssetCategory; label: string; defaultYears: num
   { value: 'other_tangible', label: 'Övrig materiell tillgång', defaultYears: 5 },
 ]
 
+// The server-side default pair for 'immaterial' is 1010/1019
+// (Utvecklingsutgifter), which BFNAR 2016:10 punkt 10.4 reserves for K3:
+// egenupparbetade immateriella tillgångar får inte aktiveras enligt K2.
+// For non-K3 companies the dialog therefore books intangibles on the generic
+// PURCHASED pair instead: 1090 Övriga immateriella anläggningstillgångar /
+// 1099 Ackumulerade avskrivningar på övriga immateriella
+// anläggningstillgångar. The API rejects K2 writes onto Ej K2 accounts
+// (K2_EXCLUDED_ACCOUNT), so without this override the create would 422.
+const K2_IMMATERIAL_ACCOUNTS = {
+  bas_asset_account: '1090',
+  bas_accumulated_account: '1099',
+} as const
+
 export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAssetDialogProps) {
   const { toast } = useToast()
   // useCompanyOptional so the dialog still works in tests / storyboards
@@ -197,6 +210,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
           acquisition_date: acquisitionDate,
           acquisition_cost: cost,
           useful_life_months: years * 12,
+          ...(category === 'immaterial' && !isK3 ? K2_IMMATERIAL_ACCOUNTS : {}),
           ...(componentsPayload !== null ? { k3_components: componentsPayload } : {}),
         }),
       })
@@ -250,6 +264,19 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                 ))}
               </SelectContent>
             </Select>
+            {category === 'immaterial' && !isK3 && (
+              <p className="text-xs text-muted-foreground">
+                Bokförs som förvärvad immateriell tillgång (konto 1090). Egenupparbetad
+                utveckling får inte aktiveras enligt K2 (BFNAR 2016:10 punkt 10.4): det kräver K3.
+              </p>
+            )}
+            {category === 'immaterial' && isK3 && (
+              <p className="text-xs text-muted-foreground">
+                För aktiebolag medför aktivering av egenupparbetad utveckling (konto 1010) att
+                motsvarande belopp sätts av till fond för utvecklingsutgifter (konto 2089) enligt
+                ÅRL 4 kap. 2 §.
+              </p>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">

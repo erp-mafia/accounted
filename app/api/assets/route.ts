@@ -4,8 +4,16 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { K3ComponentSchema } from '@/lib/api/schemas'
-import { createAsset, listAssets } from '@/lib/bokslut/assets/asset-service'
+import {
+  createAsset,
+  listAssets,
+  DEFAULT_ACCOUNTS_BY_CATEGORY,
+} from '@/lib/bokslut/assets/asset-service'
 import { validateComponents } from '@/lib/bokslut/assets/k3-components'
+import {
+  findK2ExcludedAccount,
+  k2ExcludedAccountMessage,
+} from '@/lib/bokslut/assets/k2-account-guard'
 import type { AssetCategory, WritableDepreciationMethod } from '@/types'
 
 const ASSET_CATEGORIES: readonly AssetCategory[] = [
@@ -195,22 +203,49 @@ export const POST = withRouteContext(
     const { user, supabase, companyId, log, requestId } = ctx
     const validation = await validateBody(request, CreateAssetSchema)
     if (!validation.success) return validation.response
-    // K3_REQUIRED_FOR_COMPONENTS: K3 component depreciation is only
-    // meaningful when the company applies the K3 framework. Reject the
-    // write with 422 (Unprocessable Entity) rather than silently dropping
-    // the field so the user knows their input was discarded.
-    if (validation.data.k3_components !== undefined && validation.data.k3_components !== null) {
-      const { data: company } = await supabase
-        .from('companies')
-        .select('accounting_framework')
-        .eq('id', companyId)
-        .single()
-      if (!company || company.accounting_framework !== 'k3') {
+    // Framework gates. One companies fetch serves both checks:
+    // 1. K3_REQUIRED_FOR_COMPONENTS: K3 component depreciation is only
+    //    meaningful when the company applies the K3 framework. Reject the
+    //    write with 422 (Unprocessable Entity) rather than silently dropping
+    //    the field so the user knows their input was discarded.
+    // 2. K2_EXCLUDED_ACCOUNT: accounts flagged k2_excluded in the BAS
+    //    reference (egenupparbetade immateriella, 1010-1019) may not carry
+    //    assets under K2 (BFNAR 2016:10 punkt 10.4). Checked on the RESOLVED
+    //    accounts (explicit override or category default) so a K2 company
+    //    cannot land on 1010/1019 through the immaterial defaults either.
+    const { data: company } = await supabase
+      .from('companies')
+      .select('accounting_framework')
+      .eq('id', companyId)
+      .single()
+    const isK3Company = company?.accounting_framework === 'k3'
+    if (
+      validation.data.k3_components !== undefined &&
+      validation.data.k3_components !== null &&
+      !isK3Company
+    ) {
+      return NextResponse.json(
+        {
+          error: {
+            code: 'K3_REQUIRED_FOR_COMPONENTS',
+            message: 'Komponentuppdelning (k3_components) kräver att företaget tillämpar K3 (BFNAR 2012:1).',
+          },
+        },
+        { status: 422 },
+      )
+    }
+    if (!isK3Company) {
+      const defaults = DEFAULT_ACCOUNTS_BY_CATEGORY[validation.data.category]
+      const excluded = findK2ExcludedAccount([
+        validation.data.bas_asset_account ?? defaults.asset,
+        validation.data.bas_accumulated_account ?? defaults.accumulated,
+      ])
+      if (excluded) {
         return NextResponse.json(
           {
             error: {
-              code: 'K3_REQUIRED_FOR_COMPONENTS',
-              message: 'Komponentuppdelning (k3_components) kräver att företaget tillämpar K3 (BFNAR 2012:1).',
+              code: 'K2_EXCLUDED_ACCOUNT',
+              message: k2ExcludedAccountMessage(excluded),
             },
           },
           { status: 422 },

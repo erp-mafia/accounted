@@ -3160,6 +3160,13 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
     message_en:
       'Acquisition date, cost and category cannot be changed once the asset has been disposed or depreciation has been posted. Reverse (storno) first, or use the disposal flow.',
   },
+  K2_EXCLUDED_ACCOUNT: {
+    httpStatus: 422,
+    message_sv:
+      'Kontot är markerat Ej K2 i BAS-kontoplanen och kräver K3: egenupparbetade immateriella tillgångar får inte aktiveras enligt K2 (BFNAR 2016:10 punkt 10.4). Byt regelverk under Inställningar → Bokföring om företaget tillämpar K3.',
+    message_en:
+      'The account is marked Ej K2 in the BAS chart of accounts and requires the K3 framework: internally generated intangible assets may not be capitalized under K2 (BFNAR 2016:10 paragraph 10.4). Switch the accounting framework under Settings → Bookkeeping if the company applies K3.',
+  },
 }
 
 // Dimensions registry (kostnadsställe/projekt): dev_docs/dimensions_implementation_plan.md §6

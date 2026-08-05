@@ -28,12 +28,19 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
-vi.mock('@/lib/bokslut/assets/asset-service', () => ({
-  createAsset: vi.fn(),
-  listAssets: vi.fn(),
-  getAsset: vi.fn(),
-  updateAsset: vi.fn(),
-}))
+// Keep DEFAULT_ACCOUNTS_BY_CATEGORY (and other pure exports) real: the routes
+// resolve category-default accounts through it for the K2_EXCLUDED_ACCOUNT
+// framework gate. Only the service functions that hit Supabase are mocked.
+vi.mock('@/lib/bokslut/assets/asset-service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/bokslut/assets/asset-service')>()
+  return {
+    ...actual,
+    createAsset: vi.fn(),
+    listAssets: vi.fn(),
+    getAsset: vi.fn(),
+    updateAsset: vi.fn(),
+  }
+})
 
 import { createAsset, getAsset, updateAsset } from '@/lib/bokslut/assets/asset-service'
 import { GET, PATCH } from '../[id]/route'
@@ -113,6 +120,120 @@ describe('POST /api/assets', () => {
       'user-1',
       expect.objectContaining({ depreciation_method: 'linear' }),
     )
+  })
+
+  it('rejects a K2 company creating an immaterial asset on the 1010/1019 defaults with 422', async () => {
+    enqueue({ data: { accounting_framework: 'k2' } })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+      await POST(createMockRequest('/api/assets', {
+        method: 'POST',
+        body: {
+          name: 'Egen plattform',
+          category: 'immaterial',
+          acquisition_date: '2025-01-01',
+          acquisition_cost: 100_000,
+          useful_life_months: 60,
+        },
+      }))
+    )
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('K2_EXCLUDED_ACCOUNT')
+    expect(body.error.message).toContain('1010')
+    expect(body.error.message).toContain('K3')
+    expect(mockCreateAsset).not.toHaveBeenCalled()
+  })
+
+  it('rejects a K2 company explicitly overriding onto 1010 with 422', async () => {
+    enqueue({ data: { accounting_framework: 'k2' } })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await POST(createMockRequest('/api/assets', {
+        method: 'POST',
+        body: {
+          name: 'Utvecklingsprojekt',
+          category: 'immaterial',
+          acquisition_date: '2025-01-01',
+          acquisition_cost: 50_000,
+          useful_life_months: 60,
+          bas_asset_account: '1010',
+          bas_accumulated_account: '1039',
+        },
+      }))
+    )
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('K2_EXCLUDED_ACCOUNT')
+    expect(mockCreateAsset).not.toHaveBeenCalled()
+  })
+
+  it('rejects a K2 company using 1081 (pagaende immateriella projekt) with 422', async () => {
+    enqueue({ data: { accounting_framework: 'k2' } })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await POST(createMockRequest('/api/assets', {
+        method: 'POST',
+        body: {
+          name: 'Pågående utvecklingsprojekt',
+          category: 'immaterial',
+          acquisition_date: '2025-01-01',
+          acquisition_cost: 75_000,
+          useful_life_months: 60,
+          bas_asset_account: '1081',
+          bas_accumulated_account: '1039',
+        },
+      }))
+    )
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('K2_EXCLUDED_ACCOUNT')
+    expect(mockCreateAsset).not.toHaveBeenCalled()
+  })
+
+  it('accepts a K2 company creating an immaterial asset on a purchased pair (1030/1039)', async () => {
+    enqueue({ data: { accounting_framework: 'k2' } })
+    mockCreateAsset.mockResolvedValue({ id: 'asset-patent' } as never)
+
+    const response = await POST(createMockRequest('/api/assets', {
+      method: 'POST',
+      body: {
+        name: 'Patent',
+        category: 'immaterial',
+        acquisition_date: '2025-01-01',
+        acquisition_cost: 80_000,
+        useful_life_months: 60,
+        bas_asset_account: '1030',
+        bas_accumulated_account: '1039',
+      },
+    }))
+
+    expect(response.status).toBe(200)
+    expect(mockCreateAsset).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({ bas_asset_account: '1030' }),
+    )
+  })
+
+  it('accepts a K3 company creating an immaterial asset on the 1010/1019 defaults', async () => {
+    enqueue({ data: { accounting_framework: 'k3' } })
+    mockCreateAsset.mockResolvedValue({ id: 'asset-dev' } as never)
+
+    const response = await POST(createMockRequest('/api/assets', {
+      method: 'POST',
+      body: {
+        name: 'Utvecklingsutgifter plattform',
+        category: 'immaterial',
+        acquisition_date: '2025-01-01',
+        acquisition_cost: 100_000,
+        useful_life_months: 60,
+      },
+    }))
+
+    expect(response.status).toBe(200)
+    expect(mockCreateAsset).toHaveBeenCalled()
   })
 })
 
@@ -209,5 +330,116 @@ describe('PATCH /api/assets/[id]', () => {
     expect(status).toBe(400)
     expect(body.error.code).toBe('INVALID_K3_COMPONENTS')
     expect(mockUpdateAsset).not.toHaveBeenCalled()
+  })
+
+  it('rejects a K2 company patching the asset account onto 1010 with 422', async () => {
+    enqueue({ data: { accounting_framework: 'k2' } })
+    mockGetAsset.mockResolvedValue({
+      id: 'asset-1',
+      category: 'immaterial',
+      bas_asset_account: '1030',
+      bas_accumulated_account: '1039',
+      bas_expense_account: '7813',
+    } as never)
+
+    const req = createMockRequest('/api/assets/asset-1', {
+      method: 'PATCH',
+      body: { bas_asset_account: '1010' },
+    })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+      await PATCH(req, routeParams)
+    )
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('K2_EXCLUDED_ACCOUNT')
+    expect(body.error.message).toContain('1010')
+    expect(mockUpdateAsset).not.toHaveBeenCalled()
+  })
+
+  it('rejects a K2 company recategorizing to immaterial (defaults land on 1010/1019) with 422', async () => {
+    enqueue({ data: { accounting_framework: 'k2' } })
+    mockGetAsset.mockResolvedValue({
+      id: 'asset-1',
+      category: 'equipment',
+      bas_asset_account: '1220',
+      bas_accumulated_account: '1229',
+      bas_expense_account: '7832',
+    } as never)
+
+    const req = createMockRequest('/api/assets/asset-1', {
+      method: 'PATCH',
+      body: { category: 'immaterial' },
+    })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await PATCH(req, routeParams)
+    )
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('K2_EXCLUDED_ACCOUNT')
+    expect(mockUpdateAsset).not.toHaveBeenCalled()
+  })
+
+  it('allows a K2 company moving a legacy 1010 asset onto a purchased pair', async () => {
+    enqueue({ data: { accounting_framework: 'k2' } })
+    mockGetAsset.mockResolvedValue({
+      id: 'asset-1',
+      category: 'immaterial',
+      bas_asset_account: '1010',
+      bas_accumulated_account: '1019',
+      bas_expense_account: '7811',
+    } as never)
+    mockUpdateAsset.mockResolvedValue({ id: 'asset-1', bas_asset_account: '1030' } as never)
+
+    const req = createMockRequest('/api/assets/asset-1', {
+      method: 'PATCH',
+      body: { bas_asset_account: '1030', bas_accumulated_account: '1039' },
+    })
+
+    const { status } = await parseJsonResponse(await PATCH(req, routeParams))
+
+    expect(status).toBe(200)
+    expect(mockUpdateAsset).toHaveBeenCalled()
+  })
+
+  it('allows a K3 company patching the asset account onto 1010', async () => {
+    enqueue({ data: { accounting_framework: 'k3' } })
+    mockGetAsset.mockResolvedValue({
+      id: 'asset-1',
+      category: 'immaterial',
+      bas_asset_account: '1030',
+      bas_accumulated_account: '1039',
+      bas_expense_account: '7813',
+    } as never)
+    mockUpdateAsset.mockResolvedValue({ id: 'asset-1', bas_asset_account: '1010' } as never)
+
+    const req = createMockRequest('/api/assets/asset-1', {
+      method: 'PATCH',
+      body: { bas_asset_account: '1010', bas_accumulated_account: '1019' },
+    })
+
+    const { status } = await parseJsonResponse(await PATCH(req, routeParams))
+
+    expect(status).toBe(200)
+    expect(mockUpdateAsset).toHaveBeenCalled()
+  })
+
+  it('skips the framework gate for patches that touch neither category nor accounts', async () => {
+    // No company row enqueued and getAsset unmocked: if the gate ran anyway
+    // it would resolve a null company (treated as K2) and 404 on the missing
+    // asset. A 200 therefore proves the name-only patch never hit the gate,
+    // which keeps legacy K2 assets already sitting on 1010 editable.
+    mockUpdateAsset.mockResolvedValue({ id: 'asset-1', name: 'Nytt namn' } as never)
+
+    const req = createMockRequest('/api/assets/asset-1', {
+      method: 'PATCH',
+      body: { name: 'Nytt namn' },
+    })
+
+    const { status } = await parseJsonResponse(await PATCH(req, routeParams))
+
+    expect(status).toBe(200)
+    expect(mockUpdateAsset).toHaveBeenCalled()
   })
 })
