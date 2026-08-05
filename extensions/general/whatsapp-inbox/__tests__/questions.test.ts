@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import {
   evaluateQuestion,
   QUESTION_PRIORITY,
-  REPRESENTATION_MIN_TOTAL,
   type QuestionInput,
 } from '@/extensions/general/whatsapp-inbox/lib/questions'
 import type { InvoiceExtractionResult } from '@/types'
@@ -77,7 +76,7 @@ describe('evaluateQuestion', () => {
     ).toBeNull()
   })
 
-  it('restaurant/cafe/hotel receipts >= 150 kr trigger representation', () => {
+  it('restaurant/cafe/hotel receipts trigger representation', () => {
     for (const category of ['restaurant', 'cafe', 'hotel'] as const) {
       expect(
         evaluateQuestion(
@@ -87,17 +86,34 @@ describe('evaluateQuestion', () => {
     }
   })
 
-  it('representation needs the minimum total: a coffee below the floor is left alone', () => {
+  it('asks about a small business meal too: the documentation duty has no amount floor', () => {
+    // BFL 5 kap 6-7 §: deltagare + syfte is what makes representation
+    // deductible, regardless of the sum. The 300 kr/person figure is the
+    // VAT-base cap, a different rule. Flagged by the Swedish compliance
+    // review on PR #1340; the old 150 kr floor silently skipped it.
     expect(
       evaluateQuestion(
         input({
           extracted: extraction({
             merchantCategory: 'cafe',
-            totals: { subtotal: null, vatAmount: null, total: REPRESENTATION_MIN_TOTAL - 1 },
+            totals: { subtotal: null, vatAmount: null, total: 120 },
           }),
         }),
       ),
-    ).toBeNull()
+    ).toEqual({ type: 'representation' })
+  })
+
+  it('still asks when the total is unreadable, rather than skipping the trail', () => {
+    expect(
+      evaluateQuestion(
+        input({
+          extracted: extraction({
+            merchantCategory: 'restaurant',
+            totals: { subtotal: null, vatAmount: null, total: null },
+          }),
+        }),
+      ),
+    ).toEqual({ type: 'representation' })
   })
 
   it('a supplier_invoice never triggers representation, whatever the merchant', () => {

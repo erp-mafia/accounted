@@ -13,9 +13,20 @@ import { MEAL_PATTERN } from '@/lib/tax/expense-warnings'
 import type { InvoiceExtractionResult } from '@/types'
 import type { QuestionType } from './conversation'
 
-/** Representation question only above this total (SEK): Skatteverket-grade
- *  documentation for a 45 kr coffee is noise, not compliance. */
-export const REPRESENTATION_MIN_TOTAL = 150
+/** No amount floor on the representation question, deliberately.
+ *
+ *  An earlier version gated it at 150 kr to avoid asking about a 45 kr
+ *  coffee. That was wrong: what makes a representation expense deductible
+ *  at all is documenting deltagare and syfte (BFL 5 kap 6-7 §, verifikation
+ *  content requirements), and that duty is not conditioned on any amount.
+ *  The 300 kr/person figure people remember is the VAT-deduction BASE cap,
+ *  a different rule entirely. A 120 kr business lunch booked with no
+ *  participant trail is exactly the deduction Skatteverket denies later.
+ *
+ *  Noise is controlled where it belongs instead: the question fires only for
+ *  receipt-shaped documents from restaurant/cafe/hotel merchants, at most
+ *  once per receipt, at most twice per burst and six times per sender per
+ *  day, and a single "nej" dismisses it for good. */
 
 /** Compressed-chat-photo signal: WhatsApp chat photos are JPEG, nameless and
  *  small. Below this size with an empty extraction, assume the compression
@@ -82,9 +93,6 @@ function isUnreadable(input: QuestionInput): boolean {
 
 function isRepresentation(input: QuestionInput): boolean {
   const extracted = input.extracted
-  const total = extracted?.totals?.total ?? null
-  if (total == null || total < REPRESENTATION_MIN_TOTAL) return false
-
   const kind = extracted?.documentKind ?? null
   const category = extracted?.merchantCategory ?? null
 
