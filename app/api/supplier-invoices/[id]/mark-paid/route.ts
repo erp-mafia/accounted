@@ -6,6 +6,7 @@ import {
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
@@ -229,6 +230,28 @@ export const POST = withRouteContext(
     // debt orphans on 2440 and expense + input VAT double-count.
     const siAlreadyBooked = !!(invoice as { registration_journal_entry_id?: string | null }).registration_journal_entry_id
     const useCashEntry = !siAlreadyBooked && accountingMethod === 'cash'
+
+    // createSupplierInvoiceCashEntry books the FULL invoice (all items + VAT)
+    // and takes no payment amount: reject partials and part-paid completions
+    // for never-booked kontantmetoden invoices instead of over-booking the
+    // expense against a smaller bank movement. Custom lines are not exempt:
+    // the dialog pre-fills the same full-invoice shape.
+    const cashBlock = cashPartialBlockReason({
+      invoiceAlreadyBooked: siAlreadyBooked,
+      accountingMethod,
+      priorPaidAmount: (invoice as { paid_amount?: number | null }).paid_amount,
+      paysRemainingInFull: paymentAmount >= invoice.remaining_amount - 0.005,
+    })
+    if (cashBlock) {
+      return errorResponseFromCode('SI_CASH_PARTIAL_UNSUPPORTED', opLog, {
+        requestId,
+        details: {
+          reason: cashBlock,
+          payment_amount: paymentAmount,
+          remaining_amount: invoice.remaining_amount,
+        },
+      })
+    }
 
     let journalEntryId: string | null = null
 

@@ -21,13 +21,23 @@ interface SettingsSectionHeaderProps {
   intro?: React.ReactNode
   /** Right-aligned header action (e.g. "Förhandsvisa faktura", "Skapa nyckel"). */
   action?: React.ReactNode
+  /**
+   * Brand mark for a section that represents a third-party channel
+   * (WhatsApp today). Sections that are just Accounted settings leave this
+   * unset: the serif title carries them, and a decorative icon per tab
+   * would turn the settings rail into a sticker album.
+   */
+  mark?: React.ReactNode
 }
 
-export function SettingsSectionHeader({ title, intro, action }: SettingsSectionHeaderProps) {
+export function SettingsSectionHeader({ title, intro, action, mark }: SettingsSectionHeaderProps) {
   return (
     <header>
       <div className="flex items-baseline justify-between gap-4">
-        <h2 className="font-display text-xl tracking-tight">{title}</h2>
+        <div className="flex items-center gap-2.5">
+          {mark ? <span className="shrink-0 leading-none">{mark}</span> : null}
+          <h2 className="font-display text-xl tracking-tight">{title}</h2>
+        </div>
         {action ? <div className="flex shrink-0 items-center gap-3">{action}</div> : null}
       </div>
       {intro ? (

@@ -2,8 +2,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
+import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
+import { generateReconciliation as generateAPReconciliation } from '@/lib/reports/supplier-reconciliation'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
+import { createLogger } from '@/lib/logger'
 import type { YearEndValidation } from '@/types'
+
+const log = createLogger('bokslut-readiness')
 
 export type ReminderSeverity = 'info' | 'warning'
 
@@ -83,7 +88,7 @@ export async function buildBokslutReadinessReport(
       .single(),
     supabase
       .from('company_settings')
-      .select('entity_type')
+      .select('entity_type, accounting_method')
       .eq('company_id', companyId)
       .maybeSingle(),
     validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId),
@@ -95,6 +100,9 @@ export async function buildBokslutReadinessReport(
 
   const period = periodResult.data
   const entityType = (settingsResult.data?.entity_type ?? 'aktiebolag') as BokslutReadinessReport['entityType']
+  const accountingMethod =
+    ((settingsResult.data as { accounting_method?: string | null } | null)?.accounting_method ??
+      'accrual')
 
   // Bank reconciliation snapshot for the period. Run after period fetch so we
   // know the date range. Failure here must not break the report: fall back
@@ -145,6 +153,52 @@ export async function buildBokslutReadinessReport(
       // link 404ed.
       href: '/reports/bank-reconciliation',
     })
+  }
+
+  // AR/AP tie-outs: Phase 1 avstämningar per the bokslut process, open
+  // sub-ledger vs konto 1510 / 2440. Accrual companies only: under
+  // kontantmetoden open invoices are deliberately not on 1510/2440 until the
+  // year-end conversion (BFL 5 kap 2 § 3 st) exists, so the tie-out is
+  // permanently "unreconciled" there by construction and would only mislead.
+  // Warnings, never blockers: a difference can be legitimate (e.g. partial
+  // payments settled at a different FX rate than the invoice-date rate).
+  if (accountingMethod === 'accrual') {
+    const [arResult, apResult] = await Promise.allSettled([
+      generateARReconciliation(supabase, companyId, fiscalPeriodId),
+      generateAPReconciliation(supabase, companyId, fiscalPeriodId),
+    ])
+    // A failed tie-out degrades to "no reminder" (these are advisory), but a
+    // silently swallowed failure is indistinguishable from "reconciled" in
+    // the report, so the rejection must at least be traceable in logs
+    // (compliance review on the avstämning controls, BFNAR 2013:2 kap 8).
+    if (arResult.status === 'rejected') {
+      log.warn('AR tie-out (kundreskontra vs 1510) failed; reminder omitted', arResult.reason)
+    }
+    if (apResult.status === 'rejected') {
+      log.warn('AP tie-out (leverantörsreskontra vs 2440) failed; reminder omitted', apResult.reason)
+    }
+    if (arResult.status === 'fulfilled' && !arResult.value.is_reconciled) {
+      reminders.push({
+        code: 'ar_reconciliation_mismatch',
+        severity: 'warning',
+        message:
+          arResult.value.unconverted_fx_count > 0
+            ? `Kundreskontran kan inte stämmas av mot konto 1510: ${arResult.value.unconverted_fx_count} fakturor i utländsk valuta saknar valutakurs.`
+            : `Kundreskontran stämmer inte mot konto 1510: differens ${arResult.value.difference.toFixed(2)} kr. Kontrollera obetalda kundfakturor innan bokslut.`,
+        href: '/reports/kundreskontra',
+      })
+    }
+    if (apResult.status === 'fulfilled' && !apResult.value.is_reconciled) {
+      reminders.push({
+        code: 'ap_reconciliation_mismatch',
+        severity: 'warning',
+        message:
+          apResult.value.unconverted_fx_count > 0
+            ? `Leverantörsreskontran kan inte stämmas av mot konto 2440: ${apResult.value.unconverted_fx_count} fakturor i utländsk valuta saknar valutakurs.`
+            : `Leverantörsreskontran stämmer inte mot konto 2440: differens ${apResult.value.difference.toFixed(2)} kr. Kontrollera obetalda leverantörsfakturor innan bokslut.`,
+        href: '/reports/supplier-ledger',
+      })
+    }
   }
 
   // Periodiseringar (accruals) are still manual: no wizard step ships in

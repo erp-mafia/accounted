@@ -12795,6 +12795,7 @@ export const tools: McpTool[] = [
       const blockers = validation.errors.map((message) => {
         let kind: string = 'other'
         if (/draft journal entries|utkast måste bokföras/i.test(message)) kind = 'draft_entries'
+        else if (/unbooked transaction|saknar bokföring|obokförda transaktioner/i.test(message)) kind = 'unbooked_transactions'
         else if (/voucher gap|verifikationsnummerglapp/i.test(message)) kind = 'unexplained_voucher_gap'
         else if (/Sequence counter integrity|Nummerserien i serie/i.test(message)) kind = 'sequence_mismatch'
         else if (/Trial balance is not balanced|Råbalansen balanserar inte/i.test(message)) kind = 'trial_balance_unbalanced'
@@ -12802,6 +12803,7 @@ export const tools: McpTool[] = [
         else if (/has not yet ended|slutdatumet har inte passerat/i.test(message)) kind = 'period_not_ended'
         else if (/closing entry already exists|Bokslutsverifikation finns redan/i.test(message)) kind = 'closing_entry_exists'
         else if (/continuity check failed|IB\/UB-kontinuiteten/i.test(message)) kind = 'opening_balance_continuity'
+        else if (/opening balances already posted|redan ingående balanser bokförda/i.test(message)) kind = 'next_period_ib_posted'
         else if (/Fiscal period not found|Räkenskapsperioden hittades inte/i.test(message)) kind = 'period_not_found'
         return { kind, severity: 'high' as const, message }
       })
