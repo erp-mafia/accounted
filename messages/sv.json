@@ -2127,6 +2127,7 @@
     "scope_period_desc": "Välj ett specifikt räkenskapsår",
     "recommended": "Rekommenderas",
     "fiscal_year_label": "Räkenskapsår",
+    "fiscal_year_placeholder": "Välj räkenskapsår",
     "no_fiscal_years": "Inga räkenskapsår",
     "include_docs_label": "Inkludera kvitton och underlag",
     "include_docs_help": "Bilagor till verifikationer (kvitton, fakturor, PDF:er) packas med i ZIP:en. Stäng av för en mindre backup med bara bokföringsdata.",

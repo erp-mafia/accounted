@@ -2127,6 +2127,7 @@
     "scope_period_desc": "Pick a specific fiscal year",
     "recommended": "Recommended",
     "fiscal_year_label": "Fiscal year",
+    "fiscal_year_placeholder": "Select fiscal year",
     "no_fiscal_years": "No fiscal years",
     "include_docs_label": "Include receipts and supporting documents",
     "include_docs_help": "Voucher attachments (receipts, invoices, PDFs) are packed in the ZIP. Turn off for a smaller backup with bookkeeping data only.",

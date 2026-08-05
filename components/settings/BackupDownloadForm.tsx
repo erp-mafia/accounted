@@ -6,6 +6,13 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -273,24 +280,30 @@ export function BackupDownloadForm() {
           {scope === 'period' && (
             <div className="space-y-2">
               <Label htmlFor="backup-period">{t('fiscal_year_label')}</Label>
-              <select
-                id="backup-period"
-                value={selectedPeriodId}
-                onChange={(e) => setSelectedPeriodId(e.target.value)}
-                className="flex h-10 w-full max-w-xs rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              <Select
+                value={selectedPeriodId || undefined}
+                onValueChange={setSelectedPeriodId}
                 disabled={periods === null || periods.length === 0}
               >
-                {/* The confirmed-empty option only after a confirmed empty
-                    read; an unknown list renders an empty disabled select. */}
-                {periods !== null && periods.length === 0 && (
-                  <option value="">{t('no_fiscal_years')}</option>
-                )}
-                {(periods ?? []).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.period_start}: {p.period_end}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger id="backup-period" className="w-full max-w-xs">
+                  {/* The confirmed-empty text only after a confirmed empty
+                      read; an unknown list renders an empty disabled select. */}
+                  <SelectValue
+                    placeholder={
+                      periods !== null && periods.length === 0
+                        ? t('no_fiscal_years')
+                        : t('fiscal_year_placeholder')
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {(periods ?? []).map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.period_start}: {p.period_end}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
 
