@@ -12795,6 +12795,7 @@ export const tools: McpTool[] = [
       const blockers = validation.errors.map((message) => {
         let kind: string = 'other'
         if (/draft journal entries|utkast måste bokföras/i.test(message)) kind = 'draft_entries'
+        else if (/unbooked transaction|saknar bokföring|obokförda transaktioner/i.test(message)) kind = 'unbooked_transactions'
         else if (/voucher gap|verifikationsnummerglapp/i.test(message)) kind = 'unexplained_voucher_gap'
         else if (/Sequence counter integrity|Nummerserien i serie/i.test(message)) kind = 'sequence_mismatch'
         else if (/Trial balance is not balanced|Råbalansen balanserar inte/i.test(message)) kind = 'trial_balance_unbalanced'
