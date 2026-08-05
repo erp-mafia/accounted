@@ -11,12 +11,14 @@ import {
 function principles(
   overrides: Partial<{
     hasComponents: boolean
-    hasRecognizedDeferredTax: boolean
+    deferredTax: 'none' | 'recognized' | 'unknown'
+    hasCapitalizedLease: boolean
   }> = {},
 ) {
   return buildK3RedovisningsPrinciper({
     hasComponents: false,
-    hasRecognizedDeferredTax: false,
+    deferredTax: 'none',
+    hasCapitalizedLease: false,
     ...overrides,
   })
 }
@@ -48,7 +50,7 @@ describe('buildK3RedovisningsPrinciper', () => {
   })
 
   it('discloses the recognised 2240 liability instead when the books carry one', () => {
-    const note = principles({ hasRecognizedDeferredTax: true })
+    const note = principles({ deferredTax: 'recognized' })
     expect(note.body).toContain('konto 2240')
     expect(note.body).toContain('Uppskjutna skatter')
     // The gross-reserve claim is the OTHER branch: keeping it here would
@@ -65,14 +67,36 @@ describe('buildK3RedovisningsPrinciper', () => {
     expect(note.body).toContain('operationella leasingavtal')
     expect(note.body).toContain('kostnadsförs linjärt')
     // The blanket operational treatment is only available to a juridisk
-    // person (K3 punkt 20.29); it is not the general K3 rule and is not
-    // available in koncernredovisning, so the note must state the basis.
+    // person (K3 punkt 20.29); it is not the general K3 rule, so the note
+    // must state the basis it relies on.
     expect(note.body).toContain('juridisk person')
     expect(note.body).toContain('K3 punkt 20.29')
-    expect(note.body).toContain('koncernredovisning upprättas inte')
+    // It must NOT assert anything about the entity's group obligations: the
+    // same document emits a Koncernforhallanden note when a parent is set.
+    expect(note.body).not.toMatch(/koncernredovisning upprättas inte/)
     // No code capitalizes leases, so the note must not assert that finance
     // leases are recognized as assets with a corresponding liability.
     expect(note.body).not.toMatch(/anläggningstillgång med motsvarande skuld/)
+  })
+
+  it('drops the blanket operational claim when the books carry leased assets', () => {
+    const note = principles({ hasCapitalizedLease: true })
+    // A balansrakning with 1260/1269 contradicts "samtliga leasingavtal
+    // redovisas som operationella", so that claim and the 20.29 basis for it
+    // must both disappear; the paragraph describes what is booked instead.
+    expect(note.body).not.toMatch(/Samtliga leasingavtal/)
+    expect(note.body).not.toMatch(/20\.29/)
+    expect(note.body).toContain('leasade tillgångar')
+    expect(note.body).toContain('kostnadsförs linjärt')
+  })
+
+  it('never prints an affirmative denial when the deferred-tax figures could not be read', () => {
+    const note = principles({ deferredTax: 'unknown' })
+    // The denial is a statement about the books; on the read-failure path we
+    // have no books to state it from, so only the going-forward policy shows.
+    expect(note.body).not.toMatch(/särredovisas inte/)
+    expect(note.body).toContain('K3 punkt 29.37')
+    expect(note.body).toContain('inklusive uppskjuten skatteskuld')
   })
 
   it('OMITS the komponentavskrivning paragraph when no asset has components', () => {
@@ -92,7 +116,7 @@ describe('K3 noter: the two deferred-tax notes never contradict each other', () 
     // build-data omits buildUppskjutenSkattNot entirely when the trial
     // balance has no 2240/8940 activity, so the only deferred-tax statement
     // in the document is the policy paragraph.
-    const note = principles({ hasRecognizedDeferredTax: false })
+    const note = principles({ deferredTax: 'none' })
     expect(note.body).toContain(
       'Uppskjuten skatt hänförlig till obeskattade reserver särredovisas inte i juridisk person',
     )
@@ -101,7 +125,7 @@ describe('K3 noter: the two deferred-tax notes never contradict each other', () 
   })
 
   it('company WITH a 2240 balance: policy paragraph and movement note tell one story', () => {
-    const policy = principles({ hasRecognizedDeferredTax: true })
+    const policy = principles({ deferredTax: 'recognized' })
     const movement = buildUppskjutenSkattNot({
       noteNumber: 4,
       latentTaxOpening: 50_000,

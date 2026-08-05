@@ -36,19 +36,24 @@ import type {
  *   paragraph. K3 ch.17.4 makes component depreciation mandatory when the
  *   components have meaningfully different useful lives; otherwise the
  *   paragraph would be misleading and is omitted.
- * @param hasRecognizedDeferredTax: true when the trial balance actually
- *   carries a deferred-tax balance on 2240 (or a movement on 8940), i.e.
- *   exactly when buildUppskjutenSkattNot is emitted. The two notes MUST be
- *   driven by the same signal: a policy paragraph that denies any separately
- *   recognized deferred tax on obeskattade reserver cannot sit in the same
- *   document as a note disclosing that very balance. The caller derives the
- *   flag once (build-data.ts) and passes it to both.
+ * @param deferredTax: what the trial balance says about 2240/8940.
+ *   'recognized' is exactly when buildUppskjutenSkattNot is emitted; the two
+ *   notes MUST be driven by the same signal, since a policy paragraph denying
+ *   any separately recognized deferred tax cannot sit in the same document as
+ *   a note disclosing that very balance. 'unknown' is the read-failure path:
+ *   an affirmative denial is itself a claim, so figures we could not read may
+ *   not produce one. The caller derives this once (build-data.ts).
+ * @param hasCapitalizedLease: true when the balance sheet carries leased
+ *   assets (1260/1269). The blanket operational treatment is then contradicted
+ *   by the company's own balansrakning, so the paragraph describes what is
+ *   booked instead of asserting the 20.29 simplification.
  */
 export function buildK3RedovisningsPrinciper(params: {
   hasComponents: boolean
-  hasRecognizedDeferredTax: boolean
+  deferredTax: 'none' | 'recognized' | 'unknown'
+  hasCapitalizedLease: boolean
 }): NoteEntry {
-  const { hasComponents, hasRecognizedDeferredTax } = params
+  const { hasComponents, deferredTax, hasCapitalizedLease } = params
   const paragraphs: string[] = [
     'Årsredovisningen är upprättad i enlighet med Årsredovisningslagen (1995:1554) och Bokföringsnämndens allmänna råd BFNAR 2012:1 Årsredovisning och koncernredovisning (K3).',
     'Värderingsprinciper: Tillgångar och skulder värderas till anskaffningsvärde om inget annat anges. Materiella anläggningstillgångar redovisas till anskaffningsvärde med avdrag för ackumulerade avskrivningar och eventuella nedskrivningar. Avskrivning sker linjärt över tillgångens bedömda nyttjandeperiod.',
@@ -67,23 +72,40 @@ export function buildK3RedovisningsPrinciper(params: {
   // implements them: a signed AR must not assert policies the books do not
   // follow.
   //
-  // Deferred tax has two mutually exclusive cases, decided by the same
-  // signal that decides whether buildUppskjutenSkattNot is emitted:
-  //   - no 2240/8940 activity: the reserves are carried gross, which is what
-  //     K3 29.37 permits in juridisk person, and the paragraph says so.
-  //   - a 2240 balance exists (K3 dispositions, legacy postings or imported
-  //     history): denying the split would contradict both the balansrakning
+  // Deferred tax has three cases, decided by the same signal that decides
+  // whether buildUppskjutenSkattNot is emitted:
+  //   - 'none': no 2240/8940 activity. The reserves are carried gross, which
+  //     is what K3 29.37 permits in juridisk person, and the paragraph says so.
+  //   - 'recognized': a 2240 balance exists (legacy postings or imported
+  //     history). Denying the split would contradict both the balansrakning
   //     and the "Uppskjutna skatter" note, so the paragraph discloses the
   //     recognized liability and points at that note.
-  // Neither branch claims HOW the balance was measured or where it came
-  // from: an imported provision may have been booked at 22 or 21.4 percent
-  // by another system, and this builder cannot tell the cases apart.
-  paragraphs.push(
-    hasRecognizedDeferredTax
+  //   - 'unknown': the figures could not be read. A denial is an affirmative
+  //     statement about the books, so it may not be printed on data we do not
+  //     have; the paragraph states only the policy applied going forward. The
+  //     caller has already raised a warning on this path.
+  // No branch claims HOW the balance was measured or where it came from: an
+  // imported provision may have been booked at 22 or 21.4 percent by another
+  // system, and this builder cannot tell the cases apart.
+  const deferredTaxParagraph =
+    deferredTax === 'recognized'
       ? 'Uppskjuten skatt: Uppskjuten skatteskuld hänförlig till obeskattade reserver redovisas på konto 2240. Ingående saldo, årets förändring och utgående saldo framgår av noten Uppskjutna skatter.'
-      : 'Uppskjuten skatt: Uppskjuten skatt hänförlig till obeskattade reserver särredovisas inte i juridisk person, utan obeskattade reserver redovisas inklusive uppskjuten skatteskuld.',
+      : deferredTax === 'unknown'
+        ? 'Uppskjuten skatt: Obeskattade reserver redovisas inklusive uppskjuten skatteskuld i enlighet med K3 punkt 29.37, som medger att de redovisas brutto i juridisk person.'
+        : 'Uppskjuten skatt: Uppskjuten skatt hänförlig till obeskattade reserver särredovisas inte i juridisk person, utan obeskattade reserver redovisas inklusive uppskjuten skatteskuld.'
+  // Leasing follows the same rule as deferred tax: describe the books, do not
+  // assert a simplification the balansrakning contradicts. The 20.29 wording
+  // states the basis for the treatment without claiming anything about the
+  // entity's group obligations, which this builder cannot know (build-data
+  // emits a Koncernforhallanden note whenever a parent company is declared).
+  // Source: .claude/skills/swedish-asset-accounting/references/leasing-and-disposal.md:32.
+  const leasingParagraph = hasCapitalizedLease
+    ? 'Leasing: Leasingavgifter för operationella leasingavtal kostnadsförs linjärt i resultaträkningen över leasingperioden. Balansräkningen innehåller leasade tillgångar som redovisas som anläggningstillgång med tillhörande avskrivningar.'
+    : 'Leasing: Samtliga leasingavtal redovisas som operationella leasingavtal med stöd av undantaget i K3 punkt 20.29, som medger att även finansiella leasingavtal redovisas som operationella i juridisk person. Leasingavgifterna kostnadsförs linjärt i resultaträkningen över leasingperioden.'
+  paragraphs.push(
+    deferredTaxParagraph,
     'Intäktsredovisning: Intäkter redovisas till det verkliga värdet av det som erhållits eller kommer att erhållas och redovisas när väsentliga risker och förmåner har överförts till köparen, beloppet kan mätas tillförlitligt och det är sannolikt att de ekonomiska fördelarna tillfaller företaget.',
-    'Leasing: Årsredovisningen avser en juridisk person och någon koncernredovisning upprättas inte. Samtliga leasingavtal redovisas som operationella leasingavtal med stöd av undantaget i K3 punkt 20.29, som medger att även finansiella leasingavtal redovisas som operationella i juridisk person. Leasingavgifterna kostnadsförs linjärt i resultaträkningen över leasingperioden.',
+    leasingParagraph,
     'Finansiella instrument: Finansiella instrument redovisas initialt till anskaffningsvärde inklusive transaktionskostnader. Kundfordringar värderas till det belopp som beräknas inflyta. Övriga finansiella tillgångar och skulder redovisas till upplupet anskaffningsvärde.',
   )
   return {

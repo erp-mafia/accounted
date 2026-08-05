@@ -990,10 +990,25 @@ async function buildK3Noter(
     )
   }
   const latentTaxMovement = latentTax.ok ? latentTax.movement : null
+  // Leased assets on the balance sheet (1260/1269) contradict the blanket
+  // "all leases are operational" simplification, so the same trial balance
+  // that decides the deferred-tax wording also decides the leasing wording.
+  const hasCapitalizedLease = tbFullRows.some(
+    (r) =>
+      (r.account_number === '1260' || r.account_number === '1269')
+      && ((r.closing_debit || 0) !== 0 || (r.closing_credit || 0) !== 0),
+  )
   notes.push(
     buildK3RedovisningsPrinciper({
       hasComponents,
-      hasRecognizedDeferredTax: latentTaxMovement !== null,
+      // A read failure may not print an affirmative denial: it degrades to
+      // the going-forward policy, and the warning above tells the user.
+      deferredTax: !latentTax.ok
+        ? 'unknown'
+        : latentTaxMovement !== null
+          ? 'recognized'
+          : 'none',
+      hasCapitalizedLease,
     }),
   )
 
