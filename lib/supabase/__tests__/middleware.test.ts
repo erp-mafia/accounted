@@ -26,9 +26,16 @@ const state = vi.hoisted(() => ({
     error: unknown
   },
   // Rows the team_members query resolves to (the byrå exception in the
-  // no-company branch awaits an eq-terminated chain, so the from() mock
-  // makes exactly that table thenable).
-  byraMemberships: [] as Array<{ role: string; teams: { kind: string } }>,
+  // no-company branch and the home-domain guard both await eq-terminated
+  // chains, so the from() mock makes exactly that table thenable).
+  byraMemberships: [] as Array<{
+    role?: string
+    teams: { kind: string; brands?: { domain: string } | Array<{ domain: string }> | null }
+  }>,
+  // Rows the home-domain client lookup on company_members resolves to.
+  clientMemberships: [] as Array<{ company_id: string }>,
+  // What the mocked resolveBrandByHost returns for the request host.
+  hostBrand: null as null | { teamId: string },
 }))
 
 vi.mock('@supabase/ssr', () => ({
@@ -50,11 +57,16 @@ vi.mock('@supabase/ssr', () => ({
       const self = new Proxy(chain, {
         get: (_t, prop) => {
           if (prop === 'then') {
-            // The byrå-membership lookup awaits its filter chain directly
-            // (no .maybeSingle terminal), so team_members must be thenable.
+            // The byrå-membership lookup and the home-domain client lookup
+            // await their filter chains directly (no .maybeSingle terminal),
+            // so those tables must be thenable.
             if (table === 'team_members') {
               return (resolve: (v: unknown) => void) =>
                 resolve({ data: state.byraMemberships, error: null })
+            }
+            if (table === 'company_members') {
+              return (resolve: (v: unknown) => void) =>
+                resolve({ data: state.clientMemberships, error: null })
             }
             return undefined
           }
@@ -69,6 +81,13 @@ vi.mock('@supabase/ssr', () => ({
   })),
 }))
 
+vi.mock('@/lib/branding/resolve', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/branding/resolve')>()),
+  resolveBrandByHost: vi.fn(async () =>
+    state.hostBrand ? { teamId: state.hostBrand.teamId } : null,
+  ),
+}))
+
 import { updateSession } from '../middleware'
 
 const ORIGIN = 'http://localhost:3000'
@@ -80,6 +99,10 @@ function locationOf(response: Response) {
 
 function run(path: string) {
   return updateSession(new NextRequest(`${ORIGIN}${path}`))
+}
+
+function runAt(origin: string, path: string, headers?: Record<string, string>) {
+  return updateSession(new NextRequest(`${origin}${path}`, { headers }))
 }
 
 describe('updateSession redirect destinations', () => {
@@ -99,6 +122,8 @@ describe('updateSession redirect destinations', () => {
       error: null,
     }
     state.byraMemberships = []
+    state.clientMemberships = []
+    state.hostBrand = null
     delete process.env.NEXT_PUBLIC_REQUIRE_MFA
     delete process.env.NEXT_PUBLIC_SELF_HOSTED
   })
@@ -320,6 +345,106 @@ describe('updateSession redirect destinations', () => {
       const response = await run('/')
 
       expect(new URL(locationOf(response)!).pathname).toBe('/onboarding')
+    })
+  })
+
+  // ── Home-domain affinity (WL): the domain corrects itself ─────────────
+
+  describe('home-domain affinity', () => {
+    const ARBORE = 'https://arbore.accounted.se'
+    const ACOUNT = 'https://acount.accounted.se'
+
+    beforeEach(() => {
+      state.user = SIGNED_IN
+    })
+
+    it('redirects a byrå member on a foreign byrå domain to their own domain', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'acount.accounted.se' } } },
+      ]
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(locationOf(response)).toBe(`${ACOUNT}/`)
+    })
+
+    it('redirects a byrå member on the platform domain to their byrå domain', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+
+      const response = await runAt('https://app.gnubok.se', '/')
+
+      expect(locationOf(response)).toBe(`${ARBORE}/`)
+    })
+
+    it('lets a byrå member through on their own domain and caches the verdict', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+
+      const response = await runAt(ARBORE, '/byra')
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('set-cookie')).toContain(
+        'gnubok-home-ok=arbore.accounted.se',
+      )
+    })
+
+    it('tolerates the array shape for the embedded brand', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: [{ domain: 'acount.accounted.se' }] } },
+      ]
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(locationOf(response)).toBe(`${ACOUNT}/`)
+    })
+
+    it('redirects a user with no byrå ties off a brand domain to the platform', async () => {
+      state.hostBrand = { teamId: 'team-arbore' }
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(locationOf(response)).toBe('https://app.gnubok.se/')
+    })
+
+    it('keeps a byrå client user on the byrå domain their company lives under', async () => {
+      state.hostBrand = { teamId: 'team-arbore' }
+      state.clientMemberships = [{ company_id: 'company-1' }]
+
+      const response = await runAt(ARBORE, '/')
+
+      expect(response.status).toBe(200)
+    })
+
+    it('does nothing on the platform domain for regular users', async () => {
+      const response = await runAt('https://app.gnubok.se', '/')
+
+      expect(response.status).toBe(200)
+    })
+
+    it('does nothing on localhost and direct Vercel hosts', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+      ]
+
+      for (const origin of [ORIGIN, 'https://erp-base-abc123.vercel.app']) {
+        const response = await runAt(origin, '/byra')
+        expect(response.status).toBe(200)
+      }
+    })
+
+    it('skips the check while the host-scoped OK cookie is fresh', async () => {
+      state.byraMemberships = [
+        { teams: { kind: 'byra', brands: { domain: 'acount.accounted.se' } } },
+      ]
+
+      const response = await runAt(ARBORE, '/', {
+        cookie: 'gnubok-home-ok=arbore.accounted.se',
+      })
+
+      expect(response.status).toBe(200)
     })
   })
 

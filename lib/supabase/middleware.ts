@@ -5,6 +5,15 @@ import { apiPathSkipsMfaGate } from '@/lib/auth/api-mfa-gate'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { normalizeHost, resolveBrandByHost } from '@/lib/branding/resolve'
+
+/**
+ * Host-scoped marker that the signed-in user is on their home domain, so the
+ * affinity check below costs zero queries on the hot path. Expiry re-runs the
+ * check, which bounds staleness after team-membership changes.
+ */
+const HOME_DOMAIN_OK_COOKIE = 'gnubok-home-ok'
+const HOME_DOMAIN_OK_MAX_AGE = 15 * 60
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -145,6 +154,33 @@ export async function updateSession(request: NextRequest) {
   // Protected routes - require authentication
   if (!user) {
     return bounceToAuth(request, '/login')
+  }
+
+  // ── Home-domain affinity (WL, founder call 2026-08-05) ──────────────────
+  // Every signed-in user has a home domain: byrå team members home on their
+  // brand's domain, everyone else on the platform app URL, except a byrå's
+  // client users, whose home is the byrå domain their companies live under.
+  // On a mismatch the request is redirected to the home domain's root:
+  // sessions are per domain, so the user lands on the RIGHT branded login
+  // and signs in there ("the domain corrects itself"). This complements the
+  // WL-01 signpost, which handles per-company homing INSIDE a domain and
+  // stays the answer for multi-domain company rosters.
+  const homeOutcome = await resolveHomeDomainOutcome(supabase, user.id, request)
+  if (homeOutcome.redirectTo) {
+    return NextResponse.redirect(homeOutcome.redirectTo)
+  }
+  if (homeOutcome.cacheOk) {
+    supabaseResponse.cookies.set(
+      HOME_DOMAIN_OK_COOKIE,
+      normalizeHost(request.nextUrl.hostname),
+      {
+        path: '/',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: HOME_DOMAIN_OK_MAX_AGE,
+      },
+    )
   }
 
   // /mfa/enroll: gate behind has-password. BankID-only users who reach this
@@ -379,6 +415,94 @@ function bounceToAuth(
     url.search = `${AUTH_DESTINATION_PARAM[target]}=${encodeURIComponent(destination)}`
   }
   return NextResponse.redirect(url)
+}
+
+/**
+ * Hosts that carry no brand affinity: local dev and direct Vercel
+ * deployment URLs must never bounce a signed-in user to a product domain.
+ */
+function isAffinityExemptHost(host: string): boolean {
+  return (
+    !host ||
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.vercel.app') ||
+    /^\d{1,3}(\.\d{1,3}){3}$/.test(host)
+  )
+}
+
+/**
+ * Decide whether this signed-in request sits on the user's home domain.
+ *
+ * Rules (founder call 2026-08-05):
+ *   1. A byrå team member's home is their brand's domain: any other product
+ *      host (a foreign byrå domain OR the platform domain) redirects there.
+ *   2. A non-member on a brand domain redirects to the platform app URL,
+ *      UNLESS one of their companies is homed under that brand's team (the
+ *      byrå's own client users log in on the byrå domain).
+ *   3. Everyone else stays put.
+ *
+ * `cacheOk` marks a positive "this is home" verdict, cached in a host-scoped
+ * cookie by the caller. Query failures fail open with no caching, so a
+ * transient error neither locks anyone out nor sticks for a TTL window.
+ */
+async function resolveHomeDomainOutcome(
+  supabase: ReturnType<typeof createServerClient>,
+  userId: string,
+  request: NextRequest,
+): Promise<{ redirectTo: URL | null; cacheOk: boolean }> {
+  const stay = { redirectTo: null, cacheOk: false }
+  const host = normalizeHost(request.nextUrl.hostname)
+  if (isAffinityExemptHost(host)) return stay
+  if (request.cookies.get(HOME_DOMAIN_OK_COOKIE)?.value === host) return stay
+
+  // Rule 1: the user's own byrå brand domains (RLS: members read their brand).
+  const { data: byraRows, error: byraError } = await supabase
+    .from('team_members')
+    .select('teams:team_id!inner(kind, brands(domain))')
+    .eq('user_id', userId)
+    .eq('teams.kind', 'byra')
+  if (byraError) {
+    console.error('[middleware] home-domain byrå lookup failed', byraError)
+    return stay
+  }
+
+  const byraDomains: string[] = []
+  for (const row of byraRows ?? []) {
+    const teams = (row as { teams?: { brands?: unknown } | null }).teams
+    const brands = teams?.brands
+    // One brand per team (brands.team_id unique): PostgREST returns an
+    // object, but tolerate the array shape too.
+    const list = Array.isArray(brands) ? brands : brands ? [brands] : []
+    for (const entry of list) {
+      const domain = (entry as { domain?: unknown }).domain
+      if (typeof domain === 'string' && domain) byraDomains.push(normalizeHost(domain))
+    }
+  }
+  if (byraDomains.length > 0) {
+    if (byraDomains.includes(host)) return { redirectTo: null, cacheOk: true }
+    return { redirectTo: new URL(`https://${byraDomains[0]}/`), cacheOk: false }
+  }
+
+  // Rule 2: not a byrå member, so only a brand host can be foreign.
+  const hostBrand = await resolveBrandByHost(host)
+  if (!hostBrand) return { redirectTo: null, cacheOk: true }
+
+  const { data: clientRows, error: clientError } = await supabase
+    .from('company_members')
+    .select('company_id, companies!inner(team_id)')
+    .eq('user_id', userId)
+    .eq('companies.team_id', hostBrand.teamId)
+    .limit(1)
+  if (clientError) {
+    console.error('[middleware] home-domain client lookup failed', clientError)
+    return stay
+  }
+  if ((clientRows ?? []).length > 0) return { redirectTo: null, cacheOk: true }
+
+  const platformUrl = new URL(process.env.NEXT_PUBLIC_APP_URL || 'https://app.gnubok.se')
+  if (normalizeHost(platformUrl.hostname) === host) return { redirectTo: null, cacheOk: true }
+  return { redirectTo: platformUrl, cacheOk: false }
 }
 
 /**
