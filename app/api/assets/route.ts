@@ -12,7 +12,7 @@ import {
 import { validateComponents } from '@/lib/bokslut/assets/k3-components'
 import {
   findK2ExcludedAccount,
-  k2ExcludedAccountMessage,
+  k2ExcludedAccountMessages,
 } from '@/lib/bokslut/assets/k2-account-guard'
 import type { AssetCategory, WritableDepreciationMethod } from '@/types'
 
@@ -208,11 +208,12 @@ export const POST = withRouteContext(
     //    meaningful when the company applies the K3 framework. Reject the
     //    write with 422 (Unprocessable Entity) rather than silently dropping
     //    the field so the user knows their input was discarded.
-    // 2. K2_EXCLUDED_ACCOUNT: accounts flagged k2_excluded in the BAS
-    //    reference (egenupparbetade immateriella, 1010-1019) may not carry
-    //    assets under K2 (BFNAR 2016:10 punkt 10.4). Checked on the RESOLVED
+    // 2. K2_EXCLUDED_ACCOUNT: accounts flagged k2_excluded ("Ej K2") in the
+    //    BAS reference may not carry assets under K2. Checked on the RESOLVED
     //    accounts (explicit override or category default) so a K2 company
-    //    cannot land on 1010/1019 through the immaterial defaults either.
+    //    cannot land on 1010/1019 through the immaterial defaults either. The
+    //    guard supplies the message: the egenupparbetade-immateriella group
+    //    cites BFNAR 2016:10 punkt 10.4, other Ej K2 accounts do not.
     const { data: company } = await supabase
       .from('companies')
       .select('accounting_framework')
@@ -241,11 +242,13 @@ export const POST = withRouteContext(
         validation.data.bas_accumulated_account ?? defaults.accumulated,
       ])
       if (excluded) {
+        const messages = k2ExcludedAccountMessages(excluded)
         return NextResponse.json(
           {
             error: {
               code: 'K2_EXCLUDED_ACCOUNT',
-              message: k2ExcludedAccountMessage(excluded),
+              message: messages.message_sv,
+              message_en: messages.message_en,
             },
           },
           { status: 422 },

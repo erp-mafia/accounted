@@ -125,7 +125,9 @@ describe('POST /api/assets', () => {
   it('rejects a K2 company creating an immaterial asset on the 1010/1019 defaults with 422', async () => {
     enqueue({ data: { accounting_framework: 'k2' } })
 
-    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en: string }
+    }>(
       await POST(createMockRequest('/api/assets', {
         method: 'POST',
         body: {
@@ -142,6 +144,11 @@ describe('POST /api/assets', () => {
     expect(body.error.code).toBe('K2_EXCLUDED_ACCOUNT')
     expect(body.error.message).toContain('1010')
     expect(body.error.message).toContain('K3')
+    // 1010 is in the egenupparbetade-immateriella group, so this rejection
+    // MUST carry the punkt 10.4 citation (both languages).
+    expect(body.error.message).toContain('BFNAR 2016:10 punkt 10.4')
+    expect(body.error.message).toContain('egenupparbetade immateriella')
+    expect(body.error.message_en).toContain('BFNAR 2016:10 paragraph 10.4')
     expect(mockCreateAsset).not.toHaveBeenCalled()
   })
 
@@ -171,7 +178,7 @@ describe('POST /api/assets', () => {
   it('rejects a K2 company using 1081 (pagaende immateriella projekt) with 422', async () => {
     enqueue({ data: { accounting_framework: 'k2' } })
 
-    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
       await POST(createMockRequest('/api/assets', {
         method: 'POST',
         body: {
@@ -188,6 +195,8 @@ describe('POST /api/assets', () => {
 
     expect(status).toBe(422)
     expect(body.error.code).toBe('K2_EXCLUDED_ACCOUNT')
+    // Also kontogrupp 10, so the intangible citation applies here too.
+    expect(body.error.message).toContain('BFNAR 2016:10 punkt 10.4')
     expect(mockCreateAsset).not.toHaveBeenCalled()
   })
 
@@ -354,6 +363,44 @@ describe('PATCH /api/assets/[id]', () => {
     expect(status).toBe(422)
     expect(body.error.code).toBe('K2_EXCLUDED_ACCOUNT')
     expect(body.error.message).toContain('1010')
+    expect(body.error.message).toContain('BFNAR 2016:10 punkt 10.4')
+    expect(mockUpdateAsset).not.toHaveBeenCalled()
+  })
+
+  // The Ej K2 flag also covers accounts that have nothing to do with
+  // intangibles (uppskjuten skatt, verkligt värde, säkringsredovisning, ...).
+  // PATCH can reach them: UpdateAssetSchema has no BAS range refinement, so an
+  // override outside the category range hits this gate before updateAsset()
+  // raises its range error. Those rejections must NOT claim punkt 10.4.
+  it('rejects a K2 company patching onto 1370 without citing the intangible rule', async () => {
+    enqueue({ data: { accounting_framework: 'k2' } })
+    mockGetAsset.mockResolvedValue({
+      id: 'asset-1',
+      category: 'immaterial',
+      bas_asset_account: '1030',
+      bas_accumulated_account: '1039',
+      bas_expense_account: '7813',
+    } as never)
+
+    const req = createMockRequest('/api/assets/asset-1', {
+      method: 'PATCH',
+      body: { bas_asset_account: '1370' },
+    })
+
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en: string }
+    }>(await PATCH(req, routeParams))
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('K2_EXCLUDED_ACCOUNT')
+    expect(body.error.message).toContain('1370')
+    expect(body.error.message).toContain('Ej K2')
+    expect(body.error.message).toContain('K3')
+    expect(body.error.message).not.toContain('10.4')
+    expect(body.error.message).not.toContain('egenupparbetade')
+    expect(body.error.message_en).toContain('Ej K2')
+    expect(body.error.message_en).not.toContain('10.4')
+    expect(body.error.message_en).not.toContain('intangible')
     expect(mockUpdateAsset).not.toHaveBeenCalled()
   })
 

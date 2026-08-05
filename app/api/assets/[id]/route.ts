@@ -12,7 +12,7 @@ import {
 import { validateComponents } from '@/lib/bokslut/assets/k3-components'
 import {
   findK2ExcludedAccount,
-  k2ExcludedAccountMessage,
+  k2ExcludedAccountMessages,
 } from '@/lib/bokslut/assets/k2-account-guard'
 import type { AssetCategory, WritableDepreciationMethod } from '@/types'
 
@@ -136,11 +136,15 @@ export const PATCH = withRouteContext(
       }
     }
 
-    // K2_EXCLUDED_ACCOUNT gate (BFNAR 2016:10 punkt 10.4): when the patch
-    // touches the category or the asset/accumulated accounts, the asset must
-    // not END UP on an account the BAS reference flags as k2_excluded
-    // (egenupparbetade immateriella, 1010-1019) unless the company applies
-    // K3. The final accounts mirror updateAsset()'s resolution: a category
+    // K2_EXCLUDED_ACCOUNT gate: when the patch touches the category or the
+    // asset/accumulated accounts, the asset must not END UP on an account the
+    // BAS reference flags as k2_excluded ("Ej K2") unless the company applies
+    // K3. The guard supplies the message, citing BFNAR 2016:10 punkt 10.4
+    // only for the egenupparbetade-immateriella group and staying generic for
+    // the other Ej K2 accounts (uppskjuten skatt, verkligt värde, ...), which
+    // this route can reach: UpdateAssetSchema has no BAS range refinement, so
+    // an explicit override outside the category range lands here first.
+    // The final accounts mirror updateAsset()'s resolution: a category
     // change without explicit accounts realigns the triple to the new
     // category's defaults. Patches that leave category and accounts alone
     // skip the gate entirely, so legacy assets already sitting on an
@@ -177,11 +181,13 @@ export const PATCH = withRouteContext(
             (categoryDefaultsApply ? defaults.accumulated : existing.bas_accumulated_account),
         ])
         if (excluded) {
+          const messages = k2ExcludedAccountMessages(excluded)
           return NextResponse.json(
             {
               error: {
                 code: 'K2_EXCLUDED_ACCOUNT',
-                message: k2ExcludedAccountMessage(excluded),
+                message: messages.message_sv,
+                message_en: messages.message_en,
               },
             },
             { status: 422 },
