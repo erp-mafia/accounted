@@ -29,6 +29,8 @@ export interface Brand {
   domain: string
   appName: string
   logoUrl: string | null
+  /** Square tab icon; the layout prefers it over logoUrl for rel="icon". */
+  faviconUrl: string | null
   brandColor: string
   chromeColor: string | null
   fontKey: string
@@ -45,6 +47,7 @@ interface BrandRow {
   domain: string
   app_name: string
   logo_url: string | null
+  favicon_url: string | null
   brand_color: string
   chrome_color: string | null
   font_key: string
@@ -62,6 +65,7 @@ function mapRow(row: BrandRow): Brand {
     domain: row.domain,
     appName: row.app_name,
     logoUrl: row.logo_url,
+    faviconUrl: row.favicon_url ?? null,
     brandColor: row.brand_color,
     chromeColor: row.chrome_color,
     fontKey: row.font_key,

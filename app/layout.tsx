@@ -180,7 +180,12 @@ export default async function RootLayout({
     >
       <head>
         <link rel="apple-touch-icon" href={branding.appleTouchIconPath} />
-        {brand?.logoUrl ? <link rel="icon" href={brand.logoUrl} /> : null}
+        {/* Tab icon: the brand's dedicated square favicon when set, else the
+            logo (a wide lockup squeezed to 16px, but better than the default
+            on a branded host). */}
+        {brand?.faviconUrl || brand?.logoUrl ? (
+          <link rel="icon" href={brand.faviconUrl ?? brand.logoUrl ?? undefined} />
+        ) : null}
       </head>
       <body
         className="antialiased"
