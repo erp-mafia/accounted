@@ -236,7 +236,9 @@ describe('POST /api/team/invite', () => {
     expect(mail.fromName).toBe('Siffra')
     expect(mail.fromAddress).toBe('noreply@post.siffra.se')
     expect(mail.replyTo).toBe('support@siffra.se')
-    expect(mail.subject).toContain('siffra')
+    // Branded byrå: the subject names the byrå in its own casing, with no
+    // platform wording ("Du har blivit inbjuden till Siffra").
+    expect(mail.subject).toContain('Siffra')
     expect(mail.html).toContain('https://app.siffra.se/invite/gnubok_inv_test-token')
     expect(mail.html).not.toMatch(/accounted/i)
   })
