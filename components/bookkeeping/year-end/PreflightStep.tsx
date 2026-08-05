@@ -123,32 +123,23 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
 /**
  * Renders a blocker with a contextual action link when we can derive one.
  * Falls back to plain text otherwise.
- *
- * validateYearEndReadiness emits SWEDISH strings (the wizard is a "stays
- * Swedish" surface); the English alternates are kept as fallback so a link
- * never regresses if an older message slips through. Mirrors the MCP
- * classifier in extensions/general/mcp-server/server.ts: keep both in sync
- * with the engine wording in lib/core/bookkeeping/year-end-service.ts.
  */
 function BlockerRow({ blocker, report }: { blocker: string; report: BokslutReadinessReport }) {
   let href: string | null = null
   let actionLabel: string | null = null
 
-  if (/draft journal entries|utkast måste bokföras/i.test(blocker) && report.draftCount > 0) {
+  if (/draft journal entries/i.test(blocker) && report.draftCount > 0) {
     href = '/bookkeeping?status=draft'
     actionLabel = 'Visa utkast'
-  } else if (/voucher gap|verifikationsnummerglapp/i.test(blocker)) {
+  } else if (/voucher gap/i.test(blocker)) {
     href = '/bookkeeping/voucher-gaps'
     actionLabel = 'Hantera nummerlucka'
-  } else if (/trial balance|råbalansen/i.test(blocker)) {
+  } else if (/trial balance/i.test(blocker)) {
     href = '/reports/trial-balance'
     actionLabel = 'Öppna balansrapport'
-  } else if (/continuity|IB\/UB-kontinuiteten/i.test(blocker)) {
+  } else if (/continuity/i.test(blocker)) {
     href = '/bookkeeping'
     actionLabel = 'Granska ingående balans'
-  } else if (/unbooked transaction|saknar bokföring/i.test(blocker)) {
-    href = '/transactions'
-    actionLabel = 'Visa transaktioner'
   }
 
   return (
