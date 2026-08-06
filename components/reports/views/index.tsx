@@ -1516,13 +1516,12 @@ function MomsPeriodInlineSetup({
       })
       if (!res.ok) {
         const json = await res.json().catch(() => ({}))
-        throw new Error(
-          typeof json?.error === 'string' ? json.error : 'Kunde inte spara redovisningsperioden',
-        )
+        setError(getErrorMessage(json, { statusCode: res.status }))
+        return
       }
       await onSaved(value)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Kunde inte spara redovisningsperioden')
+      setError(getErrorMessage(err))
     } finally {
       setSaving(null)
     }
