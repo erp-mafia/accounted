@@ -1,6 +1,7 @@
 import posthog from 'posthog-js'
 import { isAnalyticsEnabled, warnIfAnalyticsMisconfigured } from '@/lib/analytics/enabled'
 import { purgeLegacyAnalyticsStorage } from '@/lib/analytics/purge-legacy-storage'
+import { replayMaskInput, replayMaskText } from '@/lib/analytics/replay-masking'
 
 // Clear anything Recapt left on the device. Runs unconditionally, BEFORE the
 // analytics gate: a browser carrying `__recapt_record_engine` must get cleaned
@@ -53,31 +54,27 @@ function tracingHosts(): string[] {
  *    `seenSurvey_*` flags straight to localStorage, bypassing this setting:
  *    that is functional UI state ("don't ask again"), not tracking.
  *
- * 3. Mask-by-default text masking. `maskTextSelector: '*'` routes EVERY text
- *    node through `maskTextFn`, which masks unless a `data-ph-unmask`
- *    ancestor opts the node back in. This is an accounting app: org numbers
- *    (which for a sole proprietorship ARE the owner's personal identity
- *    number), customer names, balances and invoice amounts are rendered as
- *    ordinary text, and PostHog masks inputs but NOT text by default.
- *    Replays are for seeing WHERE a user gets stuck, never WHAT their books
- *    say.
+ * 3. Pattern-based replay masking (founder-approved 2026-08-06, supersedes
+ *    the 2026-07-27 mask-everything default that made replays wall-to-wall
+ *    asterisks). Replays exist so support can see WHERE a user gets stuck
+ *    and WHAT they typed while getting there; what stays unreadable is the
+ *    content of their books. `lib/analytics/replay-masking.ts` masks
+ *    currency-shaped text (every amount renders through `formatCurrency()`,
+ *    so one pattern covers all surfaces including future code), person-/
+ *    organisationsnummer (for an enskild firma the orgnr IS the owner's
+ *    personnummer) in both text and typed input, and password inputs.
+ *    Everything else, typed input included, is visible in the replay.
  *
- *    `data-ph-unmask` is for static chrome only (nav labels, headings,
- *    button text from i18n). User data nested inside an unmasked container
- *    (active company name, user email, badge counts) gets `data-ph-mask`,
- *    which wins because `closest()` finds the NEAREST tagged ancestor: when
- *    both attributes land on the same element, mask still wins.
- *    Anything untagged stays masked, so a forgotten tag fails safe.
+ *    `data-ph-mask` force-masks a subtree (deliberate PII spots: danger-zone
+ *    labels, user-defined dimension names, nav count bubbles) and
+ *    `data-ph-unmask` exempts one from pattern masking; the NEAREST tagged
+ *    ancestor wins, and mask wins when both land on the same element.
  *
- *    The shared form label primitive (`components/ui/label.tsx`) carries
- *    `data-ph-unmask` by default, so replays show WHICH field a user is
- *    filling in while `maskAllInputs` keeps the typed value hidden. A call
- *    site whose label text is user data (e.g. user-defined dimension names)
- *    must add `data-ph-mask`.
+ *    rrweb only calls `maskInputFn` on inputs flagged by `maskInputOptions`,
+ *    so `maskAllInputs: true` stays set to flag every input and the function
+ *    decides per value. posthog-js force-merges `password: true` into
+ *    `maskInputOptions` on top of that.
  */
-function maskText(text: string): string {
-  return text.replace(/\S/g, '*')
-}
 if (warnIfAnalyticsMisconfigured() && isAnalyticsEnabled()) {
   posthog.init(process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN!, {
     api_host: '/rl',
@@ -91,14 +88,9 @@ if (warnIfAnalyticsMisconfigured() && isAnalyticsEnabled()) {
     tracing_headers: tracingHosts(),
     session_recording: {
       maskAllInputs: true,
+      maskInputFn: replayMaskInput,
       maskTextSelector: '*',
-      maskTextFn: (text: string, element?: HTMLElement): string => {
-        const tagged = element?.closest('[data-ph-unmask],[data-ph-mask]')
-        if (!tagged || tagged.hasAttribute('data-ph-mask')) {
-          return maskText(text)
-        }
-        return text
-      },
+      maskTextFn: replayMaskText,
     },
     debug: process.env.NODE_ENV === 'development',
   })
