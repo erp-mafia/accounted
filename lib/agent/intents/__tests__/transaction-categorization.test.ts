@@ -316,6 +316,27 @@ describe('chat answers: denial and untrusted text', () => {
     expect(out).not.toContain('bildtext')
   })
 
+  it('omits the prior-conversation guidance when nothing was actually rendered', () => {
+    // A caption-only context is non-null but summarises to nothing, so the
+    // paragraph would point at "uppgivna av användaren" rows the prompt does
+    // not contain: the same defect as a rule keyed to a marker the renderer
+    // never emits. Gate on what was rendered, not on chat_answers != null.
+    const out = renderPrompt({
+      hasUnderlag: true,
+      chatAnswers: { channel: 'whatsapp', caption: 'kvitto' } as InboxChannelContext,
+    })
+    expect(out).not.toContain('uppgivna av användaren')
+    expect(out).not.toContain('en tidigare konversation')
+  })
+
+  it('keeps the guidance when a real answer was rendered', () => {
+    const out = renderPrompt({
+      hasUnderlag: true,
+      chatAnswers: { channel: 'whatsapp', user_note: 'lunch med kund' } as InboxChannelContext,
+    })
+    expect(out).toContain('en tidigare konversation')
+  })
+
   it('flattens markdown structure out of human-typed answers', () => {
     const out = renderPrompt({
       hasUnderlag: true,

@@ -344,6 +344,9 @@ export const transactionCategorization = defineAgentIntent<
       // Underlag IS attached: read the extracted metadata and use it
       // directly. Don't ask the user for things the extraction already nailed.
       lines.push(`UNDERLAG: ${captured.underlag.length} st bifogat. Extraherade fält:`)
+      // Set when at least one underlag actually contributed a clarification
+      // line, which is what the guidance paragraph below refers to.
+      let renderedClarifications = false
       for (const u of captured.underlag) {
         const parts: string[] = []
         if (u.document_id) parts.push(`document_id=${u.document_id}`)
@@ -369,15 +372,22 @@ export const transactionCategorization = defineAgentIntent<
         // the purpose of a meal the user had just said was not representation.
         // The summary also flattens the free text and drops the caption.
         const clarifications = summariseClarifications(u.chat_answers)
-        for (const line of clarifications ? renderClarificationLines(clarifications) : []) {
+        const clarificationLines = clarifications ? renderClarificationLines(clarifications) : []
+        if (clarificationLines.length > 0) renderedClarifications = true
+        for (const line of clarificationLines) {
           lines.push(`    - ${line}`)
         }
       }
       lines.push('')
       lines.push('VIKTIGT: extraktionen ovan är det vi REDAN VET. Återupprepa inte frågor som "vilken leverantör är det?" eller "vad var beloppet?": det står ovan. Använd uppgifterna direkt och föreslå kategori + moms-behandling.')
       // Conditional: an unconditional line is prompt bloat on the common
-      // transaction that has no chat history.
-      if (captured.underlag.some((u) => u.chat_answers != null)) {
+      // transaction that has no chat history. Gated on what was actually
+      // RENDERED, not on chat_answers being present: a context holding only a
+      // caption (or only an already-answered question) summarises to nothing,
+      // and this paragraph would then point at marked rows the prompt does not
+      // contain. Same failure as an instruction keyed to a marker the renderer
+      // never emits.
+      if (renderedClarifications) {
         lines.push('Rader märkta "uppgivna av användaren" kommer från en tidigare konversation om samma underlag (t.ex. WhatsApp när kvittot skickades in). Det är MÄNSKLIGT bekräftade uppgifter och väger tyngre än vad du själv läser ut ur bilden. Fråga ALDRIG om något som redan står där; behöver du komplettera, fråga bara om den del som faktiskt saknas. Står det "OBESVARAD FRÅGA": ställ exakt den frågan och ingen annan. När du stagear: ta med deltagare och syfte i notes så de följer med till verifikationen.')
       }
     }
