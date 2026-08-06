@@ -605,6 +605,9 @@ processing_activities:
     data_categories:
       - user.contact.email    # person property via identify(), aldrig i event-properties
       - user.name             # profiles.full_name
+      # Sessionsinspelningen visar synlig text och tangentbordsinmatning,
+      # förutom maskerade fält (belopp, person-/orgnummer, lösenord samt
+      # data-ph-mask-taggade element), se security_measures nedan.
       - user.behavior         # sidvisningar, klick, händelser, sessionsinspelning
       - user.device           # user agent, skärmstorlek, IP (trunkeras av PostHog)
       # Supportärenden: fritext som användaren SJÄLV skriver till supporten via
@@ -634,9 +637,14 @@ processing_activities:
       stored_in:
         - posthog_eu   # externt hos biträdet; inget lagras i vår databas
     security_measures:
-      - session_replay_masks_all_text        # maskTextSelector '*' utöver maskAllInputs
-      - session_replay_masks_all_inputs
-      - org_number_never_transmitted         # låst av test i lib/analytics/__tests__
+      # Mönsterbaserad maskering (2026-08-06, ersätter maskera-allt-läget):
+      # belopp (valutaformaterad text), person-/organisationsnummer (text och
+      # inmatning) och lösenord maskeras; övrig text och tangentbordsinmatning
+      # syns i inspelningen för felsökning. data-ph-mask tvingar maskering av
+      # utpekade PII-element; låst av test i lib/analytics/__tests__.
+      - session_replay_masks_amounts_and_identity_numbers  # lib/analytics/replay-masking.ts
+      - session_replay_masks_password_inputs
+      - org_number_never_transmitted_as_group_property     # låst av test i lib/analytics/__tests__
       - no_pii_in_event_properties           # PII endast som person properties via identify()
       # persistence: 'memory' -> ingen analysdata och inga kakor på enheten.
       # TVÅ undantag, båda funktionell UI-state utan personuppgifter, båda
