@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState, useEffect } from 'react'
+import { Suspense, useState, useEffect, useRef } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
@@ -22,6 +22,8 @@ import {
   INVITE_PROBLEM_MESSAGE_KEYS,
 } from '@/lib/auth/consume-invite-cookie'
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
+import { AuthFormError } from '@/components/auth/AuthFormError'
+import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
 import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import {
   isSessionAuthMethod,
@@ -57,6 +59,10 @@ function LoginPageContent() {
   const [resetCooldownUntil, setResetCooldownUntil] = useState<number | null>(null)
   const [resetCooldownRemaining, setResetCooldownRemaining] = useState(0)
   const [bankIdNoAccount, setBankIdNoAccount] = useState<{ givenName?: string; surname?: string } | null>(null)
+  // Auth failures render inline next to the form (see AuthFormError), never
+  // as a toast: `kind` drives field highlighting and the recovery action.
+  const [formError, setFormError] = useState<{ kind: AuthErrorKind | 'bankid'; message: string } | null>(null)
+  const passwordInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -81,6 +87,26 @@ function LoginPageContent() {
   useEffect(() => {
     if (timeoutReason) resetAnalyticsIdentity()
   }, [timeoutReason])
+
+  // After a failed credentials attempt, put the caret back in the password
+  // field with the old value selected so the user can retype immediately.
+  // Runs post-render: the inputs are disabled while the request is in flight.
+  useEffect(() => {
+    if (formError?.kind === 'invalid_credentials') {
+      passwordInputRef.current?.focus()
+      passwordInputRef.current?.select()
+    }
+  }, [formError])
+
+  const openResetForm = () => {
+    setFormError(null)
+    setShowResetPassword(true)
+  }
+
+  const closeResetForm = () => {
+    setFormError(null)
+    setShowResetPassword(false)
+  }
 
   // Accept a pending invite, if any, and report a non-definitive failure.
   // Returns true when the caller should land the user in the app directly.
@@ -128,11 +154,7 @@ function LoginPageContent() {
     }
 
     if (result.error) {
-      toast({
-        title: tAuth('login_failed_title'),
-        description: tAuth('login_failed_bankid'),
-        variant: 'destructive',
-      })
+      setFormError({ kind: 'bankid', message: tAuth('login_failed_bankid') })
       return
     }
 
@@ -145,11 +167,7 @@ function LoginPageContent() {
 
         if (error) {
           console.error('[login] BankID verifyOtp failed', error)
-          toast({
-            title: tAuth('login_failed_title'),
-            description: tAuth('login_failed_bankid'),
-            variant: 'destructive',
-          })
+          setFormError({ kind: 'bankid', message: tAuth('login_failed_bankid') })
           return
         }
 
@@ -174,10 +192,9 @@ function LoginPageContent() {
         router.refresh()
       } catch (error) {
         console.error('[login] BankID complete error', error)
-        toast({
-          title: tAuth('login_failed_title'),
-          description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-          variant: 'destructive',
+        setFormError({
+          kind: 'bankid',
+          message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
         })
       }
     }
@@ -185,6 +202,7 @@ function LoginPageContent() {
 
   const handlePasswordLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    setFormError(null)
     setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
@@ -198,12 +216,18 @@ function LoginPageContent() {
       })
 
       if (error) {
-        toast({
-          title: tAuth('login_failed_title'),
-          description: getErrorMessage(error) === 'Invalid login credentials'
-            ? tAuth('login_invalid_credentials')
-            : getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-          variant: 'destructive',
+        const kind = classifyAuthError(error)
+        const messageByKind: Partial<Record<AuthErrorKind, string>> = {
+          invalid_credentials: tAuth('login_invalid_credentials'),
+          email_not_confirmed: tAuth('login_error_email_not_confirmed'),
+          rate_limited: tAuth('login_error_rate_limited'),
+          user_banned: tAuth('login_error_user_banned'),
+        }
+        setFormError({
+          kind,
+          message:
+            messageByKind[kind] ??
+            getErrorMessage(error, { context: 'auth', locale: errorLocale }),
         })
         return
       }
@@ -239,10 +263,9 @@ function LoginPageContent() {
       router.push('/')
       router.refresh()
     } catch (error) {
-      toast({
-        title: tAuth('login_failed_title'),
-        description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-        variant: 'destructive',
+      setFormError({
+        kind: 'unknown',
+        message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
       setIsLoading(false)
@@ -251,6 +274,7 @@ function LoginPageContent() {
 
   const handleResetPassword = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    setFormError(null)
     setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
@@ -262,26 +286,26 @@ function LoginPageContent() {
       })
 
       if (error) {
-        toast({
-          title: tAuth('reset_failed_title'),
-          description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-          variant: 'destructive',
+        const kind = classifyAuthError(error)
+        setFormError({
+          kind,
+          message:
+            kind === 'rate_limited'
+              ? tAuth('login_error_rate_limited')
+              : getErrorMessage(error, { context: 'auth', locale: errorLocale }),
         })
         return
       }
 
+      // The full-screen "check your email" confirmation below is the
+      // feedback; no toast needed on top of it.
       setEmail(emailValue)
       setResetCooldownUntil(Date.now() + 60_000)
       setIsEmailSent(true)
-      toast({
-        title: tAuth('reset_sent_title'),
-        description: tAuth('reset_sent_body'),
-      })
     } catch (error) {
-      toast({
-        title: tAuth('reset_failed_title'),
-        description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-        variant: 'destructive',
+      setFormError({
+        kind: 'unknown',
+        message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
       setIsLoading(false)
@@ -377,6 +401,7 @@ function LoginPageContent() {
 
           <div className="rounded-lg border bg-card p-6">
             <form onSubmit={handleResetPassword} className="space-y-5">
+              {formError && <AuthFormError message={formError.message} />}
               <div className="space-y-2">
                 <Label htmlFor="email">{tAuth('email_label')}</Label>
                 <Input
@@ -410,7 +435,7 @@ function LoginPageContent() {
           <Button
             variant="ghost"
             className="w-full mt-4 text-muted-foreground"
-            onClick={() => setShowResetPassword(false)}
+            onClick={closeResetForm}
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
             {tAuth('back_to_login')}
@@ -454,7 +479,7 @@ function LoginPageContent() {
                     {tAuth('callback_error_body')}{' '}
                     <button
                       type="button"
-                      onClick={() => setShowResetPassword(true)}
+                      onClick={openResetForm}
                       className="font-medium underline underline-offset-2"
                     >
                       {tAuth('request_new_reset_link')}
@@ -529,6 +554,24 @@ function LoginPageContent() {
               </p>
             </div>
           )}
+          {formError && (
+            <div className="mb-5">
+              <AuthFormError
+                message={formError.message}
+                action={
+                  formError.kind === 'invalid_credentials' ? (
+                    <button
+                      type="button"
+                      onClick={openResetForm}
+                      className="font-medium underline underline-offset-2"
+                    >
+                      {tAuth('login_error_reset_link')}
+                    </button>
+                  ) : undefined
+                }
+              />
+            </div>
+          )}
           {showPasswordLogin && (
             <>
           <form onSubmit={handlePasswordLogin} className="space-y-5">
@@ -544,6 +587,7 @@ function LoginPageContent() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 disabled={isLoading}
+                aria-invalid={formError?.kind === 'invalid_credentials' || undefined}
                 className="h-11"
               />
             </div>
@@ -552,13 +596,14 @@ function LoginPageContent() {
                 <Label htmlFor="password">{tAuth('password_label')}</Label>
                 <button
                   type="button"
-                  onClick={() => setShowResetPassword(true)}
+                  onClick={openResetForm}
                   className="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
                 >
                   {tAuth('forgot_password')}
                 </button>
               </div>
               <Input
+                ref={passwordInputRef}
                 id="password"
                 name="password"
                 type="password"
@@ -568,6 +613,7 @@ function LoginPageContent() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={isLoading}
+                aria-invalid={formError?.kind === 'invalid_credentials' || undefined}
                 className="h-11"
               />
             </div>
