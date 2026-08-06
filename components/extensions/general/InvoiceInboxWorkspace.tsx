@@ -47,6 +47,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
+import { selectInboxFields } from '@/lib/documents/inbox-field-visibility'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
 import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
@@ -2334,6 +2335,8 @@ export function EditableFieldsList({
   // from the extraction) and flips to user-verified once the user edits it:
   // mirrors the create form's AiFilledIndicator. Reset when switching items.
   const [edited, setEdited] = useState<Partial<Record<FieldKey, boolean>>>({})
+  // Per-document fold for the invoice-only fields on a receipt.
+  const [showAllFields, setShowAllFields] = useState(false)
   const timersRef = useRef<Partial<Record<FieldKey, ReturnType<typeof setTimeout>>>>({})
   // Last-known server values per field. Used to detect when the server
   // normalises a value (currency upper-cased, whitespace trimmed) so we can
@@ -2351,6 +2354,10 @@ export function EditableFieldsList({
     setDrafts(seeded)
     lastServerRef.current = seeded
     setEdited({})
+    // The "Visa fakturafält" fold is per document: without this, expanding
+    // it on one receipt leaves the invoice fields open on the next one,
+    // which reads as if that document had them too.
+    setShowAllFields(false)
     return () => {
       for (const t of Object.values(timersRef.current)) {
         if (t) clearTimeout(t)
@@ -2465,9 +2472,20 @@ export function EditableFieldsList({
 
   const vatRows = useMemo(() => data.vatBreakdown ?? [], [data.vatBreakdown])
 
+  const { shown: shownFields, hiddenCount } = useMemo(
+    () =>
+      selectInboxFields({
+        documentKind: data.documentKind ?? null,
+        fields: FIELD_DEFS,
+        hasValue: (key) => (drafts[key as FieldKey] ?? '').trim() !== '',
+        showAll: showAllFields,
+      }),
+    [data, drafts, showAllFields]
+  )
+
   return (
     <div className="space-y-2">
-      {FIELD_DEFS.map((f) => (
+      {shownFields.map((f) => (
         <div key={f.key} className="flex flex-col gap-0.5">
           <div className="flex items-center justify-between gap-2">
             <label
@@ -2497,6 +2515,15 @@ export function EditableFieldsList({
           />
         </div>
       ))}
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAllFields(true)}
+          className="text-[11px] text-muted-foreground hover:text-foreground hover:underline pt-1"
+        >
+          Visa fakturafält ({hiddenCount})
+        </button>
+      )}
       {vatRows.length > 0 && (
         <div className="pt-2 border-t mt-3">
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">

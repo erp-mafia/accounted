@@ -1,5 +1,6 @@
 import { defineAgentIntent } from './types'
 import { SONNET_MODEL, EFFORT_STANDARD } from '@/lib/agent/composer/client'
+import type { InboxChannelContext } from '@/types'
 
 // transaction.categorization: "Fråga om denna transaktion" on a transaction
 // row.
@@ -44,6 +45,16 @@ interface CapturedTransaction {
     // agent can paraphrase context-specific signals (line items, dates,
     // payment reference) without us pre-modeling every field.
     raw_extraction: Record<string, unknown> | null
+    /**
+     * Answers the user already gave about THIS underlag in another channel
+     * (today: the WhatsApp intake conversation). Verified human input, not
+     * OCR guesswork, so it outranks anything read off the image.
+     *
+     * Without it the assistant asked for participant names the user had
+     * typed into WhatsApp minutes earlier, which is the worst thing a
+     * system that already holds the answer can do.
+     */
+    chat_answers: InboxChannelContext | null
   }[]
 }
 
@@ -113,7 +124,7 @@ export const transactionCategorization = defineAgentIntent<
         .eq('matched_transaction_id', transaction_id),
       supabase
         .from('invoice_inbox_items')
-        .select('document_id, extracted_data')
+        .select('document_id, extracted_data, channel_context')
         .eq('company_id', companyId)
         .eq('matched_transaction_id', transaction_id),
       directDocumentId
@@ -157,11 +168,13 @@ export const transactionCategorization = defineAgentIntent<
         is_restaurant: r.is_restaurant,
         is_systembolaget: r.is_systembolaget,
         raw_extraction: r.raw_extraction,
+        chat_answers: null,
       })
     }
     for (const it of (inboxItems ?? []) as {
       document_id: string | null
       extracted_data: Record<string, unknown> | null
+      channel_context: InboxChannelContext | null
     }[]) {
       const ex = it.extracted_data ?? {}
       const supplier = (ex.supplier as { name?: string | null } | undefined) ?? null
@@ -178,6 +191,7 @@ export const transactionCategorization = defineAgentIntent<
         is_restaurant: null,
         is_systembolaget: null,
         raw_extraction: ex,
+        chat_answers: it.channel_context ?? null,
       })
     }
 
@@ -221,6 +235,7 @@ export const transactionCategorization = defineAgentIntent<
           is_restaurant: null,
           is_systembolaget: null,
           raw_extraction: null,
+          chat_answers: null,
         })
         continue
       }
@@ -238,7 +253,35 @@ export const transactionCategorization = defineAgentIntent<
         is_restaurant: null,
         is_systembolaget: null,
         raw_extraction: ex,
+        chat_answers: null,
       })
+    }
+
+    // Chat answers live on the inbox item, but an underlag can reach this
+    // point through the document paths above (the transaction's own
+    // document_id, or a doc anchored to the journal entry) without the
+    // inbox row ever being matched to the transaction. Backfill by
+    // document_id so the answers are found either way.
+    const missingContextDocIds = underlag
+      .filter((u) => u.chat_answers == null && u.document_id != null)
+      .map((u) => u.document_id as string)
+    if (missingContextDocIds.length > 0) {
+      const { data: byDoc } = await supabase
+        .from('invoice_inbox_items')
+        .select('document_id, channel_context')
+        .eq('company_id', companyId)
+        .in('document_id', missingContextDocIds)
+        .not('channel_context', 'is', null)
+      for (const row of (byDoc ?? []) as {
+        document_id: string | null
+        channel_context: InboxChannelContext | null
+      }[]) {
+        for (const u of underlag) {
+          if (u.document_id === row.document_id && u.chat_answers == null) {
+            u.chat_answers = row.channel_context ?? null
+          }
+        }
+      }
     }
 
     return {
@@ -311,9 +354,34 @@ export const transactionCategorization = defineAgentIntent<
         if (u.is_restaurant) parts.push('restaurang=ja')
         if (u.is_systembolaget) parts.push('systembolaget=ja')
         lines.push(`  • ${u.kind}: ${parts.join(', ') || '(ingen extraherad data: läs underlaget med gnubok_get_document_content)'}`)
+
+        // Answers the user already typed in another channel. Own indented
+        // block so it reads as human input, not one more OCR field.
+        const chat = u.chat_answers
+        if (chat) {
+          const rep = chat.representation
+          if (rep) {
+            const who = (rep.participants ?? [])
+              .map((pp) => (pp.company ? `${pp.name} (${pp.company})` : pp.name))
+              .join(', ')
+            if (who) lines.push(`    - deltagare (uppgivna av användaren): ${who}`)
+            if (rep.purpose) lines.push(`    - syfte (uppgivet av användaren): ${rep.purpose}`)
+            if (rep.event_date) lines.push(`    - datum (uppgivet av användaren): ${rep.event_date}`)
+            if (!rep.purpose) {
+              lines.push('    - syfte SAKNAS: fråga bara efter syftet, inte om deltagarna igen.')
+            }
+          }
+          if (chat.user_note) lines.push(`    - anteckning från användaren: ${chat.user_note}`)
+          if (chat.caption) lines.push(`    - bildtext vid inskick: ${chat.caption}`)
+        }
       }
       lines.push('')
       lines.push('VIKTIGT: extraktionen ovan är det vi REDAN VET. Återupprepa inte frågor som "vilken leverantör är det?" eller "vad var beloppet?": det står ovan. Använd uppgifterna direkt och föreslå kategori + moms-behandling.')
+      // Conditional: an unconditional line is prompt bloat on the common
+      // transaction that has no chat history.
+      if (captured.underlag.some((u) => u.chat_answers != null)) {
+        lines.push('Rader märkta "uppgivna av användaren" kommer från en tidigare konversation om samma underlag (t.ex. WhatsApp när kvittot skickades in). Det är MÄNSKLIGT bekräftade uppgifter och väger tyngre än vad du själv läser ut ur bilden. Fråga ALDRIG om något som redan står där; behöver du komplettera, fråga bara om den del som faktiskt saknas. När du stagear: ta med deltagare och syfte i notes så de följer med till verifikationen.')
+      }
     }
     lines.push('')
     lines.push('Arbetssätt: hämta information via verktygsanrop FÖRST (tyst: statusraderna visar att du söker, och ditt resonemang sker i tankekanalen), föreslå sedan. Skriv din förklaring EN gång efteråt, inte i flera block runt anropen.')
