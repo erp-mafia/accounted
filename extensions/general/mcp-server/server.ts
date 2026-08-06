@@ -15350,7 +15350,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_recurring_schedules',
     title: 'List Recurring Invoice Schedules',
-    description: "List the company's recurring invoice schedules: auto-create customer invoices on day_of_month (clamps to the last day in shorter months) every interval_months months (1/3/6/12) at send_hour, Europe/Stockholm. Shows status, auto_send and next_run_date.",
+    description: "List the company's recurring invoice schedules: auto-create customer invoices on day_of_month (clamps to the last day in shorter months) every interval_months months (any 1-12; presets 1/3/6/12) at send_hour, Europe/Stockholm. Shows status, auto_send and next_run_date.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -15373,7 +15373,7 @@ export const tools: McpTool[] = [
         customer_id: { type: 'string' },
         customer_name: { type: ['string', 'null'] },
         day_of_month: { type: 'number', description: '1-31; clamps to the last day in shorter months' },
-        interval_months: { type: 'number', description: 'Months between runs: 1 = monthly, 3 = quarterly, 6 = half-yearly, 12 = yearly' },
+        interval_months: { type: 'number', description: 'Months between runs: any integer 1-12; 1 = monthly, 3 = quarterly, 6 = half-yearly, 12 = yearly' },
         send_hour: { type: 'number', description: 'Whole hour 0-23 in Europe/Stockholm time' },
         payment_terms_days: { type: 'number' },
         currency: { type: 'string' },
@@ -15509,7 +15509,7 @@ export const tools: McpTool[] = [
           type: 'integer',
           minimum: 1,
           maximum: 12,
-          description: 'Months between invoices. Default 1 (monthly); 3 = quarterly, 6 = half-yearly, 12 = yearly. Any 1-12 is accepted.',
+          description: 'Months between invoices: any integer 1-12. Default 1 (monthly); 3 = quarterly, 6 = half-yearly, 12 = yearly.',
         },
         send_hour: {
           type: 'integer',
@@ -15703,7 +15703,7 @@ export const tools: McpTool[] = [
           type: 'integer',
           minimum: 1,
           maximum: 12,
-          description: 'Months between invoices: 1 = monthly, 3 = quarterly, 6 = half-yearly, 12 = yearly. Changing it leaves next_run_date untouched.',
+          description: 'Months between invoices: any integer 1-12; 1 = monthly, 3 = quarterly, 6 = half-yearly, 12 = yearly. Changing only interval_months leaves next_run_date untouched.',
         },
         send_hour: { type: 'integer', minimum: 0, maximum: 23, description: 'Whole hour (0-23) in Europe/Stockholm time.' },
         payment_terms_days: { type: 'integer', minimum: 0, maximum: 90 },

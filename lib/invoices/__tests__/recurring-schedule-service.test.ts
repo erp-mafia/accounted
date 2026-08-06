@@ -240,6 +240,18 @@ describe('rollNextRunDateForward', () => {
     expect(() => rollNextRunDateForward('2026-01-05', today, 5, 0)).toThrow()
     expect(() => rollNextRunDateForward('2026-01-05', today, 0, 1)).toThrow()
   })
+
+  it('rejects calendar-invalid anchors that pass the shape regex', () => {
+    expect(() => rollNextRunDateForward('2026-13-05', today, 5, 1)).toThrow()
+    expect(() => rollNextRunDateForward('2026-00-05', today, 5, 1)).toThrow()
+    expect(() => rollNextRunDateForward('2026-02-31', today, 31, 1)).toThrow()
+    expect(() => rollNextRunDateForward('2026-04-00', today, 5, 1)).toThrow()
+  })
+
+  it('rejects fractional day_of_month', () => {
+    expect(() => rollNextRunDateForward('2026-01-05', today, 5.5, 1)).toThrow()
+    expect(() => computeNextRunDate(today, 15.5)).toThrow()
+  })
 })
 
 describe('computeInitialRunDate', () => {

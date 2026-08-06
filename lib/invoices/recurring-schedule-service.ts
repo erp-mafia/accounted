@@ -88,7 +88,7 @@ function isoFromParts(year: number, monthIndex0: number, day: number): string {
 }
 
 function assertValidCadence(dayOfMonth: number, intervalMonths: number): void {
-  if (dayOfMonth < 1 || dayOfMonth > 31) {
+  if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
     throw new Error(`invalid day_of_month: ${dayOfMonth}`)
   }
   if (!Number.isInteger(intervalMonths) || intervalMonths < 1 || intervalMonths > 12) {
@@ -153,9 +153,15 @@ export function rollNextRunDateForward(
   if (!match) {
     throw new Error(`invalid anchor date: ${anchorDate}`)
   }
-  const todayIso = isoFromParts(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
   let year = Number(match[1])
   let month0 = Number(match[2]) - 1
+  // The regex only shapes the string; reject calendar-invalid anchors like
+  // 2026-13-05 or 2026-02-31 instead of silently normalizing them.
+  const anchorDay = Number(match[3])
+  if (month0 < 0 || month0 > 11 || anchorDay < 1 || anchorDay > lastDayOfMonth(year, month0)) {
+    throw new Error(`invalid anchor date: ${anchorDate}`)
+  }
+  const todayIso = isoFromParts(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
   let candidate = isoFromParts(year, month0, Math.min(dayOfMonth, lastDayOfMonth(year, month0)))
   while (allowToday ? candidate < todayIso : candidate <= todayIso) {
     const m = month0 + intervalMonths
