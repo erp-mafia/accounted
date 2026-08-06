@@ -49,6 +49,7 @@ function renderPrompt(opts: {
             is_systembolaget: null,
             raw_extraction: null,
             chat_answers: opts.chatAnswers ?? null,
+            match: 'linked' as const,
           },
         ]
       : [],
