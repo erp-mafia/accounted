@@ -3836,6 +3836,7 @@
     "create_and_select": "Create & select",
     "section_invoice": "Invoice",
     "section_accounting": "Accounting",
+    "account_from_history": "Account {account} suggested from previous bookings of {counterparty}",
     "section_other": "Other",
     "paid_privately_label": "I paid this privately",
     "paid_privately_help_ef": "Booked as a liability from the company to you (2018 Egen insättning). Refund manually later from the company account.",

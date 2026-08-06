@@ -20,6 +20,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { SupplierInvoiceReviewContent } from '@/components/suppliers/SupplierInvoiceReviewContent'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
+import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
@@ -610,10 +611,12 @@ export default function NewSupplierInvoiceForm({
 
   // Auto-fill due date and defaults when supplier is selected: but never
   // overwrite a value the AI already filled in for us.
+  const [templateAccountNote, setTemplateAccountNote] = useState<{ account: string; counterparty: string } | null>(null)
   useEffect(() => {
     if (!watchedSupplierId) return
     const supplier = suppliers.find((s) => s.id === watchedSupplierId)
     if (!supplier) return
+    setTemplateAccountNote(null)
 
     const invoiceDate = watch('invoice_date')
     const currentDue = watch('due_date')
@@ -638,6 +641,45 @@ export default function NewSupplierInvoiceForm({
     if (supplier.supplier_type === 'eu_business') {
       setValue('reverse_charge', true)
     }
+
+    // No supplier default: fall back to the company's own booking history for
+    // this counterparty (the same tiered matcher the booking flows use). Fills
+    // empty rows only, never a generic seed, and only from expense-shaped
+    // templates (cost on debit, settlement on credit). Best-effort: on any
+    // miss the rows simply stay blank, exactly as before.
+    if (!supplier.default_expense_account && fields.length > 0 && supplier.name?.trim()) {
+      let cancelled = false
+      ;(async () => {
+        try {
+          const res = await fetch(
+            `/api/settings/counterparty-templates?counterparty=${encodeURIComponent(supplier.name.trim())}`
+          )
+          if (!res.ok) return
+          const json = await res.json()
+          if (cancelled) return
+          const match = json?.data
+          const debit: string | undefined = match?.template?.debit_account
+          const credit: string | undefined = match?.template?.credit_account
+          if (!match || (match.confidence ?? 0) < 0.5) return
+          if (!debit || debit.startsWith('19') || !credit || !credit.startsWith('19')) return
+          const items = getValues('items')
+          let applied = false
+          items.forEach((row, i) => {
+            if (!row.account_number) {
+              setValue(`items.${i}.account_number`, debit)
+              applied = true
+            }
+          })
+          if (applied) {
+            setTemplateAccountNote({ account: debit, counterparty: match.template.counterparty_name })
+          }
+        } catch {
+          // Prefill is best-effort; the rows stay blank.
+        }
+      })()
+      return () => { cancelled = true }
+    }
+    return undefined
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedSupplierId, suppliers])
 
@@ -1733,6 +1775,16 @@ export default function NewSupplierInvoiceForm({
             </Button>
           </CardHeader>
           <CardContent>
+            {templateAccountNote &&
+              (watchedItems ?? []).some((r) => r.account_number === templateAccountNote.account) && (
+                <p className="mb-4 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
+                  {t('account_from_history', {
+                    account: templateAccountNote.account,
+                    counterparty: formatCounterpartyName(templateAccountNote.counterparty),
+                  })}
+                </p>
+              )}
             {/* Valuta & moms: kept inline with the line items because they
                 drive how each row is interpreted. Hidden defaults (SEK +
                 normal moms) collapse to nothing so most users don't see this. */}

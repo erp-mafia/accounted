@@ -3836,6 +3836,7 @@
     "create_and_select": "Skapa & välj",
     "section_invoice": "Faktura",
     "section_accounting": "Kontering",
+    "account_from_history": "Konto {account} föreslaget från tidigare bokföringar av {counterparty}",
     "section_other": "Övrigt",
     "paid_privately_label": "Jag har betalat detta privat",
     "paid_privately_help_ef": "Bokförs som skuld från bolaget till dig (2018 Egen insättning). Återbetalas senare manuellt från företagskontot.",
