@@ -186,6 +186,8 @@ export default function WooCommerceSettingsPanel() {
           description: t('sync_revoked'),
           variant: 'destructive',
         })
+      } else if (summary.reason === 'partial') {
+        toast({ title: t('sync_partial_title'), description: t('sync_partial', summary.values) })
       } else if (summary.reason === 'empty') {
         toast({ title: t('sync_done_title'), description: t('sync_done_empty') })
       } else if (summary.reason === 'errors') {

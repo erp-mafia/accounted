@@ -125,6 +125,12 @@ export type WooSyncSummary =
   | { reason: 'revoked' }
   /** The window genuinely held nothing. A real answer, not a silent success. */
   | { reason: 'empty' }
+  /**
+   * The time budget ran out with orders still unfetched. Reported before the
+   * count-based outcomes so a truncated run never reads as a complete one;
+   * the cursor persisted, so pressing sync again continues where it stopped.
+   */
+  | { reason: 'partial'; values: SyncCounts }
   /** Rows landed, and some rows did not. Both halves get said. */
   | { reason: 'errors'; values: SyncCounts & { errors: number } }
   /** Rows landed. */
@@ -143,6 +149,9 @@ export function syncSummary(payload: WooSyncPayload | null): WooSyncSummary {
   const imported = typeof summary.imported === 'number' ? summary.imported : 0
   const errors = typeof summary.errors === 'number' ? summary.errors : 0
 
+  if (summary.deadlineReached === true) {
+    return { reason: 'partial', values: { fetched, imported } }
+  }
   if (fetched === 0) return { reason: 'empty' }
   if (errors > 0) return { reason: 'errors', values: { fetched, imported, errors } }
   return { reason: 'feed', values: { fetched, imported } }

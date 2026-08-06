@@ -128,10 +128,19 @@ export interface WooCommerceSyncSummary {
 
 const round = (n: number) => Math.round(n * 100) / 100
 
-/** Money fields arrive as strings; anything unparseable maps to 0 and is skipped. */
-function parseAmount(value: string): number {
+/**
+ * Money fields arrive as strings; unparseable input returns null so callers
+ * can tell a corrupt total (counted + logged in buildPageRows) from a
+ * legitimate zero (silently skipped).
+ */
+function parseAmount(value: string): number | null {
   const parsed = Number.parseFloat(value)
-  return Number.isFinite(parsed) ? round(parsed) : 0
+  return Number.isFinite(parsed) ? round(parsed) : null
+}
+
+/** Whether a qualifying order's total cannot be read as money. */
+export function orderAmountUnparseable(order: Pick<WooOrder, 'total'>): boolean {
+  return parseAmount(order.total) === null
 }
 
 /** Date part of a wc/v3 _gmt timestamp ("2026-08-01T12:34:56", no zone suffix). */
@@ -169,7 +178,7 @@ export function orderQualifies(order: Pick<WooOrder, 'status' | 'date_paid_gmt'>
 export function mapOrder(storeScope: string, order: WooOrder): RawTransaction[] {
   if (!orderQualifies(order)) return []
   const amount = parseAmount(order.total)
-  if (amount === 0) return []
+  if (amount === null || amount === 0) return []
   return [
     {
       date: isoDateOfGmt(order.date_paid_gmt!),
@@ -190,7 +199,7 @@ export function mapRefund(
   refund: WooRefund,
 ): RawTransaction[] {
   const amount = parseAmount(refund.amount)
-  if (amount === 0) return []
+  if (amount === null || amount === 0) return []
   return [
     {
       date: isoDateOfGmt(refund.date_created_gmt),
@@ -346,6 +355,17 @@ async function buildPageRows(
   }
 
   for (const order of orders) {
+    // A corrupt total is counted and logged, never silently identical to a
+    // zero-total order. Deliberately NOT held via the cursor: a permanently
+    // corrupt total would stall the whole feed forever, where a skipped row
+    // plus a loud error can be followed up.
+    if (orderQualifies(order) && orderAmountUnparseable(order)) {
+      summary.errors += 1
+      log.warn('unparseable order total; row skipped', {
+        orderId: order.id,
+        total: order.total,
+      })
+    }
     push(mapOrder(storeScope, order))
     // Refunds only exist for qualifying (paid) orders: a refund row without
     // its gross counterpart would be an unexplainable negative in the inbox.
@@ -364,6 +384,14 @@ async function buildPageRows(
       const refunds = await listOrderRefunds(creds, order.id)
       summary.refundsFetched += refunds.length
       for (const refund of refunds) {
+        if (parseAmount(refund.amount) === null) {
+          summary.errors += 1
+          log.warn('unparseable refund amount; row skipped', {
+            orderId: order.id,
+            refundId: refund.id,
+            amount: refund.amount,
+          })
+        }
         push(mapRefund(storeScope, order, refund))
       }
     } catch (refundError) {
@@ -535,6 +563,10 @@ export async function syncWooCommerceOrders(
         .update({
           status: 'revoked',
           error_message: 'Butiken avvisade API-nyckeln. Anslut butiken igen.',
+          // The store already rejected these; keeping decryptable dead
+          // credentials would be pure data retention (same as /disconnect).
+          consumer_key_encrypted: null,
+          consumer_secret_encrypted: null,
           disconnected_at: new Date().toISOString(),
         })
         .eq('id', connection.id)

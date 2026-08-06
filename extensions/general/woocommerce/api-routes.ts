@@ -374,9 +374,15 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
 
       try {
         const serviceClient = createServiceClientNoCookies()
+        // Bounded like the cron: without a deadline a huge first sync against
+        // a slow host would be killed at the dispatcher's maxDuration with no
+        // cursor persisted; with one it stops cleanly, reports a partial sync
+        // and resumes where it stopped on the next press.
         const summary = await syncWooCommerceOrders(
           serviceClient,
           connection as WooCommerceConnection,
+          undefined,
+          Date.now() + 240_000,
         )
         return NextResponse.json({ success: true, transactions: summary })
       } catch (error) {
@@ -471,13 +477,17 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
 
       // There is no remote revoke API: the consumer key lives in the store's
       // wp-admin and only the merchant can delete it there. We drop our copy
-      // (status flip; the row is kept for audit) and the panel tells the user
-      // to remove the key in WooCommerce as well.
+      // of the credentials outright (nothing reads them after revoke, and a
+      // reconnect inserts a fresh row); the audit row keeps store_url and the
+      // connect/disconnect timestamps. The panel tells the user to remove the
+      // key in WooCommerce as well.
       const { error: updateError } = await auth.supabase
         .from('woocommerce_connections')
         .update({
           status: 'revoked',
           oauth_state: null,
+          consumer_key_encrypted: null,
+          consumer_secret_encrypted: null,
           disconnected_at: new Date().toISOString(),
         })
         .eq('id', connection.id)

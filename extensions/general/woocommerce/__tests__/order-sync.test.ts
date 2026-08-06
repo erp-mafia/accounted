@@ -378,6 +378,18 @@ describe('syncWooCommerceOrders', () => {
     expect(errorUpdate?.values.error_message).toMatch(/1680/)
   })
 
+  it('counts an unparseable order total as an error without stalling the cursor', async () => {
+    const { client, updates } = makeSupabaseMock()
+    listOrdersPage.mockResolvedValueOnce([makeOrder({ total: 'not-a-number' })])
+
+    const summary = await syncWooCommerceOrders(client, makeConnection())
+
+    expect(summary.errors).toBe(1)
+    expect(ingestTransactions).not.toHaveBeenCalled()
+    // Deliberate: a permanently corrupt total must not stall the feed.
+    expect(cursorUpdates(updates)).toHaveLength(1)
+  })
+
   it('does nothing for a connection without credentials or not active', async () => {
     const { client } = makeSupabaseMock()
     const summary = await syncWooCommerceOrders(

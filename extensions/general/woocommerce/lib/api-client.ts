@@ -228,20 +228,33 @@ export async function listOrdersPage(
   })
 }
 
-/** All refunds of one order (paginated; more than 100 refunds is theoretical). */
+/** Hard cap on refund pages per order; a real order never approaches this. */
+const MAX_REFUND_PAGES = 10
+
+/**
+ * All refunds of one order. Terminates on an EMPTY batch, not a short one
+ * (hosts may cap per_page below our request, same as the order pagination),
+ * dedupes by id so a host that ignores `page` cannot loop forever, and caps
+ * total pages as a final backstop.
+ */
 export async function listOrderRefunds(
   creds: WooCredentials,
   orderId: number,
 ): Promise<WooRefund[]> {
   const refunds: WooRefund[] = []
-  for (let page = 1; ; page++) {
+  const seen = new Set<number>()
+  for (let page = 1; page <= MAX_REFUND_PAGES; page++) {
     const batch = await wcGet<WooRefund[]>(creds, `/orders/${orderId}/refunds`, {
       per_page: String(WC_PAGE_SIZE),
       page: String(page),
     })
-    refunds.push(...batch)
-    if (batch.length < WC_PAGE_SIZE) return refunds
+    if (batch.length === 0) return refunds
+    const fresh = batch.filter((r) => !seen.has(r.id))
+    if (fresh.length === 0) return refunds
+    for (const refund of fresh) seen.add(refund.id)
+    refunds.push(...fresh)
   }
+  return refunds
 }
 
 /**

@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { getPool, withUserContext } from './setup'
+import { randomUUID } from 'crypto'
 import { seedCompany } from './fixtures'
+
+// Committed (pool) inserts persist across pg-real runs, and the store_url
+// partial unique index is global: fixed URLs would collide with rows left by
+// a previous run before the assertion under test is ever reached.
+const uniqueStore = (label: string) => 'https://' + label + '-' + randomUUID() + '.example.se'
 
 /**
  * Covers migration 20260806170000_woocommerce_connections:
@@ -38,8 +44,8 @@ describe('woocommerce_connections RLS', () => {
     const { userId: ownerId, companyId } = await seedCompany()
     await getPool().query(
       `INSERT INTO public.woocommerce_connections (company_id, user_id, store_url, status)
-       VALUES ($1, $2, 'https://foreign.example.se', 'active')`,
-      [companyId, ownerId],
+       VALUES ($1, $2, $3, 'active')`,
+      [companyId, ownerId, uniqueStore('foreign')],
     )
     const { userId: outsiderId } = await seedCompany() // member of a DIFFERENT company
 
@@ -64,14 +70,14 @@ describe('woocommerce_connections RLS', () => {
     const { userId, companyId } = await seedCompany()
     await getPool().query(
       `INSERT INTO public.woocommerce_connections (company_id, user_id, store_url, status)
-       VALUES ($1, $2, 'https://store-one.example.se', 'active')`,
-      [companyId, userId],
+       VALUES ($1, $2, $3, 'active')`,
+      [companyId, userId, uniqueStore('store-one')],
     )
     await expect(
       getPool().query(
         `INSERT INTO public.woocommerce_connections (company_id, user_id, store_url, status)
-         VALUES ($1, $2, 'https://store-two.example.se', 'active')`,
-        [companyId, userId],
+         VALUES ($1, $2, $3, 'active')`,
+        [companyId, userId, uniqueStore('store-two')],
       ),
     ).rejects.toMatchObject({ code: '23505' }) // unique_violation
   })
@@ -79,24 +85,25 @@ describe('woocommerce_connections RLS', () => {
   it('a store may be actively connected to at most one company', async () => {
     const { userId: userA, companyId: companyA } = await seedCompany()
     const { userId: userB, companyId: companyB } = await seedCompany()
+    const sharedUrl = uniqueStore('shared')
     await getPool().query(
       `INSERT INTO public.woocommerce_connections (company_id, user_id, store_url, status)
-       VALUES ($1, $2, 'https://shared.example.se', 'active')`,
-      [companyA, userA],
+       VALUES ($1, $2, $3, 'active')`,
+      [companyA, userA, sharedUrl],
     )
     await expect(
       getPool().query(
         `INSERT INTO public.woocommerce_connections (company_id, user_id, store_url, status)
-         VALUES ($1, $2, 'https://shared.example.se', 'active')`,
-        [companyB, userB],
+         VALUES ($1, $2, $3, 'active')`,
+        [companyB, userB, sharedUrl],
       ),
     ).rejects.toMatchObject({ code: '23505' })
 
     // A revoked row for the same store is fine (history is kept).
     const revoked = await getPool().query(
       `INSERT INTO public.woocommerce_connections (company_id, user_id, store_url, status)
-       VALUES ($1, $2, 'https://shared.example.se', 'revoked') RETURNING id`,
-      [companyB, userB],
+       VALUES ($1, $2, $3, 'revoked') RETURNING id`,
+      [companyB, userB, sharedUrl],
     )
     expect(revoked.rows).toHaveLength(1)
   })
@@ -105,8 +112,8 @@ describe('woocommerce_connections RLS', () => {
     const { userId, companyId } = await seedCompany()
     const { rows } = await getPool().query(
       `INSERT INTO public.woocommerce_connections (company_id, user_id, store_url, status)
-       VALUES ($1, $2, 'https://keep.example.se', 'active') RETURNING id`,
-      [companyId, userId],
+       VALUES ($1, $2, $3, 'active') RETURNING id`,
+      [companyId, userId, uniqueStore('keep')],
     )
     await withUserContext(userId, async (client) => {
       const del = await client.query(

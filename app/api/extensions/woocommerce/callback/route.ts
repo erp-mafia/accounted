@@ -5,7 +5,10 @@ import { eventBus } from '@/lib/events/bus'
 import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createLogger } from '@/lib/logger'
-import { encryptCredential } from '@/extensions/general/woocommerce/lib/credentials'
+import {
+  encryptCredential,
+  isWooCommerceConfigured,
+} from '@/extensions/general/woocommerce/lib/credentials'
 import { testConnectionAndFetchStoreInfo } from '@/extensions/general/woocommerce/lib/api-client'
 
 // This route emits woocommerce.connected (audit trail). ensureInitialized()
@@ -34,6 +37,15 @@ export async function POST(request: Request) {
   if (!extensionRegistry.get('woocommerce')) {
     return NextResponse.json(
       { error: 'WooCommerce extension is not enabled', code: 'EXTENSION_DISABLED' },
+      { status: 503 },
+    )
+  }
+  // The registry does not check manifest requiredEnvVars, so this route can be
+  // live without the encryption key; without this guard encryptCredential()
+  // would throw AFTER the probe, escaping the markError path entirely.
+  if (!isWooCommerceConfigured()) {
+    return NextResponse.json(
+      { error: 'WooCommerce integration is not configured', code: 'NOT_CONFIGURED' },
       { status: 503 },
     )
   }
