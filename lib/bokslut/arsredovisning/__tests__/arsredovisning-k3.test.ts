@@ -493,6 +493,23 @@ describe('buildArsredovisningData: K3', () => {
     expect(body).not.toContain('Balansräkningen innehåller leasade tillgångar')
   })
 
+  it('does not claim a leased asset for a lease disposed during the year', async () => {
+    // closing_debit/closing_credit are cumulative per-side totals, not a net
+    // balance: a lease acquired in an earlier year and disposed this year has
+    // both sides non-zero while the balansräkning carries nothing. Asserting
+    // "Balansräkningen innehåller leasade tillgångar" about an empty balance
+    // sheet is the same defect class this sweep exists to remove.
+    plantTbRow({
+      account_number: '1217',
+      account_name: 'Finansiellt leasade maskiner',
+      closing_debit: 180_000,
+      closing_credit: 180_000,
+    })
+    const body = await leasingParagraph()
+    expect(body).toContain('Samtliga leasingavtal redovisas som operationella')
+    expect(body).not.toContain('Balansräkningen innehåller leasade tillgångar')
+  })
+
   it('ignores a zero-balance lease account', async () => {
     plantTbRow({
       account_number: '1217',

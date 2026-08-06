@@ -335,8 +335,14 @@ export async function buildArsredovisningData(
     // K3-compliant; we keep a soft notice here so the filer remembers to
     // verify the document against their specific obligations before sending
     // to Bolagsverket.
+    // The enumeration is conditional on what was actually produced: when
+    // generateKassaflodesanalys failed we already pushed "kunde inte
+    // genereras" above, and claiming the PDF contains one in the very next
+    // warning would contradict it on the same screen.
     warnings.push(
-      'Bolaget redovisar enligt K3 (BFNAR 2012:1). Soliditeten är beräknad med 79,4 % av obeskattade reserver inräknat i eget kapital. PDF:en innehåller kassaflödesanalys, förändring av eget kapital och utökade noter: granska innehållet mot er specifika redovisning innan inlämning.',
+      'Bolaget redovisar enligt K3 (BFNAR 2012:1). Soliditeten är beräknad med 79,4 % av obeskattade reserver inräknat i eget kapital. PDF:en innehåller '
+        + (kassaflodesanalys ? 'kassaflödesanalys, förändring av eget kapital och utökade noter' : 'förändring av eget kapital och utökade noter')
+        + ': granska innehållet mot er specifika redovisning innan inlämning.',
     )
   }
   if (entityType === 'unknown') {
@@ -899,7 +905,12 @@ function hasCapitalizedLeaseAsset(tbFullRows: TrialBalanceRow[]): boolean {
       r.account_number >= '1200' &&
       r.account_number < '1300' &&
       /leas/i.test(r.account_name ?? '') &&
-      ((r.closing_debit || 0) !== 0 || (r.closing_credit || 0) !== 0),
+      // closing_debit/closing_credit are cumulative per-side totals, not a
+      // net balance, so a leased asset acquired earlier and disposed this
+      // year has both sides non-zero while the balansrakning carries
+      // nothing. Compare the NET balance so a disposed lease stops
+      // triggering the paragraph.
+      Math.abs((r.closing_debit || 0) - (r.closing_credit || 0)) > 0.005,
   )
 }
 

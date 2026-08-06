@@ -112,9 +112,13 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
         help={
           <>
             K2 är standard för mindre bolag och innebär förenklade regler. Större företag
-            ska tillämpa K3 och upprätta kassaflödesanalys: gränsen går vid mer än ett av
-            tre tröskelvärden (nettoomsättning &gt; 80 MSEK, tillgångar &gt; 40 MSEK, fler
-            än 50 anställda) under vart och ett av de två senaste räkenskapsåren. Med K3
+            ska tillämpa K3 och upprätta kassaflödesanalys: dit räknas bland annat bolag
+            som överskrider mer än ett av tre tröskelvärden (nettoomsättning &gt; 80 MSEK,
+            tillgångar &gt; 40 MSEK, fler än 50 anställda) under vart och ett av de två
+            senaste räkenskapsåren, och bolag med noterade värdepapper. För räkenskapsår
+            som börjar efter 2025-12-31 är K2 dessutom stängt för bolag med utländsk
+            filial, kryptotillgångar eller aktierelaterade ersättningar, och för bolag där
+            byggnader ger minst 75 % av nettoomsättningen. Med K3
             valt bygger Accounted årsredovisningen enligt K3-mallen: kassaflödesanalys,
             förändring av eget kapital som egen räkning och utökade noter.
             Anläggningsregistret tar emot komponentuppdelning först med K3, som kräver
