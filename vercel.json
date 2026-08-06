@@ -84,6 +84,10 @@
     {
       "path": "/api/bookkeeping/accruals/post-due/cron",
       "schedule": "15 5 * * *"
+    },
+    {
+      "path": "/api/receipt-hunt/cron",
+      "schedule": "30 5 * * *"
     }
   ]
 }
