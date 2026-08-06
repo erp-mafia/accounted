@@ -9,6 +9,7 @@ import { buildPayslipLinkEmail } from '@/lib/salary/payslips/email-template'
 import { getCompanyDisplayName } from '@/lib/company/context'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { guardSandbox } from '@/lib/sandbox/guard'
 
 ensureInitialized()
 
@@ -25,6 +26,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary_run.payslips_send',
   async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
+
+    // The sandbox must never send a real email (lib/sandbox/guard.ts): this
+    // route reaches the live Resend service on hosted, and the demo now ships
+    // with a booked salary run, which puts "Skicka lönebesked" one click from
+    // an anonymous visitor. Sibling send paths (/api/invoices/[id]/send) have
+    // always been guarded; this one was missed.
+    const sandboxBlocked = await guardSandbox(supabase, companyId)
+    if (sandboxBlocked) return sandboxBlocked
 
     const blocked = await requireCapability(supabase, companyId, CAPABILITY.email_send)
     if (blocked) return blocked

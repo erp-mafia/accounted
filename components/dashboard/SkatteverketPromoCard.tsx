@@ -2,9 +2,6 @@
 
 import { useCallback, useSyncExternalStore } from 'react'
 import { useTranslations } from 'next-intl'
-import { ArrowRight, FileCheck, X } from 'lucide-react'
-import { Card, CardContent } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -32,8 +29,13 @@ interface SkatteverketPromoCardProps {
 /**
  * Dismissible dashboard nudge for companies that have never connected
  * Skatteverket. New companies meet the connect step in NewUserChecklist;
- * this card is the equivalent surface for existing companies, which
- * otherwise only discover the integration deep inside the VAT/AGI flows.
+ * this is the equivalent surface for existing companies, which otherwise
+ * only discover the integration deep inside the VAT/AGI flows.
+ * Shape: one quiet sentence with the connect link at the end and the same
+ * "Dölj" text control the checklist uses, not a boxed card. It is an
+ * optional offer, not an exception, so it stays muted rather than taking
+ * the ochre .attn tone (convention 6/12: attention colour is for data and
+ * real exceptions).
  * Capability-less users never see it: the paywall upsell lives where the
  * intent is (SkatteverketPanel, AGIPanel), not on the dashboard.
  * Sandbox companies never see it either: Skatteverket is one of the external
@@ -61,34 +63,27 @@ export function SkatteverketPromoCard({ companyId, connected }: SkatteverketProm
   if (!extensionEnabled || !hasCapability || isSandbox || connected || dismissed) return null
 
   return (
-    <section>
-      <Card>
-        <CardContent className="p-6 flex items-center gap-4">
-          <div className="flex-shrink-0 h-10 w-10 rounded-lg flex items-center justify-center bg-secondary">
-            <FileCheck className="h-5 w-5" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-display text-xl leading-tight">{t('skv_promo_title')}</p>
-            <p className="text-sm text-muted-foreground mt-1">{t('skv_promo_description')}</p>
-          </div>
-          <Button variant="outline" asChild className="flex-shrink-0">
-            {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- /api route, not a Next page; the authorize endpoint 302s to Skatteverket, which the client router cannot follow */}
-            <a href="/api/extensions/ext/skatteverket/authorize?return_to=/">
-              {t('skv_promo_cta')}
-              <ArrowRight className="ml-1.5 h-4 w-4" />
-            </a>
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="flex-shrink-0"
-            aria-label={t('skv_promo_dismiss')}
-            onClick={dismiss}
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </CardContent>
-      </Card>
+    <section className="flex items-start justify-between gap-4">
+      <p className="text-[12.5px] leading-5 text-muted-foreground">
+        {t('skv_promo_description')}{' '}
+        {/* py-3/-my-3: a 44px tap target on a link that still sits inline in
+            the sentence; the negative margin keeps the line box at 20px so
+            nothing shifts. */}
+        {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- /api route, not a Next page; the authorize endpoint 302s to Skatteverket, which the client router cannot follow */}
+        <a
+          href="/api/extensions/ext/skatteverket/authorize?return_to=/"
+          className="inline-block -my-3 whitespace-nowrap py-3 text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-foreground"
+        >
+          {t('skv_promo_cta')}
+        </a>
+      </p>
+      <button
+        type="button"
+        onClick={dismiss}
+        className="-my-3 shrink-0 py-3 text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+      >
+        {t('skv_promo_dismiss')}
+      </button>
     </section>
   )
 }
