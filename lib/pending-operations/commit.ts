@@ -35,7 +35,7 @@ import {
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
+import { cashPartialBlockReason, supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import {
@@ -3787,7 +3787,10 @@ async function commitCreditSupplierInvoice(
   const accountingMethod = settings?.accounting_method || 'accrual'
 
   let journalEntryId: string | null = null
-  if (accountingMethod === 'accrual') {
+  // Kontantmetoden skips only while the original is still UNPAID: a paid one
+  // was already booked by its payment verifikat (expense + 2641 ingående
+  // moms), and leaving that un-reversed overstates cost and moms deduction.
+  if (supplierCreditNoteNeedsJournalEntry(accountingMethod, original)) {
     try {
       const je = await createSupplierCreditNoteEntry(
         supabase,

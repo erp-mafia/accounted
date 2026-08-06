@@ -25,6 +25,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { eventBus } from '@/lib/events'
@@ -47,18 +48,25 @@ const SI_RESPONSE_COLUMNS =
 // flow are projected. `user_id` and `company_id` were dropped earlier; this
 // round drops `notes` (the original SI's free-text notes are never copied
 // onto the credit note and never inspected) plus several housekeeping
-// fields (`paid_at`, `payment_journal_entry_id`, `transaction_id`,
-// `document_id`, `payment_reference`, `paid_amount`, `delivery_date`,
-// `received_date`, `is_credit_note`, `reversed_at`, `created_at`,
-// `updated_at`) that the credit handler never reads. SEK-conversion fields
-// (`subtotal_sek` / `vat_amount_sek` / `total_sek`) ARE read: they're
-// copied verbatim onto the credit-note row so the 2440 reversal nets
-// correctly.
+// fields (`transaction_id`, `document_id`, `payment_reference`,
+// `delivery_date`, `received_date`, `is_credit_note`, `reversed_at`,
+// `created_at`, `updated_at`) that the credit handler never reads. SEK-
+// conversion fields (`subtotal_sek` / `vat_amount_sek` / `total_sek`) ARE
+// read: they're copied verbatim onto the credit-note row so the 2440
+// reversal nets correctly.
+//
+// `registration_journal_entry_id`, `payment_journal_entry_id`, `paid_at` and
+// `paid_amount` were dropped in that round but are read again now: they are
+// the booked-ness signals supplierCreditNoteNeedsJournalEntry() needs to
+// decide whether a kontantmetoden credit note must reverse an entry the
+// payment already posted. `status` alone is too weak, it misses a
+// part-paid-but-booked original (rows predating the #1413 guard).
 const SI_FULL_COLUMNS = `
   id, supplier_id, supplier_invoice_number, invoice_date, status,
   currency, exchange_rate,
   subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek,
   vat_treatment, reverse_charge, remaining_amount,
+  registration_journal_entry_id, payment_journal_entry_id, paid_at, paid_amount,
   is_credit_note, credited_invoice_id, arrival_number, default_dimensions,
   supplier:suppliers(id, name, supplier_type),
   items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, dimensions)
@@ -154,6 +162,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       reverse_charge: boolean
       remaining_amount: number
       paid_amount: number
+      // Booked-ness signals for supplierCreditNoteNeedsJournalEntry().
+      registration_journal_entry_id: string | null
+      payment_journal_entry_id: string | null
+      paid_at: string | null
       is_credit_note: boolean
       credited_invoice_id: string | null
       supplier_invoice_number: string
@@ -338,9 +350,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
-    // Accrual: post the reversing JE. Cash basis: skip (no original
-    // registration entry to reverse; refund is recognized when the bank
-    // transaction is booked).
+    // Post the reversing JE whenever the original actually reached the ledger.
+    // Kontantmetoden skips only while the original is still UNPAID: a paid one
+    // was booked by its payment verifikat (expense + 2641 ingående moms), so
+    // skipping there would overstate both the cost and the moms deduction.
     const { data: settings } = await ctx.supabase
       .from('company_settings')
       .select('accounting_method')
@@ -350,7 +363,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       ?? 'accrual') as AccountingMethod
 
     let journalEntryId: string | null = null
-    if (accountingMethod === 'accrual') {
+    if (supplierCreditNoteNeedsJournalEntry(accountingMethod, typed)) {
       try {
         const entry = await createSupplierCreditNoteEntry(
           ctx.supabase,

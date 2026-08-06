@@ -158,4 +158,60 @@ describe('POST /api/supplier-invoices/[id]/credit', () => {
       'Leverantör AB',
     )
   })
+  it('skips the reversing entry under kontantmetoden while the original is unpaid', async () => {
+    // Nothing reached the ledger at registration, so there is no entry to
+    // reverse: recognition correctly waits for the refund.
+    const creditNote = makeSupplierInvoice({
+      id: 'credit-1',
+      is_credit_note: true,
+      credited_invoice_id: 'invoice-1',
+    })
+    enqueueMany([
+      { data: { ...original, status: 'registered', paid_amount: 0, paid_at: null, payment_journal_entry_id: null, registration_journal_entry_id: null }, error: null },
+      { data: 2, error: null },
+      { data: creditNote, error: null },
+      { data: null, error: null },
+      { data: { accounting_method: 'cash' }, error: null },
+      { data: null, error: null },
+    ])
+
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices/invoice-1/credit', { method: 'POST' }),
+      createMockRouteParams({ id: 'invoice-1' }),
+    )
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(createCreditEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('reverses under kontantmetoden once the payment already booked the expense', async () => {
+    // The payment verifikat booked expense + 2641 ingående moms. Skipping the
+    // reversal here would leave both the cost and the moms deduction
+    // overstated for as long as the credit stands.
+    const creditNote = makeSupplierInvoice({
+      id: 'credit-1',
+      is_credit_note: true,
+      credited_invoice_id: 'invoice-1',
+    })
+    enqueueMany([
+      { data: { ...original, status: 'paid', paid_amount: 1250, paid_at: '2026-03-12', payment_journal_entry_id: 'je-payment' }, error: null },
+      { data: 2, error: null },
+      { data: creditNote, error: null },
+      { data: null, error: null },
+      { data: { accounting_method: 'cash' }, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+    ])
+    createCreditEntryMock.mockResolvedValue({ id: 'journal-1' })
+
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices/invoice-1/credit', { method: 'POST' }),
+      createMockRouteParams({ id: 'invoice-1' }),
+    )
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(createCreditEntryMock).toHaveBeenCalledTimes(1)
+  })
 })
