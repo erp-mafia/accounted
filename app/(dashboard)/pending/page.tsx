@@ -854,17 +854,21 @@ export default function PendingOperationsPage() {
     setSelectedIds(new Set())
   }, [activeTab, sourceFilter, conversationFilter])
 
-  async function handleCommit() {
-    if (!selectedOp) return
+  // Shared by the direct-commit pill (low/medium risk) and the high-risk
+  // confirmation dialog. The Granskning row already states source, title and
+  // risk and offers Detaljer, so for low/medium the pill IS the deliberate
+  // approval; only high risk keeps the dialog, whose warning sentence carries
+  // information the row does not.
+  async function commitOp(op: PendingOperation) {
     setIsCommitting(true)
     try {
-      const res = await fetch(`/api/pending-operations/${selectedOp.id}/commit`, { method: 'POST' })
+      const res = await fetch(`/api/pending-operations/${op.id}/commit`, { method: 'POST' })
       const json = await res.json().catch(() => ({}))
       // getErrorMessage handles both `{ error: string }` and the structured
       // `{ error: { code, message } }` envelope (the latter would otherwise
       // toast "[object Object]") and never surfaces raw English.
       if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
-      toast({ title: 'Godkänd', description: selectedOp.title })
+      toast({ title: 'Godkänd', description: op.title })
       setShowCommitDialog(false)
       setSelectedOp(null)
       fetchOperations()
@@ -876,6 +880,11 @@ export default function PendingOperationsPage() {
       })
     }
     setIsCommitting(false)
+  }
+
+  async function handleCommit() {
+    if (!selectedOp) return
+    await commitOp(selectedOp)
   }
 
   async function handleBulkCommit(ids: string[]) {
@@ -1421,8 +1430,17 @@ export default function PendingOperationsPage() {
                         onClick={(e) => {
                           e.stopPropagation()
                           if (periodLocked) return
-                          setSelectedOp(op)
-                          setShowCommitDialog(true)
+                          if (op.risk_level === 'high') {
+                            // High risk keeps the confirmation dialog: its
+                            // warning sentence carries real information.
+                            setSelectedOp(op)
+                            setShowCommitDialog(true)
+                          } else {
+                            // Low/medium: the pill on the review row is the
+                            // approval; a second Godkann in a dialog restated
+                            // what the row already shows.
+                            void commitOp(op)
+                          }
                         }}
                       >
                         <Check className="h-3.5 w-3.5" />
