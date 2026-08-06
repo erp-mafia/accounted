@@ -45,9 +45,9 @@ export function BrandWordmark({
         <Image
           src={branding.logoUrl}
           alt={name}
-          width={size === 'hero' ? 160 : 88}
-          height={size === 'hero' ? 48 : 22}
-          className={cn('w-auto', size === 'hero' ? 'h-12' : 'h-[22px]')}
+          width={size === 'hero' ? 214 : 88}
+          height={size === 'hero' ? 64 : 22}
+          className={cn('w-auto', size === 'hero' ? 'h-16' : 'h-[22px]')}
           priority={size === 'hero'}
         />
       </span>
