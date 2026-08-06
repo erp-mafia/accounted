@@ -283,6 +283,7 @@ function RegisterPageContent() {
             email_exists: t('account_exists_description'),
             email_invalid: t('error_email_invalid'),
             rate_limited: t('error_rate_limited'),
+            signup_disabled: t('error_signup_disabled'),
           }
           setFormError({
             kind,

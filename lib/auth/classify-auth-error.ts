@@ -34,6 +34,7 @@ const CODE_MAP: Record<string, AuthErrorKind> = {
   weak_password: 'weak_password',
   email_address_invalid: 'email_invalid',
   signup_disabled: 'signup_disabled',
+  email_provider_disabled: 'signup_disabled',
 }
 
 export function classifyAuthError(error: unknown): AuthErrorKind {
@@ -51,6 +52,7 @@ export function classifyAuthError(error: unknown): AuthErrorKind {
     if (/email not confirmed/i.test(message)) return 'email_not_confirmed'
     if (/already registered/i.test(message)) return 'email_exists'
     if (/signups? not allowed/i.test(message)) return 'signup_disabled'
+    if (/signups? (are )?disabled/i.test(message)) return 'signup_disabled'
     if (/rate limit/i.test(message)) return 'rate_limited'
   }
 

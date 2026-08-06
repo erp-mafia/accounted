@@ -21,6 +21,8 @@ describe('classifyAuthError', () => {
       .toBe('email_invalid')
     expect(classifyAuthError({ code: 'signup_disabled', message: 'Signups not allowed', status: 400 }))
       .toBe('signup_disabled')
+    expect(classifyAuthError({ code: 'email_provider_disabled', message: 'Email signups are disabled', status: 400 }))
+      .toBe('signup_disabled')
   })
 
   it('falls back on message strings when code is missing (older self-hosted GoTrue)', () => {
@@ -31,6 +33,8 @@ describe('classifyAuthError', () => {
     expect(classifyAuthError({ message: 'User already registered', status: 422 }))
       .toBe('email_exists')
     expect(classifyAuthError({ message: 'Signups not allowed for this instance', status: 400 }))
+      .toBe('signup_disabled')
+    expect(classifyAuthError({ message: 'Email signups are disabled', status: 400 }))
       .toBe('signup_disabled')
     expect(classifyAuthError({ message: 'Email rate limit exceeded', status: 429 }))
       .toBe('rate_limited')
