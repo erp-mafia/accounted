@@ -129,9 +129,10 @@ describe('buildCutoffLines: fordringar', () => {
     expect(totals.debit).toBe(totals.credit)
   })
 
-  it('still balances when a zero-moms treatment carries a stray moms amount', () => {
-    // Data error: export with moms. It must not invent a moms account, and
-    // above all must not unbalance the verifikat.
+  it('still balances if a stray moms amount reaches buildCutoffLines directly', () => {
+    // The collector now excludes these rows and the posting step refuses them,
+    // so this is the last-resort path. It must never invent a moms account and
+    // must never unbalance the verifikat.
     const { receivableLines } = buildCutoffLines(
       [receivable({ vatTreatment: 'export', outstanding: 5000, vat: 100 })],
       [],
@@ -340,6 +341,18 @@ describe('postKontantmetodCutoff', () => {
         'co-1', 'user-1', baseOpts,
       ),
     ).rejects.toThrow(/utanför nästa räkenskapsår/i)
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
+  it('refuses when an invoice carries moms on a momsfri treatment', async () => {
+    // Absorbing it into revenue would balance the verifikat and swallow a real
+    // invoicing error: the netting the swedish-vat reference prohibits.
+    await expect(
+      postKontantmetodCutoff(makeSupabase(OPEN_NEXT), 'co-1', 'user-1', {
+        ...baseOpts,
+        strayVatOnZeroRate: ['F-7'],
+      }),
+    ).rejects.toThrow(/momsfri momsinställning/i)
     expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
   })
 

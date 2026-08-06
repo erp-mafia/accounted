@@ -332,6 +332,14 @@ export interface CutoffCollection {
    * is non-empty so the user fixes the source rows instead.
    */
   unknownVatTreatment: string[]
+  /**
+   * Invoices carrying moms on a treatment that cannot have Swedish output moms
+   * (export, omvänd betalningsskyldighet, undantagen). Absorbing that into the
+   * revenue line would balance the verifikat while silently swallowing a real
+   * invoicing error, which is the netting the swedish-vat reference prohibits.
+   * Excluded and refused on the same footing as a missing treatment.
+   */
+  strayVatOnZeroRate: string[]
 }
 
 /**
@@ -426,6 +434,7 @@ export async function collectKontantmetodCutoff(
 
   const receivables: CutoffReceivable[] = []
   const unknownVatTreatment: string[] = []
+  const strayVatOnZeroRate: string[] = []
   for (const row of invoices) {
     // Credit notes reduce the receivable through their own negative totals;
     // they are already part of the invoice set, so no special casing beyond
@@ -453,12 +462,21 @@ export async function collectKontantmetodCutoff(
     // Scale the moms share to the part still outstanding: a half-paid invoice
     // carries half its moms into the cut-off.
     const ratio = total === 0 ? 0 : outstanding / total
+    const scaledVat = roundOre(vat * ratio)
+
+    // Moms on a treatment that cannot carry Swedish output moms is a real
+    // invoicing error. Surface it instead of quietly folding it into revenue:
+    // the verifikat would balance and the mistake would disappear.
+    if (!VILANDE_OUTPUT_VAT_ACCOUNTS[treatment] && Math.abs(scaledVat) >= ORE_TOLERANCE) {
+      strayVatOnZeroRate.push(reference || (row.id as string))
+      continue
+    }
     receivables.push({
       id: row.id as string,
       reference,
       vatTreatment: treatment,
       outstanding,
-      vat: roundOre(vat * ratio),
+      vat: scaledVat,
     })
   }
 
@@ -501,8 +519,14 @@ export async function collectKontantmetodCutoff(
       count: unknownVatTreatment.length,
     })
   }
+  if (strayVatOnZeroRate.length > 0) {
+    log.warn('invoices with moms on a zero-rate treatment excluded from the cut-off', {
+      companyId,
+      count: strayVatOnZeroRate.length,
+    })
+  }
 
-  return { receivables, payables, unknownVatTreatment }
+  return { receivables, payables, unknownVatTreatment, strayVatOnZeroRate }
 }
 
 export interface PostCutoffResult {
@@ -585,12 +609,21 @@ export async function postKontantmetodCutoff(
     entityType?: EntityType
     /** Refuse if any invoice lacked a vat_treatment (see CutoffCollection). */
     unknownVatTreatment?: string[]
+    /** Refuse if any invoice carried moms on a zero-rate treatment. */
+    strayVatOnZeroRate?: string[]
   },
 ): Promise<PostCutoffResult> {
   if (opts.unknownVatTreatment && opts.unknownVatTreatment.length > 0) {
     throw new Error(
       `${opts.unknownVatTreatment.length} fakturor saknar momsinställning och kan inte tas med i bokslutsavgränsningen: ` +
         `${opts.unknownVatTreatment.slice(0, 10).join(', ')}. Komplettera fakturorna och kör om.`,
+    )
+  }
+
+  if (opts.strayVatOnZeroRate && opts.strayVatOnZeroRate.length > 0) {
+    throw new Error(
+      `${opts.strayVatOnZeroRate.length} fakturor har moms trots en momsfri momsinställning (export, omvänd betalningsskyldighet eller undantagen) och kan inte tas med i bokslutsavgränsningen: ` +
+        `${opts.strayVatOnZeroRate.slice(0, 10).join(', ')}. Rätta fakturorna och kör om.`,
     )
   }
 

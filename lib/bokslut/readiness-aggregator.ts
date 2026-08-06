@@ -195,6 +195,17 @@ export async function buildBokslutReadinessReport(
       }
       // Surfaced separately: these rows block the cut-off entirely, so the
       // user needs to see them even when nothing else is outstanding.
+      if (cutoff.strayVatOnZeroRate.length > 0) {
+        reminders.push({
+          code: 'kontantmetod_cutoff_stray_vat',
+          severity: 'warning',
+          message:
+            `${cutoff.strayVatOnZeroRate.length} fakturor har moms trots en momsfri ` +
+            'momsinställning och kan inte tas med i bokslutsavgränsningen. Rätta dem innan bokslut: ' +
+            `${cutoff.strayVatOnZeroRate.slice(0, 5).join(', ')}`,
+          href: '/invoices',
+        })
+      }
       if (cutoff.unknownVatTreatment.length > 0) {
         reminders.push({
           code: 'kontantmetod_cutoff_missing_vat_treatment',
