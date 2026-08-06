@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { maskSensitiveText, replayMaskInput, replayMaskText } from '@/lib/analytics/replay-masking'
+
+// Repo test convention. eventBus.clear() is deliberately absent: these are
+// pure functions and importing the bus would only add module side effects.
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
 /**
  * Minimal stand-ins for the DOM elements rrweb hands to the masking

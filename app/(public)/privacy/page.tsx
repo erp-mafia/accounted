@@ -19,7 +19,7 @@ export default function PrivacyPolicyPage() {
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">
-            Senast uppdaterad: 2026-07-22
+            Senast uppdaterad: 2026-08-06
           </p>
         </div>
 
