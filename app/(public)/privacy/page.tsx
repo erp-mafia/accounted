@@ -19,7 +19,7 @@ export default function PrivacyPolicyPage() {
             Integritetspolicy
           </h1>
           <p className="text-muted-foreground">
-            Senast uppdaterad: 2026-07-22
+            Senast uppdaterad: 2026-08-06
           </p>
         </div>
 
@@ -157,10 +157,12 @@ export default function PrivacyPolicyPage() {
                       enkäter och supportärenden. Överförda uppgifter:
                       användar-ID, e-postadress, namn och företagsnamn. Om du
                       själv skriver till supporten i appen skickas även ditt
-                      meddelande dit som ett ärende, så att vi kan svara. All text i
-                      sessionsinspelningar maskeras: vi spelar in var i
-                      gränssnittet du klickar, aldrig vad som står i din
-                      bokföring. Organisationsnummer överförs aldrig.
+                      meddelande dit som ett ärende, så att vi kan svara. I
+                      sessionsinspelningar maskeras belopp, person- och
+                      organisationsnummer samt lösenord; övrig text i
+                      gränssnittet och det du själv skriver kan ingå i
+                      inspelningen, så att vi kan felsöka problem du stöter
+                      på. Organisationsnummer skickas aldrig som analysdata.
                       Identifiering sker endast för inloggade användare (ej
                       sandbox/demo). Inga kakor används, och själva analysdatan
                       lagras inte på din enhet. Två små tekniska värden sparas

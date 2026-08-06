@@ -2,8 +2,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
+import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
+import { generateReconciliation as generateAPReconciliation } from '@/lib/reports/supplier-reconciliation'
+import { collectKontantmetodCutoff } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
-import type { YearEndValidation } from '@/types'
+import { createLogger } from '@/lib/logger'
+import type { YearEndBlocker, YearEndValidation } from '@/types'
+
+const log = createLogger('bokslut-readiness')
 
 export type ReminderSeverity = 'info' | 'warning'
 
@@ -22,6 +28,10 @@ export interface BokslutReadinessReport {
   ready: boolean
   /** Blocking errors that prevent year-end execution (from year-end-service). */
   blockers: string[]
+  /** Same blockers with stable machine codes (same order as `blockers`).
+   *  The wizard matches on `code` to attach remediation links; `blockers`
+   *  stays as plain strings for existing consumers. */
+  blockerItems: YearEndBlocker[]
   /** Non-blocking warnings (from year-end-service). */
   warnings: string[]
   /** Soft reminders (Phase 2+ features not yet shipped, manual steps the user
@@ -83,7 +93,7 @@ export async function buildBokslutReadinessReport(
       .single(),
     supabase
       .from('company_settings')
-      .select('entity_type')
+      .select('entity_type, accounting_method')
       .eq('company_id', companyId)
       .maybeSingle(),
     validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId),
@@ -95,6 +105,9 @@ export async function buildBokslutReadinessReport(
 
   const period = periodResult.data
   const entityType = (settingsResult.data?.entity_type ?? 'aktiebolag') as BokslutReadinessReport['entityType']
+  const accountingMethod =
+    ((settingsResult.data as { accounting_method?: string | null } | null)?.accounting_method ??
+      'accrual')
 
   // Bank reconciliation snapshot for the period. Run after period fetch so we
   // know the date range. Failure here must not break the report: fall back
@@ -147,6 +160,109 @@ export async function buildBokslutReadinessReport(
     })
   }
 
+  // AR/AP tie-outs: Phase 1 avstämningar per the bokslut process, open
+  // sub-ledger vs konto 1510 / 2440. Accrual companies only: under
+  // kontantmetoden open invoices are deliberately not on 1510/2440 until the
+  // cut-off entry below puts them there, so the tie-out is "unreconciled" by
+  // construction for the whole year and would only mislead.
+  // Warnings, never blockers: a difference can be legitimate (e.g. partial
+  // payments settled at a different FX rate than the invoice-date rate).
+  if (accountingMethod === 'cash') {
+    // Kontantmetoden year-end cut-off (BFL 5 kap 2 §): fordringar och skulder
+    // must be booked at räkenskapsårets utgång even though the year is kept on
+    // a cash basis. Advisory here, not a blocker: promoting it would newly
+    // block every cash company mid-bokslut, and the posting step is the
+    // founder's call to gate on.
+    try {
+      const cutoff = await collectKontantmetodCutoff(
+        supabase,
+        companyId,
+        period.period_start,
+        period.period_end,
+      )
+      const openCount = cutoff.receivables.length + cutoff.payables.length
+      if (openCount > 0) {
+        reminders.push({
+          code: 'kontantmetod_cutoff_required',
+          severity: 'warning',
+          message:
+            `${openCount} obetalda fakturor var utestående vid periodens slut. ` +
+            'Kontantmetoden kräver att fordringar och skulder bokförs vid ' +
+            'räkenskapsårets utgång (BFL 5 kap 2 §). Momsen bokas som vilande ' +
+            'och redovisas först vid betalning.',
+          href: '/reports/kundreskontra',
+        })
+      }
+      // Surfaced separately: these rows block the cut-off entirely, so the
+      // user needs to see them even when nothing else is outstanding.
+      if (cutoff.strayVatOnZeroRate.length > 0) {
+        reminders.push({
+          code: 'kontantmetod_cutoff_stray_vat',
+          severity: 'warning',
+          message:
+            `${cutoff.strayVatOnZeroRate.length} fakturor har moms trots en momsfri ` +
+            'momsinställning och kan inte tas med i bokslutsavgränsningen. Rätta dem innan bokslut: ' +
+            `${cutoff.strayVatOnZeroRate.slice(0, 5).join(', ')}`,
+          href: '/invoices',
+        })
+      }
+      if (cutoff.unknownVatTreatment.length > 0) {
+        reminders.push({
+          code: 'kontantmetod_cutoff_missing_vat_treatment',
+          severity: 'warning',
+          message:
+            `${cutoff.unknownVatTreatment.length} fakturor saknar momsinställning och kan ` +
+            'inte tas med i bokslutsavgränsningen. Komplettera dem innan bokslut: ' +
+            `${cutoff.unknownVatTreatment.slice(0, 5).join(', ')}`,
+          href: '/invoices',
+        })
+      }
+    } catch (err) {
+      // Advisory: never break the wizard on it, but keep the failure traceable
+      // so a silently missing reminder is not mistaken for "nothing open".
+      log.warn('kontantmetoden cut-off check failed; reminder omitted', err as Error)
+    }
+  }
+
+  if (accountingMethod === 'accrual') {
+    const [arResult, apResult] = await Promise.allSettled([
+      generateARReconciliation(supabase, companyId, fiscalPeriodId),
+      generateAPReconciliation(supabase, companyId, fiscalPeriodId),
+    ])
+    // A failed tie-out degrades to "no reminder" (these are advisory), but a
+    // silently swallowed failure is indistinguishable from "reconciled" in
+    // the report, so the rejection must at least be traceable in logs
+    // (compliance review on the avstämning controls, BFNAR 2013:2 kap 8).
+    if (arResult.status === 'rejected') {
+      log.warn('AR tie-out (kundreskontra vs 1510) failed; reminder omitted', arResult.reason)
+    }
+    if (apResult.status === 'rejected') {
+      log.warn('AP tie-out (leverantörsreskontra vs 2440) failed; reminder omitted', apResult.reason)
+    }
+    if (arResult.status === 'fulfilled' && !arResult.value.is_reconciled) {
+      reminders.push({
+        code: 'ar_reconciliation_mismatch',
+        severity: 'warning',
+        message:
+          arResult.value.unconverted_fx_count > 0
+            ? `Kundreskontran kan inte stämmas av mot konto 1510: ${arResult.value.unconverted_fx_count} fakturor i utländsk valuta saknar valutakurs.`
+            : `Kundreskontran stämmer inte mot konto 1510: differens ${arResult.value.difference.toFixed(2)} kr. Kontrollera obetalda kundfakturor innan bokslut.`,
+        href: '/reports/kundreskontra',
+      })
+    }
+    if (apResult.status === 'fulfilled' && !apResult.value.is_reconciled) {
+      reminders.push({
+        code: 'ap_reconciliation_mismatch',
+        severity: 'warning',
+        message:
+          apResult.value.unconverted_fx_count > 0
+            ? `Leverantörsreskontran kan inte stämmas av mot konto 2440: ${apResult.value.unconverted_fx_count} fakturor i utländsk valuta saknar valutakurs.`
+            : `Leverantörsreskontran stämmer inte mot konto 2440: differens ${apResult.value.difference.toFixed(2)} kr. Kontrollera obetalda leverantörsfakturor innan bokslut.`,
+        href: '/reports/supplier-ledger',
+      })
+    }
+  }
+
   // Periodiseringar (accruals) are still manual: no wizard step ships in
   // Phases 1-3. Depreciation, bolagsskatt and periodiseringsfond now have
   // dedicated calculators (DepreciationPanel + DispositionsStep) so they're
@@ -193,6 +309,7 @@ export async function buildBokslutReadinessReport(
   return {
     ready: validation.ready,
     blockers: validation.errors,
+    blockerItems: validation.blockers,
     warnings: validation.warnings,
     reminders,
     draftCount: validation.draftCount,

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { cancelSchedulesForSource } from '@/lib/bookkeeping/accruals/service'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -106,10 +107,13 @@ export const POST = withRouteContext(
 
     const accountingMethod = (settings?.accounting_method as AccountingMethod) || 'accrual'
 
-    // Cash method: skip, no original registration entry to reverse;
-    // recognition is deferred until refund.
+    // Kontantmetoden skips only while the original is still UNPAID: nothing
+    // reached the ledger, so there is nothing to reverse and recognition
+    // rightly waits for cash. A PAID original was already booked by its
+    // payment verifikat (expense + 2641 ingående moms), and leaving that
+    // un-reversed overstates both the cost and the moms deduction.
     let journalEntryId: string | null = null
-    if (accountingMethod === 'accrual') {
+    if (supplierCreditNoteNeedsJournalEntry(accountingMethod, original)) {
       try {
         // Pass the ORIGINAL items: deferred lines carry their periodisering
         // fields there, so the credit entry reverses against the same 17xx

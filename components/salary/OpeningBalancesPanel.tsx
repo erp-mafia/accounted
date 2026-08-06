@@ -27,6 +27,7 @@ interface OpeningBalancesData {
   ytd_tax: number
   ytd_net: number
   vacation_paid_days_remaining: number
+  vacation_days_taken_this_year: number
   vacation_saved_days_by_year: Record<string, number>
   opening_semester_liability: number
   opening_semester_liability_avgifter: number
@@ -52,6 +53,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
   const [ytdTax, setYtdTax] = useState('')
   const [ytdNet, setYtdNet] = useState('')
   const [daysRemaining, setDaysRemaining] = useState('')
+  const [daysTaken, setDaysTaken] = useState('')
   const [savedByYear, setSavedByYear] = useState<Record<string, string>>({})
   const [liability, setLiability] = useState('')
   const [liabilityAvgifter, setLiabilityAvgifter] = useState('')
@@ -71,6 +73,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
           setYtdTax(String(data.ytd_tax))
           setYtdNet(String(data.ytd_net))
           setDaysRemaining(String(data.vacation_paid_days_remaining))
+          setDaysTaken(String(data.vacation_days_taken_this_year ?? 0))
           setSavedByYear(
             Object.fromEntries(
               Object.entries(data.vacation_saved_days_by_year ?? {}).map(([y, d]) => [y, String(d)]),
@@ -103,6 +106,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
         ytd_tax: parseFloat(ytdTax) || 0,
         ytd_net: parseFloat(ytdNet) || 0,
         vacation_paid_days_remaining: parseFloat(daysRemaining) || 0,
+        vacation_days_taken_this_year: parseFloat(daysTaken) || 0,
         vacation_saved_days_by_year: saved,
         opening_semester_liability: parseFloat(liability) || 0,
         opening_semester_liability_avgifter: parseFloat(liabilityAvgifter) || 0,
@@ -214,6 +218,12 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
               <Label htmlFor="ob-days-remaining">{t('opening_balances_days_remaining')}</Label>
               <Input id="ob-days-remaining" type="number" min={0} max={40} step={0.5} value={daysRemaining}
                 onChange={(e) => setDaysRemaining(e.target.value)} disabled={readOnly} className="tabular-nums" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="ob-days-taken">{t('opening_balances_days_taken')}</Label>
+              <Input id="ob-days-taken" type="number" min={0} max={40} step={0.5} value={daysTaken}
+                onChange={(e) => setDaysTaken(e.target.value)} disabled={readOnly} className="tabular-nums" />
+              <p className="text-xs text-muted-foreground">{t('opening_balances_days_taken_hint')}</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="ob-liability">{t('opening_balances_liability')}</Label>

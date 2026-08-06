@@ -118,6 +118,7 @@ function buildMasterDataQueue(opts: {
 describe('generateFullArchive', () => {
   let supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']
   let enqueueMany: ReturnType<typeof createQueuedMockSupabase>['enqueueMany']
+  let findCall: ReturnType<typeof createQueuedMockSupabase>['findCall']
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -125,6 +126,7 @@ describe('generateFullArchive', () => {
     const mock = createQueuedMockSupabase()
     supabase = mock.supabase
     enqueueMany = mock.enqueueMany
+    findCall = mock.findCall
   })
 
   describe('scope: period', () => {
@@ -823,6 +825,72 @@ describe('generateFullArchive', () => {
       expect(rows).toEqual([
         { id: 'ritem-1', request_id: 'req-1', requested_amount: 5000 },
       ])
+    })
+
+    // The archive is what a company leaving Accounted keeps as its BFL
+    // 7-year record. A representation answer given in chat is documented in
+    // full only in invoice_inbox_items.channel_context: the verifikat line
+    // caps at 220 chars and drops whole names ("… och N till"), while
+    // Skatteverket wants every deltagare. So the answers must be exported.
+    it('exports the chat answers behind a verifikat, in full', async () => {
+      const participants = Array.from({ length: 10 }, (_, i) => ({
+        name: `Deltagare Efternamnsson ${i + 1}`,
+        company: 'Företagsnamnet Aktiebolag',
+      }))
+      const inboxRow = {
+        id: 'inbox-1',
+        created_at: '2024-06-01T10:00:00Z',
+        source: 'whatsapp',
+        status: 'confirmed',
+        document_id: 'doc-1',
+        matched_transaction_id: 'tx-1',
+        created_journal_entry_id: 'je-1',
+        created_supplier_invoice_id: null,
+        channel_context: {
+          channel: 'whatsapp',
+          representation: {
+            participants,
+            purpose: 'avtalsförhandling',
+            event_date: '2024-06-01',
+            raw_answer: 'tio personer, avtalsförhandling',
+            answered_at: '2024-06-01T18:00:00Z',
+          },
+        },
+      }
+
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: [PERIOD_2024] },
+        { data: [] }, // document_attachments
+        { data: [] }, // sie_imports
+        { data: [] }, // sie_account_mappings
+        ...buildMasterDataQueue({ direct: { invoice_inbox_items: [inboxRow] } }),
+      ])
+
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'all',
+      })
+      const zip = await JSZip.loadAsync(buffer)
+      const rows = JSON.parse(
+        await zip.file('data/invoice_inbox_items.json')!.async('text')
+      ) as Array<Record<string, any>>
+
+      // Every deltagare survives, not the three that fit on the verifikat line.
+      expect(rows[0].channel_context.representation.participants).toHaveLength(10)
+      expect(rows[0].channel_context.representation.raw_answer).toBe(
+        'tio personer, avtalsförhandling'
+      )
+      // Tied to what was booked from it, so a revisor can find the verifikat.
+      expect(rows[0].created_journal_entry_id).toBe('je-1')
+
+      // A projection, not the whole row: inbox workflow state (email bodies,
+      // OCR output, error messages) stays out of the archive.
+      const select = findCall('invoice_inbox_items', 'select')?.[0] as string
+      expect(select).toContain('channel_context')
+      expect(select).toContain('created_journal_entry_id')
+      expect(select).not.toContain('email_body_text')
+      expect(select).not.toContain('extracted_data')
+      expect(select).not.toBe('*')
     })
 
     it('skips raw SIE blobs when include_documents is false but keeps metadata', async () => {

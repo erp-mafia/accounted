@@ -85,3 +85,41 @@ describe('GET /auth/callback: recovery flow', () => {
     )
   })
 })
+
+describe('GET /auth/callback: admin invite flow (type=invite)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('routes a verified invite to /reset-password and preserves the invite token from next', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+
+    const request = new NextRequest(
+      'http://localhost:3000/auth/callback?token_hash=abc&type=invite&next=/invite/gnubok_inv_tok123'
+    )
+    const response = await GET(request)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe('http://localhost:3000/reset-password')
+    expect(verifyOtp).toHaveBeenCalledWith({ token_hash: 'abc', type: 'invite' })
+    // The company invite token is persisted as the pre-auth invite cookie so
+    // the reset-password handoff can accept the membership after the
+    // password is set.
+    expect(response.headers.get('set-cookie') ?? '').toContain(
+      'gnubok-invite-token=gnubok_inv_tok123'
+    )
+  })
+
+  it('routes a verified invite without an invite path in next to /reset-password without the cookie', async () => {
+    verifyOtp.mockResolvedValue({ error: null })
+
+    const request = new NextRequest(
+      'http://localhost:3000/auth/callback?token_hash=abc&type=invite'
+    )
+    const response = await GET(request)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe('http://localhost:3000/reset-password')
+    expect(response.headers.get('set-cookie') ?? '').not.toContain('gnubok-invite-token')
+  })
+})

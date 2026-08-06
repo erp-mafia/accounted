@@ -6,7 +6,6 @@ export type DispositionKind =
   | 'periodiseringsfond_ateforing'
   | 'overavskrivningar'
   | 'sarskild_loneskatt'
-  | 'uppskjuten_skatt'
 
 /**
  * Common shape every bokslut-disposition calculator returns. The wizard renders

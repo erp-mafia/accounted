@@ -56,12 +56,12 @@ Both general and sector extensions live in the same system:
 ```
 extensions/
   general/                    ← General extensions (any business)
-    receipt-ocr/
-    ai-categorization/
-    ai-chat/
+    document-extraction/
+    invoice-inbox/
+    mcp-server/
+    skatteverket/
     push-notifications/
     enable-banking/
-    invoice-inbox/
     calendar/
     email/
   restaurant/                 ← Restaurant sector extensions
@@ -298,16 +298,15 @@ type ExtensionCategory = 'accounting' | 'reports' | 'import' | 'operations'
 ```
 extensions/                           ← Extension source code (opt-in via config)
   general/                            ← General extensions
-    receipt-ocr/
+    invoice-inbox/
       manifest.json                   ← Metadata, entry point, env vars, workspace path
       index.ts                        ← Extension definition + logic (exports Extension)
       lib/
       __tests__/
-    ai-categorization/
+    document-extraction/
       manifest.json
       index.ts
-      lib/
-    ai-chat/
+    skatteverket/
       manifest.json
       index.ts
       lib/
@@ -323,9 +322,6 @@ extensions/                           ← Extension source code (opt-in via conf
       manifest.json
       index.ts
       lib/
-    invoice-inbox/
-      manifest.json
-      index.ts
     calendar/
       manifest.json
       index.ts
@@ -465,12 +461,10 @@ To check if an extension is compiled in at runtime (e.g. for conditional UI), us
 ```typescript
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 
-if (ENABLED_EXTENSION_IDS.has('receipt-ocr')) {
-  // Show OCR UI
+if (ENABLED_EXTENSION_IDS.has('document-extraction')) {
+  // Show AI extraction status UI
 }
 ```
-
-AI extensions (`receipt-ocr`, `ai-categorization`, `ai-chat`) additionally require per-user AI consent before making API calls. This is a separate system using the `extension_data` table, managed by `lib/extensions/ai-consent.ts`.
 
 > **Note:** The `extension_toggles` database table still exists but is no longer queried by any code. It can be dropped in a future migration.
 
@@ -536,8 +530,7 @@ The sidebar (`DashboardNav.tsx`) has a section for extensions. It shows all comp
 
 ```
 ── Your Extensions ──────────
-  📷 Receipt OCR             → /e/general/receipt-ocr
-  🤖 AI Categorization       → /e/general/ai-categorization
+  📥 Dokumentinkorg          → /e/general/invoice-inbox
   📊 Food Cost %             → /e/restaurant/food-cost
   🍷 Earnings Per Liter      → /e/restaurant/earnings-per-liter
 ```
@@ -594,9 +587,9 @@ The previous architecture had extensions "always loaded" via hardcoded static im
 
 1. **Extension opt-in system** -- Extensions are configured via `extensions.config.json`. A generator script (`npm run setup:extensions`) reads manifest files and produces `lib/extensions/_generated/` files. Core compiles and runs with an empty config (zero extensions).
 
-2. **Services pattern** -- Extensions can expose named services via `services?: Record<string, (...args: any[]) => Promise<any>>` on the Extension interface. Core code uses `extensionRegistry.get('ext-id')?.services?.methodName` for runtime lookup instead of direct imports. This is how `ai-categorization` provides template embedding functions to core booking logic.
+2. **Services pattern** -- Extensions can expose named services via `services?: Record<string, (...args: any[]) => Promise<any>>` on the Extension interface. Core code uses `extensionRegistry.get('ext-id')?.services?.methodName` for runtime lookup instead of direct imports. This is how `skatteverket` exposes declaration submission to core pending-operation commits, and how `stripe` provides invoice payment links.
 
-3. **Catch-all API dispatcher** -- Extension API routes are registered via `apiRoutes: ApiRouteDefinition[]` on the Extension object. The catch-all at `/api/extensions/ext/[...path]/route.ts` handles auth, AI consent checks, path param extraction, and dispatches to the handler. URL pattern: `/api/extensions/ext/{extensionId}/{path}`.
+3. **Catch-all API dispatcher** -- Extension API routes are registered via `apiRoutes: ApiRouteDefinition[]` on the Extension object. The catch-all at `/api/extensions/ext/[...path]/route.ts` handles auth, path param extraction, and dispatches to the handler. URL pattern: `/api/extensions/ext/{extensionId}/{path}`.
 
 4. **SRU/NE-bilaga are core** -- These tax compliance features were moved from `extensions/` into `lib/reports/sru-export/` and `lib/reports/ne-bilaga/`. They are always available regardless of extension configuration.
 
@@ -630,7 +623,7 @@ The previous architecture had extensions "always loaded" via hardcoded static im
 | Shared UI components | Done | KPICard, DataEntryForm, DateRangeFilter, etc. |
 | Extension API routes (generic CRUD) | Done | `app/api/extensions/[sector]/[slug]/` |
 | Catch-all API dispatcher | Done | `app/api/extensions/ext/[...path]/route.ts` |
-| Services pattern | Done | Used by ai-categorization for template embeddings |
+| Services pattern | Done | Used by skatteverket (declaration submission) and stripe (payment links) |
 | Email service interface | Done | `lib/email/service.ts` + email extension |
 | SRU/NE-bilaga moved to core | Done | `lib/reports/sru-export/` + `lib/reports/ne-bilaga/` |
 | Manifest files for all extensions | Done | 25 manifest.json files |
@@ -679,15 +672,16 @@ npx tsx scripts/generate-extension-registry.ts --list
 
 # 2. Edit extensions.config.json: add extension IDs
 {
-  "extensions": ["receipt-ocr", "ai-categorization", "email"]
+  "extensions": ["invoice-inbox", "document-extraction", "email"]
 }
 
 # 3. Regenerate (also runs automatically on build/dev)
 npm run setup:extensions
 
 # 4. Set extension-specific env vars (check each manifest.json for requiredEnvVars)
-export ANTHROPIC_API_KEY=...
-export OPENAI_API_KEY=...
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_REGION=eu-north-1
 export RESEND_API_KEY=...
 export RESEND_FROM_EMAIL=...
 
@@ -769,15 +763,15 @@ Extensions with `exportName: null` and `entryPoint: null` are metadata-only -- t
 Extensions can expose named services for cross-boundary calls. This avoids direct imports from extension code into core:
 
 ```typescript
-// Extension: ai-categorization/index.ts
-export const aiCategorizationExtension: Extension = {
-  id: 'ai-categorization',
-  name: 'AI Categorization',
+// Extension: stripe/index.ts
+export const stripeExtension: Extension = {
+  id: 'stripe',
+  name: 'Stripe',
   version: '1.0.0',
   services: {
-    findSimilarTemplates: async (description: string, limit?: number) => {
-      // ... embedding search logic
-      return matches
+    createInvoicePaymentLink: async (companyId: string, invoiceId: string) => {
+      // ... eligibility checks + Stripe API call
+      return { url, externalId }
     },
   },
 }
@@ -787,16 +781,18 @@ Core code calls the service via registry lookup:
 
 ```typescript
 // Core code: no direct import from extensions/
-const ext = extensionRegistry.get('ai-categorization')
-const results = await ext?.services?.findSimilarTemplates(description, 5)
-if (results) {
-  // Use results
+// (real example: lib/extensions/payment-links.ts)
+const ext = extensionRegistry.get('stripe')
+const link = await ext?.services?.createInvoicePaymentLink(companyId, invoiceId)
+if (link) {
+  // Use link
 }
 // Gracefully degrades if extension is not loaded
 ```
 
 This pattern is used for:
-- `ai-categorization` providing template embedding search to core booking suggestions
+- `stripe` providing invoice payment links to the core invoice send routes (`lib/extensions/payment-links.ts`)
+- `skatteverket` exposing declaration submission to core pending-operation commits
 - Any extension that needs to provide functionality callable by core without a direct dependency
 
 ### Event Bus Usage
@@ -861,10 +857,10 @@ This pattern can be reused for any capability that should degrade gracefully whe
 **Core functionality** is the standard accounting system: bookkeeping, invoicing, reports, tax (SRU, NE-bilaga), bank reconciliation. Every user gets this. Core compiles and runs with zero extensions.
 
 **Extensions** are everything beyond core accounting. They come in three kinds:
-- **General extensions** (receipt-ocr, ai-categorization, email, etc.) -- useful for any business, not sector-specific
+- **General extensions** (invoice-inbox, document-extraction, email, etc.) -- useful for any business, not sector-specific
 - **Sector extensions** (food cost %, earnings per liter, etc.) -- tied to a specific market sector
 - **Export extensions** (EU Sales List, Intrastat, etc.) -- for businesses with international trade
 
-All extensions live in the same system, appear in the same marketplace, and show up in the sidebar when they have a workspace + quickAction. All compiled extensions are active for all users -- the operator chooses which to include in `extensions.config.json` at build time. AI extensions additionally require per-user consent before making API calls.
+All extensions live in the same system, appear in the same marketplace, and show up in the sidebar when they have a workspace + quickAction. All compiled extensions are active for all users -- the operator chooses which to include in `extensions.config.json` at build time.
 
 Extensions are read-only with respect to the core accounting system. They can be fed accounting data, they can accept manual user input, but they never write back to the bookkeeping. They can expose services to core via the registry lookup pattern, and they can register API routes that are dispatched by the catch-all handler.

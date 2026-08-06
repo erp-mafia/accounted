@@ -154,6 +154,7 @@ export default function InvoicesPage() {
   const searchParams = useSearchParams()
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [oreRounding, setOreRounding] = useState<boolean>(true)
+  const [rotRutEnabled, setRotRutEnabled] = useState<boolean>(false)
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [sort, setSort] = useState<InvoiceListSort | null>(null)
@@ -192,6 +193,16 @@ export default function InvoicesPage() {
   const closeRotRutPayout = () => router.replace('/invoices', { scroll: false })
   const openRotRutPayout = () => router.push('/invoices?rot-rut=1', { scroll: false })
 
+  // Begäran om utbetalning (Lag 2009:194 8 §) only concerns companies selling
+  // ROT/RUT-eligible work to consumers, so the action stays out of the header
+  // for everyone else. It appears once the company has invoiced a deduction
+  // (the payout can never precede that invoice), or once ROT/RUT is opted into
+  // in tax settings. Not scoped to the fiscal-year filter: a payout is claimed
+  // the year after payment, so last year's invoices are exactly the relevant
+  // ones. ?rot-rut=1 keeps working regardless, so nothing is unreachable.
+  const showRotRutAction =
+    rotRutEnabled || invoices.some((invoice) => (invoice.deduction_total ?? 0) > 0)
+
   async function fetchInvoices() {
     if (!company) return
     setIsLoading(true)
@@ -209,7 +220,7 @@ export default function InvoicesPage() {
       ),
       supabase
         .from('company_settings')
-        .select('ore_rounding')
+        .select('ore_rounding, rot_rut_enabled')
         .eq('company_id', company.id)
         .maybeSingle(),
     ])
@@ -227,6 +238,11 @@ export default function InvoicesPage() {
       settingsResult.status === 'fulfilled'
         ? (settingsResult.value.data?.ore_rounding ?? true)
         : true,
+    )
+    setRotRutEnabled(
+      settingsResult.status === 'fulfilled'
+        ? (settingsResult.value.data?.rot_rut_enabled ?? false)
+        : false,
     )
     setIsLoading(false)
   }
@@ -382,16 +398,18 @@ export default function InvoicesPage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={openRotRutPayout}
-            disabled={!canWrite}
-            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-          >
-            <FileDown className="mr-2 h-4 w-4" />
-            {t('rot_rut_payout_action')}
-          </Button>
+          {showRotRutAction && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={openRotRutPayout}
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              <FileDown className="mr-2 h-4 w-4" />
+              {t('rot_rut_payout_action')}
+            </Button>
+          )}
           <SplitButton
             key={uiStateLoaded ? 'loaded' : 'initial'}
             persistKey="invoices"

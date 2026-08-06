@@ -1,0 +1,27 @@
+{
+  "id": "whatsapp-inbox",
+  "sector": "general",
+  "exportName": "whatsappInboxExtension",
+  "entryPoint": "@/extensions/general/whatsapp-inbox",
+  "workspace": null,
+  "requiredEnvVars": [
+    "WHATSAPP_ACCESS_TOKEN",
+    "WHATSAPP_PHONE_NUMBER_ID",
+    "WHATSAPP_APP_SECRET",
+    "WHATSAPP_VERIFY_TOKEN",
+    "WHATSAPP_PHONE_HASH_KEY",
+    "WHATSAPP_PHONE_ENCRYPTION_KEY"
+  ],
+  "optionalEnvVars": ["WHATSAPP_PUBLIC_NUMBER"],
+  "npmDependencies": [],
+  "definition": {
+    "name": "WhatsApp-inkorg",
+    "category": "import",
+    "icon": "MessageCircle",
+    "dataPattern": "both",
+    "hasOwnData": true,
+    "readsCoreTables": ["company_members", "document_attachments", "invoice_inbox_items"],
+    "description": "Skicka kvitton som foto eller PDF till Accounteds WhatsApp-nummer: de landar i Underlag med avlästa fält",
+    "longDescription": "Koppla ditt mobilnummer med en engångskod och skicka sedan kvitton direkt i WhatsApp. Varje kvitto laddas upp till dokumentarkivet, fält som belopp och datum läses av med AI, och du får en bekräftelse i chatten. Bokföringen sker som vanligt i appen."
+  }
+}

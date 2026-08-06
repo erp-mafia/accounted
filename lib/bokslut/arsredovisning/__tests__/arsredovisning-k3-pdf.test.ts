@@ -169,6 +169,40 @@ function makeMinimalK3Data(): ArsredovisningData {
   }
 }
 
+interface WatermarkElement {
+  type: unknown
+  props: { children?: unknown; fixed?: boolean }
+}
+
+function isReactElement(node: unknown): node is WatermarkElement {
+  return (
+    typeof node === 'object' &&
+    node !== null &&
+    'type' in node &&
+    'props' in node
+  )
+}
+
+/**
+ * Walks the unrendered element tree, expanding plain function components
+ * (react-pdf primitives are strings like 'TEXT', so only local helpers such
+ * as PageChrome get invoked; none of them use hooks), and collects every
+ * Text element whose child is the GRANSKNINGSUTKAST watermark string.
+ */
+function findWatermarkNodes(node: unknown, found: WatermarkElement[]): void {
+  if (Array.isArray(node)) {
+    for (const child of node) findWatermarkNodes(child, found)
+    return
+  }
+  if (!isReactElement(node)) return
+  if (typeof node.type === 'function') {
+    findWatermarkNodes((node.type as (props: unknown) => unknown)(node.props), found)
+    return
+  }
+  if (node.props.children === 'GRANSKNINGSUTKAST') found.push(node)
+  findWatermarkNodes(node.props.children, found)
+}
+
 describe('ArsredovisningK3PDF', () => {
   it('renders without throwing against a minimal K3 fixture', async () => {
     const doc = ArsredovisningK3PDF({ data: makeMinimalK3Data() })
@@ -217,6 +251,30 @@ describe('ArsredovisningK3PDF', () => {
     const doc = ArsredovisningK3PDF({ data })
     const buffer = await renderToBuffer(doc)
     expect(buffer.length).toBeGreaterThan(0)
+  })
+
+  it('carries a fixed GRANSKNINGSUTKAST watermark in every page chrome', () => {
+    const doc = ArsredovisningK3PDF({ data: makeMinimalK3Data() })
+    const found: WatermarkElement[] = []
+    findWatermarkNodes(doc, found)
+    // 9 Page elements with the full fixture: cover, forvaltningsberattelse,
+    // resultatrakning, balansrakning, kassaflodesanalys, equity changes,
+    // noter, underskrifter, faststallelseintyg. One watermark per PageChrome;
+    // the `fixed` prop repeats it on wrap-generated continuation pages.
+    expect(found.length).toBe(9)
+    for (const node of found) {
+      expect(node.props.fixed).toBe(true)
+    }
+  })
+
+  it('does NOT watermark the K2 template', () => {
+    const data = makeMinimalK3Data()
+    data.accounting_framework = 'k2'
+    delete data.kassaflodesanalys
+    delete data.equity_changes_statement
+    const found: WatermarkElement[] = []
+    findWatermarkNodes(ArsredovisningPDF({ data }), found)
+    expect(found.length).toBe(0)
   })
 
   it('renders with multiple signatures', async () => {

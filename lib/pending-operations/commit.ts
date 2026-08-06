@@ -35,6 +35,7 @@ import {
   createCreditNoteJournalEntry,
 } from '@/lib/bookkeeping/invoice-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { cashPartialBlockReason, supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import {
@@ -124,6 +125,7 @@ import {
 import {
   computeInitialRunDate,
   computeNextRunDate,
+  rollNextRunDateForward,
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
 import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/update-invoice'
@@ -558,6 +560,7 @@ async function commitCreateRecurringSchedule(
       customer_id: validated.customer_id,
       name: validated.name,
       day_of_month: validated.day_of_month,
+      interval_months: validated.interval_months,
       send_hour: validated.send_hour,
       payment_terms_days: validated.payment_terms_days,
       currency: validated.currency,
@@ -609,6 +612,7 @@ async function commitCreateRecurringSchedule(
       name: validated.name,
       customer_id: validated.customer_id,
       day_of_month: validated.day_of_month,
+      interval_months: validated.interval_months,
       send_hour: validated.send_hour,
       currency: validated.currency,
       auto_send: validated.auto_send,
@@ -643,7 +647,7 @@ async function commitUpdateRecurringSchedule(
 
   const { data: existing, error: existingError } = await supabase
     .from('recurring_invoice_schedules')
-    .select('id, status, auto_send, customer_id, day_of_month, next_run_date')
+    .select('id, status, auto_send, customer_id, day_of_month, interval_months, next_run_date')
     .eq('id', scheduleId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -690,16 +694,29 @@ async function commitUpdateRecurringSchedule(
     const dayChanged =
       changes.day_of_month !== undefined && changes.day_of_month !== existing.day_of_month
     const effectiveDay = changes.day_of_month ?? existing.day_of_month
+    const effectiveInterval = changes.interval_months ?? existing.interval_months ?? 1
     const { date: todayStockholm } = getStockholmDateHour(new Date())
     const stockholmToday = new Date(`${todayStockholm}T00:00:00Z`)
 
     const staleOnReactivate = reactivating && existing.next_run_date <= todayStockholm
     if (staleOnReactivate || dayChanged) {
-      const rolled = computeInitialRunDate(stockholmToday, effectiveDay)
-      updateRow.next_run_date =
-        rolled === todayStockholm
-          ? computeNextRunDate(stockholmToday, effectiveDay)
-          : rolled
+      if (effectiveInterval === 1) {
+        // Monthly keeps its long-standing today-anchored semantics.
+        const rolled = computeInitialRunDate(stockholmToday, effectiveDay)
+        updateRow.next_run_date =
+          rolled === todayStockholm
+            ? computeNextRunDate(stockholmToday, effectiveDay)
+            : rolled
+      } else {
+        // Interval schedules roll on their own month grid so an edit or
+        // reactivation cannot shift a quarterly schedule off its phase.
+        updateRow.next_run_date = rollNextRunDateForward(
+          existing.next_run_date,
+          stockholmToday,
+          effectiveDay,
+          effectiveInterval,
+        )
+      }
     }
 
     // A conscious reactivation invalidates any lingering warning.
@@ -1989,6 +2006,26 @@ async function commitMarkInvoicePaid(
   }
   const { newPaidAmount, newRemaining, newStatus } = payment.plan
 
+  // The generated cash entry books the FULL invoice: refuse to complete a
+  // previously part-paid, never-booked kontantmetoden invoice (it would book
+  // the full total a second time on the settlement account). A partial cannot
+  // arise here (this path always settles the full remaining), but the shared
+  // predicate covers it for safety.
+  const cashBlock = cashPartialBlockReason({
+    invoiceAlreadyBooked,
+    accountingMethod,
+    priorPaidAmount: inv.paid_amount,
+    paysRemainingInFull: newStatus === 'paid',
+  })
+  if (isRealInvoice && cashBlock) {
+    return {
+      error:
+        getErrorEntry('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')?.message_sv ??
+        'Kontantmetoden kan inte bokföra delbetalningar av en obokförd faktura automatiskt.',
+      status: 400,
+    }
+  }
+
   if (isRealInvoice) {
     if (useCashEntry) {
       const je = await createInvoiceCashEntry(
@@ -2520,6 +2557,27 @@ async function commitMatchTransactionInvoice(
   const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
   const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
 
+  // Reject cash-method partials and part-paid completions on never-booked
+  // invoices BEFORE the irreversible storno below. The old fallback booked an
+  // accrual-style clearing entry against an EMPTY 1510 (negative receivable,
+  // no revenue, no moms: bokslutsmetoden reports moms at payment, per
+  // installment), and the cash builder books the FULL invoice, so
+  // neither shape is bookable here. Mirrors the dashboard and v1 match routes.
+  const cashBlock = cashPartialBlockReason({
+    invoiceAlreadyBooked,
+    accountingMethod,
+    priorPaidAmount: (invoice as { paid_amount?: number | null }).paid_amount,
+    paysRemainingInFull: isFullyPaid,
+  })
+  if (cashBlock) {
+    return {
+      error:
+        getErrorEntry('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')?.message_sv ??
+        'Kontantmetoden kan inte bokföra delbetalningar av en obokförd faktura automatiskt.',
+      status: 400,
+    }
+  }
+
   // Debit the cash account THIS transaction actually belongs to, never a
   // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
   // only source of truth for which bank/cash account a real, matched
@@ -2601,9 +2659,9 @@ async function commitMatchTransactionInvoice(
     }
   }
 
-  const paymentNotes = (accountingMethod === 'cash' && !isFullyPaid)
-    ? 'Kontantmetoden: intäkt bokförs vid slutbetalning' : null
-
+  // No cash-method note here anymore: pure kontantmetoden partials are now
+  // rejected above, and for an invoice booked at send the clearing entry
+  // handles a partial correctly, so the note would be misleading.
   await supabase.from('invoice_payments').insert({
     user_id: userId,
     company_id: companyId,
@@ -2614,7 +2672,7 @@ async function commitMatchTransactionInvoice(
     exchange_rate: invoice.exchange_rate,
     journal_entry_id: journalEntryId,
     transaction_id: transactionId,
-    notes: paymentNotes,
+    notes: null,
   })
 
   // The invoice is now settled, so every OTHER transaction still carrying a
@@ -3745,7 +3803,10 @@ async function commitCreditSupplierInvoice(
   const accountingMethod = settings?.accounting_method || 'accrual'
 
   let journalEntryId: string | null = null
-  if (accountingMethod === 'accrual') {
+  // Kontantmetoden skips only while the original is still UNPAID: a paid one
+  // was already booked by its payment verifikat (expense + 2641 ingående
+  // moms), and leaving that un-reversed overstates cost and moms deduction.
+  if (supplierCreditNoteNeedsJournalEntry(accountingMethod, original)) {
     try {
       const je = await createSupplierCreditNoteEntry(
         supabase,

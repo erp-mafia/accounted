@@ -8,6 +8,7 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
 import { computeAnnualDepreciation } from './depreciation-engine'
 import { assessJamkning, assessJamkningEligibility } from './jamkning'
 import type {
+  AccountingFramework,
   Asset,
   AssetCategory,
   WritableDepreciationMethod,
@@ -20,23 +21,32 @@ import type {
   VatTreatment,
 } from '@/types'
 
+export interface AssetAccountTriple {
+  asset: string
+  accumulated: string
+  expense: string
+}
+
 /**
- * Default BAS account triples per category. The user can override at create
- * time; these only kick in when the form doesn't specify accounts. Every
- * account here MUST exist in BAS_REFERENCE (lib/bookkeeping/bas-data/) so the
- * engine's backfillStandardBASAccounts can seed it on a minimal chart:
- * otherwise depreciation throws AccountsNotInChartError (#755). A guard test in
- * asset-service.test.ts enforces that invariant.
+ * Default BAS account triples per category, in their K3 form. The user can
+ * override at create time; these only kick in when the form doesn't specify
+ * accounts. Every account here MUST exist in BAS_REFERENCE
+ * (lib/bookkeeping/bas-data/) so the engine's backfillStandardBASAccounts can
+ * seed it on a minimal chart: otherwise depreciation throws
+ * AccountsNotInChartError (#755). A guard test in asset-service.test.ts
+ * enforces that invariant.
+ *
+ * The intangible entry is framework-dependent: resolve it through
+ * defaultAccountsForCategory() rather than reading this map directly, so a K2
+ * company never lands on the egenupparbetade pair. See
+ * ACQUIRED_IMMATERIAL_ACCOUNTS below.
  *
  * vehicle (1240) and computer (1250) both sit in the maskiner-och-inventarier
  * asset range, so their depreciation maps to 7832 (Avskrivningar på
  * inventarier, verktyg och installationer). 7833/7834 are not in the standard
  * BAS catalog (removed as non-standard in #463).
  */
-export const DEFAULT_ACCOUNTS_BY_CATEGORY: Record<
-  AssetCategory,
-  { asset: string; accumulated: string; expense: string }
-> = {
+export const DEFAULT_ACCOUNTS_BY_CATEGORY: Record<AssetCategory, AssetAccountTriple> = {
   immaterial: { asset: '1010', accumulated: '1019', expense: '7810' },
   building: { asset: '1110', accumulated: '1119', expense: '7821' },
   land_improvement: { asset: '1150', accumulated: '1159', expense: '7824' },
@@ -45,6 +55,76 @@ export const DEFAULT_ACCOUNTS_BY_CATEGORY: Record<
   vehicle: { asset: '1240', accumulated: '1249', expense: '7832' },
   computer: { asset: '1250', accumulated: '1259', expense: '7832' },
   other_tangible: { asset: '1290', accumulated: '1299', expense: '7839' },
+}
+
+/**
+ * The acquired-intangible pair, i.e. the K2 default for the immaterial
+ * category.
+ *
+ * K2 forbids capitalizing EGENUPPARBETADE immateriella tillgångar, which is
+ * exactly what 1010/1019 (Utvecklingsutgifter) carry: the BAS chart flags them
+ * k2_excluded ("Ej K2"). A PURCHASED intangible (a software licence, a
+ * trademark, a patent) is perfectly lawful under K2 and belongs on 1090
+ * Övriga immateriella anläggningstillgångar / 1099 Ackumulerade avskrivningar
+ * på övriga immateriella anläggningstillgångar. Both carry k2_excluded: false
+ * and both sit inside the 1010-1099 range the immaterial category permits, so
+ * the Zod range refinement and the K2 gate accept them.
+ *
+ * Source: .claude/skills/swedish-year-end-closing/references/k2-vs-k3.md:24,
+ * "K2: All development costs must be expensed immediately. Only acquired
+ * intangibles may be recognized."
+ */
+const ACQUIRED_IMMATERIAL_ACCOUNTS = { asset: '1090', accumulated: '1099' } as const
+
+/**
+ * Category defaults for a given accounting framework. Only the intangible
+ * category depends on the framework; everything else is identical either way.
+ * Anything other than 'k3' (including a null column) counts as K2, mirroring
+ * how the rest of the codebase reads the flag.
+ *
+ * The expense account is framework-independent: 7810 (Avskrivningar på
+ * immateriella anläggningstillgångar) covers both pairs.
+ */
+export function defaultAccountsForCategory(
+  category: AssetCategory,
+  framework: AccountingFramework | null | undefined,
+): AssetAccountTriple {
+  const defaults = DEFAULT_ACCOUNTS_BY_CATEGORY[category]
+  if (category !== 'immaterial' || framework === 'k3') return defaults
+  return { ...defaults, ...ACQUIRED_IMMATERIAL_ACCOUNTS }
+}
+
+/**
+ * The same defaults, resolved against the company's stored framework. Doing
+ * the lookup here rather than at the API layer means every write path (create
+ * dialog, edit dialog, MCP, a future importer) gets the lawful default without
+ * having to know the rule: the edit dialog in particular sends only the fields
+ * it changed and has no account inputs at all.
+ *
+ * The companies read only happens for the intangible category, the one case
+ * whose answer depends on it. A failed read throws instead of guessing a
+ * framework: silently picking an account off an unchecked read is what put
+ * purchased intangibles on 1010 in the first place.
+ */
+async function resolveDefaultAccounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  category: AssetCategory,
+): Promise<AssetAccountTriple> {
+  if (category !== 'immaterial') return DEFAULT_ACCOUNTS_BY_CATEGORY[category]
+  const { data, error } = await supabase
+    .from('companies')
+    .select('accounting_framework')
+    .eq('id', companyId)
+    .single()
+  if (error) {
+    throw new Error(
+      `Failed to load accounting framework for company ${companyId}: ${error.message}`,
+    )
+  }
+  const framework = (data as { accounting_framework?: AccountingFramework | null } | null)
+    ?.accounting_framework
+  return defaultAccountsForCategory(category, framework)
 }
 
 export interface CreateAssetInput {
@@ -68,7 +148,8 @@ export interface CreateAssetInput {
 
 /**
  * Create a new asset. Defaults BAS accounts from the category mapping when
- * the caller doesn't override them. Does NOT post a journal entry: the
+ * the caller doesn't override them, framework-aware for the intangible
+ * category (see resolveDefaultAccounts). Does NOT post a journal entry: the
  * acquisition is assumed to already be in the books (bank payment or
  * supplier invoice). Posting an acquisition entry alongside an existing
  * payment would double-count.
@@ -79,7 +160,7 @@ export async function createAsset(
   userId: string,
   input: CreateAssetInput,
 ): Promise<Asset> {
-  const defaults = DEFAULT_ACCOUNTS_BY_CATEGORY[input.category]
+  const defaults = await resolveDefaultAccounts(supabase, companyId, input.category)
   const row = {
     user_id: userId,
     company_id: companyId,
@@ -343,7 +424,9 @@ export async function updateAsset(
   // The BAS triple is category-scoped (INK2R mapping + engine defaults depend
   // on it). When the category changes and the caller didn't supply explicit
   // accounts, reset the triple to the new category's defaults so the chart
-  // stays aligned, mirrors createAsset()'s defaulting.
+  // stays aligned, mirrors createAsset()'s defaulting. Framework-aware for the
+  // intangible category, so recategorizing a purchased licence to "Immateriell
+  // tillgång" lands a K2 company on 1090/1099 instead of the Ej K2 pair.
   if (
     input.category !== undefined &&
     existing &&
@@ -352,7 +435,7 @@ export async function updateAsset(
     input.bas_accumulated_account === undefined &&
     input.bas_expense_account === undefined
   ) {
-    const defaults = DEFAULT_ACCOUNTS_BY_CATEGORY[input.category]
+    const defaults = await resolveDefaultAccounts(supabase, companyId, input.category)
     input = {
       ...input,
       bas_asset_account: defaults.asset,

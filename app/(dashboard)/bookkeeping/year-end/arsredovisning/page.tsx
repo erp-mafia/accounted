@@ -530,10 +530,20 @@ export default function ArsredovisningPage() {
       {data.accounting_framework === 'k3' && (
         <div className="px-1 text-sm">
           <p className="font-medium">Årsredovisning enligt K3 (BFNAR 2012:1)</p>
+          {/* Enumerate only what buildK3Noter and buildArsredovisningData
+              actually emit. The uppskjuten skatt-noten needs a 2240/8940
+              balance (which the engine no longer creates: K3 29.37 gross in
+              juridisk person), the anläggningsnoter need assets in the
+              register, and the kassaflödesanalys is dropped with a warning
+              when it cannot be generated. Promising any of them
+              unconditionally is false in the normal case. */}
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Dokumentet innehåller kassaflödesanalys, förändring av eget kapital och
-            utökade noter (uppskjuten skatt, redovisningsprinciper, materiella
-            anläggningstillgångar): krav som följer K3 men inte K2.
+            {data.kassaflodesanalys
+              ? 'Dokumentet följer K3-mallen: kassaflödesanalys, förändring av eget kapital som egen räkning och noter enligt K3.'
+              : 'Dokumentet följer K3-mallen: förändring av eget kapital som egen räkning och noter enligt K3. Kassaflödesanalysen kunde inte beräknas för perioden: se varningarna längre ner.'}{' '}
+            Vilka noter som kommer med styrs av bokföringen: noten Uppskjutna skatter tas
+            med först när konto 2240 eller 8940 har ett saldo, och anläggningsnoterna när
+            det finns tillgångar i anläggningsregistret.
           </p>
         </div>
       )}
@@ -1035,15 +1045,12 @@ export default function ArsredovisningPage() {
               </Button>
             </span>
           </div>
-          <div
-            inert={INLAMNING_COMING_SOON}
-            aria-hidden={INLAMNING_COMING_SOON}
-            className={
-              INLAMNING_COMING_SOON
-                ? 'pointer-events-none select-none blur-[3px] opacity-60 space-y-4'
-                : 'space-y-4'
-            }
-          >
+          {/* The warning list stays SHARP even while direct submission is
+              gated: the warnings describe problems in the user's own report
+              (unmapped accounts, resultat vs 2099, AGM dates) and apply to
+              the paper PDF just as much as to digital inlämning. Blurring
+              them alongside the coming-soon Bolagsverket parts made the
+              pre-submission checklist unreadable in the default config. */}
           {data.warnings.length > 0 && (
             <div className="space-y-1 border-t border-border/60 pt-3 text-xs">
               <p className="font-medium">Innan inlämning till Bolagsverket:</p>
@@ -1054,13 +1061,20 @@ export default function ArsredovisningPage() {
               </ul>
             </div>
           )}
-          <p className="text-xs text-muted-foreground">
+          <p
+            inert={INLAMNING_COMING_SOON}
+            aria-hidden={INLAMNING_COMING_SOON}
+            className={
+              INLAMNING_COMING_SOON
+                ? 'pointer-events-none select-none blur-[3px] opacity-60 text-xs text-muted-foreground'
+                : 'text-xs text-muted-foreground'
+            }
+          >
             <strong className="text-foreground">Digital inlämning är frivillig.</strong> Den görs som iXBRL genom en
             ansluten programvara. Accounteds direktinlämning förblir stängd tills avtal,
             certifikat och Bolagsverkets acceptanstest är klara. PDF-flödet ovan är den
             separata vägen för pappersinlämning.
           </p>
-          </div>
         </div>
       </section>
 

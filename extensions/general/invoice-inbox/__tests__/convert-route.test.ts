@@ -216,6 +216,131 @@ describe('POST /items/:id/convert', () => {
     expect(body.data.inbox_item_id).toBe('item-1')
   })
 
+  it('defaults the supplier invoice notes to the rendered WhatsApp channel context', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        status: 'received',
+        document_id: 'doc-1',
+        source: 'whatsapp',
+        channel_context: { channel: 'whatsapp', user_note: 'Serverlicens för Q3' },
+      }),
+    })
+    enqueue({ data: makeSupplier({ id: 'supplier-1' }) })
+    enqueue({ data: 42 })
+    enqueue({ data: { id: 'invoice-1', status: 'registered' } })
+    enqueue({ data: null, error: null })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
+    enqueue({ data: null, error: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/convert', {
+      method: 'POST',
+      body: VALID_CONVERT_BODY, // no notes field
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    const insertArgs = findCall('supplier_invoices', 'insert')
+    expect(insertArgs?.[0]).toMatchObject({ notes: 'Serverlicens för Q3' })
+  })
+
+  // Same rule as book-direct: an explicit '' is the caller clearing the field,
+  // not "no opinion", so the chat context must not be written back in.
+  it('honors an explicitly cleared notes field on convert', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        status: 'received',
+        source: 'whatsapp',
+        channel_context: { channel: 'whatsapp', user_note: 'Från chatten' },
+      }),
+    })
+    enqueue({ data: makeSupplier({ id: 'supplier-1' }) })
+    enqueue({ data: 42 })
+    enqueue({ data: { id: 'invoice-1', status: 'registered' } })
+    enqueue({ data: null, error: null })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
+    enqueue({ data: null, error: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/convert', {
+      method: 'POST',
+      body: { ...VALID_CONVERT_BODY, notes: '' },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    const insertArgs = findCall('supplier_invoices', 'insert')
+    expect(insertArgs?.[0]).toMatchObject({ notes: null })
+  })
+
+  // The convert form never shows the chat context, so an unreviewed photo
+  // caption must not ride along onto the leverantörsfaktura either.
+  it('never defaults an unreviewed caption onto the supplier invoice', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        status: 'received',
+        source: 'whatsapp',
+        channel_context: { channel: 'whatsapp', caption: 'lunch med Anna, hon bjöd tillbaka' },
+      }),
+    })
+    enqueue({ data: makeSupplier({ id: 'supplier-1' }) })
+    enqueue({ data: 42 })
+    enqueue({ data: { id: 'invoice-1', status: 'registered' } })
+    enqueue({ data: null, error: null })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
+    enqueue({ data: null, error: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/convert', {
+      method: 'POST',
+      body: VALID_CONVERT_BODY, // no notes field
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    const insertArgs = findCall('supplier_invoices', 'insert')
+    expect(insertArgs?.[0]).toMatchObject({ notes: null })
+  })
+
+  it('keeps caller-supplied notes over the channel context on convert', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({
+        status: 'received',
+        source: 'whatsapp',
+        channel_context: { channel: 'whatsapp', user_note: 'Från chatten' },
+      }),
+    })
+    enqueue({ data: makeSupplier({ id: 'supplier-1' }) })
+    enqueue({ data: 42 })
+    enqueue({ data: { id: 'invoice-1', status: 'registered' } })
+    enqueue({ data: null, error: null })
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
+    enqueue({ data: null, error: null })
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/convert', {
+      method: 'POST',
+      body: { ...VALID_CONVERT_BODY, notes: 'Egen anteckning' },
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    const insertArgs = findCall('supplier_invoices', 'insert')
+    expect(insertArgs?.[0]).toMatchObject({ notes: 'Egen anteckning' })
+  })
+
   it('emits supplier_invoice.registered and supplier_invoice.confirmed events', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })

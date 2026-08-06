@@ -54,7 +54,48 @@ export interface ExtractionOutput {
   rawText: string | null
 }
 
+// Classification fields are nullable AND .catch(null): a hallucinated enum
+// value must degrade to "unknown", never fail the whole document parse. The
+// amount/date fields keep strict parsing on purpose: a malformed amount
+// SHOULD reject the output rather than store garbage.
+const DocumentKind = z
+  .enum(['receipt', 'supplier_invoice', 'government_letter', 'other'])
+  .nullable()
+  .catch(null)
+const PaymentMethod = z
+  .enum(['card', 'swish', 'cash', 'invoice', 'other'])
+  .nullable()
+  .catch(null)
+const MerchantCategory = z
+  .enum(['restaurant', 'cafe', 'taxi', 'parking', 'fuel', 'grocery', 'hotel', 'other'])
+  .nullable()
+  .catch(null)
+const Legibility = z.enum(['good', 'partial', 'unreadable']).nullable().catch(null)
+
 export const ExtractionSchema = z.object({
+  // All optional: raw model outputs cached before these fields existed must
+  // still validate (same convention as servicePeriodStart/End below). These
+  // route UI emphasis and clarifying questions only; they never book anything.
+  documentKind: DocumentKind.optional(),
+  merchantCategory: MerchantCategory.optional(),
+  legibility: Legibility.optional(),
+  purchaseTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+    .nullable()
+    .catch(null)
+    .optional(),
+  payment: z
+    .object({
+      method: PaymentMethod,
+      // Length + digits-only, deliberately not the shared four-digit
+      // invariant from @/lib/invariants: this is the tail of a masked card
+      // number, not a BAS account and not a fiscal year.
+      cardLast4: z.string().length(4).regex(/^\d+$/).nullable().catch(null),
+    })
+    .nullable()
+    .catch(null)
+    .optional(),
   supplier: z.object({
     name: z.string().nullable(),
     orgNumber: z.string().nullable(),
@@ -100,6 +141,9 @@ export const ExtractionSchema = z.object({
     subtotal: z.number().nullable(),
     vatAmount: z.number().nullable(),
     total: z.number().nullable(),
+    // Öresavrundning line on Swedish receipts (can be negative). Optional so
+    // cached raw outputs from before the field still validate.
+    roundingAmount: z.number().nullable().catch(null).optional(),
   }),
   vatBreakdown: z.array(
     z.object({
@@ -131,6 +175,11 @@ const SYSTEM_PROMPT = `You extract invoice and receipt fields from a single docu
 Return ONLY a single JSON object that matches this schema exactly. No prose, no markdown fences, no commentary.
 
 {
+  "documentKind": "receipt" | "supplier_invoice" | "government_letter" | "other" | null,
+  "merchantCategory": "restaurant" | "cafe" | "taxi" | "parking" | "fuel" | "grocery" | "hotel" | "other" | null,
+  "legibility": "good" | "partial" | "unreadable",
+  "purchaseTime": string | null,   // "HH:MM" 24h, receipts only
+  "payment": { "method": "card" | "swish" | "cash" | "invoice" | "other" | null, "cardLast4": string | null } | null,
   "supplier": {
     "name": string | null,
     "orgNumber": string | null,    // 10 digits, no hyphen, only when issued by a Swedish entity
@@ -161,7 +210,8 @@ Return ONLY a single JSON object that matches this schema exactly. No prose, no 
   "totals": {
     "subtotal": number | null,    // amount excluding VAT
     "vatAmount": number | null,   // total VAT
-    "total": number | null        // amount including VAT: what the buyer pays
+    "total": number | null,       // amount including VAT: what the buyer actually pays
+    "roundingAmount": number | null  // öresavrundning line, may be negative, e.g. -0.37
   },
   "vatBreakdown": [
     { "rate": number, "base": number, "amount": number }   // rate as percent integer, e.g. 25 for 25%
@@ -172,6 +222,12 @@ VAT rate convention: BOTH lineItems[].vatRate AND vatBreakdown[].rate use the sa
 
 Rules:
 - Output JSON only. The first character must be '{' and the last must be '}'.
+- documentKind: "receipt" = point-of-sale proof of a COMPLETED payment (kassakvitto, kortkvitto, taxi/parking slip, webshop order confirmation marked paid). "supplier_invoice" = a request for payment (has due date, OCR/payment reference, bankgiro, "Att betala senast"). "government_letter" = correspondence from a myndighet (Skatteverket, Bolagsverket, Försäkringskassan...). "other" = contracts, statements, reports. null only when truly indeterminate.
+- merchantCategory: judge from the merchant name and line items (a receipt from "Prinsen" listing food and wine is "restaurant" even without the word). Use "other" when unsure. null for non-receipts.
+- legibility: "good" = all key amounts and the merchant are readable. "partial" = some key fields are cut off, blurry, or unreadable. "unreadable" = the document is mostly illegible (too blurry/dark/small). Judge the IMAGE quality, not whether fields exist on the document.
+- payment: only for documents that show how payment was made. "card" for kort/VISA/Mastercard; cardLast4 only when a masked card number like ****1234 is printed. "invoice" means the document says it will be billed separately.
+- purchaseTime: the HH:MM time printed on a receipt. null when absent.
+- Öresavrundning: Swedish receipts often show an "Avrundning"/"Öresavrundning" line. "total" is ALWAYS the amount actually paid AFTER rounding; put the rounding line in totals.roundingAmount (negative when rounded down). When present: subtotal + vatAmount + roundingAmount = total.
 - Currency: detect from the document (symbol $/€/kr or explicit code). Use the ISO 4217 code. Do NOT default to SEK if the document clearly shows another currency.
 - "total" is the amount the buyer must pay (look for "Att betala", "Total", "Amount paid", "Amount due", "Balance"). Prefer this over Subtotal.
 - Dates: convert any format to YYYY-MM-DD. If the document only shows month/year, leave null.
@@ -186,6 +242,11 @@ Rules:
 
 export function emptyResult(): InvoiceExtractionResult {
   return {
+    documentKind: null,
+    merchantCategory: null,
+    legibility: null,
+    purchaseTime: null,
+    payment: null,
     supplier: {
       name: null,
       orgNumber: null,
@@ -204,9 +265,61 @@ export function emptyResult(): InvoiceExtractionResult {
       servicePeriodEnd: null,
     },
     lineItems: [],
-    totals: { subtotal: null, vatAmount: null, total: null },
+    totals: { subtotal: null, vatAmount: null, total: null, roundingAmount: null },
     vatBreakdown: [],
     confidence: 0,
+  }
+}
+
+// Anthropic rejects images above 5 MB (decoded bytes), and 12 MP phone photos
+// routinely exceed that: before this step they errored out to an empty
+// extraction. Downscaling to ≤2000px JPEG also cuts input tokens on every
+// large image. HEIC/HEIF (iPhone default) is transcoded to JPEG when the
+// local sharp/libvips build can decode it; prebuilt binaries usually cannot
+// (patent licensing), in which case the caller falls through to the
+// unsupported-type path exactly as before.
+const IMAGE_DOWNSCALE_THRESHOLD_BYTES = 4 * 1024 * 1024
+const IMAGE_MAX_DIMENSION = 2000
+
+async function normalizeImageForExtraction(
+  input: ExtractionInput
+): Promise<ExtractionInput> {
+  const isHeic = input.mimeType === 'image/heic' || input.mimeType === 'image/heif'
+  const isLargeSupportedImage =
+    input.mimeType.startsWith('image/') &&
+    SUPPORTED_MEDIA_TYPES.has(input.mimeType) &&
+    input.buffer.byteLength > IMAGE_DOWNSCALE_THRESHOLD_BYTES
+  if (!isHeic && !isLargeSupportedImage) return input
+
+  try {
+    // Lazy import: sharp is a native module and only a fraction of
+    // extractions need it; loading it at module scope would tax every
+    // cold start of the extension route bundle.
+    const sharp = (await import('sharp')).default
+    const converted = await sharp(input.buffer)
+      // Apply the EXIF orientation before it is lost in re-encoding:
+      // phone photos are routinely stored rotated.
+      .rotate()
+      .resize({
+        width: IMAGE_MAX_DIMENSION,
+        height: IMAGE_MAX_DIMENSION,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality: 80 })
+      .toBuffer()
+    return { buffer: converted, mimeType: 'image/jpeg', fileName: input.fileName }
+  } catch (err) {
+    // HEIC without libheif lands here → caller hits the unsupported-type
+    // guard, same net behavior as before this step existed. For oversized
+    // JPEG/PNG the original buffer is still worth attempting.
+    log.warn('image normalization failed', {
+      file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
+      mime_type: input.mimeType,
+      byte_length: input.buffer.byteLength,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return input
   }
 }
 
@@ -240,8 +353,12 @@ function buildContent(input: ExtractionInput) {
  * always returns an InvoiceExtractionResult. Empty fields are null.
  */
 export async function extractInvoiceFields(
-  input: ExtractionInput
+  rawInput: ExtractionInput
 ): Promise<ExtractionOutput> {
+  // Transcodes HEIC when possible and downscales oversized images; a no-op
+  // for PDFs and normal-sized supported images.
+  const input = await normalizeImageForExtraction(rawInput)
+
   if (!SUPPORTED_MEDIA_TYPES.has(input.mimeType)) {
     return { data: emptyResult(), rawText: null }
   }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { AlertCircle, CheckCircle2, FileClock, Loader2, LockKeyhole, Save } from 'lucide-react'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -315,6 +316,7 @@ export function AnnualReportStudio({
             <Badge variant="warning">{t('blocker_count', { count: blockingIssues.length })}</Badge>
           )}
         </div>
+        {framework === 'k3' && <AttnLine>{t('k3_draft_notice')}</AttnLine>}
         <div className="grid gap-2 sm:grid-cols-4">
           {[
             [

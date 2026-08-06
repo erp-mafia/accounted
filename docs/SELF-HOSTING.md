@@ -188,27 +188,22 @@ Additionally, migration 048 schedules a `pg_cron` job inside the database that m
 
 ### AI Features
 
-The self-hosted Docker image includes these AI-powered extensions: receipt OCR, AI categorization, AI chat, and invoice inbox. To enable them, add API keys to your `.env`:
+All AI features (automatic interpretation of uploaded receipts and invoices via the `document-extraction` and `invoice-inbox` extensions, and the in-app AI assistant) run Claude via AWS Bedrock. To enable them, add AWS credentials for an account with Bedrock model access to Claude:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...    # Required for all AI features
-OPENAI_API_KEY=sk-...           # Required for embedding-based features (categorization, chat)
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=eu-north-1                          # default; keeps inference in the EU
+BEDROCK_MODEL_ID=eu.anthropic.claude-sonnet-5  # optional: document extraction model
+BEDROCK_OPUS_MODEL_ID=...                      # optional: assistant model, heavy intents
+BEDROCK_SONNET_MODEL_ID=...                    # optional: assistant model, standard intents
 ```
 
-Each user must individually grant AI consent in the UI before AI features activate (per GDPR requirements).
+Set the two static keys explicitly. The AI assistant's client can fall back to the standard AWS credential provider chain (instance profile, IRSA) when they are absent, but document extraction requires `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` and silently returns empty results without them.
 
-**AI chat knowledge base** (optional): The AI chat can answer Swedish tax and accounting questions using a RAG knowledge base. To populate it, create `dev_docs/ai_knowledge_base/` with markdown files and run:
+Without working credentials the rest of the app runs normally: uploads are stored but not auto-interpreted, and the AI assistant cannot answer.
 
-```bash
-npx tsx extensions/general/ai-chat/ingestion/ingest.ts
-```
-
-**Booking template embeddings** (optional): For AI-powered transaction categorization suggestions, seed the template embeddings by calling:
-
-```bash
-curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
-  https://your-domain.com/api/admin/seed-template-embeddings
-```
+> **Note:** `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` from earlier versions are no longer read by any code path. Support for a plain Anthropic API key (and pluggable providers) is tracked in [#1406](https://github.com/erp-mafia/accounted/issues/1406).
 
 ### Email (Invoice Sending and Reminders)
 
@@ -240,14 +235,7 @@ Sentry is disabled if these are not set. No errors are thrown.
 
 ## Storage Buckets
 
-Migration 024 automatically creates the `documents` storage bucket (private, 50 MB limit, WORM, no update/delete).
-
-If you enable the **receipt-ocr** extension, you must manually create a `receipts` storage bucket in the Supabase dashboard:
-
-1. Go to **Storage** in the Supabase dashboard.
-2. Create a new bucket named `receipts`.
-3. Set it as **public** (receipt images are referenced by public URL).
-4. Set an appropriate file size limit (e.g., 10 MB).
+Migration 024 automatically creates the `documents` storage bucket (private, 50 MB limit, WORM, no update/delete). No other buckets need to be created manually.
 
 ## Updating
 

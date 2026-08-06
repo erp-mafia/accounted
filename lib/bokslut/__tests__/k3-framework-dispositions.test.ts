@@ -1,14 +1,15 @@
 /**
  * K3 framework integration test for the dispositions builder.
  *
- * Verifies that:
- *   - K3 companies get an `uppskjuten_skatt` proposal at the end of the chain.
- *   - K2 companies (the default) do NOT receive that proposal.
- *   - The latent tax amount equals 20.6 % × projected closing 21xx − current
- *     2240 balance.
+ * Since 2026-08-05 (founder decision, K3 29.37) the builder books NO
+ * uppskjuten skatt on obeskattade reserver: in juridisk person the reserves
+ * stay at gross and the 79.4/20.6 split belongs to koncernredovisning.
+ * These tests pin that the proposal chain is framework-independent and that
+ * no uppskjuten_skatt proposal ever appears, alongside the disposition math
+ * that remains (periodiseringsfond, overavskrivningar, bolagsskatt).
  *
- * Mocks generateIncomeStatement and generateTrialBalance directly so the
- * test can drive numeric inputs without touching the database.
+ * Mocks generateIncomeStatement directly so the test can drive numeric
+ * inputs without touching the database.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -181,7 +182,7 @@ beforeEach(() => {
 })
 
 describe('buildDispositionsProposal: K3 framework', () => {
-  it('appends an uppskjuten_skatt proposal for K3 aktiebolag', async () => {
+  it('never proposes uppskjuten skatt on obeskattade reserver, K3 included (K3 29.37)', async () => {
     const supabase = makeSupabase({ entityType: 'aktiebolag', accountingFramework: 'k3' })
     const result = await buildDispositionsProposal(
       supabase as unknown as Parameters<typeof buildDispositionsProposal>[0],
@@ -189,15 +190,12 @@ describe('buildDispositionsProposal: K3 framework', () => {
       'fp1',
     )
     expect(result.entityType).toBe('aktiebolag')
-    const latentTax = result.proposals.find((p) => p.kind === 'uppskjuten_skatt')
-    expect(latentTax).toBeDefined()
-    expect(latentTax!.amount).toBe(20_600)
-    expect(latentTax!.lines).toHaveLength(2)
-    // Liability increased → debit 8940 / credit 2240.
-    const debit = latentTax!.lines.find((l) => l.account_number === '8940')!
-    const credit = latentTax!.lines.find((l) => l.account_number === '2240')!
-    expect(debit.debit_amount).toBe(20_600)
-    expect(credit.credit_amount).toBe(20_600)
+    // In juridisk person obeskattade reserver stay at gross: no 8940/2240
+    // proposal exists, and no proposal line may touch those accounts.
+    expect(result.proposals.map((p) => p.kind)).not.toContain('uppskjuten_skatt')
+    const touched = result.proposals.flatMap((p) => p.lines.map((l) => l.account_number))
+    expect(touched).not.toContain('8940')
+    expect(touched).not.toContain('2240')
   })
 
   it('computes bolagsskatt on the result AFTER the periodiseringsfond avsättning', async () => {
@@ -263,42 +261,6 @@ describe('buildDispositionsProposal: K3 framework', () => {
     expect(bolagsskatt?.amount).toBe(139_050)
   })
 
-  it('includes a pending 2153 increase in the K3 latent tax proposal', async () => {
-    vi.mocked(calculateOveravskrivningar).mockResolvedValue({
-      status: 'ready',
-      proposal: {
-        kind: 'overavskrivningar',
-        label: 'Överavskrivningar',
-        description: 'Skillnad mellan bokförd och skattemässig avskrivning.',
-        amount: 10_000,
-        signedAmount: 10_000,
-        lines: [
-          { account_number: '8853', debit_amount: 10_000, credit_amount: 0 },
-          { account_number: '2153', debit_amount: 0, credit_amount: 10_000 },
-        ],
-        warnings: [],
-      },
-      warning: null,
-      currentReserve: 0,
-      currentPeriodChange: 0,
-      targetReserve: 10_000,
-      maximumSignedChange: 10_000,
-    })
-
-    const supabase = makeSupabase({ entityType: 'aktiebolag', accountingFramework: 'k3' })
-    const result = await buildDispositionsProposal(
-      supabase as unknown as Parameters<typeof buildDispositionsProposal>[0],
-      'co',
-      'fp1',
-    )
-
-    const latentTax = result.proposals.find((p) => p.kind === 'uppskjuten_skatt')
-    expect(latentTax?.amount).toBe(22_660)
-    expect(latentTax?.computation).toEqual(
-      expect.objectContaining({ untaxedReserves: 110_000, target2240: 22_660 }),
-    )
-  })
-
   it('does NOT add an uppskjuten_skatt proposal for K2 aktiebolag', async () => {
     const supabase = makeSupabase({ entityType: 'aktiebolag', accountingFramework: 'k2' })
     const result = await buildDispositionsProposal(
@@ -307,7 +269,7 @@ describe('buildDispositionsProposal: K3 framework', () => {
       'fp1',
     )
     expect(result.entityType).toBe('aktiebolag')
-    expect(result.proposals.find((p) => p.kind === 'uppskjuten_skatt')).toBeUndefined()
+    expect(result.proposals.map((p) => p.kind)).not.toContain('uppskjuten_skatt')
   })
 
   it('defaults to K2 when accounting_framework is null on the company row', async () => {
@@ -317,7 +279,7 @@ describe('buildDispositionsProposal: K3 framework', () => {
       'co',
       'fp1',
     )
-    expect(result.proposals.find((p) => p.kind === 'uppskjuten_skatt')).toBeUndefined()
+    expect(result.proposals.map((p) => p.kind)).not.toContain('uppskjuten_skatt')
   })
 
   it('does NOT add an uppskjuten_skatt proposal for enskild firma even if mislabelled K3', async () => {
@@ -333,44 +295,4 @@ describe('buildDispositionsProposal: K3 framework', () => {
     expect(result.proposals).toEqual([])
   })
 
-  it('skips uppskjuten_skatt when 2240 already matches target (no change)', async () => {
-    // Bump 2240 to exactly 20 600 so the delta is zero: calculator should
-    // return null and the builder skip the proposal entirely.
-    vi.mocked(generateTrialBalance).mockResolvedValue({
-      rows: [
-        {
-          account_number: '2125',
-          account_name: 'Periodiseringsfond 2025',
-          account_class: 2,
-          closing_credit: 100_000,
-          closing_debit: 0,
-          opening_credit: 0,
-          opening_debit: 0,
-          period_credit: 100_000,
-          period_debit: 0,
-        },
-        {
-          account_number: '2240',
-          account_name: 'Avsättningar för uppskjutna skatter',
-          account_class: 2,
-          closing_credit: 20_600,
-          closing_debit: 0,
-          opening_credit: 20_600,
-          opening_debit: 0,
-          period_credit: 0,
-          period_debit: 0,
-        },
-      ],
-      totalDebit: 0,
-      totalCredit: 120_600,
-      isBalanced: false,
-    } as unknown as Awaited<ReturnType<typeof generateTrialBalance>>)
-    const supabase = makeSupabase({ entityType: 'aktiebolag', accountingFramework: 'k3' })
-    const result = await buildDispositionsProposal(
-      supabase as unknown as Parameters<typeof buildDispositionsProposal>[0],
-      'co',
-      'fp1',
-    )
-    expect(result.proposals.find((p) => p.kind === 'uppskjuten_skatt')).toBeUndefined()
-  })
 })

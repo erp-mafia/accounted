@@ -88,6 +88,7 @@ const SAMPLE_ROW = {
   ytd_tax: 48000,
   ytd_net: 162000,
   vacation_paid_days_remaining: 12.5,
+  vacation_days_taken_this_year: 2,
   vacation_saved_days_by_year: { [`${CURRENT_YEAR - 1}`]: 5 },
   opening_semester_liability: 42000,
   opening_semester_liability_avgifter: 13196.4,
@@ -102,6 +103,7 @@ const VALID_BODY = {
   ytd_tax: 48000,
   ytd_net: 162000,
   vacation_paid_days_remaining: 12.5,
+  vacation_days_taken_this_year: 2,
   vacation_saved_days_by_year: { [`${CURRENT_YEAR - 1}`]: 5 },
   opening_semester_liability: 42000,
   opening_semester_liability_avgifter: 13196.4,
@@ -244,7 +246,40 @@ describe('PUT /employees/:id/opening-balances', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.employee_opening_balances_id).toBe(ROW_ID)
+    expect(body.data.vacation_days_taken_this_year).toBe(2)
     expect(body.data.locked).toBe(false)
+  })
+
+  it('rejects vacation_days_taken_this_year below 0', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+    const res = await putBalances(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/opening-balances`,
+        { method: 'PUT', body: JSON.stringify({ ...VALID_BODY, vacation_days_taken_this_year: -1 }) },
+      ),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it('rejects vacation_days_taken_this_year above 40', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+    const res = await putBalances(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/opening-balances`,
+        { method: 'PUT', body: JSON.stringify({ ...VALID_BODY, vacation_days_taken_this_year: 41 }) },
+      ),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(400)
   })
 
   it('returns 409 OPENING_BALANCES_LOCKED when a booked run exists', async () => {

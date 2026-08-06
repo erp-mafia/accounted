@@ -548,7 +548,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         : null
 
   const countBubble = (badge: number) => (
-    <span className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
+    <span data-ph-mask className="ml-auto min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1">
       {badge > 99 ? '99+' : badge}
     </span>
   )
@@ -651,7 +651,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           cn('h-[17px] w-[17px]', active ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground'),
         )}
         {badge !== null && (
-          <span className="absolute -top-2 -right-2.5 min-w-[15px] h-[15px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-semibold px-0.5">
+          <span data-ph-mask className="absolute -top-2 -right-2.5 min-w-[15px] h-[15px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-semibold px-0.5">
             {badge > 99 ? '99' : badge}
           </span>
         )}
@@ -727,7 +727,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 the aside width animates: no DOM swap, one continuous motion.
                 The inactive layer is absolute (no layout), faded, nudged
                 sideways and inert. */}
+              {/* data-ph-unmask: nav labels are static i18n chrome; count
+                  bubbles inside carry data-ph-mask (nearest tag wins). */}
               <nav
+                data-ph-unmask
                 aria-hidden={!collapsed}
                 inert={!collapsed ? true : undefined}
                 className={cn(
@@ -766,6 +769,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 })}
               </nav>
             <nav
+              data-ph-unmask
               aria-hidden={collapsed}
               inert={collapsed ? true : undefined}
               className={cn(
@@ -899,7 +903,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
       </aside>
 
       {/* Mobile bottom navigation */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
+      <nav data-ph-unmask className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
         <div className="flex items-center justify-around h-16 px-2">
           {mobileNavItems.map((item) => {
             const active = isActive(item.href)
@@ -913,7 +917,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 <div className="relative">
                   {renderNavIcon(item, cn('h-5 w-5 mb-1', active && 'text-primary'))}
                   {badge !== null && (
-                    <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-[16px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-semibold px-0.5">
+                    <span data-ph-mask className="absolute -top-1.5 -right-2.5 min-w-[16px] h-[16px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-semibold px-0.5">
                       {badge > 99 ? '99+' : badge}
                     </span>
                   )}
@@ -1001,8 +1005,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               </Button>
             </div>
 
-            {/* Navigation */}
-            <div className="px-2">
+            {/* Navigation. data-ph-unmask: static i18n labels only; the
+                CompanySwitcher above stays outside so it remains masked,
+                and count bubbles inside carry data-ph-mask. */}
+            <div data-ph-unmask className="px-2">
               {/* Top items (Hem, Assistent) */}
               <div className="space-y-0.5">
                 {topItems.map((item) => {
@@ -1015,7 +1021,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                       {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}
                       <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
                       {decorBadge ? decorBadge : badge !== null && (
-                        <span className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
+                        <span data-ph-mask className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
                           {badge > 99 ? '99+' : badge}
                         </span>
                       )}
@@ -1072,7 +1078,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                           <Icon className={cn("h-[18px] w-[18px] flex-shrink-0", active ? "text-primary" : "text-muted-foreground")} />
                           <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
                           {decorBadge ? decorBadge : badge !== null && (
-                            <span className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
+                            <span data-ph-mask className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
                               {badge > 99 ? '99+' : badge}
                             </span>
                           )}

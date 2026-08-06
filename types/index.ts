@@ -1247,9 +1247,12 @@ export interface RecurringInvoiceSchedule {
 
   name: string
 
-  // Monthly cadence, day-of-month 1-31. Clamped to last day of month in
-  // shorter months (handled by computeNextRunDate).
+  // Day-of-month anchor, 1-31. Clamped to last day of month in shorter
+  // months (handled by computeNextRunDate).
   day_of_month: number
+  // Months between runs: 1 = monthly, 3 = quarterly, 6 = half-yearly,
+  // 12 = yearly. next_run_date is the month anchor the interval advances from.
+  interval_months: number
   // Whole hour (0-23) in Europe/Stockholm time at which the schedule sends.
   // The hourly cron only fires schedules matching the current Stockholm hour.
   send_hour: number
@@ -1722,6 +1725,11 @@ export interface AccrualSchedule {
   posting_floor_date: string
   status: AccrualScheduleStatus
   description: string | null
+  // Dimensions bag ({sie_dim_no: object_code}) copied from the origin line
+  // (invoice default_dimensions merged with the item bag); carried onto both
+  // dissolution lines. jsonb DEFAULT '{}'. Optional in TS for pre-migration
+  // fixtures.
+  dimensions?: Record<string, string>
   created_at: string
   updated_at: string
   // Relations
@@ -2652,7 +2660,7 @@ export interface SIEAccountMapping {
 // ============================================================
 
 export type InboxItemStatus = 'received' | 'error'
-export type InboxItemSource = 'email' | 'upload'
+export type InboxItemSource = 'email' | 'upload' | 'whatsapp'
 
 export type CompanyInboxStatus = 'active' | 'deprecated' | 'blocked'
 
@@ -2715,6 +2723,13 @@ export interface InvoiceInboxItem {
   error_message: string | null
   raw_email_payload: Record<string, unknown> | null
 
+  // WhatsApp channel (migration 20260802092000). whatsapp_message_id links
+  // back to the delivering chat message; channel_context holds verified
+  // human answers from the chat (kept OUT of extracted_data on purpose:
+  // retry-extraction overwrites that container wholesale).
+  whatsapp_message_id?: string | null
+  channel_context?: InboxChannelContext | null
+
   // Audit chain (processing_history correlation)
   correlation_id: string | null
 
@@ -2725,6 +2740,123 @@ export interface InvoiceInboxItem {
   document?: DocumentAttachment
   supplier?: Supplier
   supplier_invoice?: SupplierInvoice
+}
+
+// Chat-sourced context attached to an inbox item. `raw_answer` + timestamps
+// double as the Skatteverket representation documentation trail.
+export interface InboxChannelContext {
+  channel: 'whatsapp'
+  caption?: string | null
+  company_selected_via?: 'button' | 'list' | 'numbered' | 'pin' | 'default' | 'single'
+  representation?: {
+    participants: { name: string; company: string | null }[]
+    purpose: string | null
+    event_date: string | null
+    raw_answer: string
+    answered_at: string
+    /** True when the user answered `nej` (or the LLM read a denial): the
+     *  receipt is NOT representation and the question is settled. */
+    denied?: boolean
+  }
+  user_note?: string | null
+  /** What the user actually typed when answering a context question, kept
+   *  next to the LLM paraphrase in user_note. The paraphrase is what renders;
+   *  this is the durable human answer, mirroring the representation branch
+   *  (whatsapp_messages.body_text is purged at 90 days, so it is no trail). */
+  context_answer?: {
+    raw_answer: string
+    answered_at: string
+  }
+  quality?: {
+    resend_requested_at: string
+    resent?: boolean
+    /** Set on the OLD item when a re-sent, sharper file created a fresh item
+     *  (WORM archive + anchored-doc invariant forbid swapping the document
+     *  out from under the original). */
+    superseded?: boolean
+  }
+  pending_question?: {
+    type: 'representation' | 'context' | 'resend'
+    asked_at: string
+    status: 'open' | 'answered' | 'moved_to_app'
+  }
+}
+
+// ============================================================
+// WhatsApp Channel Types (migrations 20260802090000/091000)
+// ============================================================
+
+export interface WhatsAppPhoneLink {
+  id: string
+  user_id: string
+  phone_hash: string
+  phone_enc: string
+  phone_masked: string
+  wa_profile_name: string | null
+  default_company_id: string | null
+  last_company_id: string | null
+  verified_at: string
+  revoked_at: string | null
+  muted_at: string | null
+  last_message_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type WhatsAppConversationState =
+  | 'idle'
+  | 'awaiting_company'
+  | 'awaiting_representation'
+  | 'awaiting_context'
+  | 'awaiting_resend'
+
+export interface WhatsAppConversation {
+  id: string
+  phone_link_id: string
+  state: WhatsAppConversationState
+  context: Record<string, unknown>
+  company_id: string | null
+  service_window_expires_at: string | null
+  debounce_until: string | null
+  pending_ack: boolean
+  last_inbound_at: string | null
+  last_outbound_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type WhatsAppMessageProcessingStatus =
+  | 'received'
+  | 'processing'
+  | 'done'
+  | 'skipped'
+  | 'error'
+
+export interface WhatsAppMessage {
+  id: string
+  direction: 'inbound' | 'outbound'
+  wamid: string | null
+  sender_phone_hash: string | null
+  phone_link_id: string | null
+  conversation_id: string | null
+  message_type: string
+  body_text: string | null
+  media_id: string | null
+  media_mime: string | null
+  media_sha256: string | null
+  media_filename: string | null
+  raw_payload: Record<string, unknown> | null
+  processing_status: WhatsAppMessageProcessingStatus
+  attempts: number
+  error_message: string | null
+  inbox_item_id: string | null
+  delivery_status: string | null
+  correlation_id: string | null
+  /** When a combined burst ack (M4/M5) covered this ingested row.
+   *  NULL = not yet acked (the burst winner's work queue). */
+  acked_at: string | null
+  created_at: string
+  updated_at: string
 }
 
 // ============================================================
@@ -3140,6 +3272,7 @@ export type DocumentUploadSource =
   | 'scan'
   | 'api'
   | 'system'
+  | 'whatsapp'
 
 export interface DocumentAttachment {
   id: string
@@ -3269,8 +3402,38 @@ export interface SequenceMismatch {
 // Year-End Closing Types (Årsbokslut)
 // ============================================================
 
+/**
+ * Stable machine codes for year-end readiness blockers. One code per
+ * blockers.push site in validateYearEndReadiness: the wizard matches on
+ * these to attach remediation links, so codes must never be renamed once
+ * shipped. The Swedish message stays the display text.
+ */
+export type YearEndBlockerCode =
+  | 'PERIOD_NOT_FOUND'
+  | 'PERIOD_NOT_ENDED'
+  | 'PERIOD_ALREADY_CLOSED'
+  | 'CLOSING_ENTRY_EXISTS'
+  | 'DRAFT_ENTRIES'
+  | 'UNEXPLAINED_VOUCHER_GAP'
+  | 'SEQUENCE_COUNTER_BEHIND'
+  | 'TRIAL_BALANCE_UNBALANCED'
+  | 'CONTINUITY_MISMATCH'
+  | 'NEXT_PERIOD_HAS_IB'
+  | 'UNBOOKED_TRANSACTIONS'
+  | 'UNBOOKED_CHECK_FAILED'
+
+export interface YearEndBlocker {
+  code: YearEndBlockerCode
+  /** Swedish, user-facing: bokslut is a stays-Swedish surface. */
+  message: string
+}
+
 export interface YearEndValidation {
   ready: boolean
+  /** Blocking errors with stable machine codes. */
+  blockers: YearEndBlocker[]
+  /** Blocker messages only; mirrors `blockers`. Kept so existing consumers
+   *  of the string list (v1 compliance check, MCP tool) stay unchanged. */
   errors: string[]
   warnings: string[]
   draftCount: number
@@ -3278,6 +3441,14 @@ export interface YearEndValidation {
   unexplainedGaps: VoucherGap[]
   sequenceMismatches: SequenceMismatch[]
   trialBalanceBalanced: boolean
+  /**
+   * Bank transactions in the period with no verifikat (untriaged +
+   * business-confirmed-but-unbooked). Blocking: lockPeriod refuses to lock
+   * over them, so surfacing the count here stops executeYearEndClosing from
+   * aborting mid-flow at the lock step. Optional: absent on the early
+   * period-not-found return.
+   */
+  unbookedTransactionCount?: number
 }
 
 export interface YearEndPreview {
@@ -3628,7 +3799,32 @@ export interface IngestResult {
 
 // ── Invoice extraction (used by invoice-inbox extension and core utils) ──
 
+export type ExtractedDocumentKind =
+  | 'receipt'
+  | 'supplier_invoice'
+  | 'government_letter'
+  | 'other'
+export type ExtractedPaymentMethod = 'card' | 'swish' | 'cash' | 'invoice' | 'other'
+export type ExtractedMerchantCategory =
+  | 'restaurant'
+  | 'cafe'
+  | 'taxi'
+  | 'parking'
+  | 'fuel'
+  | 'grocery'
+  | 'hotel'
+  | 'other'
+export type ExtractedLegibility = 'good' | 'partial' | 'unreadable'
+
 export interface InvoiceExtractionResult {
+  // Classification fields (2026-08): optional because extractions stored
+  // before they existed lack them. They route UI emphasis and clarifying
+  // questions only: never bookings.
+  documentKind?: ExtractedDocumentKind | null
+  merchantCategory?: ExtractedMerchantCategory | null
+  legibility?: ExtractedLegibility | null
+  purchaseTime?: string | null
+  payment?: { method: ExtractedPaymentMethod | null; cardLast4: string | null } | null
   supplier: {
     name: string | null
     orgNumber: string | null
@@ -3654,10 +3850,15 @@ export interface InvoiceExtractionResult {
     subtotal: number | null
     vatAmount: number | null
     total: number | null
+    // Öresavrundning line on Swedish receipts; negative when rounded down.
+    roundingAmount?: number | null
   }
   vatBreakdown: VatBreakdownItem[]
   confidence: number
   suggestedTemplateId?: string
+  // Set by the caller (not the model) when a long PDF was sliced before
+  // extraction: fields were read from the first `analyzed` of `total` pages.
+  pages?: { total: number; analyzed: number }
 }
 
 export interface ExtractedInvoiceLineItem {

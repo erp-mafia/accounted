@@ -45,6 +45,10 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       'gnubok_suggest_categories',
       'gnubok_categorize_transaction',
       'gnubok_match_transaction_to_invoice',
+      // For transactions whose affärshändelse is already booked on an existing
+      // verifikat: links without creating new bookkeeping. Categorizing such a
+      // transaction would double-book it.
+      'gnubok_link_transaction_to_journal_entry',
       // Tagging: check the registry before writing dimensions bags on
       // categorize calls (resolve-don't-select needs real codes/names).
       'gnubok_list_dimensions',

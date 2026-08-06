@@ -195,7 +195,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
 // which dispatches to this handler: no duplicate call needed here.
-import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor } from '@/types'
+import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, YearEndBlockerCode } from '@/types'
 
 // ── Actor context ────────────────────────────────────────────
 
@@ -1703,6 +1703,19 @@ interface VatCloseBlocker {
 }
 
 /**
+ * Hint for the uncategorized_transactions blocker. Must name BOTH resolution
+ * paths: categorize/auto-match creates NEW bookkeeping, so for a transaction
+ * whose affärshändelse is already booked on an existing verifikat the agent
+ * needs gnubok_link_transaction_to_journal_entry instead; a hint that only
+ * offers the booking tools dead-ends that case into "contact support"
+ * (2026-08-06 support case). Exported so the test can pin the contract.
+ */
+export const UNCATEGORIZED_TRANSACTIONS_HINT =
+  'Kategorisera via gnubok_categorize_transaction eller kör gnubok_auto_match_period. ' +
+  'Är affärshändelsen redan bokförd på ett befintligt verifikat: koppla i stället med ' +
+  'gnubok_link_transaction_to_journal_entry (ingen ny bokföring skapas).'
+
+/**
  * Completeness codes that describe the omvänd-skattskyldighet pair. They keep
  * the pre-existing `reverse_charge_input_missing` blocker kind so clients
  * already switching on it do not lose the case they were watching for.
@@ -1712,6 +1725,56 @@ const RC_COMPLETENESS_CODES = new Set<VatDeclarationCheck['code']>([
   'RC_OUTPUT_MISSING',
   'RC_INPUT_VAT_MISMATCH',
 ])
+
+/**
+ * gnubok_year_end_readiness: YearEndBlockerCode to the blocker `kind` this
+ * tool publishes. The kinds are the public contract agents switch on, so they
+ * are deliberately NOT the codes themselves: a code may be renamed or split
+ * without breaking a consumer, as long as it keeps mapping to the same kind.
+ *
+ * UNBOOKED_CHECK_FAILED shares 'unbooked_transactions' with the real count:
+ * the fail-closed variant means "we could not tell", and an agent should react
+ * to it the same way (go look at the transactions, then re-run readiness).
+ *
+ * Exported so the tool-description test can assert that every kind an agent
+ * can receive is actually named in the description it plans against: the
+ * description drifted once already (it advertised FX revaluation, a WARNING,
+ * as a blocker and never mentioned unbooked transactions, the common one).
+ */
+export const YEAR_END_BLOCKER_KIND: Record<YearEndBlockerCode, string> = {
+  PERIOD_NOT_FOUND: 'period_not_found',
+  PERIOD_NOT_ENDED: 'period_not_ended',
+  PERIOD_ALREADY_CLOSED: 'period_already_closed',
+  CLOSING_ENTRY_EXISTS: 'closing_entry_exists',
+  DRAFT_ENTRIES: 'draft_entries',
+  UNEXPLAINED_VOUCHER_GAP: 'unexplained_voucher_gap',
+  SEQUENCE_COUNTER_BEHIND: 'sequence_mismatch',
+  TRIAL_BALANCE_UNBALANCED: 'trial_balance_unbalanced',
+  CONTINUITY_MISMATCH: 'opening_balance_continuity',
+  NEXT_PERIOD_HAS_IB: 'next_period_ib_posted',
+  UNBOOKED_TRANSACTIONS: 'unbooked_transactions',
+  UNBOOKED_CHECK_FAILED: 'unbooked_transactions',
+}
+
+/**
+ * Wording fallback for a blocker whose code is not in YEAR_END_BLOCKER_KIND.
+ * Kept so an unmapped or legacy English message still routes somewhere useful
+ * instead of collapsing to 'other'.
+ */
+function classifyYearEndBlockerMessage(message: string): string {
+  if (/draft journal entries|utkast måste bokföras/i.test(message)) return 'draft_entries'
+  if (/unbooked transaction|saknar bokföring|obokförda transaktioner/i.test(message)) return 'unbooked_transactions'
+  if (/voucher gap|verifikationsnummerglapp/i.test(message)) return 'unexplained_voucher_gap'
+  if (/Sequence counter integrity|Nummerserien i serie/i.test(message)) return 'sequence_mismatch'
+  if (/Trial balance is not balanced|Råbalansen balanserar inte/i.test(message)) return 'trial_balance_unbalanced'
+  if (/already closed|redan stängd/i.test(message)) return 'period_already_closed'
+  if (/has not yet ended|slutdatumet har inte passerat/i.test(message)) return 'period_not_ended'
+  if (/closing entry already exists|Bokslutsverifikation finns redan/i.test(message)) return 'closing_entry_exists'
+  if (/continuity check failed|IB\/UB-kontinuiteten/i.test(message)) return 'opening_balance_continuity'
+  if (/opening balances already posted|redan ingående balanser bokförda/i.test(message)) return 'next_period_ib_posted'
+  if (/Fiscal period not found|Räkenskapsperioden hittades inte/i.test(message)) return 'period_not_found'
+  return 'other'
+}
 
 interface VatCloseSanityAnomaly {
   kind: 'output_vat_ratio_drift' | 'input_vat_ratio_drift' | 'revenue_drop' | 'revenue_spike'
@@ -2021,7 +2084,7 @@ export async function computeVatCloseCheck(
       severity: 'high',
       count: uncategorizedCount,
       message: `${uncategorizedCount} okategoriserade banktransaktioner i perioden`,
-      hint: 'Kategorisera via gnubok_categorize_transaction eller kör gnubok_auto_match_period.',
+      hint: UNCATEGORIZED_TRANSACTIONS_HINT,
     })
   }
   const unapprovedCount = unapprovedRes.count ?? 0
@@ -11811,7 +11874,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_set_employee_opening_balances',
     title: 'Set Employee Opening Balances (Cutover)',
-    description: 'Stage payroll cutover state per employee: YTD gross/tax/net, vacation days remaining, sparade dagar by origin year, opening semesterlöneskuld SEK, karens adjustment. An omitted field keeps its stored value; send 0 to clear it. Locked after a booked run.',
+    description: 'Stage payroll cutover state per employee: YTD gross/tax/net, vacation days remaining and taken this year, sparade dagar by origin year, opening semesterlöneskuld SEK, karens adjustment. An omitted field keeps its stored value; send 0 to clear it. Locked after a booked run.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -11830,6 +11893,7 @@ export const tools: McpTool[] = [
               ytd_tax: { type: 'number' },
               ytd_net: { type: 'number' },
               vacation_paid_days_remaining: { type: 'number' },
+              vacation_days_taken_this_year: { type: 'number', description: 'Paid days already taken this vacation year under the previous system (0-40)' },
               vacation_saved_days_by_year: { type: 'object', description: 'Origin year -> days, e.g. {"2025": 5}; {} clears' },
               opening_semester_liability: { type: 'number', description: 'SEK on 2920 (report-only; booked via SIE)' },
               opening_semester_liability_avgifter: { type: 'number', description: 'SEK on 2940' },
@@ -11845,9 +11909,9 @@ export const tools: McpTool[] = [
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async execute(args, companyId, userId, supabase, actor) {
       // Sparse merge, NOT full replace. OpeningBalancesBulkSchema carries a
-      // .default() on all eight non-key fields (and .partial() would not strip
+      // .default() on all nine non-key fields (and .partial() would not strip
       // them: Zod applies defaults through it), so parsing the caller's args
-      // straight into the 9-column upsert resets ytd_tax, ytd_net, vacation
+      // straight into the 10-column upsert resets ytd_tax, ytd_net, vacation
       // days, sparade dagar, the opening semesterlöneskuld and the karens
       // adjustment to 0 whenever an agent corrects a single figure. Same
       // defence as gnubok_update_employee: keep only the keys actually sent,
@@ -11875,7 +11939,8 @@ export const tools: McpTool[] = [
 
       const MERGEABLE_FIELDS = [
         'ytd_gross', 'ytd_tax', 'ytd_net',
-        'vacation_paid_days_remaining', 'vacation_saved_days_by_year',
+        'vacation_paid_days_remaining', 'vacation_days_taken_this_year',
+        'vacation_saved_days_by_year',
         'opening_semester_liability', 'opening_semester_liability_avgifter',
         'karens_periods_adjustment',
       ] as const
@@ -12733,7 +12798,14 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_year_end_readiness',
     title: 'Year-End Readiness Check',
-    description: "Pre-flight before irreversible gnubok_run_year_end. Returns ready (bool) + ordered blockers (drafts, voucher gaps, sequence mismatches, unbalanced TB, FX revaluation) + optional closing-entry preview.",
+    // Budget: 280 chars (output-schema.test.ts). Spend it on the blockers an
+    // agent can act on BEFORE calling, in likelihood order. The four
+    // period-state kinds (period_not_found / _not_ended / _already_closed /
+    // closing_entry_exists) collapse into "period-state": nothing to pre-check
+    // there, the period either is closable or is not. Open items in foreign
+    // currency are warnings, never blockers, because executeYearEndClosing
+    // revalues them in step 2 (lib/core/bookkeeping/year-end-service.ts).
+    description: "Pre-flight for irreversible gnubok_run_year_end. Blockers: unbooked_transactions (most common), draft_entries, unexplained_voucher_gap, sequence_mismatch, trial_balance_unbalanced, opening_balance_continuity, next_period_ib_posted, period-state. FX = warning, never blocker.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -12784,25 +12856,18 @@ export const tools: McpTool[] = [
 
       const validation = await validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId)
 
-      // Reshape error strings into structured blockers so the agent (and any
-      // dashboard) can render and act on each one independently. The lib
-      // returns flat strings; we tag each with a `kind` heuristic for routing.
-      // validateYearEndReadiness emits Swedish messages (the bokslut wizard
-      // renders them verbatim); English alternates are kept as fallback so
-      // classification never regresses if an older message slips through.
-      const blockers = validation.errors.map((message) => {
-        let kind: string = 'other'
-        if (/draft journal entries|utkast måste bokföras/i.test(message)) kind = 'draft_entries'
-        else if (/voucher gap|verifikationsnummerglapp/i.test(message)) kind = 'unexplained_voucher_gap'
-        else if (/Sequence counter integrity|Nummerserien i serie/i.test(message)) kind = 'sequence_mismatch'
-        else if (/Trial balance is not balanced|Råbalansen balanserar inte/i.test(message)) kind = 'trial_balance_unbalanced'
-        else if (/already closed|redan stängd/i.test(message)) kind = 'period_already_closed'
-        else if (/has not yet ended|slutdatumet har inte passerat/i.test(message)) kind = 'period_not_ended'
-        else if (/closing entry already exists|Bokslutsverifikation finns redan/i.test(message)) kind = 'closing_entry_exists'
-        else if (/continuity check failed|IB\/UB-kontinuiteten/i.test(message)) kind = 'opening_balance_continuity'
-        else if (/Fiscal period not found|Räkenskapsperioden hittades inte/i.test(message)) kind = 'period_not_found'
-        return { kind, severity: 'high' as const, message }
-      })
+      // Reshape the lib's blockers into structured entries so the agent (and
+      // any dashboard) can render and act on each one independently. Routing
+      // keys off the stable YearEndBlockerCode via YEAR_END_BLOCKER_KIND, so a
+      // reworded Swedish message no longer silently reclassifies as 'other'.
+      // The `kind` strings are this tool's public contract: never rename one.
+      // A blocker with no mapped code falls back to the wording heuristic
+      // (which also catches legacy English messages), then to 'other'.
+      const blockers = validation.blockers.map(({ code, message }) => ({
+        kind: YEAR_END_BLOCKER_KIND[code] ?? classifyYearEndBlockerMessage(message),
+        severity: 'high' as const,
+        message,
+      }))
 
       let preview = null
       if (includePreview && validation.ready) {
@@ -15285,7 +15350,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_recurring_schedules',
     title: 'List Recurring Invoice Schedules',
-    description: "List the company's recurring invoice schedules: monthly templates that auto-create customer invoices on day_of_month (clamps to the last day in shorter months) at send_hour (a whole hour in Europe/Stockholm time). Shows status, auto_send and next_run_date.",
+    description: "List the company's recurring invoice schedules: auto-create customer invoices on day_of_month (clamps to the last day in shorter months) every interval_months months (any 1-12; presets 1/3/6/12) at send_hour, Europe/Stockholm. Shows status, auto_send and next_run_date.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -15308,6 +15373,7 @@ export const tools: McpTool[] = [
         customer_id: { type: 'string' },
         customer_name: { type: ['string', 'null'] },
         day_of_month: { type: 'number', description: '1-31; clamps to the last day in shorter months' },
+        interval_months: { type: 'number', description: 'Months between runs: any integer 1-12; 1 = monthly, 3 = quarterly, 6 = half-yearly, 12 = yearly' },
         send_hour: { type: 'number', description: 'Whole hour 0-23 in Europe/Stockholm time' },
         payment_terms_days: { type: 'number' },
         currency: { type: 'string' },
@@ -15353,7 +15419,7 @@ export const tools: McpTool[] = [
       let query = supabase
         .from('recurring_invoice_schedules')
         .select(
-          'id, name, status, customer_id, day_of_month, send_hour, payment_terms_days, currency, auto_send, default_dimensions, next_run_date, last_run_at, last_invoice_id, last_run_warning, generated_count, customer:customers(name), items:recurring_invoice_schedule_items(description, quantity, unit, unit_price, vat_rate, dimensions, sort_order)',
+          'id, name, status, customer_id, day_of_month, interval_months, send_hour, payment_terms_days, currency, auto_send, default_dimensions, next_run_date, last_run_at, last_invoice_id, last_run_warning, generated_count, customer:customers(name), items:recurring_invoice_schedule_items(description, quantity, unit, unit_price, vat_rate, dimensions, sort_order)',
           { count: 'exact' },
         )
         .eq('company_id', companyId)
@@ -15391,6 +15457,7 @@ export const tools: McpTool[] = [
           customer_id: row.customer_id,
           customer_name: (row.customer as Record<string, unknown> | null)?.name ?? null,
           day_of_month: row.day_of_month,
+          interval_months: row.interval_months,
           send_hour: row.send_hour,
           payment_terms_days: row.payment_terms_days,
           currency: row.currency,
@@ -15424,7 +15491,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_recurring_schedule',
     title: 'Create Recurring Invoice Schedule',
-    description: 'Stage a new recurring invoice schedule: a monthly template that creates a customer invoice on day_of_month (clamps to the last day in shorter months) at send_hour (a whole hour in Europe/Stockholm time). auto_send defaults false; true emails each invoice without new approval.',
+    description: 'Stage a new recurring invoice schedule: creates a customer invoice on day_of_month (clamps to the last day in shorter months) every interval_months months (default 1) at send_hour, Europe/Stockholm. auto_send defaults false; true emails each invoice without new approval.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
@@ -15437,6 +15504,12 @@ export const tools: McpTool[] = [
           minimum: 1,
           maximum: 31,
           description: 'Day of month the invoice is created. 29-31 clamp to the last day in shorter months; the stored day is kept for longer months.',
+        },
+        interval_months: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 12,
+          description: 'Months between invoices: any integer 1-12. Default 1 (monthly); 3 = quarterly, 6 = half-yearly, 12 = yearly.',
         },
         send_hour: {
           type: 'integer',
@@ -15523,6 +15596,7 @@ export const tools: McpTool[] = [
         'customer_id',
         'name',
         'day_of_month',
+        'interval_months',
         'send_hour',
         'payment_terms_days',
         'currency',
@@ -15574,6 +15648,7 @@ export const tools: McpTool[] = [
         customer_id: customer.id,
         customer_name: customer.name,
         day_of_month: params.day_of_month,
+        interval_months: params.interval_months,
         send_hour: params.send_hour,
         payment_terms_days: params.payment_terms_days,
         currency: params.currency,
@@ -15623,6 +15698,12 @@ export const tools: McpTool[] = [
           minimum: 1,
           maximum: 31,
           description: '1-31; clamps to the last day in shorter months. Changing it rolls next_run_date to the next future occurrence.',
+        },
+        interval_months: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 12,
+          description: 'Months between invoices: any integer 1-12; 1 = monthly, 3 = quarterly, 6 = half-yearly, 12 = yearly. Changing only interval_months leaves next_run_date untouched.',
         },
         send_hour: { type: 'integer', minimum: 0, maximum: 23, description: 'Whole hour (0-23) in Europe/Stockholm time.' },
         payment_terms_days: { type: 'integer', minimum: 0, maximum: 90 },
@@ -15705,6 +15786,7 @@ export const tools: McpTool[] = [
         'customer_id',
         'name',
         'day_of_month',
+        'interval_months',
         'send_hour',
         'payment_terms_days',
         'currency',
@@ -15738,7 +15820,7 @@ export const tools: McpTool[] = [
       const { data: current, error } = await supabase
         .from('recurring_invoice_schedules')
         .select(
-          'id, name, status, customer_id, day_of_month, send_hour, payment_terms_days, currency, your_reference, our_reference, notes, auto_send, default_dimensions, next_run_date, customer:customers(name, email), items:recurring_invoice_schedule_items(description, quantity, unit, unit_price, vat_rate, dimensions, sort_order)',
+          'id, name, status, customer_id, day_of_month, interval_months, send_hour, payment_terms_days, currency, your_reference, our_reference, notes, auto_send, default_dimensions, next_run_date, customer:customers(name, email), items:recurring_invoice_schedule_items(description, quantity, unit, unit_price, vat_rate, dimensions, sort_order)',
         )
         .eq('id', parsed.data.schedule_id)
         .eq('company_id', companyId)
@@ -15790,6 +15872,7 @@ export const tools: McpTool[] = [
         customer_id: current.customer_id,
         customer_name: (current.customer as { name?: string } | null)?.name ?? null,
         day_of_month: current.day_of_month,
+        interval_months: current.interval_months,
         send_hour: current.send_hour,
         payment_terms_days: current.payment_terms_days,
         currency: current.currency,

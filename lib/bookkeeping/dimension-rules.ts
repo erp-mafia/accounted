@@ -214,3 +214,40 @@ export const DIMENSION_RULE_EXEMPT_SOURCE_TYPES: ReadonlySet<string> = new Set([
 export function isDimensionRuleExemptSource(sourceType: string | null | undefined): boolean {
   return sourceType != null && DIMENSION_RULE_EXEMPT_SOURCE_TYPES.has(sourceType)
 }
+
+/**
+ * Source types exempt from the SOFT REGISTRY VALIDATION in
+ * validateEntryDimensions (dimension-resolver.ts). Deliberately a SECOND and
+ * much narrower set than DIMENSION_RULE_EXEMPT_SOURCE_TYPES above: that one
+ * governs POLICY (required/default/fixed rules), this one governs whether a
+ * tagged bag has to resolve against the registry at all.
+ *
+ * Only 'accrual' qualifies. A periodisering dissolution is the mechanical
+ * continuation of a decision that was already approved and already posted:
+ * the origin entry booked the net amount to the interim account (17xx/29xx)
+ * and the schedule replays it month by month onto the P&L account. The
+ * dissolution lines copy the ORIGIN's bag verbatim, so the storno argument
+ * applies unchanged: the value may have been archived in the months since
+ * the origin was posted, and rejecting the copy would leave every remaining
+ * installment PENDING forever (the service records last_error and the daily
+ * cron retries the same impossible entry). The deferred cost would never
+ * reach its 5xxx/6xxx account, the interim account would stay overstated,
+ * and the trial balance would still balance, so no year-end check fires.
+ *
+ * The tag itself is kept, never stripped: an archived value still exists in
+ * the registry and the cost genuinely belongs to that project, so dropping
+ * it would understate the project instead.
+ *
+ * Nothing else belongs here. import/opening_balance carry user-supplied
+ * codes on a FIRST posting: skipping validation there would silently write
+ * registry-orphaned tags that no dimension report can group.
+ */
+export const DIMENSION_VALIDATION_EXEMPT_SOURCE_TYPES: ReadonlySet<string> = new Set([
+  'accrual',
+])
+
+export function isDimensionValidationExemptSource(
+  sourceType: string | null | undefined
+): boolean {
+  return sourceType != null && DIMENSION_VALIDATION_EXEMPT_SOURCE_TYPES.has(sourceType)
+}

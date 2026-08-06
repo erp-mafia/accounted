@@ -725,6 +725,9 @@ export const CreateRecurringScheduleSchema = z.object({
   customer_id: uuid,
   name: z.string().min(1, 'Schedule name is required').max(200),
   day_of_month: z.number().int().min(1).max(31),
+  // Months between runs: 1 = monthly (default), 3 = quarterly, 6 = half-
+  // yearly, 12 = yearly. Any 1-12 is accepted (e.g. every 2 months).
+  interval_months: z.number().int().min(1).max(12).default(1),
   // Whole hour (0-23) in Europe/Stockholm at which the invoice is sent.
   send_hour: z.number().int().min(0).max(23).default(8),
   payment_terms_days: z.number().int().min(0).max(90).default(30),
@@ -745,6 +748,9 @@ export const UpdateRecurringScheduleSchema = z.object({
   customer_id: uuid.optional(),
   name: z.string().min(1).max(200).optional(),
   day_of_month: z.number().int().min(1).max(31).optional(),
+  // Changing the interval alone leaves next_run_date untouched: the new
+  // cadence applies from the next run onward.
+  interval_months: z.number().int().min(1).max(12).optional(),
   send_hour: z.number().int().min(0).max(23).optional(),
   payment_terms_days: z.number().int().min(0).max(90).optional(),
   currency: CurrencySchema.optional(),
@@ -1383,6 +1389,12 @@ export const BookInboxItemDirectlySchema = z.object({
   fiscal_period_id: uuid,
   entry_date: isoDate,
   description: z.string().min(1, 'Beskrivning krävs'),
+  // `.optional()` here carries meaning the route depends on: ABSENT means
+  // "caller has no opinion", so the route may default the notes from the
+  // item's chat context, while an explicit '' means the user cleared the
+  // prefilled note and nothing must be written back onto the verifikat.
+  // Keep it `.optional()`, never `.default('')` or a min(1): both would
+  // collapse those two cases into one.
   notes: z.string().max(2000).optional(),
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'Minst två rader krävs för dubbel bokföring'),
   transaction_id: uuid.optional(),
@@ -2776,6 +2788,11 @@ const openingBalancesShape = {
   ytd_tax: z.number().min(0).default(0),
   ytd_net: z.number().min(0).default(0),
   vacation_paid_days_remaining: z.number().min(0).max(40).default(0),
+  // Paid days already taken in the CURRENT vacation year under the previous
+  // system. The ledger's cutover-year row derives entitled = remaining +
+  // taken_this_year and folds this into taken_days; remaining keeps meaning
+  // "remaining at cutover".
+  vacation_days_taken_this_year: z.number().min(0).max(40).default(0),
   vacation_saved_days_by_year: z
     .record(fiscalYearSchema, z.number().min(0).max(40))
     .default({}),

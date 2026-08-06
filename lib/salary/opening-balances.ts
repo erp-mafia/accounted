@@ -27,6 +27,7 @@ export interface OpeningBalancesInput {
   ytd_tax: number
   ytd_net: number
   vacation_paid_days_remaining: number
+  vacation_days_taken_this_year: number
   vacation_saved_days_by_year: Record<string, number>
   opening_semester_liability: number
   opening_semester_liability_avgifter: number
@@ -43,7 +44,8 @@ export interface OpeningBalancesRow extends OpeningBalancesInput {
 
 const ROW_COLUMNS =
   'id, employee_id, cutover_date, ytd_gross, ytd_tax, ytd_net, ' +
-  'vacation_paid_days_remaining, vacation_saved_days_by_year, ' +
+  'vacation_paid_days_remaining, vacation_days_taken_this_year, ' +
+  'vacation_saved_days_by_year, ' +
   'opening_semester_liability, opening_semester_liability_avgifter, ' +
   'karens_periods_adjustment, created_at, updated_at'
 
@@ -242,6 +244,7 @@ export async function setOpeningBalancesBulk(
     ytd_tax: roundOre(item.ytd_tax),
     ytd_net: roundOre(item.ytd_net),
     vacation_paid_days_remaining: item.vacation_paid_days_remaining,
+    vacation_days_taken_this_year: item.vacation_days_taken_this_year,
     vacation_saved_days_by_year: item.vacation_saved_days_by_year,
     opening_semester_liability: roundOre(item.opening_semester_liability),
     opening_semester_liability_avgifter: roundOre(item.opening_semester_liability_avgifter),

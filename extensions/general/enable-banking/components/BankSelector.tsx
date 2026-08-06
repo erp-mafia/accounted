@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { ChevronRight, Landmark, Loader2, Search } from 'lucide-react'
+import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
 export interface Bank {
@@ -27,7 +28,52 @@ interface BankSelectorProps {
   className?: string
 }
 
-function BankCard({ bank, isConnecting, connectingBankName, onConnect }: {
+/**
+ * Eyebrow above a list section: same micro-label and same px-1 inset as the
+ * SettingsGroup eyebrow, so the two sit on one left edge.
+ */
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <h3 className="px-1 pb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+      {children}
+    </h3>
+  )
+}
+
+/**
+ * 32px leading mark for a row. Real bank logos are drawn for a white
+ * background, so they sit on a white chip (same treatment as LogoMark in
+ * components/onboarding/NewUserChecklist.tsx); the no-logo fallback uses the
+ * neutral surface instead, which keeps the icon readable in dark mode.
+ * While connecting, the mark is replaced by a bare spinner: quiet inline
+ * state, no tint, no box.
+ */
+function BankMark({ bank, connecting }: { bank: Bank; connecting: boolean }) {
+  if (connecting) {
+    return (
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center">
+        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />
+      </span>
+    )
+  }
+
+  if (bank.logo) {
+    return (
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-white">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={bank.logo} alt="" className="h-6 w-6 object-contain" />
+      </span>
+    )
+  }
+
+  return (
+    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-secondary">
+      <Landmark className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+    </span>
+  )
+}
+
+function BankRow({ bank, isConnecting, connectingBankName, onConnect }: {
   bank: Bank
   isConnecting: boolean
   connectingBankName: string | null
@@ -37,54 +83,34 @@ function BankCard({ bank, isConnecting, connectingBankName, onConnect }: {
 
   return (
     <button
-      key={bank.name}
       type="button"
       disabled={isConnecting}
       onClick={() => onConnect(bank)}
       className={cn(
-        'group flex items-center gap-3 p-4 border border-border rounded-lg bg-card text-left transition-all',
-        'hover:border-primary hover:bg-muted',
-        connecting && 'border-primary bg-muted',
-        isConnecting && !connecting && 'opacity-50 cursor-not-allowed',
+        // 32px mark + py-2 keeps the row at 48px: comfortably past the 44px
+        // touch target without turning back into a card.
+        'flex w-full items-center gap-3 px-1 py-2 text-left transition-colors duration-150',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+        !isConnecting && 'hover:bg-secondary/60',
+        isConnecting && 'cursor-not-allowed',
+        isConnecting && !connecting && 'opacity-50',
       )}
     >
-      <div className="flex-shrink-0 w-12 h-12 rounded-lg border border-border bg-white dark:bg-gray-300 flex items-center justify-center overflow-hidden">
-        {connecting ? (
-          <Loader2 className="h-6 w-6 animate-spin text-primary" />
-        ) : bank.logo ? (
-          <img
-            src={bank.logo}
-            alt={bank.name}
-            className="w-12 h-12 object-contain p-1"
-          />
-        ) : (
-          <svg
-            className="h-6 w-6 text-muted-foreground"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-            strokeWidth={1.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-          </svg>
+      <BankMark bank={bank} connecting={connecting} />
+      <span
+        className={cn(
+          'min-w-0 flex-1 truncate text-sm',
+          connecting ? 'text-muted-foreground' : 'text-foreground',
         )}
-      </div>
-      <span className="flex-1 font-medium text-foreground group-hover:text-primary truncate">
+      >
         {bank.name}
       </span>
-      <svg
-        className="flex-shrink-0 h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        <path d="M9 5l7 7-7 7" />
-      </svg>
+      {/* No per-row "Ansluter..." text: the spinner mark carries the row's
+          share of the state, the wording lives once in the line below the
+          list. */}
+      {!connecting && (
+        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      )}
     </button>
   )
 }
@@ -151,46 +177,42 @@ export function BankSelector({
     <div className={cn('space-y-4', className)}>
       {/* Search input */}
       <div className="relative">
-        <svg
-          className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          strokeWidth={2}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-        </svg>
-        <input
+        <Search
+          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+          aria-hidden="true"
+        />
+        <Input
           ref={searchRef}
           type="text"
           placeholder="Sök efter din bank..."
+          aria-label="Sök efter din bank"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full pl-10 pr-3 py-3 border border-border rounded-lg bg-background text-foreground text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring transition-all"
+          className="pl-10"
         />
       </div>
 
-      {/* Loading state */}
+      {/* Loading state. The spinner is decorative, so the state needs a text
+          equivalent: without it a screen-reader user gets silence between
+          submitting and the list appearing. */}
       {isLoading && (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <div role="status" className="flex items-center justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden="true" />
+          <span className="sr-only">Laddar banker...</span>
         </div>
       )}
 
-      {/* Error state */}
+      {/* Error state: one quiet line, not a tinted panel. role="alert" so the
+          failure is announced rather than only redrawn. */}
       {error && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4">
-          <p className="text-sm text-destructive">{error}</p>
-        </div>
+        <p role="alert" className="px-1 text-[12.5px] leading-relaxed text-destructive">{error}</p>
       )}
 
-      {/* Bank grid */}
+      {/* Bank list */}
       {!isLoading && !error && (
         <>
           {filteredBanks.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
+            <div className="px-1 py-8 text-center">
               <p className="text-sm text-muted-foreground">
                 {searchQuery
                   ? `Inga banker matchar "${searchQuery}"`
@@ -203,36 +225,46 @@ export function BankSelector({
               )}
             </div>
           ) : (
-            <div className="max-h-[400px] overflow-y-auto space-y-4">
+            // -mx-1 cancels the px-1 the settings panel wraps this in, so the
+            // hairlines and the hover band run the full width of the settings
+            // content, level with the SettingsRow hairlines above; the rows'
+            // own px-1 then puts the bank mark on the same left edge as the
+            // settings labels.
+            // max-h-96 is exactly eight 48px rows: a scroll box with a reason.
+            <div className="-mx-1 max-h-96 space-y-6 overflow-y-auto overscroll-contain">
               {popularBanks.length > 0 && (
-                <div>
-                  <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 px-1">Populära banker</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <section>
+                  <SectionLabel>Populära banker</SectionLabel>
+                  <div className="divide-y divide-border border-t border-border">
                     {popularBanks.map((bank) => (
-                      <BankCard key={bank.name} bank={bank} isConnecting={isConnecting} connectingBankName={connectingBankName} onConnect={onConnect} />
+                      <BankRow key={bank.name} bank={bank} isConnecting={isConnecting} connectingBankName={connectingBankName} onConnect={onConnect} />
                     ))}
                   </div>
-                </div>
+                </section>
               )}
-              {popularBanks.length > 0 && otherBanks.length > 0 && (
-                <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider px-1">Alla banker</h3>
+              {otherBanks.length > 0 && (
+                <section>
+                  {popularBanks.length > 0 && <SectionLabel>Alla banker</SectionLabel>}
+                  <div className="divide-y divide-border border-t border-border">
+                    {otherBanks.map((bank) => (
+                      <BankRow key={bank.name} bank={bank} isConnecting={isConnecting} connectingBankName={connectingBankName} onConnect={onConnect} />
+                    ))}
+                  </div>
+                </section>
               )}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {otherBanks.map((bank) => (
-                  <BankCard key={bank.name} bank={bank} isConnecting={isConnecting} connectingBankName={connectingBankName} onConnect={onConnect} />
-                ))}
-              </div>
             </div>
           )}
         </>
       )}
 
-      {/* Connecting overlay */}
+      {/* The single worded home of the connecting state: one muted line rather
+          than a tinted bordered panel, and it names the bank so the state is
+          still readable when the chosen row has scrolled out of view. */}
       {isConnecting && connectingBankName && (
-        <div className="flex items-center justify-center gap-2 p-3 rounded-lg bg-primary/10 border border-primary/30">
-          <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          <span className="text-sm font-medium text-foreground">Ansluter till {connectingBankName}...</span>
-        </div>
+        <p role="status" className="flex items-center gap-2 px-1 text-[12.5px] leading-relaxed text-muted-foreground">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+          Ansluter till {connectingBankName}...
+        </p>
       )}
     </div>
   )

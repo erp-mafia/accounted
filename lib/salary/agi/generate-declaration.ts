@@ -128,6 +128,16 @@ function sumLineItemAmounts(
     .reduce((sum, li) => sum + ((li.amount as number) || 0), 0)
 }
 
+// Invariant: F-skatt compensation never contributes to the avgifter
+// aggregates (per-IU basis, FK061-series categories, FK487, HU totals),
+// overrides included. The calculation engine already stores
+// avgifter_basis/avgifter_amount = 0 for these rows; a manual advanced-mode
+// override must not resurrect them, or the filing would claim social charges
+// on pay whose IU simultaneously asserts FK131 (not subject to them).
+function isFSkattRow(sre: SalaryRunEmployeeRow): boolean {
+  return sre.employee?.f_skatt_status === 'f_skatt'
+}
+
 export async function generateAgiDeclaration(
   args: GenerateAgiDeclarationArgs,
 ): Promise<GenerateAgiDeclarationResult> {
@@ -330,21 +340,25 @@ export async function generateAgiDeclaration(
         )
       }
 
-      const isFSkatt = emp?.f_skatt_status === 'f_skatt'
+      const isFSkatt = isFSkattRow(sre)
       // Honor advanced-mode per-employee overrides set during review.
+      // F-skatt rows ignore avgifter overrides (see isFSkattRow invariant).
       const effectiveTax = sre.tax_withheld_override ?? sre.tax_withheld
-      const effectiveAvgifterBasis = sre.avgifter_basis_override ?? sre.avgifter_basis
+      const effectiveAvgifterBasis = isFSkatt
+        ? 0
+        : sre.avgifter_basis_override ?? sre.avgifter_basis
       return {
         personnummer: emp?.personnummer ?? '',
         specificationNumber: emp?.specification_number ?? 0,
         removed: Boolean(sre.removed_from_agi),
-        grossSalary: sre.gross_salary,
+        grossSalary: isFSkatt ? 0 : sre.gross_salary,
         taxWithheld: effectiveTax,
         avgifterBasis: effectiveAvgifterBasis,
         fSkattPayment: isFSkatt ? sre.gross_salary : undefined,
-        // F-skatt payees: cash goes to FK131 and benefits to the ej-UlagSA
-        // variants (FK132/FK133/FK134/FK137/FK138/FK139). Regular employees
-        // get FK011 + FK012/FK013/FK015/FK018/FK041/FK043.
+        // F-skatt payees: cash goes to FK131 ONLY (grossSalary is zeroed so
+        // FK011 is never emitted for the same payment) and benefits to the
+        // ej-UlagSA variants (FK132/FK133/FK134/FK137/FK138/FK139). Regular
+        // employees get FK011 + FK012/FK013/FK015/FK018/FK041/FK043.
         benefitsExcludedFromSAUnderlag: isFSkatt ? true : undefined,
         benefitCar: benefitCar > 0 ? benefitCar : undefined,
         benefitFuel: benefitFuel > 0 ? benefitFuel : undefined,
@@ -405,8 +419,9 @@ export async function generateAgiDeclaration(
     const cat = (avgifterByCategory as Record<string, { basis: number; amount: number }>)[
       category
     ] || { basis: 0, amount: 0 }
-    cat.basis += sre.avgifter_basis_override ?? sre.avgifter_basis
-    cat.amount += sre.avgifter_amount_override ?? sre.avgifter_amount
+    // F-skatt rows contribute 0 regardless of overrides (see isFSkattRow).
+    cat.basis += isFSkattRow(sre) ? 0 : sre.avgifter_basis_override ?? sre.avgifter_basis
+    cat.amount += isFSkattRow(sre) ? 0 : sre.avgifter_amount_override ?? sre.avgifter_amount
     ;(avgifterByCategory as Record<string, { basis: number; amount: number }>)[category] = cat
   }
   const totalAvgifterAmount = Object.values(avgifterByCategory).reduce(
@@ -446,8 +461,9 @@ export async function generateAgiDeclaration(
 
   const totals: AGITotals = {
     totalTax: Math.round(totalTax * 100) / 100,
+    // F-skatt rows contribute 0 regardless of overrides (see isFSkattRow).
     totalAvgifterBasis: activeEmployees.reduce(
-      (s, e) => s + ((e.avgifter_basis_override ?? e.avgifter_basis) || 0),
+      (s, e) => s + (isFSkattRow(e) ? 0 : (e.avgifter_basis_override ?? e.avgifter_basis) || 0),
       0,
     ),
     totalAvgifterAmount: Math.round(totalAvgifterAmount * 100) / 100,

@@ -39,6 +39,9 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // Companies
   'GET /api/v1/companies': 'companies:read',
   'GET /api/v1/companies/:companyId': 'companies:read',
+  // Issue #1348: company-settings write (same field set as the MCP tool
+  // gnubok_update_company_settings; direct write, no staging).
+  'PATCH /api/v1/companies/:companyId/settings': 'companies:write',
 
   // Operations (async long-running tasks)
   'GET /api/v1/operations/:id': 'operations:read',

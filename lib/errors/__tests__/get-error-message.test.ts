@@ -461,3 +461,34 @@ describe('getErrorMessage: Swedish heuristic covers real route sentences', () =>
     )
   })
 })
+
+describe('getErrorMessage: GoTrue auth error patterns', () => {
+  it('maps "Signups not allowed for this instance" to the closed-installation message', () => {
+    // Shape mirrors a real AuthApiError: an Error instance carrying a GoTrue
+    // error code that the structured registry does not know.
+    const authError = Object.assign(new Error('Signups not allowed for this instance'), {
+      code: 'signup_disabled',
+      status: 422,
+    })
+    const msg = getErrorMessage(authError, { context: 'auth' })
+    expect(msg).toBe(
+      'Kontoregistrering är avstängd på den här installationen. Kontakta den som bjöd in dig eller din administratör för att få ett konto.',
+    )
+  })
+
+  it('maps a plain "Signups not allowed" string as well', () => {
+    const msg = getErrorMessage('Signups not allowed for this instance', { context: 'auth' })
+    expect(msg).toContain('avstängd på den här installationen')
+  })
+
+  it('maps GoTrue "Error sending invite email" to the SMTP guidance message', () => {
+    const authError = Object.assign(new Error('Error sending invite email'), {
+      code: 'unexpected_failure',
+      status: 500,
+    })
+    const msg = getErrorMessage(authError, { context: 'auth', statusCode: 502 })
+    expect(msg).toBe(
+      'E-postmeddelandet kunde inte skickas av autentiseringstjänsten. Kontrollera installationens SMTP-inställningar och försök igen.',
+    )
+  })
+})

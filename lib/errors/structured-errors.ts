@@ -669,6 +669,20 @@ const MATCH_SI: Record<string, StructuredErrorEntry> = {
     message_en:
       'The cash method cannot handle a partial foreign-currency payment. Pay the invoice in full, switch to accrual, or book the payment manually.',
   },
+  INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED: {
+    httpStatus: 400,
+    message_sv:
+      'Kontantmetoden kan inte bokföra delbetalningar av en obokförd faktura automatiskt: hela fakturan bokförs vid betalning. Ta emot hela beloppet i en betalning, byt till faktureringsmetoden eller bokför betalningen manuellt som verifikation.',
+    message_en:
+      'The cash method cannot auto-book partial payments of an unbooked invoice: the generated entry always books the full invoice. Receive the full amount in one payment, switch to the accrual method, or book the payment manually as a journal entry.',
+  },
+  SI_CASH_PARTIAL_UNSUPPORTED: {
+    httpStatus: 400,
+    message_sv:
+      'Kontantmetoden kan inte bokföra delbetalningar av en obokförd leverantörsfaktura automatiskt: hela fakturan bokförs vid betalning. Betala hela beloppet i en betalning eller bokför betalningen manuellt som verifikation.',
+    message_en:
+      'The cash method cannot auto-book partial payments of an unbooked supplier invoice: the generated entry always books the full invoice. Pay the full amount in one payment or book the payment manually as a journal entry.',
+  },
   MATCH_SI_AMOUNT_EXCEEDS_REMAINING: {
     httpStatus: 400,
     message_sv:
@@ -3159,6 +3173,20 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
       'Anskaffningsdatum, anskaffningsvärde och kategori kan inte ändras efter att tillgången avyttrats eller avskrivningar bokförts. Återför (storno) först, eller använd avyttringsflödet.',
     message_en:
       'Acquisition date, cost and category cannot be changed once the asset has been disposed or depreciation has been posted. Reverse (storno) first, or use the disposal flow.',
+  },
+  // Generic on purpose: the flag covers accounts excluded from K2 for several
+  // different reasons (egenupparbetade immateriella, uppskjuten skatt,
+  // verkligt värde, säkringsredovisning, ...), so the static entry states only
+  // what the BAS chart says. The asset routes override it with an
+  // account-specific message from lib/bokslut/assets/k2-account-guard.ts,
+  // which cites BFNAR 2016:10 punkt 10.4 only when the intangible group is
+  // what actually triggered the gate.
+  K2_EXCLUDED_ACCOUNT: {
+    httpStatus: 422,
+    message_sv:
+      'Kontot är markerat Ej K2 i BAS-kontoplanen och förutsätter K3. Välj ett konto som är tillåtet enligt K2.',
+    message_en:
+      'The account is marked Ej K2 in the BAS chart of accounts and presumes the K3 framework. Pick an account that K2 permits.',
   },
 }
 

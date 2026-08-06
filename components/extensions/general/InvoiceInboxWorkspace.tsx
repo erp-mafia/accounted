@@ -35,6 +35,7 @@ import {
   X,
   ChevronDown,
   Sparkles,
+  MessageCircle,
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -44,7 +45,9 @@ import { copyInboxAddress, type AddressCopyState } from '@/components/extensions
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
-import type { InvoiceExtractionResult } from '@/types'
+import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
+import { renderChannelParticipant } from '@/lib/documents/channel-context-notes'
+import { selectInboxFields } from '@/lib/documents/inbox-field-visibility'
 import BookDirectlyDialog from '@/components/extensions/general/BookDirectlyDialog'
 import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
@@ -61,7 +64,7 @@ type AccountingMethod = 'accrual' | 'cash'
 interface InboxItem {
   id: string
   status: 'received' | 'error'
-  source: 'email' | 'upload'
+  source: 'email' | 'upload' | 'whatsapp'
   created_at: string
   email_from: string | null
   email_subject: string | null
@@ -84,6 +87,10 @@ interface InboxItem {
   // Distinct from status='error' (extraction failed) and from extracted_data
   // having empty fields (extraction ran but found nothing).
   extraction_skipped: boolean
+  // Verified human answers from the delivering chat (source='whatsapp'):
+  // photo caption, representation deltagare + syfte, sender note, and the
+  // open-question state. Null/absent for email and upload items.
+  channel_context?: InboxChannelContext | null
   // Set client-side only while a manual upload is in flight. Replaced by a
   // real server-side row once the AI extraction completes.
   isPlaceholder?: boolean
@@ -1128,6 +1135,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           {selected ? (
             <FieldsRail
               item={selected}
+              docMime={docMime}
               accountingMethod={accountingMethod}
               onDelete={() => handleDelete(selected.id)}
               onBookDirect={() => setBookDirectOpen(true)}
@@ -1348,6 +1356,7 @@ function InboxRow({
       checkbox visible (otherwise it's hover-only on desktop). */
   anyChecked: boolean
 }) {
+  const t = useTranslations('inbox_workspace')
   const amount = pickAmount(item)
   const supplierName = pickSupplierName(item)
   const isPlaceholder = !!item.isPlaceholder
@@ -1355,6 +1364,11 @@ function InboxRow({
   const isErrored = status === 'error'
   const isBooked = status === 'booked'
   const isLinkedToTransaction = status === 'linked'
+  // A chat question the sender never answered (48h TTL hit): the missing
+  // info should be completed here instead. Quiet hint, not a status: the
+  // item still books normally. Booked items drop the reminder.
+  const hasUnansweredQuestion =
+    !isBooked && item.channel_context?.pending_question?.status === 'moved_to_app'
 
   return (
     <li
@@ -1395,6 +1409,8 @@ function InboxRow({
             <Loader2 className="h-3 w-3 text-muted-foreground shrink-0 animate-spin" />
           ) : item.source === 'email' ? (
             <Mail className="h-3 w-3 text-muted-foreground shrink-0" />
+          ) : item.source === 'whatsapp' ? (
+            <MessageCircle className="h-3 w-3 text-muted-foreground shrink-0" />
           ) : (
             <Upload className="h-3 w-3 text-muted-foreground shrink-0" />
           )}
@@ -1416,9 +1432,16 @@ function InboxRow({
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           {isPlaceholder ? (
             <span className="italic">Tolkar dokument med AI…</span>
-          ) : item.extraction_skipped ? (
+          ) : item.extraction_skipped || hasUnansweredQuestion ? (
             <span className="flex items-center gap-1.5 min-w-0">
-              <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
+              {item.extraction_skipped && (
+                <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
+              )}
+              {hasUnansweredQuestion && (
+                <Badge variant="outline" className="font-normal text-attn border-attn/40">
+                  {t('wa_question_badge')}
+                </Badge>
+              )}
               <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
             </span>
           ) : (
@@ -1741,6 +1764,7 @@ function EmptyPreview({
 
 function FieldsRail({
   item,
+  docMime,
   accountingMethod,
   onDelete,
   onBookDirect,
@@ -1753,6 +1777,7 @@ function FieldsRail({
   onRetryRequested,
 }: {
   item: InboxItem
+  docMime: string | null
   accountingMethod: AccountingMethod
   onDelete: () => void
   onBookDirect: () => void
@@ -1777,6 +1802,24 @@ function FieldsRail({
   const [isRetrying, setIsRetrying] = useState(false)
   const t = useTranslations('inbox_workspace')
 
+  // WhatsApp chat context: verified human answers captured by the intake bot
+  // (photo caption, representation deltagare + syfte, sender note). Rendered
+  // as read-only provenance above the editable fields, mirroring the email
+  // metadata block. `moved_to_app` means the bot asked a question in the chat
+  // that was never answered (48h TTL): the missing info should be completed
+  // here before booking.
+  const waCtx = item.source === 'whatsapp' ? item.channel_context ?? null : null
+  const waParticipants = (waCtx?.representation?.participants ?? [])
+    .map(renderChannelParticipant)
+    .filter((n) => n.length > 0)
+  const waPurpose = waCtx?.representation?.purpose?.trim() || null
+  const waCaption = waCtx?.caption?.trim() || null
+  const waNote = waCtx?.user_note?.trim() || null
+  const waUnanswered =
+    !isResolved && waCtx?.pending_question?.status === 'moved_to_app'
+  const showWaBlock =
+    waParticipants.length > 0 || !!waPurpose || !!waCaption || !!waNote || waUnanswered
+
   // Surface a quiet hint when extraction caught a supplier name but no existing
   // supplier matched. The actual creation flow lives on the leverantörsfaktura
   // form (Skapa & välj), so we don't render a separate button here.
@@ -1787,6 +1830,9 @@ function FieldsRail({
     !!extractedSupplierName
 
   const handleRetry = async () => {
+    // Retry overwrites extracted_data wholesale server-side, including any
+    // manual field edits: make the user opt into that loss explicitly.
+    if (hasAnyExtractedField(data) && !confirm(t('retry_overwrite_confirm'))) return
     setIsRetrying(true)
     try {
       const res = await fetch(
@@ -1830,6 +1876,74 @@ function FieldsRail({
             <div className="flex gap-2">
               <span className="text-muted-foreground w-14 shrink-0">Mottaget</span>
               <span>{new Date(item.email_received_at).toLocaleString('sv-SE')}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* WhatsApp chat context (see waCtx derivation above). */}
+      {showWaBlock && (
+        <div className="border-b px-4 py-3 text-xs space-y-1">
+          <h3 className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-2">
+            {t('wa_block_title')}
+          </h3>
+          {waCaption && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-20 shrink-0">{t('wa_caption_label')}</span>
+              <span className="break-words min-w-0">{waCaption}</span>
+            </div>
+          )}
+          {waParticipants.length > 0 && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-20 shrink-0">{t('wa_participants_label')}</span>
+              <span className="break-words min-w-0">{waParticipants.join(', ')}</span>
+            </div>
+          )}
+          {waPurpose && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-20 shrink-0">{t('wa_purpose_label')}</span>
+              <span className="break-words min-w-0">{waPurpose}</span>
+            </div>
+          )}
+          {waNote && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-20 shrink-0">{t('wa_note_label')}</span>
+              <span className="break-words min-w-0">{waNote}</span>
+            </div>
+          )}
+          {waUnanswered && (
+            <AttnLine className="pt-1">{t('wa_question_unanswered')}</AttnLine>
+          )}
+        </div>
+      )}
+
+      {/* AI classification: what kind of document this is and how it was
+          paid. Read-only context above the editable fields; absent for
+          extractions from before the fields existed. */}
+      {(data?.documentKind || data?.payment?.method || data?.pages) && (
+        <div className="border-b px-4 py-3 text-xs space-y-1">
+          {data?.documentKind && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-14 shrink-0">{t('doc_kind_label')}</span>
+              <span>{t(`doc_kind_${data.documentKind}`)}</span>
+            </div>
+          )}
+          {data?.payment?.method && (
+            <div className="flex gap-2">
+              <span className="text-muted-foreground w-14 shrink-0">{t('payment_label')}</span>
+              <span>
+                {t(`payment_${data.payment.method}`)}
+                {data.payment.cardLast4 ? ` •• ${data.payment.cardLast4}` : ''}
+                {data.purchaseTime ? ` · ${data.purchaseTime}` : ''}
+              </span>
+            </div>
+          )}
+          {data?.pages && (
+            <div className="text-muted-foreground">
+              {t('pages_partial_note', {
+                analyzed: data.pages.analyzed,
+                total: data.pages.total,
+              })}
             </div>
           )}
         </div>
@@ -1894,14 +2008,27 @@ function FieldsRail({
       )}
 
       {/* Skipped-extraction hint: explains the empty fields and points the
-          user to the manual paths (transaction link or supplier invoice). */}
+          user to the manual paths (transaction link or supplier invoice).
+          Deliberately reason-agnostic: skip covers sandbox, BYO-extraction
+          and unsliceable PDFs, not just page count anymore. */}
       {item.extraction_skipped && !isResolved && (
         <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
-          AI-tolkning skippades p.g.a. dokumentets storlek (fler än 3 sidor).
-          Du kan koppla dokumentet till en transaktion eller skapa
-          leverantörsfaktura manuellt.
+          {t('skipped_hint')}
         </div>
       )}
+
+      {/* HEIC: extraction ran but Bedrock cannot read the format, so every
+          field came back empty with no error. Tell the user why instead of
+          leaving a silently blank rail (iPhone photos default to HEIC). */}
+      {!item.extraction_skipped &&
+        !isResolved &&
+        hasAi &&
+        (docMime === 'image/heic' || docMime === 'image/heif') &&
+        !hasAnyExtractedField(data) && (
+          <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+            {t('heic_hint')}
+          </div>
+        )}
 
       {/* Extracted fields */}
       <div className="flex-1 overflow-y-auto px-4 py-3">
@@ -2208,6 +2335,8 @@ export function EditableFieldsList({
   // from the extraction) and flips to user-verified once the user edits it:
   // mirrors the create form's AiFilledIndicator. Reset when switching items.
   const [edited, setEdited] = useState<Partial<Record<FieldKey, boolean>>>({})
+  // Per-document fold for the invoice-only fields on a receipt.
+  const [showAllFields, setShowAllFields] = useState(false)
   const timersRef = useRef<Partial<Record<FieldKey, ReturnType<typeof setTimeout>>>>({})
   // Last-known server values per field. Used to detect when the server
   // normalises a value (currency upper-cased, whitespace trimmed) so we can
@@ -2225,6 +2354,10 @@ export function EditableFieldsList({
     setDrafts(seeded)
     lastServerRef.current = seeded
     setEdited({})
+    // The "Visa fakturafält" fold is per document: without this, expanding
+    // it on one receipt leaves the invoice fields open on the next one,
+    // which reads as if that document had them too.
+    setShowAllFields(false)
     return () => {
       for (const t of Object.values(timersRef.current)) {
         if (t) clearTimeout(t)
@@ -2339,9 +2472,20 @@ export function EditableFieldsList({
 
   const vatRows = useMemo(() => data.vatBreakdown ?? [], [data.vatBreakdown])
 
+  const { shown: shownFields, hiddenCount } = useMemo(
+    () =>
+      selectInboxFields({
+        documentKind: data.documentKind ?? null,
+        fields: FIELD_DEFS,
+        hasValue: (key) => (drafts[key as FieldKey] ?? '').trim() !== '',
+        showAll: showAllFields,
+      }),
+    [data, drafts, showAllFields]
+  )
+
   return (
     <div className="space-y-2">
-      {FIELD_DEFS.map((f) => (
+      {shownFields.map((f) => (
         <div key={f.key} className="flex flex-col gap-0.5">
           <div className="flex items-center justify-between gap-2">
             <label
@@ -2371,6 +2515,15 @@ export function EditableFieldsList({
           />
         </div>
       ))}
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAllFields(true)}
+          className="text-[11px] text-muted-foreground hover:text-foreground hover:underline pt-1"
+        >
+          Visa fakturafält ({hiddenCount})
+        </button>
+      )}
       {vatRows.length > 0 && (
         <div className="pt-2 border-t mt-3">
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">

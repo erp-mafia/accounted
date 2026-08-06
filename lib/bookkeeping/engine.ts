@@ -23,6 +23,7 @@ import {
   assertMandatoryDimensions,
   fetchActiveDimensionRules,
   isDimensionRuleExemptSource,
+  isDimensionValidationExemptSource,
 } from '@/lib/bookkeeping/dimension-rules'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
@@ -264,7 +265,14 @@ export async function createDraftEntry(
   // enabled companies get registry validation with a typed Swedish rejection.
   // Runs before any insert so a rejection leaves no orphan rows. Reversal/
   // storno/correction paths bypass this: they copy posted data verbatim.
-  await validateEntryDimensions(supabase, companyId, lines)
+  // Accrual dissolutions bypass it for exactly that reason too: they replay
+  // the origin entry's bag, so a value archived after the origin was posted
+  // must not be able to strand the remaining months as pending and leave the
+  // interim 17xx/29xx account overstated. See
+  // DIMENSION_VALIDATION_EXEMPT_SOURCE_TYPES.
+  if (!isDimensionValidationExemptSource(input.source_type)) {
+    await validateEntryDimensions(supabase, companyId, lines)
+  }
 
   // Validate that entry_date falls within the selected fiscal period
   const { data: period, error: periodError } = await supabase

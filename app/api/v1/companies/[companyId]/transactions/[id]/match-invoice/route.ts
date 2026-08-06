@@ -465,7 +465,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     // Reject cash-method partial payments ONLY for pure kontantmetoden
     // invoices (no prior JE). Under kontantmetoden utgående moms must be
-    // reported in the period of actual receipt (ML 13 kap 8 §); the
+    // reported in the period of actual receipt (bokslutsmetoden); the
     // partial-payment branch uses the accrual-style clearing entry which
     // doesn't model the per-installment moms event. When the invoice was
     // already booked under accrual, the clearing entry IS the correct
