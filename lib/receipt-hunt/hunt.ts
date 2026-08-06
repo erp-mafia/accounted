@@ -51,6 +51,21 @@ export interface HuntCompanyResult {
   poolSize: number
   proposed: number
   skippedNoOwner?: boolean
+  /** Populated on a dry run so the pairings can be inspected before trusting them. */
+  proposals?: HuntProposal[]
+}
+
+export interface HuntOptions {
+  limit?: number
+  /**
+   * Score and decide, but write nothing.
+   *
+   * The provkörning the flow concept calls for: a company can see exactly what
+   * tonight would propose before anything reaches the granskningskö, and it is
+   * how this code is validated against a real ledger without staging a single
+   * operation.
+   */
+  dryRun?: boolean
 }
 
 /** Purchases with no receipt that nobody has booked yet. */
@@ -233,8 +248,9 @@ export async function huntCompany(
   supabase: SupabaseClient,
   companyId: string,
   runId: string,
-  limit: number = MAX_PROPOSALS_PER_RUN,
+  options: HuntOptions = {},
 ): Promise<HuntCompanyResult> {
+  const { limit = MAX_PROPOSALS_PER_RUN, dryRun = false } = options
   const [transactions, { pool, fileNames }, suppression] = await Promise.all([
     fetchCandidateTransactions(supabase, companyId),
     fetchPool(supabase, companyId),
@@ -251,6 +267,7 @@ export async function huntCompany(
 
   const proposals = selectProposals(transactions, pool, suppression, limit)
   if (proposals.length === 0) return base
+  if (dryRun) return { ...base, proposed: proposals.length, proposals }
 
   const userId = await resolveOwnerUserId(supabase, companyId)
   if (!userId) return { ...base, skippedNoOwner: true }
