@@ -350,7 +350,7 @@ describe('buildBokslutReadinessReport', () => {
     // only mislead.
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
     vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
-    vi.mocked(collectKontantmetodCutoff).mockResolvedValue({ receivables: [], payables: [] })
+    vi.mocked(collectKontantmetodCutoff).mockResolvedValue({ receivables: [], payables: [], unknownVatTreatment: [] })
     const supabase = makeSupabase({
       period: { data: PERIOD, error: null },
       settings: { data: { entity_type: 'enskild_firma', accounting_method: 'cash' }, error: null },
@@ -388,6 +388,7 @@ describe('buildBokslutReadinessReport', () => {
     vi.mocked(collectKontantmetodCutoff).mockResolvedValue({
       receivables: [{ id: 'i1', reference: 'F-1', vatTreatment: 'standard_25', outstanding: 1250, vat: 250 }],
       payables: [{ id: 's1', reference: 'L-1', outstanding: 500, vat: 100, netByAccount: [] }],
+      unknownVatTreatment: [],
     })
     const supabase = makeSupabase({
       period: { data: PERIOD, error: null },
@@ -407,7 +408,7 @@ describe('buildBokslutReadinessReport', () => {
   it('emits no cut-off reminder when nothing was outstanding at period end', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
     vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
-    vi.mocked(collectKontantmetodCutoff).mockResolvedValue({ receivables: [], payables: [] })
+    vi.mocked(collectKontantmetodCutoff).mockResolvedValue({ receivables: [], payables: [], unknownVatTreatment: [] })
     const supabase = makeSupabase({
       period: { data: PERIOD, error: null },
       settings: { data: { entity_type: 'enskild_firma', accounting_method: 'cash' }, error: null },

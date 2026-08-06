@@ -1,7 +1,15 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+vi.mock('@/lib/bookkeeping/engine', () => ({
+  createJournalEntry: vi.fn(),
+  reverseEntry: vi.fn(),
+}))
+
 import {
   buildCutoffLines,
+  buildCutoffNote,
   distributeOre,
+  postKontantmetodCutoff,
   nextDay,
   reverseLines,
   VILANDE_INPUT_VAT_ACCOUNT,
@@ -9,6 +17,7 @@ import {
 } from '../kontantmetod-cutoff'
 import type { CutoffPayable, CutoffReceivable } from '../kontantmetod-cutoff'
 import { roundOre } from '@/lib/money'
+import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 
 const sum = (lines: Array<{ debit_amount: number; credit_amount: number }>) => ({
   debit: roundOre(lines.reduce((s, l) => s + l.debit_amount, 0)),
@@ -232,5 +241,154 @@ describe('nextDay', () => {
   it('handles a broken fiscal year and a leap day', () => {
     expect(nextDay('2026-06-30')).toBe('2026-07-01')
     expect(nextDay('2028-02-28')).toBe('2028-02-29')
+  })
+})
+
+describe('buildCutoffNote (BFL 5 kap 6-7 §: traceability)', () => {
+  it('names the invoices an aggregate verifikat covers', () => {
+    expect(buildCutoffNote('Kundfordringar', ['F-1', 'F-2'])).toBe(
+      'Kundfordringar (2 st): F-1, F-2',
+    )
+  })
+
+  it('truncates a long list to a pointer rather than an unbounded note', () => {
+    const refs = Array.from({ length: 60 }, (_, i) => `F-${i + 1}`)
+    const note = buildCutoffNote('Kundfordringar', refs)
+    expect(note).toContain('(60 st)')
+    expect(note).toContain('och 10 till')
+  })
+
+  it('is explicit when no invoice numbers exist', () => {
+    expect(buildCutoffNote('Skulder', ['', '  '])).toBe('Skulder: inga fakturanummer registrerade')
+  })
+})
+
+describe('postKontantmetodCutoff', () => {
+  const OPEN_NEXT = {
+    id: 'fp-next',
+    period_start: '2027-01-01',
+    period_end: '2027-12-31',
+    is_closed: false,
+    locked_at: null,
+  }
+
+  const makeSupabase = (next: Record<string, unknown> | null) => ({
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({ maybeSingle: async () => ({ data: next, error: next ? null : { message: 'x' } }) }),
+        }),
+      }),
+    }),
+  }) as never
+
+  const baseOpts = {
+    fiscalPeriodId: 'fp-1',
+    nextFiscalPeriodId: 'fp-next',
+    periodEnd: '2026-12-31',
+    receivables: [receivable()],
+    payables: [],
+  }
+
+  beforeEach(() => {
+    vi.mocked(createJournalEntry).mockReset()
+    vi.mocked(reverseEntry).mockReset()
+  })
+
+  it('posts the cut-off and its vändning, carrying invoice refs into notes', async () => {
+    vi.mocked(createJournalEntry)
+      .mockResolvedValueOnce({ id: 'je-cutoff' } as never)
+      .mockResolvedValueOnce({ id: 'je-reversal' } as never)
+
+    const result = await postKontantmetodCutoff(makeSupabase(OPEN_NEXT), 'co-1', 'user-1', baseOpts)
+
+    expect(result.receivableEntry?.id).toBe('je-cutoff')
+    expect(result.receivableReversal?.id).toBe('je-reversal')
+
+    const cutoffCall = vi.mocked(createJournalEntry).mock.calls[0][3]
+    expect(cutoffCall.entry_date).toBe('2026-12-31')
+    expect(cutoffCall.notes).toContain('F-1')
+    const reversalCall = vi.mocked(createJournalEntry).mock.calls[1][3]
+    expect(reversalCall.entry_date).toBe('2027-01-01')
+    expect(reversalCall.fiscal_period_id).toBe('fp-next')
+  })
+
+  it('refuses before posting anything when the next period does not exist', async () => {
+    await expect(
+      postKontantmetodCutoff(makeSupabase(null), 'co-1', 'user-1', baseOpts),
+    ).rejects.toThrow(/nästa räkenskapsår/i)
+    // The critical assertion: nothing was posted, so no un-reversed cut-off.
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
+  it('refuses before posting anything when the next period is closed or locked', async () => {
+    await expect(
+      postKontantmetodCutoff(makeSupabase({ ...OPEN_NEXT, is_closed: true }), 'co-1', 'user-1', baseOpts),
+    ).rejects.toThrow(/stängt eller låst/i)
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+
+    await expect(
+      postKontantmetodCutoff(makeSupabase({ ...OPEN_NEXT, locked_at: '2027-02-01' }), 'co-1', 'user-1', baseOpts),
+    ).rejects.toThrow(/stängt eller låst/i)
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
+  it('refuses when the vändning date falls outside the next period', async () => {
+    await expect(
+      postKontantmetodCutoff(
+        makeSupabase({ ...OPEN_NEXT, period_start: '2027-03-01' }),
+        'co-1', 'user-1', baseOpts,
+      ),
+    ).rejects.toThrow(/utanför nästa räkenskapsår/i)
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
+  it('refuses when any invoice lacks a vat_treatment', async () => {
+    await expect(
+      postKontantmetodCutoff(makeSupabase(OPEN_NEXT), 'co-1', 'user-1', {
+        ...baseOpts,
+        unknownVatTreatment: ['F-9'],
+      }),
+    ).rejects.toThrow(/saknar momsinställning/i)
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
+  })
+
+  it('stornoes the cut-off when its vändning fails, leaving no inflated 1510', async () => {
+    // The failure mode the module exists to prevent: a committed cut-off with
+    // no vändning inflates 1510/2440 permanently and double-books every
+    // new-year payment.
+    vi.mocked(createJournalEntry)
+      .mockResolvedValueOnce({ id: 'je-cutoff' } as never)
+      .mockRejectedValueOnce(new Error('period locked'))
+    vi.mocked(reverseEntry).mockResolvedValue({ id: 'je-storno' } as never)
+
+    await expect(
+      postKontantmetodCutoff(makeSupabase(OPEN_NEXT), 'co-1', 'user-1', baseOpts),
+    ).rejects.toThrow('period locked')
+
+    expect(vi.mocked(reverseEntry)).toHaveBeenCalledWith(
+      expect.anything(), 'co-1', 'user-1', 'je-cutoff', '2026-12-31',
+    )
+  })
+
+  it('still rethrows the original error when the compensating storno also fails', async () => {
+    vi.mocked(createJournalEntry)
+      .mockResolvedValueOnce({ id: 'je-cutoff' } as never)
+      .mockRejectedValueOnce(new Error('period locked'))
+    vi.mocked(reverseEntry).mockRejectedValue(new Error('storno failed'))
+
+    await expect(
+      postKontantmetodCutoff(makeSupabase(OPEN_NEXT), 'co-1', 'user-1', baseOpts),
+    ).rejects.toThrow('period locked')
+  })
+
+  it('posts nothing at all when there is nothing outstanding', async () => {
+    const result = await postKontantmetodCutoff(makeSupabase(OPEN_NEXT), 'co-1', 'user-1', {
+      ...baseOpts,
+      receivables: [],
+      payables: [],
+    })
+    expect(result.receivableEntry).toBeNull()
+    expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
   })
 })

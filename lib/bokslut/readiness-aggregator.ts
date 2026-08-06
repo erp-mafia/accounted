@@ -193,6 +193,19 @@ export async function buildBokslutReadinessReport(
           href: '/reports/kundreskontra',
         })
       }
+      // Surfaced separately: these rows block the cut-off entirely, so the
+      // user needs to see them even when nothing else is outstanding.
+      if (cutoff.unknownVatTreatment.length > 0) {
+        reminders.push({
+          code: 'kontantmetod_cutoff_missing_vat_treatment',
+          severity: 'warning',
+          message:
+            `${cutoff.unknownVatTreatment.length} fakturor saknar momsinställning och kan ` +
+            'inte tas med i bokslutsavgränsningen. Komplettera dem innan bokslut: ' +
+            `${cutoff.unknownVatTreatment.slice(0, 5).join(', ')}`,
+          href: '/invoices',
+        })
+      }
     } catch (err) {
       // Advisory: never break the wizard on it, but keep the failure traceable
       // so a silently missing reminder is not mistaken for "nothing open".

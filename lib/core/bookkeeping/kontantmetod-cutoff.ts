@@ -40,7 +40,7 @@ import type {
   VatTreatment,
 } from '@/types'
 import { getRevenueAccount } from '@/lib/bookkeeping/invoice-entries'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { createJournalEntry, reverseEntry } from '@/lib/bookkeeping/engine'
 import { createLogger } from '@/lib/logger'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 
@@ -311,6 +311,34 @@ export function nextDay(date: string): string {
 export interface CutoffCollection {
   receivables: CutoffReceivable[]
   payables: CutoffPayable[]
+  /**
+   * Invoices whose vat_treatment is missing. Never guessed at: a reduced-rate
+   * or exempt invoice silently defaulted to 25 % would land on the wrong
+   * vilande account and the wrong revenue account. Posting refuses while this
+   * is non-empty so the user fixes the source rows instead.
+   */
+  unknownVatTreatment: string[]
+}
+
+/**
+ * An aggregate verifikat still has to say which affärshändelser it covers
+ * (BFL 5 kap 6-7 §: motpart and underlag must be traceable). The lines are
+ * grouped by account, so the invoice references go into the entry `notes`
+ * where an examiner can follow them back to the sub-ledger.
+ *
+ * Truncated past a sane length: the note is a pointer to the reskontra, not a
+ * replacement for it, and an unbounded note on a company with thousands of
+ * open invoices helps nobody.
+ */
+export function buildCutoffNote(label: string, references: string[]): string {
+  const named = references.filter((ref) => ref && ref.trim().length > 0)
+  if (named.length === 0) return `${label}: inga fakturanummer registrerade`
+  const MAX = 50
+  const shown = named.slice(0, MAX).join(', ')
+  const rest = named.length - Math.min(named.length, MAX)
+  return rest > 0
+    ? `${label} (${named.length} st): ${shown} och ${rest} till`
+    : `${label} (${named.length} st): ${shown}`
 }
 
 /**
@@ -382,6 +410,7 @@ export async function collectKontantmetodCutoff(
   }
 
   const receivables: CutoffReceivable[] = []
+  const unknownVatTreatment: string[] = []
   for (const row of invoices) {
     // Credit notes reduce the receivable through their own negative totals;
     // they are already part of the invoice set, so no special casing beyond
@@ -395,13 +424,24 @@ export async function collectKontantmetodCutoff(
     const outstanding = roundOre(total - paid)
     if (Math.abs(outstanding) < ORE_TOLERANCE) continue
 
+    // Never guess the treatment. Defaulting a 12 %/6 %/undantagen invoice to
+    // 25 % would route it to the wrong vilande account AND the wrong revenue
+    // account; the moms impact is deferred but the year-end fordran
+    // composition would be wrong on the balance sheet. Collect and refuse.
+    const treatment = row.vat_treatment as VatTreatment | null
+    const reference = (row.invoice_number as string) ?? ''
+    if (!treatment) {
+      unknownVatTreatment.push(reference || (row.id as string))
+      continue
+    }
+
     // Scale the moms share to the part still outstanding: a half-paid invoice
     // carries half its moms into the cut-off.
     const ratio = total === 0 ? 0 : outstanding / total
     receivables.push({
       id: row.id as string,
-      reference: (row.invoice_number as string) ?? '',
-      vatTreatment: (row.vat_treatment as VatTreatment) ?? 'standard_25',
+      reference,
+      vatTreatment: treatment,
       outstanding,
       vat: roundOre(vat * ratio),
     })
@@ -439,7 +479,14 @@ export async function collectKontantmetodCutoff(
     payables: payables.length,
   })
 
-  return { receivables, payables }
+  if (unknownVatTreatment.length > 0) {
+    log.warn('invoices without vat_treatment excluded from the cut-off', {
+      companyId,
+      count: unknownVatTreatment.length,
+    })
+  }
+
+  return { receivables, payables, unknownVatTreatment }
 }
 
 export interface PostCutoffResult {
@@ -450,12 +497,64 @@ export interface PostCutoffResult {
 }
 
 /**
+ * Assert the vändning can actually be posted BEFORE any cut-off entry exists.
+ *
+ * The cut-off and its reversal are two verifikat, and the engine gives no
+ * cross-entry transaction: if the reversal fails after the cut-off is
+ * committed, 1510/2440 stay permanently inflated and every new-year payment
+ * double-books. Checking the target period up front turns the common failure
+ * (next period missing, closed, or locked) into a refusal that posts nothing,
+ * which leaves the compensating storno below as a genuine last resort rather
+ * than the expected path.
+ */
+async function assertReversalPeriodPostable(
+  supabase: SupabaseClient,
+  companyId: string,
+  nextFiscalPeriodId: string,
+  reversalDate: string,
+): Promise<void> {
+  if (!nextFiscalPeriodId) {
+    throw new Error(
+      'Kontantmetodens bokslutsavgränsning kräver att nästa räkenskapsår är upplagt: vändningen bokas första dagen på det nya året.',
+    )
+  }
+
+  const { data, error } = await supabase
+    .from('fiscal_periods')
+    .select('id, period_start, period_end, is_closed, locked_at')
+    .eq('id', nextFiscalPeriodId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (error || !data) {
+    throw new Error(
+      'Kontantmetodens bokslutsavgränsning kräver att nästa räkenskapsår är upplagt: vändningen bokas första dagen på det nya året.',
+    )
+  }
+  if (data.is_closed || data.locked_at) {
+    throw new Error(
+      'Nästa räkenskapsår är stängt eller låst: vändningen av bokslutsavgränsningen kan inte bokföras. Lås upp perioden och försök igen.',
+    )
+  }
+  if (reversalDate < (data.period_start as string) || reversalDate > (data.period_end as string)) {
+    throw new Error(
+      `Vändningsdatumet ${reversalDate} ligger utanför nästa räkenskapsår: kontrollera periodernas datum.`,
+    )
+  }
+}
+
+/**
  * Post the cut-off verifikat and their vändningar.
  *
- * The reversal is posted into `nextFiscalPeriodId`; when the next period does
- * not exist yet the cut-off is refused outright rather than posted half-done.
- * A cut-off without its vändning would leave 1510/2440 permanently inflated
- * and every new-year payment would double-book.
+ * Refuses outright unless the vändning can be posted (see
+ * assertReversalPeriodPostable) and unless every invoice has a known
+ * vat_treatment: a cut-off without its vändning leaves 1510/2440 permanently
+ * inflated and makes every new-year payment double-book.
+ *
+ * If a reversal still fails after its cut-off committed, the cut-off is
+ * stornoed through the sanctioned reverseEntry() path (BFL 5 kap 5 §: posted
+ * entries are never edited or deleted) so the ledger is left consistent, and
+ * the original error is rethrown.
  */
 export async function postKontantmetodCutoff(
   supabase: SupabaseClient,
@@ -468,8 +567,17 @@ export async function postKontantmetodCutoff(
     receivables: CutoffReceivable[]
     payables: CutoffPayable[]
     entityType?: EntityType
+    /** Refuse if any invoice lacked a vat_treatment (see CutoffCollection). */
+    unknownVatTreatment?: string[]
   },
 ): Promise<PostCutoffResult> {
+  if (opts.unknownVatTreatment && opts.unknownVatTreatment.length > 0) {
+    throw new Error(
+      `${opts.unknownVatTreatment.length} fakturor saknar momsinställning och kan inte tas med i bokslutsavgränsningen: ` +
+        `${opts.unknownVatTreatment.slice(0, 10).join(', ')}. Komplettera fakturorna och kör om.`,
+    )
+  }
+
   const { receivableLines, payableLines } = buildCutoffLines(
     opts.receivables,
     opts.payables,
@@ -484,38 +592,73 @@ export async function postKontantmetodCutoff(
     payableReversal: null,
   }
 
-  if (receivableLines.length > 0) {
-    result.receivableEntry = await createJournalEntry(supabase, companyId, userId, {
+  if (receivableLines.length === 0 && payableLines.length === 0) return result
+
+  await assertReversalPeriodPostable(supabase, companyId, opts.nextFiscalPeriodId, reversalDate)
+
+  /**
+   * Post a cut-off/vändning pair. On reversal failure the cut-off is stornoed
+   * so the pair is all-or-nothing from the ledger's point of view.
+   */
+  const postPair = async (
+    lines: CreateJournalEntryLineInput[],
+    label: string,
+    references: string[],
+  ): Promise<[JournalEntry, JournalEntry]> => {
+    const entry = await createJournalEntry(supabase, companyId, userId, {
       fiscal_period_id: opts.fiscalPeriodId,
       entry_date: opts.periodEnd,
-      description: 'Kundfordringar vid bokslut (kontantmetoden)',
+      description: `${label} vid bokslut (kontantmetoden)`,
       source_type: 'year_end',
-      lines: receivableLines,
+      notes: buildCutoffNote(label, references),
+      lines,
     })
-    result.receivableReversal = await createJournalEntry(supabase, companyId, userId, {
-      fiscal_period_id: opts.nextFiscalPeriodId,
-      entry_date: reversalDate,
-      description: 'Vändning kundfordringar bokslut (kontantmetoden)',
-      source_type: 'year_end',
-      lines: reverseLines(receivableLines),
-    })
+
+    try {
+      const reversal = await createJournalEntry(supabase, companyId, userId, {
+        fiscal_period_id: opts.nextFiscalPeriodId,
+        entry_date: reversalDate,
+        description: `Vändning ${label.toLowerCase()} bokslut (kontantmetoden)`,
+        source_type: 'year_end',
+        notes: buildCutoffNote(`Vändning ${label.toLowerCase()}`, references),
+        lines: reverseLines(lines),
+      })
+      return [entry, reversal]
+    } catch (reversalError) {
+      // Compensate: an un-reversed cut-off is worse than no cut-off at all.
+      try {
+        // Storno in the same period as the cut-off so the pair nets to zero
+        // inside the year being closed.
+        await reverseEntry(supabase, companyId, userId, entry.id, opts.periodEnd)
+      } catch (stornoError) {
+        log.error(
+          'cut-off reversal failed AND the compensating storno failed: 1510/2440 left inflated, manual correction required',
+          stornoError as Error,
+          { companyId, entryId: entry.id },
+        )
+      }
+      throw reversalError
+    }
+  }
+
+  if (receivableLines.length > 0) {
+    const [entry, reversal] = await postPair(
+      receivableLines,
+      'Kundfordringar',
+      opts.receivables.map((r) => r.reference),
+    )
+    result.receivableEntry = entry
+    result.receivableReversal = reversal
   }
 
   if (payableLines.length > 0) {
-    result.payableEntry = await createJournalEntry(supabase, companyId, userId, {
-      fiscal_period_id: opts.fiscalPeriodId,
-      entry_date: opts.periodEnd,
-      description: 'Leverantörsskulder vid bokslut (kontantmetoden)',
-      source_type: 'year_end',
-      lines: payableLines,
-    })
-    result.payableReversal = await createJournalEntry(supabase, companyId, userId, {
-      fiscal_period_id: opts.nextFiscalPeriodId,
-      entry_date: reversalDate,
-      description: 'Vändning leverantörsskulder bokslut (kontantmetoden)',
-      source_type: 'year_end',
-      lines: reverseLines(payableLines),
-    })
+    const [entry, reversal] = await postPair(
+      payableLines,
+      'Leverantörsskulder',
+      opts.payables.map((p) => p.reference),
+    )
+    result.payableEntry = entry
+    result.payableReversal = reversal
   }
 
   return result
