@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, Suspense } from 'react'
+import { useState, useEffect, useRef, Suspense } from 'react'
 import dynamic from 'next/dynamic'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Mail, ArrowLeft, ExternalLink } from 'lucide-react'
+import { Check, Loader2, Mail, ArrowLeft, ExternalLink } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
@@ -22,6 +22,11 @@ import {
   INVITE_PROBLEM_MESSAGE_KEYS,
 } from '@/lib/auth/consume-invite-cookie'
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
+import { AuthFormError } from '@/components/auth/AuthFormError'
+import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
+import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
+import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
+import { cn } from '@/lib/utils'
 
 const branding = getBranding()
 
@@ -61,10 +66,19 @@ function RegisterPageContent() {
   const [bankIdUser, setBankIdUser] = useState<{ givenName?: string; surname?: string } | null>(null)
   const [bankIdSessionId, setBankIdSessionId] = useState<string | null>(null)
   const [bankIdEmail, setBankIdEmail] = useState('')
+  // Signup failures render inline next to the form (see AuthFormError), never
+  // as a toast. Field-level problems attach to their field; everything else
+  // goes to the form-level alert above the form.
+  const [formError, setFormError] = useState<{ kind: AuthErrorKind | 'bankid' | 'oauth'; message: string } | null>(null)
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [confirmError, setConfirmError] = useState<string | null>(null)
+  const passwordInputRef = useRef<HTMLInputElement>(null)
+  const confirmInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const router = useRouter()
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
+  const googleAuthEnabled = isGoogleAuthEnabled()
   const t = useTranslations('register')
   const tInvite = useTranslations('invite')
   const errorLocale = useLocale() as ErrorLocale
@@ -120,20 +134,18 @@ function RegisterPageContent() {
     }
 
     if (result.error) {
-      toast({
-        title: t('bankid_failed_title'),
-        description: t('bankid_failed_description'),
-        variant: 'destructive',
-      })
+      setFormError({ kind: 'bankid', message: t('bankid_failed_description') })
       return
     }
     // BankID verified: store sessionId and show email form
+    setFormError(null)
     setBankIdUser({ givenName: result.givenName, surname: result.surname })
     if (result.sessionId) setBankIdSessionId(result.sessionId)
   }
 
   const handleBankIdSignup = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    setFormError(null)
     setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
@@ -154,23 +166,17 @@ function RegisterPageContent() {
 
       if (!res.ok) {
         if (json.error === 'already_linked') {
-          toast({
-            title: t('bankid_already_linked_title'),
-            description: t('bankid_already_linked_description'),
-            variant: 'destructive',
-          })
+          // email_exists kind: the alert renders a sign-in link, which is the
+          // recovery path for both "BankID taken" and "email taken".
+          setFormError({ kind: 'email_exists', message: t('bankid_already_linked_description') })
         } else if (json.error === 'account_exists') {
-          toast({
-            title: t('account_exists_title'),
-            description: t('account_exists_description'),
-            variant: 'destructive',
-          })
-          router.push('/login')
+          // Inline with a sign-in link instead of yanking the user to /login
+          // mid-read: they keep the context and choose when to leave.
+          setFormError({ kind: 'email_exists', message: t('account_exists_description') })
         } else {
-          toast({
-            title: t('register_failed_title'),
-            description: json.message || json.error || t('register_failed_default'),
-            variant: 'destructive',
+          setFormError({
+            kind: 'unknown',
+            message: json.message || json.error || t('register_failed_default'),
           })
         }
         return
@@ -184,10 +190,9 @@ function RegisterPageContent() {
 
       if (error) {
         console.error('[register] BankID verifyOtp failed', error.message)
-        toast({
-          title: t('register_failed_complete'),
-          description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-          variant: 'destructive',
+        setFormError({
+          kind: 'unknown',
+          message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
         })
         return
       }
@@ -206,15 +211,23 @@ function RegisterPageContent() {
       router.refresh()
     } catch (error) {
       console.error('[register] BankID signup error', error instanceof Error ? error.message : String(error))
-      toast({
-        title: t('register_failed_title'),
-        description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-        variant: 'destructive',
+      setFormError({
+        kind: 'unknown',
+        message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
       setIsLoading(false)
     }
   }
+
+  // The live checklist under the password field mirrors these rules; the
+  // aggregate check gates submission.
+  const passwordChecks = [
+    { key: 'password_req_length', met: password.length >= 8 },
+    { key: 'password_req_case', met: /[a-z]/.test(password) && /[A-Z]/.test(password) },
+    { key: 'password_req_number', met: /[0-9]/.test(password) },
+    { key: 'password_req_special', met: /[^a-zA-Z0-9]/.test(password) },
+  ] as const
 
   function isStrongPassword(pw: string): boolean {
     return pw.length >= 8
@@ -226,32 +239,31 @@ function RegisterPageContent() {
 
   const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    setIsLoading(true)
+    setFormError(null)
+    setPasswordError(null)
+    setConfirmError(null)
 
     const formData = new FormData(e.currentTarget)
     const emailValue = (formData.get('email') as string) || email
     const passwordValue = (formData.get('password') as string) || password
     const confirmValue = (formData.get('confirm_password') as string) || confirmPassword
 
+    // Client-side checks run before isLoading so the inputs are still enabled
+    // when focus moves to the offending field.
     if (!isStrongPassword(passwordValue)) {
-      toast({
-        title: t('weak_password_title'),
-        description: t('weak_password_description'),
-        variant: 'destructive',
-      })
-      setIsLoading(false)
+      setPasswordError(t('password_error_requirements'))
+      passwordInputRef.current?.focus()
       return
     }
 
     if (passwordValue !== confirmValue) {
-      toast({
-        title: t('password_mismatch_title'),
-        description: t('password_mismatch_description'),
-        variant: 'destructive',
-      })
-      setIsLoading(false)
+      setConfirmError(t('password_mismatch_description'))
+      confirmInputRef.current?.focus()
+      confirmInputRef.current?.select()
       return
     }
+
+    setIsLoading(true)
 
     try {
       const { data, error } = await supabase.auth.signUp({
@@ -264,11 +276,25 @@ function RegisterPageContent() {
 
       if (error) {
         console.error('[register] signUp error', error.message)
-        toast({
-          title: t('register_failed_title'),
-          description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-          variant: 'destructive',
-        })
+        const kind = classifyAuthError(error)
+        if (kind === 'weak_password') {
+          // Server-side password policy rejection: same field, same message
+          // as the client-side check.
+          setPasswordError(t('password_error_requirements'))
+        } else {
+          const messageByKind: Partial<Record<AuthErrorKind, string>> = {
+            email_exists: t('account_exists_description'),
+            email_invalid: t('error_email_invalid'),
+            rate_limited: t('error_rate_limited'),
+            signup_disabled: t('error_signup_disabled'),
+          }
+          setFormError({
+            kind,
+            message:
+              messageByKind[kind] ??
+              getErrorMessage(error, { context: 'auth', locale: errorLocale }),
+          })
+        }
         return
       }
 
@@ -314,10 +340,9 @@ function RegisterPageContent() {
       setIsRegistered(true)
     } catch (error) {
       console.error('[register] unexpected exception', error instanceof Error ? error.message : String(error))
-      toast({
-        title: t('register_failed_title'),
-        description: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
-        variant: 'destructive',
+      setFormError({
+        kind: 'unknown',
+        message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),
       })
     } finally {
       setIsLoading(false)
@@ -437,11 +462,20 @@ function RegisterPageContent() {
         </div>
 
         <div className="rounded-lg border bg-card p-6">
-          {bankIdEnabled && !bankIdUser && (
+          {(bankIdEnabled || googleAuthEnabled) && !bankIdUser && (
             <>
-              <div className="mb-5">
-                <BankIdAuth mode="signup" onComplete={handleBankIdComplete} />
-              </div>
+              {bankIdEnabled && (
+                <div className="mb-5">
+                  <BankIdAuth mode="signup" onComplete={handleBankIdComplete} />
+                </div>
+              )}
+              {googleAuthEnabled && (
+                <div className="mb-5">
+                  <GoogleAuthButton
+                    onError={(message) => setFormError({ kind: 'oauth', message })}
+                  />
+                </div>
+              )}
               <div className="relative mb-5">
                 <div className="absolute inset-0 flex items-center">
                   <div className="w-full border-t" />
@@ -458,6 +492,24 @@ function RegisterPageContent() {
               <p className="text-sm text-blue-700 dark:text-blue-300">
                 {t('bankid_unavailable_body')}
               </p>
+            </div>
+          )}
+
+          {formError && (
+            <div className="mb-5">
+              <AuthFormError
+                message={formError.message}
+                action={
+                  formError.kind === 'email_exists' ? (
+                    <Link
+                      href="/login"
+                      className="font-medium underline underline-offset-2"
+                    >
+                      {t('sign_in')}
+                    </Link>
+                  ) : undefined
+                }
+              />
             </div>
           )}
 
@@ -539,34 +591,90 @@ function RegisterPageContent() {
             <div className="space-y-2">
               <Label htmlFor="password">{t('password_label')}</Label>
               <Input
+                ref={passwordInputRef}
                 id="password"
                 name="password"
                 type="password"
                 autoComplete="new-password"
                 placeholder={t('password_placeholder')}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value)
+                  if (passwordError && isStrongPassword(e.target.value)) {
+                    setPasswordError(null)
+                  }
+                }}
                 required
                 minLength={8}
                 disabled={isLoading}
+                aria-invalid={passwordError ? true : undefined}
+                aria-describedby="password-requirements"
                 className="h-11"
               />
+              <ul
+                id="password-requirements"
+                className="grid grid-cols-2 gap-x-3 gap-y-1 pt-1"
+              >
+                {passwordChecks.map((check) => (
+                  <li
+                    key={check.key}
+                    className={cn(
+                      'flex items-center gap-2 text-xs transition-colors duration-150',
+                      check.met ? 'text-foreground' : 'text-muted-foreground',
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className="flex h-3 w-3 items-center justify-center"
+                    >
+                      {check.met ? (
+                        <Check className="h-3 w-3" />
+                      ) : (
+                        <span className="h-1 w-1 rounded-full bg-current opacity-60" />
+                      )}
+                    </span>
+                    {t(check.key)}
+                  </li>
+                ))}
+              </ul>
+              {passwordError && (
+                <p role="alert" className="text-xs text-destructive">
+                  {passwordError}
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="confirm_password">{t('confirm_password_label')}</Label>
               <Input
+                ref={confirmInputRef}
                 id="confirm_password"
                 name="confirm_password"
                 type="password"
                 autoComplete="new-password"
                 placeholder={t('confirm_password_placeholder')}
                 value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value)
+                  if (confirmError && e.target.value === password) {
+                    setConfirmError(null)
+                  }
+                }}
                 required
                 minLength={8}
                 disabled={isLoading}
+                aria-invalid={confirmError ? true : undefined}
+                aria-describedby={confirmError ? 'confirm-password-error' : undefined}
                 className="h-11"
               />
+              {confirmError && (
+                <p
+                  id="confirm-password-error"
+                  role="alert"
+                  className="text-xs text-destructive"
+                >
+                  {confirmError}
+                </p>
+              )}
             </div>
             <Button type="submit" className="w-full h-11" disabled={isLoading}>
               {isLoading ? (
