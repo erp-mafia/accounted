@@ -11,6 +11,7 @@ import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
 import { documentExtractionExtension } from '@/extensions/general/document-extraction'
 import { stripeExtension } from '@/extensions/general/stripe'
 import { whatsappInboxExtension } from '@/extensions/general/whatsapp-inbox'
+import { woocommerceExtension } from '@/extensions/general/woocommerce'
 
 export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   enableBankingExtension,
@@ -24,4 +25,5 @@ export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   documentExtractionExtension,
   stripeExtension,
   whatsappInboxExtension,
+  woocommerceExtension,
 ]

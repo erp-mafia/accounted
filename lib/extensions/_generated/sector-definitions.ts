@@ -147,5 +147,16 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           ],
           "hasOwnData": true
     },
+    {
+          "slug": "woocommerce",
+          "name": "WooCommerce",
+          "sector": "general",
+          "category": "import",
+          "icon": "ShoppingCart",
+          "dataPattern": "manual",
+          "description": "Hämta betalda ordrar och återbetalningar från din WooCommerce-butik till transaktionsinkorgen",
+          "longDescription": "Anslut din WooCommerce-butik så hämtas betalda ordrar och återbetalningar automatiskt varje natt till transaktionsinkorgen, som ett bankflöde för butiken. Inget bokförs automatiskt: du bokför raderna själv precis som vanliga banktransaktioner.",
+          "hasOwnData": true
+    },
   ],
 }
