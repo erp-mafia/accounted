@@ -4,7 +4,7 @@
  * The base seed posts two verifikat, which leaves Resultatrapport, Balansrapport,
  * Nyckeltal and momsrapporten looking like a broken page rather than a demo. This
  * builder produces the missing year-to-date: January through the month BEFORE
- * today's month, at 4 to 6 verifikat per month, for the one-person Swedish
+ * today's month, at 4 to 7 verifikat per month, for the one-person Swedish
  * IT/design consultancy (enskild firma) the rest of the seed portrays.
  *
  * Pure by construction. `today` is an input, there is no Math.random and no

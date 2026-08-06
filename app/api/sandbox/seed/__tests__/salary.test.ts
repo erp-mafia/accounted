@@ -432,7 +432,7 @@ describe('sandbox salary run employee seed data', () => {
     }
   })
 
-  it('carries a calculation breakdown that never claims a table lookup', () => {
+  it('carries a calculation breakdown whose skatteavdrag step names the real table', () => {
     for (const row of runEmployeeRows()) {
       const breakdown = row.calculation_breakdown as {
         steps: Array<{ label: string; formula: string; output: number | null }>

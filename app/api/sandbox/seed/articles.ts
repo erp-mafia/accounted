@@ -99,7 +99,7 @@ export function buildSandboxArticles({ userId, companyId }: SandboxArticlesInput
       cost_price: 4860,
       ean: null,
       housework_type: null,
-      notes: 'Inköpspris plus 10 % påslag. Faktureras när licensen förnyas.',
+      notes: 'Inköpspris plus påslag. Faktureras när licensen förnyas.',
     },
     {
       ...base,

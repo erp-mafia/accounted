@@ -455,11 +455,16 @@ export async function POST(request: Request) {
       if (missingAccountsError) throw missingAccountsError
     }
 
-    const { data: accounts } = await supabase
+    // Errors are fatal here, not tolerable: a failed read would leave
+    // accountMap empty and silently write account_id: null onto every
+    // ledger-history and salary voucher line, producing a sandbox whose
+    // vouchers reference no account at all.
+    const { data: accounts, error: accountsError } = await supabase
       .from('chart_of_accounts')
       .select('id, account_number')
       .eq('company_id', companyId)
       .in('account_number', neededAccounts)
+    if (accountsError) throw accountsError
 
     const accountMap = Object.fromEntries(
       (accounts ?? []).map(a => [a.account_number, a.id])
@@ -1143,11 +1148,21 @@ export async function POST(request: Request) {
 
     const runEntryLinks: Record<string, string> = {}
     for (const voucher of salaryVouchers) {
-      const { data: salaryVoucherNumber } = await supabase.rpc('next_voucher_number', {
-        p_company_id: companyId,
-        p_fiscal_period_id: fiscalPeriod.id,
-        p_series: voucher.entry.voucher_series,
-      })
+      const { data: salaryVoucherNumber, error: salaryVoucherError } = await supabase.rpc(
+        'next_voucher_number',
+        {
+          p_company_id: companyId,
+          p_fiscal_period_id: fiscalPeriod.id,
+          p_series: voucher.entry.voucher_series,
+        },
+      )
+      // A posted verifikat with no voucher number is a hole in the
+      // verifikationsserie (BFNAR 2013:2), so a failed counter read has to stop
+      // the seed rather than insert one.
+      if (salaryVoucherError) throw salaryVoucherError
+      if (salaryVoucherNumber == null) {
+        throw new Error('Sandbox seed: next_voucher_number returned no number for a salary voucher')
+      }
 
       const { data: insertedSalaryEntry, error: salaryEntryError } = await supabase
         .from('journal_entries')

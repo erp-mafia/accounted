@@ -192,16 +192,20 @@ export function BankSelector({
         />
       </div>
 
-      {/* Loading state */}
+      {/* Loading state. The spinner is decorative, so the state needs a text
+          equivalent: without it a screen-reader user gets silence between
+          submitting and the list appearing. */}
       {isLoading && (
-        <div className="flex items-center justify-center py-12">
+        <div role="status" className="flex items-center justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden="true" />
+          <span className="sr-only">Laddar banker...</span>
         </div>
       )}
 
-      {/* Error state: one quiet line, not a tinted panel */}
+      {/* Error state: one quiet line, not a tinted panel. role="alert" so the
+          failure is announced rather than only redrawn. */}
       {error && (
-        <p className="px-1 text-[12.5px] leading-relaxed text-destructive">{error}</p>
+        <p role="alert" className="px-1 text-[12.5px] leading-relaxed text-destructive">{error}</p>
       )}
 
       {/* Bank list */}
@@ -257,7 +261,7 @@ export function BankSelector({
           than a tinted bordered panel, and it names the bank so the state is
           still readable when the chosen row has scrolled out of view. */}
       {isConnecting && connectingBankName && (
-        <p className="flex items-center gap-2 px-1 text-[12.5px] leading-relaxed text-muted-foreground">
+        <p role="status" className="flex items-center gap-2 px-1 text-[12.5px] leading-relaxed text-muted-foreground">
           <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
           Ansluter till {connectingBankName}...
         </p>
