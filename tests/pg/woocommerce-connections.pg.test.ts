@@ -3,7 +3,7 @@ import { getPool, withUserContext } from './setup'
 import { seedCompany } from './fixtures'
 
 /**
- * Covers migration 20260806090000_woocommerce_connections:
+ * Covers migration 20260806170000_woocommerce_connections:
  *   1. RLS: members insert and read their own company's connection,
  *      non-members see nothing and cannot insert for a foreign company.
  *   2. One ACTIVE connection per company (partial unique index).

@@ -22,7 +22,7 @@ select
   g.expires_at,
   jsonb_build_object(
     'backfilled_from', 'bank_sync',
-    'backfill_migration', '20260806090100'
+    'backfill_migration', '20260806170100'
   )
 from public.capability_grants g
 where g.capability_key = 'bank_sync'
