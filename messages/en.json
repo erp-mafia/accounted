@@ -443,7 +443,7 @@
     "sync_done_empty": "The store returned no orders for the period. Check that the right store is connected if you expected orders.",
     "sync_done_feed_errors": "{fetched} order(s) fetched: {imported} new rows in the inbox. {errors} row(s) could not be imported: sync again.",
     "sync_partial_title": "Sync paused",
-    "sync_partial": "{fetched} order(s) fetched so far: {imported} new rows in the inbox. Not all orders were fetched in time: sync again to continue where it stopped.",
+    "sync_partial": "{fetched} order(s) fetched so far: {imported} new rows in the inbox.{errors, plural, =0 {} other { # row(s) could not be imported.}} Not all orders were fetched in time: sync again to continue where it stopped.",
     "sync_failed_title": "Sync failed",
     "sync_revoked": "The store rejected the API key, so no orders could be fetched. Connect the store again.",
     "transaction_sync_title": "Orders from WooCommerce",

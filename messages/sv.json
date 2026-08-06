@@ -443,7 +443,7 @@
     "sync_done_empty": "Butiken returnerade inga ordrar för perioden. Kontrollera att rätt butik är ansluten om du väntade dig ordrar.",
     "sync_done_feed_errors": "{fetched} order/ordrar hämtade: {imported} nya rader i inkorgen. {errors} rad(er) kunde inte importeras: synka igen.",
     "sync_partial_title": "Synkroniseringen pausades",
-    "sync_partial": "{fetched} order/ordrar hämtade hittills: {imported} nya rader i inkorgen. Alla ordrar hann inte hämtas: synka igen för att fortsätta där det stannade.",
+    "sync_partial": "{fetched} order/ordrar hämtade hittills: {imported} nya rader i inkorgen.{errors, plural, =0 {} other { # rad(er) kunde inte importeras.}} Alla ordrar hann inte hämtas: synka igen för att fortsätta där det stannade.",
     "sync_failed_title": "Synkroniseringen misslyckades",
     "sync_revoked": "Butiken avvisade API-nyckeln, så inga ordrar kunde hämtas. Anslut butiken igen.",
     "transaction_sync_title": "Ordrar från WooCommerce",

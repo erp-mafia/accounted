@@ -254,7 +254,14 @@ export async function listOrderRefunds(
     for (const refund of fresh) seen.add(refund.id)
     refunds.push(...fresh)
   }
-  return refunds
+  // Cap exhausted with data still flowing: returning the partial list would
+  // let the sync advance its cursor past refunds it never saw. Throwing
+  // routes into the caller's refund-failure path instead (order held, cursor
+  // capped, retried next run).
+  throw new WooCommerceApiError(
+    `Refund pagination cap exceeded for order ${orderId}`,
+    0,
+  )
 }
 
 /**

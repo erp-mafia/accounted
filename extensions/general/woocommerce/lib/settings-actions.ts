@@ -129,8 +129,10 @@ export type WooSyncSummary =
    * The time budget ran out with orders still unfetched. Reported before the
    * count-based outcomes so a truncated run never reads as a complete one;
    * the cursor persisted, so pressing sync again continues where it stopped.
+   * Carries the error count too: a truncated run can also have failed rows,
+   * and dropping that number would repeat the silent-partial mistake.
    */
-  | { reason: 'partial'; values: SyncCounts }
+  | { reason: 'partial'; values: SyncCounts & { errors: number } }
   /** Rows landed, and some rows did not. Both halves get said. */
   | { reason: 'errors'; values: SyncCounts & { errors: number } }
   /** Rows landed. */
@@ -150,7 +152,7 @@ export function syncSummary(payload: WooSyncPayload | null): WooSyncSummary {
   const errors = typeof summary.errors === 'number' ? summary.errors : 0
 
   if (summary.deadlineReached === true) {
-    return { reason: 'partial', values: { fetched, imported } }
+    return { reason: 'partial', values: { fetched, imported, errors } }
   }
   if (fetched === 0) return { reason: 'empty' }
   if (errors > 0) return { reason: 'errors', values: { fetched, imported, errors } }
