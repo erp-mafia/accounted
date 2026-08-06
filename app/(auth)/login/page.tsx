@@ -23,6 +23,8 @@ import {
 } from '@/lib/auth/consume-invite-cookie'
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
 import { AuthFormError } from '@/components/auth/AuthFormError'
+import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
+import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
 import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
 import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import {
@@ -61,7 +63,7 @@ function LoginPageContent() {
   const [bankIdNoAccount, setBankIdNoAccount] = useState<{ givenName?: string; surname?: string } | null>(null)
   // Auth failures render inline next to the form (see AuthFormError), never
   // as a toast: `kind` drives field highlighting and the recovery action.
-  const [formError, setFormError] = useState<{ kind: AuthErrorKind | 'bankid'; message: string } | null>(null)
+  const [formError, setFormError] = useState<{ kind: AuthErrorKind | 'bankid' | 'oauth'; message: string } | null>(null)
   const passwordInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const router = useRouter()
@@ -79,6 +81,7 @@ function LoginPageContent() {
   const nextPath = safeReturnTo(searchParams.get('next'), '/')
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
+  const googleAuthEnabled = isGoogleAuthEnabled()
   const tAuth = useTranslations('auth')
   const tCommon = useTranslations('common')
   const tInvite = useTranslations('invite')
@@ -470,7 +473,16 @@ function LoginPageContent() {
           )}
           {callbackError === 'auth_error' && (
             <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
-              {callbackFlow === 'recovery' ? (
+              {callbackFlow === 'oauth' ? (
+                <>
+                  <p className="text-sm font-medium text-destructive">
+                    {tAuth('callback_error_title_oauth')}
+                  </p>
+                  <p className="mt-1 text-sm text-destructive/90">
+                    {tAuth('callback_error_body_oauth')}
+                  </p>
+                </>
+              ) : callbackFlow === 'recovery' ? (
                 <>
                   <p className="text-sm font-medium text-destructive">
                     {tAuth('callback_error_title')}
@@ -499,9 +511,9 @@ function LoginPageContent() {
               )}
             </div>
           )}
-          {bankIdEnabled && (
+          {(bankIdEnabled || googleAuthEnabled) && (
             <>
-              {bankIdNoAccount ? (
+              {bankIdEnabled && (bankIdNoAccount ? (
                 <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30">
                   <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
                     {tAuth('bankid_no_account_greeting', { name: bankIdNoAccount.givenName ?? '' })}
@@ -521,6 +533,13 @@ function LoginPageContent() {
               ) : (
                 <div className="mb-5">
                   <BankIdAuth mode="login" onComplete={handleBankIdComplete} />
+                </div>
+              ))}
+              {googleAuthEnabled && !(isBankIdReauth && !showPasswordLogin) && (
+                <div className="mb-5">
+                  <GoogleAuthButton
+                    onError={(message) => setFormError({ kind: 'oauth', message })}
+                  />
                 </div>
               )}
               {isBankIdReauth && !showPasswordLogin ? (

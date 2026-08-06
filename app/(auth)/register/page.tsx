@@ -23,6 +23,8 @@ import {
 } from '@/lib/auth/consume-invite-cookie'
 import { AuthPageSkeleton } from '@/components/auth/AuthPageSkeleton'
 import { AuthFormError } from '@/components/auth/AuthFormError'
+import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
+import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
 import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
 import { cn } from '@/lib/utils'
 
@@ -67,7 +69,7 @@ function RegisterPageContent() {
   // Signup failures render inline next to the form (see AuthFormError), never
   // as a toast. Field-level problems attach to their field; everything else
   // goes to the form-level alert above the form.
-  const [formError, setFormError] = useState<{ kind: AuthErrorKind | 'bankid'; message: string } | null>(null)
+  const [formError, setFormError] = useState<{ kind: AuthErrorKind | 'bankid' | 'oauth'; message: string } | null>(null)
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [confirmError, setConfirmError] = useState<string | null>(null)
   const passwordInputRef = useRef<HTMLInputElement>(null)
@@ -76,6 +78,7 @@ function RegisterPageContent() {
   const router = useRouter()
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
+  const googleAuthEnabled = isGoogleAuthEnabled()
   const t = useTranslations('register')
   const tInvite = useTranslations('invite')
   const errorLocale = useLocale() as ErrorLocale
@@ -459,11 +462,20 @@ function RegisterPageContent() {
         </div>
 
         <div className="rounded-lg border bg-card p-6">
-          {bankIdEnabled && !bankIdUser && (
+          {(bankIdEnabled || googleAuthEnabled) && !bankIdUser && (
             <>
-              <div className="mb-5">
-                <BankIdAuth mode="signup" onComplete={handleBankIdComplete} />
-              </div>
+              {bankIdEnabled && (
+                <div className="mb-5">
+                  <BankIdAuth mode="signup" onComplete={handleBankIdComplete} />
+                </div>
+              )}
+              {googleAuthEnabled && (
+                <div className="mb-5">
+                  <GoogleAuthButton
+                    onError={(message) => setFormError({ kind: 'oauth', message })}
+                  />
+                </div>
+              )}
               <div className="relative mb-5">
                 <div className="absolute inset-0 flex items-center">
                   <div className="w-full border-t" />
