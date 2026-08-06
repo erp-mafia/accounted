@@ -13,6 +13,7 @@ import { stripeExtension } from '@/extensions/general/stripe'
 import { whatsappInboxExtension } from '@/extensions/general/whatsapp-inbox'
 import { woocommerceExtension } from '@/extensions/general/woocommerce'
 import { shopifyExtension } from '@/extensions/general/shopify'
+import { mailExtension } from '@/extensions/general/mail'
 
 export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   enableBankingExtension,
@@ -28,4 +29,5 @@ export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   whatsappInboxExtension,
   woocommerceExtension,
   shopifyExtension,
+  mailExtension,
 ]

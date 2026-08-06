@@ -15,6 +15,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { getMailSearchService } from '@/lib/mail-search/service'
+import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
 import {
   MAX_PROPOSALS_PER_RUN,
   pairKey,
@@ -40,6 +42,15 @@ export const LOOKBACK_MONTHS = 12
 /** Actor label shown wherever a staged operation names its origin. */
 export const HUNT_ACTOR_LABEL = 'Kvittojakten'
 
+/**
+ * Purchases to search the mailboxes for in one run.
+ *
+ * Each search is a provider round-trip per connected mailbox, so this bounds
+ * both latency and API quota. Largest amounts go first, and the rest wait for
+ * tomorrow night rather than being dropped.
+ */
+export const MAX_MAIL_SEARCHES_PER_RUN = 15
+
 const OPERATION_TYPE = 'attach_document_to_transaction'
 
 /** Statuses that mean "this purchase already has a live or settled proposal". */
@@ -53,10 +64,38 @@ export interface HuntCompanyResult {
   skippedNoOwner?: boolean
   /** Populated on a dry run so the pairings can be inspected before trusting them. */
   proposals?: HuntProposal[]
+  /** What the mailbox search found, when a mail connection exists. */
+  mail?: MailHuntSummary
+}
+
+export interface MailHuntSummary {
+  /** Purchases we searched the mailboxes for. */
+  searched: number
+  /** Purchases where at least one message looked like it could be the receipt. */
+  withCandidates: number
+  candidates: Array<{
+    transactionId: string
+    merchant: string | null
+    amount: number
+    mailbox: string
+    subject: string | null
+    from: string | null
+    receivedAt: string | null
+    attachmentCount: number
+    bodyIsReceipt: boolean
+  }>
 }
 
 export interface HuntOptions {
   limit?: number
+  /**
+   * Also search connected mailboxes for the purchases nothing in Underlag
+   * could explain. Off by default so the nightly sweep's cost stays opt-in
+   * while the connector is piloted.
+   */
+  searchMail?: boolean
+  /** How many unexplained purchases to search mail for in one run. */
+  mailSearchLimit?: number
   /**
    * Score and decide, but write nothing.
    *
@@ -250,7 +289,12 @@ export async function huntCompany(
   runId: string,
   options: HuntOptions = {},
 ): Promise<HuntCompanyResult> {
-  const { limit = MAX_PROPOSALS_PER_RUN, dryRun = false } = options
+  const {
+    limit = MAX_PROPOSALS_PER_RUN,
+    dryRun = false,
+    searchMail = false,
+    mailSearchLimit = MAX_MAIL_SEARCHES_PER_RUN,
+  } = options
   const [transactions, { pool, fileNames }, suppression] = await Promise.all([
     fetchCandidateTransactions(supabase, companyId),
     fetchPool(supabase, companyId),
@@ -266,8 +310,21 @@ export async function huntCompany(
   if (transactions.length === 0 || pool.length === 0) return base
 
   const proposals = selectProposals(transactions, pool, suppression, limit)
-  if (proposals.length === 0) return base
-  if (dryRun) return { ...base, proposed: proposals.length, proposals }
+
+  // Mail is searched only for what Underlag could NOT explain: a purchase that
+  // already has a receipt in hand needs no mailbox read, and not reading is the
+  // privacy promise the consent screen makes.
+  const explained = new Set(proposals.map((p) => p.transaction_id))
+  const mail = searchMail
+    ? await searchMailForUnexplained(
+        companyId,
+        transactions.filter((t) => !explained.has(t.id) && !suppression.claimedTransactionIds.has(t.id)),
+        mailSearchLimit,
+      )
+    : undefined
+
+  if (proposals.length === 0) return { ...base, mail }
+  if (dryRun) return { ...base, proposed: proposals.length, proposals, mail }
 
   const userId = await resolveOwnerUserId(supabase, companyId)
   if (!userId) return { ...base, skippedNoOwner: true }
@@ -304,7 +361,56 @@ export async function huntCompany(
   const { error } = await supabase.from('pending_operations').insert(rows)
   if (error) throw new Error(`Failed to stage receipt-hunt proposals: ${error.message}`)
 
-  return { ...base, proposed: rows.length }
+  return { ...base, proposed: rows.length, mail }
+}
+
+/**
+ * Ask the connected mailboxes about purchases nothing in Underlag explained.
+ *
+ * Read-only and bounded: the largest amounts first, capped per run, and the
+ * whole thing degrades to an empty summary when no mail extension is loaded or
+ * no mailbox is connected. Finding a candidate is NOT the same as having the
+ * receipt: ingesting it is the next step and stays behind human approval.
+ */
+async function searchMailForUnexplained(
+  companyId: string,
+  unexplained: readonly HuntTransaction[],
+  limit: number,
+): Promise<MailHuntSummary> {
+  const service = getMailSearchService()
+  const summary: MailHuntSummary = { searched: 0, withCandidates: 0, candidates: [] }
+  if (!service.isConfigured() || unexplained.length === 0) return summary
+
+  const byLargest = [...unexplained]
+    .sort((a, b) => Math.abs(b.amount ?? 0) - Math.abs(a.amount ?? 0))
+    .slice(0, limit)
+
+  for (const tx of byLargest) {
+    if (tx.amount == null || !tx.date) continue
+    summary.searched++
+    const found = await service.search(companyId, {
+      merchant: normalizeForMatch(tx.merchant_name || tx.description || ''),
+      amount: Math.abs(tx.amount),
+      currency: tx.currency ?? 'SEK',
+      date: tx.date,
+    })
+    if (found.length === 0) continue
+    summary.withCandidates++
+    for (const c of found) {
+      summary.candidates.push({
+        transactionId: tx.id,
+        merchant: tx.merchant_name || tx.description,
+        amount: tx.amount,
+        mailbox: c.mailbox,
+        subject: c.subject,
+        from: c.from,
+        receivedAt: c.receivedAt,
+        attachmentCount: c.attachmentIds.length,
+        bodyIsReceipt: c.bodyIsReceipt,
+      })
+    }
+  }
+  return summary
 }
 
 /**

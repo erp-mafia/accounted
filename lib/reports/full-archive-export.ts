@@ -972,6 +972,8 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
  */
 export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   agent_conversations: 'AI assistant state, not räkenskapsinformation',
+  mail_connections:
+    'OAuth mailbox grants for receipt hunting: credentials and health, not räkenskapsinformation. The receipts they find are archived as documents.',
   agent_memory: 'AI assistant state, not räkenskapsinformation',
   agent_profiles: 'AI assistant state, not räkenskapsinformation',
   api_keys: 'secrets',
