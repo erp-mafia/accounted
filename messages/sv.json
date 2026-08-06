@@ -3074,6 +3074,8 @@
     "income_services": "Tjänster",
     "income_products": "Produkter",
     "income_other": "Övrigt",
+    "vat_auto": "Enligt kategori",
+    "vat_auto_desc": "Momsen föreslås utifrån vald kategori",
     "vat_standard_25": "Moms 25%",
     "vat_reduced_12": "Moms 12%",
     "vat_reduced_12_desc": "Livsmedel, hotell, camping",

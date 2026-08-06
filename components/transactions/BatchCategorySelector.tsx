@@ -30,11 +30,15 @@ export default function BatchCategorySelector({
 }: BatchCategorySelectorProps) {
   const t = useTranslations('tx_batch_selector')
   const tCat = useTranslations('tx_categories')
-  const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'none'>('standard_25')
+  // 'auto' sends no explicit treatment: the server derives the correct default
+  // per category (exempt for bank/card fees, 12% representation, else 25%).
+  // A hardcoded 'standard_25' initial value used to override that derivation
+  // and claim 25% moms on VAT-exempt bank fees.
+  const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'none' | 'auto'>('auto')
   const isProcessing = progress !== null
 
   const handleSelectCategory = (category: TransactionCategory) => {
-    const resolvedVat = vatTreatment === 'none' ? undefined : vatTreatment
+    const resolvedVat = vatTreatment === 'none' || vatTreatment === 'auto' ? undefined : vatTreatment
     onSelectCategory(category, resolvedVat)
   }
 
@@ -76,6 +80,7 @@ export default function BatchCategorySelector({
               <VatTreatmentSelect
                 value={vatTreatment}
                 onValueChange={setVatTreatment}
+                allowAuto
               />
             </div>
             <div>
