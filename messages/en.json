@@ -323,9 +323,24 @@
     "continue": "Continue",
     "sign_in_again": "Sign in again"
   },
+  "mail": {
+    "connected": "Connected mailboxes",
+    "help": "Each mailbox is connected by its own owner. We can never connect a colleague's mailbox for them: send an invitation instead.",
+    "none_label": "None connected",
+    "none": "No mailboxes connected yet. Without one, the receipt hunt only looks at what is already in Underlag.",
+    "connect": "Connect mailbox",
+    "disconnect": "Disconnect",
+    "disconnect_title": "Disconnect this mailbox?",
+    "disconnect_body": "Access to {address} is revoked immediately and no further receipts are fetched from it. Receipts you have already approved remain as underlag: they belong to the bookkeeping now.",
+    "needs_reconsent": "Needs reconnecting",
+    "last_searched": "Last searched {date}",
+    "not_configured": "Gmail is not configured in this installation.",
+    "promise": "Read-only access: we can never send, change or delete anything in your mail. Your inbox is never copied. Only messages that might be the receipt for a specific purchase are fetched, in the moment, and then released. What becomes underlag is archived only once you approve it."
+  },
   "settings_intro": {
     "account": "Your personal details and security. Applies to you, not the company.",
     "billing": "Each company has its own subscription.",
+    "mail": "Connect mailboxes so the receipt hunt can find missing receipts.",
     "company": "Shown on invoices, in email and in files to the authorities.",
     "bookkeeping": "Framework, method and series. Most of this is set once.",
     "tax": "Drives the VAT return, the employer declaration and which deadlines are tracked.",
@@ -340,6 +355,7 @@
   "settings_nav": {
     "aria_label": "Settings",
     "company": "Company",
+    "mail": "Mailboxes",
     "invoicing": "Invoicing",
     "bookkeeping": "Bookkeeping",
     "tax": "Tax",

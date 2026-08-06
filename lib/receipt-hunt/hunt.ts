@@ -16,6 +16,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { getMailSearchService } from '@/lib/mail-search/service'
+import { ingestMailCandidate } from './ingest'
 import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
 import {
   MAX_PROPOSALS_PER_RUN,
@@ -73,6 +74,8 @@ export interface MailHuntSummary {
   searched: number
   /** Purchases where at least one message looked like it could be the receipt. */
   withCandidates: number
+  /** Receipts actually fetched and filed as underlag, ready to be paired. */
+  ingested: number
   candidates: Array<{
     transactionId: string
     merchant: string | null
@@ -311,23 +314,31 @@ export async function huntCompany(
 
   const proposals = selectProposals(transactions, pool, suppression, limit)
 
+  // Resolved before the mail leg, because ingesting a receipt needs an owner to
+  // attribute the document to.
+  const userId = await resolveOwnerUserId(supabase, companyId)
+
   // Mail is searched only for what Underlag could NOT explain: a purchase that
   // already has a receipt in hand needs no mailbox read, and not reading is the
   // privacy promise the consent screen makes.
   const explained = new Set(proposals.map((p) => p.transaction_id))
-  const mail = searchMail
+  const mailLeg = searchMail
     ? await searchMailForUnexplained(
+        supabase,
         companyId,
+        userId,
         transactions.filter((t) => !explained.has(t.id) && !suppression.claimedTransactionIds.has(t.id)),
         mailSearchLimit,
+        dryRun,
       )
-    : undefined
+    : { summary: undefined, proposals: [] as MailProposal[] }
+  const mail = mailLeg.summary
 
-  if (proposals.length === 0) return { ...base, mail }
+  const totalProposals = proposals.length + mailLeg.proposals.length
+  if (totalProposals === 0) return { ...base, mail }
   if (dryRun) return { ...base, proposed: proposals.length, proposals, mail }
 
-  const userId = await resolveOwnerUserId(supabase, companyId)
-  if (!userId) return { ...base, skippedNoOwner: true }
+  if (!userId) return { ...base, skippedNoOwner: true, mail }
 
   const byId = new Map(transactions.map((t) => [t.id, t]))
   const riskLevel = getRiskLevel(OPERATION_TYPE)
@@ -358,10 +369,68 @@ export async function huntCompany(
     }
   })
 
-  const { error } = await supabase.from('pending_operations').insert(rows)
+  // Receipts fetched out of a mailbox this run. Same operation type and the
+  // same human gate; what differs is the evidence, which names the mailbox and
+  // the message instead of a similarity score.
+  const mailRows = mailLeg.proposals.map((proposal) => {
+    const tx = byId.get(proposal.transactionId) as HuntTransaction
+    return {
+      company_id: companyId,
+      user_id: userId,
+      operation_type: OPERATION_TYPE,
+      title: `Koppla underlag: ${proposal.fileName} → ${tx.merchant_name || tx.description || 'köp'}`,
+      params: {
+        transaction_id: proposal.transactionId,
+        document_id: proposal.documentId,
+      },
+      preview_data: {
+        transaction_description: tx.description,
+        transaction_amount: tx.amount,
+        transaction_currency: tx.currency ?? 'SEK',
+        transaction_date: tx.date,
+        document_file_name: proposal.fileName,
+        document_vendor_name: proposal.from,
+        document_amount: null,
+        document_currency: null,
+        document_invoice_date: proposal.receivedAt,
+        will_overwrite_existing: false,
+        existing_document_file_name: null,
+        existing_document_is_rakenskapsinformation: false,
+        // What the user needs to judge it: where it came from and why we looked.
+        mail_mailbox: proposal.mailbox,
+        mail_subject: proposal.subject,
+        mail_from: proposal.from,
+      },
+      actor_type: 'cron',
+      actor_label: HUNT_ACTOR_LABEL,
+      risk_level: riskLevel,
+      agent_metadata: {
+        source: 'receipt_hunt_mail',
+        run_id: runId,
+        inbox_item_id: proposal.inboxItemId,
+        mailbox: proposal.mailbox,
+        mail_subject: proposal.subject,
+      },
+    }
+  })
+
+  const allRows = [...rows, ...mailRows]
+  const { error } = await supabase.from('pending_operations').insert(allRows)
   if (error) throw new Error(`Failed to stage receipt-hunt proposals: ${error.message}`)
 
-  return { ...base, proposed: rows.length, mail }
+  return { ...base, proposed: allRows.length, mail }
+}
+
+/** A receipt pulled out of a mailbox, already filed and awaiting its pairing. */
+interface MailProposal {
+  transactionId: string
+  documentId: string
+  inboxItemId: string
+  fileName: string
+  mailbox: string
+  subject: string | null
+  from: string | null
+  receivedAt: string | null
 }
 
 /**
@@ -373,13 +442,17 @@ export async function huntCompany(
  * receipt: ingesting it is the next step and stays behind human approval.
  */
 async function searchMailForUnexplained(
+  supabase: SupabaseClient,
   companyId: string,
+  userId: string | null,
   unexplained: readonly HuntTransaction[],
   limit: number,
-): Promise<MailHuntSummary> {
+  dryRun: boolean,
+): Promise<{ summary: MailHuntSummary; proposals: MailProposal[] }> {
   const service = getMailSearchService()
-  const summary: MailHuntSummary = { searched: 0, withCandidates: 0, candidates: [] }
-  if (!service.isConfigured() || unexplained.length === 0) return summary
+  const summary: MailHuntSummary = { searched: 0, withCandidates: 0, ingested: 0, candidates: [] }
+  const proposals: MailProposal[] = []
+  if (!service.isConfigured() || unexplained.length === 0) return { summary, proposals }
 
   const byLargest = [...unexplained]
     .sort((a, b) => Math.abs(b.amount ?? 0) - Math.abs(a.amount ?? 0))
@@ -396,6 +469,7 @@ async function searchMailForUnexplained(
     })
     if (found.length === 0) continue
     summary.withCandidates++
+
     for (const c of found) {
       summary.candidates.push({
         transactionId: tx.id,
@@ -409,8 +483,36 @@ async function searchMailForUnexplained(
         bodyIsReceipt: c.bodyIsReceipt,
       })
     }
+
+    // A dry run reports what it found and fetches nothing: the point of a
+    // provkörning is that no mailbox content is copied anywhere.
+    if (dryRun || !userId) continue
+
+    // Only the strongest hit is stored. Downloading every OR-query hit would
+    // fill Underlag with mail that merely mentioned an amount.
+    const best = found.find((c) => c.attachmentIds.length > 0)
+    if (!best) continue
+
+    const ingested = await ingestMailCandidate(supabase, companyId, userId, best)
+    if (!ingested) continue
+    summary.ingested++
+
+    // No re-matching: the receipt was fetched *while searching for this
+    // purchase*, so the pairing is known by construction. The OR query is
+    // broad, which is exactly why this still goes to a human with the search
+    // that produced it written on the proposal rather than being linked.
+    proposals.push({
+      transactionId: tx.id,
+      documentId: ingested.documentId,
+      inboxItemId: ingested.inboxItemId,
+      fileName: ingested.fileName,
+      mailbox: ingested.mailbox,
+      subject: best.subject,
+      from: best.from,
+      receivedAt: best.receivedAt,
+    })
   }
-  return summary
+  return { summary, proposals }
 }
 
 /**

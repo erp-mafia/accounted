@@ -1,0 +1,149 @@
+/**
+ * Turning a mailbox hit into an underlag the user can approve.
+ *
+ * Lives in core rather than in the mail extension because it writes documents
+ * and inbox items, and an extension may never import another extension. The
+ * mail extension only ever hands over bytes.
+ *
+ * The hunt does NOT book anything and does not link anything by itself: it
+ * stores the receipt, records where it came from, and stages the pairing. The
+ * document becomes räkenskapsinformation only when a human approves.
+ */
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { uploadDocument } from '@/lib/core/documents/document-service'
+import { getMailSearchService, type MailCandidate } from '@/lib/mail-search/service'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('receipt-hunt-ingest')
+
+/** Largest attachment worth pulling. Receipts are small; anything larger is a report. */
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+
+export interface IngestedReceipt {
+  documentId: string
+  inboxItemId: string
+  fileName: string
+  mailbox: string
+}
+
+/**
+ * Provenance written onto the inbox item.
+ *
+ * Deliberately in `channel_context` and not in `extracted_data`: retrying
+ * extraction overwrites extracted_data wholesale, and the record of which
+ * mailbox a receipt came from must survive that. Same rule the WhatsApp intake
+ * follows.
+ */
+function buildChannelContext(candidate: MailCandidate) {
+  return {
+    channel: 'mail_hunt',
+    mail_message_id: candidate.messageId,
+    mail_mailbox: candidate.mailbox,
+    mail_provider: candidate.provider,
+    mail_subject: candidate.subject,
+    mail_from: candidate.from,
+    mail_received_at: candidate.receivedAt,
+    fetched_at: new Date().toISOString(),
+  }
+}
+
+/**
+ * Fetch the first usable attachment on a candidate and file it as an inbox item.
+ *
+ * Returns null when there is nothing to store (body-only receipt, oversized
+ * attachment, or a duplicate we have already ingested). Never throws for one
+ * bad message: a single unreadable attachment must not abort a night's hunt.
+ */
+export async function ingestMailCandidate(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  candidate: MailCandidate,
+): Promise<IngestedReceipt | null> {
+  if (candidate.attachmentIds.length === 0) return null
+
+  // Cheap pre-check so an already-known message costs no provider call. The
+  // partial unique index is still the real guard against a race.
+  const { data: existing } = await supabase
+    .from('invoice_inbox_items')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('source', 'mail_hunt')
+    .eq('channel_context->>mail_message_id', candidate.messageId)
+    .maybeSingle()
+  if (existing) return null
+
+  const service = getMailSearchService()
+
+  for (const attachmentId of candidate.attachmentIds) {
+    let fetched
+    try {
+      fetched = await service.fetchAttachment(candidate.connectionId, candidate.messageId, attachmentId)
+    } catch (error) {
+      log.warn('could not fetch attachment', {
+        messageId: candidate.messageId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      continue
+    }
+    if (!fetched) continue
+    if (fetched.bytes.byteLength > MAX_ATTACHMENT_BYTES) continue
+
+    try {
+      const document = await uploadDocument(
+        supabase,
+        userId,
+        companyId,
+        {
+          name: fetched.filename,
+          buffer: fetched.bytes.buffer.slice(
+            fetched.bytes.byteOffset,
+            fetched.bytes.byteOffset + fetched.bytes.byteLength,
+          ) as ArrayBuffer,
+          type: fetched.mimeType,
+        },
+        { upload_source: 'mail_hunt' },
+      )
+
+      const { data: item, error } = await supabase
+        .from('invoice_inbox_items')
+        .insert({
+          company_id: companyId,
+          user_id: userId,
+          document_id: document.id,
+          source: 'mail_hunt',
+          status: 'received',
+          email_from: candidate.from,
+          email_subject: candidate.subject,
+          email_received_at: candidate.receivedAt,
+          channel_context: buildChannelContext(candidate),
+        })
+        .select('id')
+        .single()
+
+      if (error) {
+        // 23505 is the partial unique index doing its job: another run got
+        // there first, which is a success from the caller's point of view.
+        if (error.code === '23505') return null
+        throw new Error(error.message)
+      }
+
+      return {
+        documentId: document.id,
+        inboxItemId: (item as { id: string }).id,
+        fileName: fetched.filename,
+        mailbox: candidate.mailbox,
+      }
+    } catch (error) {
+      log.warn('could not store hunted receipt', {
+        messageId: candidate.messageId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      // Magic-byte rejection and the like: try the next attachment rather than
+      // failing the whole candidate.
+      continue
+    }
+  }
+
+  return null
+}

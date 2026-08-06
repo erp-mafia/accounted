@@ -323,9 +323,24 @@
     "continue": "Fortsätt",
     "sign_in_again": "Logga in igen"
   },
+  "mail": {
+    "connected": "Kopplade brevlådor",
+    "help": "Varje brevlåda kopplas av sin egen ägare. Vi kan aldrig koppla en kollegas brevlåda åt dem: skicka en inbjudan i stället.",
+    "none_label": "Ingen kopplad",
+    "none": "Inga brevlådor kopplade än. Utan koppling letar Kvittojakten bara bland det som redan finns i Underlag.",
+    "connect": "Koppla brevlåda",
+    "disconnect": "Koppla från",
+    "disconnect_title": "Koppla från brevlådan?",
+    "disconnect_body": "Åtkomsten till {address} stryks direkt och inga fler kvitton hämtas därifrån. Kvitton du redan godkänt ligger kvar som underlag: de tillhör bokföringen nu.",
+    "needs_reconsent": "Behöver återkopplas",
+    "last_searched": "Senast genomsökt {date}",
+    "not_configured": "Gmail är inte konfigurerat i den här installationen.",
+    "promise": "Läsbehörighet: vi kan aldrig skicka, ändra eller radera något i din mejl. Inkorgen kopieras aldrig. Bara mejl som kan vara kvittot till ett visst köp hämtas, i stunden, och släpps igen. Det som blir underlag arkiveras först när du godkänt det."
+  },
   "settings_intro": {
     "account": "Dina personliga uppgifter och din säkerhet. Gäller dig, inte företaget.",
     "billing": "Varje företag har sitt eget abonnemang.",
+    "mail": "Koppla brevlådor så att Kvittojakten kan leta upp kvitton som saknas.",
     "company": "Uppgifterna visas på fakturor, i e-post och i filer till myndigheter.",
     "bookkeeping": "Regelverk, metod och serier. Det mesta sätts en gång.",
     "tax": "Styr momsdeklarationen, arbetsgivardeklarationen och vilka datum som bevakas.",
@@ -340,6 +355,7 @@
   "settings_nav": {
     "aria_label": "Inställningar",
     "company": "Företag",
+    "mail": "Brevlådor",
     "invoicing": "Fakturering",
     "bookkeeping": "Bokföring",
     "tax": "Skatt",
