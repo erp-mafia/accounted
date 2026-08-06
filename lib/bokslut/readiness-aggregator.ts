@@ -4,6 +4,7 @@ import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliatio
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
 import { generateReconciliation as generateAPReconciliation } from '@/lib/reports/supplier-reconciliation'
+import { collectKontantmetodCutoff } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
 import { createLogger } from '@/lib/logger'
 import type { YearEndBlocker, YearEndValidation } from '@/types'
@@ -162,10 +163,43 @@ export async function buildBokslutReadinessReport(
   // AR/AP tie-outs: Phase 1 avstämningar per the bokslut process, open
   // sub-ledger vs konto 1510 / 2440. Accrual companies only: under
   // kontantmetoden open invoices are deliberately not on 1510/2440 until the
-  // year-end conversion (BFL 5 kap 2 § 3 st) exists, so the tie-out is
-  // permanently "unreconciled" there by construction and would only mislead.
+  // cut-off entry below puts them there, so the tie-out is "unreconciled" by
+  // construction for the whole year and would only mislead.
   // Warnings, never blockers: a difference can be legitimate (e.g. partial
   // payments settled at a different FX rate than the invoice-date rate).
+  if (accountingMethod === 'cash') {
+    // Kontantmetoden year-end cut-off (BFL 5 kap 2 §): fordringar och skulder
+    // must be booked at räkenskapsårets utgång even though the year is kept on
+    // a cash basis. Advisory here, not a blocker: promoting it would newly
+    // block every cash company mid-bokslut, and the posting step is the
+    // founder's call to gate on.
+    try {
+      const cutoff = await collectKontantmetodCutoff(
+        supabase,
+        companyId,
+        period.period_start,
+        period.period_end,
+      )
+      const openCount = cutoff.receivables.length + cutoff.payables.length
+      if (openCount > 0) {
+        reminders.push({
+          code: 'kontantmetod_cutoff_required',
+          severity: 'warning',
+          message:
+            `${openCount} obetalda fakturor var utestående vid periodens slut. ` +
+            'Kontantmetoden kräver att fordringar och skulder bokförs vid ' +
+            'räkenskapsårets utgång (BFL 5 kap 2 §). Momsen bokas som vilande ' +
+            'och redovisas först vid betalning.',
+          href: '/reports/kundreskontra',
+        })
+      }
+    } catch (err) {
+      // Advisory: never break the wizard on it, but keep the failure traceable
+      // so a silently missing reminder is not mistaken for "nothing open".
+      log.warn('kontantmetoden cut-off check failed; reminder omitted', err as Error)
+    }
+  }
+
   if (accountingMethod === 'accrual') {
     const [arResult, apResult] = await Promise.allSettled([
       generateARReconciliation(supabase, companyId, fiscalPeriodId),
