@@ -512,6 +512,13 @@ export async function POST(request: Request) {
     // 20260806130000) rejects a posted header whose transaction carries no
     // lines. The draft-to-posted UPDATE below fires check_balance_on_post
     // against the finished verifikat instead.
+    //
+    // committed_at note: this route runs under the requester's authenticated
+    // client, and set_committed_at() (migration 20260806160000) preserves a
+    // preset committed_at only for trusted roles, so any backdated
+    // committed_at supplied here is overwritten with now() at posting. That
+    // is deliberate: an end-user role must never control the audit timestamp,
+    // and sandbox companies are disposable.
     const { data: insertedHistoryEntries, error: historyEntryError } = await supabase
       .from('journal_entries')
       .insert(

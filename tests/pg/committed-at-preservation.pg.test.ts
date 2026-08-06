@@ -1,42 +1,82 @@
 import { describe, it, expect } from 'vitest'
-import { getPool } from './setup'
+import { getPool, withUserContext, runAsServiceRole } from './setup'
 import { seedCompany, insertDraftJournalEntry, insertBalancedLines } from './fixtures'
 
-// set_committed_at() after migration 20260806150000: the draft-to-posted
-// transition stamps committed_at = now() ONLY when the row carries none.
-// Seeding flows post drafts with a backdated committed_at (sandbox seed,
-// seed-demo-account, seed-export-data); that value must survive posting,
-// while the engine path (drafts with NULL committed_at) keeps getting
-// stamped, so a posted entry never ends up without a committed_at.
+// set_committed_at() after migration 20260806160000: on draft-to-posted the
+// preset committed_at survives ONLY for trusted writers (service_role,
+// postgres, supabase_admin). Seeding flows backdate history that way. For
+// end-user roles the stamp stays tamper-proof: RLS lets a member insert a
+// draft with any committed_at and flip it to posted via PostgREST, and the
+// timeliness checks (BFL 5 kap) read committed_at as the genuine transition
+// time, so an authenticated caller must never control it. Drafts with no
+// committed_at are stamped now() for everyone.
 
-async function postEntry(id: string): Promise<{ committed_at: Date | null }> {
-  const pool = getPool()
-  await pool.query(
-    `UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`,
-    [id],
-  )
-  const { rows } = await pool.query(
-    `SELECT committed_at FROM public.journal_entries WHERE id = $1`,
-    [id],
-  )
-  return rows[0] as { committed_at: Date | null }
+const BACKDATED = '2026-03-15T10:00:00Z'
+const BACKDATED_ISO = '2026-03-15T10:00:00.000Z'
+
+async function seedBackdatedDraft(): Promise<{ entryId: string; userId: string }> {
+  const { userId, companyId, fiscalPeriodId } = await seedCompany()
+  const entryId = await insertDraftJournalEntry({
+    userId,
+    companyId,
+    fiscalPeriodId,
+    entryDate: '2026-03-15',
+    committedAt: BACKDATED,
+  })
+  await insertBalancedLines(entryId)
+  return { entryId, userId }
 }
 
-describe('set_committed_at preserves a preset committed_at', () => {
-  it('keeps a backdated committed_at on draft-to-posted', async () => {
-    const { userId, companyId, fiscalPeriodId } = await seedCompany()
-    const backdated = '2026-03-15T10:00:00Z'
-    const entryId = await insertDraftJournalEntry({
-      userId,
-      companyId,
-      fiscalPeriodId,
-      entryDate: '2026-03-15',
-      committedAt: backdated,
-    })
-    await insertBalancedLines(entryId)
+describe('set_committed_at trusted-writer preservation', () => {
+  it('preserves a backdated committed_at when posting as postgres', async () => {
+    const { entryId } = await seedBackdatedDraft()
+    const pool = getPool()
+    await pool.query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [
+      entryId,
+    ])
+    const { rows } = await pool.query<{ committed_at: Date }>(
+      `SELECT committed_at FROM public.journal_entries WHERE id = $1`,
+      [entryId],
+    )
+    expect(rows[0].committed_at.toISOString()).toBe(BACKDATED_ISO)
+  })
 
-    const { committed_at } = await postEntry(entryId)
-    expect(committed_at?.toISOString()).toBe('2026-03-15T10:00:00.000Z')
+  it('preserves a backdated committed_at when posting as service_role', async () => {
+    const { entryId } = await seedBackdatedDraft()
+    const committedAt = await runAsServiceRole(async (client) => {
+      await client.query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [
+        entryId,
+      ])
+      const { rows } = await client.query<{ committed_at: Date }>(
+        `SELECT committed_at FROM public.journal_entries WHERE id = $1`,
+        [entryId],
+      )
+      return rows[0].committed_at
+    })
+    expect(committedAt.toISOString()).toBe(BACKDATED_ISO)
+  })
+
+  it('overwrites a preset committed_at when an authenticated member posts', async () => {
+    const { entryId, userId } = await seedBackdatedDraft()
+    const before = Date.now()
+    const committedAt = await withUserContext(userId, async (client) => {
+      const updated = await client.query(
+        `UPDATE public.journal_entries SET status = 'posted' WHERE id = $1 RETURNING id`,
+        [entryId],
+      )
+      // RLS must actually let the member's UPDATE through; 0 rows would make
+      // the assertion below pass vacuously against the seeded value.
+      expect(updated.rowCount).toBe(1)
+      const { rows } = await client.query<{ committed_at: Date }>(
+        `SELECT committed_at FROM public.journal_entries WHERE id = $1`,
+        [entryId],
+      )
+      return rows[0].committed_at
+    })
+    const after = Date.now()
+    expect(committedAt.toISOString()).not.toBe(BACKDATED_ISO)
+    expect(committedAt.getTime()).toBeGreaterThanOrEqual(before - 60_000)
+    expect(committedAt.getTime()).toBeLessThanOrEqual(after + 60_000)
   })
 
   it('stamps now() when the draft carries no committed_at', async () => {
@@ -49,10 +89,19 @@ describe('set_committed_at preserves a preset committed_at', () => {
     })
     await insertBalancedLines(entryId)
 
+    const pool = getPool()
     const before = Date.now()
-    const { committed_at } = await postEntry(entryId)
-    expect(committed_at).not.toBeNull()
+    await pool.query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [
+      entryId,
+    ])
+    const after = Date.now()
+    const { rows } = await pool.query<{ committed_at: Date | null }>(
+      `SELECT committed_at FROM public.journal_entries WHERE id = $1`,
+      [entryId],
+    )
+    expect(rows[0].committed_at).not.toBeNull()
     // Stamped at posting time, not the (older) entry_date.
-    expect(committed_at!.getTime()).toBeGreaterThanOrEqual(before - 60_000)
+    expect(rows[0].committed_at!.getTime()).toBeGreaterThanOrEqual(before - 60_000)
+    expect(rows[0].committed_at!.getTime()).toBeLessThanOrEqual(after + 60_000)
   })
 })
