@@ -40,6 +40,7 @@ export const TEMPLATE = {
   m6BytPin: 'm6_byt_pin',
   m7Representation: 'm7_representation',
   m8RepConfirmed: 'm8_rep_confirmed',
+  m8RepNeedPurpose: 'm8_rep_need_purpose',
   m8RepPartial: 'm8_rep_partial',
   m8RepDenied: 'm8_rep_denied',
   m9Resend: 'm9_resend',
@@ -77,9 +78,13 @@ const SV = {
       'Två tips: skicka som _dokument_ (gem-ikonen) för bästa skärpa, och en fil per kvitto. Flersidiga kvitton skickas som PDF.'
     const outro =
       'Jag är en AI-assistent. Skriv *hjälp* för mänsklig support, *stopp* för att koppla från.'
+    // Two real ways to route a receipt, and the old copy named only one,
+    // which read as if the per-receipt path did not exist. Own paragraph:
+    // run together with the outro it read as a single sentence.
     const multi =
       companyCount > 1
-        ? `Du är med i ${companyCount} företag i Accounted. Välj standardföretag i panelen så hamnar kvitton rätt. `
+        ? `Du är med i ${companyCount} företag i Accounted. Välj antingen ett standardföretag i panelen, ` +
+          'eller skicka ett kvitto i taget så frågar jag vilket företag det gäller direkt efter varje kvitto.\n\n'
         : ''
     return `${intro}\n\n${tips}\n\n${multi}${outro}`
   },
@@ -128,6 +133,11 @@ const SV = {
 
   m8RepConfirmed: ({ participants, purpose }: { participants: string; purpose?: string | null }) =>
     `Tack! Noterat: ${participants}${purpose ? ` · Syfte: ${purpose}` : ''}. Följer med när kvittot bokförs.`,
+
+  // Participants captured, purpose missing. Skatteverket wants both, so ask
+  // once for the missing half only, never for the names again.
+  m8RepNeedPurpose: ({ participants }: { participants: string }) =>
+    `Tack! Noterat: ${participants}. En sak till: vad var syftet med mötet? Skriv en kort rad, t.ex. _uppföljning av avtal_.`,
 
   m8RepPartial: () =>
     'Tack! Jag har sparat ditt svar som anteckning på kvittot. Kolla att deltagare och syfte kom med när du bokför i appen.',
@@ -206,7 +216,8 @@ const EN: typeof SV = {
       'I am an AI assistant. Type *hjälp* for human support, *stopp* to disconnect.'
     const multi =
       companyCount > 1
-        ? `You belong to ${companyCount} companies in Accounted. Pick a default company in the panel so receipts land in the right one. `
+        ? `You belong to ${companyCount} companies in Accounted. Either pick a default company in the panel, ` +
+          'or send one receipt at a time and I will ask which company it belongs to right after each one.\n\n'
         : ''
     return `${intro}\n\n${tips}\n\n${multi}${outro}`
   },
@@ -255,6 +266,9 @@ const EN: typeof SV = {
 
   m8RepConfirmed: ({ participants, purpose }: { participants: string; purpose?: string | null }) =>
     `Thanks! Noted: ${participants}${purpose ? ` · Purpose: ${purpose}` : ''}. It follows the receipt when it is booked.`,
+
+  m8RepNeedPurpose: ({ participants }: { participants: string }) =>
+    `Thanks! Noted: ${participants}. One more thing: what was the purpose of the meeting? A short line is enough, e.g. _contract follow-up_.`,
 
   m8RepPartial: () =>
     'Thanks! I saved your reply as a note on the receipt. Check that attendees and purpose came through when you book it in the app.',
