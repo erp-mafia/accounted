@@ -70,6 +70,34 @@ function apiErrorMessage(data: unknown, fallback: string): string {
   return fallback
 }
 
+/**
+ * Marks an error whose message is already user-facing Swedish (server
+ * envelopes, ImportResult.errors). The catch blocks must show these
+ * verbatim: routing them through getErrorMessage would test them against
+ * its Swedish-pattern heuristic and swallow any miss into the generic
+ * "Något gick fel. Försök igen.", hiding the real reason the migration
+ * stopped.
+ */
+class UserFacingError extends Error {}
+
+/**
+ * Build the throwable for a failed API response: an extracted server
+ * message passes through to the UI verbatim, while the technical fallback
+ * (e.g. "HTTP 500") stays a plain Error so getErrorMessage maps it to a
+ * friendly message.
+ */
+function apiError(data: unknown, fallback: string): Error {
+  const extracted = apiErrorMessage(data, '')
+  return extracted ? new UserFacingError(extracted) : new Error(fallback)
+}
+
+/** Resolve the message a catch block should display. */
+function displayError(err: unknown, nonErrorFallback?: string): string {
+  if (err instanceof UserFacingError) return err.message
+  if (!(err instanceof Error) && nonErrorFallback) return nonErrorFallback
+  return getUserErrorMessage(err)
+}
+
 /** Pull the structured error `code` from an envelope, if present. */
 function apiErrorCode(data: unknown): string | null {
   const err = (data as { error?: unknown } | null)?.error
@@ -2094,11 +2122,11 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
         const validationErrors = data?.error === 'validation' ? data.validation?.errors : undefined
         if (Array.isArray(validationErrors)) {
           setErrorDetails(validationErrors.filter((e): e is string => typeof e === 'string'))
-          throw new Error(
+          throw new UserFacingError(
             'Bokföringsdatan hos leverantören klarade inte valideringen. Felen nedan måste rättas i källsystemet innan importen kan fortsätta.'
           )
         }
-        throw new Error(apiErrorMessage(data, `HTTP ${res.status}`))
+        throw apiError(data, `HTTP ${res.status}`)
       }
 
       const data = await res.json()
@@ -2114,7 +2142,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
         setStep('options')
       }
     } catch (err) {
-      setError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte hämta SIE-data')
+      setError(displayError(err, 'Kunde inte hämta SIE-data'))
     } finally {
       setIsLoading(false)
     }
@@ -2196,7 +2224,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
 
           if (!res.ok) {
             const data = await res.json().catch(() => ({}))
-            throw new Error(apiErrorMessage(data, `SIE import HTTP ${res.status}`))
+            throw apiError(data, `SIE import HTTP ${res.status}`)
           }
 
           const result = await res.json() as ImportResult
@@ -2207,7 +2235,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
           // to /migrate would hit its SIE-guard, whose "SIE måste importeras
           // först" message masks the real error.
           if (!result.success) {
-            throw new Error(result.errors.length > 0
+            throw new UserFacingError(result.errors.length > 0
               ? result.errors.join('\n')
               : 'SIE-importen misslyckades utan felmeddelande.')
           }
@@ -2240,7 +2268,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
 
         if (!res.ok) {
           const data = await res.json().catch(() => ({}))
-          throw new Error(apiErrorMessage(data, `HTTP ${res.status}`))
+          throw apiError(data, `HTTP ${res.status}`)
         }
 
         const data = await res.json()
@@ -2264,8 +2292,7 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
         description: 'Din bokföringsdata har importerats.',
       })
     } catch (err) {
-      const msg = getUserErrorMessage(err)
-      setError(msg)
+      setError(displayError(err))
       setStep('result')
     }
   }, [consentId, migrationOptions, sieData, toast])

@@ -210,6 +210,8 @@ function isSwedishUserMessage(message: string): boolean {
     /clearingnummer/i,
     /nummer är/i,
     /tillgängligt/i,
+    /verifikation/i,
+    /importera|importen/i,
   ]
   return swedishPatterns.some((p) => p.test(message))
 }
