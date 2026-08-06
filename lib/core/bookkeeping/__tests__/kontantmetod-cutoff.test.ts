@@ -392,3 +392,25 @@ describe('postKontantmetodCutoff', () => {
     expect(vi.mocked(createJournalEntry)).not.toHaveBeenCalled()
   })
 })
+
+describe('buildCutoffLines: omvänd betalningsskyldighet', () => {
+  it('never routes reverse-charge moms into the single vilande bucket', () => {
+    // A one-sided reverse charge is prohibited: the self-assessed output/input
+    // pair belongs to the payment entry, not to a deferred 2648 balance.
+    const { payableLines } = buildCutoffLines(
+      [],
+      [payable({ outstanding: 1000, vat: 250, reverseCharge: true, netByAccount: [{ account: '4056', amount: 1000 }] })],
+    )
+    expect(payableLines.some((l) => l.account_number === VILANDE_INPUT_VAT_ACCOUNT)).toBe(false)
+    // The full outstanding is expense against 2440.
+    expect(payableLines.find((l) => l.account_number === '4056')?.debit_amount).toBe(1000)
+    expect(payableLines.find((l) => l.account_number === '2440')?.credit_amount).toBe(1000)
+    const totals = sum(payableLines)
+    expect(totals.debit).toBe(totals.credit)
+  })
+
+  it('still books vilande moms for ordinary (non-RC) supplier invoices', () => {
+    const { payableLines } = buildCutoffLines([], [payable({ reverseCharge: false })])
+    expect(payableLines.find((l) => l.account_number === VILANDE_INPUT_VAT_ACCOUNT)?.debit_amount).toBe(250)
+  })
+})

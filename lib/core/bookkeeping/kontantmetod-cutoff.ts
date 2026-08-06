@@ -84,6 +84,17 @@ export interface CutoffPayable {
   /** The ingående moms share of `outstanding`. */
   vat: number
   /**
+   * Omvänd betalningsskyldighet. The supplier charges no moms, so the buyer
+   * self-assesses output AND input moms on 2614/2624/2634 + 2645/2647, which
+   * is a symmetric pair that must never be split. `vat` is 0 on every such row
+   * by construction, and this flag forces it to 0 anyway: routing a stray
+   * amount into the single 2648 bucket would post a one-sided reverse charge,
+   * the exact error the swedish-vat reference calls out as prohibited.
+   * The self-assessed pair is handled by the payment entry after the vändning,
+   * unchanged by the cut-off.
+   */
+  reverseCharge?: boolean
+  /**
    * Net expense split across BAS accounts, as weights. Only the ratios matter:
    * the net total is always derived as `outstanding - vat` so the verifikat
    * balances no matter how the source rows round.
@@ -233,7 +244,10 @@ export function buildCutoffLines(
   for (const row of payables) {
     const outstandingOre = toOre(row.outstanding)
     if (outstandingOre === 0) continue
-    const vatOre = toOre(row.vat)
+    // Reverse charge carries no deductible moms on the invoice itself: the
+    // self-assessed pair is booked by the payment entry, never split into the
+    // single vilande bucket. Forced to 0 rather than trusted from the row.
+    const vatOre = row.reverseCharge ? 0 : toOre(row.vat)
     const netOre = outstandingOre - vatOre
 
     payableOre += outstandingOre
@@ -337,7 +351,8 @@ export function buildCutoffNote(label: string, references: string[]): string {
   const shown = named.slice(0, MAX).join(', ')
   const rest = named.length - Math.min(named.length, MAX)
   return rest > 0
-    ? `${label} (${named.length} st): ${shown} och ${rest} till`
+    ? `${label} (${named.length} st): ${shown} och ${rest} till. ` +
+        'Fullständig specifikation finns i reskontran per bokslutsdagen.'
     : `${label} (${named.length} st): ${shown}`
 }
 
@@ -365,7 +380,7 @@ export async function collectKontantmetodCutoff(
       .in('status', ['sent', 'overdue', 'partially_paid', 'paid']),
     supabase
       .from('supplier_invoices')
-      .select('id, supplier_invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, is_credit_note, items:supplier_invoice_items(account_number, line_total)')
+      .select('id, supplier_invoice_number, invoice_date, status, total, total_sek, vat_amount, vat_amount_sek, reverse_charge, is_credit_note, items:supplier_invoice_items(account_number, line_total)')
       .eq('company_id', companyId)
       .lte('invoice_date', periodEnd)
       .in('status', ['registered', 'approved', 'partially_paid', 'paid']),
@@ -462,6 +477,7 @@ export async function collectKontantmetodCutoff(
       reference: (row.supplier_invoice_number as string) ?? '',
       outstanding,
       vat: roundOre(vat * ratio),
+      reverseCharge: Boolean(row.reverse_charge),
       netByAccount: items
         .filter((item) => item.account_number)
         .map((item) => ({
