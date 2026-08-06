@@ -5,7 +5,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import {
   executeRecurringSchedule,
   computeNextRunDate,
-  computeInitialRunDate,
+  rollNextRunDateForward,
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
@@ -35,7 +35,8 @@ type DueSchedule = RecurringInvoiceSchedule & { items: RecurringInvoiceScheduleI
  *    paused on deploy so nothing resumes sending behind the user's back.
  *
  * Each schedule runs in isolated try/catch so a failure on one doesn't block
- * the rest. On a successful send: bump next_run_date to next month, set
+ * the rest. On a successful send: bump next_run_date one interval_months
+ * step forward (1 = monthly, 3 = quarterly, 6 = half-yearly, 12 = yearly), set
  * last_run_at/last_invoice_id/generated_count. On failure: leave next_run_date
  * alone so a later run retries.
  */
@@ -90,7 +91,16 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
     //    reactivation path: turning a long-paused schedule back on rolls it to
     //    its next date rather than firing a stale one immediately.
     if (schedule.next_run_date < todayStockholm) {
-      const rolledNext = computeInitialRunDate(stockholmToday, schedule.day_of_month)
+      // Roll on the schedule's own month grid (anchored on the missed date,
+      // not on today) so a quarterly/yearly schedule keeps its phase: a
+      // Jan 15 quarterly run missed in an outage rolls to Apr 15, not Feb 15.
+      const rolledNext = rollNextRunDateForward(
+        schedule.next_run_date,
+        stockholmToday,
+        schedule.day_of_month,
+        schedule.interval_months,
+        { allowToday: true },
+      )
       // Surface the skip on the schedule: a day of failed runs (or a cron
       // outage) would otherwise roll the month forward with no user-visible
       // trace. The next successful run overwrites this, and a conscious
@@ -209,7 +219,11 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
       throw err
     }
 
-    const nextRunDate = computeNextRunDate(stockholmToday, schedule.day_of_month)
+    const nextRunDate = computeNextRunDate(
+      stockholmToday,
+      schedule.day_of_month,
+      schedule.interval_months,
+    )
     const { error: updateError } = await supabase
       .from('recurring_invoice_schedules')
       .update({

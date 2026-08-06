@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Check } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
@@ -23,8 +24,13 @@ interface NewUserChecklistProps {
 
 /**
  * First-run getting-started block on Hem, in the founder-picked stepped
- * shape: a numbered three-step thread (get the books in, connect the bank,
- * build the assistant) with the partner marks on the steps that have them.
+ * shape: a numbered thread (get the books in, connect the bank, connect
+ * Skatteverket, build the assistant) on a hairline spine.
+ * Only the step you are on argues its case: it carries the description and
+ * the partner marks next to a filled action. Steps you have not reached yet
+ * drop the pitch but keep a quiet outline action, so any step stays one
+ * click away (connect Skatteverket before the bank, if that is your order).
+ * Done steps collapse to their title.
  * The persisted state machine is unchanged (path / completedAt /
  * dismissedAt via /api/onboarding/state); "Starta från början" records the
  * fresh path and simply checks off step one.
@@ -104,11 +110,12 @@ export default function NewUserChecklist({
   }
 
   const activeStep = !step1Done ? 1 : !step2Done ? 2 : !step3Done ? 3 : 4
+  const stepCount = hasSkatteverket ? 4 : 3
 
   return (
-    <section className={className} aria-label={t('title', { count: hasSkatteverket ? 4 : 3 })}>
-      <div className="mb-1 flex items-center justify-between gap-3">
-        <h2 className="text-sm font-medium">{t('title', { count: hasSkatteverket ? 4 : 3 })}</h2>
+    <section className={className} aria-label={t('title', { count: stepCount })}>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-medium">{t('title', { count: stepCount })}</h2>
         <button
           type="button"
           disabled={saving !== null}
@@ -119,40 +126,41 @@ export default function NewUserChecklist({
         </button>
       </div>
 
-      <div className="mt-4">
+      <ol className="mt-3" role="list">
         <Step
           number={1}
           done={step1Done}
           active={activeStep === 1}
           title={t('step_books_title')}
-        >
-          <p className="text-xs leading-5 text-muted-foreground">
-            {t('step_books_description')}{' '}
-            <button
-              type="button"
+          action={(variant) => (
+            <Button
+              size="sm"
+              variant={variant}
               disabled={saving !== null}
-              onClick={goFresh}
-              className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+              onClick={() => void goMigration()}
             >
-              {t('step_books_fresh_link')}
-            </button>{' '}
-            {t('step_books_fresh_suffix')}
-          </p>
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-              <Button
-                size="sm"
-                disabled={saving !== null}
-                onClick={() => void goMigration()}
-              >
-                {t('step_books_action')}
-              </Button>
-              <span className="flex items-center gap-1.5">
-                <LogoMark src="/logos/fortnox.svg" name="Fortnox" />
-                <LogoMark src="/logos/visma.jpeg" name="Visma" />
-                <LogoMark src="/logos/bokio.png" name="Bokio" />
-                <span className="ml-1 text-[11px] text-muted-foreground">{t('step_books_sie')}</span>
-              </span>
-            </div>
+              {t('step_books_action')}
+            </Button>
+          )}
+          marks={
+            <>
+              <LogoMark src="/logos/fortnox.svg" name="Fortnox" />
+              <LogoMark src="/logos/visma.jpeg" name="Visma" />
+              <LogoMark src="/logos/bokio.png" name="Bokio" />
+              <span className="text-[11px] text-muted-foreground">{t('step_books_sie')}</span>
+            </>
+          }
+        >
+          {t('step_books_description')}{' '}
+          <button
+            type="button"
+            disabled={saving !== null}
+            onClick={goFresh}
+            className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+          >
+            {t('step_books_fresh_link')}
+          </button>{' '}
+          {t('step_books_fresh_suffix')}
         </Step>
 
         <Step
@@ -160,25 +168,23 @@ export default function NewUserChecklist({
           done={step2Done}
           active={activeStep === 2}
           title={t('step_bank_title')}
-        >
-          <p className="text-xs leading-5 text-muted-foreground">{t('step_bank_description')}</p>
-          <div className="mt-3 flex flex-wrap items-center gap-3">
+          action={(variant) => (
             <Button
               size="sm"
-              variant={activeStep === 2 ? 'default' : 'outline'}
+              variant={variant}
               disabled={saving !== null}
               onClick={() => void goBank()}
             >
               {t('step_bank_action')}
             </Button>
-            {hasBanking && (
-              <LogoMark
-                src="/logos/enable-banking-icon.png"
-                name="Enable Banking"
-                mono
-              />
-            )}
-          </div>
+          )}
+          marks={
+            hasBanking ? (
+              <LogoMark src="/logos/enable-banking-icon.png" name="Enable Banking" mono />
+            ) : undefined
+          }
+        >
+          {t('step_bank_description')}
         </Step>
 
         {hasSkatteverket && (
@@ -187,22 +193,18 @@ export default function NewUserChecklist({
             done={step3Done}
             active={activeStep === 3}
             title={t('step_skv_title')}
-          >
-            <p className="text-xs leading-5 text-muted-foreground">{t('step_skv_description')}</p>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <Button
-                size="sm"
-                variant={activeStep === 3 ? 'default' : 'outline'}
-                asChild
-              >
+            action={(variant) => (
+              <Button size="sm" variant={variant} asChild>
                 {/* The authorize endpoint redirects off-site to Skatteverket. */}
                 {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
                 <a href="/api/extensions/ext/skatteverket/authorize?return_to=/">
                   {t('step_skv_action')}
                 </a>
               </Button>
-              <LogoMark src="/logos/skatteverket_color.svg" name="Skatteverket" />
-            </div>
+            )}
+            marks={<LogoMark src="/logos/skatteverket_color.svg" name="Skatteverket" />}
+          >
+            {t('step_skv_description')}
           </Step>
         )}
 
@@ -213,30 +215,41 @@ export default function NewUserChecklist({
           title={t('step_assistant_title')}
           badge={t('step_assistant_beta')}
           last
-        >
-          <p className="text-xs leading-5 text-muted-foreground">{t('step_assistant_description')}</p>
-          <div className="mt-3">
+          action={(variant) => (
             <Button
               size="sm"
-              variant={activeStep >= 3 ? 'default' : 'outline'}
+              variant={variant}
               onClick={() => router.push(hasAi ? '/onboarding/agent' : '/settings/billing')}
             >
               {t('step_assistant_action')}
             </Button>
-          </div>
+          )}
+        >
+          {t('step_assistant_description')}
         </Step>
-      </div>
+      </ol>
     </section>
   )
 }
 
-/** One numbered step on the thread: dot + hairline down to the next step. */
+/**
+ * One numbered step on the thread: dot + hairline down to the next step.
+ * `children` (the pitch) and `marks` (partner logos) render only while this
+ * is the step the user is on. `action` renders on every step that is not
+ * done: filled on the active step, outline on the ones further down, so no
+ * step is ever unreachable just because it is not next in line.
+ * The title row is a constant 36px so it matches the h-9 action button and
+ * the dot (mt-1) centres in it; the spine then runs dot-bottom to dot-top
+ * (top-8 to -bottom-1) without visible breaks.
+ */
 function Step({
   number,
   done,
   active,
   title,
   badge,
+  action,
+  marks,
   last = false,
   children,
 }: {
@@ -245,43 +258,64 @@ function Step({
   active: boolean
   title: string
   badge?: string
+  action?: (variant: 'default' | 'outline') => React.ReactNode
+  marks?: React.ReactNode
   last?: boolean
   children: React.ReactNode
 }) {
+  const open = active && !done
+
   return (
-    <div className="relative flex gap-4 pb-6 last:pb-0">
+    <li
+      className="relative flex gap-3 pb-3 last:pb-0"
+      aria-current={open ? 'step' : undefined}
+    >
       {!last && (
         <span
-          className="absolute bottom-0 left-[13px] top-8 w-px bg-border"
+          className="absolute -bottom-1 left-[13px] top-8 w-px bg-border"
           aria-hidden="true"
         />
       )}
       <span
         className={cn(
-          'relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs tabular-nums',
+          'relative z-10 mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs tabular-nums',
           done
             ? 'border-success/40 text-success'
-            : active
+            : open
               ? 'border-foreground bg-foreground text-background'
               : 'border-border text-muted-foreground',
         )}
       >
         {done ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : number}
       </span>
-      <div className="min-w-0 flex-1 pt-1">
-        <p className={cn('flex items-center gap-2 text-sm', active && !done && 'font-medium', done && 'text-muted-foreground')}>
-          {title}
-          {badge && (
-            <span className="rounded-full border border-border px-2 py-0.5 text-[10px] leading-none text-muted-foreground">
-              {badge}
-            </span>
-          )}
-        </p>
-        {/* A ticked step needs no pitch: the description and actions only
-            render while the step is still open. */}
-        {!done && <div className="mt-1">{children}</div>}
+      <div className="min-w-0 flex-1">
+        <div className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-2">
+          <div
+            className={cn(
+              'flex items-center gap-2 text-sm',
+              open ? 'font-medium' : 'text-muted-foreground',
+            )}
+          >
+            <span>{title}</span>
+            {badge && (
+              <Badge
+                variant="secondary"
+                className={cn('shrink-0 uppercase tracking-wider', !open && 'font-normal')}
+              >
+                {badge}
+              </Badge>
+            )}
+          </div>
+          {!done && action?.(open ? 'default' : 'outline')}
+        </div>
+        {open && (
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <p className="text-xs leading-5 text-muted-foreground">{children}</p>
+            {marks && <span className="flex items-center gap-2">{marks}</span>}
+          </div>
+        )}
       </div>
-    </div>
+    </li>
   )
 }
 

@@ -725,6 +725,9 @@ export const CreateRecurringScheduleSchema = z.object({
   customer_id: uuid,
   name: z.string().min(1, 'Schedule name is required').max(200),
   day_of_month: z.number().int().min(1).max(31),
+  // Months between runs: 1 = monthly (default), 3 = quarterly, 6 = half-
+  // yearly, 12 = yearly. Any 1-12 is accepted (e.g. every 2 months).
+  interval_months: z.number().int().min(1).max(12).default(1),
   // Whole hour (0-23) in Europe/Stockholm at which the invoice is sent.
   send_hour: z.number().int().min(0).max(23).default(8),
   payment_terms_days: z.number().int().min(0).max(90).default(30),
@@ -745,6 +748,9 @@ export const UpdateRecurringScheduleSchema = z.object({
   customer_id: uuid.optional(),
   name: z.string().min(1).max(200).optional(),
   day_of_month: z.number().int().min(1).max(31).optional(),
+  // Changing the interval alone leaves next_run_date untouched: the new
+  // cadence applies from the next run onward.
+  interval_months: z.number().int().min(1).max(12).optional(),
   send_hour: z.number().int().min(0).max(23).optional(),
   payment_terms_days: z.number().int().min(0).max(90).optional(),
   currency: CurrencySchema.optional(),

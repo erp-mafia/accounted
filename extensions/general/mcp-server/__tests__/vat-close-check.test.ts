@@ -7,7 +7,7 @@
  * supabase call here would couple tests to internal query order.
  */
 import { describe, it, expect } from 'vitest'
-import { tools, computeMomsDeadline } from '../server'
+import { tools, computeMomsDeadline, UNCATEGORIZED_TRANSACTIONS_HINT } from '../server'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
 describe('gnubok_vat_close_check', () => {
@@ -41,6 +41,16 @@ describe('gnubok_vat_close_check', () => {
 
   it('is mapped to reports:read scope', () => {
     expect(TOOL_SCOPE_MAP.gnubok_vat_close_check).toBe('reports:read')
+  })
+
+  it('uncategorized-transactions hint offers both resolution paths', () => {
+    // The blocker must not steer agents into double-booking: a transaction
+    // whose affärshändelse is already booked needs the link tool, not a new
+    // booking via categorize/auto-match. An agent that only sees the booking
+    // tools concludes linking requires support intervention.
+    expect(UNCATEGORIZED_TRANSACTIONS_HINT).toContain('gnubok_categorize_transaction')
+    expect(UNCATEGORIZED_TRANSACTIONS_HINT).toContain('gnubok_auto_match_period')
+    expect(UNCATEGORIZED_TRANSACTIONS_HINT).toContain('gnubok_link_transaction_to_journal_entry')
   })
 })
 

@@ -112,6 +112,7 @@ function NewRecurringScheduleForm({
       customer_id: z.string().uuid(t('validation_customer_required')),
       name: z.string().min(1, t('validation_name_required')),
       day_of_month: z.number().int().min(1).max(31),
+      interval_months: z.number().int().min(1).max(12),
       send_hour: z.number().int().min(0).max(23),
       payment_terms_days: z.number().int().min(0).max(90),
       currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
@@ -139,6 +140,7 @@ function NewRecurringScheduleForm({
           customer_id: schedule.customer_id,
           name: schedule.name,
           day_of_month: schedule.day_of_month,
+          interval_months: schedule.interval_months ?? 1,
           send_hour: schedule.send_hour ?? 8,
           payment_terms_days: schedule.payment_terms_days,
           currency: schedule.currency,
@@ -163,6 +165,7 @@ function NewRecurringScheduleForm({
           customer_id: '',
           name: '',
           day_of_month: 15,
+          interval_months: 1,
           send_hour: 8,
           payment_terms_days: 30,
           currency: 'SEK',
@@ -296,6 +299,37 @@ function NewRecurringScheduleForm({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="interval_months">{t('interval_label')}</Label>
+              <Controller
+                control={control}
+                name="interval_months"
+                render={({ field }) => (
+                  <Select
+                    value={String(field.value)}
+                    onValueChange={(v) => field.onChange(Number(v))}
+                  >
+                    <SelectTrigger id="interval_months">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">{t('interval_monthly')}</SelectItem>
+                      <SelectItem value="3">{t('interval_quarterly')}</SelectItem>
+                      <SelectItem value="6">{t('interval_semiannual')}</SelectItem>
+                      <SelectItem value="12">{t('interval_yearly')}</SelectItem>
+                      {/* A non-preset interval (set via API/MCP, e.g. every 2
+                          months) must stay selectable so an edit doesn't
+                          silently coerce it to a preset. */}
+                      {![1, 3, 6, 12].includes(field.value) && (
+                        <SelectItem value={String(field.value)}>
+                          {t('interval_every_n', { n: field.value })}
+                        </SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </div>
             <div>
               <Label htmlFor="day_of_month">{t('day_label')}</Label>
               <Input

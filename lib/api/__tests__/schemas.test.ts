@@ -2744,3 +2744,32 @@ describe('CreateRecurringScheduleSchema send_hour', () => {
     expect(CreateRecurringScheduleSchema.safeParse({ ...base, send_hour: -1 }).success).toBe(false)
   })
 })
+
+describe('CreateRecurringScheduleSchema interval_months', () => {
+  const base = {
+    customer_id: '550e8400-e29b-41d4-a716-446655440000',
+    name: 'Retainer',
+    day_of_month: 15,
+    items: [{ description: 'Service', quantity: 1, unit_price: 1000 }],
+  }
+
+  it('defaults interval_months to 1 (monthly) when omitted', () => {
+    const result = CreateRecurringScheduleSchema.safeParse(base)
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.interval_months).toBe(1)
+  })
+
+  it('accepts quarterly, half-yearly and yearly intervals', () => {
+    for (const interval of [3, 6, 12]) {
+      const result = CreateRecurringScheduleSchema.safeParse({ ...base, interval_months: interval })
+      expect(result.success).toBe(true)
+      if (result.success) expect(result.data.interval_months).toBe(interval)
+    }
+  })
+
+  it('rejects out-of-range or fractional intervals', () => {
+    expect(CreateRecurringScheduleSchema.safeParse({ ...base, interval_months: 0 }).success).toBe(false)
+    expect(CreateRecurringScheduleSchema.safeParse({ ...base, interval_months: 13 }).success).toBe(false)
+    expect(CreateRecurringScheduleSchema.safeParse({ ...base, interval_months: 1.5 }).success).toBe(false)
+  })
+})

@@ -7,8 +7,30 @@ import { createLogger } from '@/lib/logger'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
+import { encryptPersonnummer } from '@/lib/salary/personnummer'
+import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import { buildSandboxCustomers } from './customers'
 import { buildSandboxPendingOperations } from './pending-operations'
+import { buildSandboxArticles } from './articles'
+import {
+  buildSandboxLedgerHistory,
+  SANDBOX_LEDGER_ACCOUNT_NUMBERS,
+} from './ledger-history'
+import {
+  buildSandboxEmployees,
+  buildSandboxSalaryLineItems,
+  buildSandboxSalaryRunEmployees,
+  buildSandboxSalaryRuns,
+  mapSandboxEmployeeIds,
+  resolveSandboxSalaryPeriods,
+  SANDBOX_RUN_TOTALS,
+  SANDBOX_TOTAL_VACATION_ACCRUAL_AVGIFTER,
+} from './salary'
+import {
+  buildSandboxSalaryVouchers,
+  SANDBOX_SALARY_ACCOUNT_NUMBERS,
+} from './salary-vouchers'
 
 // Anonymous sign-in is enabled in all environments so visitors can try the
 // product; a per-/24 cap on the seed endpoint keeps a single network from
@@ -153,6 +175,14 @@ export async function POST(request: Request) {
         is_sandbox: true,
         // Dimensions demo: the register/pickers render out of the box.
         dimensions_enabled: true,
+        // Payroll demo. `pays_salaries` is the UI gate DashboardNav reads to
+        // decide whether Löner and Anställda appear at all (an enskild firma
+        // is not an employer by default), and `employer_registered` is the
+        // AGI gate. An EF may absolutely employ staff; what it may not do is
+        // put its OWNER on payroll, which is why both seeded employees carry
+        // employment_type 'employee' rather than 'company_owner'.
+        pays_salaries: true,
+        employer_registered: true,
       })
 
     if (settingsError) throw settingsError
@@ -357,18 +387,178 @@ export async function POST(request: Request) {
 
     if (itemsError) throw itemsError
 
-    // 8. Resolve account IDs for journal entries
-    const { data: accounts } = await supabase
+    // 8. Resolve account IDs for journal entries.
+    //
+    // seed_chart_of_accounts lays down the K1 subset, and its 7xxx personnel
+    // block is gated on p_entity_type = 'aktiebolag'. The sandbox company is an
+    // enskild firma, so none of the payroll accounts exist yet, and neither do
+    // the semesterlöneskuld pair. Create the missing ones from the BAS 2026
+    // reference first, exactly as ensureSalaryAccountsExist does before the
+    // real booking path posts a salary run.
+    const neededAccounts = [
+      ...new Set([
+        ...SANDBOX_LEDGER_ACCOUNT_NUMBERS,
+        ...SANDBOX_SALARY_ACCOUNT_NUMBERS,
+        '1510',
+        '1930',
+        '2611',
+        '3001',
+        // The 6 % article (a printed book) derives 3003/2631 at invoice-line
+        // time; neither is in the K1 chart, so invoicing it would post to an
+        // account the company does not have.
+        '2631',
+        '3003',
+      ]),
+    ]
+
+    const { data: existingAccounts, error: existingAccountsError } = await supabase
+      .from('chart_of_accounts')
+      .select('account_number')
+      .eq('company_id', companyId)
+      .in('account_number', neededAccounts)
+    if (existingAccountsError) throw existingAccountsError
+
+    const existingAccountNumbers = new Set(
+      (existingAccounts ?? []).map(a => a.account_number as string)
+    )
+    const missingAccounts = neededAccounts
+      .filter(n => !existingAccountNumbers.has(n))
+      .map(accountNumber => {
+        const ref = getBASReference(accountNumber)
+        // An account with no BAS 2026 reference would have to be invented here.
+        // Better to fail the seed than to write a chart row with guessed
+        // class/type/normal_balance that every report would then trust.
+        if (!ref) {
+          throw new Error(`Sandbox seed: no BAS reference for account ${accountNumber}`)
+        }
+        return {
+          user_id: userId,
+          company_id: companyId,
+          account_number: accountNumber,
+          account_name: ref.account_name,
+          account_class: ref.account_class,
+          account_group: ref.account_group,
+          account_type: ref.account_type,
+          normal_balance: ref.normal_balance,
+          sru_code: ref.sru_code,
+          k2_excluded: ref.k2_excluded,
+          plan_type: 'full_bas',
+          is_active: true,
+          is_system_account: false,
+        }
+      })
+
+    if (missingAccounts.length > 0) {
+      const { error: missingAccountsError } = await supabase
+        .from('chart_of_accounts')
+        .insert(missingAccounts)
+      if (missingAccountsError) throw missingAccountsError
+    }
+
+    // Errors are fatal here, not tolerable: a failed read would leave
+    // accountMap empty and silently write account_id: null onto every
+    // ledger-history and salary voucher line, producing a sandbox whose
+    // vouchers reference no account at all.
+    const { data: accounts, error: accountsError } = await supabase
       .from('chart_of_accounts')
       .select('id, account_number')
       .eq('company_id', companyId)
-      .in('account_number', ['1510', '1930', '2611', '3001'])
+      .in('account_number', neededAccounts)
+    if (accountsError) throw accountsError
 
     const accountMap = Object.fromEntries(
       (accounts ?? []).map(a => [a.account_number, a.id])
     )
 
-    // 9. Create journal entries (inserted directly, not via engine, to avoid event emission)
+    // 9. Year-to-date ledger history (January through last month).
+    //
+    // Without it the company has two verifikat and every report is a flat
+    // line: Resultatrapport, Balansrapport, Nyckeltal and Momsrapport all read
+    // as broken rather than empty.
+    //
+    // Seeded BEFORE the invoice and payroll vouchers below on purpose.
+    // next_voucher_number hands out numbers in call order, so seeding January
+    // last would have produced A-1 dated in July followed by A-3 dated in
+    // January: a gap-free sequence that runs backwards through the year, which
+    // is not what BFNAR 2013:2 means by a chronological verifikationsserie.
+    const ledgerHistory = buildSandboxLedgerHistory({
+      userId,
+      companyId,
+      fiscalPeriodId: fiscalPeriod.id,
+      today,
+      accountMap,
+    })
+
+    // One RPC per voucher: next_voucher_number is a counter table with a row
+    // lock (not MAX+1), so sequential calls are safe and gap-free. The two
+    // writes are batched rather than run per entry, which is what turns ~130
+    // round trips into ~45 for a seed that runs on every sandbox visit.
+    const historyVoucherNumbers: number[] = []
+    for (const historyEntry of ledgerHistory.entries) {
+      const { data: historyVoucherNumber, error: historyVoucherError } = await supabase.rpc(
+        'next_voucher_number',
+        {
+          p_company_id: companyId,
+          p_fiscal_period_id: fiscalPeriod.id,
+          p_series: historyEntry.voucher_series,
+        },
+      )
+      if (historyVoucherError) throw historyVoucherError
+      historyVoucherNumbers.push(historyVoucherNumber as number)
+    }
+
+    const { data: insertedHistoryEntries, error: historyEntryError } = await supabase
+      .from('journal_entries')
+      .insert(
+        ledgerHistory.entries.map((historyEntry, index) => ({
+          ...historyEntry,
+          voucher_number: historyVoucherNumbers[index],
+        })),
+      )
+      .select('id, voucher_number')
+    if (historyEntryError) throw historyEntryError
+
+    // Match on voucher_number, not on array position: PostgREST does not
+    // promise the returned rows come back in insertion order, and
+    // (company_id, fiscal_period_id, voucher_series, voucher_number) is unique.
+    const historyIdByVoucher = new Map(
+      (insertedHistoryEntries ?? []).map(row => [row.voucher_number as number, row.id as string]),
+    )
+
+    const historyEntryIds = historyVoucherNumbers.map(voucherNumber => {
+      const entryId = historyIdByVoucher.get(voucherNumber)
+      if (!entryId) {
+        throw new Error(`Sandbox seed: ledger history voucher ${voucherNumber} was not inserted`)
+      }
+      return entryId
+    })
+
+    const { error: historyLinesError } = await supabase
+      .from('journal_entry_lines')
+      .insert(
+        ledgerHistory.linesByEntryIndex.flatMap((lines, index) =>
+          lines.map(line => ({ ...line, journal_entry_id: historyEntryIds[index] })),
+        ),
+      )
+    if (historyLinesError) throw historyLinesError
+
+    // The history is the company's books from before it arrived in Accounted:
+    // its kvitton live in the previous system's binder, not here. Left
+    // unflagged, every one of these vouchers would land on Hem as "Verifikat
+    // utan underlag" and the demo's first screen would read as a compliance
+    // mess. Marking them exempt is the same move the SIE-import opt-in makes
+    // for exactly the same reason, through the same sanctioned sidecar table
+    // (journal_entry_no_doc_required), so the verifikat themselves stay
+    // immutable per BFL.
+    await markEntriesNoDocRequired(
+      supabase,
+      companyId,
+      userId,
+      historyEntryIds,
+      'Historisk bokföring: underlag arkiverade i det tidigare systemet.',
+    )
+
+    // 10. Invoice vouchers (inserted directly, not via engine, to avoid event emission)
     const { data: voucherNum1 } = await supabase.rpc('next_voucher_number', {
       p_company_id: companyId,
       p_fiscal_period_id: fiscalPeriod.id,
@@ -861,6 +1051,148 @@ export async function POST(request: Request) {
 
     if (pendOpsError) throw pendOpsError
 
+    // 18. Artikelregister, so /articles shows reusable invoice-line presets
+    // instead of the Package empty state.
+    const { error: articlesError } = await supabase
+      .from('articles')
+      .insert(buildSandboxArticles({ userId, companyId }))
+
+    if (articlesError) throw articlesError
+
+    // 20. Payroll. An enskild firma may employ staff (it just may not put its
+    // own owner on payroll), so the demo runs two employees through one booked
+    // and one open lönekörning.
+    const { data: employeeRows, error: employeesError } = await supabase
+      .from('employees')
+      .insert(
+        buildSandboxEmployees({
+          userId,
+          companyId,
+          today,
+          // employees.personnummer stores AES-256-GCM ciphertext; the builder
+          // stays pure by taking the cipher as an argument.
+          encrypt: encryptPersonnummer,
+        }),
+      )
+      .select('id, last_name')
+
+    if (employeesError) throw employeesError
+    const { annaEmployeeId, erikEmployeeId } = mapSandboxEmployeeIds(employeeRows)
+
+    const { data: salaryRunRows, error: salaryRunsError } = await supabase
+      .from('salary_runs')
+      .insert(buildSandboxSalaryRuns({ userId, companyId, today }))
+      .select('id, status')
+
+    if (salaryRunsError) throw salaryRunsError
+
+    const bookedRun = salaryRunRows.find(r => r.status === 'booked')
+    const draftRun = salaryRunRows.find(r => r.status === 'draft')
+    if (!bookedRun || !draftRun) {
+      throw new Error('Sandbox seed: expected one booked and one draft salary run')
+    }
+
+    const { data: runEmployeeRows, error: runEmployeesError } = await supabase
+      .from('salary_run_employees')
+      .insert(
+        buildSandboxSalaryRunEmployees({
+          companyId,
+          today,
+          bookedRunId: bookedRun.id,
+          draftRunId: draftRun.id,
+          annaEmployeeId,
+          erikEmployeeId,
+        }),
+      )
+      .select('id, employee_id')
+
+    if (runEmployeesError) throw runEmployeesError
+
+    const { error: salaryLineItemsError } = await supabase
+      .from('salary_line_items')
+      .insert(
+        buildSandboxSalaryLineItems({
+          companyId,
+          annaEmployeeId,
+          erikEmployeeId,
+          runEmployees: runEmployeeRows,
+        }),
+      )
+
+    if (salaryLineItemsError) throw salaryLineItemsError
+
+    // 21. Verifikat for the BOOKED run. A run in status 'booked' that posted
+    // nothing would be a lie: the real path (bookPaidSalaryRun) always writes
+    // these through the engine before advancing the status. The seed inserts
+    // journal rows directly to avoid event emission, so ./salary-vouchers
+    // mirrors the engine's account structure instead.
+    const bookedPeriod = resolveSandboxSalaryPeriods(today).booked
+    const salaryVouchers = buildSandboxSalaryVouchers({
+      userId,
+      companyId,
+      fiscalPeriodId: fiscalPeriod.id,
+      salaryRunId: bookedRun.id,
+      paymentDate: bookedPeriod.paymentDate,
+      periodYear: bookedPeriod.year,
+      periodMonth: bookedPeriod.month,
+      totalGross: SANDBOX_RUN_TOTALS.total_gross,
+      totalTax: SANDBOX_RUN_TOTALS.total_tax,
+      totalNet: SANDBOX_RUN_TOTALS.total_net,
+      totalAvgifter: SANDBOX_RUN_TOTALS.total_avgifter,
+      totalVacationAccrual: SANDBOX_RUN_TOTALS.total_vacation_accrual,
+      // salary_runs has no column for avgifter on the vacation accrual (it is
+      // a per-employee figure), so ./salary exports the sum of the same
+      // figures the salary_run_employees rows were written from.
+      totalVacationAvgifter: SANDBOX_TOTAL_VACATION_ACCRUAL_AVGIFTER,
+    })
+
+    const runEntryLinks: Record<string, string> = {}
+    for (const voucher of salaryVouchers) {
+      const { data: salaryVoucherNumber, error: salaryVoucherError } = await supabase.rpc(
+        'next_voucher_number',
+        {
+          p_company_id: companyId,
+          p_fiscal_period_id: fiscalPeriod.id,
+          p_series: voucher.entry.voucher_series,
+        },
+      )
+      // A posted verifikat with no voucher number is a hole in the
+      // verifikationsserie (BFNAR 2013:2), so a failed counter read has to stop
+      // the seed rather than insert one.
+      if (salaryVoucherError) throw salaryVoucherError
+      if (salaryVoucherNumber == null) {
+        throw new Error('Sandbox seed: next_voucher_number returned no number for a salary voucher')
+      }
+
+      const { data: insertedSalaryEntry, error: salaryEntryError } = await supabase
+        .from('journal_entries')
+        .insert({ ...voucher.entry, voucher_number: salaryVoucherNumber })
+        .select('id')
+        .single()
+      if (salaryEntryError) throw salaryEntryError
+
+      const { error: salaryEntryLinesError } = await supabase
+        .from('journal_entry_lines')
+        .insert(
+          voucher.lines.map(line => ({
+            ...line,
+            account_id: accountMap[line.account_number] ?? null,
+            journal_entry_id: insertedSalaryEntry.id,
+          })),
+        )
+      if (salaryEntryLinesError) throw salaryEntryLinesError
+
+      runEntryLinks[voucher.runColumn] = insertedSalaryEntry.id
+    }
+
+    const { error: linkRunError } = await supabase
+      .from('salary_runs')
+      .update(runEntryLinks)
+      .eq('id', bookedRun.id)
+      .eq('company_id', companyId)
+
+    if (linkRunError) throw linkRunError
+
     return NextResponse.json({ seeded: true })
   } catch (err) {
     log.error('failed to seed sandbox data', { error: err, userId: user.id, companyId })
@@ -877,6 +1209,14 @@ export async function POST(request: Request) {
  * at the company_settings idempotency check above, so they never get the
  * agent_profile without this hook. Delegates to ensureSandboxAgentProfile
  * so the profile data stays in exactly one place.
+ *
+ * Deliberately NOT extended to the payroll and ledger-history additions: those
+ * are one correlated dataset (a chart of accounts, a year of vouchers, a
+ * roster, two runs and their verifikat) that cannot be half-applied coherently,
+ * and a partial top-up would produce a booked lönekörning whose verifikat
+ * numbering interleaves with vouchers that already exist. Sandboxes are deleted
+ * after 24 hours, so the window where this matters closes on its own; a visitor
+ * who wants the payroll demo starts a new sandbox.
  */
 async function topUpSandboxAdditions(
   supabase: SupabaseClient,
