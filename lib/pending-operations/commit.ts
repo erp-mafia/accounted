@@ -125,6 +125,7 @@ import {
 import {
   computeInitialRunDate,
   computeNextRunDate,
+  rollNextRunDateForward,
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
 import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/update-invoice'
@@ -559,6 +560,7 @@ async function commitCreateRecurringSchedule(
       customer_id: validated.customer_id,
       name: validated.name,
       day_of_month: validated.day_of_month,
+      interval_months: validated.interval_months,
       send_hour: validated.send_hour,
       payment_terms_days: validated.payment_terms_days,
       currency: validated.currency,
@@ -610,6 +612,7 @@ async function commitCreateRecurringSchedule(
       name: validated.name,
       customer_id: validated.customer_id,
       day_of_month: validated.day_of_month,
+      interval_months: validated.interval_months,
       send_hour: validated.send_hour,
       currency: validated.currency,
       auto_send: validated.auto_send,
@@ -644,7 +647,7 @@ async function commitUpdateRecurringSchedule(
 
   const { data: existing, error: existingError } = await supabase
     .from('recurring_invoice_schedules')
-    .select('id, status, auto_send, customer_id, day_of_month, next_run_date')
+    .select('id, status, auto_send, customer_id, day_of_month, interval_months, next_run_date')
     .eq('id', scheduleId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -691,16 +694,29 @@ async function commitUpdateRecurringSchedule(
     const dayChanged =
       changes.day_of_month !== undefined && changes.day_of_month !== existing.day_of_month
     const effectiveDay = changes.day_of_month ?? existing.day_of_month
+    const effectiveInterval = changes.interval_months ?? existing.interval_months ?? 1
     const { date: todayStockholm } = getStockholmDateHour(new Date())
     const stockholmToday = new Date(`${todayStockholm}T00:00:00Z`)
 
     const staleOnReactivate = reactivating && existing.next_run_date <= todayStockholm
     if (staleOnReactivate || dayChanged) {
-      const rolled = computeInitialRunDate(stockholmToday, effectiveDay)
-      updateRow.next_run_date =
-        rolled === todayStockholm
-          ? computeNextRunDate(stockholmToday, effectiveDay)
-          : rolled
+      if (effectiveInterval === 1) {
+        // Monthly keeps its long-standing today-anchored semantics.
+        const rolled = computeInitialRunDate(stockholmToday, effectiveDay)
+        updateRow.next_run_date =
+          rolled === todayStockholm
+            ? computeNextRunDate(stockholmToday, effectiveDay)
+            : rolled
+      } else {
+        // Interval schedules roll on their own month grid so an edit or
+        // reactivation cannot shift a quarterly schedule off its phase.
+        updateRow.next_run_date = rollNextRunDateForward(
+          existing.next_run_date,
+          stockholmToday,
+          effectiveDay,
+          effectiveInterval,
+        )
+      }
     }
 
     // A conscious reactivation invalidates any lingering warning.
