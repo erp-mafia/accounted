@@ -22,6 +22,14 @@ interface FyPickerProps {
   includeAllOption?: boolean
   /** Only show periods that have started (Reports-style filter). */
   hideFuturePeriods?: boolean
+  /**
+   * Auto-select the most recently ENDED period on load instead of restoring
+   * the shared per-company scope or falling back to the newest started one.
+   * For filing surfaces (helårsmoms): only an ended räkenskapsår can be
+   * declared, so the newest started period is the one default that is always
+   * wrong there. Manual picks still work and are still persisted.
+   */
+  preferLatestEnded?: boolean
   /** Fires once after the initial period load completes. */
   onReady?: () => void
   /** Server-loaded periods for the first render, scoped to initialCompanyId. */
@@ -49,6 +57,7 @@ export function FyPicker({
   onChange,
   includeAllOption = true,
   hideFuturePeriods = false,
+  preferLatestEnded = false,
   onReady,
   initialPeriods,
   initialCompanyId,
@@ -92,14 +101,22 @@ export function FyPicker({
       // Restore last selection (same key as FiscalYearSelector so pages keep
       // their scope when the picker swaps in).
       if (value === null && typeof window !== 'undefined') {
-        const stored = window.localStorage.getItem(STORAGE_KEY_PREFIX + company.id)
-        if (stored === ALL_YEARS_VALUE) {
-          if (includeAllOption) onChange(null, null)
-          else if (fetched.length > 0) onChange(fetched[0].id, fetched[0])
-        } else if (stored && fetched.some((p) => p.id === stored)) {
-          onChange(stored, fetched.find((p) => p.id === stored) ?? null)
-        } else if (!includeAllOption && fetched.length > 0) {
-          onChange(fetched[0].id, fetched[0])
+        if (preferLatestEnded) {
+          // Filing surfaces: ignore the shared scope memory and open on the
+          // most recently ended period (fetched is sorted newest-first).
+          const today = new Date().toISOString().split('T')[0]
+          const pick = fetched.find((p) => p.period_end < today) ?? fetched[0]
+          if (pick) onChange(pick.id, pick)
+        } else {
+          const stored = window.localStorage.getItem(STORAGE_KEY_PREFIX + company.id)
+          if (stored === ALL_YEARS_VALUE) {
+            if (includeAllOption) onChange(null, null)
+            else if (fetched.length > 0) onChange(fetched[0].id, fetched[0])
+          } else if (stored && fetched.some((p) => p.id === stored)) {
+            onChange(stored, fetched.find((p) => p.id === stored) ?? null)
+          } else if (!includeAllOption && fetched.length > 0) {
+            onChange(fetched[0].id, fetched[0])
+          }
         }
       }
 
@@ -111,7 +128,7 @@ export function FyPicker({
   // onReady is a lifecycle callback: fire once per load, not on parent
   // re-renders that re-create it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company?.id, hideFuturePeriods, includeAllOption, initialCompanyId, initialPeriods])
+  }, [company?.id, hideFuturePeriods, includeAllOption, preferLatestEnded, initialCompanyId, initialPeriods])
 
   const handleChange = (id: string) => {
     const nextId = id === ALL_YEARS_VALUE ? null : id

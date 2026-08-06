@@ -306,7 +306,7 @@ export default function UserMenu({
                   </div>
                   {!sandbox && (
                     <div className="border-t border-border/60 px-1 pt-1">
-                      <Link href="/select-company" onClick={close} className={menuRow}>
+                      <Link href="/select-company?choose=1" onClick={close} className={menuRow}>
                         <Plus className="h-4 w-4 flex-shrink-0" />
                         {tSwitcher('add_company')}
                       </Link>
