@@ -41,12 +41,15 @@ import type {
  *   notes MUST be driven by the same signal, since a policy paragraph denying
  *   any separately recognized deferred tax cannot sit in the same document as
  *   a note disclosing that very balance. 'unknown' is the read-failure path:
- *   an affirmative denial is itself a claim, so figures we could not read may
- *   not produce one. The caller derives this once (build-data.ts).
- * @param hasCapitalizedLease: true when the balance sheet carries leased
- *   assets (1260/1269). The blanket operational treatment is then contradicted
- *   by the company's own balansrakning, so the paragraph describes what is
- *   booked instead of asserting the 20.29 simplification.
+ *   every possible wording is an affirmative claim about figures we could not
+ *   read, so NO deferred-tax paragraph is emitted at all. The caller derives
+ *   this once (build-data.ts) and warns the user on that path.
+ * @param hasCapitalizedLease: true when the balance sheet carries an
+ *   anlaggningskonto the company's own chart names as leased (build-data
+ *   decides; see hasCapitalizedLeaseAsset there). The blanket operational
+ *   treatment is then contradicted by the company's own balansrakning, so the
+ *   paragraph describes what is booked instead of asserting the 20.29
+ *   simplification.
  */
 export function buildK3RedovisningsPrinciper(params: {
   hasComponents: boolean
@@ -80,18 +83,25 @@ export function buildK3RedovisningsPrinciper(params: {
   //     history). Denying the split would contradict both the balansrakning
   //     and the "Uppskjutna skatter" note, so the paragraph discloses the
   //     recognized liability and points at that note.
-  //   - 'unknown': the figures could not be read. A denial is an affirmative
-  //     statement about the books, so it may not be printed on data we do not
-  //     have; the paragraph states only the policy applied going forward. The
-  //     caller has already raised a warning on this path.
-  // No branch claims HOW the balance was measured or where it came from: an
-  // imported provision may have been booked at 22 or 21.4 percent by another
-  // system, and this builder cannot tell the cases apart.
+  //   - 'unknown': the figures could not be read, so NO paragraph is emitted.
+  //     Both of the other wordings state how this document reports the
+  //     reserves, which is a claim about books we just failed to read: the
+  //     gross wording is the same affirmative statement as the denial, only
+  //     phrased positively. Silence is the one honest option, and the caller
+  //     has already raised a warning telling the user the note could not be
+  //     computed.
+  // No branch claims HOW the balance was measured or WHERE it came from:
+  // under K3 the 2240 account carries deferred tax on ALL temporary
+  // differences (.claude/skills/swedish-year-end-closing/references/
+  // k2-vs-k3.md:11-13), and deriveLatentTaxMovement reads only the 2240/8940
+  // balances, so an attribution to obeskattade reserver is not something this
+  // builder can establish. An imported provision may also have been booked at
+  // 22 or 21.4 percent by another system.
   const deferredTaxParagraph =
     deferredTax === 'recognized'
-      ? 'Uppskjuten skatt: Uppskjuten skatteskuld hänförlig till obeskattade reserver redovisas på konto 2240. Ingående saldo, årets förändring och utgående saldo framgår av noten Uppskjutna skatter.'
+      ? 'Uppskjuten skatt: Uppskjuten skatteskuld redovisas på konto 2240. Ingående saldo, årets förändring och utgående saldo framgår av noten Uppskjutna skatter.'
       : deferredTax === 'unknown'
-        ? 'Uppskjuten skatt: Obeskattade reserver redovisas inklusive uppskjuten skatteskuld i enlighet med K3 punkt 29.37, som medger att de redovisas brutto i juridisk person.'
+        ? null
         : 'Uppskjuten skatt: Uppskjuten skatt hänförlig till obeskattade reserver särredovisas inte i juridisk person, utan obeskattade reserver redovisas inklusive uppskjuten skatteskuld.'
   // Leasing follows the same rule as deferred tax: describe the books, do not
   // assert a simplification the balansrakning contradicts. The 20.29 wording
@@ -102,8 +112,8 @@ export function buildK3RedovisningsPrinciper(params: {
   const leasingParagraph = hasCapitalizedLease
     ? 'Leasing: Leasingavgifter för operationella leasingavtal kostnadsförs linjärt i resultaträkningen över leasingperioden. Balansräkningen innehåller leasade tillgångar som redovisas som anläggningstillgång med tillhörande avskrivningar.'
     : 'Leasing: Samtliga leasingavtal redovisas som operationella leasingavtal med stöd av undantaget i K3 punkt 20.29, som medger att även finansiella leasingavtal redovisas som operationella i juridisk person. Leasingavgifterna kostnadsförs linjärt i resultaträkningen över leasingperioden.'
+  if (deferredTaxParagraph) paragraphs.push(deferredTaxParagraph)
   paragraphs.push(
-    deferredTaxParagraph,
     'Intäktsredovisning: Intäkter redovisas till det verkliga värdet av det som erhållits eller kommer att erhållas och redovisas när väsentliga risker och förmåner har överförts till köparen, beloppet kan mätas tillförlitligt och det är sannolikt att de ekonomiska fördelarna tillfaller företaget.',
     leasingParagraph,
     'Finansiella instrument: Finansiella instrument redovisas initialt till anskaffningsvärde inklusive transaktionskostnader. Kundfordringar värderas till det belopp som beräknas inflyta. Övriga finansiella tillgångar och skulder redovisas till upplupet anskaffningsvärde.',
@@ -131,7 +141,11 @@ export function buildK3RedovisningsPrinciper(params: {
  * legacy postings or imported history). The body reports the figures and
  * does NOT claim they were measured at the current 20.6 percent rate: an
  * imported provision may have been booked at 21.4 or 22 percent by another
- * system, and the balance is disclosed here exactly as it stands.
+ * system, and the balance is disclosed here exactly as it stands. It also
+ * does not attribute the balance to obeskattade reserver: under K3 the 2240
+ * account holds deferred tax on every temporary difference
+ * (.claude/skills/swedish-year-end-closing/references/k2-vs-k3.md:11-13) and
+ * the caller derives these figures from the 2240/8940 balances alone.
  *
  * Whenever this note is emitted, buildK3RedovisningsPrinciper MUST be built
  * with hasRecognizedDeferredTax: true, or note 1 would deny the very split
@@ -150,7 +164,7 @@ export function buildUppskjutenSkattNot(params: {
   const fmt = (n: number) =>
     Math.round(n).toLocaleString('sv-SE')
   const lines: string[] = [
-    'Posten avser uppskjuten skatteskuld hänförlig till obeskattade reserver, redovisad på konto 2240.',
+    'Posten avser uppskjuten skatteskuld redovisad på konto 2240.',
     '',
     `Ingående saldo (2240): ${fmt(latentTaxOpening)} kr`,
     `Årets förändring (8940): ${fmt(latentTaxChange)} kr`,

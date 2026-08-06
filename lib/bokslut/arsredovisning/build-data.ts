@@ -868,6 +868,42 @@ function deriveLatentTaxMovement(
 }
 
 /**
+ * True when the balansräkning carries an anläggningstillgång that the
+ * company's OWN chart of accounts names as leased.
+ *
+ * The previous rule tested for account 1260 or 1269, which was wrong in both
+ * directions. It missed every other account a finance-leased asset can land
+ * on (the K2 mapper folds 1220-1279 into one BR post, and the shipped BAS
+ * chart carries 1217 Finansiellt leasade maskiner and 1227 Finansiellt
+ * leasade inventarier), and on that same chart 1260 is "(Fritt konto för
+ * Inventarier, verktyg och installationer)" and 1269 is "Ack. avskrivningar
+ * på datorer": an owned laptop would have been reported as a leased asset.
+ *
+ * Numbers cannot separate an owned 1220 inventarie from a leased one, so ask
+ * the names instead. A kontogrupp-12 account (BAS keeps capitalized leases
+ * there: .claude/skills/swedish-asset-accounting/references/
+ * leasing-and-disposal.md:28) whose name contains "leas" is a leased asset or
+ * its accumulated depreciation; "Inventarier, verktyg och installationer"
+ * never matches. Names are the right source because they travel with the
+ * balance: the asset register cannot even reach 1260-1279 (its per-category
+ * ranges stop at 1259 and resume at 1280), so such a balance always arrives
+ * by SIE import or a manual voucher, carrying the originating chart's name.
+ *
+ * The scan stops at 1299 on purpose: 1720 Förutbetalda leasingavgifter is
+ * part of the OPERATIONAL treatment (leasing-and-disposal.md:14) and must not
+ * flip the paragraph.
+ */
+function hasCapitalizedLeaseAsset(tbFullRows: TrialBalanceRow[]): boolean {
+  return tbFullRows.some(
+    (r) =>
+      r.account_number >= '1200' &&
+      r.account_number < '1300' &&
+      /leas/i.test(r.account_name ?? '') &&
+      ((r.closing_debit || 0) !== 0 || (r.closing_credit || 0) !== 0),
+  )
+}
+
+/**
  * Build the K3 note set (BFNAR 2012:1). Differs from K2 in:
  *   - Verbose redovisningsprinciper covering all K3 measurement principles
  *   - A separate "Uppskjutna skatter" note showing 2240 movement
@@ -990,14 +1026,10 @@ async function buildK3Noter(
     )
   }
   const latentTaxMovement = latentTax.ok ? latentTax.movement : null
-  // Leased assets on the balance sheet (1260/1269) contradict the blanket
-  // "all leases are operational" simplification, so the same trial balance
-  // that decides the deferred-tax wording also decides the leasing wording.
-  const hasCapitalizedLease = tbFullRows.some(
-    (r) =>
-      (r.account_number === '1260' || r.account_number === '1269')
-      && ((r.closing_debit || 0) !== 0 || (r.closing_credit || 0) !== 0),
-  )
+  // Leased assets on the balance sheet contradict the blanket "all leases are
+  // operational" simplification, so the same trial balance that decides the
+  // deferred-tax wording also decides the leasing wording.
+  const hasCapitalizedLease = hasCapitalizedLeaseAsset(tbFullRows)
   notes.push(
     buildK3RedovisningsPrinciper({
       hasComponents,

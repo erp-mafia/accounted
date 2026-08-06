@@ -1722,8 +1722,13 @@ const RC_COMPLETENESS_CODES = new Set<VatDeclarationCheck['code']>([
  * UNBOOKED_CHECK_FAILED shares 'unbooked_transactions' with the real count:
  * the fail-closed variant means "we could not tell", and an agent should react
  * to it the same way (go look at the transactions, then re-run readiness).
+ *
+ * Exported so the tool-description test can assert that every kind an agent
+ * can receive is actually named in the description it plans against: the
+ * description drifted once already (it advertised FX revaluation, a WARNING,
+ * as a blocker and never mentioned unbooked transactions, the common one).
  */
-const YEAR_END_BLOCKER_KIND: Record<YearEndBlockerCode, string> = {
+export const YEAR_END_BLOCKER_KIND: Record<YearEndBlockerCode, string> = {
   PERIOD_NOT_FOUND: 'period_not_found',
   PERIOD_NOT_ENDED: 'period_not_ended',
   PERIOD_ALREADY_CLOSED: 'period_already_closed',
@@ -12780,7 +12785,14 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_year_end_readiness',
     title: 'Year-End Readiness Check',
-    description: "Pre-flight before irreversible gnubok_run_year_end. Returns ready (bool) + ordered blockers (drafts, voucher gaps, sequence mismatches, unbalanced TB, FX revaluation) + optional closing-entry preview.",
+    // Budget: 280 chars (output-schema.test.ts). Spend it on the blockers an
+    // agent can act on BEFORE calling, in likelihood order. The four
+    // period-state kinds (period_not_found / _not_ended / _already_closed /
+    // closing_entry_exists) collapse into "period-state": nothing to pre-check
+    // there, the period either is closable or is not. Open items in foreign
+    // currency are warnings, never blockers, because executeYearEndClosing
+    // revalues them in step 2 (lib/core/bookkeeping/year-end-service.ts).
+    description: "Pre-flight for irreversible gnubok_run_year_end. Blockers: unbooked_transactions (most common), draft_entries, unexplained_voucher_gap, sequence_mismatch, trial_balance_unbalanced, opening_balance_continuity, next_period_ib_posted, period-state. FX = warning, never blocker.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,

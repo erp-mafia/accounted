@@ -34,8 +34,16 @@ interface AccountingFrameworkFormProps {
  * UX rules (regulatory area: kept in Swedish):
  *   - Default is K2 (matches the column default and BFNAR 2016:10 baseline).
  *   - Switching in either direction fires a confirmation dialog. K2 → K3
- *     warns about the added obligations; the recommendation per BFN is that
- *     the choice is permanent once made, surfaced as a warning, not a block.
+ *     names what the system then does (K3-mallen for the årsredovisning,
+ *     komponentuppdelning in the asset register) and the one obligation the
+ *     choice itself carries: komponentavskrivning is mandatory under K3 where
+ *     component useful lives differ materially (punkt 17.4,
+ *     .claude/skills/swedish-year-end-closing/references/k2-vs-k3.md:5).
+ *     Kassaflödesanalys is NOT a consequence of K3: it follows from being a
+ *     större företag (references/reporting-and-filing.md:10), so the copy
+ *     says the product includes one, it does not blame the regelverk.
+ *     The recommendation per BFN is that the choice is permanent once made,
+ *     surfaced as a warning, not a block.
  *     K3 → K2 warns about what the system does NOT do: uppskjuten skatt
  *     (2240/8940) balances and komponentavskrivningar are not unwound
  *     automatically, and the K3 årsredovisning content stops applying.
@@ -103,10 +111,14 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
         htmlFor="accounting_framework"
         help={
           <>
-            K2 är standard för mindre bolag och innebär förenklade regler. K3 krävs när
-            bolaget når två av tre tröskelvärden (nettoomsättning &gt; 80 MSEK, tillgångar
-            &gt; 40 MSEK, eller fler än 50 anställda). K3 ställer högre krav: kassaflödesanalys,
-            komponentavskrivning på materiella anläggningstillgångar och mer omfattande noter.
+            K2 är standard för mindre bolag och innebär förenklade regler. Större företag
+            ska tillämpa K3 och upprätta kassaflödesanalys: gränsen går vid mer än ett av
+            tre tröskelvärden (nettoomsättning &gt; 80 MSEK, tillgångar &gt; 40 MSEK, fler
+            än 50 anställda) under vart och ett av de två senaste räkenskapsåren. Med K3
+            valt bygger Accounted årsredovisningen enligt K3-mallen: kassaflödesanalys,
+            förändring av eget kapital som egen räkning och utökade noter.
+            Anläggningsregistret tar emot komponentuppdelning först med K3, som kräver
+            komponentavskrivning när komponenterna har väsentligt olika nyttjandeperioder.
             Obeskattade reserver redovisas brutto i juridisk person enligt K3 punkt 29.37.
           </>
         }
@@ -153,9 +165,15 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
               ) : (
                 <>
                   <span className="block">
-                    K3 medför löpande att kassaflödesanalys upprättas, att
-                    komponentavskrivning kan användas och att årsredovisningen får ett
-                    utökat notinnehåll.
+                    Årsredovisningen byggs då enligt K3-mallen: kassaflödesanalys,
+                    förändring av eget kapital som egen räkning och utökade noter.
+                    Kassaflödesanalys är i sig ett krav för större företag, inte en följd
+                    av regelverksvalet.
+                  </span>
+                  <span className="block">
+                    Komponentavskrivning blir obligatorisk för tillgångar vars komponenter
+                    har väsentligt olika nyttjandeperioder (K3 punkt 17.4).
+                    Anläggningsregistret tar emot komponentuppdelning först när K3 är valt.
                   </span>
                   <span className="block">
                     Bytet är permanent enligt rekommendation. Fortsätt?

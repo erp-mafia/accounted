@@ -215,10 +215,11 @@ export const POST = withRouteContext(
     //    immaterial default is the acquired pair 1090/1099, which is lawful,
     //    so only a deliberate override can trip this). The guard supplies the
     //    message: the egenupparbetade group cites BFNAR 2016:10 punkt 10.4,
-    //    other Ej K2 accounts do not.
+    //    other Ej K2 accounts do not, and an enskild firma gets neither, since
+    //    K2 is not its regelverk. entity_type rides along on the same fetch.
     const { data: company } = await supabase
       .from('companies')
-      .select('accounting_framework')
+      .select('accounting_framework, entity_type')
       .eq('id', companyId)
       .single()
     const isK3Company = company?.accounting_framework === 'k3'
@@ -247,7 +248,7 @@ export const POST = withRouteContext(
         validation.data.bas_accumulated_account ?? defaults.accumulated,
       ])
       if (excluded) {
-        const messages = k2ExcludedAccountMessages(excluded)
+        const messages = k2ExcludedAccountMessages(excluded, company?.entity_type)
         return NextResponse.json(
           {
             error: {

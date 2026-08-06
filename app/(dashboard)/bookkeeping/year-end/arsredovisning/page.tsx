@@ -530,10 +530,20 @@ export default function ArsredovisningPage() {
       {data.accounting_framework === 'k3' && (
         <div className="px-1 text-sm">
           <p className="font-medium">Årsredovisning enligt K3 (BFNAR 2012:1)</p>
+          {/* Enumerate only what buildK3Noter and buildArsredovisningData
+              actually emit. The uppskjuten skatt-noten needs a 2240/8940
+              balance (which the engine no longer creates: K3 29.37 gross in
+              juridisk person), the anläggningsnoter need assets in the
+              register, and the kassaflödesanalys is dropped with a warning
+              when it cannot be generated. Promising any of them
+              unconditionally is false in the normal case. */}
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
-            Dokumentet innehåller kassaflödesanalys, förändring av eget kapital och
-            utökade noter (uppskjuten skatt, redovisningsprinciper, materiella
-            anläggningstillgångar): krav som följer K3 men inte K2.
+            {data.kassaflodesanalys
+              ? 'Dokumentet följer K3-mallen: kassaflödesanalys, förändring av eget kapital som egen räkning och noter enligt K3.'
+              : 'Dokumentet följer K3-mallen: förändring av eget kapital som egen räkning och noter enligt K3. Kassaflödesanalysen kunde inte beräknas för perioden: se varningarna längre ner.'}{' '}
+            Vilka noter som kommer med styrs av bokföringen: noten Uppskjutna skatter tas
+            med först när konto 2240 eller 8940 har ett saldo, och anläggningsnoterna när
+            det finns tillgångar i anläggningsregistret.
           </p>
         </div>
       )}

@@ -62,6 +62,16 @@ describe('buildK3RedovisningsPrinciper', () => {
     expect(note.body).not.toMatch(/beräknad/)
   })
 
+  it('does not attribute the recognised 2240 balance to obeskattade reserver', () => {
+    // deriveLatentTaxMovement reads the 2240 and 8940 balances and nothing
+    // else. Under K3 that account carries deferred tax on ALL temporary
+    // differences (k2-vs-k3.md:11-13), so where the balance came from is
+    // exactly what this builder cannot establish.
+    const note = principles({ deferredTax: 'recognized' })
+    expect(note.body).toContain('Uppskjuten skatteskuld redovisas på konto 2240')
+    expect(note.body).not.toContain('hänförlig till obeskattade reserver')
+  })
+
   it('describes leasing as expensed operational leases under the K3 20.29 juridisk-person exemption', () => {
     const note = principles()
     expect(note.body).toContain('operationella leasingavtal')
@@ -81,22 +91,32 @@ describe('buildK3RedovisningsPrinciper', () => {
 
   it('drops the blanket operational claim when the books carry leased assets', () => {
     const note = principles({ hasCapitalizedLease: true })
-    // A balansrakning with 1260/1269 contradicts "samtliga leasingavtal
-    // redovisas som operationella", so that claim and the 20.29 basis for it
-    // must both disappear; the paragraph describes what is booked instead.
+    // A balansrakning carrying an anlaggningskonto the company's own chart
+    // names as leased contradicts "samtliga leasingavtal redovisas som
+    // operationella", so that claim and the 20.29 basis for it must both
+    // disappear; the paragraph describes what is booked instead.
     expect(note.body).not.toMatch(/Samtliga leasingavtal/)
     expect(note.body).not.toMatch(/20\.29/)
     expect(note.body).toContain('leasade tillgångar')
     expect(note.body).toContain('kostnadsförs linjärt')
   })
 
-  it('never prints an affirmative denial when the deferred-tax figures could not be read', () => {
+  it('prints NO deferred-tax paragraph when the figures could not be read', () => {
     const note = principles({ deferredTax: 'unknown' })
-    // The denial is a statement about the books; on the read-failure path we
-    // have no books to state it from, so only the going-forward policy shows.
-    expect(note.body).not.toMatch(/särredovisas inte/)
-    expect(note.body).toContain('K3 punkt 29.37')
-    expect(note.body).toContain('inklusive uppskjuten skatteskuld')
+    // Every available wording is a statement about how THIS document reports
+    // the reserves, and on the read-failure path there are no figures to state
+    // it from: the gross wording is the denial phrased positively, not a
+    // weaker claim. So the paragraph is omitted entirely; build-data has
+    // already pushed a warning that the note could not be computed.
+    expect(note.body).not.toMatch(/Uppskjuten skatt/)
+    expect(note.body).not.toMatch(/29\.37/)
+    expect(note.body).not.toMatch(/uppskjuten skatteskuld/)
+    expect(note.body).not.toMatch(/2240/)
+    // The rest of the policy note is unaffected.
+    expect(note.body).toContain('BFNAR 2012:1')
+    expect(note.body).toContain('Intäktsredovisning')
+    expect(note.body).toContain('Leasing')
+    expect(note.body).toContain('Finansiella instrument')
   })
 
   it('OMITS the komponentavskrivning paragraph when no asset has components', () => {
@@ -132,11 +152,13 @@ describe('K3 noter: the two deferred-tax notes never contradict each other', () 
       latentTaxChange: 20_600,
       latentTaxClosing: 70_600,
     })
-    // Both notes recognise the same liability on the same account.
+    // Both notes recognise the same liability on the same account, and
+    // neither says where the balance came from: the caller sees 2240/8940
+    // only, and K3 puts every temporary difference on 2240.
     expect(policy.body).toContain('konto 2240')
     expect(movement.body).toContain('konto 2240')
-    expect(policy.body).toContain('obeskattade reserver')
-    expect(movement.body).toContain('obeskattade reserver')
+    expect(policy.body).not.toContain('hänförlig till obeskattade reserver')
+    expect(movement.body).not.toContain('hänförlig till obeskattade reserver')
     // The policy paragraph must NOT carry the denial while the movement note
     // discloses exactly that split: that is the contradiction this pins.
     expect(policy.body).not.toContain('särredovisas inte')
@@ -191,7 +213,7 @@ describe('buildUppskjutenSkattNot', () => {
     expect(note.body).toMatch(/Utgående saldo.*60/)
   })
 
-  it('reports the balance without claiming a rate it cannot verify', () => {
+  it('reports the balance without claiming a rate or an origin it cannot verify', () => {
     const note = buildUppskjutenSkattNot({
       noteNumber: 1,
       latentTaxOpening: 50_000,
@@ -199,12 +221,14 @@ describe('buildUppskjutenSkattNot', () => {
       latentTaxClosing: 50_000,
     })
     expect(note.body).toContain('konto 2240')
-    expect(note.body).toContain('obeskattade reserver')
     // A balance can come from the K3 disposition, a legacy posting or an SIE
     // import measured at 22 or 21,4 percent: asserting 20,6 percent would be
     // a claim about numbers this builder did not produce.
     expect(note.body).not.toMatch(/20,6/)
     expect(note.body).not.toMatch(/skattesats/)
+    // Same for provenance: 2240 is K3's account for every temporary
+    // difference (k2-vs-k3.md:11-13), and the caller reads only the balance.
+    expect(note.body).not.toContain('obeskattade reserver')
   })
 })
 

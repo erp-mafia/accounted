@@ -4,6 +4,12 @@
  * the rejection text cites BFNAR 2016:10 punkt 10.4 only for the
  * egenupparbetade immateriella group and stays generic everywhere else, so a
  * deferred-tax or fair-value account never gets a wrong legal citation.
+ *
+ * The second axis is entity_type. companies.accounting_framework is NOT NULL
+ * DEFAULT 'k2', so an enskild firma hits the same gate although K2 is the
+ * regelverk for an ÅRSREDOVISNING, which it does not prepare
+ * (legal-framework.md:29, :48). It may therefore get neither the citation nor
+ * a K3 remedy.
  */
 import { describe, it, expect } from 'vitest'
 import {
@@ -11,11 +17,12 @@ import {
   k2ExcludedAccountMessages,
 } from '@/lib/bokslut/assets/k2-account-guard'
 import { BAS_REFERENCE, getBASReference } from '@/lib/bookkeeping/bas-reference'
+import type { EntityType } from '@/types'
 
-function messagesFor(accountNumber: string) {
+function messagesFor(accountNumber: string, entityType: EntityType | null = 'aktiebolag') {
   const account = getBASReference(accountNumber)
   expect(account, `${accountNumber} missing from the BAS reference`).toBeTruthy()
-  return k2ExcludedAccountMessages(account!)
+  return k2ExcludedAccountMessages(account!, entityType)
 }
 
 describe('findK2ExcludedAccount', () => {
@@ -77,12 +84,14 @@ describe('k2ExcludedAccountMessages', () => {
   // rewrites the whole årsredovisning: it is never the remedy for one
   // misdirected account. No message may suggest it, on any Ej K2 account.
   it('never tells the user to change the accounting framework', () => {
-    for (const account of BAS_REFERENCE.filter((a) => a.k2_excluded)) {
-      const { message_sv, message_en } = k2ExcludedAccountMessages(account)
-      expect(message_sv).not.toContain('Byt regelverk')
-      expect(message_sv).not.toContain('Inställningar')
-      expect(message_en).not.toContain('Switch the accounting framework')
-      expect(message_en).not.toContain('Settings')
+    for (const entityType of ['aktiebolag', 'enskild_firma', null] as const) {
+      for (const account of BAS_REFERENCE.filter((a) => a.k2_excluded)) {
+        const { message_sv, message_en } = k2ExcludedAccountMessages(account, entityType)
+        expect(message_sv).not.toContain('Byt regelverk')
+        expect(message_sv).not.toContain('Inställningar')
+        expect(message_en).not.toContain('Switch the accounting framework')
+        expect(message_en).not.toContain('Settings')
+      }
     }
   })
 
@@ -91,12 +100,14 @@ describe('k2ExcludedAccountMessages', () => {
   // company. The text must therefore describe the ACCOUNT, never claim which
   // framework this company applies.
   it('never asserts which framework the company applies', () => {
-    for (const account of BAS_REFERENCE.filter((a) => a.k2_excluded)) {
-      const { message_sv, message_en } = k2ExcludedAccountMessages(account)
-      expect(message_sv).not.toContain('företaget tillämpar')
-      expect(message_sv).not.toContain('ert företag')
-      expect(message_en).not.toContain('the company applies')
-      expect(message_en).not.toContain('your company')
+    for (const entityType of ['aktiebolag', 'enskild_firma', null] as const) {
+      for (const account of BAS_REFERENCE.filter((a) => a.k2_excluded)) {
+        const { message_sv, message_en } = k2ExcludedAccountMessages(account, entityType)
+        expect(message_sv).not.toContain('företaget tillämpar')
+        expect(message_sv).not.toContain('ert företag')
+        expect(message_en).not.toContain('the company applies')
+        expect(message_en).not.toContain('your company')
+      }
     }
   })
 
@@ -107,7 +118,7 @@ describe('k2ExcludedAccountMessages', () => {
     // 1370, 1518, 2089, 2092, 2096, 2240, 2448, 3940, 7940, 82xx-84xx, 8940.
     expect(others.length).toBeGreaterThan(0)
     for (const account of others) {
-      const { message_sv, message_en } = k2ExcludedAccountMessages(account)
+      const { message_sv, message_en } = k2ExcludedAccountMessages(account, 'aktiebolag')
       expect(message_sv).toContain(account.account_number)
       expect(message_sv).toContain('Ej K2')
       expect(message_sv).toContain('K3')
@@ -126,5 +137,51 @@ describe('k2ExcludedAccountMessages', () => {
   it('names the account so the user can see what was rejected', () => {
     const { message_sv } = messagesFor('1370')
     expect(message_sv).toContain('1370 (Uppskjuten skattefordran)')
+  })
+})
+
+describe('k2ExcludedAccountMessages: enskild firma', () => {
+  // An enskild firma prepares ett förenklat årsbokslut (K1) or ett årsbokslut
+  // (BFNAR 2017:3), never an årsredovisning under BFNAR 2016:10
+  // (.claude/skills/swedish-year-end-closing/references/legal-framework.md:29,
+  // :48). Citing the K2 regelverk at it is a wrong legal claim, and "apply K3
+  // instead" points at a document it does not produce. The K1 counterpart of
+  // punkt 10.4 is not sourced in the repo skills, so nothing replaces it: the
+  // message states the chart flag, what the system did, and the way forward.
+  it.each(['1010', '1011', '1012', '1018', '1019', '1081'])(
+    'drops the BFNAR 2016:10 citation on %s but keeps the 1090 remedy',
+    (accountNumber) => {
+      const { message_sv, message_en } = messagesFor(accountNumber, 'enskild_firma')
+      expect(message_sv).toContain(accountNumber)
+      expect(message_sv).not.toContain('BFNAR 2016:10')
+      expect(message_sv).not.toContain('10.4')
+      expect(message_sv).not.toContain('K3')
+      expect(message_sv).toContain('Ej K2')
+      expect(message_sv).toContain('anläggningsregistret')
+      expect(message_sv).toContain('1090')
+      expect(message_en).not.toContain('BFNAR 2016:10')
+      expect(message_en).not.toContain('K3')
+      expect(message_en).toContain('1090')
+    },
+  )
+
+  it('drops the "presumes K3" line for the other Ej K2 accounts', () => {
+    const { message_sv, message_en } = messagesFor('1370', 'enskild_firma')
+    expect(message_sv).toContain('1370 (Uppskjuten skattefordran)')
+    expect(message_sv).toContain('Ej K2')
+    expect(message_sv).not.toContain('K3')
+    // No 1090: that answer belongs to a misdirected intangible only.
+    expect(message_sv).not.toContain('1090')
+    expect(message_en).not.toContain('K3')
+    expect(message_en).not.toContain('1090')
+  })
+
+  // A failed companies read leaves entity_type undefined. An unknown entity
+  // may not be handed a legal citation on a guess, so it gets the same
+  // neutral wording as an enskild firma.
+  it('treats an unknown entity type like an enskild firma', () => {
+    const known = messagesFor('1010', 'enskild_firma')
+    const unknown = k2ExcludedAccountMessages(getBASReference('1010')!)
+    expect(unknown).toEqual(known)
   })
 })

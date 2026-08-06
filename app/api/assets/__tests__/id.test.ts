@@ -167,7 +167,7 @@ describe('POST /api/assets', () => {
   ])(
     'rejects a K2 company explicitly overriding onto %s with 422',
     async (assetAccount, accumulatedAccount) => {
-      enqueue({ data: { accounting_framework: 'k2' } })
+      enqueue({ data: { accounting_framework: 'k2', entity_type: 'aktiebolag' } })
 
       const { status, body } = await parseJsonResponse<{
         error: { code: string; message: string }
@@ -189,11 +189,51 @@ describe('POST /api/assets', () => {
       expect(status).toBe(422)
       expect(body.error.code).toBe('K2_EXCLUDED_ACCOUNT')
       expect(body.error.message).toContain(assetAccount)
-      // All six are kontogrupp 10, so the punkt 10.4 citation applies.
+      // All six are kontogrupp 10 and the company is an AB preparing an
+      // årsredovisning, so the punkt 10.4 citation applies.
       expect(body.error.message).toContain('BFNAR 2016:10 punkt 10.4')
       expect(mockCreateAsset).not.toHaveBeenCalled()
     },
   )
+
+  // companies.accounting_framework is NOT NULL DEFAULT 'k2', so an enskild
+  // firma runs into the same gate. It prepares a förenklat årsbokslut, not an
+  // årsredovisning under BFNAR 2016:10, so the K2 citation would be a false
+  // legal claim and "use K3 instead" an impossible remedy. The block stands;
+  // the wording drops both and keeps the actionable 1090 remedy.
+  it('rejects an enskild firma on 1010 without citing BFNAR 2016:10 or K3', async () => {
+    enqueue({ data: { accounting_framework: 'k2', entity_type: 'enskild_firma' } })
+
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en: string }
+    }>(
+      await POST(createMockRequest('/api/assets', {
+        method: 'POST',
+        body: {
+          name: 'Utvecklingsprojekt',
+          category: 'immaterial',
+          acquisition_date: '2025-01-01',
+          acquisition_cost: 50_000,
+          useful_life_months: 60,
+          bas_asset_account: '1010',
+          bas_accumulated_account: '1039',
+        },
+      }))
+    )
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('K2_EXCLUDED_ACCOUNT')
+    expect(body.error.message).toContain('1010')
+    expect(body.error.message).not.toContain('BFNAR 2016:10')
+    expect(body.error.message).not.toContain('10.4')
+    expect(body.error.message).not.toContain('K3')
+    expect(body.error.message_en).not.toContain('BFNAR 2016:10')
+    expect(body.error.message_en).not.toContain('K3')
+    // Still actionable: the lawful account, and what the system did.
+    expect(body.error.message).toContain('1090')
+    expect(body.error.message).toContain('anläggningsregistret')
+    expect(mockCreateAsset).not.toHaveBeenCalled()
+  })
 
   it('rejects a K2 company overriding the ACCUMULATED account onto 1019 with 422', async () => {
     enqueue({ data: { accounting_framework: 'k2' } })
@@ -395,7 +435,7 @@ describe('PATCH /api/assets/[id]', () => {
   })
 
   it('rejects a K2 company patching the asset account onto 1010 with 422', async () => {
-    enqueue({ data: { accounting_framework: 'k2' } })
+    enqueue({ data: { accounting_framework: 'k2', entity_type: 'aktiebolag' } })
     mockGetAsset.mockResolvedValue({
       id: 'asset-1',
       category: 'immaterial',
@@ -416,6 +456,7 @@ describe('PATCH /api/assets/[id]', () => {
     expect(status).toBe(422)
     expect(body.error.code).toBe('K2_EXCLUDED_ACCOUNT')
     expect(body.error.message).toContain('1010')
+    // AB on the companies row, so the K2 citation is the right one here.
     expect(body.error.message).toContain('BFNAR 2016:10 punkt 10.4')
     expect(mockUpdateAsset).not.toHaveBeenCalled()
   })
@@ -457,7 +498,7 @@ describe('PATCH /api/assets/[id]', () => {
   // override outside the category range hits this gate before updateAsset()
   // raises its range error. Those rejections must NOT claim punkt 10.4.
   it('rejects a K2 company patching onto 1370 without citing the intangible rule', async () => {
-    enqueue({ data: { accounting_framework: 'k2' } })
+    enqueue({ data: { accounting_framework: 'k2', entity_type: 'aktiebolag' } })
     mockGetAsset.mockResolvedValue({
       id: 'asset-1',
       category: 'immaterial',

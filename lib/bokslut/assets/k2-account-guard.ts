@@ -36,7 +36,24 @@
  *   intangible belongs on 1090, which K2 permits
  *   (.claude/skills/swedish-year-end-closing/references/k2-vs-k3.md:24,
  *   "Only acquired intangibles may be recognized").
+ *
+ * The K2 framing only holds for an entity that prepares an ÅRSREDOVISNING.
+ * companies.accounting_framework is NOT NULL DEFAULT 'k2', so an enskild
+ * firma trips this gate too, and BFNAR 2016:10 is not its regelverk: K2 is
+ * for mindre aktiebolag och ekonomiska föreningar, while a sole trader
+ * prepares ett förenklat årsbokslut (K1) or ett årsbokslut (BFNAR 2017:3)
+ * (.claude/skills/swedish-year-end-closing/references/legal-framework.md:29,
+ * :31, :48). Citing punkt 10.4 at them is a wrong legal claim, and "apply K3
+ * instead" is not a remedy the ordinary sole trader has (the same source, :50,
+ * has it reaching an årsredovisning only by meeting the större-företag
+ * criteria, which it calls extremely rare). The K1 counterpart of punkt 10.4
+ * is not sourced in the repo skills, so nothing is cited in its place: the
+ * enskild-firma wording states what the BAS chart marks and what the asset
+ * register does, plus the same 1090 remedy. `entityType` is optional, and
+ * when it is missing the neutral wording is used: an unknown entity may not
+ * be handed a legal citation on a guess.
  */
+import type { EntityType } from '@/types'
 import { getBASReference, type BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
 
 /** Swedish and English rejection text, mirroring the structured-errors registry shape. */
@@ -78,15 +95,36 @@ export function findK2ExcludedAccount(
 
 /**
  * User-facing text for the K2_EXCLUDED_ACCOUNT rejection, in both languages.
- * The legal citation is conditional on what actually triggered the gate: see
- * the file header.
+ * The legal citation is conditional on what actually triggered the gate AND on
+ * the entity preparing an årsredovisning at all: see the file header.
+ *
+ * @param entityType companies.entity_type for the company being written to.
+ *   Only 'aktiebolag' gets the K2/K3 regelverk framing; anything else
+ *   (enskild firma, or an entity we could not read) gets wording that is true
+ *   without it.
  */
 export function k2ExcludedAccountMessages(
   account: BASReferenceAccount,
+  entityType?: EntityType | null,
 ): K2ExcludedAccountMessages {
   const label = `${account.account_number} (${account.account_name})`
+  const preparesArsredovisning = entityType === 'aktiebolag'
 
   if (isEgenupparbetadImmateriell(account)) {
+    if (!preparesArsredovisning) {
+      return {
+        message_sv:
+          `Konto ${label} är i BAS-kontoplanen reserverat för egenupparbetade ` +
+          `utvecklingsutgifter och markerat Ej K2: anläggningsregistret tar inte emot det. ` +
+          `En förvärvad immateriell tillgång bokförs på 1090 ` +
+          `(Övriga immateriella anläggningstillgångar).`,
+        message_en:
+          `Account ${label} is reserved in the BAS chart of accounts for internally generated ` +
+          `development expenditure and marked Ej K2: the asset register does not accept it. ` +
+          `An acquired intangible asset belongs on 1090 ` +
+          `(Övriga immateriella anläggningstillgångar).`,
+      }
+    }
     return {
       message_sv:
         `Konto ${label} är reserverat för egenupparbetade utvecklingsutgifter, som bara får ` +
@@ -96,6 +134,17 @@ export function k2ExcludedAccountMessages(
         `Account ${label} is reserved for internally generated development expenditure, which ` +
         `may only be capitalized under K3 (BFNAR 2016:10 paragraph 10.4). An acquired ` +
         `intangible asset belongs on 1090 (Övriga immateriella anläggningstillgångar).`,
+    }
+  }
+
+  if (!preparesArsredovisning) {
+    return {
+      message_sv:
+        `Konto ${label} är markerat Ej K2 i BAS-kontoplanen: anläggningsregistret tar inte ` +
+        `emot det. Välj ett annat konto för tillgången.`,
+      message_en:
+        `Account ${label} is marked Ej K2 in the BAS chart of accounts: the asset register ` +
+        `does not accept it. Choose a different account for the asset.`,
     }
   }
 

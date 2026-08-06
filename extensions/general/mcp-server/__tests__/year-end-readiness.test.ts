@@ -7,7 +7,7 @@
  * lib/core/bookkeeping tests + the manual MCP smoke test.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { tools } from '../server'
+import { tools, YEAR_END_BLOCKER_KIND } from '../server'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
 vi.mock('@/lib/core/bookkeeping/year-end-service', () => ({
@@ -46,6 +46,48 @@ describe('gnubok_year_end_readiness: registration', () => {
 
   it('is mapped to reports:read scope', () => {
     expect(TOOL_SCOPE_MAP.gnubok_year_end_readiness).toBe('reports:read')
+  })
+
+  // The description is the only thing an agent reads before deciding what to
+  // pre-check, and the 280-char budget does not fit all eleven kinds. It must
+  // therefore name every kind the caller can DO something about ahead of time;
+  // the four period-state kinds are summarized, since nothing can be
+  // pre-checked about them.
+  const PERIOD_STATE_KINDS = new Set([
+    'period_not_found',
+    'period_not_ended',
+    'period_already_closed',
+    'closing_entry_exists',
+  ])
+
+  it('names every actionable blocker kind the tool can emit', () => {
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    const actionable = [...new Set(Object.values(YEAR_END_BLOCKER_KIND))].filter(
+      (kind) => !PERIOD_STATE_KINDS.has(kind),
+    )
+    // Guards the summarizing itself: if a kind stops being period-state, or a
+    // new one appears, it has to show up in the description.
+    expect(actionable.length).toBe(7)
+    for (const kind of actionable) {
+      expect(tool.description, `blocker kind ${kind} missing from description`).toContain(kind)
+    }
+    expect(tool.description).toContain('period-state')
+  })
+
+  it('names unbooked transactions as the most common blocker', () => {
+    // The omission that sent agents pre-checking the wrong things: this is the
+    // blocker a real close trips on, and the description never mentioned it.
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    expect(tool.description).toMatch(/unbooked_transactions \(most common\)/)
+  })
+
+  it('does not present open foreign-currency items as a blocker', () => {
+    // validateYearEndReadiness pushes those onto `warnings`, never `blockers`:
+    // executeYearEndClosing runs the revaluation itself, so escalating would
+    // block a close that the very next step performs.
+    const tool = tools.find((t) => t.name === 'gnubok_year_end_readiness')!
+    expect(tool.description).toMatch(/FX = warning, never blocker/)
+    expect(tool.description).not.toMatch(/[Bb]lockers[^.]*revaluation/)
   })
 })
 

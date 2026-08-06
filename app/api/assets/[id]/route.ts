@@ -160,7 +160,10 @@ export const PATCH = withRouteContext(
       const [{ data: company }, existing] = await Promise.all([
         supabase
           .from('companies')
-          .select('accounting_framework')
+          // entity_type rides along on the same fetch: the rejection wording
+          // must not cite BFNAR 2016:10 at an enskild firma, which prepares no
+          // årsredovisning under K2. See lib/bokslut/assets/k2-account-guard.ts.
+          .select('accounting_framework, entity_type')
           .eq('id', companyId)
           .single(),
         getAsset(supabase, companyId, id),
@@ -187,7 +190,7 @@ export const PATCH = withRouteContext(
             (categoryDefaultsApply ? defaults.accumulated : existing.bas_accumulated_account),
         ])
         if (excluded) {
-          const messages = k2ExcludedAccountMessages(excluded)
+          const messages = k2ExcludedAccountMessages(excluded, company?.entity_type)
           return NextResponse.json(
             {
               error: {
