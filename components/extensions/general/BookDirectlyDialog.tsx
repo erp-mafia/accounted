@@ -33,6 +33,7 @@ import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { AttnLine } from '@/components/ui/attn-line'
 import type { BASAccount, BookingTemplateLibrary, CashAccount, FiscalPeriod, InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
@@ -268,7 +269,9 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
         const debit: string | undefined = match?.template?.debit_account
         const credit: string | undefined = match?.template?.credit_account
         if (!match || (match.confidence ?? 0) < 0.5) return
-        if (!debit || debit.startsWith('19') || !credit || !credit.startsWith('19')) return
+        // P&L cost on debit (4xxx-8xxx), settlement on credit: keeps private
+        // and balance-sheet templates (2013, 1630, 12xx) out of a cost field.
+        if (!debit || !/^[4-8]/.test(debit) || !credit || !credit.startsWith('19')) return
         setLines((current) => {
           if (!current[0] || current[0].account_number) return current
           return current.map((l, i) => (i === 0 ? { ...l, account_number: debit } : l))
@@ -673,15 +676,15 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 <p className="text-sm pt-2 tabular-nums">
                   {derivedPeriod.period_start}: {derivedPeriod.period_end}
                   {(derivedPeriod.locked_at || derivedPeriod.is_closed) && (
-                    <span className="text-warning-foreground">
+                    <span className="text-attn">
                       {' '}({derivedPeriod.locked_at ? 'låst' : 'stängd'})
                     </span>
                   )}
                 </p>
               ) : (
-                <p className="text-sm text-warning-foreground pt-2">
+                <AttnLine className="pt-2">
                   Datumet ligger utanför öppna räkenskapsperioder. Ändra datumet eller skapa perioden under Bokföring.
-                </p>
+                </AttnLine>
               )}
             </div>
           </div>

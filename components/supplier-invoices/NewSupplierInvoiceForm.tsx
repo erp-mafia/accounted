@@ -612,11 +612,29 @@ export default function NewSupplierInvoiceForm({
   // Auto-fill due date and defaults when supplier is selected: but never
   // overwrite a value the AI already filled in for us.
   const [templateAccountNote, setTemplateAccountNote] = useState<{ account: string; counterparty: string } | null>(null)
+  // Rows planted by the counterparty-history prefill, so a supplier SWITCH can
+  // un-plant them: without this, supplier A's history account survives into
+  // supplier B's invoice and silently blocks B's own default_expense_account
+  // (the fill branches only touch empty rows).
+  const plantedRef = useRef<{ account: string; rows: number[] } | null>(null)
   useEffect(() => {
     if (!watchedSupplierId) return
     const supplier = suppliers.find((s) => s.id === watchedSupplierId)
     if (!supplier) return
     setTemplateAccountNote(null)
+    if (plantedRef.current) {
+      const { account, rows } = plantedRef.current
+      const planted = getValues('items')
+      rows.forEach((i) => {
+        if (planted[i]?.account_number === account) {
+          // Clear only the account; the rate is left for the next fill or
+          // manual pick to settle (handleAccountChange reapplies konto
+          // defaults), so an AI-extracted rate is never clobbered here.
+          setValue(`items.${i}.account_number`, '')
+        }
+      })
+      plantedRef.current = null
+    }
 
     const invoiceDate = watch('invoice_date')
     const currentDue = watch('due_date')
@@ -628,10 +646,13 @@ export default function NewSupplierInvoiceForm({
     if (supplier.default_expense_account && fields.length > 0) {
       // Fill every row the user hasn't assigned yet: an empty account is the
       // only signal needed (rows start empty by design, no seeded default).
+      // Through handleAccountChange so the fill behaves exactly like a manual
+      // pick: description and the konto's default moms come along (a momsfri
+      // konto must not keep the 25% row default).
       const items = getValues('items')
       items.forEach((row, i) => {
         if (!row.account_number) {
-          setValue(`items.${i}.account_number`, supplier.default_expense_account!)
+          handleAccountChange(i, supplier.default_expense_account!)
         }
       })
     }
@@ -645,8 +666,9 @@ export default function NewSupplierInvoiceForm({
     // No supplier default: fall back to the company's own booking history for
     // this counterparty (the same tiered matcher the booking flows use). Fills
     // empty rows only, never a generic seed, and only from expense-shaped
-    // templates (cost on debit, settlement on credit). Best-effort: on any
-    // miss the rows simply stay blank, exactly as before.
+    // templates (P&L cost on debit, settlement on credit; the 4-8 gate keeps
+    // private/balance-sheet templates like 2013 or 1630 out). Best-effort: on
+    // any miss the rows simply stay blank, exactly as before.
     if (!supplier.default_expense_account && fields.length > 0 && supplier.name?.trim()) {
       let cancelled = false
       ;(async () => {
@@ -661,16 +683,18 @@ export default function NewSupplierInvoiceForm({
           const debit: string | undefined = match?.template?.debit_account
           const credit: string | undefined = match?.template?.credit_account
           if (!match || (match.confidence ?? 0) < 0.5) return
-          if (!debit || debit.startsWith('19') || !credit || !credit.startsWith('19')) return
+          if (!debit || !/^[4-8]/.test(debit) || !credit || !credit.startsWith('19')) return
           const items = getValues('items')
-          let applied = false
+          const appliedRows: number[] = []
           items.forEach((row, i) => {
             if (!row.account_number) {
-              setValue(`items.${i}.account_number`, debit)
-              applied = true
+              // Same path as a manual pick: konto default moms rides along.
+              handleAccountChange(i, debit)
+              appliedRows.push(i)
             }
           })
-          if (applied) {
+          if (appliedRows.length > 0) {
+            plantedRef.current = { account: debit, rows: appliedRows }
             setTemplateAccountNote({ account: debit, counterparty: match.template.counterparty_name })
           }
         } catch {

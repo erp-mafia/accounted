@@ -38,7 +38,12 @@ export default function BatchCategorySelector({
   const isProcessing = progress !== null
 
   const handleSelectCategory = (category: TransactionCategory) => {
-    const resolvedVat = vatTreatment === 'none' || vatTreatment === 'auto' ? undefined : vatTreatment
+    // 'auto' omits the treatment so the server derives it per category. An
+    // explicit 'Ingen moms' goes over the wire as 'exempt' (books no VAT
+    // line): the old collapse to undefined made an explicit no-VAT choice
+    // book the DERIVED default, i.e. 25% moms on most expense categories.
+    const resolvedVat =
+      vatTreatment === 'auto' ? undefined : vatTreatment === 'none' ? 'exempt' : vatTreatment
     onSelectCategory(category, resolvedVat)
   }
 

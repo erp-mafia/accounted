@@ -2,26 +2,54 @@ import { describe, it, expect } from 'vitest'
 import { mostRecentEndedVatPeriod } from '../period-defaults'
 
 describe('mostRecentEndedVatPeriod', () => {
-  describe('monthly', () => {
-    it('returns the previous month mid-year', () => {
+  describe('monthly (standard filers: month M due the 12th/17th of M+2)', () => {
+    it('returns M-2 while the deadline for it is still open', () => {
+      // 2026-08-06: June's declaration is due 17 Aug (August deadline day).
       expect(mostRecentEndedVatPeriod('monthly', new Date('2026-08-06'))).toEqual({
+        year: 2026,
+        period: 6,
+      })
+    })
+
+    it('advances to M-1 once the deadline has passed', () => {
+      // 2026-08-20: June is filed; July (due 12 Sep) is the open one.
+      expect(mostRecentEndedVatPeriod('monthly', new Date('2026-08-20'))).toEqual({
         year: 2026,
         period: 7,
       })
     })
 
-    it('rolls back to December of the previous year in January', () => {
-      expect(mostRecentEndedVatPeriod('monthly', new Date('2026-01-15'))).toEqual({
+    it('uses the 12th as deadline day outside January and August', () => {
+      expect(mostRecentEndedVatPeriod('monthly', new Date('2026-03-12'))).toEqual({
+        year: 2026,
+        period: 1,
+      })
+      expect(mostRecentEndedVatPeriod('monthly', new Date('2026-03-13'))).toEqual({
+        year: 2026,
+        period: 2,
+      })
+    })
+
+    it('rolls back across the year boundary in January', () => {
+      // 2026-01-10: November 2025 is due 17 Jan (January deadline day).
+      expect(mostRecentEndedVatPeriod('monthly', new Date('2026-01-10'))).toEqual({
+        year: 2025,
+        period: 11,
+      })
+      // After the January deadline: December 2025 is the open one.
+      expect(mostRecentEndedVatPeriod('monthly', new Date('2026-01-20'))).toEqual({
         year: 2025,
         period: 12,
       })
     })
 
-    it('returns January in February', () => {
-      expect(mostRecentEndedVatPeriod('monthly', new Date('2026-02-01'))).toEqual({
-        year: 2026,
-        period: 1,
-      })
+    it('over-40M filers (month M due the 26th of M+1) always get M-1', () => {
+      expect(
+        mostRecentEndedVatPeriod('monthly', new Date('2026-08-06'), { over40m: true }),
+      ).toEqual({ year: 2026, period: 7 })
+      expect(
+        mostRecentEndedVatPeriod('monthly', new Date('2026-01-10'), { over40m: true }),
+      ).toEqual({ year: 2025, period: 12 })
     })
   })
 

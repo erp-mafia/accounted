@@ -1541,14 +1541,22 @@ function MomsPeriodInlineSetup({
             key={opt.value}
             variant="outline"
             size="sm"
-            disabled={saving !== null}
+            // The clicked button stays enabled (aria-busy) so keyboard focus
+            // survives the save; the `if (saving) return` guard in choose()
+            // prevents a double submit.
+            disabled={saving !== null && saving !== opt.value}
+            aria-busy={saving === opt.value}
             onClick={() => choose(opt.value)}
           >
             {saving === opt.value ? 'Sparar …' : opt.label}
           </Button>
         ))}
       </div>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {error && (
+        <p role="status" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
     </div>
   )
 }
@@ -1608,10 +1616,12 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
     const configured = settings?.moms_period ?? 'quarterly'
     setPeriodType(configured)
     if (configured === 'monthly' || configured === 'quarterly') {
-      // Default to the most recently ENDED period: the current one can never
-      // be filed, so seeding it forced a step-back click on every filing
-      // visit (and a year-boundary trap in January).
-      const ended = mostRecentEndedVatPeriod(configured)
+      // Default to the period whose declaration is actually open: the current
+      // one can never be filed, so seeding it forced a step-back click on
+      // every filing visit (and a year-boundary trap in January).
+      const ended = mostRecentEndedVatPeriod(configured, new Date(), {
+        over40m: settings?.vat_taxable_base_over_40m === true,
+      })
       setYear(ended.year)
       setPeriod(ended.period)
     } else {
@@ -1633,7 +1643,9 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   const handlePeriodTypeChange = (value: VatPeriodType) => {
     setPeriodType(value)
     if (value === 'monthly' || value === 'quarterly') {
-      const ended = mostRecentEndedVatPeriod(value)
+      const ended = mostRecentEndedVatPeriod(value, new Date(), {
+        over40m: settings?.vat_taxable_base_over_40m === true,
+      })
       setYear(ended.year)
       setPeriod(ended.period)
     } else {
@@ -1845,36 +1857,52 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // period type is a compliance hazard, not a convenience. But the answer is
   // collected HERE, inline: until it exists the deadline engine generates no
   // VAT deadlines at all (silently), so bouncing the user to settings left a
-  // compliance hole open longer than it needed to be.
+  // compliance hole open longer than it needed to be. When vat_number is ALSO
+  // missing, the inline save would 400 on the ML 11 kap 8 § coherence rule in
+  // PUT /api/settings, so that (rarer) state keeps the settings bounce, which
+  // has both fields.
   if (momsPeriodMissing) {
+    if (!settings?.vat_number) {
+      return (
+        <div className="space-y-8">
+          {bareHeader}
+          <EmptyState
+            icon={Percent}
+            title="Redovisningsperiod för moms saknas"
+            description="Företaget är momsregistrerat men momsregistreringsnummer och redovisningsperiod (månad, kvartal eller helår) saknas. Ange dem i skatteinställningarna så visas deklarationen för rätt period."
+            actionLabel="Öppna skatteinställningar"
+            actionHref="/settings/tax"
+          />
+        </div>
+      )
+    }
     return (
       <div className="space-y-8">
         {bareHeader}
-        <div className="mx-auto max-w-md space-y-4 py-12 text-center">
-          <Percent className="mx-auto h-6 w-6 text-muted-foreground" />
-          <h2 className="font-display text-lg tracking-tight">Välj redovisningsperiod för moms</h2>
-          <p className="text-sm text-muted-foreground">
-            Företaget är momsregistrerat men ingen redovisningsperiod är vald, så deklarationen
-            och momsdeadlines kan inte visas. Perioden står i registreringsbeslutet från
-            Skatteverket.
-          </p>
-          <MomsPeriodInlineSetup
-            onSaved={async (value) => {
-              await refetchSettings()
-              // The first-settle seeding above only runs once per company, so
-              // re-apply the fresh periodicity (and its most-recent-ended
-              // default period) by hand.
-              handlePeriodTypeChange(value)
-            }}
-          />
-          <p className="text-xs text-muted-foreground">
-            Du kan alltid ändra den i{' '}
-            <Link href="/settings/tax" className="underline underline-offset-2 hover:text-foreground">
-              skatteinställningarna
-            </Link>
-            .
-          </p>
-        </div>
+        <EmptyState
+          icon={Percent}
+          title="Välj redovisningsperiod för moms"
+          description="Företaget är momsregistrerat men ingen redovisningsperiod är vald, så deklarationen och momsdeadlines kan inte visas. Perioden står i registreringsbeslutet från Skatteverket."
+        >
+          <div className="space-y-3">
+            <MomsPeriodInlineSetup
+              onSaved={async (value) => {
+                await refetchSettings()
+                // The first-settle seeding above only runs once per company,
+                // so re-apply the fresh periodicity (and its most-recent-
+                // ended default period) by hand.
+                handlePeriodTypeChange(value)
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              Du kan alltid ändra den i{' '}
+              <Link href="/settings/tax" className="underline underline-offset-2 hover:text-foreground">
+                skatteinställningarna
+              </Link>
+              .
+            </p>
+          </div>
+        </EmptyState>
       </div>
     )
   }
