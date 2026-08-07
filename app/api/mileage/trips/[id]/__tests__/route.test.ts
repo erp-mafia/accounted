@@ -97,7 +97,7 @@ describe('PATCH /api/mileage/trips/[id]', () => {
       .mockImplementationOnce(() => Promise.resolve({ data: null, error: null }))
     authed(supabase)
     const res = await PATCH(
-      patchReq({ employee_id: '11111111-2222-3333-4444-555555555555' }),
+      patchReq({ employee_id: '9f8e7d6c-5b4a-4321-8abc-def012345678' }),
       params
     )
     expect(res.status).toBe(400)
