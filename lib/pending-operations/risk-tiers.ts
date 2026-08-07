@@ -198,6 +198,16 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // both attach an existing booking to a different entity.
   link_transaction_journal_entry: 'medium',
 
+  // ── Körjournal (mileage) ───────────────────────────────────────────
+  // A trip row is pure travel documentation: no booking impact until a
+  // separate book operation. Same tier as create_customer.
+  log_mileage_trip: 'low',
+  // Books one verifikat with fixed lines derived from logged trips (7331 +
+  // whitelisted counter account) at the DB-configured schablon rate: not the
+  // arbitrary-line surface that makes create_voucher 'high'. Reversible via
+  // storno: same tier as post_annual_depreciation.
+  book_mileage_period: 'medium',
+
   // ── Skatteverket filing (PR5) ──────────────────────────────────────
   // External + irreversible once signed. Commit sends the declaration for
   // BankID signing; the user's signature in the browser is the filing act.

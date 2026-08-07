@@ -2217,6 +2217,10 @@ export type PendingOperationType =
   // Payroll: salary run creation + AGI declaration
   | 'create_salary_run'
   | 'generate_agi'
+  // Körjournal: log a trip (pure travel documentation) + book the period's
+  // milersättning as one verifikat (7331 at schablon rate)
+  | 'log_mileage_trip'
+  | 'book_mileage_period'
   // Mark invoice paid by linking an existing posted verifikat (no new JE)
   | 'link_invoice_voucher'
   // Supplier-side mirror: mark a leverantörsfaktura paid by linking an existing
@@ -4183,4 +4187,65 @@ export interface StoredStagedOperation {
   title?: string | null
   risk_level?: string | null
   preview_data?: unknown
+}
+
+// ============================================================
+// Körjournal (mileage trips)
+// ============================================================
+
+export type MileageVehicleType = 'own_car' | 'company_car_fossil' | 'company_car_electric'
+
+export type MileageTripStatus = 'draft' | 'booked'
+
+/** A `mileage_trips` row: one business trip in the körjournal. */
+export interface MileageTrip {
+  id: string
+  company_id: string
+  user_id: string
+  employee_id: string | null
+  trip_date: string
+  vehicle_type: MileageVehicleType
+  vehicle_registration: string | null
+  odometer_start: number | null
+  odometer_end: number | null
+  distance_km: number
+  from_location: string
+  to_location: string
+  purpose: string
+  visited: string | null
+  is_round_trip: boolean
+  status: MileageTripStatus
+  journal_entry_id: string | null
+  salary_run_id: string | null
+  notes: string | null
+  created_via: 'manual' | 'mcp' | 'import'
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateMileageTripInput {
+  trip_date: string
+  vehicle_type?: MileageVehicleType
+  vehicle_registration?: string | null
+  odometer_start?: number | null
+  odometer_end?: number | null
+  distance_km: number
+  from_location: string
+  to_location: string
+  purpose: string
+  visited?: string | null
+  is_round_trip?: boolean
+  employee_id?: string | null
+  notes?: string | null
+  created_via?: 'manual' | 'mcp' | 'import'
+}
+
+/** Per-vehicle-type aggregation of draft trips for a period. */
+export interface MileagePeriodSummary {
+  vehicle_type: MileageVehicleType
+  trip_count: number
+  total_km: number
+  total_mil: number
+  rate_per_mil: number
+  amount: number
 }
