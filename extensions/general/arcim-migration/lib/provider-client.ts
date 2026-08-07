@@ -18,6 +18,8 @@ import { BjornLundenClient, BjornLundenApiError } from '@/lib/providers/bjornlun
 import { exchangeBrioxCode } from '@/lib/providers/briox/oauth'
 import { BrioxApiError } from '@/lib/providers/briox/client'
 import { BokioClient, BokioApiError } from '@/lib/providers/bokio/client'
+import { WintClient, WintApiError } from '@/lib/providers/wint/client'
+import { loginWint, WintLoginRejectedError } from '@/lib/providers/wint/oauth'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import type { ConsentRecord, OtcResponse } from '../types'
 
@@ -26,6 +28,9 @@ const bjornLundenClient = new BjornLundenClient()
 
 // Singleton (holds the rate limiter): used to verify Bokio company identity
 const bokioClient = new BokioClient()
+
+// Singleton (holds the rate limiter): used to verify the WINT login at submit
+const wintClient = new WintClient()
 
 /**
  * Thrown by submitProviderToken when the provider actively rejects the
@@ -393,6 +398,11 @@ export async function submitProviderToken(
   let accessToken = apiToken
   let refreshToken: string | null = null
   let tokenExpiresAt: string | null = null
+  // What lands in provider_consent_tokens.provider_company_id. Usually the
+  // caller-supplied value (BL User-Key, Bokio GUID, Briox account id); WINT
+  // overrides it below because its caller-supplied value is the login mail,
+  // which must not be persisted.
+  let storedProviderCompanyId: string | undefined = providerCompanyId
 
   // BL uses app-level client credentials: get a real token, then prove the
   // pasted User-Key actually opens a company before storing anything.
@@ -548,6 +558,68 @@ export async function submitProviderToken(
     }
   }
 
+  // WINT: no API keys exist, so the wizard sends the user's WINT login
+  // (providerCompanyId = mail, apiToken = password). The pair is exchanged
+  // HERE, once, for an access/refresh token pair; the password is used for
+  // this single call and never stored, logged, or echoed. The token is then
+  // probed against GET /api/Auth to learn WHICH company it opens, mirroring
+  // the Bokio org-number mismatch guard.
+  if (provider === 'wint') {
+    const mail = providerCompanyId?.trim()
+    if (!mail || !mail.includes('@')) {
+      throw new ProviderTokenInvalidError('WINT requires the login e-mail address')
+    }
+
+    try {
+      const tokenResponse = await loginWint(mail, apiToken)
+      accessToken = tokenResponse.access_token
+      refreshToken = tokenResponse.refresh_token || null
+      tokenExpiresAt = new Date(Date.now() + tokenResponse.expires_in * 1000).toISOString()
+    } catch (error) {
+      // A definitive LoginState (wrong password, locked, BankID-only) is a
+      // credential verdict. Auth-endpoint 400/401/403 likewise. 429/5xx are
+      // transient: rethrow as a generic submit failure.
+      if (error instanceof WintLoginRejectedError) {
+        throw new ProviderTokenInvalidError(`WINT rejected the login (${error.state})`)
+      }
+      if (error instanceof WintApiError && error.statusCode < 500 && error.statusCode !== 429) {
+        throw new ProviderTokenInvalidError(`WINT rejected the login (HTTP ${error.statusCode})`)
+      }
+      throw error
+    }
+
+    const wintCompany = await wintClient.get<Record<string, unknown>>(accessToken, '/api/Auth')
+    const wintCompanyName = typeof wintCompany['Name'] === 'string' ? (wintCompany['Name'] as string).trim() : ''
+    const wintOrgNumber = normalizeOrgNumber(wintCompany['Org'] as string | undefined)
+
+    const { data: targetCompany } = await supabase
+      .from('companies')
+      .select('org_number')
+      .eq('id', ownerCompanyId)
+      .maybeSingle()
+    const targetOrgNumber = normalizeOrgNumber(targetCompany?.org_number)
+
+    // Same confident-mismatch-only rule as Bokio: a missing org number on
+    // either side falls through to labelling, a definite mismatch blocks.
+    if (wintOrgNumber && targetOrgNumber && wintOrgNumber !== targetOrgNumber) {
+      throw new ProviderCompanyMismatchError(targetOrgNumber, wintOrgNumber, wintCompanyName || null)
+    }
+
+    // The WINT-internal company id is what later calls may need (CompanyAuth
+    // company switching); the login mail is deliberately NOT persisted.
+    storedProviderCompanyId = wintCompany['Id'] != null ? String(wintCompany['Id']) : undefined
+
+    if (wintCompanyName || wintOrgNumber) {
+      await supabase
+        .from('provider_consents')
+        .update({
+          company_name: wintCompanyName || undefined,
+          org_number: wintOrgNumber || undefined,
+        })
+        .eq('id', consentId)
+    }
+  }
+
   // Store tokens: consent stays at status 0 until migration/SIE import completes
   await supabase
     .from('provider_consent_tokens')
@@ -557,7 +629,7 @@ export async function submitProviderToken(
       access_token: accessToken,
       refresh_token: refreshToken,
       token_expires_at: tokenExpiresAt,
-      provider_company_id: providerCompanyId,
+      provider_company_id: storedProviderCompanyId,
     })
 
   return { success: true, consentId }
