@@ -29,8 +29,25 @@ export const GET = withCronContext('cron.sandbox_cleanup', async (_request, ctx)
     return errorResponse(error, ctx.log, { requestId: ctx.requestId })
   }
 
-  const cleaned = data ?? 0
-  ctx.log.info('sandbox cleanup summary', { cleaned })
+  // Migration 20260807130000 changed the RPC's return from a bare integer to
+  // a {cleaned, failed, orphans_removed} summary; accept both shapes so
+  // deploy/migration ordering cannot break the cron.
+  const summary =
+    typeof data === 'number'
+      ? { cleaned: data, failed: 0, orphans_removed: 0 }
+      : {
+          cleaned: Number(data?.cleaned ?? 0),
+          failed: Number(data?.failed ?? 0),
+          orphans_removed: Number(data?.orphans_removed ?? 0),
+        }
 
-  return NextResponse.json({ success: true, cleaned })
+  // Per-user failures used to be swallowed as Postgres WARNINGs, which is how
+  // the cleanup sat broken for months; surface them at error level instead.
+  if (summary.failed > 0) {
+    ctx.log.error('sandbox cleanup completed with failures', summary)
+  } else {
+    ctx.log.info('sandbox cleanup summary', summary)
+  }
+
+  return NextResponse.json({ success: true, ...summary })
 })
