@@ -60,6 +60,21 @@ async function seedSandboxUser(settingsCreatedAt?: string): Promise<{
      VALUES ($1, $2, 'Document', $3, 'DocumentIngested', '{"type":"system"}', now())`,
     [companyId, randomUUID(), randomUUID()],
   )
+  // invoice_deliveries has the same NO ACTION company FK AND a delete guard
+  // that silently swallows deletes (RETURN NULL) outside the teardown
+  // bypass; a marked_sent manual delivery is the minimal terminal row.
+  const invoiceId = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.invoices (id, user_id, company_id, invoice_date, due_date)
+     VALUES ($1, $2, $3, '2026-01-10', '2026-02-10')`,
+    [invoiceId, userId, companyId],
+  )
+  await getPool().query(
+    `INSERT INTO public.invoice_deliveries
+       (company_id, user_id, invoice_id, channel, status, sent_at, retention_expires_at)
+     VALUES ($1, $2, $3, 'manual', 'marked_sent', now(), '2033-12-31')`,
+    [companyId, userId, invoiceId],
+  )
   return { userId, companyId, entryId }
 }
 
@@ -113,6 +128,14 @@ describe('sandbox cleanup RPCs (pg)', () => {
       [entryId],
     )
     expect(lines[0]!.n).toBe(0)
+  })
+
+  it('refuses a user with no company_settings rows at all', async () => {
+    const { userId } = await seedCompany()
+    await expect(
+      getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [userId]),
+    ).rejects.toThrow(/is not a sandbox user/i)
+    expect(await authUserExists(userId)).toBe(true)
   })
 
   it('refuses a user whose company is not a sandbox', async () => {
