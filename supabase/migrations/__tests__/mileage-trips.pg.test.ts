@@ -117,6 +117,32 @@ describe('mileage_trips booked immutability (20260807113215)', () => {
     expect(res.rowCount).toBe(1)
   })
 
+  it('forces a revert to draft to clear salary_run_id (20260807114924)', async () => {
+    const { companyId, userId } = await seedCompany()
+    const runRes = await getPool().query<{ id: string }>(
+      `INSERT INTO public.salary_runs (company_id, user_id, period_year, period_month, payment_date)
+       VALUES ($1, $2, 2026, 5, '2026-05-25') RETURNING id`,
+      [companyId, userId],
+    )
+    const runId = runRes.rows[0].id
+    const tripId = await insertTrip({ companyId, userId, status: 'booked' })
+    await getPool().query(
+      `UPDATE public.mileage_trips SET salary_run_id = $2 WHERE id = $1`,
+      [tripId, runId],
+    )
+    // Revert keeping salary_run_id: rejected (draft trip would still carry a
+    // run that holds its allowance = re-bookable double pay).
+    await expect(
+      getPool().query(`UPDATE public.mileage_trips SET status = 'draft' WHERE id = $1`, [tripId]),
+    ).rejects.toThrow(/clear salary_run_id/)
+    // Revert clearing it in the same statement: allowed.
+    const res = await getPool().query(
+      `UPDATE public.mileage_trips SET status = 'draft', salary_run_id = NULL WHERE id = $1`,
+      [tripId],
+    )
+    expect(res.rowCount).toBe(1)
+  })
+
   it('blocks unbooking a trip linked to a verifikat', async () => {
     const { companyId, userId, fiscalPeriodId } = await seedCompany()
     const entryId = await insertPostedJournalEntry({ companyId, userId, fiscalPeriodId })

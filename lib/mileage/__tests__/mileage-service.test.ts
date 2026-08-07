@@ -241,6 +241,11 @@ describe('pushMileageToSalaryRun', () => {
     const result = await pushMileageToSalaryRun(supabase as never, 'company-1', params)
     expect(result).toEqual({ ok: false, code: 'CLAIM_LOST' })
     expect(supabase.insert).not.toHaveBeenCalled()
+    // The partial claim was reverted, not left dangling.
+    expect(supabase.tripChain.update).toHaveBeenCalledWith({
+      status: 'draft',
+      salary_run_id: null,
+    })
   })
 
   it('reverts the claim when the line item insert fails', async () => {
