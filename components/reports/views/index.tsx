@@ -1858,9 +1858,9 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // collected HERE, inline: until it exists the deadline engine generates no
   // VAT deadlines at all (silently), so bouncing the user to settings left a
   // compliance hole open longer than it needed to be. When vat_number is ALSO
-  // missing, the inline save would 400 on the ML 11 kap 8 § coherence rule in
-  // PUT /api/settings, so that (rarer) state keeps the settings bounce, which
-  // has both fields.
+  // missing, the inline save would 400 on the vat_number coherence rule in
+  // PUT /api/settings (momsregistrerad requires a registreringsnummer), so
+  // that (rarer) state keeps the settings bounce, which has both fields.
   if (momsPeriodMissing) {
     if (!settings?.vat_number) {
       return (

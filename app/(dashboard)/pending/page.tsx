@@ -871,6 +871,15 @@ export default function PendingOperationsPage() {
       toast({ title: 'Godkänd', description: op.title })
       setShowCommitDialog(false)
       setSelectedOp(null)
+      // Drop the committed op from the bulk selection: the row leaves the
+      // pending list on refresh, but a stale id would keep inflating the
+      // bulk bar and ride along into bulk-commit.
+      setSelectedIds((prev) => {
+        if (!prev.has(op.id)) return prev
+        const next = new Set(prev)
+        next.delete(op.id)
+        return next
+      })
       fetchOperations()
     } catch (err) {
       toast({
@@ -1565,8 +1574,15 @@ export default function PendingOperationsPage() {
                       disabled={detailPeriodLocked || isCommitting}
                       title={detailPeriodLocked ? 'Perioden är låst' : undefined}
                       onClick={() => {
-                        setSelectedOp(detailOp)
-                        setShowCommitDialog(true)
+                        // Same risk gate as the review-row pill: the detail
+                        // panel already shows the full preview, so low/medium
+                        // commit directly; only high risk keeps the dialog.
+                        if (detailOp.risk_level === 'high') {
+                          setSelectedOp(detailOp)
+                          setShowCommitDialog(true)
+                        } else {
+                          void commitOp(detailOp)
+                        }
                       }}
                     >
                       {t('approve')}

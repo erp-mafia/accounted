@@ -617,11 +617,48 @@ export default function NewSupplierInvoiceForm({
   // supplier B's invoice and silently blocks B's own default_expense_account
   // (the fill branches only touch empty rows).
   const plantedRef = useRef<{ account: string; rows: number[] } | null>(null)
+  // Automatic fill is requested, not applied inline: handleAccountChange
+  // needs the loaded BAS chart to apply the konto's default moms, and the
+  // requests originate in closures (the supplier effect and its async
+  // template fetch) that may hold a stale empty `accounts`. The applying
+  // effect below re-runs on both the request tick and the chart load with
+  // fresh closures, so whichever arrives last triggers the fill. Filling
+  // early would leave a VAT-free konto on the 25% row default, the exact
+  // mis-booking the fill exists to prevent.
+  const pendingAccountFillRef = useRef<{ account: string; plant: boolean; counterparty?: string } | null>(null)
+  const [accountFillTick, setAccountFillTick] = useState(0)
+
+  function requestAccountFill(account: string, plant: boolean, counterparty?: string) {
+    pendingAccountFillRef.current = { account, plant, counterparty }
+    setAccountFillTick((t) => t + 1)
+  }
+
+  useEffect(() => {
+    if (accounts.length === 0 || !pendingAccountFillRef.current) return
+    const { account, plant, counterparty } = pendingAccountFillRef.current
+    pendingAccountFillRef.current = null
+    const items = getValues('items')
+    const appliedRows: number[] = []
+    items.forEach((row, i) => {
+      if (!row.account_number) {
+        // Same path as a manual pick: konto default moms rides along.
+        handleAccountChange(i, account)
+        appliedRows.push(i)
+      }
+    })
+    if (appliedRows.length > 0 && plant && counterparty) {
+      plantedRef.current = { account, rows: appliedRows }
+      setTemplateAccountNote({ account, counterparty })
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accounts, accountFillTick])
+
   useEffect(() => {
     if (!watchedSupplierId) return
     const supplier = suppliers.find((s) => s.id === watchedSupplierId)
     if (!supplier) return
     setTemplateAccountNote(null)
+    pendingAccountFillRef.current = null
     if (plantedRef.current) {
       const { account, rows } = plantedRef.current
       const planted = getValues('items')
@@ -646,15 +683,9 @@ export default function NewSupplierInvoiceForm({
     if (supplier.default_expense_account && fields.length > 0) {
       // Fill every row the user hasn't assigned yet: an empty account is the
       // only signal needed (rows start empty by design, no seeded default).
-      // Through handleAccountChange so the fill behaves exactly like a manual
-      // pick: description and the konto's default moms come along (a momsfri
-      // konto must not keep the 25% row default).
-      const items = getValues('items')
-      items.forEach((row, i) => {
-        if (!row.account_number) {
-          handleAccountChange(i, supplier.default_expense_account!)
-        }
-      })
+      // Routed through the fill request so it waits for the BAS chart and the
+      // konto's default moms comes along exactly like a manual pick.
+      requestAccountFill(supplier.default_expense_account, false)
     }
     if (supplier.default_currency && watch('currency') === 'SEK') {
       setValue('currency', supplier.default_currency)
@@ -684,19 +715,7 @@ export default function NewSupplierInvoiceForm({
           const credit: string | undefined = match?.template?.credit_account
           if (!match || (match.confidence ?? 0) < 0.5) return
           if (!debit || !/^[4-8]/.test(debit) || !credit || !credit.startsWith('19')) return
-          const items = getValues('items')
-          const appliedRows: number[] = []
-          items.forEach((row, i) => {
-            if (!row.account_number) {
-              // Same path as a manual pick: konto default moms rides along.
-              handleAccountChange(i, debit)
-              appliedRows.push(i)
-            }
-          })
-          if (appliedRows.length > 0) {
-            plantedRef.current = { account: debit, rows: appliedRows }
-            setTemplateAccountNote({ account: debit, counterparty: match.template.counterparty_name })
-          }
+          requestAccountFill(debit, true, match.template.counterparty_name)
         } catch {
           // Prefill is best-effort; the rows stay blank.
         }
