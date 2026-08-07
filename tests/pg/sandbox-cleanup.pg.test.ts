@@ -57,7 +57,7 @@ async function seedSandboxUser(settingsCreatedAt?: string): Promise<{
   await getPool().query(
     `INSERT INTO public.processing_history
        (company_id, correlation_id, aggregate_type, aggregate_id, event_type, actor, occurred_at)
-     VALUES ($1, $2, 'transaction', $3, 'sandbox.cleanup.test', '{"type":"system"}', now())`,
+     VALUES ($1, $2, 'Document', $3, 'DocumentIngested', '{"type":"system"}', now())`,
     [companyId, randomUUID(), randomUUID()],
   )
   return { userId, companyId, entryId }
