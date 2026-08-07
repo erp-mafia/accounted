@@ -71,9 +71,14 @@ export async function searchMessageIds(accessToken: string, query: string): Prom
 }
 
 /**
- * Metadata only: subject, sender, date and which parts are attachments. The
- * body is deliberately not pulled here, so a search that finds nothing useful
- * never reads anyone's correspondence.
+ * Subject, sender, date and which parts are attachments.
+ *
+ * `format=full` rather than `format=metadata`: metadata returns headers only
+ * and omits `payload.parts` entirely, so every message came back looking like
+ * it had no attachments and the hunt could never file anything. Gmail offers no
+ * format that returns the MIME structure without the body, so the body does
+ * come down the wire here. It is read for nothing and stored nowhere: only
+ * attachment bytes are ever persisted, and only after a match.
  */
 export async function getMessageSummary(
   accessToken: string,
@@ -81,10 +86,7 @@ export async function getMessageSummary(
   connectionId: string,
   mailbox: string,
 ): Promise<MailCandidate> {
-  const msg = await gmailFetch<GmailMessage>(
-    accessToken,
-    `/messages/${messageId}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
-  )
+  const msg = await gmailFetch<GmailMessage>(accessToken, `/messages/${messageId}?format=full`)
   const attachmentIds: string[] = []
   collectAttachments(msg.payload, attachmentIds)
 

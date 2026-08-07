@@ -98,3 +98,32 @@ describe('buildAuthorizationUrl', () => {
     expect(params.get('access_type')).toBe('offline')
   })
 })
+
+/**
+ * Regression from the first provkörning against a real ledger: the same seven
+ * unrelated messages came back for every purchase, because the bank's
+ * description is not a merchant name and its month and person tokens match most
+ * of a mailbox.
+ */
+describe('merchant terms drawn from a real bank description', () => {
+  it('does not search for the month in a salary row', () => {
+    expect(merchantTerms('Lön Juli Jakob Överföring via internet')).not.toContain('Juli')
+  })
+
+  it('drops the payment rail, which every row on the statement shares', () => {
+    const terms = merchantTerms('Kontor Sting apr BG 0000059142596 Bg-bet. via internet')
+    for (const noise of ['apr', 'via', 'internet']) {
+      expect(terms.map((t) => t.toLowerCase())).not.toContain(noise)
+    }
+  })
+
+  it('still keeps what actually names the supplier', () => {
+    // This row matched a real Sting invoice; the fix must not cost that.
+    const terms = merchantTerms('Kontor Sting apr BG 0000059142596 Bg-bet. via internet')
+    expect(terms.map((t) => t.toLowerCase())).toContain('sting')
+  })
+
+  it('leaves an ordinary card purchase alone', () => {
+    expect(merchantTerms('Elgiganten Aktiebolag')).toContain('Elgiganten')
+  })
+})

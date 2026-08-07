@@ -20,6 +20,7 @@ import { ingestMailCandidate } from './ingest'
 import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
 import {
   MAX_PROPOSALS_PER_RUN,
+  canHaveEmailReceipt,
   pairKey,
   selectProposals,
   type HuntPoolItem,
@@ -454,7 +455,12 @@ async function searchMailForUnexplained(
   const proposals: MailProposal[] = []
   if (!service.isConfigured() || unexplained.length === 0) return { summary, proposals }
 
+  // Salary and tax runs are a company's largest outgoing rows, so without this
+  // they eat the whole search budget hunting receipts that cannot exist, and
+  // their descriptions ("Lön Juli Jakob") search for a person's name and match
+  // half the mailbox.
   const byLargest = [...unexplained]
+    .filter((t) => canHaveEmailReceipt(t.merchant_name || t.description))
     .sort((a, b) => Math.abs(b.amount ?? 0) - Math.abs(a.amount ?? 0))
     .slice(0, limit)
 

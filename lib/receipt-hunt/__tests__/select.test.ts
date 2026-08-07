@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest'
 import {
   AMBIGUITY_MARGIN,
   HUNT_MIN_CONFIDENCE,
+  canHaveEmailReceipt,
   pairKey,
   selectProposals,
   type HuntPoolItem,
@@ -181,5 +182,40 @@ describe('selectProposals', () => {
   it('exposes the margin and floor it enforces', () => {
     expect(HUNT_MIN_CONFIDENCE).toBeGreaterThan(0.6)
     expect(AMBIGUITY_MARGIN).toBeGreaterThan(0)
+  })
+})
+
+/**
+ * Which purchases are worth a mailbox search. Drawn from a provkörning where
+ * salary and tax rows, being the largest, consumed the entire search budget.
+ */
+describe('canHaveEmailReceipt', () => {
+  it('skips salary, which no merchant confirms by mail', () => {
+    expect(canHaveEmailReceipt('Lön Juli Jakob Överföring via internet')).toBe(false)
+  })
+
+  it('skips tax even when the bank has truncated the word', () => {
+    // Real row: the statement cuts "skatt" to "skat" at 16 characters.
+    expect(canHaveEmailReceipt('Inbetalning skat BG 0000050501055 Bg-bet. via internet')).toBe(false)
+    expect(canHaveEmailReceipt('Skatt lön Juni   BG 0000050501055 Bg-bet. via internet')).toBe(false)
+  })
+
+  it('keeps a supplier invoice paid over bankgiro', () => {
+    // This one matched a real emailed invoice; skipping the whole rail would
+    // have thrown away the hunt's best hit.
+    expect(canHaveEmailReceipt('Kontorsplatser j BG 0000059142596 Bg-bet. via internet')).toBe(true)
+  })
+
+  it('keeps an expense reimbursement, which has a receipt behind it', () => {
+    expect(canHaveEmailReceipt('Utlägg Norwegian Överföring via internet')).toBe(true)
+  })
+
+  it('keeps ordinary card purchases', () => {
+    expect(canHaveEmailReceipt('ANTHROPIC* CLAUDE SUB SAN FRANCISCO Kortköp/uttag')).toBe(true)
+    expect(canHaveEmailReceipt('Elgiganten Aktiebolag K3667 Kortköp/uttag')).toBe(true)
+  })
+
+  it('hunts a transaction with no description rather than silently dropping it', () => {
+    expect(canHaveEmailReceipt(null)).toBe(true)
   })
 })

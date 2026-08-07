@@ -149,3 +149,32 @@ export function selectProposals(
 
   return proposals
 }
+
+/**
+ * Payments that cannot have an emailed receipt, however hard we look.
+ *
+ * Salary, tax, employer contributions, VAT settlements, dividends, loan
+ * amortisation and interest are all money moving on the strength of a
+ * declaration or an agreement, not a purchase a merchant confirms by mail.
+ *
+ * Deliberately narrow. Supplier payments over bankgiro DO arrive with an
+ * emailed invoice (a provkörning matched a Sting office invoice that way), and
+ * an "Utlägg" reimbursement has a real receipt behind it, so neither the rail
+ * nor the word "överföring" is grounds for skipping.
+ *
+ * Swedish bank statements truncate hard, which is why "skat" has to match as
+ * well as "skatt": a real ledger row reads "Inbetalning skat BG 000005...".
+ */
+const NO_EMAIL_RECEIPT_EXISTS =
+  /\bl[oö]n\b|\bl[oö]ner\b|\bskatt?\b|skatteverket|arbetsgivaravg|\bmoms\b|utdelning|amortering|\br[aä]nta\b|egen ins[aä]ttning/i
+
+/**
+ * Whether it is worth spending a mailbox search on this purchase.
+ *
+ * Only gates the mail leg: the Underlag pairing is scored on amount and
+ * merchant and is already safe on these rows.
+ */
+export function canHaveEmailReceipt(description: string | null | undefined): boolean {
+  if (!description) return true
+  return !NO_EMAIL_RECEIPT_EXISTS.test(description)
+}

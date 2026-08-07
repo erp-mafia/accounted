@@ -19,11 +19,29 @@ import type { MailSearchQuery } from '@/lib/mail-search/service'
 export const DAYS_BEFORE = 3
 export const DAYS_AFTER = 10
 
-/** Merchant tokens too generic to search on alone. */
+/**
+ * Merchant tokens too generic to search on alone.
+ *
+ * The bank's description is not a merchant name: it is whatever the payer typed
+ * plus the rail it went over. Month names and rail words are in here because a
+ * provkörning on a real ledger showed "Lön Juli Jakob Överföring via internet"
+ * searching for `"Juli"`, which matches most of a mailbox and returned the same
+ * seven unrelated messages for every purchase.
+ */
 const STOPWORDS = new Set([
   'ab', 'hb', 'kb', 'inc', 'llc', 'ltd', 'gmbh', 'oy', 'pbc', 'plc', 'corp', 'co',
   'the', 'and', 'och', 'group', 'sweden', 'sverige', 'international', 'kortkop',
   'kortköp', 'uttag', 'betalning', 'payment', 'store', 'shop', 'www', 'com',
+  // Payment rails and the bank's own boilerplate.
+  'överföring', 'overforing', 'internet', 'via', 'bankgiro', 'plusgiro', 'autogiro',
+  'bgbet', 'bg-bet', 'insättning', 'insattning', 'inbetalning', 'utbetalning',
+  'europabetalning', 'swish', 'faktura', 'invoice', 'kortköputtag', 'kortkoputtag',
+  // Months, Swedish and English, full and abbreviated.
+  'januari', 'februari', 'mars', 'april', 'maj', 'juni', 'juli', 'augusti',
+  'september', 'oktober', 'november', 'december',
+  'january', 'february', 'march', 'may', 'june', 'july', 'august', 'october',
+  'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'okt', 'oct',
+  'nov', 'dec',
 ])
 
 function isoDay(d: Date): string {
