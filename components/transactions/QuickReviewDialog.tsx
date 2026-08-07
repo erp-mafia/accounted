@@ -15,6 +15,7 @@ import { getDefaultAccountForCategory } from '@/lib/bookkeeping/category-mapping
 import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
 import { getVatRate } from '@/lib/bookkeeping/vat-entries'
 import type { ReviewTemplate } from '@/lib/transactions/quick-review-defaults'
+import { resolveExplicitVat } from '@/lib/transactions/quick-review-defaults'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import JournalEntryPreview from './JournalEntryPreview'
@@ -250,7 +251,12 @@ export default function QuickReviewDialog({
     setIsProcessing(true)
     setError(null)
     try {
-      const resolvedVat = vatTreatment === 'none' ? undefined : vatTreatment
+      // 'none' as the seeded default stays off the wire (server derives, no
+      // VAT line); 'none' as a user deviation goes as explicit 'exempt'. The
+      // old unconditional collapse re-derived the default server-side and
+      // booked 25% moms against an explicit "Ingen moms" while the preview
+      // showed none. See resolveExplicitVat.
+      const resolvedVat = resolveExplicitVat(vatTreatment, defaultVat)
       const catDefault = getDefaultAccountForCategory(category)
       const override = accountOverride && accountOverride !== catDefault
         ? accountOverride
