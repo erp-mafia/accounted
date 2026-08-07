@@ -5,14 +5,18 @@ import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
 
 const FETCH_TIMEOUT_MS = 15_000;
 
+// WINT error bodies can carry customer data, and provider errors get logged
+// wholesale by callers (provider-data-fetcher). Keep only a short bounded
+// diagnostic on the error object so a full response body never reaches logs.
+const MAX_ERROR_BODY_CHARS = 300;
+
 export class WintApiError extends Error {
-  constructor(
-    message: string,
-    public readonly statusCode: number,
-    public readonly body?: string,
-  ) {
+  public readonly body?: string;
+
+  constructor(message: string, public readonly statusCode: number, body?: string) {
     super(message);
     this.name = 'WintApiError';
+    this.body = body != null ? body.slice(0, MAX_ERROR_BODY_CHARS) : undefined;
   }
 }
 

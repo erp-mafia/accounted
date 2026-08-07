@@ -203,8 +203,13 @@ export function mapWintToAccountingAccount(raw: Record<string, unknown>): Accoun
   let type: AccountType | undefined;
   if (numberValue != null) {
     if (numberValue >= 1000 && numberValue < 2000) type = 'asset';
-    else if (numberValue >= 2000 && numberValue < 3000) type = 'liability';
+    // 20xx is eget kapital, not a liability; 21xx+ (obeskattade reserver,
+    // avsättningar, skulder) stays 'liability' at this metadata granularity.
+    else if (numberValue >= 2000 && numberValue < 2100) type = 'equity';
+    else if (numberValue >= 2100 && numberValue < 3000) type = 'liability';
     else if (numberValue >= 3000 && numberValue < 4000) type = 'revenue';
+    // 83xx is financial income (ränteintäkter m.m.), not an expense.
+    else if (numberValue >= 8300 && numberValue < 8400) type = 'revenue';
     else if (numberValue >= 4000 && numberValue < 9000) type = 'expense';
   }
 

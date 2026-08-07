@@ -22,6 +22,7 @@ describe('WINT auth', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     fetchSpy = vi.spyOn(globalThis, 'fetch');
   });
 
@@ -79,7 +80,26 @@ describe('WINT auth', () => {
       const err = await loginWint('user@example.se', 'x').catch((e: unknown) => e);
 
       expect(err).toBeInstanceOf(WintApiError);
-      expect((err as WintApiError).message).toContain('no access token');
+      expect((err as WintApiError).message).toContain('incomplete token pair');
+    });
+
+    it('rejects a Success response missing the refresh token (unrefreshable consent)', async () => {
+      const jwt = makeJwt({ exp: Math.floor(Date.now() / 1000) + 900 });
+      fetchSpy.mockResolvedValueOnce(authResponse({ AuthTokens: { AccessToken: jwt, RefreshToken: null } }));
+
+      const err = await loginWint('user@example.se', 'x').catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(WintApiError);
+      expect((err as WintApiError).message).toContain('incomplete token pair');
+    });
+
+    it('rejects an unrecognized LoginState instead of assuming success', async () => {
+      fetchSpy.mockResolvedValueOnce(authResponse({ State: 'SomethingNewFromWint' }));
+
+      const err = await loginWint('user@example.se', 'x').catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(WintLoginRejectedError);
+      expect((err as WintLoginRejectedError).state).toBe('SomethingNewFromWint');
     });
   });
 

@@ -96,7 +96,7 @@ describe('buildWintSieFile', () => {
     expect(content).toContain('#UB 0 2611 -250.00');
   });
 
-  it('skips deleted vouchers and vouchers without transactions', () => {
+  it('excludes deleted vouchers from the ledger but documents them in a #PROSA record', () => {
     const content = buildWintSieFile({
       ...BASE_OPTIONS,
       vouchers: [
@@ -109,6 +109,43 @@ describe('buildWintSieFile', () => {
 
     expect(parsed.vouchers).toHaveLength(1);
     expect(parsed.vouchers[0]?.number).toBe(1);
+    // BFL 5 kap 6-7 §: the gap in the number series must be accounted for in
+    // the file, not silently inherited.
+    expect(content).toContain('#PROSA');
+    expect(content).toContain('1 verifikat exkluderade (raderade i källsystemet WINT): A-3');
+    // No #PROSA when nothing was deleted
+    expect(buildWintSieFile(BASE_OPTIONS)).not.toContain('#PROSA');
+  });
+
+  it('refuses to render a transaction without an account number', () => {
+    expect(() =>
+      buildWintSieFile({
+        ...BASE_OPTIONS,
+        vouchers: [voucher({
+          number: 9,
+          transactions: [
+            { accountNumber: '', amount: 100 },
+            { accountNumber: '1930', amount: -100 },
+          ],
+        })],
+      }),
+    ).toThrow(/A-9.*without an account number/);
+  });
+
+  it('refuses to render a voucher without a booking date', () => {
+    expect(() =>
+      buildWintSieFile({
+        ...BASE_OPTIONS,
+        vouchers: [voucher({
+          number: 9,
+          bookingDate: '',
+          transactions: [
+            { accountNumber: '3010', amount: -100 },
+            { accountNumber: '1930', amount: 100 },
+          ],
+        })],
+      }),
+    ).toThrow(/A-9.*no booking date/);
   });
 
   it('escapes quotes in voucher texts', () => {

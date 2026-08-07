@@ -244,7 +244,24 @@ export function buildWintSieFile(options: BuildWintSieOptions): string {
   } = options;
 
   const active = vouchers.filter((v) => !v.deleted && v.transactions.length > 0);
+  const deleted = vouchers.filter((v) => v.deleted);
   const deltas = accountDeltas(active);
+
+  // Structurally invalid source data must fail the year loudly, never render:
+  // a #TRANS without an account or a #VER without a date shifts the positional
+  // fields and the parser reads the NEXT token as account/date, silently
+  // corrupting the voucher.
+  for (const voucher of active) {
+    const label = `${voucher.seriesShortName || '?'}-${voucher.number}`;
+    if (!voucher.bookingDate) {
+      throw new Error(`WINT voucher ${label} has no booking date; refusing to render SIE`);
+    }
+    for (const t of voucher.transactions) {
+      if (!t.accountNumber) {
+        throw new Error(`WINT voucher ${label} has a transaction without an account number; refusing to render SIE`);
+      }
+    }
+  }
 
   // Every account referenced anywhere must be declared with #KONTO.
   const accountNames = new Map<string, WintSieAccount>();
@@ -255,6 +272,10 @@ export function buildWintSieFile(options: BuildWintSieOptions): string {
   const lines: string[] = [];
   lines.push('#FLAGGA 0');
   lines.push(`#PROGRAM ${quote('Accounted')} ${quote(programVersion)}`);
+  // Declared PC8 with a UTF-8 body, the same de-facto convention Fortnox and
+  // Bokio ship: this file goes straight into our own parser, whose encoding
+  // detection ignores the header, and never leaves the import pipeline as
+  // bytes. Revisit if the raw file is ever offered for download.
   lines.push('#FORMAT PC8');
   lines.push(`#GEN ${fmtDate(generatedDate)}`);
   lines.push('#SIETYP 4');
@@ -265,6 +286,19 @@ export function buildWintSieFile(options: BuildWintSieOptions): string {
     lines.push(`#RAR -1 ${fmtDate(previousYear.start)} ${fmtDate(previousYear.end)}`);
   }
   lines.push('#KPTYP EUBAS97');
+  if (deleted.length > 0) {
+    // BFL 5 kap 6-7 §: the voucher number series must be accounted for. WINT
+    // flags these vouchers Deleted and excludes them from its own ledger, so
+    // they cannot be rendered as transactions, but the resulting gaps in the
+    // series must be documented in the file rather than silently inherited.
+    const numbers = deleted
+      .map((v) => `${v.seriesShortName || 'A'}-${v.number}`)
+      .slice(0, 50)
+      .join(', ');
+    lines.push(`#PROSA ${quote(
+      `${deleted.length} verifikat exkluderade (raderade i källsystemet WINT): ${numbers}${deleted.length > 50 ? ', ...' : ''}`,
+    )}`);
+  }
 
   // Chart of accounts
   const sortedAccounts = [...referenced].sort((a, b) => a.localeCompare(b, 'sv'));

@@ -85,20 +85,26 @@ export function jwtExpiresInSeconds(token: string, nowMs: number = Date.now()): 
 }
 
 function toTokenResponse(auth: WintAuthResponse, context: string): TokenResponse {
+  // Strict on purpose: anything other than an explicit Success is rejected.
+  // Accepting an ambiguous response here would mint a consent that LOOKS
+  // connected but cannot refresh, which surfaces days later as a broken
+  // migration instead of failing loudly at connect time.
   const state = normalizeLoginState(auth.State);
-  if (state !== 'Success' && state !== 'Unknown') {
+  if (state !== 'Success') {
     throw new WintLoginRejectedError(state);
   }
 
   const accessToken = auth.AuthTokens?.AccessToken;
   const refreshToken = auth.AuthTokens?.RefreshToken;
-  if (!accessToken) {
-    throw new WintApiError(`${context}: response carried no access token`, 502);
+  if (!accessToken || !refreshToken) {
+    // Refresh is WINT's only token-revival path (no stored password, no API
+    // keys): a pair without a refresh token is as unusable as no pair.
+    throw new WintApiError(`${context}: response carried an incomplete token pair`, 502);
   }
 
   return {
     access_token: accessToken,
-    refresh_token: refreshToken ?? '',
+    refresh_token: refreshToken,
     token_type: 'Bearer',
     expires_in: jwtExpiresInSeconds(accessToken),
   };

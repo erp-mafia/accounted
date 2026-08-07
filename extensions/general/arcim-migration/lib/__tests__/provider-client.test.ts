@@ -357,6 +357,17 @@ describe('submitProviderToken', () => {
         'provider_consents',
         'provider_consent_tokens',
       ])
+      // The stored row carries the token pair and the WINT company id; the
+      // login mail and password must never reach the database.
+      const upsert = mock.findCall('provider_consent_tokens', 'upsert')?.[0] as Record<string, unknown>
+      expect(upsert).toMatchObject({
+        provider: 'wint',
+        access_token: 'wint-jwt',
+        refresh_token: 'wint-refresh',
+        provider_company_id: '4711',
+      })
+      expect(JSON.stringify(upsert)).not.toContain('user@bolag.se')
+      expect(JSON.stringify(upsert)).not.toContain('hemligt')
     })
 
     it('rejects a login WINT refused (WrongUsernameOrPassword) without writing tokens', async () => {

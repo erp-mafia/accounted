@@ -197,6 +197,7 @@ function getSieFetcher(
       years: (WintSieYear & { id: number })[]
       vouchersByYear: Map<number, WintSieVoucher[]>
       ibByYear: Map<number, Map<string, number>>
+      fetchErrors: Map<number, string>
     }
     let contextPromise: Promise<WintSieContext> | null = null
 
@@ -205,15 +206,15 @@ function getSieFetcher(
         const company = await wintClient.get<Record<string, unknown>>(accessToken, '/api/Auth')
         const rawYears = (company['FinancialYears'] as Record<string, unknown>[] | undefined) ?? []
         const allowed = getAllowedFiscalYears()
-        const years = rawYears
+        const allYears = rawYears
           .map((fy) => ({
             id: Number(fy['Id']),
             year: new Date((fy['Start'] as string) ?? '').getFullYear(),
             start: ((fy['Start'] as string) ?? '').slice(0, 10),
             end: ((fy['End'] as string) ?? '').slice(0, 10),
           }))
-          .filter((fy) => allowed.has(fy.year))
           .sort((a, b) => a.year - b.year)
+        const years = allYears.filter((fy) => allowed.has(fy.year))
 
         const accountsRaw = await wintClient.getPaginated<Record<string, unknown>>(
           accessToken,
@@ -221,19 +222,45 @@ function getSieFetcher(
         )
         const accounts = accountsRaw.map(mapWintAccountForSie).filter((a) => a.accountNumber)
 
-        const vouchersByYear = new Map<number, WintSieVoucher[]>()
-        for (const fy of years) {
-          const raw = await wintClient.getPaginated<Record<string, unknown>>(
-            accessToken,
-            `/api/Voucher?BookingDateStart=${fy.start}&BookingDateEnd=${fy.end}&IncludeTransactions=true`,
-          )
-          vouchersByYear.set(fy.year, raw.map(mapWintVoucherForSie))
+        // The Ib anchor is WINT's ACTIVE fiscal year: selected from the
+        // UNFILTERED year list, so an active year outside the allowed import
+        // window can never be silently swapped for the latest allowed year
+        // (that would attach the anchor balances to the wrong year). When the
+        // anchor lies outside the window, its vouchers are still fetched below
+        // so the derivation chain stays complete; only allowed years render.
+        const today = new Date().toISOString().slice(0, 10)
+        const anchor =
+          allYears.find((fy) => fy.start <= today && today <= fy.end) ?? allYears[allYears.length - 1]
+
+        const chainYears = new Map(years.map((fy) => [fy.year, fy]))
+        if (anchor) {
+          const lo = Math.min(anchor.year, ...years.map((fy) => fy.year))
+          const hi = Math.max(anchor.year, ...years.map((fy) => fy.year))
+          for (const fy of allYears) {
+            if (fy.year >= lo && fy.year <= hi) chainYears.set(fy.year, fy)
+          }
         }
 
-        // Ib anchors to the fiscal year that contains today (WINT's active
-        // year); fall back to the latest fetched year when none matches.
-        const today = new Date().toISOString().slice(0, 10)
-        const anchor = years.find((fy) => fy.start <= today && today <= fy.end) ?? years[years.length - 1]
+        // A single year's fetch failure must not sink the whole migration:
+        // the year is simply absent from vouchersByYear, deriveIbByYear stops
+        // at the hole, and the affected years fail loudly in fetchSie while
+        // the years on the anchor's side of the hole still render.
+        const vouchersByYear = new Map<number, WintSieVoucher[]>()
+        const fetchErrors = new Map<number, string>()
+        for (const fy of [...chainYears.values()].sort((a, b) => a.year - b.year)) {
+          try {
+            const raw = await wintClient.getPaginated<Record<string, unknown>>(
+              accessToken,
+              `/api/Voucher?BookingDateStart=${fy.start}&BookingDateEnd=${fy.end}&IncludeTransactions=true`,
+            )
+            vouchersByYear.set(fy.year, raw.map(mapWintVoucherForSie))
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err)
+            log.warn(`WINT voucher fetch failed for fiscal year ${fy.year}`, { reason })
+            fetchErrors.set(fy.year, reason)
+          }
+        }
+
         const anchorIb = new Map<string, number>()
         for (const account of accounts) {
           if (account.ib != null && account.ib !== 0) anchorIb.set(account.accountNumber, account.ib)
@@ -249,6 +276,7 @@ function getSieFetcher(
           years,
           vouchersByYear,
           ibByYear,
+          fetchErrors,
         }
       })()
       return contextPromise
@@ -270,7 +298,12 @@ function getSieFetcher(
         const vouchers = context.vouchersByYear.get(fy.year)
         const ibByAccount = context.ibByYear.get(fy.year)
         if (!yearRef || !vouchers) {
-          throw new Error(`WINT returned no ledger data for fiscal year ${fy.year}`)
+          const reason = context.fetchErrors.get(fy.year)
+          throw new Error(
+            reason
+              ? `WINT voucher fetch failed for fiscal year ${fy.year}: ${reason}`
+              : `WINT returned no ledger data for fiscal year ${fy.year}`,
+          )
         }
         if (!ibByAccount) {
           // A hole in the voucher chain between this year and the Ib anchor

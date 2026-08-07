@@ -126,10 +126,19 @@ describe('WINT mappers', () => {
       expect(dto.balanceBroughtForward).toBe(50000.51);
     });
 
-    it('classifies revenue and expense ranges', () => {
+    it('classifies revenue, expense, equity and financial-income ranges', () => {
       expect(mapWintToAccountingAccount({ Number: 3010, Name: 'Försäljning' }).type).toBe('revenue');
       expect(mapWintToAccountingAccount({ Number: 4010, Name: 'Inköp' }).type).toBe('expense');
       expect(mapWintToAccountingAccount({ Number: 2440, Name: 'Leverantörsskulder' }).type).toBe('liability');
+      // 20xx is eget kapital, not a liability
+      expect(mapWintToAccountingAccount({ Number: 2081, Name: 'Aktiekapital' }).type).toBe('equity');
+      expect(mapWintToAccountingAccount({ Number: 2099, Name: 'Årets resultat' }).type).toBe('equity');
+      // 21xx obeskattade reserver stays at liability granularity
+      expect(mapWintToAccountingAccount({ Number: 2110, Name: 'Periodiseringsfond' }).type).toBe('liability');
+      // 83xx is financial income, not an expense
+      expect(mapWintToAccountingAccount({ Number: 8310, Name: 'Ränteintäkter' }).type).toBe('revenue');
+      expect(mapWintToAccountingAccount({ Number: 8410, Name: 'Räntekostnader' }).type).toBe('expense');
+      expect(mapWintToAccountingAccount({ Number: 8999, Name: 'Årets resultat' }).type).toBe('expense');
     });
   });
 

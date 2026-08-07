@@ -408,4 +408,59 @@ describe('fetchProviderSieFiles: wint (SIE rendered from voucher data)', () => {
     expect(result.availableYears).toEqual([CY - 1, CY])
     expect(result.files.map((f) => f.fiscalYear)).toEqual([CY])
   })
+
+  it('fails a year loudly when its voucher fetch errors, and still renders the anchor year', async () => {
+    routeFetch(fetchSpy, [
+      {
+        match: '/api/Auth',
+        respond: () =>
+          jsonResponse({
+            Id: 123,
+            Name: 'Bolaget AB',
+            Org: '556699-0011',
+            FinancialYears: [
+              { Id: 1, Start: `${CY - 1}-01-01T00:00:00`, End: `${CY - 1}-12-31T00:00:00` },
+              { Id: 2, Start: `${CY}-01-01T00:00:00`, End: `${CY}-12-31T00:00:00` },
+            ],
+          }),
+      },
+      {
+        match: '/api/Account',
+        respond: () => wintList([{ Id: 'a1', Name: 'Företagskonto', Number: 1930, SRU: 7281, Ib: 1000 }]),
+      },
+      {
+        // 404 is non-retryable: the older year fails fast
+        match: `BookingDateStart=${CY - 1}-01-01`,
+        respond: () => new Response('gone', { status: 404 }),
+      },
+      {
+        match: `BookingDateStart=${CY}-01-01`,
+        respond: () =>
+          wintList([
+            {
+              SeriesShortName: 'A',
+              Number: 1,
+              BookingDate: `${CY}-02-01T00:00:00`,
+              Text: 'Försäljning i år',
+              Deleted: false,
+              Transactions: [
+                { AccountNumber: 1930, Amount: 500 },
+                { AccountNumber: 3010, Amount: -500 },
+              ],
+            },
+          ]),
+      },
+    ])
+
+    const result = await fetchProviderSieFiles('wint', 'jwt-token', undefined)
+
+    // The anchor year derives from its own Ib and still renders; the failed
+    // year is REPORTED, never silently dropped (IB/UB continuity would break
+    // unnoticed otherwise).
+    expect(result.files.map((f) => f.fiscalYear)).toEqual([CY])
+    expect(result.files[0].rawContent).toContain('#IB 0 1930 1000.00')
+    expect(result.failedYears).toEqual([
+      { year: CY - 1, error: expect.stringContaining('404') },
+    ])
+  })
 })
