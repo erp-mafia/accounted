@@ -10529,7 +10529,7 @@ export const tools: McpTool[] = [
         status: status === 'draft' || status === 'booked' ? status : undefined,
         employeeId: (args.employee_id as string) || undefined,
       })
-      const round2 = (n: number) => Math.round(n * 100) / 100
+      const { roundOre: round2 } = await import('@/lib/money')
       const trips = rows.map((t) => ({
         mileage_trip_id: t.id,
         trip_date: t.trip_date,
@@ -10606,8 +10606,9 @@ export const tools: McpTool[] = [
       try {
         const { loadPayrollConfig } = await import('@/lib/salary/payroll-config')
         const { ratePerMil } = await import('@/lib/mileage/mileage-service')
+        const { roundOre } = await import('@/lib/money')
         const config = await loadPayrollConfig(supabase, Number(tripDate.slice(0, 4)))
-        approxAmount = Math.round((distanceKm / 10) * ratePerMil(config, vehicleType as never) * 100) / 100
+        approxAmount = roundOre((distanceKm / 10) * ratePerMil(config, vehicleType as never))
       } catch {
         approxAmount = undefined
       }
@@ -10681,6 +10682,7 @@ export const tools: McpTool[] = [
       // exactly what would be booked. The commit path re-reads atomically.
       const { listTrips, summarizeTrips } = await import('@/lib/mileage/mileage-service')
       const { loadPayrollConfig } = await import('@/lib/salary/payroll-config')
+      const { roundOre } = await import('@/lib/money')
       const trips = await listTrips(supabase, companyId, {
         from, to, status: 'draft',
         employeeId: (args.employee_id as string) || undefined,
@@ -10690,7 +10692,7 @@ export const tools: McpTool[] = [
       }
       const config = await loadPayrollConfig(supabase, Number(to.slice(0, 4)))
       const summaries = summarizeTrips(trips, config)
-      const totalAmount = Math.round(summaries.reduce((sum, s) => sum + s.amount, 0) * 100) / 100
+      const totalAmount = roundOre(summaries.reduce((sum, s) => sum + s.amount, 0))
 
       return stagePendingOperation(
         supabase, companyId, userId, 'book_mileage_period',

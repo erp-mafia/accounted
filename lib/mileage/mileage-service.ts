@@ -10,6 +10,7 @@ import { loadPayrollConfig, type PayrollConfig } from '@/lib/salary/payroll-conf
 import { getLineItemAccount } from '@/lib/salary/account-mapping'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { roundOre } from '@/lib/money'
 
 /**
  * Körjournal service: trip log per Skatteverket documentation requirements
@@ -30,9 +31,7 @@ const MILEAGE_TAXFREE_ACCOUNT = getLineItemAccount('mileage_taxfree')
 export const MILEAGE_COUNTER_ACCOUNTS = ['2820', '2893', '1930'] as const
 export type MileageCounterAccount = (typeof MILEAGE_COUNTER_ACCOUNTS)[number]
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
+const round2 = roundOre
 
 export function ratePerMil(config: PayrollConfig, vehicleType: MileageVehicleType): number {
   switch (vehicleType) {
