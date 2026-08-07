@@ -35,9 +35,10 @@
 --      ensure_company_dimensions) while the flag is set.
 --   4. enforce_pending_operations_no_delete allows the cascade through
 --      terminal-state demo operations while the flag is set.
---   4b. company_settings.is_sandbox becomes write-once (trigger): every
---      bypass above trusts that flag, so a real company must never be able
---      to flip it and become eligible for teardown.
+--   4b. company_settings.is_sandbox becomes write-once and insert-guarded
+--      (trigger): every bypass above trusts that flag, so a real company
+--      must never be able to flip it, and is_sandbox = true can only be
+--      created by anonymous-user JWTs, service_role, or direct DB sessions.
 --   5. cleanup_sandbox_user sets gnubok.allow_delete (the sanctioned
 --      delete_last_voucher flag that every delete-path trigger on
 --      journal_entries / journal_entry_lines respects) plus the new flag,
@@ -427,6 +428,17 @@ BEGIN
         AND NOT EXISTS (
           SELECT 1 FROM public.company_settings cs WHERE cs.user_id = u.id
         )
+        -- Explicit safety, not emergent: an anonymous user attached to ANY
+        -- company (a seed that died between company creation and the
+        -- settings insert) is out of scope for this blind delete. Such
+        -- half-seeded users are rare and can be handled manually; a user
+        -- with real data must never depend on a downstream trigger throwing.
+        AND NOT EXISTS (
+          SELECT 1 FROM public.companies c WHERE c.created_by = u.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM public.company_members cm WHERE cm.user_id = u.id
+        )
       ORDER BY u.created_at
       LIMIT p_limit
     LOOP
@@ -449,25 +461,56 @@ END;
 $$;
 
 -- =============================================================================
--- 7. company_settings.is_sandbox becomes write-once
+-- 7. company_settings.is_sandbox: write-once, and true only for sandbox actors
 -- =============================================================================
 
--- Every teardown bypass above trusts company_settings.is_sandbox, so that
--- flag must not be flippable after creation: RLS lets an owner update their
--- own settings row via PostgREST, and a real company that set is_sandbox =
--- true would become eligible for full deletion by the nightly cron. No
--- application path updates the flag (the seed inserts it at creation and
--- everything else only reads it); a future sandbox-to-real conversion
--- feature ships its own migration relaxing this deliberately.
+-- Every teardown bypass above trusts company_settings.is_sandbox, so the
+-- flag needs guarded provenance in both directions:
+--
+--   * UPDATE: write-once. RLS lets an owner update their own settings row
+--     via PostgREST, and a real company that flipped is_sandbox = true
+--     would become eligible for full deletion by the nightly cron. No
+--     application path updates the flag; a future sandbox-to-real
+--     conversion ships its own migration relaxing this deliberately.
+--   * INSERT: is_sandbox = true may only be written by an anonymous-user
+--     JWT (the sandbox seed's actor), service_role, or a direct database
+--     session (no PostgREST claims at all: migrations, seeds, tests). A
+--     regular authenticated user must not be able to provision their real
+--     company as a sandbox and have the cron destroy their books, which
+--     BFL 7 kap. forbids even self-inflicted.
+--
+-- Claims are read from request.jwt.* GUCs directly (both the modern json
+-- and the legacy per-claim style) rather than auth helpers, so the check
+-- behaves identically on hosted, self-hosted, and the CI auth shim.
 
 CREATE OR REPLACE FUNCTION public.enforce_company_settings_sandbox_immutable()
 RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = public
 AS $$
+DECLARE
+  v_claims jsonb;
+  v_role text;
 BEGIN
-  IF NEW.is_sandbox IS DISTINCT FROM OLD.is_sandbox THEN
-    RAISE EXCEPTION 'company_settings.is_sandbox is write-once: it is set at company creation and cannot be changed';
+  IF TG_OP = 'UPDATE' THEN
+    IF NEW.is_sandbox IS DISTINCT FROM OLD.is_sandbox THEN
+      RAISE EXCEPTION 'company_settings.is_sandbox is write-once: it is set at company creation and cannot be changed';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  -- INSERT
+  IF NEW.is_sandbox = true THEN
+    v_claims := nullif(current_setting('request.jwt.claims', true), '')::jsonb;
+    v_role := coalesce(
+      nullif(current_setting('request.jwt.claim.role', true), ''),
+      v_claims->>'role'
+    );
+    IF v_role IS NOT NULL
+       AND v_role <> 'service_role'
+       AND coalesce((v_claims->>'is_anonymous')::boolean, false) = false THEN
+      RAISE EXCEPTION 'company_settings.is_sandbox = true can only be created for anonymous sandbox users';
+    END IF;
   END IF;
   RETURN NEW;
 END;
@@ -475,7 +518,7 @@ $$;
 
 DROP TRIGGER IF EXISTS company_settings_sandbox_immutable ON public.company_settings;
 CREATE TRIGGER company_settings_sandbox_immutable
-  BEFORE UPDATE ON public.company_settings
+  BEFORE INSERT OR UPDATE ON public.company_settings
   FOR EACH ROW EXECUTE FUNCTION public.enforce_company_settings_sandbox_immutable();
 
 -- =============================================================================

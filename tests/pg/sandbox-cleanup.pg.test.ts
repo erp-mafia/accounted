@@ -221,7 +221,7 @@ describe('sandbox cleanup RPCs (pg)', () => {
     await getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [sandbox.userId])
   })
 
-  it('the orphan sweep cannot silently delete an anonymous user who has bookkeeping but no settings row', async () => {
+  it('the orphan sweep never reaches an anonymous user who has a company but no settings row', async () => {
     if (!(await hasIsAnonymousColumn())) return
 
     const userId = await insertAnonymousAuthUser('2000-01-03T00:00:00Z')
@@ -242,17 +242,15 @@ describe('sandbox cleanup RPCs (pg)', () => {
       fiscalPeriodId: fpRows[0]!.id,
     })
 
-    const { rows } = await getPool().query<{
-      summary: { cleaned: number; failed: number; orphans_removed: number }
-    }>(`SELECT public.cleanup_expired_sandbox_users(24, 25) AS summary`)
+    await getPool().query(`SELECT public.cleanup_expired_sandbox_users(24, 25)`)
 
-    // The immutability triggers fire with NO bypass flag set in the orphan
-    // loop, so the deletion fails loudly and the user survives.
+    // Excluded from the sweep by the explicit companies/company_members
+    // guards, not by an incidental downstream trigger failure.
     expect(await authUserExists(userId)).toBe(true)
-    expect(rows[0]!.summary.failed).toBeGreaterThanOrEqual(1)
 
     // Clean up via the sanctioned teardown: give the company a sandbox
-    // settings row (INSERT is allowed; only flips are blocked).
+    // settings row (a direct DB session may insert is_sandbox = true; only
+    // flips and PostgREST-authenticated inserts are blocked).
     await getPool().query(
       `INSERT INTO public.company_settings (user_id, company_id, is_sandbox)
        VALUES ($1, $2, true)`,
@@ -260,6 +258,53 @@ describe('sandbox cleanup RPCs (pg)', () => {
     )
     await getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [userId])
     expect(await authUserExists(userId)).toBe(false)
+  })
+
+  it('is_sandbox = true cannot be inserted by a regular authenticated user, but can by an anonymous one', async () => {
+    const { userId, companyId } = await seedCompany()
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [
+        JSON.stringify({ sub: userId, role: 'authenticated' }),
+      ])
+      await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [userId])
+      await client.query(`SELECT set_config('request.jwt.claim.role', 'authenticated', true)`)
+      await client.query(`SET LOCAL ROLE authenticated`)
+      await expect(
+        client.query(
+          `INSERT INTO public.company_settings (user_id, company_id, is_sandbox)
+           VALUES ($1, $2, true)`,
+          [userId, companyId],
+        ),
+      ).rejects.toThrow(/anonymous sandbox users/i)
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+
+    const anonClient = await getClient()
+    try {
+      await anonClient.query('BEGIN')
+      await anonClient.query(`SELECT set_config('request.jwt.claims', $1, true)`, [
+        JSON.stringify({ sub: userId, role: 'authenticated', is_anonymous: true }),
+      ])
+      await anonClient.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [userId])
+      await anonClient.query(
+        `SELECT set_config('request.jwt.claim.role', 'authenticated', true)`,
+      )
+      await anonClient.query(`SET LOCAL ROLE authenticated`)
+      await anonClient.query(
+        `INSERT INTO public.company_settings (user_id, company_id, is_sandbox)
+         VALUES ($1, $2, true)`,
+        [userId, companyId],
+      )
+      // Rolled back below: this test only proves the guard's allow path.
+    } finally {
+      await anonClient.query('ROLLBACK').catch(() => {})
+      anonClient.release()
+    }
   })
 
   it('is executable by service_role only', async () => {
