@@ -284,6 +284,10 @@ async function postEntry(
   const gaps = VOUCHER_GAPS[fy]
   while (gaps && gaps.has(next)) next++
   ctx.voucher[fy] = next
+  // Inserted as draft and posted after the lines land: supabase-js autocommits
+  // each request, and check_balance_on_posted_insert rejects a posted header
+  // whose transaction carries no lines. The draft-to-posted UPDATE fires
+  // check_balance_on_post against the finished verifikat instead.
   const { data: je, error } = await sb
     .from('journal_entries')
     .insert({
@@ -296,7 +300,7 @@ async function postEntry(
       description,
       source_type: sourceType,
       source_id: opts.sourceId ?? null,
-      status: 'posted',
+      status: 'draft',
       committed_at: new Date(date).toISOString(),
       created_via: 'system',
     })
@@ -319,6 +323,13 @@ async function postEntry(
     }))
   )
   if (lineErr) throw new Error(`lines for "${description}": ${lineErr.message}`)
+
+  const { error: postErr } = await sb
+    .from('journal_entries')
+    .update({ status: 'posted' })
+    .eq('id', je.id)
+    .eq('company_id', ctx.companyId)
+  if (postErr) throw new Error(`post "${description}": ${postErr.message}`)
 
   await sb
     .from('voucher_sequences')

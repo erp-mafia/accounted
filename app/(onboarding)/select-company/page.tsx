@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
+import { setActiveCompany } from '@/lib/company/context'
 import {
   acceptPendingInviteByToken,
   hasPendingInviteForEmail,
@@ -15,7 +16,11 @@ export const dynamic = 'force-dynamic'
 
 const ENRICHMENT_TTL_DAYS = 7
 
-export default async function SelectCompanyPage() {
+export default async function SelectCompanyPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ choose?: string }>
+}) {
   const supabase = await createClient()
 
   const { data: { user } } = await supabase.auth.getUser()
@@ -181,6 +186,30 @@ export default async function SelectCompanyPage() {
   const enrichmentStale = enrichmentTimestamp
     ? Date.now() - new Date(enrichmentTimestamp).getTime() > ENRICHMENT_TTL_DAYS * 24 * 60 * 60 * 1000
     : false
+
+  // A member of exactly one company with nothing else to decide (no new TIC
+  // engagements, no pending invite, enrichment not stale enough to hide one)
+  // gets sent straight in instead of clicking the only row on every login.
+  // `?choose=1` (the in-app switcher links) always renders the picker, and
+  // multi-company/byra users are untouched.
+  const { choose } = await searchParams
+  if (
+    !choose &&
+    memberCompanies.length === 1 &&
+    ticCompanies.length === 0 &&
+    !hasPendingInvite &&
+    !enrichmentStale
+  ) {
+    // redirect() throws NEXT_REDIRECT, so it must stay outside the try.
+    let switched = false
+    try {
+      await setActiveCompany(supabase, user.id, memberCompanies[0].id)
+      switched = true
+    } catch {
+      // Fall through to the picker: rendering it is always safe.
+    }
+    if (switched) redirect('/')
+  }
 
   return (
     <BankIdCompanyPicker

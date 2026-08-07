@@ -252,10 +252,13 @@ describe('executeSIEImport: derived IB from #UB -1 (issue #675)', () => {
     expect(createJournalEntry).not.toHaveBeenCalled()
     expect(result.openingBalanceEntryId).toBeNull()
     expect(result.warnings.join(' ')).toMatch(/hoppades över eftersom bolaget redan har bokförda verifikationer/)
-    // Zero entries created → the finalizer safety net downgrades the run so
-    // the file slot stays free for a retry (existing behavior).
-    expect(result.success).toBe(false)
-    expect(result.errors.join(' ')).toMatch(/0 verifikationer/)
+    // Zero entries from a file with no vouchers is a deliberate no-op (the
+    // continuation guard skipped the IB), not a failure: the finalizer
+    // downgrade only fires when the file contained vouchers that could not
+    // be imported. Re-running the same file could never produce a different
+    // outcome, so failing it would just dead-end the user.
+    expect(result.success).toBe(true)
+    expect(result.errors).toEqual([])
   })
 
   it('creates no IB entry when the file has neither #IB 0 nor #UB -1', async () => {

@@ -5,6 +5,7 @@ import { getPool } from './setup'
 import {
   seedCompany,
   insertDraftJournalEntry,
+  insertPostedJournalEntry,
   insertBalancedLines,
   insertTransaction,
 } from './fixtures'
@@ -169,18 +170,19 @@ describe('document surfaces unification', () => {
     fiscalPeriodId = s.fiscalPeriodId
 
     const mkJe = async (n: number, sourceType: string) => {
-      const id = await insertDraftJournalEntry({
+      return insertPostedJournalEntry({
         userId,
         companyId,
         fiscalPeriodId,
-        status: 'posted',
         voucherNumber: n,
         entryDate: `2026-06-${String(n).padStart(2, '0')}`,
         description: `${sourceType} ${n}`,
         sourceType,
+        lines: [
+          { accountNumber: '1930', debitAmount: n * 100, creditAmount: 0 },
+          { accountNumber: '3001', debitAmount: 0, creditAmount: n * 100 },
+        ],
       })
-      await insertBalancedLines(id, n * 100)
-      return id
     }
 
     jeBankNoDoc = await mkJe(1, 'bank_transaction')
@@ -331,17 +333,19 @@ describe('document surfaces unification', () => {
     let voucher = 1
     const expected: string[] = []
     for (const sourceType of NEEDS_DOC_SOURCE_TYPES) {
-      const id = await insertDraftJournalEntry({
+      const id = await insertPostedJournalEntry({
         userId: s.userId,
         companyId: s.companyId,
         fiscalPeriodId: s.fiscalPeriodId,
-        status: 'posted',
         voucherNumber: voucher,
         entryDate: '2026-06-15',
         description: sourceType,
         sourceType,
+        lines: [
+          { accountNumber: '1930', debitAmount: 100 * voucher, creditAmount: 0 },
+          { accountNumber: '3001', debitAmount: 0, creditAmount: 100 * voucher },
+        ],
       })
-      await insertBalancedLines(id, 100 * voucher)
       expected.push(id)
       voucher++
     }
@@ -385,18 +389,19 @@ describe('transaction-pinned document backfill (migration 20260724090000 §4)', 
     const s = await seedCompany()
 
     const mkPostedJe = async (n: number, fiscalPeriodId: string) => {
-      const id = await insertDraftJournalEntry({
+      return insertPostedJournalEntry({
         userId: s.userId,
         companyId: s.companyId,
         fiscalPeriodId,
-        status: 'posted',
         voucherNumber: n,
         entryDate: '2026-06-15',
         description: `backfill ${n}`,
         sourceType: 'supplier_invoice_paid',
+        lines: [
+          { accountNumber: '1930', debitAmount: 100 * n, creditAmount: 0 },
+          { accountNumber: '3001', debitAmount: 0, creditAmount: 100 * n },
+        ],
       })
-      await insertBalancedLines(id, 100 * n)
-      return id
     }
 
     // Case A (Emil's flow): doc pinned to the tx, never propagated.
@@ -534,6 +539,21 @@ describe('floating supplier-invoice document backfill (migration 20260727180000)
     // the verifikat view still displayed the PDF.
     const s = await seedCompany()
     const mkJe = async (n: number, status: 'posted' | 'reversed', sourceType: string) => {
+      if (status === 'posted') {
+        return insertPostedJournalEntry({
+          userId: s.userId,
+          companyId: s.companyId,
+          fiscalPeriodId: s.fiscalPeriodId,
+          voucherNumber: n,
+          entryDate: '2026-06-15',
+          description: `anchor ${n}`,
+          sourceType,
+          lines: [
+            { accountNumber: '1930', debitAmount: 100 * n, creditAmount: 0 },
+            { accountNumber: '3001', debitAmount: 0, creditAmount: 100 * n },
+          ],
+        })
+      }
       const id = await insertDraftJournalEntry({
         userId: s.userId,
         companyId: s.companyId,
@@ -580,18 +600,19 @@ describe('floating supplier-invoice document backfill (migration 20260727180000)
   it('prefers the registration verifikat and never steals an anchored doc', async () => {
     const s = await seedCompany()
     const mkJe = async (n: number, sourceType: string) => {
-      const id = await insertDraftJournalEntry({
+      return insertPostedJournalEntry({
         userId: s.userId,
         companyId: s.companyId,
         fiscalPeriodId: s.fiscalPeriodId,
-        status: 'posted',
         voucherNumber: n,
         entryDate: '2026-06-15',
         description: `prefer ${n}`,
         sourceType,
+        lines: [
+          { accountNumber: '1930', debitAmount: 100 * n, creditAmount: 0 },
+          { accountNumber: '3001', debitAmount: 0, creditAmount: 100 * n },
+        ],
       })
-      await insertBalancedLines(id, 100 * n)
-      return id
     }
 
     const jeReg = await mkJe(1, 'supplier_invoice_registered')
@@ -637,17 +658,19 @@ describe('floating supplier-invoice document backfill (migration 20260727180000)
 
   it('skips closed periods: the period-lock trigger would reject the write anyway', async () => {
     const s = await seedCompany()
-    const je = await insertDraftJournalEntry({
+    const je = await insertPostedJournalEntry({
       userId: s.userId,
       companyId: s.companyId,
       fiscalPeriodId: s.fiscalPeriodId,
-      status: 'posted',
       voucherNumber: 1,
       entryDate: '2026-06-15',
       description: 'closed period',
       sourceType: 'supplier_invoice_paid',
+      lines: [
+        { accountNumber: '1930', debitAmount: 100, creditAmount: 0 },
+        { accountNumber: '3001', debitAmount: 0, creditAmount: 100 },
+      ],
     })
-    await insertBalancedLines(je, 100)
     const supplierId = await insertSupplier({ userId: s.userId, companyId: s.companyId })
     const doc = await attachDocument({
       userId: s.userId,

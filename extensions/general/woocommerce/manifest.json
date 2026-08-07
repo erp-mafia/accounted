@@ -1,0 +1,19 @@
+{
+  "id": "woocommerce",
+  "sector": "general",
+  "exportName": "woocommerceExtension",
+  "entryPoint": "@/extensions/general/woocommerce",
+  "workspace": null,
+  "requiredEnvVars": ["WOOCOMMERCE_CREDENTIALS_ENCRYPTION_KEY"],
+  "optionalEnvVars": [],
+  "npmDependencies": [],
+  "definition": {
+    "name": "WooCommerce",
+    "category": "import",
+    "icon": "ShoppingCart",
+    "dataPattern": "manual",
+    "hasOwnData": true,
+    "description": "Hämta betalda ordrar och återbetalningar från din WooCommerce-butik till transaktionsinkorgen",
+    "longDescription": "Anslut din WooCommerce-butik så hämtas betalda ordrar och återbetalningar automatiskt varje natt till transaktionsinkorgen, som ett bankflöde för butiken. Inget bokförs automatiskt: du bokför raderna själv precis som vanliga banktransaktioner."
+  }
+}

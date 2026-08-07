@@ -8,9 +8,13 @@
  * default p_account_number of '1930' keeps these assertions valid.
  */
 import { describe, it, expect } from 'vitest'
-import { randomUUID } from 'node:crypto'
 import { getPool } from './setup'
-import { insertAuthUser, insertCompany, insertFiscalPeriod } from './fixtures'
+import {
+  insertAuthUser,
+  insertCompany,
+  insertFiscalPeriod,
+  insertPostedJournalEntry as insertAtomicPostedJournalEntry,
+} from './fixtures'
 
 async function insertPostedJournalEntry(params: {
   userId: string
@@ -21,38 +25,26 @@ async function insertPostedJournalEntry(params: {
   voucherNumber: number
   amount?: number
 }): Promise<string> {
-  const id = randomUUID()
   const amount = params.amount ?? 1000
   // Insert as posted directly. This bypasses commit_journal_entry's voucher
   // sequencing; that's fine for testing the read-side RPC, which only cares
   // about (account_number, status, source_type, date_range, link presence).
-  await getPool().query(
-    `INSERT INTO public.journal_entries
-       (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
-        entry_date, description, source_type, status)
-     VALUES ($1, $2, $3, $4, $5, 'A', $6, $7, $8, 'posted')`,
-    [
-      id,
-      params.userId,
-      params.companyId,
-      params.fiscalPeriodId,
-      params.voucherNumber,
-      params.entryDate,
-      `Test ${params.sourceType}`,
-      params.sourceType,
-    ],
-  )
   // Balanced pair on 1930 + 2091 (balanserad vinst/förlust, the realistic
   // carried-forward counterpart for an IB on a bank account; harmless for the
   // other source_types where the test only cares about the 1930 side).
-  await getPool().query(
-    `INSERT INTO public.journal_entry_lines
-       (journal_entry_id, account_number, debit_amount, credit_amount)
-     VALUES ($1, '1930', $2, 0),
-            ($1, '2091', 0, $2)`,
-    [id, amount],
-  )
-  return id
+  return insertAtomicPostedJournalEntry({
+    userId: params.userId,
+    companyId: params.companyId,
+    fiscalPeriodId: params.fiscalPeriodId,
+    voucherNumber: params.voucherNumber,
+    entryDate: params.entryDate,
+    description: `Test ${params.sourceType}`,
+    sourceType: params.sourceType,
+    lines: [
+      { accountNumber: '1930', debitAmount: amount, creditAmount: 0 },
+      { accountNumber: '2091', debitAmount: 0, creditAmount: amount },
+    ],
+  })
 }
 
 describe('get_unlinked_gl_lines RPC: opening_balance exclusion', () => {

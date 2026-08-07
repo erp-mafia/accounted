@@ -1700,11 +1700,32 @@ export async function finalizeImportRecord(
   // overlapping-period check would block any retry. Flipping to 'failed'
   // (which the partial index already excludes) keeps the slot free so the
   // caller can re-import the same file once the mapping is fixed.
+  //
+  // Exception: a file the parser found NO vouchers in (documentation
+  // carries the parsed count) is a legitimate no-op, not a failure.
+  // Fortnox exports an empty SIE file for a fiscal year with nothing
+  // booked yet, and failing it aborts the whole migration wizard. A later
+  // export with actual vouchers has a different hash, so the claimed slot
+  // never blocks it: the Fortnox flow replaces completed imports, and the
+  // manual flow offers "Ersätt import".
   const noEntriesCreated =
     result.success &&
     result.journalEntriesCreated === 0 &&
     !result.openingBalanceEntryId
-  if (noEntriesCreated) {
+  // The parsed count alone can't prove the year was empty: a separator or
+  // encoding mismatch can swallow every #VER block without a parse error
+  // (the parser only warns). Cross-check the raw content; a file that
+  // declares #VER but parsed to 0 vouchers must keep failing, or real
+  // affärshändelser would silently never be bokförda (BFL 5 kap).
+  const rawDeclaresVouchers = /^\s*#VER\b/m.test(fileContent)
+  const fileHadNoVouchers =
+    documentation?.vouchers.total === 0 && !rawDeclaresVouchers
+  if (noEntriesCreated && fileHadNoVouchers) {
+    result.warnings.push(
+      'SIE-filen innehåller inga verifikationer för räkenskapsåret: inget ' +
+      'att importera. Räkenskapsåret är skapat och redo att bokföras i.',
+    )
+  } else if (noEntriesCreated) {
     result.success = false
     if (result.errors.length === 0) {
       result.errors.push(

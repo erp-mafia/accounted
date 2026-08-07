@@ -84,6 +84,34 @@ describe('GET /auth/callback: recovery flow', () => {
       'http://localhost:3000/login?error=auth_error&flow=signup'
     )
   })
+
+  it('tags a failed OAuth code exchange (flow=oauth marker) with flow=oauth', async () => {
+    exchangeCodeForSession.mockResolvedValue({
+      error: { message: 'code verifier missing' },
+    })
+
+    const request = new NextRequest('http://localhost:3000/auth/callback?code=xyz&flow=oauth')
+    const response = await GET(request)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(
+      'http://localhost:3000/login?error=auth_error&flow=oauth'
+    )
+  })
+
+  it('tags a provider denial (no code, only ?error from the provider) with flow=oauth', async () => {
+    const request = new NextRequest(
+      'http://localhost:3000/auth/callback?flow=oauth&error=access_denied'
+    )
+    const response = await GET(request)
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe(
+      'http://localhost:3000/login?error=auth_error&flow=oauth'
+    )
+    expect(exchangeCodeForSession).not.toHaveBeenCalled()
+    expect(verifyOtp).not.toHaveBeenCalled()
+  })
 })
 
 describe('GET /auth/callback: admin invite flow (type=invite)', () => {

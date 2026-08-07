@@ -102,7 +102,7 @@ export default function CompanySwitcher() {
     if (isSandbox) return null
     return (
       <Link
-        href="/select-company"
+        href="/select-company?choose=1"
         className="flex items-center gap-2 w-full text-left rounded-lg border border-dashed border-border/60 hover:border-foreground/30 hover:bg-muted/40 -mx-1 px-2 py-1.5 transition-colors duration-150"
       >
         <Plus className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
@@ -182,7 +182,7 @@ export default function CompanySwitcher() {
           {!isSandbox && (
             <div className={cn(companies.length > 0 && 'border-t border-border/40 mt-1 pt-1', 'px-1')}>
               <Link
-                href="/select-company"
+                href="/select-company?choose=1"
                 onClick={() => setOpen(false)}
                 className="flex items-center gap-2 px-2.5 py-2 text-[13px] text-muted-foreground hover:text-foreground hover:bg-muted/40 rounded-md transition-colors md:whitespace-nowrap"
               >

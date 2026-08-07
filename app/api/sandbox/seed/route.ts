@@ -507,12 +507,25 @@ export async function POST(request: Request) {
       historyVoucherNumbers.push(historyVoucherNumber as number)
     }
 
+    // Inserted as draft and posted after the lines land: PostgREST autocommits
+    // each request, and check_balance_on_posted_insert (migration
+    // 20260806130000) rejects a posted header whose transaction carries no
+    // lines. The draft-to-posted UPDATE below fires check_balance_on_post
+    // against the finished verifikat instead.
+    //
+    // committed_at note: this route runs under the requester's authenticated
+    // client, and set_committed_at() (migration 20260806160000) preserves a
+    // preset committed_at only for trusted roles, so any backdated
+    // committed_at supplied here is overwritten with now() at posting. That
+    // is deliberate: an end-user role must never control the audit timestamp,
+    // and sandbox companies are disposable.
     const { data: insertedHistoryEntries, error: historyEntryError } = await supabase
       .from('journal_entries')
       .insert(
         ledgerHistory.entries.map((historyEntry, index) => ({
           ...historyEntry,
           voucher_number: historyVoucherNumbers[index],
+          status: 'draft',
         })),
       )
       .select('id, voucher_number')
@@ -541,6 +554,13 @@ export async function POST(request: Request) {
         ),
       )
     if (historyLinesError) throw historyLinesError
+
+    const { error: historyPostError } = await supabase
+      .from('journal_entries')
+      .update({ status: 'posted' })
+      .in('id', historyEntryIds)
+      .eq('company_id', companyId)
+    if (historyPostError) throw historyPostError
 
     // The history is the company's books from before it arrived in Accounted:
     // its kvitton live in the previous system's binder, not here. Left
@@ -577,7 +597,8 @@ export async function POST(request: Request) {
         description: 'Faktura F-2026001, Björk & Partner AB',
         source_type: 'invoice_created',
         source_id: invoiceMap['F-2026001'],
-        status: 'posted',
+        // Draft until the lines exist; see the ledger-history comment above.
+        status: 'draft',
         committed_at: toDateStr(thirtyDaysAgo),
       })
       .select('id')
@@ -603,7 +624,8 @@ export async function POST(request: Request) {
         description: 'Betalning faktura F-2026001, Björk & Partner AB',
         source_type: 'invoice_paid',
         source_id: invoiceMap['F-2026001'],
-        status: 'posted',
+        // Draft until the lines exist; see the ledger-history comment above.
+        status: 'draft',
         committed_at: toDateStr(fifteenDaysAgo),
       })
       .select('id')
@@ -674,6 +696,13 @@ export async function POST(request: Request) {
       ])
 
     if (jelError) throw jelError
+
+    const { error: invoicePostError } = await supabase
+      .from('journal_entries')
+      .update({ status: 'posted' })
+      .in('id', [je1.id, je2.id])
+      .eq('company_id', companyId)
+    if (invoicePostError) throw invoicePostError
 
     // 11. Create transactions
     const { data: txRows, error: txError } = await supabase
@@ -1166,7 +1195,8 @@ export async function POST(request: Request) {
 
       const { data: insertedSalaryEntry, error: salaryEntryError } = await supabase
         .from('journal_entries')
-        .insert({ ...voucher.entry, voucher_number: salaryVoucherNumber })
+        // Draft until the lines exist; see the ledger-history comment above.
+        .insert({ ...voucher.entry, voucher_number: salaryVoucherNumber, status: 'draft' })
         .select('id')
         .single()
       if (salaryEntryError) throw salaryEntryError
@@ -1184,6 +1214,13 @@ export async function POST(request: Request) {
 
       runEntryLinks[voucher.runColumn] = insertedSalaryEntry.id
     }
+
+    const { error: salaryPostError } = await supabase
+      .from('journal_entries')
+      .update({ status: 'posted' })
+      .in('id', Object.values(runEntryLinks))
+      .eq('company_id', companyId)
+    if (salaryPostError) throw salaryPostError
 
     const { error: linkRunError } = await supabase
       .from('salary_runs')

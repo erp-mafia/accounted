@@ -460,6 +460,19 @@ describe('getErrorMessage: Swedish heuristic covers real route sentences', () =>
       'Ett oväntat serverfel uppstod. Försök igen senare.',
     )
   })
+
+  // The CashLeads Fortnox migration (2026-08-06): the sie-import finalizer's
+  // guard message reached the wizard as a thrown Error, matched none of the
+  // patterns, and the user saw the generic fallback instead of the reason the
+  // migration stopped. Pins the added patterns: verifikation / importen.
+  it('the 0-verifikationer import guard sentence passes through verbatim', () => {
+    const thrown = new Error(
+      'Importen skapade 0 verifikationer: markerar som misslyckad så filen kan importeras om utan replace/undo. Granska varningarna för att se vilka konton som behöver mappas.',
+    )
+    const msg = getErrorMessage(thrown)
+    expect(msg).toContain('0 verifikationer')
+    expect(msg).not.toBe('Något gick fel. Försök igen.')
+  })
 })
 
 describe('getErrorMessage: GoTrue auth error patterns', () => {

@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest'
 import { executeSIEImport, finalizeImportRecord } from '../sie-import'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import type { ParsedSIEFile, AccountMapping, ImportResult } from '../types'
+import type { ParsedSIEFile, AccountMapping, ImportResult, MigrationDocumentation } from '../types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 function makeParsedFile(overrides?: Partial<ParsedSIEFile>): ParsedSIEFile {
@@ -206,6 +206,124 @@ describe('finalizeImportRecord: 0-entry downgrade', () => {
 
     expect(result.success).toBe(true)
     expect(result.errors).toEqual([])
+  })
+
+  // The CashLeads Fortnox migration case (2026-08-06): Fortnox exports an
+  // empty SIE file for a fiscal year with nothing booked yet. The parsed
+  // voucher count travels in documentation.vouchers.total; when it is 0 the
+  // run is a legitimate no-op, not a failure, and flipping it to 'failed'
+  // aborted the whole migration wizard.
+  function makeDocumentation(voucherTotal: number): MigrationDocumentation {
+    return {
+      sourceSystem: 'Fortnox',
+      sourceVersion: '3.61.17',
+      sieType: 4,
+      generatedDate: '2026-08-06',
+      fiscalYear: { start: '2026-01-01', end: '2026-12-31' },
+      importedAt: '2026-08-06T19:40:46.781Z',
+      importedBy: 'user-1',
+      accountMappings: { total: 739, exact: 613, basRange: 126, manual: 0, unmapped: 0 },
+      vouchers: {
+        total: voucherTotal,
+        imported: 0,
+        skippedUnbalanced: 0,
+        skippedUnmapped: voucherTotal,
+        skippedSingleLine: 0,
+        skippedEmpty: 0,
+      },
+      openingBalanceRounding: null,
+      migrationAdjustment: { created: false, deltaAccounts: 0, entryId: null },
+      voucherSeriesUsed: ['B'],
+      voucherNumberRanges: [],
+      voucherNumberMapping: [],
+    }
+  }
+
+  it('keeps a 0-entry run completed when the file itself contained no vouchers', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    const result: ImportResult = {
+      success: true,
+      importId: 'imp-empty',
+      fiscalPeriodId: 'fp-2026',
+      openingBalanceEntryId: null,
+      journalEntriesCreated: 0,
+      journalEntryIds: [],
+      errors: [],
+      warnings: [],
+      replacedPriorImport: null,
+    }
+
+    await finalizeImportRecord(
+      supabase as unknown as SupabaseClient,
+      'imp-empty',
+      'company-1',
+      result,
+      '#dummy',
+      makeDocumentation(0),
+    )
+
+    expect(result.success).toBe(true)
+    expect(result.errors).toEqual([])
+    expect(result.warnings.join(' ')).toMatch(/inga verifikationer/i)
+  })
+
+  it('still flips to failed when raw content declares #VER but parsing yielded 0 vouchers', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    const result: ImportResult = {
+      success: true,
+      importId: 'imp-swallowed',
+      fiscalPeriodId: 'fp-2026',
+      openingBalanceEntryId: null,
+      journalEntriesCreated: 0,
+      journalEntryIds: [],
+      errors: [],
+      warnings: ['3 #VER-rader hittades men inga verifikationer kunde tolkas: kontrollera fältavskiljare och teckenkodning'],
+      replacedPriorImport: null,
+    }
+
+    // A truncated or mis-decoded file: the parser saw no vouchers
+    // (documentation says total 0) but the raw content declares #VER.
+    await finalizeImportRecord(
+      supabase as unknown as SupabaseClient,
+      'imp-swallowed',
+      'company-1',
+      result,
+      '#FLAGGA 0\n#VER "A" "1" 20260115 "Inköp"\n{\n}\n',
+      makeDocumentation(0),
+    )
+
+    expect(result.success).toBe(false)
+    expect(result.errors.join(' ')).toMatch(/0 verifikationer/i)
+  })
+
+  it('still flips to failed when the file had vouchers but none were imported', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    const result: ImportResult = {
+      success: true,
+      importId: 'imp-skipped',
+      fiscalPeriodId: 'fp-1',
+      openingBalanceEntryId: null,
+      journalEntriesCreated: 0,
+      journalEntryIds: [],
+      errors: [],
+      warnings: ['100 verifikationer hoppades över med ej mappade konton'],
+      replacedPriorImport: null,
+    }
+
+    await finalizeImportRecord(
+      supabase as unknown as SupabaseClient,
+      'imp-skipped',
+      'company-1',
+      result,
+      '#dummy',
+      makeDocumentation(100),
+    )
+
+    expect(result.success).toBe(false)
+    expect(result.errors.join(' ')).toMatch(/0 verifikationer/i)
   })
 
   it('leaves a 0-voucher run alone when an OB entry was created', async () => {

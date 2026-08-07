@@ -71,7 +71,11 @@ const CATEGORY_OPTIONS: { value: string; label: string }[] = [
 // here by `reduced_12` / `reduced_6`: there is deliberately no `standard_12` /
 // `standard_6` (no such treatment exists; the backend would reject it). Keep
 // this list in sync with the union, not with rate labels.
-const VAT_OPTIONS: { value: VatTreatment; label: string }[] = [
+const VAT_OPTIONS: { value: VatTreatment | 'auto'; label: string }[] = [
+  // 'auto' sends no explicit treatment: the bulk-book route derives the
+  // default from the picked category (exempt for bank/card fees, 12%
+  // representation, else 25%). Reverse charge is never derived; see below.
+  { value: 'auto', label: 'Enligt kategori' },
   { value: 'standard_25', label: 'Moms 25%' },
   { value: 'reduced_12', label: 'Moms 12%' },
   { value: 'reduced_6', label: 'Moms 6%' },
@@ -88,7 +92,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
   const { toast } = useToast()
   const t = useTranslations('inbox_bulk_book')
   const [category, setCategory] = useState<string>('')
-  const [vatTreatment, setVatTreatment] = useState<VatTreatment>('standard_25')
+  const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'auto'>('auto')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const bookable = useMemo(() => items.filter(isBookable), [items])
@@ -101,15 +105,16 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
     [items],
   )
 
-  // Reset to the safe default (25% svensk moms) each time the dialog opens.
+  // Reset to the category-derived default each time the dialog opens.
   // Currency is deliberately NOT used to preselect omvänd skattskyldighet: a
   // foreign currency does not imply a foreign seller: a Swedish supplier can
   // invoice in EUR and still debit 25% moms. Reverse charge is a property of
-  // the seller (utländsk, utan svenskt momsnr), never of the currency, so
-  // defaulting to it from currency alone would silently mis-book domestic VAT.
-  // The advisory rendered under the Moms picker spells this out to the user.
+  // the seller (utländsk, utan svenskt momsnr), never of the currency, and the
+  // server-side derivation never produces it either, so it is only ever an
+  // explicit user choice. The advisory rendered under the Moms picker spells
+  // this out to the user.
   useEffect(() => {
-    if (open) setVatTreatment('standard_25')
+    if (open) setVatTreatment('auto')
   }, [open])
 
   // Underlag subtotals, split per currency. This used to be a single scalar
@@ -140,7 +145,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
         body: JSON.stringify({
           item_ids: bookable.map((it) => it.id),
           category,
-          vat_treatment: vatTreatment,
+          ...(vatTreatment !== 'auto' ? { vat_treatment: vatTreatment } : {}),
         }),
       })
       const json = await res.json().catch(() => ({}))
@@ -217,7 +222,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
                 }
               />
             </div>
-            <Select value={vatTreatment} onValueChange={(v) => setVatTreatment(v as VatTreatment)}>
+            <Select value={vatTreatment} onValueChange={(v) => setVatTreatment(v as VatTreatment | 'auto')}>
               <SelectTrigger id="bulk-vat">
                 <SelectValue />
               </SelectTrigger>

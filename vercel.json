@@ -26,6 +26,10 @@
       "schedule": "30 3 * * *"
     },
     {
+      "path": "/api/extensions/woocommerce/orders/cron",
+      "schedule": "45 3 * * *"
+    },
+    {
       "path": "/api/documents/verify/cron",
       "schedule": "0 3 * * *"
     },
