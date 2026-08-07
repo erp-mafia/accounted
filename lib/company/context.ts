@@ -305,14 +305,26 @@ export async function setActiveCompany(
 
   // Refresh the cookie as a compat hint: only after the DB write is
   // confirmed, so the cookie can never diverge from user_preferences.
-  const cookieStore = await cookies()
-  cookieStore.set(COMPANY_COOKIE, companyId, {
-    path: '/',
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 60 * 60 * 24 * 365, // 1 year
-  })
+  // Best-effort: Next only allows cookie mutation in Server Actions and
+  // Route Handlers, and setActiveCompany is also called from Server
+  // Component render (the /select-company single-company auto-forward),
+  // where cookies() is sealed and set() throws. The cookie is a write-only
+  // legacy hint that nothing reads anymore (see CLAUDE.md tenancy notes),
+  // and the authoritative DB write above is already verified, so a skipped
+  // refresh cannot desync anything. Swallowing here mirrors the setAll
+  // pattern in lib/supabase/server.ts.
+  try {
+    const cookieStore = await cookies()
+    cookieStore.set(COMPANY_COOKIE, companyId, {
+      path: '/',
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 60 * 60 * 24 * 365, // 1 year
+    })
+  } catch {
+    // Sealed cookie store (render phase): the DB write is what matters.
+  }
 }
 
 /**

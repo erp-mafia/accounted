@@ -1347,32 +1347,21 @@ export default function JournalEntryForm({
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
-          {embedded ? (
-            <div className="flex items-center gap-2">
-              <Label className="text-xs text-muted-foreground">{t('fiscal_year')}</Label>
-              <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
-                <SelectTrigger className="h-7 w-auto text-xs">
-                  <SelectValue placeholder={t('fiscal_year_placeholder')} />
-                </SelectTrigger>
-                <SelectContent>
-                  {periods.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : (
-            selectedPeriodObj && (
-              <span className="text-muted-foreground">
-                {t('fiscal_year')}:{' '}
-                <span className="text-foreground">{selectedPeriodObj.name}</span>
-                {nextVoucherNumber != null && (
-                  <span className="ml-2 font-mono text-foreground">
-                    {voucherSeries}{nextVoucherNumber}
-                  </span>
-                )}
-              </span>
-            )
+          {/* The period is a total function of the entry date (Swedish fiscal
+              periods never overlap), so it renders as derived text in both
+              variants. The embedded Select this replaces allowed hand-picking
+              a period that disagreed with the date, which only the DB period
+              trigger would catch. */}
+          {selectedPeriodObj && (
+            <span className="text-muted-foreground">
+              {t('fiscal_year')}:{' '}
+              <span className="text-foreground">{selectedPeriodObj.name}</span>
+              {nextVoucherNumber != null && (
+                <span className="ml-2 font-mono text-foreground">
+                  {voucherSeries}{nextVoucherNumber}
+                </span>
+              )}
+            </span>
           )}
           <div className="flex items-center gap-2">
             <Label className="text-xs text-muted-foreground">{t('currency')}</Label>

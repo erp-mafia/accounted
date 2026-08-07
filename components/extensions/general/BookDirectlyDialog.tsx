@@ -12,7 +12,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Plus, Trash2, AlertTriangle, Search, Check, BookmarkPlus } from 'lucide-react'
@@ -33,6 +32,8 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
+import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { AttnLine } from '@/components/ui/attn-line'
 import type { BASAccount, BookingTemplateLibrary, CashAccount, FiscalPeriod, InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
@@ -243,6 +244,46 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, item.id])
 
+  // Cost-account prefill from the company's own booking history for this
+  // supplier (counterparty templates). Fills only the first line's still-empty
+  // account: never a generic seed (the old silent-'5010' incident is the
+  // reason there is no fallback), never over anything the user typed, and only
+  // for expense-shaped templates (cost on debit, settlement on credit) so an
+  // income template can't plant a revenue account on a purchase.
+  const [accountSuggestion, setAccountSuggestion] = useState<{ account: string; counterparty: string } | null>(null)
+  useEffect(() => {
+    if (!open) return
+    setAccountSuggestion(null)
+    const supplier = item.extracted_data?.supplier?.name?.trim()
+    if (!supplier) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(
+          `/api/settings/counterparty-templates?counterparty=${encodeURIComponent(supplier)}`
+        )
+        if (!res.ok) return
+        const json = await res.json()
+        if (cancelled) return
+        const match = json?.data
+        const debit: string | undefined = match?.template?.debit_account
+        const credit: string | undefined = match?.template?.credit_account
+        if (!match || (match.confidence ?? 0) < 0.5) return
+        // P&L cost on debit (4xxx-8xxx), settlement on credit: keeps private
+        // and balance-sheet templates (2013, 1630, 12xx) out of a cost field.
+        if (!debit || !/^[4-8]/.test(debit) || !credit || !credit.startsWith('19')) return
+        setLines((current) => {
+          if (!current[0] || current[0].account_number) return current
+          return current.map((l, i) => (i === 0 ? { ...l, account_number: debit } : l))
+        })
+        setAccountSuggestion({ account: debit, counterparty: match.template.counterparty_name })
+      } catch {
+        // Prefill is best-effort; the field simply stays blank.
+      }
+    })()
+    return () => { cancelled = true }
+  }, [open, item.id, item.extracted_data?.supplier?.name])
+
   // Fetch the underlag's SEK rate for a foreign-currency document so candidate
   // transactions can be ranked against the SEK-equivalent total (and not the
   // raw foreign number). SEK / unsupported currencies skip the fetch.
@@ -376,18 +417,18 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     return () => { cancelled = true }
   }, [open])
 
-  // Auto-select fiscal period matching the entry date
+  // Derive the fiscal period from the entry date. Periods never overlap, so
+  // this is a total function of the date; when the date falls outside every
+  // period the id clears and submit is blocked with an explanation. The old
+  // else-branch silently borrowed periods[0], which could book into the wrong
+  // period with only the DB period trigger left to catch it.
   useEffect(() => {
     if (periods.length === 0) return
     const match = periods.find(
       (p) => entryDate >= p.period_start && entryDate <= p.period_end
     )
-    if (match) {
-      setPeriodId(match.id)
-    } else if (!periodId && periods.length > 0) {
-      setPeriodId(periods[0].id)
-    }
-  }, [entryDate, periods, periodId])
+    setPeriodId(match ? match.id : '')
+  }, [entryDate, periods])
 
   // Fetch unmatched transactions whenever the dialog opens: the picker
   // is always visible now (selection is optional).
@@ -503,15 +544,22 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     [],
   )
 
+  const derivedPeriod = useMemo(
+    () => periods.find((p) => p.id === periodId) ?? null,
+    [periods, periodId],
+  )
+  const derivedPeriodBlocked = !!(derivedPeriod?.locked_at || derivedPeriod?.is_closed)
+
   const disabledReason = useMemo(() => {
     if (isSubmitting) return null
     if (!entryDate) return 'Välj datum'
-    if (!periodId) return 'Välj räkenskapsperiod'
+    if (!periodId) return 'Datumet matchar ingen öppen räkenskapsperiod'
+    if (derivedPeriodBlocked) return 'Räkenskapsperioden är låst eller stängd'
     if (description.trim().length === 0) return 'Fyll i beskrivning'
     if (lines.some((l) => l.account_number.trim().length === 0)) return 'Alla rader behöver ett konto'
     if (!totals.balanced) return 'Debet och kredit måste vara lika'
     return null
-  }, [isSubmitting, entryDate, periodId, description, lines, totals.balanced])
+  }, [isSubmitting, entryDate, periodId, derivedPeriodBlocked, description, lines, totals.balanced])
 
   const canSubmit = !isSubmitting && disabledReason === null
 
@@ -619,31 +667,25 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
               />
             </div>
             <div className="space-y-1.5 md:col-span-2">
-              <Label htmlFor="bd-period">Räkenskapsperiod</Label>
-              <Select
-                value={periodId}
-                onValueChange={setPeriodId}
-                disabled={isSubmitting || periods.length === 0}
-              >
-                <SelectTrigger id="bd-period">
-                  <SelectValue placeholder="Välj period" />
-                </SelectTrigger>
-                <SelectContent>
-                  {periods.map((p) => {
-                    const lockState = p.locked_at
-                      ? 'låst'
-                      : p.is_closed
-                        ? 'stängd'
-                        : null
-                    return (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.period_start}: {p.period_end}
-                        {lockState && ` (${lockState})`}
-                      </SelectItem>
-                    )
-                  })}
-                </SelectContent>
-              </Select>
+              <Label>Räkenskapsperiod</Label>
+              {/* Derived from the entry date (periods never overlap): text,
+                  not a picker, so it can never disagree with the date. */}
+              {periods.length === 0 ? (
+                <p className="text-sm text-muted-foreground pt-2">Hämtar perioder …</p>
+              ) : derivedPeriod ? (
+                <p className="text-sm pt-2 tabular-nums">
+                  {derivedPeriod.period_start}: {derivedPeriod.period_end}
+                  {(derivedPeriod.locked_at || derivedPeriod.is_closed) && (
+                    <span className="text-attn">
+                      {' '}({derivedPeriod.locked_at ? 'låst' : 'stängd'})
+                    </span>
+                  )}
+                </p>
+              ) : (
+                <AttnLine className="pt-2">
+                  Datumet ligger utanför öppna räkenskapsperioder. Ändra datumet eller skapa perioden under Bokföring.
+                </AttnLine>
+              )}
             </div>
           </div>
 
@@ -790,6 +832,13 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 Underlaget är i {targetCurrency}. Bokföringen sker i SEK enligt
                 transaktionens belopp. Momsraden har lämnats bort: vid behov
                 lägg till en rad för omvänd skattskyldighet manuellt.
+              </p>
+            )}
+            {accountSuggestion && lines[0]?.account_number === accountSuggestion.account && (
+              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
+                Konto {accountSuggestion.account} föreslaget från tidigare bokföringar av{' '}
+                {formatCounterpartyName(accountSuggestion.counterparty)}
               </p>
             )}
             <div className="rounded-lg border overflow-hidden">

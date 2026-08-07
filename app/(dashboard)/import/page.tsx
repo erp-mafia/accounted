@@ -2135,6 +2135,7 @@ export default function ImportPage() {
                         <LogoChip src="/logos/bokio.png" name="Bokio" />
                         <LogoChip src="/logos/bjornlunden.png" name="Björn Lundén" />
                         <LogoChip src="/logos/Briox_logo.png" name="Briox" />
+                        <LogoChip src="/logos/wint.svg" name="WINT" />
                       </>
                     }
                     disabled={isSandbox}

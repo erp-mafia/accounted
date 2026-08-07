@@ -73,6 +73,7 @@ describe('providerSupportsSie', () => {
     expect(providerSupportsSie('fortnox')).toBe(true)
     expect(providerSupportsSie('briox')).toBe(true)
     expect(providerSupportsSie('bjornlunden')).toBe(true)
+    expect(providerSupportsSie('wint')).toBe(true)
     expect(providerSupportsSie('visma')).toBe(false)
     expect(providerSupportsSie('bokio')).toBe(false)
   })
@@ -296,5 +297,170 @@ describe('fetchProviderSieFiles', () => {
       expect(result.files).toHaveLength(1)
       expect(result.files[0].rawContent).toContain(`Företagskonto ${CY - 1}`)
     })
+  })
+})
+
+describe('fetchProviderSieFiles: wint (SIE rendered from voucher data)', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+  })
+
+  function wintList(items: unknown[]): Response {
+    return jsonResponse({ Items: items, Page: 1, NumPerPage: 200, TotalItems: items.length })
+  }
+
+  function routeWint() {
+    routeFetch(fetchSpy, [
+      {
+        match: '/api/Auth',
+        respond: () =>
+          jsonResponse({
+            Id: 123,
+            Name: 'Bolaget AB',
+            Org: '556699-0011',
+            FinancialYears: [
+              { Id: 1, Start: `${CY - 1}-01-01T00:00:00`, End: `${CY - 1}-12-31T00:00:00` },
+              { Id: 2, Start: `${CY}-01-01T00:00:00`, End: `${CY}-12-31T00:00:00` },
+            ],
+          }),
+      },
+      {
+        match: '/api/Account',
+        respond: () =>
+          wintList([
+            // Ib anchors to the CURRENT year: 1930 opened this year at 1000
+            // (built by last year's +1000 movement from 0).
+            { Id: 'a1', Name: 'Företagskonto', Number: 1930, SRU: 7281, Ib: 1000 },
+            { Id: 'a2', Name: 'Försäljning', Number: 3010, SRU: 7410, Ib: 0 },
+          ]),
+      },
+      {
+        match: `BookingDateStart=${CY - 1}-01-01`,
+        respond: () =>
+          wintList([
+            {
+              SeriesShortName: 'A',
+              Number: 1,
+              BookingDate: `${CY - 1}-05-01T00:00:00`,
+              Text: 'Försäljning',
+              Deleted: false,
+              Transactions: [
+                { AccountNumber: 1930, Amount: 1000 },
+                { AccountNumber: 3010, Amount: -1000 },
+              ],
+            },
+          ]),
+      },
+      {
+        match: `BookingDateStart=${CY}-01-01`,
+        respond: () =>
+          wintList([
+            {
+              SeriesShortName: 'A',
+              Number: 1,
+              BookingDate: `${CY}-02-01T00:00:00`,
+              Text: 'Försäljning i år',
+              Deleted: false,
+              Transactions: [
+                { AccountNumber: 1930, Amount: 500 },
+                { AccountNumber: 3010, Amount: -500 },
+              ],
+            },
+          ]),
+      },
+    ])
+  }
+
+  it('renders one parseable SIE file per year with derived opening balances', async () => {
+    routeWint()
+
+    const result = await fetchProviderSieFiles('wint', 'jwt-token', undefined)
+
+    expect(result.failedYears).toEqual([])
+    expect(result.availableYears).toEqual([CY - 1, CY])
+    expect(result.files.map((f) => f.fiscalYear)).toEqual([CY - 1, CY])
+
+    const prev = result.files[0].rawContent
+    const curr = result.files[1].rawContent
+    // Previous year: derived backward from the anchor (1000 - 1000 = 0), and
+    // the zero IB is still printed because the account has a nonzero UB
+    expect(prev).toContain('#IB 0 1930 0.00')
+    expect(prev).toContain('#UB 0 1930 1000.00')
+    expect(prev).toContain('#VER "A" 1')
+    // Current year: anchor IB straight from /api/Account
+    expect(curr).toContain('#IB 0 1930 1000.00')
+    expect(curr).toContain('#UB 0 1930 1500.00')
+    expect(curr).toContain('#FNAMN "Bolaget AB"')
+    expect(curr).toContain('#ORGNR 556699-0011')
+  })
+
+  it('latestOnly renders just the newest year but lists all available years', async () => {
+    routeWint()
+
+    const result = await fetchProviderSieFiles('wint', 'jwt-token', undefined, { latestOnly: true })
+
+    expect(result.availableYears).toEqual([CY - 1, CY])
+    expect(result.files.map((f) => f.fiscalYear)).toEqual([CY])
+  })
+
+  it('fails a year loudly when its voucher fetch errors, and still renders the anchor year', async () => {
+    routeFetch(fetchSpy, [
+      {
+        match: '/api/Auth',
+        respond: () =>
+          jsonResponse({
+            Id: 123,
+            Name: 'Bolaget AB',
+            Org: '556699-0011',
+            FinancialYears: [
+              { Id: 1, Start: `${CY - 1}-01-01T00:00:00`, End: `${CY - 1}-12-31T00:00:00` },
+              { Id: 2, Start: `${CY}-01-01T00:00:00`, End: `${CY}-12-31T00:00:00` },
+            ],
+          }),
+      },
+      {
+        match: '/api/Account',
+        respond: () => wintList([{ Id: 'a1', Name: 'Företagskonto', Number: 1930, SRU: 7281, Ib: 1000 }]),
+      },
+      {
+        // 404 is non-retryable: the older year fails fast
+        match: `BookingDateStart=${CY - 1}-01-01`,
+        respond: () => new Response('gone', { status: 404 }),
+      },
+      {
+        match: `BookingDateStart=${CY}-01-01`,
+        respond: () =>
+          wintList([
+            {
+              SeriesShortName: 'A',
+              Number: 1,
+              BookingDate: `${CY}-02-01T00:00:00`,
+              Text: 'Försäljning i år',
+              Deleted: false,
+              Transactions: [
+                { AccountNumber: 1930, Amount: 500 },
+                { AccountNumber: 3010, Amount: -500 },
+              ],
+            },
+          ]),
+      },
+    ])
+
+    const result = await fetchProviderSieFiles('wint', 'jwt-token', undefined)
+
+    // The anchor year derives from its own Ib and still renders; the failed
+    // year is REPORTED, never silently dropped (IB/UB continuity would break
+    // unnoticed otherwise).
+    expect(result.files.map((f) => f.fiscalYear)).toEqual([CY])
+    expect(result.files[0].rawContent).toContain('#IB 0 1930 1000.00')
+    expect(result.failedYears).toEqual([
+      { year: CY - 1, error: expect.stringContaining('404') },
+    ])
   })
 })
