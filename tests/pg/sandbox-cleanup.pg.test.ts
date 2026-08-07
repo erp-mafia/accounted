@@ -51,6 +51,51 @@ async function seedSandboxUser(settingsCreatedAt?: string): Promise<{
      VALUES ($1, $2, 'categorize_transaction', 'Sandbox cleanup test op', 'rejected')`,
     [userId, companyId],
   )
+  // processing_history references companies with a plain NO ACTION FK and no
+  // cascade; without the explicit delete (migration 20260807160000) a
+  // sandbox that produced telemetry cannot be torn down.
+  await getPool().query(
+    `INSERT INTO public.processing_history
+       (company_id, correlation_id, aggregate_type, aggregate_id, event_type, actor, occurred_at)
+     VALUES ($1, $2, 'Document', $3, 'DocumentIngested', '{"type":"system"}', now())`,
+    [companyId, randomUUID(), randomUUID()],
+  )
+  // invoice_deliveries has the same NO ACTION company FK AND a delete guard
+  // that silently swallows deletes (RETURN NULL) outside the teardown
+  // bypass; a marked_sent manual delivery is the minimal terminal row.
+  const invoiceId = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.invoices (id, user_id, company_id, invoice_date, due_date)
+     VALUES ($1, $2, $3, '2026-01-10', '2026-02-10')`,
+    [invoiceId, userId, companyId],
+  )
+  await getPool().query(
+    `INSERT INTO public.invoice_deliveries
+       (company_id, user_id, invoice_id, channel, status, sent_at, retention_expires_at)
+     VALUES ($1, $2, $3, 'manual', 'marked_sent', now(), '2033-12-31')`,
+    [companyId, userId, invoiceId],
+  )
+  // An API key with the SoD acknowledgement set: sod_acknowledged_by is a
+  // plain NO ACTION FK to auth.users that blocked teardown for every keyed
+  // sandbox until 20260807170000 deletes the keys explicitly.
+  await getPool().query(
+    `INSERT INTO public.api_keys
+       (user_id, company_id, key_hash, key_prefix, sod_acknowledged_by, sod_acknowledged_at)
+     VALUES ($1, $2, $3, 'gnubok_sk_pgtest', $1, now())`,
+    [userId, companyId, randomUUID()],
+  )
+  // A WORM retag-log row (dimension_retag_log_immutable raises on DELETE
+  // outside the teardown bypass).
+  const { rows: lineRows } = await getPool().query<{ id: string }>(
+    `SELECT id FROM public.journal_entry_lines WHERE journal_entry_id = $1 LIMIT 1`,
+    [entryId],
+  )
+  await getPool().query(
+    `INSERT INTO public.dimension_retag_log
+       (company_id, journal_entry_id, line_id, old_dimensions, new_dimensions, reason)
+     VALUES ($1, $2, $3, '{}', '{"1":"BUTIK"}', 'Sandbox cleanup test retag')`,
+    [companyId, entryId, lineRows[0]!.id],
+  )
   return { userId, companyId, entryId }
 }
 
@@ -104,6 +149,14 @@ describe('sandbox cleanup RPCs (pg)', () => {
       [entryId],
     )
     expect(lines[0]!.n).toBe(0)
+  })
+
+  it('refuses a user with no company_settings rows at all', async () => {
+    const { userId } = await seedCompany()
+    await expect(
+      getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [userId]),
+    ).rejects.toThrow(/is not a sandbox user/i)
+    expect(await authUserExists(userId)).toBe(true)
   })
 
   it('refuses a user whose company is not a sandbox', async () => {
@@ -350,6 +403,21 @@ describe('sandbox cleanup RPCs (pg)', () => {
       await anonClient.query('ROLLBACK').catch(() => {})
       anonClient.release()
     }
+  })
+
+  it('cleanup_expired_sandbox_users carries its own statement_timeout', async () => {
+    // PostgREST sessions inherit authenticator's 8s statement_timeout while
+    // one sandbox teardown costs ~3s, so without a function-local override
+    // the nightly batch times out and rolls back wholesale (migration
+    // 20260807150000, same pattern as undo_sie_import).
+    const { rows } = await getPool().query<{ proconfig: string[] | null }>(
+      `SELECT p.proconfig
+       FROM pg_proc p
+       JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.proname = 'cleanup_expired_sandbox_users'`,
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.proconfig ?? []).toContain('statement_timeout=290s')
   })
 
   it('is executable by service_role only', async () => {

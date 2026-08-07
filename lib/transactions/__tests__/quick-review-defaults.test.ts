@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveQuickReviewDefaults, type ReviewTemplate } from '../quick-review-defaults'
+import { resolveQuickReviewDefaults, resolveExplicitVat, type ReviewTemplate } from '../quick-review-defaults'
 import { getDefaultAccountForCategory } from '@/lib/bookkeeping/category-mapping'
 
 /**
@@ -68,5 +68,26 @@ describe('resolveQuickReviewDefaults', () => {
     const { account, vat } = resolveQuickReviewDefaults(null, undefined, 'expense_other')
     expect(account).toBe(getDefaultAccountForCategory('expense_other'))
     expect(vat === 'none' || typeof vat === 'string').toBe(true)
+  })
+})
+
+describe('resolveExplicitVat', () => {
+  it('passes explicit rate-bearing treatments through unchanged', () => {
+    expect(resolveExplicitVat('standard_25', 'standard_25')).toBe('standard_25')
+    expect(resolveExplicitVat('reduced_12', 'standard_25')).toBe('reduced_12')
+    expect(resolveExplicitVat('reverse_charge', 'none')).toBe('reverse_charge')
+  })
+
+  it("keeps a seeded 'none' default off the wire (server derives, no VAT line)", () => {
+    // Bank fees etc.: category default is null -> displayed as 'none'.
+    // Untouched submit must stay byte-identical to the pre-fix behavior.
+    expect(resolveExplicitVat('none', 'none')).toBeUndefined()
+  })
+
+  it("sends explicit 'exempt' when the user deviates to Ingen moms", () => {
+    // The old collapse to undefined made the server re-derive the category
+    // default and book 25% moms against an explicit no-VAT choice.
+    expect(resolveExplicitVat('none', 'standard_25')).toBe('exempt')
+    expect(resolveExplicitVat('none', 'reduced_12')).toBe('exempt')
   })
 })
