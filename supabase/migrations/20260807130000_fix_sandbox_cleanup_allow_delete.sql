@@ -286,15 +286,18 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  v_is_sandbox boolean;
   v_deleted integer := 0;
 BEGIN
-  -- Verify this is a sandbox user
-  SELECT is_sandbox INTO v_is_sandbox
-  FROM public.company_settings
-  WHERE user_id = p_user_id;
-
-  IF v_is_sandbox IS NOT TRUE THEN
+  -- Verify this is a sandbox user: at least one settings row, and EVERY
+  -- settings row flagged sandbox. A single-row read would pick an arbitrary
+  -- row for a hypothetical multi-company user and the user-scoped deletes
+  -- below would then reach the real company's rows.
+  IF NOT EXISTS (
+    SELECT 1 FROM public.company_settings cs WHERE cs.user_id = p_user_id
+  ) OR EXISTS (
+    SELECT 1 FROM public.company_settings cs
+    WHERE cs.user_id = p_user_id AND cs.is_sandbox IS NOT TRUE
+  ) THEN
     RAISE EXCEPTION 'User % is not a sandbox user', p_user_id;
   END IF;
 
@@ -361,6 +364,12 @@ BEGIN
   -- Delete from auth.users cascades everything else
   DELETE FROM auth.users WHERE id = p_user_id;
   GET DIAGNOSTICS v_deleted = ROW_COUNT;
+
+  -- Drop the bypasses before returning so nothing later in the same
+  -- transaction (the expired-users loop, the orphan sweep) runs with them
+  -- still armed.
+  PERFORM set_config('gnubok.allow_delete', '', true);
+  PERFORM set_config('gnubok.sandbox_cleanup', '', true);
 
   RETURN v_deleted;
 END;
@@ -506,8 +515,11 @@ BEGIN
       nullif(current_setting('request.jwt.claim.role', true), ''),
       v_claims->>'role'
     );
-    IF v_role IS NOT NULL
-       AND v_role <> 'service_role'
+    -- Any PostgREST context at all (claims json or a per-claim role) must
+    -- prove itself; a claims blob without a role claim is still not a
+    -- direct database session.
+    IF (v_claims IS NOT NULL OR v_role IS NOT NULL)
+       AND coalesce(v_role, '') <> 'service_role'
        AND coalesce((v_claims->>'is_anonymous')::boolean, false) = false THEN
       RAISE EXCEPTION 'company_settings.is_sandbox = true can only be created for anonymous sandbox users';
     END IF;

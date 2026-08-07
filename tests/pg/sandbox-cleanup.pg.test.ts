@@ -138,18 +138,63 @@ describe('sandbox cleanup RPCs (pg)', () => {
     }
   })
 
-  it('the gnubok.allow_delete flag does not leak out of the cleanup transaction', async () => {
+  it('the bypass flags are cleared before cleanup_sandbox_user returns', async () => {
     const { userId } = await seedSandboxUser()
     const client = await getClient()
     try {
+      // Explicit transaction: a bare statement would end its own implicit
+      // transaction and discard transaction-local GUCs regardless, which is
+      // exactly the blind spot the old version of this test had.
+      await client.query('BEGIN')
       await client.query(`SELECT public.cleanup_sandbox_user($1)`, [userId])
-      const { rows } = await client.query<{ flag: string | null }>(
-        `SELECT current_setting('gnubok.allow_delete', true) AS flag`,
+      const { rows } = await client.query<{ del: string | null; sc: string | null }>(
+        `SELECT current_setting('gnubok.allow_delete', true) AS del,
+                current_setting('gnubok.sandbox_cleanup', true) AS sc`,
       )
-      expect(rows[0]!.flag ?? '').not.toBe('true')
+      expect(rows[0]!.del ?? '').not.toBe('true')
+      expect(rows[0]!.sc ?? '').not.toBe('true')
+      await client.query('COMMIT')
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {})
+      throw err
     } finally {
       client.release()
     }
+  })
+
+  it('refuses a user who has both a sandbox and a non-sandbox company', async () => {
+    const sandbox = await seedSandboxUser()
+    const otherCompanyId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.companies (id, name, entity_type, created_by)
+       VALUES ($1, 'Second Real Company', 'enskild_firma', $2)`,
+      [otherCompanyId, sandbox.userId],
+    )
+    await getPool().query(
+      `INSERT INTO public.company_settings (user_id, company_id, is_sandbox)
+       VALUES ($1, $2, false)`,
+      [sandbox.userId, otherCompanyId],
+    )
+
+    await expect(
+      getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [sandbox.userId]),
+    ).rejects.toThrow(/is not a sandbox user/i)
+    expect(await authUserExists(sandbox.userId)).toBe(true)
+
+    // Clean up: replace the non-sandbox settings row with a sandbox one
+    // (a direct DB session may insert is_sandbox = true), then the
+    // sanctioned teardown removes everything.
+    await getPool().query(
+      `DELETE FROM public.company_settings WHERE company_id = $1`,
+      [otherCompanyId],
+    )
+    await getPool().query(
+      `INSERT INTO public.company_settings (user_id, company_id, is_sandbox)
+       VALUES ($1, $2, true)`,
+      [sandbox.userId, otherCompanyId],
+    )
+    await getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [sandbox.userId])
+    expect(await authUserExists(sandbox.userId)).toBe(false)
   })
 
   it('sweeps expired sandbox users and orphaned anonymous users, keeps fresh ones, reports counts', async () => {
