@@ -47,9 +47,10 @@ if (result.mail) {
   console.log(`köp genomsökta   : ${result.mail.searched}`)
   console.log(`köp med träff    : ${result.mail.withCandidates}\n`)
   for (const c of result.mail.candidates) {
-    console.log(`  ${c.merchant ?? '?'} ${c.amount} kr`)
+    console.log(`  ${c.merchant ?? '?'} ${c.amount} kr` + (c.brand ? `   [${c.brand}]` : ''))
     console.log(`    ur ${c.mailbox}: "${c.subject ?? '(utan ämne)'}" från ${c.from ?? '?'}`)
     console.log(`    ${c.attachmentCount} bilaga(or)${c.bodyIsReceipt ? ', kvittot ligger i mejlkroppen' : ''}`)
+    if (c.confidence != null) console.log(`    säkerhet ${c.confidence}: ${c.reason ?? ''}`)
   }
   if (result.mail.candidates.length === 0) console.log('  (inga kandidatmejl)')
 } else if (withMail) {

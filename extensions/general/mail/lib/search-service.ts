@@ -59,7 +59,7 @@ export class GmailSearchService implements MailSearchService {
     // Mailboxes are searched in parallel: the work is read-only, so there is
     // nothing to serialise, and one slow account should not delay the rest.
     const perConnection = await Promise.all(
-      connections.map((connection) => this.searchOne(supabase, connection, q)),
+      connections.map((connection) => this.searchOne(supabase, connection, q, query.limit)),
     )
     return perConnection.flat()
   }
@@ -68,6 +68,7 @@ export class GmailSearchService implements MailSearchService {
     supabase: ReturnType<typeof createServiceClientNoCookies>,
     connection: MailConnectionRow,
     q: string,
+    limit?: number,
   ): Promise<MailCandidate[]> {
     // A dead grant shrinks the hunt rather than aborting it; getAccessToken has
     // already parked it as needs_reconsent for the UI to surface.
@@ -75,7 +76,7 @@ export class GmailSearchService implements MailSearchService {
     if (!accessToken) return []
 
     try {
-      const ids = await searchMessageIds(accessToken, q)
+      const ids = await searchMessageIds(accessToken, q, limit)
       if (ids.length === 0) return []
 
       const summaries = await Promise.all(

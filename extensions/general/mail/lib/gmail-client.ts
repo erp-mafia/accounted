@@ -24,6 +24,7 @@ interface GmailPart {
 interface GmailMessage {
   id: string
   internalDate?: string
+  snippet?: string
   payload?: {
     headers?: GmailHeader[]
     filename?: string
@@ -38,15 +39,18 @@ function header(msg: GmailMessage, name: string): string | null {
   return found?.value ?? null
 }
 
-/** Attachment ids anywhere in the MIME tree, ignoring inline images. */
-function collectAttachments(part: GmailPart | undefined, out: string[]): void {
+/** Attachments anywhere in the MIME tree, ignoring inline images. */
+function collectAttachments(
+  part: GmailPart | undefined,
+  out: Array<{ id: string; filename: string }>,
+): void {
   if (!part) return
   const id = part.body?.attachmentId
   const named = part.filename && part.filename.length > 0
   const isDocument =
     named &&
     !/^image\/(png|gif)$/i.test(part.mimeType ?? '') // inline logos, not receipts
-  if (id && isDocument) out.push(id)
+  if (id && isDocument) out.push({ id, filename: part.filename as string })
   for (const child of part.parts ?? []) collectAttachments(child, out)
 }
 
@@ -61,8 +65,12 @@ async function gmailFetch<T>(accessToken: string, path: string): Promise<T> {
   return (await response.json()) as T
 }
 
-export async function searchMessageIds(accessToken: string, query: string): Promise<string[]> {
-  const params = new URLSearchParams({ q: query, maxResults: String(MAX_RESULTS) })
+export async function searchMessageIds(
+  accessToken: string,
+  query: string,
+  maxResults: number = MAX_RESULTS,
+): Promise<string[]> {
+  const params = new URLSearchParams({ q: query, maxResults: String(maxResults) })
   const data = await gmailFetch<{ messages?: Array<{ id: string }> }>(
     accessToken,
     `/messages?${params.toString()}`,
@@ -87,8 +95,8 @@ export async function getMessageSummary(
   mailbox: string,
 ): Promise<MailCandidate> {
   const msg = await gmailFetch<GmailMessage>(accessToken, `/messages/${messageId}?format=full`)
-  const attachmentIds: string[] = []
-  collectAttachments(msg.payload, attachmentIds)
+  const attachments: Array<{ id: string; filename: string }> = []
+  collectAttachments(msg.payload, attachments)
 
   return {
     connectionId,
@@ -102,8 +110,10 @@ export async function getMessageSummary(
       : header(msg, 'Date'),
     // A receipt with no attachment is usually the mail body itself; the caller
     // decides whether to render it.
-    attachmentIds,
-    bodyIsReceipt: attachmentIds.length === 0,
+    attachmentIds: attachments.map((a) => a.id),
+    attachmentNames: attachments.map((a) => a.filename),
+    snippet: msg.snippet ?? null,
+    bodyIsReceipt: attachments.length === 0,
   }
 }
 

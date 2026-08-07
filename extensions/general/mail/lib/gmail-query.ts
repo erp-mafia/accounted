@@ -93,21 +93,34 @@ export function amountTerms(amount: number): string[] {
  * `has:attachment` is NOT required: plenty of receipts are the mail body itself.
  */
 export function buildGmailQuery(query: MailSearchQuery): string {
-  const after = shiftDays(query.date, -DAYS_BEFORE - 1) // Gmail's after: is exclusive
-  const before = shiftDays(query.date, DAYS_AFTER + 1)
+  const parts: string[] = []
 
-  const parts: string[] = [`after:${after.replace(/-/g, '/')}`, `before:${before.replace(/-/g, '/')}`]
+  // Off by default now. Receipts reach these mailboxes by being forwarded, and
+  // a forward carries the forwarding date, so windowing on the purchase date
+  // hides the very mail we want. The caller re-establishes precision by having
+  // the model judge the hits instead.
+  if (query.useDateWindow !== false) {
+    const after = shiftDays(query.date, -DAYS_BEFORE - 1) // Gmail's after: is exclusive
+    const before = shiftDays(query.date, DAYS_AFTER + 1)
+    parts.push(`after:${after.replace(/-/g, '/')}`, `before:${before.replace(/-/g, '/')}`)
+  }
 
-  const terms = merchantTerms(query.merchant)
-  const amounts = amountTerms(query.amount)
-  const alternatives = [
-    ...terms.map((t) => `"${t}"`),
-    ...amounts.map((a) => `"${a}"`),
-  ]
+  // Resolved merchant names beat the raw descriptor whenever we have them: the
+  // bank's own string frequently appears nowhere in the receipt.
+  const aliases = (query.aliases ?? []).map((a) => a.trim()).filter((a) => a.length >= 2)
+  const alternatives =
+    aliases.length > 0
+      ? aliases.map((a) => `"${a}"`)
+      : [
+          ...merchantTerms(query.merchant).map((t) => `"${t}"`),
+          ...amountTerms(query.amount).map((a) => `"${a}"`),
+        ]
 
   if (alternatives.length > 0) {
     parts.push(`(${alternatives.join(' OR ')})`)
   }
+
+  if (query.requireAttachment) parts.push('has:attachment')
 
   // Calendar invitations and the user's own outbound mail are never receipts.
   parts.push('-in:chats')

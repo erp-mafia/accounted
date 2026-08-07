@@ -19,6 +19,11 @@ import { getMailSearchService } from '@/lib/mail-search/service'
 import { ingestMailCandidate } from './ingest'
 import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
 import {
+  assignReceipts,
+  planMerchantGroups,
+  type PurchaseDescriptor,
+} from './mail-intelligence'
+import {
   MAX_PROPOSALS_PER_RUN,
   canHaveEmailReceipt,
   pairKey,
@@ -52,6 +57,15 @@ export const HUNT_ACTOR_LABEL = 'Kvittojakten'
  * tomorrow night rather than being dropped.
  */
 export const MAX_MAIL_SEARCHES_PER_RUN = 15
+
+/**
+ * Hits pulled per merchant before the model is asked to choose.
+ *
+ * A merchant-name search without a date window is broad on purpose, so this is
+ * the budget for that breadth: enough that the right receipt is in the set,
+ * few enough that one review call can weigh them all.
+ */
+export const MAX_CANDIDATES_PER_MERCHANT = 12
 
 const OPERATION_TYPE = 'attach_document_to_transaction'
 
@@ -87,6 +101,12 @@ export interface MailHuntSummary {
     receivedAt: string | null
     attachmentCount: number
     bodyIsReceipt: boolean
+    /** Merchant the model resolved the bank descriptor to. */
+    brand?: string
+    /** How sure the model was that this mail is the receipt for this charge. */
+    confidence?: number
+    /** Why, in one sentence, for the human who approves it. */
+    reason?: string
   }>
 }
 
@@ -401,6 +421,9 @@ export async function huntCompany(
         mail_mailbox: proposal.mailbox,
         mail_subject: proposal.subject,
         mail_from: proposal.from,
+        // The reason in words, so approving is checking an argument rather
+        // than trusting a number.
+        mail_match_reason: proposal.reason,
       },
       actor_type: 'cron',
       actor_label: HUNT_ACTOR_LABEL,
@@ -411,6 +434,8 @@ export async function huntCompany(
         inbox_item_id: proposal.inboxItemId,
         mailbox: proposal.mailbox,
         mail_subject: proposal.subject,
+        confidence: proposal.confidence,
+        match_reasons: [proposal.reason],
       },
     }
   })
@@ -432,6 +457,9 @@ interface MailProposal {
   subject: string | null
   from: string | null
   receivedAt: string | null
+  /** The model's own confidence and its one-sentence reason, shown to the human. */
+  confidence: number
+  reason: string
 }
 
 /**
@@ -463,60 +491,122 @@ async function searchMailForUnexplained(
     .filter((t) => canHaveEmailReceipt(t.merchant_name || t.description))
     .sort((a, b) => Math.abs(b.amount ?? 0) - Math.abs(a.amount ?? 0))
     .slice(0, limit)
+    .filter((t): t is HuntTransaction & { amount: number; date: string } =>
+      t.amount != null && Boolean(t.date),
+    )
+  if (byLargest.length === 0) return { summary, proposals }
 
-  for (const tx of byLargest) {
-    if (tx.amount == null || !tx.date) continue
-    summary.searched++
+  const descriptors: PurchaseDescriptor[] = byLargest.map((t) => ({
+    id: t.id,
+    description: t.merchant_name || t.description || '',
+    amount: Math.abs(t.amount),
+    currency: t.currency ?? 'SEK',
+    date: t.date,
+  }))
+  const byId = new Map(byLargest.map((t) => [t.id, t]))
+  const descriptorById = new Map(descriptors.map((d) => [d.id, d]))
+
+  // One model call resolves every descriptor to a merchant and groups the
+  // repeats. Six Anthropic subscriptions become one search and one decision
+  // instead of six of each, which is both cheaper and more accurate: the model
+  // can use the constraint that each receipt belongs to exactly one charge.
+  const groups = await planMerchantGroups(descriptors)
+
+  for (const group of groups) {
+    const members = group.transactionIds
+      .map((id) => descriptorById.get(id))
+      .filter((d): d is PurchaseDescriptor => d != null)
+    if (members.length === 0) continue
+    summary.searched += members.length
+
+    // Searched on the merchant's name across the whole mailbox. The date window
+    // is deliberately off: these receipts arrive by being forwarded, so they
+    // carry the forwarding date. Precision is restored by the model below, not
+    // by the query.
+    const newest = members.reduce((a, b) => (a.date > b.date ? a : b))
     const found = await service.search(companyId, {
-      merchant: normalizeForMatch(tx.merchant_name || tx.description || ''),
-      amount: Math.abs(tx.amount),
-      currency: tx.currency ?? 'SEK',
-      date: tx.date,
+      merchant: normalizeForMatch(members[0].description),
+      amount: members[0].amount,
+      currency: members[0].currency,
+      date: newest.date,
+      aliases: group.aliases,
+      useDateWindow: false,
+      limit: MAX_CANDIDATES_PER_MERCHANT,
     })
     if (found.length === 0) continue
-    summary.withCandidates++
 
-    for (const c of found) {
-      summary.candidates.push({
-        transactionId: tx.id,
-        merchant: tx.merchant_name || tx.description,
-        amount: tx.amount,
+    const assignments = await assignReceipts(
+      group.brand,
+      members,
+      found.map((c) => ({
+        messageId: c.messageId,
         mailbox: c.mailbox,
         subject: c.subject,
         from: c.from,
         receivedAt: c.receivedAt,
-        attachmentCount: c.attachmentIds.length,
-        bodyIsReceipt: c.bodyIsReceipt,
+        snippet: c.snippet ?? null,
+        attachmentNames: c.attachmentNames ?? [],
+      })),
+    )
+    if (assignments.length === 0) continue
+    summary.withCandidates += assignments.length
+
+    const foundById = new Map(found.map((c) => [c.messageId, c]))
+    for (const assignment of assignments) {
+      const candidate = foundById.get(assignment.messageId)
+      const tx = byId.get(assignment.transactionId)
+      if (!candidate || !tx) continue
+
+      summary.candidates.push({
+        transactionId: tx.id,
+        merchant: tx.merchant_name || tx.description,
+        amount: tx.amount,
+        mailbox: candidate.mailbox,
+        subject: candidate.subject,
+        from: candidate.from,
+        receivedAt: candidate.receivedAt,
+        attachmentCount: candidate.attachmentIds.length,
+        bodyIsReceipt: candidate.bodyIsReceipt,
+        brand: group.brand,
+        confidence: assignment.confidence,
+        reason: assignment.reason,
+      })
+
+      // A dry run reports what it decided and fetches nothing: the point of a
+      // provkörning is that no mailbox content is copied anywhere.
+      if (dryRun || !userId) continue
+      if (candidate.attachmentIds.length === 0) continue
+
+      // Narrow the candidate to the one file the model picked before it is
+      // fetched. A batch forward carries receipts for several purchases, so
+      // "the message" is not the underlag; the chosen attachment is.
+      const names = candidate.attachmentNames ?? []
+      const chosen = assignment.attachmentName ? names.indexOf(assignment.attachmentName) : 0
+      const index = chosen >= 0 ? chosen : 0
+      const ingested = await ingestMailCandidate(supabase, companyId, userId, {
+        ...candidate,
+        attachmentIds: [candidate.attachmentIds[index] ?? candidate.attachmentIds[0]],
+        attachmentNames: [names[index] ?? names[0] ?? ''],
+      })
+      if (!ingested) continue
+      summary.ingested++
+
+      // No re-matching: the model decided this message is the receipt for this
+      // charge, and that decision is written onto the proposal in words so the
+      // human approving it can check the reasoning rather than a bare score.
+      proposals.push({
+        transactionId: tx.id,
+        documentId: ingested.documentId,
+        inboxItemId: ingested.inboxItemId,
+        fileName: ingested.fileName,
+        mailbox: ingested.mailbox,
+        subject: candidate.subject,
+        from: candidate.from,
+        receivedAt: candidate.receivedAt,
+        confidence: assignment.confidence,
+        reason: assignment.reason,
       })
     }
-
-    // A dry run reports what it found and fetches nothing: the point of a
-    // provkörning is that no mailbox content is copied anywhere.
-    if (dryRun || !userId) continue
-
-    // Only the strongest hit is stored. Downloading every OR-query hit would
-    // fill Underlag with mail that merely mentioned an amount.
-    const best = found.find((c) => c.attachmentIds.length > 0)
-    if (!best) continue
-
-    const ingested = await ingestMailCandidate(supabase, companyId, userId, best)
-    if (!ingested) continue
-    summary.ingested++
-
-    // No re-matching: the receipt was fetched *while searching for this
-    // purchase*, so the pairing is known by construction. The OR query is
-    // broad, which is exactly why this still goes to a human with the search
-    // that produced it written on the proposal rather than being linked.
-    proposals.push({
-      transactionId: tx.id,
-      documentId: ingested.documentId,
-      inboxItemId: ingested.inboxItemId,
-      fileName: ingested.fileName,
-      mailbox: ingested.mailbox,
-      subject: best.subject,
-      from: best.from,
-      receivedAt: best.receivedAt,
-    })
   }
   return { summary, proposals }
 }

@@ -38,6 +38,10 @@ function buildChannelContext(candidate: MailCandidate) {
   return {
     channel: 'mail_hunt',
     mail_message_id: candidate.messageId,
+    mail_attachment_id: candidate.attachmentIds[0] ?? null,
+    // Message + attachment, because one forward can carry receipts for several
+    // different purchases and each must be able to land separately.
+    mail_file_key: `${candidate.messageId}::${candidate.attachmentIds[0] ?? ''}`,
     mail_mailbox: candidate.mailbox,
     mail_provider: candidate.provider,
     mail_subject: candidate.subject,
@@ -62,14 +66,15 @@ export async function ingestMailCandidate(
 ): Promise<IngestedReceipt | null> {
   if (candidate.attachmentIds.length === 0) return null
 
-  // Cheap pre-check so an already-known message costs no provider call. The
+  // Cheap pre-check so an already-known file costs no provider call. The
   // partial unique index is still the real guard against a race.
+  const fileKey = `${candidate.messageId}::${candidate.attachmentIds[0] ?? ''}`
   const { data: existing } = await supabase
     .from('invoice_inbox_items')
     .select('id')
     .eq('company_id', companyId)
     .eq('source', 'mail_hunt')
-    .eq('channel_context->>mail_message_id', candidate.messageId)
+    .eq('channel_context->>mail_file_key', fileKey)
     .maybeSingle()
   if (existing) return null
 

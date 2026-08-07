@@ -87,6 +87,9 @@ describe('ingestMailCandidate', () => {
     const ctx = inserted[0].channel_context as Record<string, unknown>
     expect(ctx.mail_message_id).toBe('msg-1')
     expect(ctx.mail_mailbox).toBe('ekonomi@nordvik.se')
+    // Keyed per attachment: a batch forward carries receipts for several
+    // purchases, and filing the first must not block the rest.
+    expect(ctx.mail_file_key).toBe('msg-1::att-1')
     expect(inserted[0].extracted_data).toBeUndefined()
   })
 

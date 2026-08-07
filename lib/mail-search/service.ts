@@ -19,6 +19,25 @@ export interface MailSearchQuery {
   currency: string
   /** Purchase date, ISO. The window around it is the adapter's business. */
   date: string
+  /**
+   * Merchant names likely to appear in the receipt itself, best first. Searched
+   * in place of the raw descriptor when present: the bank writes
+   * "ANTHROPIC* CLAUDE SUB", the receipt says "Anthropic".
+   */
+  aliases?: string[]
+  /**
+   * Set false to search the whole mailbox regardless of date.
+   *
+   * A forwarded receipt is stamped when it was forwarded, which can be months
+   * after the purchase, so a window around the purchase date hides exactly the
+   * mail being looked for. Measured on a real mailbox: the same merchant search
+   * returned 0 hits inside the window and 10+ outside it.
+   */
+  useDateWindow?: boolean
+  /** Only return messages carrying a file. */
+  requireAttachment?: boolean
+  /** Hits to return per mailbox. */
+  limit?: number
 }
 
 /**
@@ -36,6 +55,13 @@ export interface MailCandidate {
   receivedAt: string | null
   /** Attachment ids on the message, resolvable through fetchAttachment. */
   attachmentIds: string[]
+  /**
+   * Attachment filenames and the provider's own preview line. Metadata only,
+   * never stored: they are what lets the hunt tell a receipt from a newsletter
+   * that merely names the merchant, without opening anyone's mail.
+   */
+  attachmentNames?: string[]
+  snippet?: string | null
   /**
    * True when the message body IS the receipt (SL, Uber-style HTML mail) and
    * there is no attachment to fetch. The caller renders it instead.
