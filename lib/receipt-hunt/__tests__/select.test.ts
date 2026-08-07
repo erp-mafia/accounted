@@ -9,6 +9,7 @@ import {
   HUNT_MIN_CONFIDENCE,
   canHaveEmailReceipt,
   pairKey,
+  worthFetching,
   selectProposals,
   type HuntPoolItem,
   type HuntTransaction,
@@ -217,5 +218,104 @@ describe('canHaveEmailReceipt', () => {
 
   it('hunts a transaction with no description rather than silently dropping it', () => {
     expect(canHaveEmailReceipt(null)).toBe(true)
+  })
+})
+
+/**
+ * The gate before a download. Not the match: the real amount comes out of the
+ * PDF afterwards. What matters is that a stated amount is enough on its own,
+ * that a vendor needs a plausible date, and that currencies are never
+ * converted to make a number agree.
+ */
+describe('worthFetching', () => {
+  const charge = (o: Partial<HuntTransaction> = {}): HuntTransaction =>
+    tx({
+      description: 'Elgiganten Aktiebolag K3667 Kortköp/uttag',
+      // Bank rows usually carry no merchant_name; the descriptor is all there is.
+      merchant_name: null,
+      amount: -21639,
+      currency: 'SEK',
+      date: '2026-08-04',
+      ...o,
+    })
+
+  const doc = (o: Partial<Parameters<typeof worthFetching>[0]> = {}) => ({
+    vendor: 'Elgiganten',
+    date: '2026-08-03',
+    amount: null,
+    currency: null,
+    ...o,
+  })
+
+  it('fetches on a matching amount alone, whatever the date says', () => {
+    // An amount that agrees is close to proof. Banks post days late and mail
+    // gets forwarded months later, so the date must not be able to veto it.
+    expect(
+      worthFetching(
+        doc({ vendor: null, date: '2025-01-01', amount: 21639, currency: 'SEK' }),
+        [charge()],
+      ),
+    ).toBe(true)
+  })
+
+  it('fetches on vendor and a nearby date when the body states no amount', () => {
+    // The common case: most receipts state their total only inside the PDF.
+    expect(worthFetching(doc(), [charge()])).toBe(true)
+  })
+
+  it('does not fetch on a vendor whose date is months away', () => {
+    expect(worthFetching(doc({ date: '2026-02-01' }), [charge()])).toBe(false)
+  })
+
+  it('fetches a matching vendor that gave no date at all', () => {
+    // Missing evidence, not contrary evidence.
+    expect(worthFetching(doc({ date: null }), [charge()])).toBe(true)
+  })
+
+  it('never converts currency to make an amount agree', () => {
+    // 180 EUR really was this charge, but turning it into 2014 SEK is a guess.
+    // The vendor path is what rescues this case, so the vendor is cleared too.
+    expect(
+      worthFetching(
+        { vendor: null, date: '2026-06-15', amount: 180, currency: 'EUR' },
+        [charge({ description: 'ANTHROPIC* CLAUDE SUB', amount: -2014.32, date: '2026-06-16' })],
+      ),
+    ).toBe(false)
+  })
+
+  it('ignores a document that matches nothing the company is missing', () => {
+    expect(
+      worthFetching({ vendor: 'Spotify', date: '2026-08-03', amount: 119, currency: 'SEK' }, [
+        charge(),
+      ]),
+    ).toBe(false)
+  })
+})
+
+describe('worthFetching, on the search that found it', () => {
+  it('fetches when the purchase that found the mail is close in time', () => {
+    // The bank calls the landlord "Kontorsplatser j BG"; the invoice says
+    // "Stockholm Innovation & Growth AB". The names will never match, but the
+    // search that produced this mail was that purchase's own.
+    const landlord = tx({
+      description: 'Kontorsplatser j BG 0000059142596 Bg-bet. via internet',
+      merchant_name: null,
+      amount: -15000,
+      date: '2026-07-04',
+    })
+    const invoice = {
+      vendor: 'Stockholm Innovation & Growth AB',
+      date: '2026-07-02',
+      amount: null,
+      currency: null,
+    }
+    expect(worthFetching(invoice, [landlord])).toBe(false)
+    expect(worthFetching(invoice, [landlord], [landlord])).toBe(true)
+  })
+
+  it('still refuses when the dates are nowhere near each other', () => {
+    const landlord = tx({ description: 'Kontorsplatser j BG', merchant_name: null, amount: -15000, date: '2026-07-04' })
+    const stale = { vendor: 'Stockholm Innovation & Growth AB', date: '2025-11-02', amount: null, currency: null }
+    expect(worthFetching(stale, [landlord], [landlord])).toBe(false)
   })
 })

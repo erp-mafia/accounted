@@ -63,6 +63,13 @@ export interface MailCandidate {
   attachmentNames?: string[]
   snippet?: string | null
   /**
+   * Readable body text, already downloaded. A forwarded receipt writes the
+   * original sender and the original purchase date into its quoted header,
+   * which is the only reliable way to date a mail that was forwarded months
+   * later. Never stored: it is read once to extract fields and discarded.
+   */
+  bodyText?: string | null
+  /**
    * True when the message body IS the receipt (SL, Uber-style HTML mail) and
    * there is no attachment to fetch. The caller renders it instead.
    */

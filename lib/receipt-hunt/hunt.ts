@@ -18,15 +18,11 @@ import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { getMailSearchService } from '@/lib/mail-search/service'
 import { ingestMailCandidate } from './ingest'
 import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
-import {
-  harvestReceipts,
-  planMerchantGroups,
-  type MerchantGroup,
-  type PurchaseDescriptor,
-} from './mail-intelligence'
+import { extractMailDocuments } from './mail-intelligence'
 import {
   MAX_PROPOSALS_PER_RUN,
   canHaveEmailReceipt,
+  worthFetching,
   pairKey,
   selectProposals,
   type HuntPoolItem,
@@ -70,13 +66,22 @@ export const MAX_MAIL_SEARCHES_PER_RUN = 15
 export const MAX_CANDIDATES_PER_MERCHANT = 25
 
 /**
- * Receipts fetched per merchant in one run.
+ * Receipts fetched in one run.
  *
  * A cap on how much of a mailbox can land in Underlag on any one night, not a
  * judgement about what is worth having: a company that pays the same supplier
- * monthly genuinely has twelve receipts, and the rest simply wait for tomorrow.
+ * monthly genuinely has twelve receipts, and the rest wait for tomorrow.
  */
-export const MAX_RECEIPTS_PER_MERCHANT = 8
+export const MAX_RECEIPTS_PER_RUN = 25
+
+/**
+ * Mails read by the model in one run.
+ *
+ * The searches are deliberately broad and overlap heavily, so this is the real
+ * cost boundary: one call carrying this many mail bodies, rather than a call
+ * per mail.
+ */
+export const MAX_MAILS_READ_PER_RUN = 40
 
 const OPERATION_TYPE = 'attach_document_to_transaction'
 
@@ -437,9 +442,7 @@ async function harvestReceiptsFromMail(
   if (!service.isConfigured() || purchases.length === 0) return summary
 
   // Salary and tax runs are a company's largest outgoing rows, so without this
-  // they eat the whole search budget hunting receipts that cannot exist, and
-  // their descriptions ("Lön Juli Jakob") search for a person's name and match
-  // half the mailbox.
+  // they eat the whole search budget hunting receipts that cannot exist.
   const searchable = [...purchases]
     .filter((t) => canHaveEmailReceipt(t.merchant_name || t.description))
     .sort((a, b) => Math.abs(b.amount ?? 0) - Math.abs(a.amount ?? 0))
@@ -448,106 +451,95 @@ async function harvestReceiptsFromMail(
       t.amount != null && Boolean(t.date),
     )
   if (searchable.length === 0) return summary
+  summary.searched = searchable.length
 
-  const descriptors: PurchaseDescriptor[] = searchable.map((t) => ({
-    id: t.id,
-    description: t.merchant_name || t.description || '',
-    amount: Math.abs(t.amount),
-    currency: t.currency ?? 'SEK',
-    date: t.date,
-  }))
-  const descriptorById = new Map(descriptors.map((d) => [d.id, d]))
-
-  // One model call resolves every descriptor to a merchant and groups the
-  // repeats, so six Anthropic subscriptions become one search rather than six.
-  const groups = await planMerchantGroups(descriptors)
-
-  // Anything the planner could not name is still searched, by amount alone. A
-  // line like "1260525758758 Europabetalning" identifies no merchant but is a
-  // real supplier payment whose invoice may carry exactly that total.
-  const named = new Set(groups.flatMap((g) => g.transactionIds))
-  const unnamed: MerchantGroup[] = descriptors
-    .filter((d) => !named.has(d.id))
-    .map((d) => ({ brand: d.description.slice(0, 40), aliases: [], transactionIds: [d.id] }))
-
-  // One file is fetched once per run. The planner legitimately splits a
-  // supplier the bank names two ways ("Sting" and "Kontorsplatser" are the same
-  // landlord), and both groups then reach for the same invoice.
-  const fetchedFiles = new Set<string>()
-
-  for (const group of [...groups, ...unnamed]) {
-    const members = group.transactionIds
-      .map((id) => descriptorById.get(id))
-      .filter((d): d is PurchaseDescriptor => d != null)
-    if (members.length === 0) continue
-    summary.searched += members.length
-
-    // Searched on merchant OR amount across the whole mailbox. The date window
-    // is off deliberately: these receipts arrive by being forwarded, so they
-    // carry the forwarding date, not the purchase date.
-    const newest = members.reduce((a, b) => (a.date > b.date ? a : b))
+  // Retrieval is deterministic: amount in every format a receipt might write
+  // it, OR the merchant tokens left after the bank's noise is stripped. No
+  // model is involved in deciding what to search for, because a wrong guess
+  // here is invisible and a broad query is cheap.
+  const byMessage = new Map<string, Awaited<ReturnType<typeof service.search>>[number]>()
+  // Which purchase's search turned each mail up. The query was that purchase's
+  // amount or its merchant tokens, so the hit is itself a signal, and it is the
+  // only one that survives a supplier the bank and the invoice name differently.
+  const retrievedBy = new Map<string, HuntTransaction[]>()
+  for (const tx of searchable) {
     const found = await service.search(companyId, {
-      merchant: normalizeForMatch(members[0].description),
-      amount: members[0].amount,
-      currency: members[0].currency,
-      date: newest.date,
-      aliases: group.aliases,
+      merchant: normalizeForMatch(tx.merchant_name || tx.description || ''),
+      amount: Math.abs(tx.amount),
+      currency: tx.currency ?? 'SEK',
+      date: tx.date,
       useDateWindow: false,
       limit: MAX_CANDIDATES_PER_MERCHANT,
     })
-    if (found.length === 0) continue
-
-    const receipts = await harvestReceipts(
-      group.brand,
-      found.map((c) => ({
-        messageId: c.messageId,
-        mailbox: c.mailbox,
-        subject: c.subject,
-        from: c.from,
-        receivedAt: c.receivedAt,
-        snippet: c.snippet ?? null,
-        attachmentNames: c.attachmentNames ?? [],
-      })),
-      MAX_RECEIPTS_PER_MERCHANT,
-    )
-    if (receipts.length === 0) continue
-    summary.withCandidates += receipts.length
-
-    const foundById = new Map(found.map((c) => [c.messageId, c]))
-    for (const receipt of receipts) {
-      const candidate = foundById.get(receipt.messageId)
-      if (!candidate || candidate.attachmentIds.length === 0) continue
-
-      const fileKey = `${receipt.messageId}::${receipt.attachmentName ?? ''}`
-      if (fetchedFiles.has(fileKey)) continue
-      fetchedFiles.add(fileKey)
-
-      summary.candidates.push({
-        merchant: group.brand,
-        mailbox: candidate.mailbox,
-        subject: candidate.subject,
-        from: candidate.from,
-        receivedAt: candidate.receivedAt,
-        fileName: receipt.attachmentName,
-        reason: receipt.reason,
-      })
-
-      // A dry run reports what it found and fetches nothing: the point of a
-      // provkörning is that no mailbox content is copied anywhere.
-      if (dryRun || !userId) continue
-
-      // Narrow to the one file before fetching. A batch forward carries
-      // receipts for several purchases, so the message is not the underlag.
-      const names = candidate.attachmentNames ?? []
-      const at = receipt.attachmentName ? names.indexOf(receipt.attachmentName) : 0
-      const index = at >= 0 ? at : 0
-      const ingested = await ingestMailCandidate(supabase, companyId, userId, {
-        ...candidate,
-        attachmentIds: [candidate.attachmentIds[index] ?? candidate.attachmentIds[0]],
-        attachmentNames: [names[index] ?? names[0] ?? ''],
-      })
-      if (ingested) summary.ingested++
+    // The same mail answers several purchases from one supplier; it is read once.
+    for (const c of found) {
+      if (!byMessage.has(c.messageId)) byMessage.set(c.messageId, c)
+      const already = retrievedBy.get(c.messageId)
+      if (already) already.push(tx)
+      else retrievedBy.set(c.messageId, [tx])
     }
+  }
+  if (byMessage.size === 0) return summary
+
+  const mails = [...byMessage.values()].slice(0, MAX_MAILS_READ_PER_RUN)
+  const documents = await extractMailDocuments(
+    mails.map((c) => ({
+      messageId: c.messageId,
+      mailbox: c.mailbox,
+      subject: c.subject,
+      from: c.from,
+      receivedAt: c.receivedAt,
+      bodyText: c.bodyText ?? null,
+      attachmentNames: c.attachmentNames ?? [],
+    })),
+  )
+  if (documents.length === 0) return summary
+
+  // The gate before spending a download: the amount when the body stated it,
+  // otherwise the vendor and the date. This is not the match. The real amount
+  // comes out of the PDF once it is fetched, and the ordinary matcher pairs it
+  // on the next few lines of huntCompany like any other underlag.
+  const wanted = documents.filter((doc) =>
+    worthFetching(doc, searchable, retrievedBy.get(doc.messageId) ?? []),
+  )
+
+  const claimedFiles = new Set<string>()
+  for (const doc of wanted) {
+    const candidate = byMessage.get(doc.messageId)
+    if (!candidate) continue
+
+    // The same invoice arrives as an original, a reminder and two forwards,
+    // every one carrying the identical attachment.
+    const fileKey = (doc.attachmentName ?? doc.messageId).toLowerCase()
+    if (claimedFiles.has(fileKey)) continue
+    claimedFiles.add(fileKey)
+    summary.withCandidates++
+
+    summary.candidates.push({
+      merchant: doc.vendor ?? '(okänd)',
+      mailbox: candidate.mailbox,
+      subject: candidate.subject,
+      from: candidate.from,
+      receivedAt: candidate.receivedAt,
+      fileName: doc.attachmentName,
+      reason: `${doc.amount ?? '?'} ${doc.currency ?? ''} ${doc.date ?? 'utan datum'}`,
+    })
+
+    // A dry run reports what it decided and fetches nothing: the point of a
+    // provkörning is that no mailbox content is copied anywhere.
+    if (dryRun || !userId) continue
+    if (candidate.attachmentIds.length === 0) continue
+    if (summary.ingested >= MAX_RECEIPTS_PER_RUN) break
+
+    const names = candidate.attachmentNames ?? []
+    const at = doc.attachmentName ? names.indexOf(doc.attachmentName) : 0
+    const index = at >= 0 ? at : 0
+    const ingested = await ingestMailCandidate(supabase, companyId, userId, {
+      ...candidate,
+      attachmentIds: [candidate.attachmentIds[index] ?? candidate.attachmentIds[0]],
+      attachmentNames: [names[index] ?? names[0] ?? ''],
+    })
+    if (ingested) summary.ingested++
   }
   return summary
 }

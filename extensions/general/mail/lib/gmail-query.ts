@@ -78,6 +78,17 @@ export function amountTerms(amount: number): string[] {
   const twoDp = abs.toFixed(2)
   const terms = new Set<string>([twoDp, twoDp.replace('.', ',')])
   if (Number.isInteger(abs)) terms.add(String(abs))
+
+  // Swedish invoices group thousands with a space: 15 000,00, not 15000,00.
+  // Measured against a real mailbox, the Sting office invoice was findable as
+  // "15 000,00" and "15 000" and by nothing else: every ungrouped form
+  // returned zero. Cheap to add and it is pure recall.
+  const group = (v: string) => v.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
+  const [whole] = twoDp.split('.')
+  if (whole.length > 3) {
+    terms.add(`${group(whole)},${twoDp.split('.')[1]}`)
+    terms.add(group(whole))
+  }
   return [...terms]
 }
 

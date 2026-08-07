@@ -17,8 +17,43 @@ interface GmailHeader {
 interface GmailPart {
   filename?: string
   mimeType?: string
-  body?: { attachmentId?: string; size?: number }
+  body?: { attachmentId?: string; size?: number; data?: string }
   parts?: GmailPart[]
+}
+
+/** Longest body worth carrying: a receipt states its total near the top. */
+const MAX_BODY_CHARS = 2500
+
+/**
+ * The readable text of a mail.
+ *
+ * Already on the wire (format=full is required to see the parts tree at all),
+ * so this costs nothing extra, and it is where the two facts a forwarded
+ * receipt hides live: the original sender and the original date, both written
+ * into the "Vidarebefordrat meddelande" header that Gmail's 200-character
+ * snippet cuts off.
+ */
+function collectBodyText(part: GmailPart | undefined, out: string[]): void {
+  if (!part) return
+  const type = part.mimeType ?? ''
+  if ((type === 'text/plain' || type === 'text/html') && part.body?.data) {
+    out.push(Buffer.from(part.body.data, 'base64url').toString('utf8'))
+  }
+  for (const child of part.parts ?? []) collectBodyText(child, out)
+}
+
+function readableBody(msg: GmailMessage): string {
+  const chunks: string[] = []
+  collectBodyText(msg.payload, chunks)
+  return chunks
+    .join('\n')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;|&zwnj;|&#847;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_BODY_CHARS)
 }
 
 interface GmailMessage {
@@ -113,6 +148,7 @@ export async function getMessageSummary(
     attachmentIds: attachments.map((a) => a.id),
     attachmentNames: attachments.map((a) => a.filename),
     snippet: msg.snippet ?? null,
+    bodyText: readableBody(msg),
     bodyIsReceipt: attachments.length === 0,
   }
 }

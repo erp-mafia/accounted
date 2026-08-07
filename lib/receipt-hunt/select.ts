@@ -13,6 +13,7 @@
  * without a database; the caller owns the reads and the staging write.
  */
 import { scoreUnderlagCandidates, type CandidateTransaction } from '@/lib/agent-context/underlag-candidates'
+import { calculateMerchantSimilarity } from '@/lib/documents/core-receipt-matcher'
 
 /**
  * Confidence a candidate must reach to be proposed unattended.
@@ -201,4 +202,85 @@ const NO_EMAIL_RECEIPT_EXISTS =
 export function canHaveEmailReceipt(description: string | null | undefined): boolean {
   if (!description) return true
   return !NO_EMAIL_RECEIPT_EXISTS.test(description)
+}
+
+/** Vendor names this alike are treated as the same merchant. */
+export const FETCH_VENDOR_SIMILARITY = 0.6
+
+/** How far a receipt's own date may sit from the charge and still be plausible. */
+export const FETCH_DATE_WINDOW_DAYS = 10
+
+/** Amounts within this fraction of each other are the same amount. */
+const AMOUNT_TOLERANCE = 0.01
+
+function daysBetween(a: string, b: string): number {
+  return Math.abs(new Date(a).getTime() - new Date(b).getTime()) / 86_400_000
+}
+
+/**
+ * Is this mailbox document worth downloading?
+ *
+ * The gate before spending a fetch, a megabyte of storage and a page of the
+ * granskningskö on a document. It is deliberately not the match: a mail body
+ * states the total only about a quarter of the time, and the real amount comes
+ * out of the PDF afterwards, at which point the ordinary matcher decides.
+ *
+ * Ordered by how much each signal is worth. An amount that agrees is close to
+ * proof on its own, which is why it does not also need the vendor or the date.
+ * A vendor that agrees is suggestive rather than conclusive, so it is asked to
+ * bring a plausible date along. Everything else waits.
+ */
+export function worthFetching(
+  doc: {
+    vendor: string | null
+    date: string | null
+    amount: number | null
+    currency: string | null
+  },
+  transactions: readonly HuntTransaction[],
+  /**
+   * The purchases whose own search turned this mail up.
+   *
+   * Already evidence, and evidence of a kind the document itself cannot carry:
+   * the query was this purchase's amount or its merchant tokens, so a hit means
+   * one of those appeared in the mail or inside its attachment. It rescues the
+   * case where the two names genuinely differ, which is common and not an
+   * error: the bank writes "Kontorsplatser j BG" and the landlord's invoice
+   * says "Stockholm Innovation & Growth AB".
+   */
+  retrievedFor: readonly HuntTransaction[] = [],
+): boolean {
+  for (const tx of transactions) {
+    if (tx.amount == null) continue
+    const charged = Math.abs(tx.amount)
+
+    // Same currency only. A EUR receipt against a SEK charge is not a
+    // disagreement about the number, it is a different number: converting one
+    // to the other is a guess and this code does not guess.
+    if (
+      doc.amount != null &&
+      (doc.currency ?? 'SEK') === (tx.currency ?? 'SEK') &&
+      Math.abs(doc.amount - charged) <= charged * AMOUNT_TOLERANCE
+    ) {
+      return true
+    }
+
+    if (!doc.vendor) continue
+    const similarity = calculateMerchantSimilarity(
+      doc.vendor,
+      tx.merchant_name || tx.description || '',
+    )
+    if (similarity < FETCH_VENDOR_SIMILARITY) continue
+
+    // No date on the receipt is missing evidence, not contrary evidence: the
+    // vendor agreeing is enough to look inside the file.
+    if (!doc.date || !tx.date) return true
+    if (daysBetween(doc.date, tx.date) <= FETCH_DATE_WINDOW_DAYS) return true
+  }
+
+  for (const tx of retrievedFor) {
+    if (!doc.date || !tx.date) continue
+    if (daysBetween(doc.date, tx.date) <= FETCH_DATE_WINDOW_DAYS) return true
+  }
+  return false
 }
