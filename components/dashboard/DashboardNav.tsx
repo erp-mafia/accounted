@@ -45,7 +45,6 @@ import {
   PanelLeftClose,
   Library,
   BookCheck,
-  Car,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -194,7 +193,8 @@ const navItems: NavItem[] = [
   { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
   { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
-  { href: '/mileage', labelKey: 'mileage', icon: Car, group: 'arbeta' },
+  // Körjournal is deliberately hidden from the nav; the /mileage route stays live.
+  // { href: '/mileage', labelKey: 'mileage', icon: Car, group: 'arbeta' },
   // Analys: read the numbers.
   { href: '/kpi', labelKey: 'kpi', icon: TrendingUp, group: 'analys' },
   { href: '/reports', labelKey: 'reports', icon: BarChart3, group: 'analys' },
