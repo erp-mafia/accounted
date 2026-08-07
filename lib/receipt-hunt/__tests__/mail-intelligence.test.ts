@@ -17,7 +17,6 @@ vi.mock('@anthropic-ai/bedrock-sdk', () => ({
 }))
 
 import {
-  MIN_ASSIGNMENT_CONFIDENCE,
   assignReceipts,
   planMerchantGroups,
   type CandidateForReview,
@@ -111,7 +110,7 @@ describe('assignReceipts', () => {
             transaction_id: 't1',
             message_id: 'msg-1',
             attachment_name: 'Receipt-2066.pdf',
-            confidence: 0.9,
+            amount_matches: true,
             reason: 'Originaldatumet matchar köpet.',
           },
         ],
@@ -128,8 +127,8 @@ describe('assignReceipts', () => {
     mockCreate.mockResolvedValue(
       toolReply({
         assignments: [
-          { transaction_id: 't1', message_id: 'msg-1', attachment_name: 'a.pdf', confidence: 0.8, reason: 'a' },
-          { transaction_id: 't2', message_id: 'msg-1', attachment_name: 'b.pdf', confidence: 0.8, reason: 'b' },
+          { transaction_id: 't1', message_id: 'msg-1', attachment_name: 'a.pdf', amount_matches: true, reason: 'a' },
+          { transaction_id: 't2', message_id: 'msg-1', attachment_name: 'b.pdf', amount_matches: true, reason: 'b' },
         ],
       }),
     )
@@ -145,8 +144,8 @@ describe('assignReceipts', () => {
     mockCreate.mockResolvedValue(
       toolReply({
         assignments: [
-          { transaction_id: 't1', message_id: 'msg-1', attachment_name: 'a.pdf', confidence: 0.8, reason: 'a' },
-          { transaction_id: 't2', message_id: 'msg-1', attachment_name: 'a.pdf', confidence: 0.8, reason: 'a' },
+          { transaction_id: 't1', message_id: 'msg-1', attachment_name: 'a.pdf', amount_matches: true, reason: 'a' },
+          { transaction_id: 't2', message_id: 'msg-1', attachment_name: 'a.pdf', amount_matches: true, reason: 'a' },
         ],
       }),
     )
@@ -162,7 +161,7 @@ describe('assignReceipts', () => {
     mockCreate.mockResolvedValue(
       toolReply({
         assignments: [
-          { transaction_id: 't1', message_id: 'invented', attachment_name: null, confidence: 0.99, reason: 'x' },
+          { transaction_id: 't1', message_id: 'invented', attachment_name: null, amount_matches: true, reason: 'x' },
         ],
       }),
     )
@@ -174,28 +173,31 @@ describe('assignReceipts', () => {
     mockCreate.mockResolvedValue(
       toolReply({
         assignments: [
-          { transaction_id: 't1', message_id: 'msg-1', attachment_name: 'ghost.pdf', confidence: 0.95, reason: 'x' },
+          { transaction_id: 't1', message_id: 'msg-1', attachment_name: 'ghost.pdf', amount_matches: true, reason: 'x' },
         ],
       }),
     )
     await expect(assignReceipts('X', [purchase('t1')], [candidate()])).resolves.toEqual([])
   })
 
-  it('drops anything under the confidence floor', async () => {
+  it('puts an amount-verified pairing ahead of a merely plausible one', async () => {
+    // The reviewer should meet the certain ones first: an amount that appears
+    // in the mail is the strongest evidence available, and unlike a date it
+    // does not drift.
     mockCreate.mockResolvedValue(
       toolReply({
         assignments: [
-          {
-            transaction_id: 't1',
-            message_id: 'msg-1',
-            attachment_name: 'Receipt-2066.pdf',
-            confidence: MIN_ASSIGNMENT_CONFIDENCE - 0.05,
-            reason: 'osäker',
-          },
+          { transaction_id: 't1', message_id: 'msg-1', attachment_name: 'a.pdf', amount_matches: false, reason: 'kanske' },
+          { transaction_id: 't2', message_id: 'msg-1', attachment_name: 'b.pdf', amount_matches: true, reason: 'beloppet står i mejlet' },
         ],
       }),
     )
-    await expect(assignReceipts('X', [purchase('t1')], [candidate()])).resolves.toEqual([])
+    const out = await assignReceipts(
+      'Anthropic',
+      [purchase('t1'), purchase('t2')],
+      [candidate({ attachmentNames: ['a.pdf', 'b.pdf'] })],
+    )
+    expect(out.map((a) => a.transactionId)).toEqual(['t2', 't1'])
   })
 
   it('proposes nothing when the call fails', async () => {

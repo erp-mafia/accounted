@@ -52,11 +52,13 @@ describe('buildGmailQuery', () => {
     expect(q).toContain('before:2026/05/13')
   })
 
-  it('ORs merchant against amount rather than requiring both', () => {
-    // Requiring both misses every rebrand and reseller: Anthropic bills as
-    // Claude, and the amount alone is a strong filter inside two weeks.
+  it('leads with the amount, then ORs the merchant', () => {
+    // Amount first because it is the one signal that does not drift: banks post
+    // late and receipts get forwarded, so dates move, but the charged figure
+    // does not. Still an OR and never an AND: a receipt billed in USD contains
+    // no SEK amount, and a bank descriptor often names nothing in the receipt.
     const q = buildGmailQuery(base)
-    expect(q).toMatch(/\("circle" OR .*"438\.75"/)
+    expect(q).toMatch(/\("438\.75" OR .*"circle"/)
   })
 
   it('still searches on amount alone when the merchant is unusable', () => {

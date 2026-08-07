@@ -105,16 +105,21 @@ export function buildGmailQuery(query: MailSearchQuery): string {
     parts.push(`after:${after.replace(/-/g, '/')}`, `before:${before.replace(/-/g, '/')}`)
   }
 
-  // Resolved merchant names beat the raw descriptor whenever we have them: the
-  // bank's own string frequently appears nowhere in the receipt.
+  // Merchant OR amount, never one instead of the other.
+  //
+  // The amount is the single strongest signal a reconciliation has: dates drift
+  // because banks post late and mail gets forwarded, but an amount does not
+  // drift. Gmail indexes text inside PDF attachments, so a Swedish receipt is
+  // often findable by its total alone. It is an OR rather than an AND because
+  // neither signal survives every case: a receipt billed in USD never contains
+  // the SEK figure the bank charged, and a bank descriptor frequently names
+  // nothing that appears in the receipt.
   const aliases = (query.aliases ?? []).map((a) => a.trim()).filter((a) => a.length >= 2)
-  const alternatives =
-    aliases.length > 0
-      ? aliases.map((a) => `"${a}"`)
-      : [
-          ...merchantTerms(query.merchant).map((t) => `"${t}"`),
-          ...amountTerms(query.amount).map((a) => `"${a}"`),
-        ]
+  const names = aliases.length > 0 ? aliases : merchantTerms(query.merchant)
+  const alternatives = [
+    ...amountTerms(query.amount).map((a) => `"${a}"`),
+    ...names.map((t) => `"${t}"`),
+  ]
 
   if (alternatives.length > 0) {
     parts.push(`(${alternatives.join(' OR ')})`)

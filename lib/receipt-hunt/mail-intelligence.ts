@@ -18,7 +18,7 @@
  * candidate mails is the receipt for a specific charge.
  *
  * What the model is NOT allowed to do: produce any number that reaches the
- * ledger. It returns message ids, a confidence and a reason. Amounts, dates,
+ * ledger. It returns message ids and a reason. Amounts, dates,
  * accounts and the pairing write itself stay in deterministic code, and every
  * result still waits for a human in the granskningskö.
  */
@@ -40,19 +40,22 @@ const MODEL =
   'eu.anthropic.claude-sonnet-5'
 
 /**
- * Below this the assignment is treated as a guess and dropped.
+ * No confidence score is asked for, and none is used as a gate.
  *
- * Lower than it looks, deliberately. Nothing here links a document to a
- * verifikat: it stages a proposal that a human reads, alongside the model's
- * own reason for making it. Measured on a real ledger, a 0.7 floor threw away
- * two correct pairings (a Sting office invoice and a Norwegian flight) that the
- * model had scored just below it, so the floor was costing real recall while
- * protecting a decision that a person makes anyway.
+ * The first version scored every pairing 0-1 and dropped anything under a
+ * threshold. Two things killed it. Measured here, the model anchored on round
+ * numbers (0.6, 0.7, 0.75, 0.9) rather than using the scale, and the threshold
+ * threw away two correct pairings that scored just under it. And the research
+ * agrees: verbalised LLM confidence is badly calibrated, clusters on anchors,
+ * and barely beats chance at separating a model's own right answers from its
+ * wrong ones, so gating on it is false rigour.
+ *
+ * What replaces it is an observation rather than a self-assessment: did the
+ * charged amount actually appear in this mail. That is a fact about evidence,
+ * it is what a reviewer would check first, and it is the signal reconciliation
+ * engines weight far above the date, because bank delays are normal and amount
+ * mismatches are not.
  */
-export const MIN_ASSIGNMENT_CONFIDENCE = (() => {
-  const parsed = Number(process.env.RECEIPT_HUNT_MIN_CONFIDENCE)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0.6
-})()
 
 export interface PurchaseDescriptor {
   id: string
@@ -92,7 +95,8 @@ export interface Assignment {
    * months), so a message is not the unit of an underlag, an attachment is.
    */
   attachmentName: string | null
-  confidence: number
+  /** The charged amount was visible in the mail: the strongest signal there is. */
+  amountMatches: boolean
   reason: string
 }
 
@@ -135,8 +139,7 @@ const AssignmentSchema = z.object({
       transaction_id: z.string().min(1),
       message_id: z.string().min(1),
       attachment_name: z.string().nullable().default(null),
-      // Some replies send confidence as "0.85"; a number is a number.
-      confidence: z.coerce.number().min(0).max(1),
+      amount_matches: z.coerce.boolean().default(false),
       reason: z.string().min(1).max(300),
     }),
   ),
@@ -223,10 +226,14 @@ const ASSIGN_TOOL = {
             description:
               'Exact filename of the attachment that is the receipt for THIS purchase. Required when the message has several.',
           },
-          confidence: { type: 'number', description: '0 to 1.' },
+          amount_matches: {
+            type: 'boolean',
+            description:
+              'True only if the charged amount is actually visible in this mail. Do not convert currencies to decide this.',
+          },
           reason: { type: 'string', description: 'One short sentence, in Swedish.' },
         },
-        required: ['transaction_id', 'message_id', 'attachment_name', 'confidence', 'reason'],
+        required: ['transaction_id', 'message_id', 'attachment_name', 'amount_matches', 'reason'],
       },
     },
   },
@@ -286,7 +293,17 @@ helt säker. Men går två köp inte att skilja åt med det du ser, lämna dem
 oparade hellre än att slumpa: fel underlag på ett verifikat är dyrare än
 inget underlag alls.
 
-confidence: 0-1, hur säker du är. reason: en kort mening på svenska.`
+Börja med beloppet. Står köpets belopp i mejlet är det så gott som säkert rätt
+underlag, även om datumen ligger långt isär: bankens datum är när dragningen
+bokfördes och mejlets datum är när det vidarebefordrades, så datum glider av
+naturliga skäl medan ett belopp inte gör det. Sätt då amount_matches=true.
+
+Syns beloppet inte alls, sätt amount_matches=false och para bara ihop dem om
+handlaren och datumet ändå gör saken tydlig. Räkna aldrig om valuta för att få
+beloppet att stämma: hellre false än en uträkning.
+
+reason: en kort mening på svenska om varför just det här mejlet hör till just
+det här köpet.`
 
 /**
  * Turn bank descriptors into merchant identities worth searching for.
@@ -399,7 +416,6 @@ export async function assignReceipts(
       // Every id must be one we supplied: this is what stops a hallucinated
       // message id from ever being fetched.
       if (!knownPurchases.has(a.transaction_id) || !knownMessages.has(a.message_id)) continue
-      if (a.confidence < MIN_ASSIGNMENT_CONFIDENCE) continue
 
       // A named attachment must actually exist on that message. An invented
       // filename means the model was guessing, so the assignment goes.
@@ -418,24 +434,25 @@ export async function assignReceipts(
         transactionId: a.transaction_id,
         messageId: a.message_id,
         attachmentName: a.attachment_name,
-        confidence: a.confidence,
+        amountMatches: a.amount_matches,
         reason: a.reason,
       })
     }
 
-    // Worth knowing in production, not just here: a run that proposes six
-    // pairings and keeps one is a tuning problem, and without this it looks
-    // identical to a run where the model found nothing.
+    // Worth knowing in production: a run that proposes six pairings and keeps
+    // one is a guardrail doing its job or a prompt going wrong, and without
+    // this it looks identical to a run that found nothing.
     if (out.length !== parsed.assignments.length) {
-      log.info('assignments filtered', {
+      log.info('assignments rejected by guardrails', {
         brand,
         proposed: parsed.assignments.length,
         kept: out.length,
-        belowConfidence: parsed.assignments.filter((a) => a.confidence < MIN_ASSIGNMENT_CONFIDENCE)
-          .length,
       })
     }
-    return out
+
+    // Amount-verified pairings first, so a reviewer meets the certain ones
+    // before the plausible ones.
+    return out.sort((a, b) => Number(b.amountMatches) - Number(a.amountMatches))
   } catch (error) {
     log.warn('receipt assignment failed, proposing nothing for this merchant', {
       brand,

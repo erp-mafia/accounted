@@ -21,6 +21,7 @@ import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
 import {
   assignReceipts,
   planMerchantGroups,
+  type MerchantGroup,
   type PurchaseDescriptor,
 } from './mail-intelligence'
 import {
@@ -61,11 +62,12 @@ export const MAX_MAIL_SEARCHES_PER_RUN = 15
 /**
  * Hits pulled per merchant before the model is asked to choose.
  *
- * A merchant-name search without a date window is broad on purpose, so this is
- * the budget for that breadth: enough that the right receipt is in the set,
- * few enough that one review call can weigh them all.
+ * Deliberately generous. The lesson from production email search is that recall
+ * is won by loosening retrieval and letting the model filter, not by tightening
+ * the query: a hit that never gets retrieved cannot be recovered downstream,
+ * while an irrelevant one is cheap to reject.
  */
-export const MAX_CANDIDATES_PER_MERCHANT = 12
+export const MAX_CANDIDATES_PER_MERCHANT = 25
 
 const OPERATION_TYPE = 'attach_document_to_transaction'
 
@@ -103,8 +105,8 @@ export interface MailHuntSummary {
     bodyIsReceipt: boolean
     /** Merchant the model resolved the bank descriptor to. */
     brand?: string
-    /** How sure the model was that this mail is the receipt for this charge. */
-    confidence?: number
+    /** The charged amount was visible in the mail. */
+    amountMatches?: boolean
     /** Why, in one sentence, for the human who approves it. */
     reason?: string
   }>
@@ -434,7 +436,7 @@ export async function huntCompany(
         inbox_item_id: proposal.inboxItemId,
         mailbox: proposal.mailbox,
         mail_subject: proposal.subject,
-        confidence: proposal.confidence,
+        amount_matches: proposal.amountMatches,
         match_reasons: [proposal.reason],
       },
     }
@@ -457,8 +459,8 @@ interface MailProposal {
   subject: string | null
   from: string | null
   receivedAt: string | null
-  /** The model's own confidence and its one-sentence reason, shown to the human. */
-  confidence: number
+  /** Whether the amount was found in the mail, and why this pairing, in words. */
+  amountMatches: boolean
   reason: string
 }
 
@@ -512,7 +514,23 @@ async function searchMailForUnexplained(
   // can use the constraint that each receipt belongs to exactly one charge.
   const groups = await planMerchantGroups(descriptors)
 
-  for (const group of groups) {
+  // Anything the planner could not name still gets searched, by amount alone.
+  // A bank line like "1260525758758 Europabetalning" identifies no merchant at
+  // all, but it is a real supplier payment whose invoice may sit in the mailbox
+  // carrying exactly that total. Searching nothing guarantees finding nothing.
+  const named = new Set(groups.flatMap((g) => g.transactionIds))
+  const unnamed: MerchantGroup[] = descriptors
+    .filter((d) => !named.has(d.id))
+    .map((d) => ({ brand: d.description.slice(0, 40), aliases: [], transactionIds: [d.id] }))
+
+  // One file, one underlag, across the whole run and not just within a group.
+  // The planner legitimately splits a supplier the bank names two ways ("Sting"
+  // and "Kontorsplatser" are the same landlord), and each group then reaches for
+  // the same invoice: the per-group guard cannot see that. A receipt attached to
+  // two verifikat is exactly the duplicate underlag BFL forbids.
+  const usedFilesThisRun = new Set<string>()
+
+  for (const group of [...groups, ...unnamed]) {
     const members = group.transactionIds
       .map((id) => descriptorById.get(id))
       .filter((d): d is PurchaseDescriptor => d != null)
@@ -557,6 +575,10 @@ async function searchMailForUnexplained(
       const tx = byId.get(assignment.transactionId)
       if (!candidate || !tx) continue
 
+      const fileKey = `${assignment.messageId}::${assignment.attachmentName ?? ''}`
+      if (usedFilesThisRun.has(fileKey)) continue
+      usedFilesThisRun.add(fileKey)
+
       summary.candidates.push({
         transactionId: tx.id,
         merchant: tx.merchant_name || tx.description,
@@ -568,7 +590,7 @@ async function searchMailForUnexplained(
         attachmentCount: candidate.attachmentIds.length,
         bodyIsReceipt: candidate.bodyIsReceipt,
         brand: group.brand,
-        confidence: assignment.confidence,
+        amountMatches: assignment.amountMatches,
         reason: assignment.reason,
       })
 
@@ -603,7 +625,7 @@ async function searchMailForUnexplained(
         subject: candidate.subject,
         from: candidate.from,
         receivedAt: candidate.receivedAt,
-        confidence: assignment.confidence,
+        amountMatches: assignment.amountMatches,
         reason: assignment.reason,
       })
     }
