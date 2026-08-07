@@ -110,6 +110,20 @@ export async function ingestMailCandidate(
         { upload_source: 'mail_hunt' },
       )
 
+      // uploadDocument emits document.uploaded and awaits its handlers, so the
+      // extraction extension has already read the amount, date and vendor out
+      // of this file by the time we get here. Copying it onto the inbox item is
+      // what lets the deterministic matcher pair the receipt on its amount:
+      // the pool is read from invoice_inbox_items, and a row with no
+      // extracted_data can never match anything.
+      const { data: extractedRow } = await supabase
+        .from('document_attachments')
+        .select('extracted_data')
+        .eq('id', document.id)
+        .maybeSingle()
+      const extracted = (extractedRow as { extracted_data?: Record<string, unknown> } | null)
+        ?.extracted_data
+
       const { data: item, error } = await supabase
         .from('invoice_inbox_items')
         .insert({
@@ -121,6 +135,7 @@ export async function ingestMailCandidate(
           email_from: candidate.from,
           email_subject: candidate.subject,
           email_received_at: candidate.receivedAt,
+          extracted_data: extracted ?? null,
           channel_context: buildChannelContext(candidate),
         })
         .select('id')

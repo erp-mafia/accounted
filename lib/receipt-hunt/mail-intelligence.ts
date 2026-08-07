@@ -84,8 +84,7 @@ export interface CandidateForReview {
   attachmentNames: string[]
 }
 
-export interface Assignment {
-  transactionId: string
+export interface HarvestedReceipt {
   messageId: string
   /**
    * Which file on that message is the receipt.
@@ -94,9 +93,9 @@ export interface Assignment {
    * februari" carries five, "Fwd: Anthropic receipts" two for two different
    * months), so a message is not the unit of an underlag, an attachment is.
    */
+  /** Which file on the message is the underlag. */
   attachmentName: string | null
-  /** The charged amount was visible in the mail: the strongest signal there is. */
-  amountMatches: boolean
+  /** One sentence, shown to nobody in the happy path: it is for the run log. */
   reason: string
 }
 
@@ -133,13 +132,11 @@ const GroupSchema = z.object({
   ),
 })
 
-const AssignmentSchema = z.object({
-  assignments: jsonArray(
+const HarvestSchema = z.object({
+  receipts: jsonArray(
     z.object({
-      transaction_id: z.string().min(1),
       message_id: z.string().min(1),
       attachment_name: z.string().nullable().default(null),
-      amount_matches: z.coerce.boolean().default(false),
       reason: z.string().min(1).max(300),
     }),
   ),
@@ -211,33 +208,26 @@ const GROUP_TOOL = {
   required: ['groups'],
 }
 
-const ASSIGN_TOOL = {
+const HARVEST_TOOL = {
   type: 'object',
   properties: {
-    assignments: {
+    receipts: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
-          transaction_id: { type: 'string' },
           message_id: { type: 'string' },
           attachment_name: {
             type: 'string',
-            description:
-              'Exact filename of the attachment that is the receipt for THIS purchase. Required when the message has several.',
-          },
-          amount_matches: {
-            type: 'boolean',
-            description:
-              'True only if the charged amount is actually visible in this mail. Do not convert currencies to decide this.',
+            description: 'Exact filename of the attachment that is the receipt or invoice.',
           },
           reason: { type: 'string', description: 'One short sentence, in Swedish.' },
         },
-        required: ['transaction_id', 'message_id', 'attachment_name', 'amount_matches', 'reason'],
+        required: ['message_id', 'attachment_name', 'reason'],
       },
     },
   },
-  required: ['assignments'],
+  required: ['receipts'],
 }
 
 const GROUP_SYSTEM = `Du tolkar svenska kontoutdrag.
@@ -262,48 +252,40 @@ Regler:
   alls (enbart ett referensnummer).
 `
 
-const ASSIGN_SYSTEM = `Du avgör vilket underlag som hör till ett visst köp.
+const HARVEST_SYSTEM = `Du avgör vilka mejl som innehåller ett underlag.
 
-Du får köp från ett kontoutdrag och kandidatmejl från företagets brevlådor.
-Para ihop dem. Ett köp får högst ett underlag.
+Ett underlag är ett kvitto eller en faktura: en handling som visar vad som
+köpts och för hur mycket. Du får kandidatmejl som hittades när vi sökte efter
+en viss handlare. Välj ut de mejl som faktiskt bär ett underlag från den
+handlaren, och peka ut exakt vilken bilaga som är underlaget.
 
-Så här ser materialet ut, och inget av det är skäl att förkasta ett mejl:
+Ta med:
+- Kvitton och fakturor från handlaren, oavsett datum. Nästan allt här är
+  vidarebefordrat, så mejlets datum säger inget om när köpet gjordes.
+- Flera mejl från samma handlare. Ett företag betalar samma leverantör varje
+  månad, och varje månads kvitto är ett eget underlag.
+- Flera bilagor ur samma mejl. Ett mejl med ämnet "Kvitton februari" och fem
+  bilagor bär fem underlag: lista då fem rader, en per bilaga.
 
-- Nästan allt är VIDAREBEFORDRAT. Mejlets eget datum är då när det skickades
-  vidare, inte när köpet gjordes. Originaldatumet står nästan alltid i
-  förhandsvisningen ("Date: mån 15 juni 2026", "Datum: tors 15 jan. 2026").
-  Använd DET datumet mot köpets datum. Det är ofta det som avgör.
-- Ett mejl kan innehålla flera kvitton för olika köp ("Fwd: Kvitton februari"
-  med fem bilagor). Välj i attachment_name exakt den bilaga som hör till
-  DETTA köp. Filnamnet bär ofta kvittonumret som också står i ämnesraden
-  (ämne "#2066-0204-8388" -> "Receipt-2066-0204-8388.pdf"), eller månaden
-  ("anthropic-kvitto-december.pdf"). Samma mejl får användas till flera köp
-  så länge du väljer olika bilagor.
-- Kvittot kan vara i annan valuta än kontoutdraget. Svenska banker drar ett
-  omräknat SEK-belopp som aldrig står i ett kvitto i USD. Räkna inte om
-  valuta: sakna belopp hellre än att gissa på ett. Saknas beloppet är datumet
-  och kvittonumret det du har.
+Ta inte med:
+- Nyhetsbrev, reklam, orderbekräftelser utan belopp, betalpåminnelser.
+- Inbjudningar, kalenderhändelser, korrespondens som bara nämner handlaren.
+- Bilagor som uppenbart inte är underlag: signaturbilder, logotyper.
 
-Förkasta mejl som bara nämner handlaren: nyhetsbrev, reklam, påminnelser utan
-underlag.
+Du ska INTE avgöra vilket köp ett underlag hör till, och inte heller pressa
+fram vilken handlare det gäller. Det gör systemet efteråt genom att läsa
+beloppet ur filen och jämföra med kontoutdraget. Din uppgift är att hitta
+handlingarna.
 
-Varje förslag granskas av en människa som ser din motivering innan något
-kopplas. Ett välmotiverat förslag är därför användbart även när du inte är
-helt säker. Men går två köp inte att skilja åt med det du ser, lämna dem
-oparade hellre än att slumpa: fel underlag på ett verifikat är dyrare än
-inget underlag alls.
+Därför: ta med varje bilaga som rimligen är ett kvitto eller en faktura, även
+när du inte kan se vilken handlare den kommer från. Ett mejl med ämnet
+"Diverse kvitton" och femton bilder bär femton underlag, oavsett vem de är
+från. Gissa inte handlaren i reason: skriv vad handlingen är.
 
-Börja med beloppet. Står köpets belopp i mejlet är det så gott som säkert rätt
-underlag, även om datumen ligger långt isär: bankens datum är när dragningen
-bokfördes och mejlets datum är när det vidarebefordrades, så datum glider av
-naturliga skäl medan ett belopp inte gör det. Sätt då amount_matches=true.
+Ett i onödan hämtat kvitto kostar en rad i inkorgen. Ett missat kvitto kostar
+en avdragsgill kostnad.
 
-Syns beloppet inte alls, sätt amount_matches=false och para bara ihop dem om
-handlaren och datumet ändå gör saken tydlig. Räkna aldrig om valuta för att få
-beloppet att stämma: hellre false än en uträkning.
-
-reason: en kort mening på svenska om varför just det här mejlet hör till just
-det här köpet.`
+reason: en kort mening på svenska om vad handlingen är.`
 
 /**
  * Turn bank descriptors into merchant identities worth searching for.
@@ -358,32 +340,30 @@ export async function planMerchantGroups(
 }
 
 /**
- * Decide which candidate mail is the receipt for which purchase.
+ * Pick out the mails that carry an underlag.
  *
- * Called once per merchant group so the model can use the constraint that each
- * receipt belongs to one charge: with six identical Anthropic subscriptions and
- * ten Anthropic mails, deciding all six together is strictly better than six
- * independent guesses.
+ * Deliberately NOT asked which purchase each receipt belongs to. That question
+ * needs the amount, the amount lives inside the PDF, and a Gmail preview
+ * essentially never shows it: measured over a real mailbox, every single
+ * pairing came back "belopp ej synligt", so the model was being asked to
+ * decide without the deciding evidence. It now answers what a subject, a
+ * sender and a preview line can actually support, and the pairing is left to
+ * deterministic code that reads the amount out of the file once it is fetched.
  */
-export async function assignReceipts(
+export async function harvestReceipts(
   brand: string,
-  purchases: readonly PurchaseDescriptor[],
   candidates: readonly CandidateForReview[],
-): Promise<Assignment[]> {
-  if (purchases.length === 0 || candidates.length === 0) return []
+  limit: number,
+): Promise<HarvestedReceipt[]> {
+  if (candidates.length === 0) return []
 
-  const knownPurchases = new Set(purchases.map((p) => p.id))
   const knownMessages = new Set(candidates.map((c) => c.messageId))
+  const attachmentsByMessage = new Map(
+    candidates.map((c) => [c.messageId, new Set(c.attachmentNames)]),
+  )
 
   const payload = {
     merchant: brand,
-    purchases: purchases.map((p) => ({
-      id: p.id,
-      date: p.date,
-      amount_charged: p.amount,
-      currency: p.currency,
-      bank_text: p.description,
-    })),
     emails: candidates.map((c) => ({
       message_id: c.messageId,
       mailbox: c.mailbox,
@@ -397,64 +377,46 @@ export async function assignReceipts(
 
   try {
     const raw = await ask(
-      ASSIGN_SYSTEM,
+      HARVEST_SYSTEM,
       JSON.stringify(payload, null, 1),
-      'receipt_assignments',
-      ASSIGN_TOOL,
+      'receipts_found',
+      HARVEST_TOOL,
       4096,
     )
-    const parsed = AssignmentSchema.parse(raw)
+    const parsed = HarvestSchema.parse(raw)
 
-    const attachmentsByMessage = new Map(
-      candidates.map((c) => [c.messageId, new Set(c.attachmentNames)]),
-    )
-    const usedFiles = new Set<string>()
-    const usedPurchases = new Set<string>()
-    const out: Assignment[] = []
+    const seen = new Set<string>()
+    const out: HarvestedReceipt[] = []
 
-    for (const a of parsed.assignments) {
-      // Every id must be one we supplied: this is what stops a hallucinated
-      // message id from ever being fetched.
-      if (!knownPurchases.has(a.transaction_id) || !knownMessages.has(a.message_id)) continue
+    for (const r of parsed.receipts) {
+      // Ids and filenames must be ones we supplied: the only place the model's
+      // answer is not taken at face value, and what stops an invented message
+      // id from ever being fetched.
+      if (!knownMessages.has(r.message_id)) continue
+      const available = attachmentsByMessage.get(r.message_id) ?? new Set<string>()
+      if (r.attachment_name && !available.has(r.attachment_name)) continue
 
-      // A named attachment must actually exist on that message. An invented
-      // filename means the model was guessing, so the assignment goes.
-      const available = attachmentsByMessage.get(a.message_id) ?? new Set<string>()
-      if (a.attachment_name && !available.has(a.attachment_name)) continue
+      // Deduped on the filename alone, not on message+filename.
+      //
+      // The same invoice arrives several times: the original, a reminder, and
+      // one or two forwards of each, every one of them carrying the identical
+      // attachment. Keyed on the message we would file "Invoice_13041840.pdf"
+      // four times over. A merchant that names every attachment the same thing
+      // loses the later ones, which costs one night rather than a duplicate.
+      const fileKey = (r.attachment_name ?? r.message_id).toLowerCase()
+      if (seen.has(fileKey)) continue
+      seen.add(fileKey)
 
-      // One purchase gets one underlag, and one file is used once. Keyed on the
-      // file rather than the message, because a single forward legitimately
-      // carries receipts for several different purchases.
-      const fileKey = `${a.message_id}::${a.attachment_name ?? ''}`
-      if (usedFiles.has(fileKey) || usedPurchases.has(a.transaction_id)) continue
-
-      usedFiles.add(fileKey)
-      usedPurchases.add(a.transaction_id)
-      out.push({
-        transactionId: a.transaction_id,
-        messageId: a.message_id,
-        attachmentName: a.attachment_name,
-        amountMatches: a.amount_matches,
-        reason: a.reason,
-      })
+      out.push({ messageId: r.message_id, attachmentName: r.attachment_name, reason: r.reason })
+      if (out.length >= limit) break
     }
 
-    // Worth knowing in production: a run that proposes six pairings and keeps
-    // one is a guardrail doing its job or a prompt going wrong, and without
-    // this it looks identical to a run that found nothing.
-    if (out.length !== parsed.assignments.length) {
-      log.info('assignments rejected by guardrails', {
-        brand,
-        proposed: parsed.assignments.length,
-        kept: out.length,
-      })
+    if (out.length !== parsed.receipts.length) {
+      log.info('harvest filtered', { brand, proposed: parsed.receipts.length, kept: out.length })
     }
-
-    // Amount-verified pairings first, so a reviewer meets the certain ones
-    // before the plausible ones.
-    return out.sort((a, b) => Number(b.amountMatches) - Number(a.amountMatches))
+    return out
   } catch (error) {
-    log.warn('receipt assignment failed, proposing nothing for this merchant', {
+    log.warn('receipt harvest failed, fetching nothing for this merchant', {
       brand,
       error: error instanceof Error ? error.message : String(error),
     })

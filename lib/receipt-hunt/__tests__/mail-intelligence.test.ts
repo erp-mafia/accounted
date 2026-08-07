@@ -17,7 +17,7 @@ vi.mock('@anthropic-ai/bedrock-sdk', () => ({
 }))
 
 import {
-  assignReceipts,
+  harvestReceipts,
   planMerchantGroups,
   type CandidateForReview,
   type PurchaseDescriptor,
@@ -101,112 +101,104 @@ describe('planMerchantGroups', () => {
   })
 })
 
-describe('assignReceipts', () => {
-  it('keeps a well-evidenced pairing', async () => {
+describe('harvestReceipts', () => {
+  it('keeps a receipt it was actually offered', async () => {
     mockCreate.mockResolvedValue(
       toolReply({
-        assignments: [
-          {
-            transaction_id: 't1',
-            message_id: 'msg-1',
-            attachment_name: 'Receipt-2066.pdf',
-            amount_matches: true,
-            reason: 'Originaldatumet matchar köpet.',
-          },
+        receipts: [
+          { message_id: 'msg-1', attachment_name: 'Receipt-2066.pdf', reason: 'Kvitto från Anthropic.' },
         ],
       }),
     )
-    const out = await assignReceipts('Anthropic', [purchase('t1')], [candidate()])
+    const out = await harvestReceipts('Anthropic', [candidate()], 8)
     expect(out).toHaveLength(1)
     expect(out[0].attachmentName).toBe('Receipt-2066.pdf')
   })
 
-  it('lets one forwarded mail serve two purchases through different files', async () => {
-    // "Fwd: Kvitton februari" carries five receipts for five purchases. Keying
-    // suppression on the message would silently drop four of them.
+  it('takes several attachments out of one batch forward', async () => {
+    // "Fwd: Kvitton februari" carries five receipts for five purchases. Each
+    // is its own underlag, so each must be fetched separately.
     mockCreate.mockResolvedValue(
       toolReply({
-        assignments: [
-          { transaction_id: 't1', message_id: 'msg-1', attachment_name: 'a.pdf', amount_matches: true, reason: 'a' },
-          { transaction_id: 't2', message_id: 'msg-1', attachment_name: 'b.pdf', amount_matches: true, reason: 'b' },
+        receipts: [
+          { message_id: 'msg-1', attachment_name: 'a.pdf', reason: 'a' },
+          { message_id: 'msg-1', attachment_name: 'b.pdf', reason: 'b' },
         ],
       }),
     )
-    const out = await assignReceipts(
+    const out = await harvestReceipts(
       'Anthropic',
-      [purchase('t1'), purchase('t2')],
       [candidate({ attachmentNames: ['a.pdf', 'b.pdf'] })],
+      8,
     )
     expect(out).toHaveLength(2)
   })
 
-  it('still refuses to use the same file for two purchases', async () => {
+  it('fetches the same invoice once however many times it was forwarded', async () => {
+    // The original, the reminder and two forwards all carry the identical
+    // attachment on four different messages. Keyed on the message we would
+    // file the same invoice four times.
     mockCreate.mockResolvedValue(
       toolReply({
-        assignments: [
-          { transaction_id: 't1', message_id: 'msg-1', attachment_name: 'a.pdf', amount_matches: true, reason: 'a' },
-          { transaction_id: 't2', message_id: 'msg-1', attachment_name: 'a.pdf', amount_matches: true, reason: 'a' },
+        receipts: [
+          { message_id: 'msg-1', attachment_name: 'Invoice_13041840.pdf', reason: 'original' },
+          { message_id: 'msg-2', attachment_name: 'Invoice_13041840.pdf', reason: 'påminnelse' },
+          { message_id: 'msg-3', attachment_name: 'Invoice_13041840.pdf', reason: 'vidarebefordrad' },
         ],
       }),
     )
-    const out = await assignReceipts(
-      'Anthropic',
-      [purchase('t1'), purchase('t2')],
-      [candidate({ attachmentNames: ['a.pdf'] })],
+    const out = await harvestReceipts(
+      'Visma',
+      [
+        candidate({ messageId: 'msg-1', attachmentNames: ['Invoice_13041840.pdf'] }),
+        candidate({ messageId: 'msg-2', attachmentNames: ['Invoice_13041840.pdf'] }),
+        candidate({ messageId: 'msg-3', attachmentNames: ['Invoice_13041840.pdf'] }),
+      ],
+      8,
     )
     expect(out).toHaveLength(1)
   })
 
   it('never fetches a message id it was not offered', async () => {
     mockCreate.mockResolvedValue(
-      toolReply({
-        assignments: [
-          { transaction_id: 't1', message_id: 'invented', attachment_name: null, amount_matches: true, reason: 'x' },
-        ],
-      }),
+      toolReply({ receipts: [{ message_id: 'invented', attachment_name: null, reason: 'x' }] }),
     )
-    await expect(assignReceipts('X', [purchase('t1')], [candidate()])).resolves.toEqual([])
+    await expect(harvestReceipts('X', [candidate()], 8)).resolves.toEqual([])
   })
 
   it('rejects a filename that is not on the message', async () => {
-    // An invented filename means it was guessing, whatever the confidence says.
+    // An invented filename means it was guessing about the contents.
     mockCreate.mockResolvedValue(
-      toolReply({
-        assignments: [
-          { transaction_id: 't1', message_id: 'msg-1', attachment_name: 'ghost.pdf', amount_matches: true, reason: 'x' },
-        ],
-      }),
+      toolReply({ receipts: [{ message_id: 'msg-1', attachment_name: 'ghost.pdf', reason: 'x' }] }),
     )
-    await expect(assignReceipts('X', [purchase('t1')], [candidate()])).resolves.toEqual([])
+    await expect(harvestReceipts('X', [candidate()], 8)).resolves.toEqual([])
   })
 
-  it('puts an amount-verified pairing ahead of a merely plausible one', async () => {
-    // The reviewer should meet the certain ones first: an amount that appears
-    // in the mail is the strongest evidence available, and unlike a date it
-    // does not drift.
+  it('honours the per-merchant cap so one mailbox cannot flood Underlag', async () => {
     mockCreate.mockResolvedValue(
       toolReply({
-        assignments: [
-          { transaction_id: 't1', message_id: 'msg-1', attachment_name: 'a.pdf', amount_matches: false, reason: 'kanske' },
-          { transaction_id: 't2', message_id: 'msg-1', attachment_name: 'b.pdf', amount_matches: true, reason: 'beloppet står i mejlet' },
-        ],
+        receipts: Array.from({ length: 10 }, (_, i) => ({
+          message_id: 'msg-1',
+          attachment_name: `r${i}.pdf`,
+          reason: 'kvitto',
+        })),
       }),
     )
-    const out = await assignReceipts(
-      'Anthropic',
-      [purchase('t1'), purchase('t2')],
-      [candidate({ attachmentNames: ['a.pdf', 'b.pdf'] })],
+    const out = await harvestReceipts(
+      'X',
+      [candidate({ attachmentNames: Array.from({ length: 10 }, (_, i) => `r${i}.pdf`) })],
+      3,
     )
-    expect(out.map((a) => a.transactionId)).toEqual(['t2', 't1'])
+    expect(out).toHaveLength(3)
   })
 
-  it('proposes nothing when the call fails', async () => {
+  it('fetches nothing when the call fails', async () => {
     mockCreate.mockRejectedValue(new Error('bedrock timeout'))
-    await expect(assignReceipts('X', [purchase('t1')], [candidate()])).resolves.toEqual([])
+    await expect(harvestReceipts('X', [candidate()], 8)).resolves.toEqual([])
   })
 
-  it('does not call the model when there is nothing to decide', async () => {
-    await expect(assignReceipts('X', [purchase('t1')], [])).resolves.toEqual([])
+  it('does not call the model when there is nothing to look at', async () => {
+    await expect(harvestReceipts('X', [], 8)).resolves.toEqual([])
     expect(mockCreate).not.toHaveBeenCalled()
   })
 })

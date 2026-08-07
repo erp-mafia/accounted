@@ -19,7 +19,7 @@ import { getMailSearchService } from '@/lib/mail-search/service'
 import { ingestMailCandidate } from './ingest'
 import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
 import {
-  assignReceipts,
+  harvestReceipts,
   planMerchantGroups,
   type MerchantGroup,
   type PurchaseDescriptor,
@@ -69,6 +69,15 @@ export const MAX_MAIL_SEARCHES_PER_RUN = 15
  */
 export const MAX_CANDIDATES_PER_MERCHANT = 25
 
+/**
+ * Receipts fetched per merchant in one run.
+ *
+ * A cap on how much of a mailbox can land in Underlag on any one night, not a
+ * judgement about what is worth having: a company that pays the same supplier
+ * monthly genuinely has twelve receipts, and the rest simply wait for tomorrow.
+ */
+export const MAX_RECEIPTS_PER_MERCHANT = 8
+
 const OPERATION_TYPE = 'attach_document_to_transaction'
 
 /** Statuses that mean "this purchase already has a live or settled proposal". */
@@ -87,28 +96,23 @@ export interface HuntCompanyResult {
 }
 
 export interface MailHuntSummary {
-  /** Purchases we searched the mailboxes for. */
+  /** Purchases whose merchant we searched the mailboxes for. */
   searched: number
-  /** Purchases where at least one message looked like it could be the receipt. */
+  /** Documents the model judged to be an underlag. */
   withCandidates: number
-  /** Receipts actually fetched and filed as underlag, ready to be paired. */
+  /** Receipts actually fetched and filed, ready for the amount match. */
   ingested: number
   candidates: Array<{
-    transactionId: string
-    merchant: string | null
-    amount: number
+    /** Merchant the model resolved the bank descriptor to. */
+    merchant: string
     mailbox: string
     subject: string | null
     from: string | null
     receivedAt: string | null
-    attachmentCount: number
-    bodyIsReceipt: boolean
-    /** Merchant the model resolved the bank descriptor to. */
-    brand?: string
-    /** The charged amount was visible in the mail. */
-    amountMatches?: boolean
-    /** Why, in one sentence, for the human who approves it. */
-    reason?: string
+    /** The attachment chosen as the underlag. */
+    fileName: string | null
+    /** What the model says the document is. */
+    reason: string
   }>
 }
 
@@ -321,47 +325,52 @@ export async function huntCompany(
     searchMail = false,
     mailSearchLimit = MAX_MAIL_SEARCHES_PER_RUN,
   } = options
-  const [transactions, { pool, fileNames }, suppression] = await Promise.all([
+
+  const [transactions, suppression] = await Promise.all([
     fetchCandidateTransactions(supabase, companyId),
-    fetchPool(supabase, companyId),
     fetchSuppression(supabase, companyId),
   ])
+  if (transactions.length === 0) {
+    return { companyId, candidates: 0, poolSize: 0, proposed: 0 }
+  }
+
+  // Ingesting a receipt needs an owner to attribute the document to.
+  const userId = await resolveOwnerUserId(supabase, companyId)
+
+  // Mail is harvested BEFORE the pool is read, so a receipt fetched tonight is
+  // paired tonight rather than a night later.
+  //
+  // The mailbox leg only finds documents; it does not decide what they belong
+  // to. That question needs the amount, and the amount is inside the PDF, not
+  // in a Gmail preview. So the receipt is filed, the extraction that already
+  // runs on upload reads its amount, and the pairing below is the same
+  // deterministic amount-and-merchant match used for every other underlag.
+  const mail = searchMail
+    ? await harvestReceiptsFromMail(
+        supabase,
+        companyId,
+        userId,
+        transactions.filter((t) => !suppression.claimedTransactionIds.has(t.id)),
+        mailSearchLimit,
+        dryRun,
+      )
+    : undefined
+
+  const { pool, fileNames } = await fetchPool(supabase, companyId)
 
   const base: HuntCompanyResult = {
     companyId,
     candidates: transactions.length,
     poolSize: pool.length,
     proposed: 0,
+    mail,
   }
-  if (transactions.length === 0 || pool.length === 0) return base
+  if (pool.length === 0) return base
 
   const proposals = selectProposals(transactions, pool, suppression, limit)
-
-  // Resolved before the mail leg, because ingesting a receipt needs an owner to
-  // attribute the document to.
-  const userId = await resolveOwnerUserId(supabase, companyId)
-
-  // Mail is searched only for what Underlag could NOT explain: a purchase that
-  // already has a receipt in hand needs no mailbox read, and not reading is the
-  // privacy promise the consent screen makes.
-  const explained = new Set(proposals.map((p) => p.transaction_id))
-  const mailLeg = searchMail
-    ? await searchMailForUnexplained(
-        supabase,
-        companyId,
-        userId,
-        transactions.filter((t) => !explained.has(t.id) && !suppression.claimedTransactionIds.has(t.id)),
-        mailSearchLimit,
-        dryRun,
-      )
-    : { summary: undefined, proposals: [] as MailProposal[] }
-  const mail = mailLeg.summary
-
-  const totalProposals = proposals.length + mailLeg.proposals.length
-  if (totalProposals === 0) return { ...base, mail }
-  if (dryRun) return { ...base, proposed: proposals.length, proposals, mail }
-
-  if (!userId) return { ...base, skippedNoOwner: true, mail }
+  if (proposals.length === 0) return base
+  if (dryRun) return { ...base, proposed: proposals.length, proposals }
+  if (!userId) return { ...base, skippedNoOwner: true }
 
   const byId = new Map(transactions.map((t) => [t.id, t]))
   const riskLevel = getRiskLevel(OPERATION_TYPE)
@@ -369,6 +378,7 @@ export async function huntCompany(
   const rows = proposals.map((proposal) => {
     const tx = byId.get(proposal.transaction_id) as HuntTransaction
     const fileName = fileNames.get(proposal.document_id) ?? 'underlag'
+    const hunted = proposal.mailProvenance != null
     return {
       company_id: companyId,
       user_id: userId,
@@ -378,12 +388,20 @@ export async function huntCompany(
         transaction_id: proposal.transaction_id,
         document_id: proposal.document_id,
       },
-      preview_data: buildPreview(proposal, fileName, tx),
+      preview_data: {
+        ...buildPreview(proposal, fileName, tx),
+        // Where it came from, when the hunt fetched it out of a mailbox. The
+        // reviewer should be able to see that this document was not uploaded
+        // by a human without having to go looking.
+        mail_mailbox: proposal.mailProvenance?.mailbox,
+        mail_subject: proposal.mailProvenance?.subject,
+        mail_from: proposal.mailProvenance?.from,
+      },
       actor_type: 'cron',
       actor_label: HUNT_ACTOR_LABEL,
       risk_level: riskLevel,
       agent_metadata: {
-        source: 'receipt_hunt',
+        source: hunted ? 'receipt_hunt_mail' : 'receipt_hunt',
         run_id: runId,
         inbox_item_id: proposal.inbox_item_id,
         confidence: proposal.confidence,
@@ -392,76 +410,10 @@ export async function huntCompany(
     }
   })
 
-  // Receipts fetched out of a mailbox this run. Same operation type and the
-  // same human gate; what differs is the evidence, which names the mailbox and
-  // the message instead of a similarity score.
-  const mailRows = mailLeg.proposals.map((proposal) => {
-    const tx = byId.get(proposal.transactionId) as HuntTransaction
-    return {
-      company_id: companyId,
-      user_id: userId,
-      operation_type: OPERATION_TYPE,
-      title: `Koppla underlag: ${proposal.fileName} → ${tx.merchant_name || tx.description || 'köp'}`,
-      params: {
-        transaction_id: proposal.transactionId,
-        document_id: proposal.documentId,
-      },
-      preview_data: {
-        transaction_description: tx.description,
-        transaction_amount: tx.amount,
-        transaction_currency: tx.currency ?? 'SEK',
-        transaction_date: tx.date,
-        document_file_name: proposal.fileName,
-        document_vendor_name: proposal.from,
-        document_amount: null,
-        document_currency: null,
-        document_invoice_date: proposal.receivedAt,
-        will_overwrite_existing: false,
-        existing_document_file_name: null,
-        existing_document_is_rakenskapsinformation: false,
-        // What the user needs to judge it: where it came from and why we looked.
-        mail_mailbox: proposal.mailbox,
-        mail_subject: proposal.subject,
-        mail_from: proposal.from,
-        // The reason in words, so approving is checking an argument rather
-        // than trusting a number.
-        mail_match_reason: proposal.reason,
-      },
-      actor_type: 'cron',
-      actor_label: HUNT_ACTOR_LABEL,
-      risk_level: riskLevel,
-      agent_metadata: {
-        source: 'receipt_hunt_mail',
-        run_id: runId,
-        inbox_item_id: proposal.inboxItemId,
-        mailbox: proposal.mailbox,
-        mail_subject: proposal.subject,
-        amount_matches: proposal.amountMatches,
-        match_reasons: [proposal.reason],
-      },
-    }
-  })
-
-  const allRows = [...rows, ...mailRows]
-  const { error } = await supabase.from('pending_operations').insert(allRows)
+  const { error } = await supabase.from('pending_operations').insert(rows)
   if (error) throw new Error(`Failed to stage receipt-hunt proposals: ${error.message}`)
 
-  return { ...base, proposed: allRows.length, mail }
-}
-
-/** A receipt pulled out of a mailbox, already filed and awaiting its pairing. */
-interface MailProposal {
-  transactionId: string
-  documentId: string
-  inboxItemId: string
-  fileName: string
-  mailbox: string
-  subject: string | null
-  from: string | null
-  receivedAt: string | null
-  /** Whether the amount was found in the mail, and why this pairing, in words. */
-  amountMatches: boolean
-  reason: string
+  return { ...base, proposed: rows.length }
 }
 
 /**
@@ -472,63 +424,56 @@ interface MailProposal {
  * no mailbox is connected. Finding a candidate is NOT the same as having the
  * receipt: ingesting it is the next step and stays behind human approval.
  */
-async function searchMailForUnexplained(
+async function harvestReceiptsFromMail(
   supabase: SupabaseClient,
   companyId: string,
   userId: string | null,
-  unexplained: readonly HuntTransaction[],
+  purchases: readonly HuntTransaction[],
   limit: number,
   dryRun: boolean,
-): Promise<{ summary: MailHuntSummary; proposals: MailProposal[] }> {
+): Promise<MailHuntSummary> {
   const service = getMailSearchService()
   const summary: MailHuntSummary = { searched: 0, withCandidates: 0, ingested: 0, candidates: [] }
-  const proposals: MailProposal[] = []
-  if (!service.isConfigured() || unexplained.length === 0) return { summary, proposals }
+  if (!service.isConfigured() || purchases.length === 0) return summary
 
   // Salary and tax runs are a company's largest outgoing rows, so without this
   // they eat the whole search budget hunting receipts that cannot exist, and
   // their descriptions ("Lön Juli Jakob") search for a person's name and match
   // half the mailbox.
-  const byLargest = [...unexplained]
+  const searchable = [...purchases]
     .filter((t) => canHaveEmailReceipt(t.merchant_name || t.description))
     .sort((a, b) => Math.abs(b.amount ?? 0) - Math.abs(a.amount ?? 0))
     .slice(0, limit)
     .filter((t): t is HuntTransaction & { amount: number; date: string } =>
       t.amount != null && Boolean(t.date),
     )
-  if (byLargest.length === 0) return { summary, proposals }
+  if (searchable.length === 0) return summary
 
-  const descriptors: PurchaseDescriptor[] = byLargest.map((t) => ({
+  const descriptors: PurchaseDescriptor[] = searchable.map((t) => ({
     id: t.id,
     description: t.merchant_name || t.description || '',
     amount: Math.abs(t.amount),
     currency: t.currency ?? 'SEK',
     date: t.date,
   }))
-  const byId = new Map(byLargest.map((t) => [t.id, t]))
   const descriptorById = new Map(descriptors.map((d) => [d.id, d]))
 
   // One model call resolves every descriptor to a merchant and groups the
-  // repeats. Six Anthropic subscriptions become one search and one decision
-  // instead of six of each, which is both cheaper and more accurate: the model
-  // can use the constraint that each receipt belongs to exactly one charge.
+  // repeats, so six Anthropic subscriptions become one search rather than six.
   const groups = await planMerchantGroups(descriptors)
 
-  // Anything the planner could not name still gets searched, by amount alone.
-  // A bank line like "1260525758758 Europabetalning" identifies no merchant at
-  // all, but it is a real supplier payment whose invoice may sit in the mailbox
-  // carrying exactly that total. Searching nothing guarantees finding nothing.
+  // Anything the planner could not name is still searched, by amount alone. A
+  // line like "1260525758758 Europabetalning" identifies no merchant but is a
+  // real supplier payment whose invoice may carry exactly that total.
   const named = new Set(groups.flatMap((g) => g.transactionIds))
   const unnamed: MerchantGroup[] = descriptors
     .filter((d) => !named.has(d.id))
     .map((d) => ({ brand: d.description.slice(0, 40), aliases: [], transactionIds: [d.id] }))
 
-  // One file, one underlag, across the whole run and not just within a group.
-  // The planner legitimately splits a supplier the bank names two ways ("Sting"
-  // and "Kontorsplatser" are the same landlord), and each group then reaches for
-  // the same invoice: the per-group guard cannot see that. A receipt attached to
-  // two verifikat is exactly the duplicate underlag BFL forbids.
-  const usedFilesThisRun = new Set<string>()
+  // One file is fetched once per run. The planner legitimately splits a
+  // supplier the bank names two ways ("Sting" and "Kontorsplatser" are the same
+  // landlord), and both groups then reach for the same invoice.
+  const fetchedFiles = new Set<string>()
 
   for (const group of [...groups, ...unnamed]) {
     const members = group.transactionIds
@@ -537,10 +482,9 @@ async function searchMailForUnexplained(
     if (members.length === 0) continue
     summary.searched += members.length
 
-    // Searched on the merchant's name across the whole mailbox. The date window
-    // is deliberately off: these receipts arrive by being forwarded, so they
-    // carry the forwarding date. Precision is restored by the model below, not
-    // by the query.
+    // Searched on merchant OR amount across the whole mailbox. The date window
+    // is off deliberately: these receipts arrive by being forwarded, so they
+    // carry the forwarding date, not the purchase date.
     const newest = members.reduce((a, b) => (a.date > b.date ? a : b))
     const found = await service.search(companyId, {
       merchant: normalizeForMatch(members[0].description),
@@ -553,9 +497,8 @@ async function searchMailForUnexplained(
     })
     if (found.length === 0) continue
 
-    const assignments = await assignReceipts(
+    const receipts = await harvestReceipts(
       group.brand,
-      members,
       found.map((c) => ({
         messageId: c.messageId,
         mailbox: c.mailbox,
@@ -565,72 +508,48 @@ async function searchMailForUnexplained(
         snippet: c.snippet ?? null,
         attachmentNames: c.attachmentNames ?? [],
       })),
+      MAX_RECEIPTS_PER_MERCHANT,
     )
-    if (assignments.length === 0) continue
-    summary.withCandidates += assignments.length
+    if (receipts.length === 0) continue
+    summary.withCandidates += receipts.length
 
     const foundById = new Map(found.map((c) => [c.messageId, c]))
-    for (const assignment of assignments) {
-      const candidate = foundById.get(assignment.messageId)
-      const tx = byId.get(assignment.transactionId)
-      if (!candidate || !tx) continue
+    for (const receipt of receipts) {
+      const candidate = foundById.get(receipt.messageId)
+      if (!candidate || candidate.attachmentIds.length === 0) continue
 
-      const fileKey = `${assignment.messageId}::${assignment.attachmentName ?? ''}`
-      if (usedFilesThisRun.has(fileKey)) continue
-      usedFilesThisRun.add(fileKey)
+      const fileKey = `${receipt.messageId}::${receipt.attachmentName ?? ''}`
+      if (fetchedFiles.has(fileKey)) continue
+      fetchedFiles.add(fileKey)
 
       summary.candidates.push({
-        transactionId: tx.id,
-        merchant: tx.merchant_name || tx.description,
-        amount: tx.amount,
+        merchant: group.brand,
         mailbox: candidate.mailbox,
         subject: candidate.subject,
         from: candidate.from,
         receivedAt: candidate.receivedAt,
-        attachmentCount: candidate.attachmentIds.length,
-        bodyIsReceipt: candidate.bodyIsReceipt,
-        brand: group.brand,
-        amountMatches: assignment.amountMatches,
-        reason: assignment.reason,
+        fileName: receipt.attachmentName,
+        reason: receipt.reason,
       })
 
-      // A dry run reports what it decided and fetches nothing: the point of a
+      // A dry run reports what it found and fetches nothing: the point of a
       // provkörning is that no mailbox content is copied anywhere.
       if (dryRun || !userId) continue
-      if (candidate.attachmentIds.length === 0) continue
 
-      // Narrow the candidate to the one file the model picked before it is
-      // fetched. A batch forward carries receipts for several purchases, so
-      // "the message" is not the underlag; the chosen attachment is.
+      // Narrow to the one file before fetching. A batch forward carries
+      // receipts for several purchases, so the message is not the underlag.
       const names = candidate.attachmentNames ?? []
-      const chosen = assignment.attachmentName ? names.indexOf(assignment.attachmentName) : 0
-      const index = chosen >= 0 ? chosen : 0
+      const at = receipt.attachmentName ? names.indexOf(receipt.attachmentName) : 0
+      const index = at >= 0 ? at : 0
       const ingested = await ingestMailCandidate(supabase, companyId, userId, {
         ...candidate,
         attachmentIds: [candidate.attachmentIds[index] ?? candidate.attachmentIds[0]],
         attachmentNames: [names[index] ?? names[0] ?? ''],
       })
-      if (!ingested) continue
-      summary.ingested++
-
-      // No re-matching: the model decided this message is the receipt for this
-      // charge, and that decision is written onto the proposal in words so the
-      // human approving it can check the reasoning rather than a bare score.
-      proposals.push({
-        transactionId: tx.id,
-        documentId: ingested.documentId,
-        inboxItemId: ingested.inboxItemId,
-        fileName: ingested.fileName,
-        mailbox: ingested.mailbox,
-        subject: candidate.subject,
-        from: candidate.from,
-        receivedAt: candidate.receivedAt,
-        amountMatches: assignment.amountMatches,
-        reason: assignment.reason,
-      })
+      if (ingested) summary.ingested++
     }
   }
-  return { summary, proposals }
+  return summary
 }
 
 /**

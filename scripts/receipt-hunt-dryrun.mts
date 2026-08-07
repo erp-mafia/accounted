@@ -45,14 +45,14 @@ if ((result.proposals ?? []).length === 0) console.log('  (inga par ur Underlag 
 if (result.mail) {
   console.log(`\n=== BREVLÅDOR ===`)
   console.log(`köp genomsökta   : ${result.mail.searched}`)
-  console.log(`köp med träff    : ${result.mail.withCandidates}\n`)
+  console.log(`underlag hittade : ${result.mail.withCandidates}`)
+  console.log(`skulle hämta     : ${result.mail.candidates.length}\n`)
   for (const c of result.mail.candidates) {
-    console.log(`  ${c.merchant ?? '?'} ${c.amount} kr` + (c.brand ? `   [${c.brand}]` : ''))
+    console.log(`  [${c.merchant}] ${c.fileName ?? '(bilaga)'}`)
     console.log(`    ur ${c.mailbox}: "${c.subject ?? '(utan ämne)'}" från ${c.from ?? '?'}`)
-    console.log(`    ${c.attachmentCount} bilaga(or)${c.bodyIsReceipt ? ', kvittot ligger i mejlkroppen' : ''}`)
-    console.log(`    ${c.amountMatches ? 'BELOPP MATCHAR' : 'belopp ej synligt'}: ${c.reason ?? ''}`)
+    console.log(`    ${c.reason}`)
   }
-  if (result.mail.candidates.length === 0) console.log('  (inga kandidatmejl)')
+  if (result.mail.candidates.length === 0) console.log('  (inga underlag hittade)')
 } else if (withMail) {
   console.log('\n(ingen brevlåda kopplad, eller Gmail inte konfigurerat)')
 }

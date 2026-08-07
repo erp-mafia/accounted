@@ -41,10 +41,16 @@ function candidate(overrides: Partial<MailCandidate> = {}): MailCandidate {
 function mockSupabase(existing: { id: string } | null, insertResult: { data?: unknown; error?: unknown } = {}) {
   const inserted: Array<Record<string, unknown>> = []
   const client = {
-    from() {
+    from(table: string) {
       const chain: Record<string, unknown> = {}
       for (const m of ['select', 'eq', 'is', 'not', 'order', 'limit']) chain[m] = vi.fn(() => chain)
-      chain.maybeSingle = vi.fn(() => Promise.resolve({ data: existing, error: null }))
+      chain.maybeSingle = vi.fn(() =>
+        Promise.resolve(
+          table === 'document_attachments'
+            ? { data: { extracted_data: { total_amount: 425 } }, error: null }
+            : { data: existing, error: null },
+        ),
+      )
       chain.insert = vi.fn((row: Record<string, unknown>) => {
         inserted.push(row)
         return {
@@ -83,14 +89,19 @@ describe('ingestMailCandidate', () => {
     expect(inserted).toHaveLength(1)
     expect(inserted[0].source).toBe('mail_hunt')
     // Provenance goes in channel_context, never extracted_data: retrying
-    // extraction overwrites extracted_data wholesale.
+    // extraction overwrites extracted_data wholesale, and the record of which
+    // mailbox a receipt came from has to survive that.
     const ctx = inserted[0].channel_context as Record<string, unknown>
     expect(ctx.mail_message_id).toBe('msg-1')
     expect(ctx.mail_mailbox).toBe('ekonomi@nordvik.se')
     // Keyed per attachment: a batch forward carries receipts for several
     // purchases, and filing the first must not block the rest.
     expect(ctx.mail_file_key).toBe('msg-1::att-1')
-    expect(inserted[0].extracted_data).toBeUndefined()
+    const extracted = inserted[0].extracted_data as Record<string, unknown> | null
+    expect(extracted).not.toHaveProperty('mail_message_id')
+    // The extraction that ran on upload is copied onto the inbox item: the
+    // pool is read from here, and a row with no amount can never be paired.
+    expect(extracted).toMatchObject({ total_amount: 425 })
   })
 
   it('does not fetch anything for a message already ingested', async () => {

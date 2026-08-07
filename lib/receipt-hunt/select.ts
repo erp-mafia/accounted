@@ -69,6 +69,16 @@ export interface HuntProposal {
   receipt_date: string | null
   total_amount: number | null
   currency: string | null
+  /**
+   * Where the document came from, carried through from the inbox item so the
+   * proposal can say "found in your mailbox" rather than implying a human
+   * uploaded it.
+   */
+  mailProvenance: {
+    mailbox?: string
+    subject?: string
+    from?: string
+  } | null
 }
 
 export interface SuppressionSets {
@@ -110,6 +120,8 @@ export function selectProposals(
     (a, b) => Math.abs(b.amount ?? 0) - Math.abs(a.amount ?? 0),
   )
 
+  const poolById = new Map(pool.map((item) => [item.id, item]))
+
   const proposals: HuntProposal[] = []
   // One receipt can only settle one purchase, and the pool is scored per
   // transaction, so the same document can win twice in a single run. Whoever
@@ -134,7 +146,19 @@ export function selectProposals(
 
     const documentId = winner.document_id as string
     spentDocumentIds.add(documentId)
+    const context = poolById.get(winner.inbox_item_id)?.channel_context as
+      | { channel?: string; mail_mailbox?: string; mail_subject?: string; mail_from?: string }
+      | null
+      | undefined
     proposals.push({
+      mailProvenance:
+        context?.channel === 'mail_hunt'
+          ? {
+              mailbox: context.mail_mailbox,
+              subject: context.mail_subject,
+              from: context.mail_from,
+            }
+          : null,
       transaction_id: tx.id,
       document_id: documentId,
       inbox_item_id: winner.inbox_item_id,
