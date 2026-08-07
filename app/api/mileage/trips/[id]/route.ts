@@ -36,6 +36,23 @@ export const PATCH = withRouteContext<Params>(
       )
     }
 
+    // The employees FK is not company-scoped: verify a newly assigned
+    // employee belongs to this company (mirrors createTrip).
+    if (validation.data.employee_id) {
+      const { data: employee } = await supabase
+        .from('employees')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('id', validation.data.employee_id)
+        .maybeSingle()
+      if (!employee) {
+        return NextResponse.json(
+          { error: 'Den anställda hittades inte i företaget' },
+          { status: 400 }
+        )
+      }
+    }
+
     // Enforce the förmånsbil regnr rule on the EFFECTIVE row (partial update
     // merged over the stored values), mirroring CreateMileageTripSchema.
     const effectiveVehicleType = validation.data.vehicle_type ?? existing.vehicle_type

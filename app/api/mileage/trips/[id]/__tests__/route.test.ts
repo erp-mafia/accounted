@@ -87,6 +87,24 @@ describe('PATCH /api/mileage/trips/[id]', () => {
     expect(res.status).toBe(409)
   })
 
+  it('rejects assigning an employee outside the company', async () => {
+    // maybeSingle serves the trip lookup first, then the employee lookup: the
+    // second call finds no company-scoped employee row.
+    const supabase = supabaseWith(DRAFT_OWN_CAR)
+    const maybeSingle = supabase.chain.maybeSingle as ReturnType<typeof vi.fn>
+    maybeSingle
+      .mockImplementationOnce(() => Promise.resolve({ data: DRAFT_OWN_CAR, error: null }))
+      .mockImplementationOnce(() => Promise.resolve({ data: null, error: null }))
+    authed(supabase)
+    const res = await PATCH(
+      patchReq({ employee_id: '11111111-2222-3333-4444-555555555555' }),
+      params
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toContain('anställda')
+  })
+
   it('rejects switching to förmånsbil when neither patch nor row has a regnr', async () => {
     authed(supabaseWith(DRAFT_OWN_CAR))
     const res = await PATCH(patchReq({ vehicle_type: 'company_car_fossil' }), params)
