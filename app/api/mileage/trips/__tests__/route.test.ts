@@ -99,6 +99,16 @@ describe('POST /api/mileage/trips', () => {
     expect(createTrip).not.toHaveBeenCalled()
   })
 
+  it('rejects a förmånsbil trip without vehicle_registration', async () => {
+    authed()
+    const res = await POST(
+      postReq({ ...VALID_TRIP, vehicle_type: 'company_car_fossil' }),
+      params
+    )
+    expect(res.status).toBe(400)
+    expect(createTrip).not.toHaveBeenCalled()
+  })
+
   it('rejects odometer_end <= odometer_start', async () => {
     authed()
     const res = await POST(

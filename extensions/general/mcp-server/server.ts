@@ -10600,6 +10600,9 @@ export const tools: McpTool[] = [
       }
 
       const vehicleType = (args.vehicle_type as string) || 'own_car'
+      if (vehicleType !== 'own_car' && !(args.vehicle_registration as string | undefined)?.trim()) {
+        throw new Error('vehicle_registration is required for a förmånsbil trip (körjournal must identify the vehicle)')
+      }
       // Preview the tax-free allowance at the schablon rate; non-fatal if the
       // payroll config year is missing.
       let approxAmount: number | undefined
@@ -10689,6 +10692,9 @@ export const tools: McpTool[] = [
       })
       if (trips.length === 0) {
         throw new Error('No unbooked trips in the selected period. Log trips first via gnubok_log_mileage_trip.')
+      }
+      if (new Set(trips.map((t) => t.employee_id ?? 'unassigned')).size > 1) {
+        throw new Error('The period spans several employees. Book per employee by passing employee_id (BFL motpart traceability).')
       }
       const config = await loadPayrollConfig(supabase, Number(to.slice(0, 4)))
       const summaries = summarizeTrips(trips, config)

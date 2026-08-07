@@ -72,6 +72,15 @@ describe('POST /api/mileage/book', () => {
     expect(res.status).toBe(400)
   })
 
+  it('returns 400 when the period spans several employees', async () => {
+    authed()
+    vi.mocked(bookMileagePeriod).mockResolvedValue({ ok: false, code: 'MIXED_EMPLOYEES' })
+    const res = await POST(postReq(VALID_BODY), params)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error).toContain('per anställd')
+  })
+
   it('returns 400 when the entry date is in a locked period', async () => {
     authed()
     vi.mocked(bookMileagePeriod).mockResolvedValue({ ok: false, code: 'PERIOD_NOT_OPEN' })

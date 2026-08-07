@@ -29,6 +29,12 @@ export const POST = withRouteContext(
           { status: 400 }
         )
       }
+      if (result.code === 'MIXED_EMPLOYEES') {
+        return NextResponse.json(
+          { error: 'Resorna i perioden gäller flera anställda. Bokför per anställd.' },
+          { status: 400 }
+        )
+      }
       if (result.code === 'PERIOD_NOT_OPEN') {
         return NextResponse.json(
           { error: 'Bokföringsdatumet ligger i en stängd eller låst period' },

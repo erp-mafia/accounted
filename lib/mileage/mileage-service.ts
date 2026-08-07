@@ -117,6 +117,12 @@ export async function createTrip(
   userId: string,
   input: CreateMileageTripInput
 ): Promise<MileageTrip> {
+  // A körjournal for a förmånsbil must identify the vehicle: the schablon
+  // rate depends on which car was driven, and Skatteverket expects the
+  // underlag to name it. Own-car trips may omit it (single private vehicle).
+  if ((input.vehicle_type ?? 'own_car') !== 'own_car' && !input.vehicle_registration?.trim()) {
+    throw new Error('Ange registreringsnummer för förmånsbilen')
+  }
   const { data, error } = await supabase
     .from('mileage_trips')
     .insert({
@@ -158,7 +164,7 @@ export type BookMileageResult =
     }
   | {
       ok: false
-      code: 'NO_TRIPS' | 'PERIOD_NOT_OPEN' | 'STAMP_FAILED'
+      code: 'NO_TRIPS' | 'MIXED_EMPLOYEES' | 'PERIOD_NOT_OPEN' | 'STAMP_FAILED'
       journalEntryId?: string
     }
 
@@ -193,6 +199,15 @@ export async function bookMileagePeriod(
     return { ok: false, code: 'NO_TRIPS' }
   }
 
+  // BFL 5 kap 6-7 §: the verifikat must identify its motpart. A single lump
+  // credit on 2820 covering several employees' reimbursements loses that, so
+  // a period spanning more than one employee (unassigned trips count as the
+  // owner's) must be booked per employee via the employeeId filter.
+  const distinctEmployees = new Set(trips.map((t) => t.employee_id ?? 'unassigned'))
+  if (distinctEmployees.size > 1) {
+    return { ok: false, code: 'MIXED_EMPLOYEES' }
+  }
+
   const period = await resolvePeriodStatusForDate(supabase, companyId, params.entryDate)
   if (period.status !== 'open' || !period.period_id) {
     return { ok: false, code: 'PERIOD_NOT_OPEN' }
@@ -203,10 +218,24 @@ export async function bookMileagePeriod(
   const totalAmount = round2(summaries.reduce((sum, s) => sum + s.amount, 0))
   const totalMil = round2(summaries.reduce((sum, s) => sum + s.total_mil, 0))
 
+  // Name the motpart in the verifikationstext when the period is scoped to an
+  // employee (BFL 5 kap 7 §): the trip rows carry the id, the verifikat the name.
+  let motpart = ''
+  const employeeId = params.employeeId ?? trips[0].employee_id
+  if (employeeId) {
+    const { data: employee } = await supabase
+      .from('employees')
+      .select('first_name, last_name')
+      .eq('company_id', companyId)
+      .eq('id', employeeId)
+      .maybeSingle()
+    if (employee) motpart = `, ${employee.first_name} ${employee.last_name}`
+  }
+
   const entry = await createJournalEntry(supabase, companyId, userId, {
     fiscal_period_id: period.period_id,
     entry_date: params.entryDate,
-    description: `Milersättning ${params.from} till ${params.to} (${trips.length} resor, ${totalMil} mil)`,
+    description: `Milersättning ${params.from} till ${params.to} (${trips.length} resor, ${totalMil} mil${motpart})`,
     source_type: 'manual',
     lines: [
       ...summaries.map((s) => ({

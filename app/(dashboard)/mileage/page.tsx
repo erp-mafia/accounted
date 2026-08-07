@@ -422,7 +422,11 @@ export default function MileagePage() {
                 <Label htmlFor="vehicle_type">{t('field_vehicle')}</Label>
                 <Select
                   value={form.vehicle_type}
-                  onValueChange={(v) => setForm({ ...form, vehicle_type: v as MileageVehicleType })}
+                  onValueChange={(v) => {
+                    setForm({ ...form, vehicle_type: v as MileageVehicleType })
+                    // Regnr is required for a förmånsbil; surface the field.
+                    if (v !== 'own_car') setShowMore(true)
+                  }}
                 >
                   <SelectTrigger id="vehicle_type">
                     <SelectValue />

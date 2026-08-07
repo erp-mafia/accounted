@@ -3192,6 +3192,9 @@ export const CreateMileageTripSchema = z
       t.odometer_start == null || t.odometer_end == null || t.odometer_end > t.odometer_start,
     { message: 'Mätarställning vid ankomst måste vara högre än vid start' }
   )
+  .refine((t) => t.vehicle_type === 'own_car' || Boolean(t.vehicle_registration?.trim()), {
+    message: 'Ange registreringsnummer för förmånsbilen',
+  })
 
 export const UpdateMileageTripSchema = z
   .object({

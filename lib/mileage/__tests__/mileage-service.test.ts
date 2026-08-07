@@ -17,6 +17,7 @@ vi.mock('@/lib/core/bookkeeping/period-service', () => ({
 
 import {
   bookMileagePeriod,
+  createTrip,
   ratePerMil,
   summarizeTrips,
 } from '@/lib/mileage/mileage-service'
@@ -116,6 +117,23 @@ describe('summarizeTrips', () => {
   })
 })
 
+describe('createTrip', () => {
+  it('rejects a förmånsbil trip without vehicle_registration before any write', async () => {
+    const supabase = { from: vi.fn() }
+    await expect(
+      createTrip(supabase as never, 'company-1', 'user-1', {
+        trip_date: '2026-05-10',
+        vehicle_type: 'company_car_electric',
+        distance_km: 10,
+        from_location: 'A',
+        to_location: 'B',
+        purpose: 'Kundbesök',
+      })
+    ).rejects.toThrow(/registreringsnummer/)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+})
+
 describe('bookMileagePeriod', () => {
   const params = {
     from: '2026-05-01',
@@ -144,6 +162,21 @@ describe('bookMileagePeriod', () => {
       params
     )
     expect(result).toEqual({ ok: false, code: 'NO_TRIPS' })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a period spanning several employees (BFL motpart)', async () => {
+    vi.mocked(fetchAllRows).mockResolvedValue([
+      trip({ id: 't1', employee_id: 'emp-1' }),
+      trip({ id: 't2', employee_id: null }),
+    ])
+    const result = await bookMileagePeriod(
+      stampSupabase([]) as never,
+      'company-1',
+      'user-1',
+      params
+    )
+    expect(result).toEqual({ ok: false, code: 'MIXED_EMPLOYEES' })
     expect(createJournalEntry).not.toHaveBeenCalled()
   })
 
