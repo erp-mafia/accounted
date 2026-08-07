@@ -4661,6 +4661,106 @@ async function commitCreateSalaryRun(
   }
 }
 
+async function commitLogMileageTrip(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  try {
+    const { createTrip } = await import('@/lib/mileage/mileage-service')
+    const trip = await createTrip(supabase, companyId, userId, {
+      trip_date: params.trip_date as string,
+      vehicle_type: params.vehicle_type as never,
+      vehicle_registration: (params.vehicle_registration as string) || null,
+      odometer_start: (params.odometer_start as number) ?? null,
+      odometer_end: (params.odometer_end as number) ?? null,
+      distance_km: params.distance_km as number,
+      from_location: params.from_location as string,
+      to_location: params.to_location as string,
+      purpose: params.purpose as string,
+      visited: (params.visited as string) || null,
+      is_round_trip: params.is_round_trip === true,
+      employee_id: (params.employee_id as string) || null,
+      notes: (params.notes as string) || null,
+      created_via: 'mcp',
+    })
+    return {
+      data: {
+        mileage_trip_id: trip.id,
+        trip_date: trip.trip_date,
+        distance_km: trip.distance_km,
+        status: trip.status,
+      },
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to log mileage trip'
+    // Input-validation failures from the service are permanent for these
+    // params: 400 so agents fix the arguments instead of retrying blindly.
+    const isValidation = /registreringsnummer|hittades inte/i.test(message)
+    return { error: message, status: isValidation ? 400 : 500 }
+  }
+}
+
+async function commitBookMileagePeriod(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  try {
+    const { bookMileagePeriod } = await import('@/lib/mileage/mileage-service')
+    const result = await bookMileagePeriod(supabase, companyId, userId, {
+      from: params.from as string,
+      to: params.to as string,
+      entryDate: params.entry_date as string,
+      counterAccount: (params.counter_account as never) || '2820',
+      employeeId: (params.employee_id as string) || undefined,
+      createdVia: 'mcp',
+      // Staged approvals freeze the trip set: what was previewed is exactly
+      // what may be booked; drift fails the commit instead of booking blind.
+      expectedTripIds: Array.isArray(params.trip_ids)
+        ? (params.trip_ids as string[])
+        : undefined,
+    })
+    if (!result.ok) {
+      if (result.code === 'NO_TRIPS') {
+        return { error: 'No unbooked trips in the selected period', status: 400 }
+      }
+      if (result.code === 'MIXED_EMPLOYEES') {
+        return { error: 'The period spans several employees; book per employee via employee_id', status: 400 }
+      }
+      if (result.code === 'PERIOD_NOT_OPEN') {
+        return { error: 'The entry date falls in a closed or locked period', status: 400 }
+      }
+      if (result.code === 'TRIPS_CHANGED' || result.code === 'CLAIM_LOST') {
+        return {
+          error: 'The körjournal changed since this booking was staged; stage it again to get a fresh preview',
+          status: 409,
+        }
+      }
+      return {
+        error: `Voucher ${result.journalEntryId} was created but trips could not all be linked; review the körjournal before booking again`,
+        status: 500,
+      }
+    }
+    return {
+      data: {
+        journal_entry_id: result.journalEntryId,
+        voucher: `${result.voucherSeries ?? ''}${result.voucherNumber ?? ''}`,
+        trip_count: result.tripCount,
+        total_amount: result.totalAmount,
+        summaries: result.summaries,
+      },
+    }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Failed to book mileage period',
+      status: 500,
+    }
+  }
+}
+
 async function commitGenerateAgi(
   supabase: SupabaseClient,
   userId: string,
@@ -5571,6 +5671,12 @@ async function commitPendingOperationInner(
         break
       case 'create_salary_run':
         result = await commitCreateSalaryRun(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'log_mileage_trip':
+        result = await commitLogMileageTrip(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'book_mileage_period':
+        result = await commitBookMileagePeriod(supabase, userId, companyId, pendingOp.params)
         break
       case 'generate_agi':
         result = await commitGenerateAgi(supabase, userId, companyId, pendingOp.params)

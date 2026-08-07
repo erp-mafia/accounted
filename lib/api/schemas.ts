@@ -3164,3 +3164,80 @@ export const DimensionTaggingApplySchema = z.object({
   dimensions: DimensionsBagSchema,
   reason: z.string().trim().min(3).max(500),
 })
+
+// ============================================================
+// Körjournal (mileage trips)
+// ============================================================
+
+const mileageVehicleType = z.enum(['own_car', 'company_car_fossil', 'company_car_electric'])
+
+export const CreateMileageTripSchema = z
+  .object({
+    trip_date: saneIsoDate,
+    vehicle_type: mileageVehicleType.default('own_car'),
+    vehicle_registration: z.string().trim().max(20).optional().nullable(),
+    odometer_start: z.number().int().nonnegative().optional().nullable(),
+    odometer_end: z.number().int().nonnegative().optional().nullable(),
+    distance_km: z.number().positive().max(100000),
+    from_location: z.string().trim().min(1).max(200),
+    to_location: z.string().trim().min(1).max(200),
+    purpose: z.string().trim().min(1).max(500),
+    visited: z.string().trim().max(200).optional().nullable(),
+    is_round_trip: z.boolean().default(false),
+    employee_id: uuid.optional().nullable(),
+    notes: z.string().trim().max(1000).optional().nullable(),
+  })
+  .refine(
+    (t) =>
+      t.odometer_start == null || t.odometer_end == null || t.odometer_end > t.odometer_start,
+    { message: 'Mätarställning vid ankomst måste vara högre än vid start' }
+  )
+  .refine((t) => t.vehicle_type === 'own_car' || Boolean(t.vehicle_registration?.trim()), {
+    message: 'Ange registreringsnummer för förmånsbilen',
+  })
+
+export const UpdateMileageTripSchema = z
+  .object({
+    trip_date: saneIsoDate.optional(),
+    vehicle_type: mileageVehicleType.optional(),
+    vehicle_registration: z.string().trim().max(20).optional().nullable(),
+    odometer_start: z.number().int().nonnegative().optional().nullable(),
+    odometer_end: z.number().int().nonnegative().optional().nullable(),
+    distance_km: z.number().positive().max(100000).optional(),
+    from_location: z.string().trim().min(1).max(200).optional(),
+    to_location: z.string().trim().min(1).max(200).optional(),
+    purpose: z.string().trim().min(1).max(500).optional(),
+    visited: z.string().trim().max(200).optional().nullable(),
+    is_round_trip: z.boolean().optional(),
+    employee_id: uuid.optional().nullable(),
+    notes: z.string().trim().max(1000).optional().nullable(),
+  })
+  .refine((t) => Object.keys(t).length > 0, { message: 'Inga fält att uppdatera' })
+
+export const BookMileagePeriodSchema = z
+  .object({
+    from: saneIsoDate,
+    to: saneIsoDate,
+    entry_date: saneIsoDate,
+    counter_account: z.enum(['2820', '2893', '1930']).default('2820'),
+    employee_id: uuid.optional(),
+  })
+  .refine((p) => p.from <= p.to, { message: 'Ogiltigt datumintervall' })
+  // Schablon rates are per calendar year: a cross-year period would book
+  // every trip at one year's rate.
+  .refine((p) => p.from.slice(0, 4) === p.to.slice(0, 4), {
+    message: 'Milersättning bokförs per kalenderår: dela upp perioden per år',
+  })
+
+export const MileageSalaryPushSchema = z
+  .object({
+    run_id: uuid,
+    employee_id: uuid,
+    from: saneIsoDate,
+    to: saneIsoDate,
+    include_unassigned: z.boolean().default(true),
+  })
+  .refine((p) => p.from <= p.to, { message: 'Ogiltigt datumintervall' })
+  .refine((p) => p.from.slice(0, 4) === p.to.slice(0, 4), {
+    message: 'Milersättning bokförs per kalenderår: dela upp perioden per år',
+  })

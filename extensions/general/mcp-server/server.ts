@@ -10494,6 +10494,246 @@ export const tools: McpTool[] = [
   },
   // ── Payroll (Lönehantering) ──────────────────────────────────
   {
+    name: 'gnubok_list_mileage_trips',
+    title: 'List Mileage Trips (Körjournal)',
+    catalogVisibility: 'search',
+    description: 'List körjournal trips for the active company. Filter by date range, status (draft = not yet booked, booked) or employee. Use before gnubok_book_mileage_period to see what would be booked.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        from: { type: 'string', description: 'From date (YYYY-MM-DD)' },
+        to: { type: 'string', description: 'To date (YYYY-MM-DD)' },
+        status: { type: 'string', enum: ['draft', 'booked'], description: 'Filter by status' },
+        employee_id: { type: 'string', description: 'Filter by employee UUID' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        trips: { type: 'array', items: { type: 'object' } },
+        count: { type: 'number' },
+        total_km: { type: 'number' },
+        draft_km: { type: 'number' },
+      },
+      required: ['trips', 'count', 'total_km', 'draft_km'],
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async execute(args, companyId, _userId, supabase) {
+      const { listTrips } = await import('@/lib/mileage/mileage-service')
+      const status = args.status as 'draft' | 'booked' | undefined
+      const rows = await listTrips(supabase, companyId, {
+        from: (args.from as string) || undefined,
+        to: (args.to as string) || undefined,
+        status: status === 'draft' || status === 'booked' ? status : undefined,
+        employeeId: (args.employee_id as string) || undefined,
+      })
+      const { roundOre: round2 } = await import('@/lib/money')
+      const trips = rows.map((t) => ({
+        mileage_trip_id: t.id,
+        trip_date: t.trip_date,
+        vehicle_type: t.vehicle_type,
+        vehicle_registration: t.vehicle_registration,
+        odometer_start: t.odometer_start,
+        odometer_end: t.odometer_end,
+        distance_km: Number(t.distance_km),
+        from_location: t.from_location,
+        to_location: t.to_location,
+        purpose: t.purpose,
+        visited: t.visited,
+        is_round_trip: t.is_round_trip,
+        status: t.status,
+        journal_entry_id: t.journal_entry_id,
+        salary_run_id: t.salary_run_id,
+      }))
+      return {
+        trips,
+        count: trips.length,
+        total_km: round2(trips.reduce((sum, t) => sum + t.distance_km, 0)),
+        draft_km: round2(
+          trips.filter((t) => t.status === 'draft').reduce((sum, t) => sum + t.distance_km, 0)
+        ),
+      }
+    },
+  },
+  {
+    name: 'gnubok_log_mileage_trip',
+    title: 'Log Mileage Trip (Körjournal)',
+    catalogVisibility: 'search',
+    description: 'Stage a körjournal trip (date, route, km, purpose per Skatteverket requirements). Approve via gnubok_approve_pending_operation. The trip stays a draft until booked via gnubok_book_mileage_period.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        trip_date: { type: 'string', description: 'Trip date (YYYY-MM-DD)' },
+        vehicle_type: { type: 'string', enum: ['own_car', 'company_car_fossil', 'company_car_electric'], description: 'Vehicle type; drives the tax-free rate (default own_car, 25 kr/mil)' },
+        vehicle_registration: { type: 'string', description: 'Registration number (regnr)' },
+        odometer_start: { type: 'number', description: 'Odometer at start (km)' },
+        odometer_end: { type: 'number', description: 'Odometer at arrival (km)' },
+        distance_km: { type: 'number', description: 'Distance in km' },
+        from_location: { type: 'string', description: 'Start location' },
+        to_location: { type: 'string', description: 'Destination' },
+        purpose: { type: 'string', description: 'Business purpose (ärende)' },
+        visited: { type: 'string', description: 'Who/which company was visited' },
+        is_round_trip: { type: 'boolean', description: 'Distance covers the return leg too' },
+        employee_id: { type: 'string', description: 'Employee UUID when the trip belongs to an employee' },
+        notes: { type: 'string', description: 'Free-text note' },
+      },
+      required: ['trip_date', 'distance_km', 'from_location', 'to_location', 'purpose'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const tripDate = args.trip_date as string
+      const distanceKm = args.distance_km as number
+      if (typeof tripDate !== 'string' || !ISO_DATE_RE.test(tripDate)) {
+        throw new Error('trip_date must be YYYY-MM-DD')
+      }
+      if (typeof distanceKm !== 'number' || !(distanceKm > 0)) {
+        throw new Error('distance_km must be a positive number')
+      }
+      const odoStart = args.odometer_start as number | undefined
+      const odoEnd = args.odometer_end as number | undefined
+      if (odoStart != null && odoEnd != null && odoEnd <= odoStart) {
+        throw new Error('odometer_end must be greater than odometer_start')
+      }
+
+      const vehicleType = (args.vehicle_type as string) || 'own_car'
+      if (vehicleType !== 'own_car' && !(args.vehicle_registration as string | undefined)?.trim()) {
+        throw new Error('vehicle_registration is required for a förmånsbil trip (körjournal must identify the vehicle)')
+      }
+      // Preview the tax-free allowance at the schablon rate; non-fatal if the
+      // payroll config year is missing.
+      let approxAmount: number | undefined
+      try {
+        const { loadPayrollConfig } = await import('@/lib/salary/payroll-config')
+        const { ratePerMil } = await import('@/lib/mileage/mileage-service')
+        const { roundOre } = await import('@/lib/money')
+        const config = await loadPayrollConfig(supabase, Number(tripDate.slice(0, 4)))
+        approxAmount = roundOre((distanceKm / 10) * ratePerMil(config, vehicleType as never))
+      } catch {
+        approxAmount = undefined
+      }
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'log_mileage_trip',
+        `Körjournal: ${args.from_location} till ${args.to_location} ${tripDate} (${distanceKm} km)`,
+        {
+          trip_date: tripDate,
+          vehicle_type: vehicleType,
+          vehicle_registration: args.vehicle_registration ?? null,
+          odometer_start: odoStart ?? null,
+          odometer_end: odoEnd ?? null,
+          distance_km: distanceKm,
+          from_location: args.from_location,
+          to_location: args.to_location,
+          purpose: args.purpose,
+          visited: args.visited ?? null,
+          is_round_trip: args.is_round_trip === true,
+          employee_id: args.employee_id ?? null,
+          notes: args.notes ?? null,
+        },
+        {
+          trip_date: tripDate,
+          route: `${args.from_location} → ${args.to_location}`,
+          distance_km: distanceKm,
+          purpose: args.purpose,
+          vehicle_type: vehicleType,
+          ...(approxAmount != null ? { tax_free_allowance_sek: approxAmount } : {}),
+        },
+        actor,
+        {
+          description: 'Once approved, the trip is a draft in the körjournal. Book the period via gnubok_book_mileage_period.',
+          tool: 'gnubok_book_mileage_period',
+        },
+      )
+    },
+  },
+  {
+    name: 'gnubok_book_mileage_period',
+    title: 'Book Mileage Period (Milersättning)',
+    catalogVisibility: 'search',
+    description: 'Stage booking of all draft körjournal trips in a date range as one milersättning verifikat: debit 7331 at the tax-free schablon rate, credit 2820/2893/1930. Approve via gnubok_approve_pending_operation. Call gnubok_list_mileage_trips first.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        from: { type: 'string', description: 'Period start (YYYY-MM-DD)' },
+        to: { type: 'string', description: 'Period end (YYYY-MM-DD)' },
+        entry_date: { type: 'string', description: 'Verifikat date (YYYY-MM-DD); must be in an open period' },
+        counter_account: { type: 'string', enum: ['2820', '2893', '1930'], description: 'Credit side: 2820 skuld till anställda (default), 2893 avräkning aktieägare, 1930 when already paid out from bank' },
+        employee_id: { type: 'string', description: 'Only book trips for this employee UUID' },
+      },
+      required: ['from', 'to', 'entry_date'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    async execute(args, companyId, userId, supabase, actor) {
+      const from = args.from as string
+      const to = args.to as string
+      const entryDate = args.entry_date as string
+      for (const [label, value] of [['from', from], ['to', to], ['entry_date', entryDate]] as const) {
+        if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) {
+          throw new Error(`${label} must be YYYY-MM-DD`)
+        }
+      }
+      if (from > to) throw new Error('from must be <= to')
+      if (from.slice(0, 4) !== to.slice(0, 4)) {
+        throw new Error('Schablon rates are per calendar year: book one year at a time')
+      }
+      const counterAccount = (args.counter_account as string) || '2820'
+
+      // Read-only preflight: aggregate the draft trips so the approver sees
+      // exactly what would be booked. The commit path re-reads atomically.
+      const { listTrips, summarizeTrips } = await import('@/lib/mileage/mileage-service')
+      const { loadPayrollConfig } = await import('@/lib/salary/payroll-config')
+      const { roundOre } = await import('@/lib/money')
+      const trips = await listTrips(supabase, companyId, {
+        from, to, status: 'draft',
+        employeeId: (args.employee_id as string) || undefined,
+      })
+      if (trips.length === 0) {
+        throw new Error('No unbooked trips in the selected period. Log trips first via gnubok_log_mileage_trip.')
+      }
+      if (new Set(trips.map((t) => t.employee_id ?? 'unassigned')).size > 1) {
+        throw new Error('The period spans several employees. Book per employee by passing employee_id (BFL motpart traceability).')
+      }
+      const config = await loadPayrollConfig(supabase, Number(to.slice(0, 4)))
+      const summaries = summarizeTrips(trips, config)
+      const totalAmount = roundOre(summaries.reduce((sum, s) => sum + s.amount, 0))
+
+      return stagePendingOperation(
+        supabase, companyId, userId, 'book_mileage_period',
+        `Bokför milersättning ${from} till ${to}: ${totalAmount} kr (${trips.length} resor)`,
+        {
+          from, to,
+          entry_date: entryDate,
+          counter_account: counterAccount,
+          // Freeze the previewed trip set: the commit fails if the drafts in
+          // range change between staging and approval.
+          trip_ids: trips.map((t) => t.id),
+          ...(args.employee_id ? { employee_id: args.employee_id } : {}),
+        },
+        {
+          trip_count: trips.length,
+          total_amount: totalAmount,
+          debit_account: '7331',
+          credit_account: counterAccount,
+          summaries: summaries.map((s) => ({
+            vehicle_type: s.vehicle_type,
+            total_mil: s.total_mil,
+            rate_per_mil: s.rate_per_mil,
+            amount: s.amount,
+          })),
+        },
+        actor,
+        undefined,
+        { dateForPeriodCheck: entryDate },
+      )
+    },
+  },
+  {
     name: 'gnubok_list_employees',
     title: 'List Employees',
     description: 'List employees for the active company. Personnummer is returned masked as personnummer_masked (YYYYMMDD-XXXX).',
