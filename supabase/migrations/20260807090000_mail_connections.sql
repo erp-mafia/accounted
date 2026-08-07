@@ -1,3 +1,9 @@
+-- pg-test: skip (reconciliation only: this DDL was already applied to prod
+-- out-of-band on 2026-08-07 and recovered byte-identical from
+-- supabase_migrations.schema_migrations; the file exists so Supabase
+-- branching stops failing on the orphaned version and will never re-run.
+-- The mail-hunt feature branch that owns this schema must ship the real
+-- pg-real coverage for the trigger and RLS.)
 CREATE TABLE IF NOT EXISTS public.mail_connections (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
