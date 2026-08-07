@@ -75,6 +75,27 @@ async function seedSandboxUser(settingsCreatedAt?: string): Promise<{
      VALUES ($1, $2, $3, 'manual', 'marked_sent', now(), '2033-12-31')`,
     [companyId, userId, invoiceId],
   )
+  // An API key with the SoD acknowledgement set: sod_acknowledged_by is a
+  // plain NO ACTION FK to auth.users that blocked teardown for every keyed
+  // sandbox until 20260807170000 deletes the keys explicitly.
+  await getPool().query(
+    `INSERT INTO public.api_keys
+       (user_id, company_id, key_hash, key_prefix, sod_acknowledged_by, sod_acknowledged_at)
+     VALUES ($1, $2, $3, 'gnubok_sk_pgtest', $1, now())`,
+    [userId, companyId, randomUUID()],
+  )
+  // A WORM retag-log row (dimension_retag_log_immutable raises on DELETE
+  // outside the teardown bypass).
+  const { rows: lineRows } = await getPool().query<{ id: string }>(
+    `SELECT id FROM public.journal_entry_lines WHERE journal_entry_id = $1 LIMIT 1`,
+    [entryId],
+  )
+  await getPool().query(
+    `INSERT INTO public.dimension_retag_log
+       (company_id, journal_entry_id, line_id, old_dimensions, new_dimensions, reason)
+     VALUES ($1, $2, $3, '{}', '{"1":"BUTIK"}', 'Sandbox cleanup test retag')`,
+    [companyId, entryId, lineRows[0]!.id],
+  )
   return { userId, companyId, entryId }
 }
 
