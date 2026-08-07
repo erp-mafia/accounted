@@ -191,6 +191,77 @@ describe('sandbox cleanup RPCs (pg)', () => {
     }
   })
 
+  it('company_settings.is_sandbox is write-once in both directions', async () => {
+    const real = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.company_settings (user_id, company_id, is_sandbox)
+       VALUES ($1, $2, false)`,
+      [real.userId, real.companyId],
+    )
+    await expect(
+      getPool().query(
+        `UPDATE public.company_settings SET is_sandbox = true WHERE company_id = $1`,
+        [real.companyId],
+      ),
+    ).rejects.toThrow(/write-once/i)
+
+    const sandbox = await seedSandboxUser()
+    await expect(
+      getPool().query(
+        `UPDATE public.company_settings SET is_sandbox = false WHERE company_id = $1`,
+        [sandbox.companyId],
+      ),
+    ).rejects.toThrow(/write-once/i)
+    // Other columns stay updatable.
+    await getPool().query(
+      `UPDATE public.company_settings SET is_sandbox = is_sandbox, company_name = 'Still Updatable'
+       WHERE company_id = $1`,
+      [real.companyId],
+    )
+    await getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [sandbox.userId])
+  })
+
+  it('the orphan sweep cannot silently delete an anonymous user who has bookkeeping but no settings row', async () => {
+    if (!(await hasIsAnonymousColumn())) return
+
+    const userId = await insertAnonymousAuthUser('2000-01-03T00:00:00Z')
+    const companyId = randomUUID()
+    await getPool().query(
+      `INSERT INTO public.companies (id, name, entity_type, created_by)
+       VALUES ($1, 'Orphan With Books', 'enskild_firma', $2)`,
+      [companyId, userId],
+    )
+    const { rows: fpRows } = await getPool().query<{ id: string }>(
+      `INSERT INTO public.fiscal_periods (user_id, company_id, name, period_start, period_end)
+       VALUES ($1, $2, 'Orphan 2026', '2026-01-01', '2026-12-31') RETURNING id`,
+      [userId, companyId],
+    )
+    await insertPostedJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId: fpRows[0]!.id,
+    })
+
+    const { rows } = await getPool().query<{
+      summary: { cleaned: number; failed: number; orphans_removed: number }
+    }>(`SELECT public.cleanup_expired_sandbox_users(24, 25) AS summary`)
+
+    // The immutability triggers fire with NO bypass flag set in the orphan
+    // loop, so the deletion fails loudly and the user survives.
+    expect(await authUserExists(userId)).toBe(true)
+    expect(rows[0]!.summary.failed).toBeGreaterThanOrEqual(1)
+
+    // Clean up via the sanctioned teardown: give the company a sandbox
+    // settings row (INSERT is allowed; only flips are blocked).
+    await getPool().query(
+      `INSERT INTO public.company_settings (user_id, company_id, is_sandbox)
+       VALUES ($1, $2, true)`,
+      [userId, companyId],
+    )
+    await getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [userId])
+    expect(await authUserExists(userId)).toBe(false)
+  })
+
   it('is executable by service_role only', async () => {
     const { rows } = await getPool().query<{
       svc_user: boolean
