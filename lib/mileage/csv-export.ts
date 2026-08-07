@@ -9,6 +9,7 @@ import type { MileageTrip } from '@/types'
 
 const HEADERS = [
   'Datum',
+  'Förare',
   'Fordon',
   'Registreringsnummer',
   'Mätarställning start',
@@ -31,7 +32,13 @@ const VEHICLE_LABELS: Record<MileageTrip['vehicle_type'], string> = {
 
 function csvField(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === '') return ''
-  const text = String(value)
+  let text = String(value)
+  // Formula-injection guard (OWASP CSV injection): user-entered text starting
+  // with a formula trigger would execute when the export opens in Excel.
+  // Neutralize with a leading apostrophe; spreadsheet apps hide it.
+  if (/^[=+@\t\r-]/.test(text)) {
+    text = `'${text}`
+  }
   if (/[";\n\r]/.test(text)) {
     return `"${text.replace(/"/g, '""')}"`
   }
@@ -40,11 +47,13 @@ function csvField(value: string | number | null | undefined): string {
 
 export function mileageTripsToCsv(
   trips: MileageTrip[],
-  voucherLabels: Map<string, string> = new Map()
+  voucherLabels: Map<string, string> = new Map(),
+  driverLabels: Map<string, string> = new Map()
 ): string {
   const rows = trips.map((trip) =>
     [
       trip.trip_date,
+      trip.employee_id ? (driverLabels.get(trip.employee_id) ?? '') : '',
       VEHICLE_LABELS[trip.vehicle_type],
       trip.vehicle_registration,
       trip.odometer_start,

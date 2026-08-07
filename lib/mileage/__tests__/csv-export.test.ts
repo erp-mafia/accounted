@@ -34,14 +34,33 @@ describe('mileageTripsToCsv', () => {
   it('starts with a UTF-8 BOM and the Swedish header row', () => {
     const csv = mileageTripsToCsv([])
     expect(csv.charCodeAt(0)).toBe(0xfeff)
-    expect(csv).toContain('Datum;Fordon;Registreringsnummer')
+    expect(csv).toContain('Datum;Förare;Fordon;Registreringsnummer')
   })
 
   it('renders decimal comma, odometer readings and status labels', () => {
     const csv = mileageTripsToCsv([trip({})])
     const row = csv.split('\r\n')[1]
-    expect(row).toContain('2026-05-10;Egen bil;ABC123;1000;1032;32,3;Kontoret;Kunden')
+    expect(row).toContain('2026-05-10;;Egen bil;ABC123;1000;1032;32,3;Kontoret;Kunden')
     expect(row).toContain('Utkast')
+  })
+
+  it('names the driver for employee-attributed trips', () => {
+    const csv = mileageTripsToCsv(
+      [trip({ employee_id: 'emp-1' })],
+      new Map(),
+      new Map([['emp-1', 'Anna Andersson']])
+    )
+    expect(csv.split('\r\n')[1]).toContain('2026-05-10;Anna Andersson;Egen bil')
+  })
+
+  it('neutralizes formula-injection triggers in user text', () => {
+    const csv = mileageTripsToCsv([
+      trip({ purpose: '=HYPERLINK("http://evil","x")', from_location: '+SUM(A1)', visited: '@cmd' }),
+    ])
+    const row = csv.split('\r\n')[1]
+    expect(row).toContain(`'=HYPERLINK`)
+    expect(row).toContain(`'+SUM(A1)`)
+    expect(row).toContain(`'@cmd`)
   })
 
   it('quotes fields containing separators and escapes quotes', () => {

@@ -232,39 +232,77 @@ export async function bookMileagePeriod(
     if (employee) motpart = `, ${employee.first_name} ${employee.last_name}`
   }
 
-  const entry = await createJournalEntry(supabase, companyId, userId, {
-    fiscal_period_id: period.period_id,
-    entry_date: params.entryDate,
-    description: `Milersättning ${params.from} till ${params.to} (${trips.length} resor, ${totalMil} mil${motpart})`,
-    source_type: 'manual',
-    lines: [
-      ...summaries.map((s) => ({
-        account_number: MILEAGE_TAXFREE_ACCOUNT,
-        debit_amount: s.amount,
-        credit_amount: 0,
-        line_description: `Milersättning ${VEHICLE_TYPE_LABELS[s.vehicle_type]}: ${s.total_mil} mil × ${s.rate_per_mil} kr`,
-      })),
-      {
-        account_number: params.counterAccount,
-        debit_amount: 0,
-        credit_amount: totalAmount,
-        line_description: 'Milersättning att utbetala',
-      },
-    ],
-  })
-
+  // Claim the trips BEFORE creating the verifikat: the draft→booked CAS is
+  // what makes a concurrent second booking (double-click, retry, two users)
+  // lose the race instead of producing a duplicate verifikat for the same
+  // trips. A partially lost race (someone claimed a subset first) aborts and
+  // reverts rather than booking a set nobody previewed.
   const tripIds = trips.map((t) => t.id)
-  const { data: stamped, error: stampError } = await supabase
+  const { data: claimed, error: claimError } = await supabase
     .from('mileage_trips')
-    .update({ status: 'booked', journal_entry_id: entry.id })
+    .update({ status: 'booked' })
     .eq('company_id', companyId)
     .eq('status', 'draft')
     .in('id', tripIds)
     .select('id')
 
-  if (stampError || !stamped || stamped.length !== tripIds.length) {
-    // The verifikat exists and is correct; surface the partial stamp so the
-    // caller can warn instead of silently leaving trips re-bookable.
+  if (claimError) {
+    throw new Error(`Failed to claim mileage trips: ${claimError.message}`)
+  }
+  const claimedIds = (claimed ?? []).map((row) => row.id as string)
+  const revertClaim = async () => {
+    if (claimedIds.length === 0) return
+    await supabase
+      .from('mileage_trips')
+      .update({ status: 'draft' })
+      .eq('company_id', companyId)
+      .eq('status', 'booked')
+      .is('journal_entry_id', null)
+      .in('id', claimedIds)
+  }
+  if (claimedIds.length !== tripIds.length) {
+    await revertClaim()
+    return { ok: false, code: 'NO_TRIPS' }
+  }
+
+  let entry
+  try {
+    entry = await createJournalEntry(supabase, companyId, userId, {
+      fiscal_period_id: period.period_id,
+      entry_date: params.entryDate,
+      description: `Milersättning ${params.from} till ${params.to} (${trips.length} resor, ${totalMil} mil${motpart})`,
+      source_type: 'manual',
+      lines: [
+        ...summaries.map((s) => ({
+          account_number: MILEAGE_TAXFREE_ACCOUNT,
+          debit_amount: s.amount,
+          credit_amount: 0,
+          line_description: `Milersättning ${VEHICLE_TYPE_LABELS[s.vehicle_type]}: ${s.total_mil} mil × ${s.rate_per_mil} kr`,
+        })),
+        {
+          account_number: params.counterAccount,
+          debit_amount: 0,
+          credit_amount: totalAmount,
+          line_description: 'Milersättning att utbetala',
+        },
+      ],
+    })
+  } catch (err) {
+    await revertClaim()
+    throw err
+  }
+
+  const { data: linked, error: linkError } = await supabase
+    .from('mileage_trips')
+    .update({ journal_entry_id: entry.id })
+    .eq('company_id', companyId)
+    .eq('status', 'booked')
+    .in('id', claimedIds)
+    .select('id')
+
+  if (linkError || !linked || linked.length !== claimedIds.length) {
+    // The verifikat exists and the trips are booked, but some rows lost the
+    // entry link. Surface loudly so the körjournal can be repaired.
     return { ok: false, code: 'STAMP_FAILED', journalEntryId: entry.id }
   }
 

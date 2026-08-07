@@ -142,15 +142,23 @@ describe('bookMileagePeriod', () => {
     counterAccount: '2820' as const,
   }
 
-  function stampSupabase(stampedIds: string[]) {
+  // Queued mock: each .select() call consumes the next result (claim first,
+  // then the journal_entry_id link). The revert path awaits the chain without
+  // .select(), so the chain itself is thenable.
+  function stampSupabase(selectResults: string[][]) {
+    const queue = [...selectResults]
     const chain: Record<string, unknown> = {}
     chain.update = vi.fn(() => chain)
     chain.eq = vi.fn(() => chain)
     chain.in = vi.fn(() => chain)
-    chain.select = vi.fn(() =>
-      Promise.resolve({ data: stampedIds.map((id) => ({ id })), error: null })
-    )
-    return { from: vi.fn(() => chain) }
+    chain.is = vi.fn(() => chain)
+    chain.select = vi.fn(() => {
+      const ids = queue.shift() ?? []
+      return Promise.resolve({ data: ids.map((id) => ({ id })), error: null })
+    })
+    chain.then = (resolve: (v: unknown) => unknown) =>
+      Promise.resolve({ data: null, error: null }).then(resolve)
+    return { from: vi.fn(() => chain), chain }
   }
 
   it('returns NO_TRIPS when the period has no drafts', async () => {
@@ -161,6 +169,21 @@ describe('bookMileagePeriod', () => {
       'user-1',
       params
     )
+    expect(result).toEqual({ ok: false, code: 'NO_TRIPS' })
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('loses a concurrent race cleanly: partial claim reverts and books nothing', async () => {
+    vi.mocked(fetchAllRows).mockResolvedValue([trip({ id: 't1' }), trip({ id: 't2' })])
+    vi.mocked(resolvePeriodStatusForDate).mockResolvedValue({
+      status: 'open',
+      period_id: 'period-1',
+    } as never)
+    vi.mocked(loadPayrollConfig).mockResolvedValue(CONFIG)
+
+    // Another booking claimed t2 first: our claim only gets t1.
+    const supabase = stampSupabase([['t1']])
+    const result = await bookMileagePeriod(supabase as never, 'company-1', 'user-1', params)
     expect(result).toEqual({ ok: false, code: 'NO_TRIPS' })
     expect(createJournalEntry).not.toHaveBeenCalled()
   })
@@ -213,7 +236,7 @@ describe('bookMileagePeriod', () => {
       voucher_series: 'A',
     } as never)
 
-    const supabase = stampSupabase(['t1', 't2'])
+    const supabase = stampSupabase([['t1', 't2'], ['t1', 't2']])
     const result = await bookMileagePeriod(supabase as never, 'company-1', 'user-1', params)
 
     expect(result).toMatchObject({
@@ -236,7 +259,7 @@ describe('bookMileagePeriod', () => {
     expect(Math.round(totalDebit * 100) / 100).toBe(credit?.credit_amount)
   })
 
-  it('surfaces STAMP_FAILED with the entry id when stamping mismatches', async () => {
+  it('surfaces STAMP_FAILED with the entry id when the entry link mismatches', async () => {
     vi.mocked(fetchAllRows).mockResolvedValue([
       trip({ id: 't1' }),
       trip({ id: 't2' }),
@@ -248,8 +271,28 @@ describe('bookMileagePeriod', () => {
     vi.mocked(loadPayrollConfig).mockResolvedValue(CONFIG)
     vi.mocked(createJournalEntry).mockResolvedValue({ id: 'je-1' } as never)
 
-    const supabase = stampSupabase(['t1'])
+    // Claim succeeds for both trips; the journal_entry_id backfill only lands
+    // on one row.
+    const supabase = stampSupabase([['t1', 't2'], ['t1']])
     const result = await bookMileagePeriod(supabase as never, 'company-1', 'user-1', params)
     expect(result).toEqual({ ok: false, code: 'STAMP_FAILED', journalEntryId: 'je-1' })
+  })
+
+  it('reverts the claim when verifikat creation fails', async () => {
+    vi.mocked(fetchAllRows).mockResolvedValue([trip({ id: 't1' })])
+    vi.mocked(resolvePeriodStatusForDate).mockResolvedValue({
+      status: 'open',
+      period_id: 'period-1',
+    } as never)
+    vi.mocked(loadPayrollConfig).mockResolvedValue(CONFIG)
+    vi.mocked(createJournalEntry).mockRejectedValue(new Error('period locked'))
+
+    const supabase = stampSupabase([['t1']])
+    await expect(
+      bookMileagePeriod(supabase as never, 'company-1', 'user-1', params)
+    ).rejects.toThrow('period locked')
+    // Claim + revert both went through the update chain.
+    expect(supabase.chain.update).toHaveBeenCalledWith({ status: 'booked' })
+    expect(supabase.chain.update).toHaveBeenCalledWith({ status: 'draft' })
   })
 })

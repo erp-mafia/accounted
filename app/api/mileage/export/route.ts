@@ -29,7 +29,22 @@ export const GET = withRouteContext('mileage.export', async (request, { supabase
     }
   }
 
-  const csv = mileageTripsToCsv(trips, voucherLabels)
+  // Driver attribution (BFL 5 kap 6-7 §): name the employee per trip so a
+  // multi-employee körjournal stays attributable in the exported underlag.
+  const employeeIds = [...new Set(trips.map((t) => t.employee_id).filter(Boolean))] as string[]
+  const driverLabels = new Map<string, string>()
+  if (employeeIds.length > 0) {
+    const { data: employees } = await supabase
+      .from('employees')
+      .select('id, first_name, last_name')
+      .eq('company_id', companyId)
+      .in('id', employeeIds)
+    for (const employee of employees || []) {
+      driverLabels.set(employee.id, `${employee.first_name} ${employee.last_name}`)
+    }
+  }
+
+  const csv = mileageTripsToCsv(trips, voucherLabels, driverLabels)
   const suffix = [from, to].filter(Boolean).join('_')
   return new NextResponse(csv, {
     headers: {
