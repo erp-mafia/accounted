@@ -6,7 +6,18 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 /**
  * GET /api/sandbox/cleanup/cron: daily 04:00 UTC.
  * Removes expired sandbox users (>24h old).
+ *
+ * One teardown costs ~3s on prod (the auth.users delete fans out over ~250
+ * FK triggers), so the run is bounded: BATCH_LIMIT users per night, sized to
+ * finish inside both the RPC's 290s statement_timeout (migration
+ * 20260807150000) and this route's maxDuration. The nightly intake is a
+ * fraction of this; a backlog drains over a few nights instead of timing
+ * out and rolling back wholesale.
  */
+export const maxDuration = 300
+
+const BATCH_LIMIT = 60
+
 export const GET = withCronContext('cron.sandbox_cleanup', async (_request, ctx) => {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -22,6 +33,7 @@ export const GET = withCronContext('cron.sandbox_cleanup', async (_request, ctx)
 
   const { data, error } = await supabase.rpc('cleanup_expired_sandbox_users', {
     p_max_age_hours: 24,
+    p_limit: BATCH_LIMIT,
   })
 
   if (error) {

@@ -27,13 +27,19 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(() => ({ rpc: h.rpc })),
 }))
 
-import { GET } from '../route'
+import { GET, maxDuration } from '../route'
 
 function cronRequest(): Request {
   return new Request('http://localhost:3000/api/sandbox/cleanup/cron')
 }
 
 describe('GET /api/sandbox/cleanup/cron', () => {
+  it('reserves enough function time for a full batch', () => {
+    // 60 users at ~3s each must fit inside the route budget and the RPC's
+    // 290s statement_timeout (migration 20260807150000).
+    expect(maxDuration).toBe(300)
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co'
@@ -51,6 +57,7 @@ describe('GET /api/sandbox/cleanup/cron', () => {
 
     expect(h.rpc).toHaveBeenCalledWith('cleanup_expired_sandbox_users', {
       p_max_age_hours: 24,
+      p_limit: 60,
     })
     expect(res.status).toBe(200)
     expect(body).toEqual({ success: true, cleaned: 3, failed: 0, orphans_removed: 2 })

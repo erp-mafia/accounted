@@ -352,6 +352,21 @@ describe('sandbox cleanup RPCs (pg)', () => {
     }
   })
 
+  it('cleanup_expired_sandbox_users carries its own statement_timeout', async () => {
+    // PostgREST sessions inherit authenticator's 8s statement_timeout while
+    // one sandbox teardown costs ~3s, so without a function-local override
+    // the nightly batch times out and rolls back wholesale (migration
+    // 20260807150000, same pattern as undo_sie_import).
+    const { rows } = await getPool().query<{ proconfig: string[] | null }>(
+      `SELECT p.proconfig
+       FROM pg_proc p
+       JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.proname = 'cleanup_expired_sandbox_users'`,
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.proconfig ?? []).toContain('statement_timeout=290s')
+  })
+
   it('is executable by service_role only', async () => {
     const { rows } = await getPool().query<{
       svc_user: boolean
