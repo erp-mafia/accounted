@@ -1712,7 +1712,14 @@ export async function finalizeImportRecord(
     result.success &&
     result.journalEntriesCreated === 0 &&
     !result.openingBalanceEntryId
-  const fileHadNoVouchers = documentation?.vouchers.total === 0
+  // The parsed count alone can't prove the year was empty: a separator or
+  // encoding mismatch can swallow every #VER block without a parse error
+  // (the parser only warns). Cross-check the raw content; a file that
+  // declares #VER but parsed to 0 vouchers must keep failing, or real
+  // affärshändelser would silently never be bokförda (BFL 5 kap).
+  const rawDeclaresVouchers = /^\s*#VER\b/m.test(fileContent)
+  const fileHadNoVouchers =
+    documentation?.vouchers.total === 0 && !rawDeclaresVouchers
   if (noEntriesCreated && fileHadNoVouchers) {
     result.warnings.push(
       'SIE-filen innehåller inga verifikationer för räkenskapsåret: inget ' +

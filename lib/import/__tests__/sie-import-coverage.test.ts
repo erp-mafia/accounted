@@ -268,6 +268,36 @@ describe('finalizeImportRecord: 0-entry downgrade', () => {
     expect(result.warnings.join(' ')).toMatch(/inga verifikationer/i)
   })
 
+  it('still flips to failed when raw content declares #VER but parsing yielded 0 vouchers', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    const result: ImportResult = {
+      success: true,
+      importId: 'imp-swallowed',
+      fiscalPeriodId: 'fp-2026',
+      openingBalanceEntryId: null,
+      journalEntriesCreated: 0,
+      journalEntryIds: [],
+      errors: [],
+      warnings: ['3 #VER-rader hittades men inga verifikationer kunde tolkas: kontrollera fältavskiljare och teckenkodning'],
+      replacedPriorImport: null,
+    }
+
+    // A truncated or mis-decoded file: the parser saw no vouchers
+    // (documentation says total 0) but the raw content declares #VER.
+    await finalizeImportRecord(
+      supabase as unknown as SupabaseClient,
+      'imp-swallowed',
+      'company-1',
+      result,
+      '#FLAGGA 0\n#VER "A" "1" 20260115 "Inköp"\n{\n}\n',
+      makeDocumentation(0),
+    )
+
+    expect(result.success).toBe(false)
+    expect(result.errors.join(' ')).toMatch(/0 verifikationer/i)
+  })
+
   it('still flips to failed when the file had vouchers but none were imported', async () => {
     const { supabase } = createQueuedMockSupabase()
 
