@@ -3223,6 +3223,11 @@ export const BookMileagePeriodSchema = z
     employee_id: uuid.optional(),
   })
   .refine((p) => p.from <= p.to, { message: 'Ogiltigt datumintervall' })
+  // Schablon rates are per calendar year: a cross-year period would book
+  // every trip at one year's rate.
+  .refine((p) => p.from.slice(0, 4) === p.to.slice(0, 4), {
+    message: 'Milersättning bokförs per kalenderår: dela upp perioden per år',
+  })
 
 export const MileageSalaryPushSchema = z
   .object({
@@ -3233,3 +3238,6 @@ export const MileageSalaryPushSchema = z
     include_unassigned: z.boolean().default(true),
   })
   .refine((p) => p.from <= p.to, { message: 'Ogiltigt datumintervall' })
+  .refine((p) => p.from.slice(0, 4) === p.to.slice(0, 4), {
+    message: 'Milersättning bokförs per kalenderår: dela upp perioden per år',
+  })

@@ -123,6 +123,19 @@ export async function createTrip(
   if ((input.vehicle_type ?? 'own_car') !== 'own_car' && !input.vehicle_registration?.trim()) {
     throw new Error('Ange registreringsnummer för förmånsbilen')
   }
+  // The FK on employee_id is not company-scoped; without this check a
+  // cross-company employee UUID would attach silently.
+  if (input.employee_id) {
+    const { data: employee } = await supabase
+      .from('employees')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('id', input.employee_id)
+      .maybeSingle()
+    if (!employee) {
+      throw new Error('Den anställda hittades inte i företaget')
+    }
+  }
   const { data, error } = await supabase
     .from('mileage_trips')
     .insert({
@@ -134,7 +147,8 @@ export async function createTrip(
       vehicle_registration: input.vehicle_registration?.trim() || null,
       odometer_start: input.odometer_start ?? null,
       odometer_end: input.odometer_end ?? null,
-      distance_km: round2(input.distance_km),
+      // The column is numeric(10,1): round to what will actually be stored.
+      distance_km: Math.round(input.distance_km * 10) / 10,
       from_location: input.from_location.trim(),
       to_location: input.to_location.trim(),
       purpose: input.purpose.trim(),
@@ -164,7 +178,13 @@ export type BookMileageResult =
     }
   | {
       ok: false
-      code: 'NO_TRIPS' | 'MIXED_EMPLOYEES' | 'PERIOD_NOT_OPEN' | 'STAMP_FAILED'
+      code:
+        | 'NO_TRIPS'
+        | 'MIXED_EMPLOYEES'
+        | 'PERIOD_NOT_OPEN'
+        | 'CLAIM_LOST'
+        | 'TRIPS_CHANGED'
+        | 'STAMP_FAILED'
       journalEntryId?: string
     }
 
@@ -187,8 +207,36 @@ export async function bookMileagePeriod(
     entryDate: string
     employeeId?: string
     createdVia?: 'manual' | 'mcp'
+    /**
+     * When set (staged MCP approvals), the commit only proceeds if the
+     * current draft-trip set matches exactly what was previewed at staging
+     * time: otherwise the approved amount and the booked amount could drift.
+     */
+    expectedTripIds?: string[]
   }
 ): Promise<BookMileageResult> {
+  // Rates are per calendar year; a period spanning a year boundary would book
+  // every trip at one year's schablon. Callers book per year (schema-enforced
+  // in the API; belt-and-braces here for direct service callers).
+  if (params.from.slice(0, 4) !== params.to.slice(0, 4)) {
+    throw new Error('Milersättning bokförs per kalenderår: dela upp perioden per år')
+  }
+
+  // Release orphaned claims from a crashed earlier booking (status booked,
+  // no verifikat, no salary run) so their trips become bookable again. The
+  // 5-minute age guard keeps a concurrent in-flight booking's claim safe.
+  const staleBefore = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+  await supabase
+    .from('mileage_trips')
+    .update({ status: 'draft' })
+    .eq('company_id', companyId)
+    .eq('status', 'booked')
+    .is('journal_entry_id', null)
+    .is('salary_run_id', null)
+    .lt('updated_at', staleBefore)
+    .gte('trip_date', params.from)
+    .lte('trip_date', params.to)
+
   const trips = await listTrips(supabase, companyId, {
     from: params.from,
     to: params.to,
@@ -197,6 +245,16 @@ export async function bookMileagePeriod(
   })
   if (trips.length === 0) {
     return { ok: false, code: 'NO_TRIPS' }
+  }
+
+  if (params.expectedTripIds) {
+    const expected = new Set(params.expectedTripIds)
+    const actual = new Set(trips.map((t) => t.id))
+    const sameSet =
+      expected.size === actual.size && [...expected].every((id) => actual.has(id))
+    if (!sameSet) {
+      return { ok: false, code: 'TRIPS_CHANGED' }
+    }
   }
 
   // BFL 5 kap 6-7 §: the verifikat must identify its motpart. A single lump
@@ -213,7 +271,9 @@ export async function bookMileagePeriod(
     return { ok: false, code: 'PERIOD_NOT_OPEN' }
   }
 
-  const config = await loadPayrollConfig(supabase, new Date(params.to).getFullYear())
+  // Date-only strings parse as UTC midnight; getFullYear() reads local time
+  // and lands in the previous year for January dates in negative UTC offsets.
+  const config = await loadPayrollConfig(supabase, Number(params.to.slice(0, 4)))
   const summaries = summarizeTrips(trips, config)
   const totalAmount = round2(summaries.reduce((sum, s) => sum + s.amount, 0))
   const totalMil = round2(summaries.reduce((sum, s) => sum + s.total_mil, 0))
@@ -261,8 +321,10 @@ export async function bookMileagePeriod(
       .in('id', claimedIds)
   }
   if (claimedIds.length !== tripIds.length) {
+    // A concurrent booking claimed part of the set first: distinct from
+    // "nothing to book" so the caller can say "reload and retry".
     await revertClaim()
-    return { ok: false, code: 'NO_TRIPS' }
+    return { ok: false, code: 'CLAIM_LOST' }
   }
 
   let entry
@@ -321,7 +383,12 @@ export type PushToSalaryRunResult =
   | { ok: true; tripCount: number; totalAmount: number; summaries: MileagePeriodSummary[] }
   | {
       ok: false
-      code: 'NO_TRIPS' | 'RUN_NOT_FOUND' | 'RUN_NOT_EDITABLE' | 'EMPLOYEE_NOT_IN_RUN' | 'STAMP_FAILED'
+      code:
+        | 'NO_TRIPS'
+        | 'RUN_NOT_FOUND'
+        | 'RUN_NOT_EDITABLE'
+        | 'EMPLOYEE_NOT_IN_RUN'
+        | 'CLAIM_LOST'
     }
 
 /**
@@ -373,9 +440,39 @@ export async function pushMileageToSalaryRun(
   )
   if (trips.length === 0) return { ok: false, code: 'NO_TRIPS' }
 
-  const config = await loadPayrollConfig(supabase, new Date(params.to).getFullYear())
+  const config = await loadPayrollConfig(supabase, Number(params.to.slice(0, 4)))
   const summaries = summarizeTrips(trips, config)
   const totalAmount = round2(summaries.reduce((sum, s) => sum + s.amount, 0))
+
+  // Claim the trips BEFORE inserting the salary lines: a retry after a
+  // partial failure would otherwise insert the mileage_taxfree items twice
+  // for the same trips (double pay). A lost claim reverts and reports.
+  const tripIds = trips.map((t) => t.id)
+  const { data: claimed, error: claimError } = await supabase
+    .from('mileage_trips')
+    .update({ status: 'booked', salary_run_id: params.runId })
+    .eq('company_id', companyId)
+    .eq('status', 'draft')
+    .in('id', tripIds)
+    .select('id')
+  if (claimError) {
+    throw new Error(`Failed to claim mileage trips: ${claimError.message}`)
+  }
+  const claimedIds = (claimed ?? []).map((row) => row.id as string)
+  const revertClaim = async () => {
+    if (claimedIds.length === 0) return
+    await supabase
+      .from('mileage_trips')
+      .update({ status: 'draft', salary_run_id: null })
+      .eq('company_id', companyId)
+      .eq('status', 'booked')
+      .is('journal_entry_id', null)
+      .in('id', claimedIds)
+  }
+  if (claimedIds.length !== tripIds.length) {
+    await revertClaim()
+    return { ok: false, code: 'CLAIM_LOST' }
+  }
 
   const { error: itemError } = await supabase.from('salary_line_items').insert(
     summaries.map((s, index) => ({
@@ -394,22 +491,8 @@ export async function pushMileageToSalaryRun(
     }))
   )
   if (itemError) {
+    await revertClaim()
     throw new Error(`Failed to add mileage line items: ${itemError.message}`)
-  }
-
-  const { data: stamped, error: stampError } = await supabase
-    .from('mileage_trips')
-    .update({ status: 'booked', salary_run_id: params.runId })
-    .eq('company_id', companyId)
-    .eq('status', 'draft')
-    .in(
-      'id',
-      trips.map((t) => t.id)
-    )
-    .select('id')
-
-  if (stampError || !stamped || stamped.length !== trips.length) {
-    return { ok: false, code: 'STAMP_FAILED' }
   }
 
   return { ok: true, tripCount: trips.length, totalAmount, summaries }

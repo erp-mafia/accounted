@@ -41,6 +41,12 @@ export const POST = withRouteContext(
           { status: 400 }
         )
       }
+      if (result.code === 'CLAIM_LOST' || result.code === 'TRIPS_CHANGED') {
+        return NextResponse.json(
+          { error: 'Körjournalen ändrades samtidigt av en annan bokning. Ladda om och försök igen.' },
+          { status: 409 }
+        )
+      }
       // STAMP_FAILED: the verifikat exists but some trips could not be marked
       // as booked. Surface loudly so the user does not book the period twice.
       log.error('mileage stamp failed after verifikat creation', undefined, {

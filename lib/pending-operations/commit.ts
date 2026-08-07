@@ -4694,10 +4694,11 @@ async function commitLogMileageTrip(
       },
     }
   } catch (err) {
-    return {
-      error: err instanceof Error ? err.message : 'Failed to log mileage trip',
-      status: 500,
-    }
+    const message = err instanceof Error ? err.message : 'Failed to log mileage trip'
+    // Input-validation failures from the service are permanent for these
+    // params: 400 so agents fix the arguments instead of retrying blindly.
+    const isValidation = /registreringsnummer|hittades inte/i.test(message)
+    return { error: message, status: isValidation ? 400 : 500 }
   }
 }
 
@@ -4716,16 +4717,30 @@ async function commitBookMileagePeriod(
       counterAccount: (params.counter_account as never) || '2820',
       employeeId: (params.employee_id as string) || undefined,
       createdVia: 'mcp',
+      // Staged approvals freeze the trip set: what was previewed is exactly
+      // what may be booked; drift fails the commit instead of booking blind.
+      expectedTripIds: Array.isArray(params.trip_ids)
+        ? (params.trip_ids as string[])
+        : undefined,
     })
     if (!result.ok) {
       if (result.code === 'NO_TRIPS') {
         return { error: 'No unbooked trips in the selected period', status: 400 }
       }
+      if (result.code === 'MIXED_EMPLOYEES') {
+        return { error: 'The period spans several employees; book per employee via employee_id', status: 400 }
+      }
       if (result.code === 'PERIOD_NOT_OPEN') {
         return { error: 'The entry date falls in a closed or locked period', status: 400 }
       }
+      if (result.code === 'TRIPS_CHANGED' || result.code === 'CLAIM_LOST') {
+        return {
+          error: 'The körjournal changed since this booking was staged; stage it again to get a fresh preview',
+          status: 409,
+        }
+      }
       return {
-        error: `Voucher ${result.journalEntryId} was created but trips could not all be marked booked; review the körjournal before booking again`,
+        error: `Voucher ${result.journalEntryId} was created but trips could not all be linked; review the körjournal before booking again`,
         status: 500,
       }
     }

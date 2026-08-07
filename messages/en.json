@@ -6580,7 +6580,7 @@
     "delete_trip": "Delete trip",
     "all_months": "All months",
     "month_filter": "Filter by month",
-    "draft_summary": "{count} unbooked trips · {km} km",
+    "draft_summary": "{count, plural, =1 {1 unbooked trip} other {# unbooked trips}} · {km} km",
     "book_period": "Book mileage allowance",
     "export_csv": "Export CSV",
     "empty_title": "No trips yet",

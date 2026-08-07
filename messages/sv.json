@@ -6580,7 +6580,7 @@
     "delete_trip": "Ta bort resa",
     "all_months": "Alla månader",
     "month_filter": "Filtrera på månad",
-    "draft_summary": "{count} obokförda resor · {km} km",
+    "draft_summary": "{count, plural, =1 {1 obokförd resa} other {# obokförda resor}} · {km} km",
     "book_period": "Bokför milersättning",
     "export_csv": "Exportera CSV",
     "empty_title": "Inga resor ännu",

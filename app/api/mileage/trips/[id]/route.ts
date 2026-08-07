@@ -21,7 +21,7 @@ export const PATCH = withRouteContext<Params>(
 
     const { data: existing } = await supabase
       .from('mileage_trips')
-      .select('id, status')
+      .select('id, status, vehicle_type, vehicle_registration')
       .eq('company_id', companyId)
       .eq('id', id)
       .maybeSingle()
@@ -33,6 +33,20 @@ export const PATCH = withRouteContext<Params>(
       return NextResponse.json(
         { error: 'Resan är bokförd och kan inte ändras. Makulera verifikatet först.' },
         { status: 409 }
+      )
+    }
+
+    // Enforce the förmånsbil regnr rule on the EFFECTIVE row (partial update
+    // merged over the stored values), mirroring CreateMileageTripSchema.
+    const effectiveVehicleType = validation.data.vehicle_type ?? existing.vehicle_type
+    const effectiveRegistration =
+      validation.data.vehicle_registration !== undefined
+        ? validation.data.vehicle_registration
+        : existing.vehicle_registration
+    if (effectiveVehicleType !== 'own_car' && !effectiveRegistration?.trim()) {
+      return NextResponse.json(
+        { error: 'Ange registreringsnummer för förmånsbilen' },
+        { status: 400 }
       )
     }
 

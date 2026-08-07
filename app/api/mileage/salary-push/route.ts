@@ -41,13 +41,10 @@ export const POST = withRouteContext(
             { error: 'Inga obokförda resor i den valda perioden' },
             { status: 400 }
           )
-        case 'STAMP_FAILED':
+        case 'CLAIM_LOST':
           return NextResponse.json(
-            {
-              error:
-                'Lönerader lades till men alla resor kunde inte markeras som bokförda. Kontrollera körjournalen innan du lägger till milersättning igen.',
-            },
-            { status: 500 }
+            { error: 'Körjournalen ändrades samtidigt av en annan bokning. Ladda om och försök igen.' },
+            { status: 409 }
           )
       }
     }

@@ -10679,6 +10679,9 @@ export const tools: McpTool[] = [
         }
       }
       if (from > to) throw new Error('from must be <= to')
+      if (from.slice(0, 4) !== to.slice(0, 4)) {
+        throw new Error('Schablon rates are per calendar year: book one year at a time')
+      }
       const counterAccount = (args.counter_account as string) || '2820'
 
       // Read-only preflight: aggregate the draft trips so the approver sees
@@ -10707,6 +10710,9 @@ export const tools: McpTool[] = [
           from, to,
           entry_date: entryDate,
           counter_account: counterAccount,
+          // Freeze the previewed trip set: the commit fails if the drafts in
+          // range change between staging and approval.
+          trip_ids: trips.map((t) => t.id),
           ...(args.employee_id ? { employee_id: args.employee_id } : {}),
         },
         {

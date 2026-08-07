@@ -74,13 +74,20 @@ function emptyForm(): TripFormState {
 }
 
 function formFromTrip(trip: MileageTrip, keepDate: boolean): TripFormState {
+  // The create form takes ONE-WAY km with a round-trip toggle that doubles on
+  // save. The stored distance is always the full logged distance, so a copy
+  // of a round trip must present the halved (one-way) value or saving would
+  // double it again. Edit mode (keepDate) shows the stored total and never
+  // re-doubles.
+  const displayKm =
+    !keepDate && trip.is_round_trip ? Number(trip.distance_km) / 2 : Number(trip.distance_km)
   return {
     trip_date: keepDate ? trip.trip_date : today(),
     vehicle_type: trip.vehicle_type,
     vehicle_registration: trip.vehicle_registration ?? '',
     odometer_start: keepDate && trip.odometer_start != null ? String(trip.odometer_start) : '',
     odometer_end: keepDate && trip.odometer_end != null ? String(trip.odometer_end) : '',
-    distance_km: String(trip.distance_km),
+    distance_km: String(displayKm),
     from_location: trip.from_location,
     to_location: trip.to_location,
     purpose: trip.purpose,
@@ -113,15 +120,19 @@ export default function MileagePage() {
   const [booking, setBooking] = useState(false)
 
   const loadTrips = useCallback(async () => {
-    const res = await fetch('/api/mileage/trips')
-    if (!res.ok) {
+    try {
+      const res = await fetch('/api/mileage/trips')
+      if (!res.ok) {
+        toast({ title: t('load_error'), variant: 'destructive' })
+        return
+      }
+      const body = await res.json()
+      setTrips(body.data || [])
+    } catch {
       toast({ title: t('load_error'), variant: 'destructive' })
+    } finally {
       setLoading(false)
-      return
     }
-    const body = await res.json()
-    setTrips(body.data || [])
-    setLoading(false)
   }, [t, toast])
 
   useEffect(() => {
@@ -176,7 +187,8 @@ export default function MileagePage() {
       return
     }
     setSaving(true)
-    const payload = {
+    try {
+      const payload = {
       trip_date: form.trip_date,
       vehicle_type: form.vehicle_type,
       vehicle_registration: form.vehicle_registration.trim() || null,
@@ -192,21 +204,25 @@ export default function MileagePage() {
       is_round_trip: form.is_round_trip,
       notes: form.notes.trim() || null,
     }
-    const res = await fetch(editingId ? `/api/mileage/trips/${editingId}` : '/api/mileage/trips', {
-      method: editingId ? 'PATCH' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    setSaving(false)
-    if (!res.ok) {
-      const body = await res.json().catch(() => null)
-      const message = typeof body?.error === 'string' ? body.error : body?.error?.message
-      toast({ title: message || t('save_error'), variant: 'destructive' })
-      return
+      const res = await fetch(editingId ? `/api/mileage/trips/${editingId}` : '/api/mileage/trips', {
+        method: editingId ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        const message = typeof body?.error === 'string' ? body.error : body?.error?.message
+        toast({ title: message || t('save_error'), variant: 'destructive' })
+        return
+      }
+      setFormOpen(false)
+      toast({ title: editingId ? t('trip_updated') : t('trip_saved') })
+      await loadTrips()
+    } catch {
+      toast({ title: t('save_error'), variant: 'destructive' })
+    } finally {
+      setSaving(false)
     }
-    setFormOpen(false)
-    toast({ title: editingId ? t('trip_updated') : t('trip_saved') })
-    await loadTrips()
   }
 
   const deleteTrip = async (trip: MileageTrip) => {
@@ -230,34 +246,39 @@ export default function MileagePage() {
 
   const submitBook = async () => {
     setBooking(true)
-    const res = await fetch('/api/mileage/book', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from: bookFrom,
-        to: bookTo,
-        entry_date: bookEntryDate,
-        counter_account: counterAccount,
-      }),
-    })
-    const body = await res.json().catch(() => null)
-    setBooking(false)
-    if (!res.ok) {
-      const message = typeof body?.error === 'string' ? body.error : body?.error?.message
-      toast({ title: message || t('book_error'), variant: 'destructive' })
-      return
+    try {
+      const res = await fetch('/api/mileage/book', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: bookFrom,
+          to: bookTo,
+          entry_date: bookEntryDate,
+          counter_account: counterAccount,
+        }),
+      })
+      const body = await res.json().catch(() => null)
+      if (!res.ok) {
+        const message = typeof body?.error === 'string' ? body.error : body?.error?.message
+        toast({ title: message || t('book_error'), variant: 'destructive' })
+        return
+      }
+      setBookOpen(false)
+      toast({
+        title: t('booked_title', {
+          voucher: `${body.data.voucher_series ?? ''}${body.data.voucher_number ?? ''}`,
+        }),
+        description: t('booked_description', {
+          count: body.data.trip_count,
+          amount: formatCurrency(body.data.total_amount),
+        }),
+      })
+      await loadTrips()
+    } catch {
+      toast({ title: t('book_error'), variant: 'destructive' })
+    } finally {
+      setBooking(false)
     }
-    setBookOpen(false)
-    toast({
-      title: t('booked_title', {
-        voucher: `${body.data.voucher_series ?? ''}${body.data.voucher_number ?? ''}`,
-      }),
-      description: t('booked_description', {
-        count: body.data.trip_count,
-        amount: formatCurrency(body.data.total_amount),
-      }),
-    })
-    await loadTrips()
   }
 
   const exportHref = useMemo(() => {

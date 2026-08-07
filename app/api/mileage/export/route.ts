@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { ISO_DATE_RE } from '@/lib/invariants'
 import { listTrips } from '@/lib/mileage/mileage-service'
 import { mileageTripsToCsv } from '@/lib/mileage/csv-export'
 
@@ -11,6 +12,13 @@ export const GET = withRouteContext('mileage.export', async (request, { supabase
   const { searchParams } = new URL(request.url)
   const from = searchParams.get('from') || undefined
   const to = searchParams.get('to') || undefined
+  // Validated dates are also what the Content-Disposition filename is built
+  // from, so nothing user-controlled reaches the header unchecked.
+  for (const value of [from, to]) {
+    if (value !== undefined && !ISO_DATE_RE.test(value)) {
+      return NextResponse.json({ error: 'Ogiltigt datum (ÅÅÅÅ-MM-DD)' }, { status: 400 })
+    }
+  }
 
   const trips = await listTrips(supabase, companyId, { from, to })
   // Oldest first in the export: a körjournal reads chronologically.

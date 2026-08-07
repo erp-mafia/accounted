@@ -72,6 +72,23 @@ describe('POST /api/mileage/book', () => {
     expect(res.status).toBe(400)
   })
 
+  it('returns 400 for a period spanning calendar years', async () => {
+    authed()
+    const res = await POST(
+      postReq({ ...VALID_BODY, from: '2025-12-20', to: '2026-01-10', entry_date: '2026-01-10' }),
+      params
+    )
+    expect(res.status).toBe(400)
+    expect(bookMileagePeriod).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 when a concurrent booking claimed the trips first', async () => {
+    authed()
+    vi.mocked(bookMileagePeriod).mockResolvedValue({ ok: false, code: 'CLAIM_LOST' })
+    const res = await POST(postReq(VALID_BODY), params)
+    expect(res.status).toBe(409)
+  })
+
   it('returns 400 when the period spans several employees', async () => {
     authed()
     vi.mocked(bookMileagePeriod).mockResolvedValue({ ok: false, code: 'MIXED_EMPLOYEES' })

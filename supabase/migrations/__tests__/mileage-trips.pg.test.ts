@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { seedCompany } from '@/tests/pg/fixtures'
+import { insertPostedJournalEntry, seedCompany } from '@/tests/pg/fixtures'
 import { getPool, withUserContext } from '@/tests/pg/setup'
 
 /**
@@ -85,6 +85,49 @@ describe('mileage_trips retention trigger', () => {
       [tripId],
     )
     expect(res.rowCount).toBe(1)
+  })
+})
+
+describe('mileage_trips booked immutability (20260807113215)', () => {
+  it('blocks changing core fields on a booked trip', async () => {
+    const { companyId, userId } = await seedCompany()
+    const tripId = await insertTrip({ companyId, userId, status: 'booked' })
+    await expect(
+      getPool().query(`UPDATE public.mileage_trips SET distance_km = 999 WHERE id = $1`, [tripId]),
+    ).rejects.toThrow(/booked mileage trip/)
+  })
+
+  it('allows a notes-only edit on a booked trip', async () => {
+    const { companyId, userId } = await seedCompany()
+    const tripId = await insertTrip({ companyId, userId, status: 'booked' })
+    const res = await getPool().query(
+      `UPDATE public.mileage_trips SET notes = 'anteckning' WHERE id = $1`,
+      [tripId],
+    )
+    expect(res.rowCount).toBe(1)
+  })
+
+  it('allows reverting an UNLINKED claim back to draft', async () => {
+    const { companyId, userId } = await seedCompany()
+    const tripId = await insertTrip({ companyId, userId, status: 'booked' })
+    const res = await getPool().query(
+      `UPDATE public.mileage_trips SET status = 'draft' WHERE id = $1`,
+      [tripId],
+    )
+    expect(res.rowCount).toBe(1)
+  })
+
+  it('blocks unbooking a trip linked to a verifikat', async () => {
+    const { companyId, userId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertPostedJournalEntry({ companyId, userId, fiscalPeriodId })
+    const tripId = await insertTrip({ companyId, userId, status: 'booked' })
+    await getPool().query(
+      `UPDATE public.mileage_trips SET journal_entry_id = $2 WHERE id = $1`,
+      [tripId, entryId],
+    )
+    await expect(
+      getPool().query(`UPDATE public.mileage_trips SET status = 'draft' WHERE id = $1`, [tripId]),
+    ).rejects.toThrow(/linked to a verifikat/)
   })
 })
 
