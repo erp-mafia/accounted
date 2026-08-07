@@ -1,6 +1,6 @@
 import type { ResourceType } from './dto';
 
-export type ProviderName = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden';
+export type ProviderName = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden' | 'wint';
 
 export interface RateLimitConfig {
   maxRequests: number;
@@ -55,4 +55,10 @@ export interface BokioResourceConfig extends ResourceConfig {
 
 export interface BjornLundenResourceConfig extends ResourceConfig {
   paginated?: boolean;
+}
+
+export interface WintResourceConfig extends ResourceConfig {
+  paginated?: boolean;
+  /** Query-param name for incremental fetches (WINT uses `UpdatedAfter` / `LastUpdated`). */
+  modifiedParam?: string;
 }

@@ -13,6 +13,15 @@
 import { FortnoxClient } from '@/lib/providers/fortnox/client'
 import { BrioxClient } from '@/lib/providers/briox/client'
 import { BjornLundenClient } from '@/lib/providers/bjornlunden/client'
+import { WintClient } from '@/lib/providers/wint/client'
+import {
+  buildWintSieFile,
+  deriveIbByYear,
+  mapWintAccountForSie,
+  mapWintVoucherForSie,
+  type WintSieVoucher,
+  type WintSieYear,
+} from '@/lib/providers/wint/sie-builder'
 import type { ProviderName } from '@/lib/providers/types'
 import { detectEncoding, decodeBuffer } from '@/lib/import/sie-parser'
 import { createLogger } from '@/lib/logger'
@@ -54,10 +63,17 @@ export interface ProviderSieFetchResult {
 const fortnoxClient = new FortnoxClient()
 const brioxClient = new BrioxClient()
 const bjornLundenClient = new BjornLundenClient()
+const wintClient = new WintClient()
 
-/** True when the provider's API can serve the GL as SIE (no manual upload). */
+/**
+ * True when the provider's API can serve the GL as SIE (no manual upload).
+ * WINT qualifies even though its v1 API has no SIE endpoint: the ledger is
+ * fetched voucher-by-voucher and RENDERED as SIE on our side (Tier A; see
+ * lib/providers/wint/sie-builder.ts). Downstream the file is indistinguishable
+ * from a provider export and goes through the same parse/validate/import path.
+ */
 export function providerSupportsSie(provider: ProviderName): boolean {
-  return provider === 'fortnox' || provider === 'briox' || provider === 'bjornlunden'
+  return provider === 'fortnox' || provider === 'briox' || provider === 'bjornlunden' || provider === 'wint'
 }
 
 interface FiscalYearRef {
@@ -163,6 +179,152 @@ function getSieFetcher(
         // (CP437/Windows-1252/UTF-8): fetch bytes and detect-decode.
         const buffer = await brioxClient.getBytes(accessToken, `/sie/${fy.id}/4`)
         return decodeBuffer(buffer, detectEncoding(buffer))
+      },
+    }
+  }
+
+  if (provider === 'wint') {
+    // The SIE files are rendered from voucher data, and opening balances for
+    // years before WINT's current fiscal year are derived by walking the
+    // voucher deltas backward from the /api/Account Ib anchor. That walk
+    // needs every year's vouchers at once, so the first fetchSie call builds
+    // a shared context (this fetcher object lives for exactly one
+    // fetchProviderSieFiles invocation: the closure is the right lifetime).
+    interface WintSieContext {
+      companyName: string
+      orgNumber?: string
+      accounts: ReturnType<typeof mapWintAccountForSie>[]
+      years: (WintSieYear & { id: number })[]
+      vouchersByYear: Map<number, WintSieVoucher[]>
+      ibByYear: Map<number, Map<string, number>>
+      fetchErrors: Map<number, string>
+    }
+    let contextPromise: Promise<WintSieContext> | null = null
+
+    const loadContext = (accessToken: string): Promise<WintSieContext> => {
+      contextPromise ??= (async () => {
+        const company = await wintClient.get<Record<string, unknown>>(accessToken, '/api/Auth')
+        const rawYears = (company['FinancialYears'] as Record<string, unknown>[] | undefined) ?? []
+        const allowed = getAllowedFiscalYears()
+        const allYears = rawYears
+          .map((fy) => ({
+            id: Number(fy['Id']),
+            year: new Date((fy['Start'] as string) ?? '').getFullYear(),
+            start: ((fy['Start'] as string) ?? '').slice(0, 10),
+            end: ((fy['End'] as string) ?? '').slice(0, 10),
+          }))
+          .sort((a, b) => a.year - b.year)
+        const years = allYears.filter((fy) => allowed.has(fy.year))
+
+        const accountsRaw = await wintClient.getPaginated<Record<string, unknown>>(
+          accessToken,
+          '/api/Account',
+        )
+        const accounts = accountsRaw.map(mapWintAccountForSie).filter((a) => a.accountNumber)
+
+        // The Ib anchor is WINT's ACTIVE fiscal year: selected from the
+        // UNFILTERED year list, so an active year outside the allowed import
+        // window can never be silently swapped for the latest allowed year
+        // (that would attach the anchor balances to the wrong year). When the
+        // anchor lies outside the window, its vouchers are still fetched below
+        // so the derivation chain stays complete; only allowed years render.
+        const today = new Date().toISOString().slice(0, 10)
+        const anchor =
+          allYears.find((fy) => fy.start <= today && today <= fy.end) ?? allYears[allYears.length - 1]
+
+        const chainYears = new Map(years.map((fy) => [fy.year, fy]))
+        if (anchor) {
+          const lo = Math.min(anchor.year, ...years.map((fy) => fy.year))
+          const hi = Math.max(anchor.year, ...years.map((fy) => fy.year))
+          for (const fy of allYears) {
+            if (fy.year >= lo && fy.year <= hi) chainYears.set(fy.year, fy)
+          }
+        }
+
+        // A single year's fetch failure must not sink the whole migration:
+        // the year is simply absent from vouchersByYear, deriveIbByYear stops
+        // at the hole, and the affected years fail loudly in fetchSie while
+        // the years on the anchor's side of the hole still render.
+        const vouchersByYear = new Map<number, WintSieVoucher[]>()
+        const fetchErrors = new Map<number, string>()
+        for (const fy of [...chainYears.values()].sort((a, b) => a.year - b.year)) {
+          try {
+            const raw = await wintClient.getPaginated<Record<string, unknown>>(
+              accessToken,
+              `/api/Voucher?BookingDateStart=${fy.start}&BookingDateEnd=${fy.end}&IncludeTransactions=true`,
+            )
+            vouchersByYear.set(fy.year, raw.map(mapWintVoucherForSie))
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err)
+            log.warn(`WINT voucher fetch failed for fiscal year ${fy.year}`, { reason })
+            fetchErrors.set(fy.year, reason)
+          }
+        }
+
+        const anchorIb = new Map<string, number>()
+        for (const account of accounts) {
+          if (account.ib != null && account.ib !== 0) anchorIb.set(account.accountNumber, account.ib)
+        }
+        const ibByYear = anchor
+          ? deriveIbByYear(anchor.year, anchorIb, vouchersByYear, years.map((fy) => fy.year))
+          : new Map<number, Map<string, number>>()
+
+        return {
+          companyName: (company['Name'] as string) ?? 'Okänt företag',
+          orgNumber: (company['Org'] as string | undefined) || undefined,
+          accounts,
+          years,
+          vouchersByYear,
+          ibByYear,
+          fetchErrors,
+        }
+      })()
+      return contextPromise
+    }
+
+    return {
+      async listYears(accessToken) {
+        const context = await loadContext(accessToken)
+        return context.years.map((fy) => ({
+          id: fy.id,
+          year: fy.year,
+          fromDate: fy.start,
+          toDate: fy.end,
+        }))
+      },
+      async fetchSie(accessToken, fy) {
+        const context = await loadContext(accessToken)
+        const yearRef = context.years.find((y) => y.year === fy.year)
+        const vouchers = context.vouchersByYear.get(fy.year)
+        const ibByAccount = context.ibByYear.get(fy.year)
+        if (!yearRef || !vouchers) {
+          const reason = context.fetchErrors.get(fy.year)
+          throw new Error(
+            reason
+              ? `WINT voucher fetch failed for fiscal year ${fy.year}: ${reason}`
+              : `WINT returned no ledger data for fiscal year ${fy.year}`,
+          )
+        }
+        if (!ibByAccount) {
+          // A hole in the voucher chain between this year and the Ib anchor
+          // year: opening balances cannot be established. Failing the year is
+          // better than importing broken IB/UB continuity.
+          throw new Error(
+            `Opening balances for ${fy.year} could not be derived from WINT's ledger data`,
+          )
+        }
+        const previousYear = context.years.find((y) => y.year === fy.year - 1)
+        return buildWintSieFile({
+          companyName: context.companyName,
+          orgNumber: context.orgNumber,
+          programVersion: '1.0',
+          generatedDate: new Date().toISOString().slice(0, 10),
+          year: yearRef,
+          previousYear,
+          accounts: context.accounts,
+          vouchers,
+          ibByAccount,
+        })
       },
     }
   }
