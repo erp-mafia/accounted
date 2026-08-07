@@ -1,9 +1,10 @@
 /**
- * Tests for the sandbox cleanup cron route: the RPC's jsonb summary
- * ({cleaned, failed, orphans_removed}, migration 20260807130000) is passed
- * through, the legacy bare-integer shape is still accepted (deploy/migration
- * ordering), and per-user failures are logged at error level: the failure
- * mode this fixes was months of silently swallowed cleanup errors.
+ * Tests for the sandbox cleanup cron route: the run loops small RPC batches
+ * (each PostgREST statement gets its own 8s window; a function-level
+ * statement_timeout cannot lift it), stops when a batch makes no progress,
+ * aggregates totals across batches, accepts the legacy bare-integer return
+ * shape, and logs failures at error level: the failure mode this route
+ * chain fixes was months of silently swallowed cleanup errors.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -33,48 +34,67 @@ function cronRequest(): Request {
   return new Request('http://localhost:3000/api/sandbox/cleanup/cron')
 }
 
-describe('GET /api/sandbox/cleanup/cron', () => {
-  it('reserves enough function time for a full batch', () => {
-    // 60 users at ~3s each must fit inside the route budget and the RPC's
-    // 290s statement_timeout (migration 20260807150000).
-    expect(maxDuration).toBe(300)
-  })
+function batch(cleaned: number, failed = 0, orphans = 0) {
+  return { data: { cleaned, failed, orphans_removed: orphans }, error: null }
+}
 
+describe('GET /api/sandbox/cleanup/cron', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co'
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key'
   })
 
-  it('passes the jsonb summary through and logs at info level when nothing failed', async () => {
-    h.rpc.mockResolvedValue({
-      data: { cleaned: 3, failed: 0, orphans_removed: 2 },
-      error: null,
-    })
+  it('reserves enough function time for the batch loop', () => {
+    expect(maxDuration).toBe(300)
+  })
+
+  it('loops full batches and stops on the first partial one, aggregating totals', async () => {
+    h.rpc
+      .mockResolvedValueOnce(batch(10))
+      .mockResolvedValueOnce(batch(10, 0, 0))
+      .mockResolvedValueOnce(batch(3, 1, 2))
+      .mockResolvedValueOnce(batch(0))
 
     const res = await GET(cronRequest())
     const body = await res.json()
 
     expect(h.rpc).toHaveBeenCalledWith('cleanup_expired_sandbox_users', {
       p_max_age_hours: 24,
-      p_limit: 60,
+      p_limit: 10,
     })
+    // Third batch still made progress (cleaned + orphans > 0), so a fourth
+    // call runs and returns zero progress, ending the loop.
+    expect(h.rpc).toHaveBeenCalledTimes(4)
     expect(res.status).toBe(200)
-    expect(body).toEqual({ success: true, cleaned: 3, failed: 0, orphans_removed: 2 })
-    expect(h.logInfo).toHaveBeenCalled()
-    expect(h.logError).not.toHaveBeenCalled()
+    expect(body).toEqual({
+      success: true,
+      cleaned: 23,
+      failed: 1,
+      orphans_removed: 2,
+      batches: 4,
+    })
   })
 
-  it('logs at error level when the summary reports failures', async () => {
-    h.rpc.mockResolvedValue({
-      data: { cleaned: 1, failed: 4, orphans_removed: 0 },
-      error: null,
-    })
+  it('stops immediately when the backlog is empty', async () => {
+    h.rpc.mockResolvedValue(batch(0))
 
     const res = await GET(cronRequest())
     const body = await res.json()
 
-    expect(res.status).toBe(200)
+    expect(h.rpc).toHaveBeenCalledTimes(1)
+    expect(body.batches).toBe(1)
+    expect(h.logInfo).toHaveBeenCalled()
+    expect(h.logError).not.toHaveBeenCalled()
+  })
+
+  it('stops when a batch yields only failures, and logs at error level', async () => {
+    h.rpc.mockResolvedValueOnce(batch(0, 4, 0))
+
+    const res = await GET(cronRequest())
+    const body = await res.json()
+
+    expect(h.rpc).toHaveBeenCalledTimes(1)
     expect(body.failed).toBe(4)
     expect(h.logError).toHaveBeenCalledWith(
       'sandbox cleanup completed with failures',
@@ -83,20 +103,19 @@ describe('GET /api/sandbox/cleanup/cron', () => {
   })
 
   it('still accepts the legacy bare-integer return shape', async () => {
-    h.rpc.mockResolvedValue({ data: 5, error: null })
+    h.rpc.mockResolvedValueOnce({ data: 5, error: null }).mockResolvedValueOnce(batch(0))
 
     const res = await GET(cronRequest())
     const body = await res.json()
 
     expect(res.status).toBe(200)
-    expect(body).toEqual({ success: true, cleaned: 5, failed: 0, orphans_removed: 0 })
+    expect(body.cleaned).toBe(5)
   })
 
-  it('returns an error envelope when the RPC fails', async () => {
-    h.rpc.mockResolvedValue({
-      data: null,
-      error: { message: 'boom', code: 'XX000' },
-    })
+  it('returns an error envelope when the RPC fails mid-loop', async () => {
+    h.rpc
+      .mockResolvedValueOnce(batch(10))
+      .mockResolvedValueOnce({ data: null, error: { message: 'boom', code: 'XX000' } })
 
     const res = await GET(cronRequest())
     const body = await res.json()

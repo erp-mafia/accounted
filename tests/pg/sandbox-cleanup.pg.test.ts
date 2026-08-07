@@ -51,6 +51,15 @@ async function seedSandboxUser(settingsCreatedAt?: string): Promise<{
      VALUES ($1, $2, 'categorize_transaction', 'Sandbox cleanup test op', 'rejected')`,
     [userId, companyId],
   )
+  // processing_history references companies with a plain NO ACTION FK and no
+  // cascade; without the explicit delete (migration 20260807160000) a
+  // sandbox that produced telemetry cannot be torn down.
+  await getPool().query(
+    `INSERT INTO public.processing_history
+       (company_id, correlation_id, aggregate_type, aggregate_id, event_type, actor, occurred_at)
+     VALUES ($1, $2, 'transaction', $3, 'sandbox.cleanup.test', '{"type":"system"}', now())`,
+    [companyId, randomUUID(), randomUUID()],
+  )
   return { userId, companyId, entryId }
 }
 
