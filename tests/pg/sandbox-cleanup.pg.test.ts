@@ -64,6 +64,21 @@ async function insertAnonymousAuthUser(createdAt: string): Promise<string> {
   return id
 }
 
+// auth.users.is_anonymous arrived with GoTrue anonymous sign-ins; the CI
+// supabase/postgres image predates it. The RPC skips the orphan sweep on such
+// stacks, so the test skips the matching assertions rather than fabricating a
+// schema hosted Supabase would not have.
+async function hasIsAnonymousColumn(): Promise<boolean> {
+  const { rows } = await getPool().query<{ has: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM information_schema.columns
+       WHERE table_schema = 'auth' AND table_name = 'users'
+         AND column_name = 'is_anonymous'
+     ) AS has`,
+  )
+  return rows[0]!.has
+}
+
 async function authUserExists(id: string): Promise<boolean> {
   const { rows } = await getPool().query<{ n: number }>(
     `SELECT count(*)::int AS n FROM auth.users WHERE id = $1`,
@@ -138,13 +153,19 @@ describe('sandbox cleanup RPCs (pg)', () => {
   })
 
   it('sweeps expired sandbox users and orphaned anonymous users, keeps fresh ones, reports counts', async () => {
+    const anonSupported = await hasIsAnonymousColumn()
+
     // Ancient timestamps put our rows first in the ORDER BY created_at loops,
     // so a bounded p_limit still covers them even on a shared database that
     // has its own stale sandbox rows.
     const expired = await seedSandboxUser('2000-01-02T00:00:00Z')
     const fresh = await seedSandboxUser()
-    const expiredOrphan = await insertAnonymousAuthUser('2000-01-01T00:00:00Z')
-    const freshOrphan = await insertAnonymousAuthUser(new Date().toISOString())
+    const expiredOrphan = anonSupported
+      ? await insertAnonymousAuthUser('2000-01-01T00:00:00Z')
+      : null
+    const freshOrphan = anonSupported
+      ? await insertAnonymousAuthUser(new Date().toISOString())
+      : null
 
     const { rows } = await getPool().query<{
       summary: { cleaned: number; failed: number; orphans_removed: number }
@@ -152,16 +173,22 @@ describe('sandbox cleanup RPCs (pg)', () => {
     const summary = rows[0]!.summary
 
     expect(await authUserExists(expired.userId)).toBe(false)
-    expect(await authUserExists(expiredOrphan)).toBe(false)
     expect(await authUserExists(fresh.userId)).toBe(true)
-    expect(await authUserExists(freshOrphan)).toBe(true)
     expect(summary.cleaned).toBeGreaterThanOrEqual(1)
-    expect(summary.orphans_removed).toBeGreaterThanOrEqual(1)
     expect(summary.failed).toBe(0)
+    if (anonSupported && expiredOrphan && freshOrphan) {
+      expect(await authUserExists(expiredOrphan)).toBe(false)
+      expect(await authUserExists(freshOrphan)).toBe(true)
+      expect(summary.orphans_removed).toBeGreaterThanOrEqual(1)
+    } else {
+      expect(summary.orphans_removed).toBe(0)
+    }
 
     // Leave nothing behind on a shared database.
     await getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [fresh.userId])
-    await getPool().query(`DELETE FROM auth.users WHERE id = $1`, [freshOrphan])
+    if (freshOrphan) {
+      await getPool().query(`DELETE FROM auth.users WHERE id = $1`, [freshOrphan])
+    }
   })
 
   it('is executable by service_role only', async () => {

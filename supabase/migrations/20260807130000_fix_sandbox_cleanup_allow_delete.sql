@@ -204,8 +204,16 @@ BEGIN
   -- DELETE
   -- Sandbox teardown deletes the entire company; its registry rows go with
   -- it. Transaction-local flag, only set by cleanup_sandbox_user after its
-  -- is_sandbox check.
-  IF current_setting('gnubok.sandbox_cleanup', true) = 'true' THEN
+  -- is_sandbox check, plus a per-row re-verification (same pattern as
+  -- audit_log_immutable) so the flag alone can never unlock a real
+  -- company's registry. cleanup_sandbox_user deletes these rows explicitly
+  -- while company_settings still exists; the re-check would fail mid-cascade
+  -- once that row is gone.
+  IF current_setting('gnubok.sandbox_cleanup', true) = 'true'
+     AND EXISTS (
+       SELECT 1 FROM public.company_settings cs
+       WHERE cs.company_id = OLD.company_id AND cs.is_sandbox = true
+     ) THEN
     RETURN OLD;
   END IF;
   IF OLD.is_system THEN
@@ -242,8 +250,15 @@ CREATE OR REPLACE FUNCTION public.enforce_pending_operations_no_delete()
 RETURNS TRIGGER AS $$
 BEGIN
   -- Sandbox teardown: transaction-local flag, only set by
-  -- cleanup_sandbox_user after its is_sandbox check.
-  IF current_setting('gnubok.sandbox_cleanup', true) = 'true' THEN
+  -- cleanup_sandbox_user after its is_sandbox check, plus a per-row
+  -- re-verification (same pattern as audit_log_immutable) so the flag alone
+  -- can never unlock a real company's rows. cleanup_sandbox_user deletes
+  -- these rows explicitly while company_settings still exists.
+  IF current_setting('gnubok.sandbox_cleanup', true) = 'true'
+     AND EXISTS (
+       SELECT 1 FROM public.company_settings cs
+       WHERE cs.company_id = OLD.company_id AND cs.is_sandbox = true
+     ) THEN
     RETURN OLD;
   END IF;
   IF OLD.status IN ('committed', 'rejected', 'failed_partial') THEN
@@ -316,6 +331,19 @@ BEGIN
   -- Delete supplier invoices before suppliers cascade
   DELETE FROM public.supplier_invoices WHERE user_id = p_user_id;
 
+  -- Terminal pending operations and the dimension registry carry delete
+  -- guards whose bypass re-verifies sandbox-ness through company_settings,
+  -- so delete them explicitly while that row still exists instead of
+  -- leaving them to the auth.users cascade (cascade order is unspecified
+  -- and may remove company_settings first).
+  DELETE FROM public.pending_operations WHERE user_id = p_user_id;
+
+  DELETE FROM public.dimensions
+  WHERE company_id IN (
+    SELECT cs.company_id FROM public.company_settings cs
+    WHERE cs.user_id = p_user_id AND cs.is_sandbox = true
+  );
+
   -- Purge the sandbox company's audit rows while company_settings still
   -- exists (audit_log_immutable re-verifies sandbox-ness through it).
   -- audit_log.company_id has a plain NO ACTION FK, so leftover rows would
@@ -378,26 +406,36 @@ BEGIN
   -- invisible to the query above and would otherwise leak forever. They have
   -- no bookkeeping (the seed writes settings before any vouchers), so a
   -- plain auth.users delete cascades the little they do have. Non-anonymous
-  -- users are never touched here.
-  FOR v_user_id IN
-    SELECT u.id
-    FROM auth.users u
-    WHERE u.is_anonymous = true
-      AND u.created_at < now() - interval '1 hour' * p_max_age_hours
-      AND NOT EXISTS (
-        SELECT 1 FROM public.company_settings cs WHERE cs.user_id = u.id
-      )
-    ORDER BY u.created_at
-    LIMIT p_limit
-  LOOP
-    BEGIN
-      DELETE FROM auth.users WHERE id = v_user_id;
-      v_orphans := v_orphans + 1;
-    EXCEPTION WHEN OTHERS THEN
-      v_failed := v_failed + 1;
-      RAISE WARNING 'Failed to clean up orphaned anonymous user %: %', v_user_id, SQLERRM;
-    END;
-  END LOOP;
+  -- users are never touched here. auth.users.is_anonymous arrived with
+  -- GoTrue's anonymous sign-ins; older self-hosted stacks (and the CI
+  -- supabase/postgres image) predate it, and without anonymous sign-ins no
+  -- orphans can exist, so the sweep is skipped there. plpgsql resolves the
+  -- loop query only when this branch executes.
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'auth' AND table_name = 'users'
+      AND column_name = 'is_anonymous'
+  ) THEN
+    FOR v_user_id IN
+      SELECT u.id
+      FROM auth.users u
+      WHERE u.is_anonymous = true
+        AND u.created_at < now() - interval '1 hour' * p_max_age_hours
+        AND NOT EXISTS (
+          SELECT 1 FROM public.company_settings cs WHERE cs.user_id = u.id
+        )
+      ORDER BY u.created_at
+      LIMIT p_limit
+    LOOP
+      BEGIN
+        DELETE FROM auth.users WHERE id = v_user_id;
+        v_orphans := v_orphans + 1;
+      EXCEPTION WHEN OTHERS THEN
+        v_failed := v_failed + 1;
+        RAISE WARNING 'Failed to clean up orphaned anonymous user %: %', v_user_id, SQLERRM;
+      END;
+    END LOOP;
+  END IF;
 
   RETURN jsonb_build_object(
     'cleaned', v_cleaned,
