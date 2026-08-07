@@ -1,0 +1,188 @@
+import { randomUUID } from 'node:crypto'
+import { describe, expect, it } from 'vitest'
+import { getClient, getPool } from './setup'
+import { insertPostedJournalEntry, seedCompany } from './fixtures'
+
+/**
+ * Sandbox cleanup RPCs (migration 20260807130000):
+ *
+ * The nightly cron was a silent no-op for months: cleanup_sandbox_user
+ * deleted journal_entry_lines without setting the gnubok.allow_delete
+ * bypass, so the BFL immutability trigger rejected the delete and the outer
+ * loop swallowed the error as a WARNING. These tests pin the fixed behavior:
+ * a sandbox company with posted vouchers and a booked salary run actually
+ * deletes, non-sandbox users stay refused, immutability outside the RPC is
+ * untouched, and the expired sweep also removes orphaned anonymous users
+ * that never got a company_settings row.
+ */
+
+async function seedSandboxUser(settingsCreatedAt?: string): Promise<{
+  userId: string
+  companyId: string
+  entryId: string
+}> {
+  const { userId, companyId, fiscalPeriodId } = await seedCompany()
+  await getPool().query(
+    `INSERT INTO public.company_settings (user_id, company_id, is_sandbox, created_at)
+     VALUES ($1, $2, true, COALESCE($3::timestamptz, now()))`,
+    [userId, companyId, settingsCreatedAt ?? null],
+  )
+  const entryId = await insertPostedJournalEntry({
+    userId,
+    companyId,
+    fiscalPeriodId,
+  })
+  // The seed links a booked salary run to its vouchers with plain NO ACTION
+  // FKs; recreate that so the test fails if the RPC forgets to clear them.
+  await getPool().query(
+    `INSERT INTO public.salary_runs
+       (company_id, user_id, period_year, period_month, payment_date, salary_entry_id)
+     VALUES ($1, $2, 2026, 1, '2026-01-25', $3)`,
+    [companyId, userId, entryId],
+  )
+  // System dimensions (undeletable outside teardown) and a terminal-state
+  // pending operation (delete-protected per BFL 7 kap.): both exist in every
+  // modern sandbox and both blocked the auth.users cascade before the
+  // gnubok.sandbox_cleanup bypass.
+  await getPool().query(`SELECT public.ensure_company_dimensions($1)`, [companyId])
+  await getPool().query(
+    `INSERT INTO public.pending_operations
+       (user_id, company_id, operation_type, title, status)
+     VALUES ($1, $2, 'categorize_transaction', 'Sandbox cleanup test op', 'rejected')`,
+    [userId, companyId],
+  )
+  return { userId, companyId, entryId }
+}
+
+async function insertAnonymousAuthUser(createdAt: string): Promise<string> {
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO auth.users (id, email, instance_id, is_anonymous, created_at)
+     VALUES ($1, NULL, '00000000-0000-0000-0000-000000000000'::uuid, true, $2::timestamptz)`,
+    [id, createdAt],
+  )
+  return id
+}
+
+async function authUserExists(id: string): Promise<boolean> {
+  const { rows } = await getPool().query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM auth.users WHERE id = $1`,
+    [id],
+  )
+  return rows[0]!.n > 0
+}
+
+describe('sandbox cleanup RPCs (pg)', () => {
+  it('deletes a sandbox user whose books contain posted vouchers and a booked salary run', async () => {
+    const { userId, entryId } = await seedSandboxUser()
+
+    await getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [userId])
+
+    expect(await authUserExists(userId)).toBe(false)
+    const { rows: entries } = await getPool().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM public.journal_entries WHERE id = $1`,
+      [entryId],
+    )
+    expect(entries[0]!.n).toBe(0)
+    const { rows: lines } = await getPool().query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM public.journal_entry_lines WHERE journal_entry_id = $1`,
+      [entryId],
+    )
+    expect(lines[0]!.n).toBe(0)
+  })
+
+  it('refuses a user whose company is not a sandbox', async () => {
+    const { userId, companyId } = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.company_settings (user_id, company_id, is_sandbox)
+       VALUES ($1, $2, false)`,
+      [userId, companyId],
+    )
+
+    await expect(
+      getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [userId]),
+    ).rejects.toThrow(/is not a sandbox user/i)
+    expect(await authUserExists(userId)).toBe(true)
+  })
+
+  it('does not loosen posted-entry immutability outside the RPC', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const entryId = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId })
+
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      await expect(
+        client.query(`DELETE FROM public.journal_entry_lines WHERE journal_entry_id = $1`, [
+          entryId,
+        ]),
+      ).rejects.toThrow(/posted journal entry/i)
+    } finally {
+      await client.query('ROLLBACK').catch(() => {})
+      client.release()
+    }
+  })
+
+  it('the gnubok.allow_delete flag does not leak out of the cleanup transaction', async () => {
+    const { userId } = await seedSandboxUser()
+    const client = await getClient()
+    try {
+      await client.query(`SELECT public.cleanup_sandbox_user($1)`, [userId])
+      const { rows } = await client.query<{ flag: string | null }>(
+        `SELECT current_setting('gnubok.allow_delete', true) AS flag`,
+      )
+      expect(rows[0]!.flag ?? '').not.toBe('true')
+    } finally {
+      client.release()
+    }
+  })
+
+  it('sweeps expired sandbox users and orphaned anonymous users, keeps fresh ones, reports counts', async () => {
+    // Ancient timestamps put our rows first in the ORDER BY created_at loops,
+    // so a bounded p_limit still covers them even on a shared database that
+    // has its own stale sandbox rows.
+    const expired = await seedSandboxUser('2000-01-02T00:00:00Z')
+    const fresh = await seedSandboxUser()
+    const expiredOrphan = await insertAnonymousAuthUser('2000-01-01T00:00:00Z')
+    const freshOrphan = await insertAnonymousAuthUser(new Date().toISOString())
+
+    const { rows } = await getPool().query<{
+      summary: { cleaned: number; failed: number; orphans_removed: number }
+    }>(`SELECT public.cleanup_expired_sandbox_users(24, 25) AS summary`)
+    const summary = rows[0]!.summary
+
+    expect(await authUserExists(expired.userId)).toBe(false)
+    expect(await authUserExists(expiredOrphan)).toBe(false)
+    expect(await authUserExists(fresh.userId)).toBe(true)
+    expect(await authUserExists(freshOrphan)).toBe(true)
+    expect(summary.cleaned).toBeGreaterThanOrEqual(1)
+    expect(summary.orphans_removed).toBeGreaterThanOrEqual(1)
+    expect(summary.failed).toBe(0)
+
+    // Leave nothing behind on a shared database.
+    await getPool().query(`SELECT public.cleanup_sandbox_user($1)`, [fresh.userId])
+    await getPool().query(`DELETE FROM auth.users WHERE id = $1`, [freshOrphan])
+  })
+
+  it('is executable by service_role only', async () => {
+    const { rows } = await getPool().query<{
+      svc_user: boolean
+      svc_expired: boolean
+      anon_user: boolean
+      anon_expired: boolean
+      authed_expired: boolean
+    }>(
+      `SELECT
+         has_function_privilege('service_role', 'public.cleanup_sandbox_user(uuid)', 'EXECUTE') AS svc_user,
+         has_function_privilege('service_role', 'public.cleanup_expired_sandbox_users(int, int)', 'EXECUTE') AS svc_expired,
+         has_function_privilege('anon', 'public.cleanup_sandbox_user(uuid)', 'EXECUTE') AS anon_user,
+         has_function_privilege('anon', 'public.cleanup_expired_sandbox_users(int, int)', 'EXECUTE') AS anon_expired,
+         has_function_privilege('authenticated', 'public.cleanup_expired_sandbox_users(int, int)', 'EXECUTE') AS authed_expired`,
+    )
+    expect(rows[0]!.svc_user).toBe(true)
+    expect(rows[0]!.svc_expired).toBe(true)
+    expect(rows[0]!.anon_user).toBe(false)
+    expect(rows[0]!.anon_expired).toBe(false)
+    expect(rows[0]!.authed_expired).toBe(false)
+  })
+})
