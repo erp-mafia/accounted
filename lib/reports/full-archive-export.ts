@@ -994,6 +994,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   graph_transaction_counterparties: 'derived AI context graph, regenerable',
   idempotency_keys: 'infrastructure',
   inbox_rate_counters: 'infrastructure',
+  mail_connections: 'mailbox OAuth grants (live refresh tokens), not portable',
   mcp_tasks: 'MCP task handles: transient tool-call state with a 1-hour TTL',
   metered_events: 'billing telemetry',
   notification_log: 'notification dedup log',
