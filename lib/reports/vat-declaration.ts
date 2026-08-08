@@ -5,6 +5,7 @@ import type {
   VatPeriodType,
 } from '@/types'
 import type { VatCheckAccountTotals } from './vat-declaration-checks'
+import { rcBasisTotalsByRate } from './vat-filing-gate'
 import { fetchDynamicRuta05Accounts } from './vat-revenue-accounts'
 
 /**
@@ -593,6 +594,9 @@ export async function calculateVatDeclaration(
     // the sharp RC_INPUT_VAT_MISMATCH comparison instead of the ruta 48
     // fallback: see VatDeclaration.rcInputAccountTotals.
     rcInputAccountTotals: rcInputTotals(totals),
+    // Per-momssats RC basis balances (44xx/45xx), the downgrade evidence for
+    // the per-voucher gap tiering: see VatDeclaration.rcBasisByRate.
+    rcBasisByRate: rcBasisTotalsByRate(totals),
     invoiceCount,
     transactionCount,
     breakdown: {
