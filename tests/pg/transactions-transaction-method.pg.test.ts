@@ -232,6 +232,15 @@ describe('transactions.transaction_method: backfill classification + title strip
     const row = await getRow(tx)
     expect(row.transaction_method).toBe('autogiro')
     expect(row.description).toBe('TELIA AB')
+
+    // The strip must preserve the only copy of the full bank string: a legacy
+    // NULL original_description is filled from the pre-strip description in
+    // the same statement, never lost.
+    const { rows } = await getPool().query(
+      `SELECT original_description FROM public.transactions WHERE id = $1`,
+      [tx],
+    )
+    expect(rows[0].original_description).toBe('TELIA AB Autogiro')
   })
 
   it('uses MCC presence as the card-rail fallback (6011 = withdrawal)', async () => {

@@ -172,7 +172,12 @@ WHERE transaction_method IS NULL
 -- and never left ending in a possessive/scope adjective ("Egen insättning"
 -- keeps its full title; the method column still says deposit).
 -- original_description keeps the full bank string, so the rewrite is exactly
--- reversible and "restore original" still works.
+-- reversible and "restore original" still works. That invariant already holds
+-- on any DB that replayed 20260605120000 (its backfill filled every NULL, and
+-- ingest writes the column on every insert since), but the strip below
+-- ENFORCES it rather than assuming it: a row that somehow reached this point
+-- with original_description NULL gets its pre-strip description preserved in
+-- the same statement, so the full bank string can never be lost.
 
 WITH pat AS (
   SELECT '(^|[[:space:]])(kortköp/uttag|kortköp|kortbetalning|webbköp|bg-bet\. via internet|bg-bet via internet|bg-betalning|bg betalning|bgmax|bg-inb|bankgiro|bg-bet\.?|pg-betalning|pg betalning|plusgiro|europabetalning|utlandsbetalning|löneinsättning|lönebetalning|löneutbetalning|lön|e-faktura|efaktura|swish-betalning|swish betalning|swish|autogirobetalning|autogiro|pris betalning|prisbetalning|avgift|insättningsränta|ränta|kontantinsättning|insättning|bankomatuttag|kontantuttag|uttag|överföring via internet|överföring via mobil|överföring via app|överföring inom banken|överföring inom bank|överföring mellan konton|direktöverföring|direktbetalning|internetbetalning|mobilbetalning|överföring)[[:space:]]*$'::text AS p
@@ -186,7 +191,8 @@ stripped AS (
     AND t.description ~* pat.p
 )
 UPDATE public.transactions t
-SET description = s.new_desc
+SET description = s.new_desc,
+    original_description = coalesce(t.original_description, t.description)
 FROM stripped s
 WHERE t.id = s.id
   AND s.new_desc <> ''
