@@ -2005,10 +2005,11 @@ export default function ImportPage() {
         setMode(modeParam as ImportMode)
       }
       // Deep link from the onboarding branch question: preselect the old
-      // system so the wizard can jump straight to its connect step.
-      if (modeParam === 'migration' && !isSandbox) {
-        setInitialProvider(searchParams.get('provider'))
-      }
+      // system so the wizard can jump straight to its connect step. Cleared
+      // for every other mode so a stale preselect can't survive re-entry.
+      setInitialProvider(
+        modeParam === 'migration' && !isSandbox ? searchParams.get('provider') : null
+      )
     }
     const viewParam = searchParams.get('view')
     if (viewParam === 'export' || viewParam === 'import') {
@@ -2242,7 +2243,17 @@ export default function ImportPage() {
       )}
 
       {mode !== null && (
-        <Button variant="ghost" size="sm" onClick={() => setMode(null)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setMode(null)
+            // Mode is client state (not URL-synced), so the deep-linked
+            // preselect must be cleared here too or a re-entered migration
+            // mode would auto-jump again.
+            setInitialProvider(null)
+          }}
+        >
           <ArrowLeft className="mr-2 h-4 w-4" />
           {t('back_to_choices')}
         </Button>

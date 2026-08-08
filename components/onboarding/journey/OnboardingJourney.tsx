@@ -108,6 +108,8 @@ export default function OnboardingJourney({
   )
 
   const bandRef = useRef<HTMLDivElement | null>(null)
+  // Latches after the first done-screen branch choice (see onBranch below).
+  const branchChosenRef = useRef(false)
   const [orgInput, setOrgInput] = useState(initialOrgNumber ?? '')
   const [orgShake, setOrgShake] = useState(false)
   const [thinking, setThinking] = useState(false)
@@ -661,6 +663,11 @@ export default function OnboardingJourney({
             methodAnswer={methodAnswer}
             onOpen={() => router.push('/')}
             onBranch={(choice) => {
+              // One choice only: rapid clicks on different chips must not
+              // race two PATCHes (last-write-wins could persist the wrong
+              // path after navigation).
+              if (branchChosenRef.current) return
+              branchChosenRef.current = true
               const dest = branchDestination(choice)
               if (dest.path) {
                 // Fire-and-forget: the checklist path is a nicety, routing is
