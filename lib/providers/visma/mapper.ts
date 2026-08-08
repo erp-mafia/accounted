@@ -13,14 +13,66 @@ function amount(value: number | undefined | null, currency: string = 'SEK'): Amo
   return { value: value ?? 0, currencyCode: currency };
 }
 
+// CustomerInvoiceApi.PaymentStatus: 0 = Paid, 1 = Unpaid, 2 = Overdue.
+const CUSTOMER_PS_PAID = 0;
+const CUSTOMER_PS_OVERDUE = 2;
+
+// SupplierInvoiceApi.PaymentStatus: Unpaid = 3, PartiallyPaidOverDue = 4,
+// PartiallyPaid = 5, Paid = 6, OverDue = 7, PaidInBank = 9; the remaining
+// values (8, 10-17) are bank-integration in-flight states where the money has
+// NOT verifiably left the account, so they must stay open payables.
+const SUPPLIER_PS_SETTLED = new Set([6, 9]);
+const SUPPLIER_PS_OVERDUE = new Set([4, 7]);
+
+/**
+ * RemainingAmount is nullable in the eAccounting schema, and in practice the
+ * /supplierinvoices LIST payload omits it entirely: reading a missing value as
+ * 0 made every migrated supplier invoice look fully settled (ElvaSmultron,
+ * 290/290 imported as paid). Distinguish "0" from "absent" and let the caller
+ * fall back to the PaymentStatus enum / TotalAmount instead.
+ */
+function readRemaining(raw: Record<string, unknown>): number | null {
+  const company = raw['RemainingAmount'];
+  if (typeof company === 'number') return company;
+  const invoiceCurrency = raw['RemainingAmountInvoiceCurrency'];
+  if (typeof invoiceCurrency === 'number') return invoiceCurrency;
+  return null;
+}
+
 function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
-  const remaining = raw['RemainingAmount'] as number ?? 0;
+  const remaining = readRemaining(raw);
   const total = raw['TotalAmount'] as number ?? 0;
+  const ps = raw['PaymentStatus'] as number | undefined;
   if (raw['IsCancelled'] === true) return 'cancelled';
-  if (remaining === 0 && total > 0) return 'paid';
+  // A credit invoice has a negative TotalAmount, so the `total > 0` paid check
+  // below can never match it: without this it fell all the way through to
+  // 'draft' and surfaced on the dashboard as an overdue unsent invoice.
+  if (raw['IsCreditInvoice'] === true) return 'credited';
+  if (ps === CUSTOMER_PS_PAID) return 'paid';
+  if (ps === CUSTOMER_PS_OVERDUE) return 'overdue';
+  if (ps == null && remaining === 0 && total !== 0) return 'paid';
   if (raw['IsBooked'] === true) return 'booked';
   if (raw['IsSent'] === true || raw['SendType'] != null) return 'sent';
   return 'draft';
+}
+
+/**
+ * SupplierInvoiceApi carries none of the customer-invoice flags
+ * (IsCancelled/IsBooked/IsSent): its lifecycle lives in `Status`
+ * (0 = Draft, 1 = Normal, 2 = Deleted) plus the PaymentStatus enum.
+ */
+function deriveSupplierInvoiceStatus(
+  raw: Record<string, unknown>,
+  paid: boolean,
+): InvoiceStatusCode {
+  const status = raw['Status'] as number | undefined;
+  if (status === 2) return 'cancelled';
+  if (raw['IsCreditInvoice'] === true) return 'credited';
+  if (paid) return 'paid';
+  if (status === 0) return 'draft';
+  const ps = raw['PaymentStatus'] as number | undefined;
+  if (ps != null && SUPPLIER_PS_OVERDUE.has(ps)) return 'overdue';
+  return 'booked';
 }
 
 function buildParty(name: string, orgNumber?: string, raw?: Record<string, unknown>): PartyDto {
@@ -49,7 +101,11 @@ function buildParty(name: string, orgNumber?: string, raw?: Record<string, unkno
 export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
   const currency = (raw['CurrencyCode'] as string) ?? 'SEK';
   const total = raw['TotalAmount'] as number ?? 0;
-  const remaining = raw['RemainingAmount'] as number ?? 0;
+  const remaining = readRemaining(raw);
+  const ps = raw['PaymentStatus'] as number | undefined;
+  const paid = ps != null
+    ? ps === CUSTOMER_PS_PAID
+    : remaining === 0 && total !== 0;
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => ({
@@ -70,8 +126,11 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: remaining === 0 && total > 0,
-    balance: amount(remaining, currency),
+    paid,
+    // When the payload omits RemainingAmount the honest open balance for an
+    // unpaid invoice is its total, not 0: 0 would read as fully settled.
+    balance: amount(remaining ?? (paid ? 0 : total), currency),
+    lastPaymentDate: raw['PaymentDate'] as string | undefined,
   };
 
   return {
@@ -81,6 +140,7 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     dueDate: raw['DueDate'] as string | undefined,
     currencyCode: currency,
     status: deriveInvoiceStatus(raw),
+    invoiceTypeCode: raw['IsCreditInvoice'] === true ? '381' : undefined,
     supplier: buildParty(''),
     customer: buildParty(
       (raw['InvoiceCustomerName'] ?? '') as string,
@@ -98,7 +158,19 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
 export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): SupplierInvoiceDto {
   const currency = (raw['CurrencyCode'] as string) ?? 'SEK';
   const total = raw['TotalAmount'] as number ?? 0;
-  const remaining = raw['RemainingAmount'] as number ?? 0;
+  const remaining = readRemaining(raw);
+  const ps = raw['PaymentStatus'] as number | undefined;
+  // The PaymentStatus enum is the reliable signal here: the /supplierinvoices
+  // LIST payload omits RemainingAmount, and reading that absence as 0 imported
+  // every supplier invoice as fully paid. Fall back to RemainingAmount only
+  // when the enum itself is missing.
+  const paid = ps != null
+    ? SUPPLIER_PS_SETTLED.has(ps)
+    : remaining === 0 && total !== 0;
+  // A partially paid invoice without a RemainingAmount cannot be represented
+  // faithfully: report the full total as open (visible and correctable)
+  // rather than inventing a split.
+  const balance = remaining ?? (paid ? 0 : total);
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => {
@@ -120,8 +192,9 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
   };
 
   const paymentStatus: PaymentStatusDto = {
-    paid: remaining === 0 && total > 0,
-    balance: amount(remaining, currency),
+    paid,
+    balance: amount(balance, currency),
+    lastPaymentDate: raw['PaymentDate'] as string | undefined,
   };
 
   return {
@@ -130,7 +203,8 @@ export function mapVismaToSupplierInvoice(raw: Record<string, unknown>): Supplie
     issueDate: (raw['InvoiceDate'] as string) ?? '',
     dueDate: raw['DueDate'] as string | undefined,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw),
+    status: deriveSupplierInvoiceStatus(raw, paid),
+    invoiceTypeCode: raw['IsCreditInvoice'] === true ? '381' : undefined,
     supplier: buildParty((raw['SupplierName'] ?? '') as string),
     buyer: buildParty(''),
     lines,
