@@ -60,9 +60,11 @@ touches), `requiresWriteScope`, `sieCompatible`, `version`, `faq` (list of
 
 The body after the frontmatter is **plain Markdown** (headings, lists, tables,
 links, fenced code blocks). The website renders bodies through MDX, which
-would evaluate JSX and `import`/`export` statements at build time, so the
-validator rejects them. Fenced code blocks are fine; they are displayed, never
-executed.
+evaluates raw tags (lowercase HTML included), `{...}` expressions and
+`import`/`export` statements at build time, so the validator rejects all of
+them. Fenced code blocks and backtick inline code are fine; they are
+displayed, never executed. Need a literal `<tag>` or `{value}` in prose? Put
+it in backticks.
 
 Write the body like documentation, not a landing page: what it does, what it
 needs (scopes, API keys), what it will not do, and one honest limitation

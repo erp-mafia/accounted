@@ -122,13 +122,19 @@ function checkBodySafety(file: string, body: string): void {
         message: `line ${i + 1}: import/export statements are not allowed (MDX would execute them in the site build)`,
       })
     }
-    if (/<script/i.test(stripped)) {
-      failures.push({ file, message: `line ${i + 1}: <script> is not allowed` })
-    }
-    if (/<[A-Z]/.test(stripped)) {
+    // MDX treats ANY tag as JSX, lowercase HTML included (<div>, <img
+    // onerror=...>), and a bare {...} as a JS expression to evaluate. Both
+    // must be banned entirely, not just capitalized component tags.
+    if (/<\/?[A-Za-z]/.test(stripped)) {
       failures.push({
         file,
-        message: `line ${i + 1}: JSX elements are not allowed; entry bodies are plain Markdown`,
+        message: `line ${i + 1}: raw HTML/JSX tags are not allowed; entry bodies are plain Markdown (put literal tags in backticks)`,
+      })
+    }
+    if (/[{}]/.test(stripped)) {
+      failures.push({
+        file,
+        message: `line ${i + 1}: { } are not allowed outside code (MDX evaluates {...} as a JS expression)`,
       })
     }
     if (/javascript:/i.test(stripped)) {
