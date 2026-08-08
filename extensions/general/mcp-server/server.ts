@@ -58,6 +58,7 @@ import {
 import {
   withRcBasisGapFindings,
   isFilingBlocked,
+  rcBasisTotalsByRate,
   type RcBasisGapScan,
 } from '@/lib/reports/vat-filing-gate'
 import { findRcBasisGaps } from '@/lib/reports/rc-basis-gaps'
@@ -1650,7 +1651,13 @@ async function runVatCompletenessChecks(
   } catch {
     scan = { status: 'unavailable' }
   }
-  return withRcBasisGapFindings(runVatDeclarationChecks(rutor, accountTotals), scan)
+  // Downgrade evidence (per-momssats 44xx/45xx balances) only exists when the
+  // caller supplied the account totals; without them the per-voucher gaps
+  // keep their blocking ERROR tier rather than guessing.
+  const evidence = accountTotals
+    ? { rutor, rcBasisByRate: rcBasisTotalsByRate(accountTotals) }
+    : undefined
+  return withRcBasisGapFindings(runVatDeclarationChecks(rutor, accountTotals), scan, evidence)
 }
 
 /** Wire shape for a completeness finding on the MCP surface. */

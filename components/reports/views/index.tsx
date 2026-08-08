@@ -1793,10 +1793,16 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // ordinary 2641 and the user pays in moms they were entitled to deduct.
   // rcInputTotalsFromDeclaration returns undefined (not an empty map) when a
   // response predates the field, which keeps the fallback honest.
+  // The gap-downgrade evidence (per-momssats 44xx/45xx balances) travels on
+  // the declaration payload. Absent on responses from an older deploy: then
+  // the gaps keep their blocking ERROR tier rather than guessing.
   const checks = data
     ? withRcBasisGapFindings(
         runVatDeclarationChecks(data.rutor, rcInputTotalsFromDeclaration(data)),
         rcBasisScan,
+        data.rcBasisByRate
+          ? { rutor: data.rutor, rcBasisByRate: data.rcBasisByRate }
+          : undefined,
       )
     : []
   const checksBlocked = isFilingBlocked(checks)

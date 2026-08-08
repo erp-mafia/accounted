@@ -5,6 +5,7 @@ import {
   type EntryLinesQuery,
 } from '@/lib/bookkeeping/entry-lines'
 import { resolvePeriodDates } from './vat-declaration'
+import { RC_BASIS_ACCOUNTS_BY_RATE } from './vat-filing-gate'
 import type { VatPeriodType } from '@/types'
 
 /**
@@ -19,12 +20,14 @@ import type { VatPeriodType } from '@/types'
 const RC_OUTPUT_ACCOUNTS = ['2614', '2624', '2634'] as const
 type RcOutputAccount = typeof RC_OUTPUT_ACCOUNTS[number]
 
-const RC_BASIS_ACCOUNTS = new Set([
-  '4515', '4516', '4517', // EU goods 25/12/6%
-  '4531', '4532', '4533', // non-EU services 25/12/6%
-  '4535', '4536', '4537', // EU services 25/12/6%
-  '4415', '4416', '4417', // domestic goods RC
-  '4425', '4426', '4427', // domestic services RC
+// EU goods (4515-4517), non-EU services (4531-4533), EU services (4535-4537),
+// domestic goods RC (4415-4417), domestic services RC (4425-4427). Derived
+// from the rate-grouped single source in vat-filing-gate.ts so this scan and
+// the per-rate downgrade evidence can never disagree on the account set.
+const RC_BASIS_ACCOUNTS = new Set<string>([
+  ...RC_BASIS_ACCOUNTS_BY_RATE.r25,
+  ...RC_BASIS_ACCOUNTS_BY_RATE.r12,
+  ...RC_BASIS_ACCOUNTS_BY_RATE.r6,
 ])
 
 const RATE_BY_OUTPUT: Record<RcOutputAccount, number> = {

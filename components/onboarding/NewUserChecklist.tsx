@@ -1,13 +1,18 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Check } from 'lucide-react'
+import posthog from 'posthog-js'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
+import { useFormat } from '@/lib/hooks/use-format'
+import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import { checklistNumbers, type VatDeadlineLine } from '@/lib/onboarding/checklist'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -19,13 +24,32 @@ interface NewUserChecklistProps {
   hasBookkeepingImported?: boolean
   hasBankConnected?: boolean
   hasSkatteverketConnected?: boolean
+  hasInboxItems?: boolean
   hasAgentBuilt?: boolean
+  /** Personalized VAT-deadline line for the Skatteverket step (null = say nothing). */
+  vatLine?: VatDeadlineLine
+}
+
+/**
+ * Activation funnel events, mirroring the one existing product-event site
+ * (lib/support/submit-feedback.ts): guarded, try/caught, no PII in
+ * properties. Sandbox companies never render this block (their
+ * initial_setup is seeded completed+dismissed), so no sandbox gate needed.
+ */
+function captureSetup(event: string, properties?: Record<string, unknown>) {
+  if (!isAnalyticsEnabled()) return
+  try {
+    posthog.capture(event, properties)
+  } catch {
+    // Telemetry must never affect the checklist.
+  }
 }
 
 /**
  * First-run getting-started block on Hem, in the founder-picked stepped
  * shape: a numbered thread (get the books in, connect the bank, connect
- * Skatteverket, build the assistant) on a hairline spine.
+ * Skatteverket, get receipts flowing, build the assistant) on a hairline
+ * spine.
  * Only the step you are on argues its case: it carries the description and
  * the partner marks next to a filled action. Steps you have not reached yet
  * drop the pitch but keep a quiet outline action, so any step stays one
@@ -41,11 +65,14 @@ export default function NewUserChecklist({
   hasBookkeepingImported = false,
   hasBankConnected = false,
   hasSkatteverketConnected = false,
+  hasInboxItems = false,
   hasAgentBuilt = false,
+  vatLine = null,
 }: NewUserChecklistProps) {
   const t = useTranslations('initial_setup')
   const router = useRouter()
   const showError = useErrorToast()
+  const { formatDateLong } = useFormat()
   const hasAi = useCapability(CAPABILITY.ai)
   const [state, setState] = useState(initialState)
   const [saving, setSaving] = useState<InitialSetupPath | 'dismiss' | 'complete' | null>(null)
@@ -53,6 +80,8 @@ export default function NewUserChecklist({
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket')
+  const hasInbox = ENABLED_EXTENSION_IDS.has('invoice-inbox')
+  const hasWhatsApp = ENABLED_EXTENSION_IDS.has('whatsapp-inbox')
 
   const persist = async (
     body: Record<string, unknown>,
@@ -82,35 +111,64 @@ export default function NewUserChecklist({
 
   const step1Done = hasBookkeepingImported || state.path === 'fresh'
   const step2Done = hasBankConnected
-  // Companies built without the skatteverket extension skip that step.
+  // Companies built without the skatteverket/inbox extensions skip those steps.
   const step3Done = !hasSkatteverket || hasSkatteverketConnected
-  const step4Done = hasAgentBuilt
+  const step4Done = !hasInbox || hasInboxItems
+  const step5Done = hasAgentBuilt
 
   useEffect(() => {
     // The block retires itself once every step is done; Dölj remains the
     // manual way out.
-    if (!state.completedAt && step1Done && step2Done && step3Done && step4Done && saving === null) {
-      void persist({ completed: true }, 'complete')
+    if (
+      !state.completedAt &&
+      step1Done && step2Done && step3Done && step4Done && step5Done &&
+      saving === null
+    ) {
+      void persist({ completed: true }, 'complete').then((updated) => {
+        if (updated) captureSetup('onboarding_setup_completed', { path: updated.path })
+      })
     }
   // persist intentionally stays out: its identity follows the toast hook and
   // would retrigger this completion sync after every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step1Done, step2Done, step3Done, step4Done, saving, state.completedAt])
+  }, [step1Done, step2Done, step3Done, step4Done, step5Done, saving, state.completedAt])
 
   if (state.dismissedAt || state.completedAt) return null
 
   const goMigration = async () => {
     const updated = await persist({ path: 'migration' }, 'migration')
-    if (updated) router.push(hasMigration ? '/import?mode=migration' : '/import?mode=sie')
+    if (updated) {
+      captureSetup('onboarding_setup_step_started', { step: 'books', path: 'migration' })
+      router.push(hasMigration ? '/import?mode=migration' : '/import?mode=sie')
+    }
   }
-  const goFresh = () => void persist({ path: 'fresh' }, 'fresh')
+  const goFresh = () =>
+    void persist({ path: 'fresh' }, 'fresh').then((updated) => {
+      if (updated) captureSetup('onboarding_setup_step_started', { step: 'books', path: 'fresh' })
+    })
   const goBank = async () => {
     const updated = await persist({ path: state.path ?? 'bank' }, 'bank')
-    if (updated) router.push(hasBanking ? '/import?mode=psd2' : '/import?mode=bank')
+    if (updated) {
+      captureSetup('onboarding_setup_step_started', { step: 'bank' })
+      router.push(hasBanking ? '/import?mode=psd2' : '/import?mode=bank')
+    }
   }
+  const goReceipts = () => {
+    captureSetup('onboarding_setup_step_started', { step: 'receipts' })
+    router.push(hasAi ? '/e/general/invoice-inbox' : '/settings/billing')
+  }
+  const goAssistant = () => {
+    captureSetup('onboarding_setup_step_started', { step: 'assistant' })
+    router.push(hasAi ? '/onboarding/agent' : '/settings/billing')
+  }
+  const dismiss = () =>
+    void persist({ dismissed: true }, 'dismiss').then((updated) => {
+      if (updated) captureSetup('onboarding_setup_dismissed', {})
+    })
 
-  const activeStep = !step1Done ? 1 : !step2Done ? 2 : !step3Done ? 3 : 4
-  const stepCount = hasSkatteverket ? 4 : 3
+  const activeStep = !step1Done ? 1 : !step2Done ? 2 : !step3Done ? 3 : !step4Done ? 4 : 5
+  const numbers = checklistNumbers({ hasSkatteverket, hasInbox })
+  const stepCount = numbers.count
 
   return (
     <section className={className} aria-label={t('title', { count: stepCount })}>
@@ -119,7 +177,7 @@ export default function NewUserChecklist({
         <button
           type="button"
           disabled={saving !== null}
-          onClick={() => void persist({ dismissed: true }, 'dismiss')}
+          onClick={dismiss}
           className="shrink-0 text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
         >
           {t('dismiss')}
@@ -189,7 +247,7 @@ export default function NewUserChecklist({
 
         {hasSkatteverket && (
           <Step
-            number={3}
+            number={numbers.skv}
             done={step3Done}
             active={activeStep === 3}
             title={t('step_skv_title')}
@@ -197,7 +255,10 @@ export default function NewUserChecklist({
               <Button size="sm" variant={variant} asChild>
                 {/* The authorize endpoint redirects off-site to Skatteverket. */}
                 {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-                <a href="/api/extensions/ext/skatteverket/authorize?return_to=/">
+                <a
+                  href="/api/extensions/ext/skatteverket/authorize?return_to=/"
+                  onClick={() => captureSetup('onboarding_setup_step_started', { step: 'skatteverket' })}
+                >
                   {t('step_skv_action')}
                 </a>
               </Button>
@@ -205,22 +266,58 @@ export default function NewUserChecklist({
             marks={<LogoMark src="/logos/skatteverket_color.svg" name="Skatteverket" />}
           >
             {t('step_skv_description')}
+            {vatLine?.kind === 'date' && (
+              <>
+                {' '}
+                <span className="text-foreground">
+                  {t('step_skv_next_vat', { date: formatDateLong(vatLine.dueDate) })}
+                </span>
+              </>
+            )}
+            {vatLine?.kind === 'missing_period' && (
+              <>
+                {' '}
+                <Link
+                  href="/settings/tax"
+                  className="underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                >
+                  {t('step_skv_choose_period')}
+                </Link>
+              </>
+            )}
+          </Step>
+        )}
+
+        {hasInbox && (
+          <Step
+            number={numbers.receipts}
+            done={step4Done}
+            active={activeStep === 4}
+            title={t('step_receipts_title')}
+            action={(variant) => (
+              <Button size="sm" variant={variant} onClick={goReceipts}>
+                {t('step_receipts_action')}
+              </Button>
+            )}
+            marks={
+              <span className="text-[11px] text-muted-foreground">
+                {hasWhatsApp ? t('step_receipts_channels') : t('step_receipts_channels_no_wa')}
+              </span>
+            }
+          >
+            {t('step_receipts_description')}
           </Step>
         )}
 
         <Step
-          number={hasSkatteverket ? 4 : 3}
-          done={step4Done}
-          active={activeStep === 4 || (!hasSkatteverket && activeStep === 3)}
+          number={numbers.assistant}
+          done={step5Done}
+          active={activeStep === 5}
           title={t('step_assistant_title')}
           badge={t('step_assistant_beta')}
           last
           action={(variant) => (
-            <Button
-              size="sm"
-              variant={variant}
-              onClick={() => router.push(hasAi ? '/onboarding/agent' : '/settings/billing')}
-            >
+            <Button size="sm" variant={variant} onClick={goAssistant}>
               {t('step_assistant_action')}
             </Button>
           )}

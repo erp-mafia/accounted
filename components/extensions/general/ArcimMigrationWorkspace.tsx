@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
@@ -1799,7 +1799,13 @@ function EntityResultRow({
 
 // ── Main wizard ─────────────────────────────────────────────────
 
-export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps) {
+export default function ArcimMigrationWorkspace({
+  initialProvider,
+}: WorkspaceComponentProps & {
+  /** Deep-linked old system (onboarding branch question): jump straight to
+   *  its connect step instead of showing the provider list. */
+  initialProvider?: string
+}) {
   const { toast } = useToast()
 
   const [step, setStep] = useState<WizardStep>('provider')
@@ -2128,6 +2134,22 @@ export default function ArcimMigrationWorkspace(_props: WorkspaceComponentProps)
     handleOAuthReturn()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Deep-linked provider preselect (onboarding branch question). Only when
+  // this mount is not an OAuth return (that flow owns the wizard state), and
+  // only for providers whose SIE comes via API: visma/bokio must first see
+  // the provider list with its "SIE krävs först" gate, which depends on
+  // async connection status.
+  const preselectedRef = useRef(false)
+  useEffect(() => {
+    if (preselectedRef.current || !initialProvider) return
+    if (new URL(window.location.href).searchParams.get('migration')) return
+    const provider = ARCIM_PROVIDERS.find((p) => p.id === initialProvider)
+    if (!provider || COMING_SOON_PROVIDERS.has(provider.id) || !provider.sieViaApi) return
+    preselectedRef.current = true
+    void handleSelectProvider(provider.id)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialProvider])
 
   // Listen for postMessage from OAuth popup
   useEffect(() => {

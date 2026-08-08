@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { getBranding } from '@/lib/branding/service'
+import { formatOrgNumber } from '@/lib/utils'
 import { createLogger } from '@/lib/logger'
 import { getOpeningBalances } from './opening-balances'
 import type { SIEExportOptions, JournalEntry, JournalEntryLine, BASAccount } from '@/types'
@@ -158,14 +159,19 @@ export async function generateSIEExport(
 
   // === Header ===
   lines.push('#FLAGGA 0')
-  if (options.emit_format_pc8) lines.push('#FORMAT PC8')
+  // #FORMAT is compulsory in every SIE type and PC8 is its only legal value.
+  // Strict importers (e.g. Visma Spiris) reject files without it, and they
+  // detect the actual byte encoding themselves, so it is emitted even when
+  // the output is served as UTF-8.
+  lines.push('#FORMAT PC8')
   lines.push('#SIETYP 4')
   const programName = sanitizeProgramName(options.program_name || getBranding().appName)
   lines.push(`#PROGRAM "${programName}" "1.0"`)
   lines.push(`#GEN ${formatSIEDate(now)}`)
 
   if (options.org_number) {
-    lines.push(`#ORGNR ${options.org_number}`)
+    // Spec format is nnnnnn-nnnn; company_settings may store it without the hyphen.
+    lines.push(`#ORGNR ${formatOrgNumber(options.org_number)}`)
   }
 
   lines.push(`#FNAMN "${escapeQuotes(options.company_name)}"`)
