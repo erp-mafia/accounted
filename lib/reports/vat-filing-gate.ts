@@ -280,6 +280,13 @@ function rcBasisPerRateConsistent(evidence: RcGapDowngradeEvidence): boolean {
     [rcBasisByRate.r6, rutor.ruta32, 0.06],
   ]
   for (const [basis, moms, rate] of pairs) {
+    // The evidence can arrive as unvalidated JSON (the web view reads it off
+    // the declaration response). A missing or non-numeric field would make
+    // every comparison below false-and-passing (NaN compares false to
+    // everything), silently relaxing a statutory filing gate. Non-finite
+    // input therefore refuses the downgrade outright: this predicate must
+    // only ever fail toward the blocking ERROR.
+    if (!Number.isFinite(basis) || !Number.isFinite(moms)) return false
     if (moms < -eps) return false
     if (Math.abs(basis - moms / rate) > eps) return false
   }

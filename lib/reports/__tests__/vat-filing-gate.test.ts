@@ -208,6 +208,41 @@ describe('withRcBasisGapFindings, correction-voucher tiering', () => {
     const result = withRcBasisGapFindings([], { status: 'scanned', gapCount: 1 }, evidence)
     expect(result[0].status).toBe('WARNING')
   })
+
+  it('drift just past the öre epsilon blocks: the 0.5 kr tolerance is pinned', () => {
+    // 0.51 kr below the implied basis: one öre outside eps. This case exists
+    // so a future widening of eps cannot slip through with every test green.
+    const evidence = makeEvidence(
+      { ruta21: 7750.36, ruta30: 1937.59 },
+      { r25: 7749.85 },
+    )
+    const result = withRcBasisGapFindings([], { status: 'scanned', gapCount: 1 }, evidence)
+    expect(result[0].status).toBe('ERROR')
+  })
+
+  it('malformed evidence blocks: a missing or non-numeric rate figure must not pass as NaN', () => {
+    // The web view reads rcBasisByRate off unvalidated JSON. NaN compares
+    // false to everything, so without the finite guard a malformed payload
+    // would sail through every comparison and relax the gate.
+    const rutor = makeRutor({ ruta21: 7750.36, ruta30: 1937.59 })
+    const missingField = {
+      rutor,
+      rcBasisByRate: { r25: 7750.36 } as unknown as RcBasisTotalsByRate,
+    }
+    const nonNumeric = {
+      rutor,
+      rcBasisByRate: { r25: '7750.36', r12: 0, r6: 0 } as unknown as RcBasisTotalsByRate,
+    }
+    const nanMoms = {
+      rutor: makeRutor({ ruta21: 7750.36, ruta30: Number.NaN }),
+      rcBasisByRate: { r25: 7750.36, r12: 0, r6: 0 },
+    }
+    for (const evidence of [missingField, nonNumeric, nanMoms]) {
+      const result = withRcBasisGapFindings([], { status: 'scanned', gapCount: 1 }, evidence)
+      expect(result[0].status).toBe('ERROR')
+      expect(isFilingBlocked(result)).toBe(true)
+    }
+  })
 })
 
 describe('rcBasisTotalsByRate', () => {
