@@ -1325,7 +1325,14 @@
     "dismiss": "Dölj",
     "step_skv_title": "Anslut Skatteverket",
     "step_skv_description": "Se skattekontot och lämna moms- och arbetsgivardeklarationer direkt härifrån. Ansluts med BankID på ett par minuter.",
-    "step_skv_action": "Anslut Skatteverket"
+    "step_skv_action": "Anslut Skatteverket",
+    "step_skv_next_vat": "Första momsdeklarationen: {date}.",
+    "step_skv_choose_period": "Välj momsperiod i inställningarna, annars bevakas inga momsdeadlines.",
+    "step_receipts_title": "Kvitton och underlag",
+    "step_receipts_description": "Fota kvittot eller vidarebefordra mejlet till er inkorgsadress, så tolkas underlaget och väntar på dig.",
+    "step_receipts_action": "Öppna inkorgen",
+    "step_receipts_channels": "Mejl · WhatsApp · uppladdning",
+    "step_receipts_channels_no_wa": "Mejl · uppladdning"
   },
   "tax_assessment_notices": {
     "title": "Slutskattebesked och kvarskatt",
@@ -5664,6 +5671,9 @@
     "att_gora_left": "{count} kvar",
     "att_gora_empty_title": "Allt klart!",
     "att_gora_empty_body": "Inga transaktioner att bokföra och inga underlag att hantera.",
+    "att_gora_new_status": "Inget här än",
+    "att_gora_new_title": "Bokföringen är tom än så länge",
+    "att_gora_new_body": "Kom igång-stegen ovan fyller den: historiken, banken och kvittona.",
     "band_bokfor": "Bokför",
     "band_granska": "Granska & komplettera",
     "band_bevaka": "Bevaka",

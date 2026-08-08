@@ -2141,8 +2141,6 @@ export interface SIEExportOptions {
    * our closing entry would zero out the P&L accounts.
    */
   exclude_year_end_closing?: boolean
-  /** Emit #FORMAT PC8 in the header. Set true when the caller will encode the output as CP437. */
-  emit_format_pc8?: boolean
 }
 
 // Input types for creating entries
@@ -2356,6 +2354,8 @@ export interface OnboardingProgress {
   hasSIEImport: boolean
   /** True when the active user has a stored Skatteverket OAuth token. */
   hasSkatteverketConnected: boolean
+  /** True when the company has ever received an item in the document inbox. */
+  hasInboxItems: boolean
 }
 
 export type InitialSetupPath = 'migration' | 'bank' | 'fresh'
