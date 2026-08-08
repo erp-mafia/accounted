@@ -1325,7 +1325,14 @@
     "dismiss": "Hide",
     "step_skv_title": "Connect Skatteverket",
     "step_skv_description": "See the tax account and file VAT and employer declarations right from here. Connects with BankID in a couple of minutes.",
-    "step_skv_action": "Connect Skatteverket"
+    "step_skv_action": "Connect Skatteverket",
+    "step_skv_next_vat": "First VAT return: {date}.",
+    "step_skv_choose_period": "Pick a VAT period in settings, otherwise no VAT deadlines are tracked.",
+    "step_receipts_title": "Receipts and documents",
+    "step_receipts_description": "Photo the receipt or forward the email to your inbox address, and the document is read and waiting for you.",
+    "step_receipts_action": "Open the inbox",
+    "step_receipts_channels": "Email · WhatsApp · upload",
+    "step_receipts_channels_no_wa": "Email · upload"
   },
   "tax_assessment_notices": {
     "title": "Final tax notices and remaining tax",
@@ -5659,6 +5666,9 @@
     "att_gora_left": "{count} left",
     "att_gora_empty_title": "All caught up!",
     "att_gora_empty_body": "No transactions to record and no documents to handle.",
+    "att_gora_new_status": "Nothing here yet",
+    "att_gora_new_title": "Your books are empty so far",
+    "att_gora_new_body": "The get-started steps above will fill them: your history, the bank and the receipts.",
     "band_bokfor": "Record",
     "band_granska": "Review & complete",
     "band_bevaka": "Monitor",

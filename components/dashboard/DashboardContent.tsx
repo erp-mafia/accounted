@@ -19,6 +19,7 @@ import { ArrowRight } from 'lucide-react'
 import type { InitialSetupState, OnboardingProgress } from '@/types'
 import type { SuggestedMatch, WorklistCounts } from '@/lib/worklist/types'
 import type { ResumeItem } from '@/lib/worklist/resume'
+import type { VatDeadlineLine } from '@/lib/onboarding/checklist'
 
 interface DashboardContentProps {
   companyId: string
@@ -48,6 +49,14 @@ interface DashboardContentProps {
    * full-screen onboarding takeover.
    */
   agentBuilt?: boolean
+  /** Personalized VAT-deadline line for the checklist's Skatteverket step. */
+  vatLine?: VatDeadlineLine
+  /**
+   * True while the setup checklist is still open and the company has zero
+   * posted journal entries: Att göra's all-clear then reads as "empty, get
+   * started" instead of a false "all caught up".
+   */
+  emptyLedger?: boolean
 }
 
 /**
@@ -68,6 +77,8 @@ export default function DashboardContent({
   onboardingProgress,
   initialSetup,
   agentBuilt = true,
+  vatLine = null,
+  emptyLedger = false,
 }: DashboardContentProps) {
   const t = useTranslations('dashboard')
   const hasAi = useCapability(CAPABILITY.ai)
@@ -123,14 +134,16 @@ export default function DashboardContent({
         hasBookkeepingImported={!!onboardingProgress?.hasSIEImport}
         hasBankConnected={!!onboardingProgress?.hasBankConnected}
         hasSkatteverketConnected={!!onboardingProgress?.hasSkatteverketConnected}
+        hasInboxItems={!!onboardingProgress?.hasInboxItems}
         hasAgentBuilt={agentBuilt}
+        vatLine={vatLine}
       />
 
       {/* Build-assistant hero: shown only until the company has a verified
           agent_profile, so existing/migrated users get a clear prompt instead
           of a full-screen onboarding takeover. While the stepped first-run
-          checklist is visible it already carries the assistant as step 3, so
-          the hero waits until that block is dismissed or completed. */}
+          checklist is visible it already carries the assistant as its last
+          step, so the hero waits until that block is dismissed or completed. */}
       {!agentBuilt && (initialSetup.dismissedAt || initialSetup.completedAt) && (
         <section>
           {/* Non-payers keep seeing the hero (conversion surface) but it
@@ -170,6 +183,7 @@ export default function DashboardContent({
           worklist={worklist}
           suggestedMatches={suggestedMatches}
           expiringBankConnections={expiringBankConnections}
+          emptyLedger={emptyLedger}
         />
         <ResumePane items={resumeItems} />
       </div>
