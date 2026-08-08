@@ -2141,8 +2141,6 @@ export interface SIEExportOptions {
    * our closing entry would zero out the P&L accounts.
    */
   exclude_year_end_closing?: boolean
-  /** Emit #FORMAT PC8 in the header. Set true when the caller will encode the output as CP437. */
-  emit_format_pc8?: boolean
 }
 
 // Input types for creating entries
@@ -3166,6 +3164,21 @@ export interface VatDeclaration {
    * (lib/reports/vat-declaration.ts), never by hand.
    */
   rcInputAccountTotals?: Record<string, { debit: number; credit: number }>
+  /**
+   * Net debit balance of the reverse-charge BASIS accounts (44xx/45xx),
+   * grouped per momssats: r25/r12/r6. Carried so a caller that reads the
+   * declaration over HTTP can hand `withRcBasisGapFindings` its downgrade
+   * evidence (lib/reports/vat-filing-gate.ts): rutor 20-24 are partitioned by
+   * purchase type, not rate, so the per-rate identity against rutor 30-32 is
+   * only computable from these account-level figures.
+   *
+   * Optional because it crosses a JSON boundary: a client parsing a response
+   * from an older deploy must keep the blocking per-voucher behavior rather
+   * than fabricate zeros, which would read as "no basis booked at any rate"
+   * and block correct periods. Produced by `rcBasisTotalsByRate()`, never by
+   * hand.
+   */
+  rcBasisByRate?: { r25: number; r12: number; r6: number }
   // Supporting data
   invoiceCount: number
   transactionCount: number
