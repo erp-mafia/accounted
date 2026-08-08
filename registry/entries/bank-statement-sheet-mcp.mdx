@@ -1,6 +1,6 @@
 ---
 title: "Bank Statement Sheet MCP-server"
-description: "MCP-server som läser PDF-kontoutdrag och lämnar tillbaka transaktionerna tillsammans med en avstämningsdom. Varje konvertering kontrollräknas mot utdragets egna tryckta siffror: löpande saldo där banken skriver ut ett, kontosummor där den inte gör det. Går det inte ihop hålls raderna tillbaka helt och en agent måste be om dem explicit. Tänkt som steget före bankimporten — CSV:n som kommer ut läses in under Bankfil."
+description: "MCP-server som läser PDF-kontoutdrag och lämnar tillbaka transaktionerna tillsammans med en avstämningsdom. Varje konvertering kontrollräknas mot utdragets egna tryckta siffror: löpande saldo där banken skriver ut ett, kontosummor där den inte gör det. Går det inte ihop hålls raderna tillbaka helt och en agent måste be om dem explicit. Tänkt som steget före bankimporten: CSV:n som kommer ut läses in under Bankfil."
 slug: "bank-statement-sheet-mcp"
 kind: "mcp"
 author: "alimpolat"
@@ -47,10 +47,14 @@ Två metoder, och vilken som används beror på utdraget:
 | `balance-continuity` | Banken skriver ut ett löpande saldo | För varje angränsande radpar ska saldo plus belopp bli föregående saldo. Minst 99 procent av paren måste stämma. |
 | `control-total` | Inget saldo per rad | Raderna summeras mot utdragets egna kontosummor: ingående saldo, in, ut, utgående saldo. |
 
-Domen gäller **filen**, inte enskilda rader. Varje returnerad rad bär filens dom
-med sig, så markeringen överlever att raderna delas upp i separata verifikat —
-det är vidarebefordran av filens dom, inte en kontroll per rad. Inget exportformat
-har någon per-rad-markering.
+Domen gäller **filen**, inte enskilda rader. Varje rad i MCP-svaret bär med sig
+filens dom, så att en agent som delar upp raderna inte tappar bort den på vägen.
+Det är vidarebefordran av filens dom, inte en kontroll per rad.
+
+Men domen lever bara i MCP-svaret. Så fort raderna skrivs till en fil finns ingen
+markering kvar per rad, och ingenting som importeras till accounted bär med sig
+domen. Den som läser in filen måste alltså ha sett domen innan, inte förvänta sig
+att hitta den i bokföringen efteråt.
 
 Går det inte ihop är `transactions` satt till null. Raderna finns kvar, men en
 agent måste be om dem explicit med `include_unverified_rows`, och det syns i
@@ -101,7 +105,7 @@ utan förklaring. Kör den en gång per session.
 
 Manuellt, och det är värt att vara tydlig med:
 
-1. Konvertera utdraget. Be om CSV med semikolon och kommadecimal — det är vad
+1. Konvertera utdraget. Be om CSV med semikolon och kommadecimal. Det är vad
    svenska importer läser utan varningar.
 2. Kontrollera domen. Är den `unverified` ska filen inte läsas in.
 3. Läs in CSV:n under Bankfil i accounted.
@@ -115,8 +119,9 @@ integrationen i dagsläget.
 - **Den skriver inget till accounted.** Inga accounted-verktyg anropas, inga
   scopes begärs, ingenting stagas åt dig. Kedjan mot `gnubok_create_voucher` är
   nästa steg och är inte byggd.
-- **Den kör inte lokalt.** PDF:en laddas upp till ett API i EU. Motorn ligger
-  serversidan; npm-paketet är en tunn HTTP-klient under MIT.
+- **Konverteringen sker inte lokalt.** Själva MCP-servern kör på din maskin över
+  stdio, men den är en tunn HTTP-klient under MIT: PDF:en laddas upp till ett API
+  i EU, och motorn ligger kvar på serversidan.
 - **Den läser inte från URL.** Bara lokala sökvägar, och bara inom en
   tillåten katalog. En agent som blivit promptinjicerad ska inte kunna be
   servern ladda upp en godtycklig fil från din disk.
@@ -128,5 +133,5 @@ integrationen i dagsläget.
 
 Versionen är 0.1.0 och publicerades 2026-08-08. Den är verifierad mot
 produktion och mot accounteds sandlåda, men den har inga externa användare än.
-Hittar du något som inte stämmer vill jag gärna veta det — det är hela
+Hittar du något som inte stämmer vill jag gärna veta det. Det är hela
 anledningen till att domen finns med i svaret istället för i marknadsföringen.
