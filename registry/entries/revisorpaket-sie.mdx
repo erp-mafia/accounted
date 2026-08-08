@@ -1,0 +1,120 @@
+---
+title: "Revisorpaket — SIE4 + audit-logg på schema"
+description: "n8n- och Make-workflow som exporterar SIE4 plus audit-logg till revisorn varje månadsslut. Cron, signerad e-post, kvitto i Slack. Read-only, ingen huvudboksmutation."
+slug: "revisorpaket-sie"
+kind: "workflow"
+author: "gnubok"
+status: "live"
+lang: "sv"
+personas: ["byra", "finance"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-07-18"
+downloadUrl: "https://github.com/erp-mafia/accounted/releases/download/workflows-v1/revisorpaket-sie.zip"
+repoUrl: "https://github.com/erp-mafia/accounted/tree/main/workflows/revisorpaket-sie"
+gnubokTools:
+  - "gnubok_export_sie"
+  - "gnubok_audit_package"
+  - "gnubok_query_journal"
+  - "gnubok_get_trial_balance"
+oauthScopes:
+  - "reports:read"
+requiresWriteScope: false
+sieCompatible: true
+version: "1.0.0"
+ogImageEyebrow: "Workflow"
+faq:
+  - q: "Vad innehåller paketet revisorn får?"
+    a: "Det som `gnubok_audit_package` paketerar: SIE-4-fil för perioden, balans- och resultaträkning som PDF, huvudboken per konto, audit-logg som CSV (vem rörde vad när, scope, before/after), kvitto-arkiv och voucher-gap-rapport per BFNAR 2013:2. Allt zippat med 1-timmes signed URL från Supabase Storage."
+  - q: "Varför audit-logg och inte bara SIE?"
+    a: "Bokföringslagen kräver att åtgärder ska kunna rekonstrueras. SIE4 visar slutresultatet, inte vägen dit. Audit-loggen visar vägen: vilka rättelseposter som skedde när, av vem, med vilken scope. Revisorn behöver båda för en ren granskning."
+  - q: "Kan jag köra workflowet utan n8n?"
+    a: "Ja. Make-blueprinten är likvärdig. Båda anropar samma accounted-MCP-verktyg via HTTP. Du kan också köra dem som ett standalone-script om du föredrar det. Kolla repot."
+  - q: "Hur signeras e-posten?"
+    a: "Workflowet använder DKIM via Resend (eller din egen SMTP). Om revisorn vill ha S/MIME finns ett tillägg i repot. Det kräver ett signing-cert från till exempel Buypass."
+  - q: "Vad händer om en period inte är låst?"
+    a: "Workflowet stoppar och skickar en larm-Slack istället. Det är medvetet: du vill inte skicka en SIE-fil för en period som fortfarande ändras under granskningen."
+---
+
+## Workflowet
+
+På schemat (default: första vardagen varje månad kl 08:00):
+
+1. Hämtar föregående periods audit-paket via `gnubok_audit_package(period: "2026-04")`. Returnerar signed URL till en zip i Supabase Storage.
+2. Laddar ner zippen via HTTP node.
+3. Hämtar balans- och resultaträkning via `gnubok_get_trial_balance` om du vill ha en separat PDF utöver det som ligger i zippen.
+4. Räknar SHA256 på SIE-filen och skapar ett kvitto.
+5. Skickar paketet till revisorns e-postadress, plus en bekräftelse i din Slack.
+
+Om en period inte är låst stoppas hela kedjan och du får en Slack-larm
+istället.
+
+Workflowet är read-only på huvudboken. `gnubok_audit_package` skriver
+visserligen en zip-fil till Storage, men det är en sidoeffekt av att
+producera rapporten. Ingen huvudboksmutation, inget `pending_operation`
+att godkänna.
+
+## Importera i n8n
+
+```bash
+# Ladda ner zip från registry, packa upp
+n8n import:workflow --input=revisorpaket-sie.json
+```
+
+Eller via UI:
+
+```
+n8n → Workflows → Import → välj revisorpaket-sie.json
+```
+
+Du behöver konfigurera tre credentials:
+
+* **accounted MCP-anslutning** med scope `reports:read`. För n8n som inte ännu stödjer MCP-OAuth direkt, använd stdio-fallback (API-nyckel via `npx gnubok-mcp` eller direkt REST mot accounted-API).
+* **SMTP eller Resend API-nyckel**.
+* **Slack webhook** (valfritt).
+
+## Importera i Make
+
+Make-blueprinten ligger som `revisorpaket-sie.blueprint.json` i ZIP-paketet.
+
+```
+Make → My Blueprints → Import → välj filen
+```
+
+Samma tre credentials behövs.
+
+## Konfigurera schema
+
+n8n-cron-noden är konfigurerad till `0 8 1-7 * 1` (första måndagen
+varje månad kl 08:00). Justera om du föredrar månadens första vardag
+oavsett veckodag.
+
+## Innehållet i paketet
+
+```
+gnubok-2026-04.zip
+├── 2026-04.sie               # SIE4-fil
+├── audit-log.csv             # Vem rörde vad när
+├── huvudbok.pdf              # Alla rader per konto
+├── balans-och-resultat.pdf
+├── voucher-gaps.csv          # BFNAR 2013:2 gap-rapport
+├── kvitton/                  # Bilagor till verifikat
+└── README.txt
+```
+
+`audit-log.csv` är delen byråer brukar reagera positivt på.
+Den ser ut så här:
+
+| ts | actor | scope | verifikation | before | after |
+|---|---|---|---|---|---|
+| 2026-04-03 09:12:44 | jakob@... | (UI) | V2026-401 | — | created |
+| 2026-04-04 14:22:01 | claude-mcp-abc | transactions:write | V2026-411 | uncategorized | konto 5410 |
+
+Tabellen är hur Skatteverket vill ha det när online-revisionen
+öppnar 1 april 2026. Ingen revisor i Sverige har sett formatet förr.
+Skicka det till din egen revisor först.
+
+## Begränsningar
+
+* Workflowet postar inte filerna till någon publik plats. Du måste konfigurera mottagar-adressen.
+* Det räknar inte ut moms eller bokslut åt dig. För det, se [Månadsbokslut på en fika](/community/registry/manadsbokslut-pa-en-fika).
+* Det följer inte upp om revisorn faktiskt öppnar paketet. Lägg gärna till en Litmus- eller Mailtrack-pixel om du vill det, men kolla GDPR först.

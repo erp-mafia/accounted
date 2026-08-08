@@ -68,6 +68,14 @@ jobs:
         # only a semantic check catches it.
         run: npm run validate:packs
 
+      - name: Validate community registry
+        # registry/ is the public source of truth for gnubok.se/community/registry
+        # and takes entries by PR from outside the team. The gate checks the
+        # frontmatter the website build consumes, and rejects JSX/import/export
+        # in entry bodies: the site renders bodies through MDX, which would
+        # execute those at build time.
+        run: npm run validate:registry
+
       - name: Check no core imports from extensions
         run: |
           VIOLATIONS=$(grep -r "from '@/extensions/" lib/ app/api/ components/ --include="*.ts" --include="*.tsx" \

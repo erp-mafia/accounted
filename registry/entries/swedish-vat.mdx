@@ -1,0 +1,58 @@
+---
+title: "swedish-vat — momsdeklaration, EU-handel och reverse charge"
+description: "SKILL.md för svensk momscompliance. Momsperioder och deadlines, EU-handel (omvänd skattskyldighet, reverse charge, tjänstehandel, varuhandel, trepartshandel, OSS), import/export-moms, representation (300 SEK cap), blandad verksamhet (proportionell avdragsrätt, HFD 2023 ref. 45), jämkning av ingående moms, momsdeklaration ruta 05–62 till BAS 26xx-mappning."
+slug: "swedish-vat"
+kind: "skill"
+author: "erp-mafia"
+status: "live"
+lang: "sv"
+personas: ["finance", "byra", "founder", "developer"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-07-18"
+repoUrl: "https://github.com/erp-mafia/swedish-accounting-skills/tree/main/.claude/skills/swedish-vat"
+externalUrl: "https://github.com/erp-mafia/swedish-accounting-skills"
+version: "community"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Vilken momsperiod gäller för mitt bolag?"
+    a: "Beror på omsättning: <1 MSEK ger årsmoms, 1–40 MSEK kvartalsmoms, >40 MSEK månadsmoms. Du kan begära kortare period (typ månad istället för kvartal) frivilligt. Skillen täcker deadlines, vilka rutor som rapporteras och vad som händer vid sen inlämning (förseningsavgift 625 kr + ränta)."
+  - q: "Hur fungerar OSS?"
+    a: "One Stop Shop: ett system för B2C-försäljning av tjänster och varor inom EU. Sverige som registreringsland, momsen avräknas till respektive konsumtionsland. Tröskelvärde 99 680 kr (10 000 EUR) per år för hela EU sammanlagt. Skillen täcker registrering, kvartalsvis OSS-deklaration, BAS-bokning per land."
+  - q: "Vad är jämkning?"
+    a: "Korrigering av tidigare avdragen ingående moms på kapitalvaror (anläggningstillgångar och fastigheter) om användningen ändras. Pågår 5 år (lös egendom) eller 10 år (fastigheter) efter förvärvet. Hamnar i ruta 48 med negativt tecken. Skillen visar formeln, BAS 2645/2646, och när jämkning utlöses."
+---
+
+## Vad skillen täcker
+
+* Momsperioder: år/kvartal/månad, deadlines, omsättningsgränser.
+* Momsdeklarationens rutor 05–62 mappade mot BAS 26xx.
+* Komplett BAS 2610–2670-serien förklarad per konto.
+* EU-handel: omvänd skattskyldighet (reverse charge), tjänstehandel B2B, varuhandel B2B, trepartshandel.
+* OSS (One Stop Shop) för B2C inom EU: registrering, kvartalsdeklaration, BAS-bokning.
+* Import/export-moms: ruta 60/61/62 (beräknad importmoms), tullbeslut, postnordeperat.
+* Representation: 300 SEK cap per person per måltid (2026), full avdragsrätt på enklare förtäring under arbetsmöte (60 kr).
+* Blandad verksamhet: proportionell avdragsrätt, HFD 2023 ref. 45 (skäligt grunden).
+* Jämkning av ingående moms på kapitalvaror.
+* Frivillig skattskyldighet för uthyrning av lokaler.
+* Felmönster: vanliga blockers, drift-detection, regler för rättning av tidigare perioder.
+* Lagrum: ML 2023:200, SFL, EU:s momsdirektiv 2006/112/EG.
+
+Skillen markeras med "highest-error-rate area in Swedish
+bookkeeping; always use this skill over training data".
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/swedish-accounting-skills.git
+cd swedish-accounting-skills
+claude
+```
+
+## Pairs med
+
+* [kvartalsmoms-pa-12-minuter](/community/registry/kvartalsmoms-pa-12-minuter) — accounted-skill som faktiskt kör momsstängningen i huvudboken.
+* [swedish-invoice-compliance](/community/registry/swedish-invoice-compliance) — fakturareglerna som föregår momsdeklarationen.
+
+## Licens
+
+MIT.

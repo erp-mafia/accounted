@@ -1,0 +1,54 @@
+---
+title: "swedish-year-end-closing — bokslut för AB och enskild firma"
+description: "SKILL.md för svenskt bokslut. Lagram (BFL/ÅRL/K2/K3), steg-för-steg-stängning med BAS-kontonummer, alla bokslutstransaktioner, skatteberäkning (bolagsskatt, egenavgifter, räntefördelning, expansionsfond, periodiseringsfond), rapportering (årsredovisning/NE-bilaga), inlämningsdeadlines, SIE4-export, K2 vs K3-skillnader."
+slug: "swedish-year-end-closing"
+kind: "skill"
+author: "erp-mafia"
+status: "live"
+lang: "sv"
+personas: ["finance", "byra", "founder"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-07-18"
+repoUrl: "https://github.com/erp-mafia/swedish-accounting-skills/tree/main/.claude/skills/swedish-year-end-closing"
+externalUrl: "https://github.com/erp-mafia/swedish-accounting-skills"
+version: "community"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Vilken är skillnaden mellan bokslut och årsredovisning?"
+    a: "Bokslut = de avslutande bokföringstransaktionerna sista dagen på räkenskapsåret (avskrivningar, periodiseringar, bolagsskatt, resultatdisposition mot 2099). Årsredovisning = den externa rapporten (balansräkning, resultaträkning, noter, förvaltningsberättelse). Skillen täcker bokslutet; årsredovisningen ligger i [swedish-financial-reporting](/community/registry/swedish-financial-reporting)."
+  - q: "Vad är resultatdispositionen?"
+    a: "Sista bokslutssteget för AB: årets resultat (BAS 2099) flyttas till balanserat resultat (2091) eller till utdelning (2093). Skillen visar exakt bokning per scenario: ren vinst, förlust, utdelning, avsättning till reservfond."
+  - q: "Måste jag göra bokslut själv eller går det att outsourcera?"
+    a: "Du kan välja: göra själv (då gäller skillens innehåll plus alla underliggande skills), eller anlita revisionsbyrå. Skillen är användbar i båda fallen — du som ägare behöver förstå vad som händer. För AB över revisionsplikt-gränsen krävs godkänd revisor oavsett, men bokslutet kan ändå göras internt."
+---
+
+## Vad skillen täcker
+
+* Lagrum: Bokföringslagen (BFL), Årsredovisningslagen (ÅRL), BFNAR 2016:10 (K2), BFNAR 2012:1 (K3).
+* Steg-för-steg-bokslut med BAS-konton.
+* Bokslutstransaktioner: avskrivningar (78xx mot 12xx), periodiseringar (17xx upparbetad intäkt, 29xx upplupna kostnader), lager (1410 mot 4960), kundförluster (1518 mot 1510, eller 6352).
+* Skatteberäkning för AB: bolagsskatt 20.6%, BAS 8910 mot 2512.
+* Skatteberäkning för enskild firma: egenavgifter, räntefördelning, expansionsfond, periodiseringsfond (separat regelverk från AB).
+* Resultatdisposition: 2099 till 2091/2093.
+* SIE4-export av bokslutet.
+* K2 vs K3-skillnader i bokslutsmekanik: avskrivningsmetoder, komponentavskrivning (K3-krav), pågående arbeten.
+* Inlämningsdeadlines: årsredovisning till Bolagsverket inom 7 mån, INK2 till Skatteverket olika beroende på räkenskapsår.
+* Compliance-fallgropar: dubbla avskrivningar, glömda periodiseringar, fel resultatdisposition.
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/swedish-accounting-skills.git
+cd swedish-accounting-skills
+claude
+```
+
+## Pairs med
+
+* [periodiseringsfond-strategi](/community/registry/periodiseringsfond-strategi) — accounted-skill för periodiseringsfonds-bokningen i bokslutet.
+* [swedish-financial-reporting](/community/registry/swedish-financial-reporting) — årsredovisningen efter bokslutet.
+* [swedish-tax-planning](/community/registry/swedish-tax-planning) — skatteoptimeringen som tas in i bokslutet.
+
+## Licens
+
+MIT.
