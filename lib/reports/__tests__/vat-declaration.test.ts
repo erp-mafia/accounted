@@ -98,6 +98,7 @@ import {
   getVatDeclarationSummary,
   calculateVatDeclaration,
   rcInputTotalsFromDeclaration,
+  rutorFromTotals,
 } from '../vat-declaration'
 import { runVatDeclarationChecks } from '../vat-declaration-checks'
 import type { VatDeclaration } from '@/types'
@@ -115,6 +116,30 @@ beforeEach(() => {
 // ============================================================
 // Pure function tests: no mocks needed
 // ============================================================
+
+describe('rutorFromTotals: ruta 41 (omvänd skattskyldighet, sales side)', () => {
+  it('projects 3231/3232/3233 credit balances into ruta 41', () => {
+    const totals = new Map([
+      ['3231', { debit: 0, credit: 100_000 }],
+      ['3232', { debit: 500, credit: 10_500 }],
+      ['3233', { debit: 0, credit: 0 }],
+    ])
+    const rutor = rutorFromTotals(totals)
+    expect(rutor.ruta41).toBe(110_000)
+    // Buyer accounts for the VAT: an RC sale must not leak into the
+    // taxable-sales pairing (rutor 05-08) nor into the net (ruta 49).
+    expect(rutor.ruta05).toBe(0)
+    expect(rutor.ruta49).toBe(0)
+  })
+
+  it('a pure ruta 41 declaration passes the sales/output pairing checks', () => {
+    const totals = new Map([['3231', { debit: 0, credit: 50_000 }]])
+    const rutor = rutorFromTotals(totals)
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).not.toContain('TAXABLE_SALES_WITHOUT_OUTPUT')
+    expect(findings.map((f) => f.code)).not.toContain('OUTPUT_VAT_WITHOUT_SALES_BASE')
+  })
+})
 
 describe('calculatePeriodDates', () => {
   it('returns correct dates for monthly period', () => {
