@@ -163,18 +163,30 @@ function startPointerDrag(
   // reach the handle and onEnd would never run, leaving the drag's global
   // side effects (transition suppression, data-agent-resizing) stuck for the
   // rest of the session. lostpointercapture covers the mid-drag-unmount case.
-  const move = (ev: PointerEvent) => onMove(ev.clientX - startX, ev.clientY - startY)
-  const up = () => {
+  // Window listeners see every active pointer, so a second touch or a pen
+  // must not move this drag or end it early: only the initiating pointer id
+  // counts. lostpointercapture carries no useful pointerId in all engines,
+  // so it stays unfiltered; it can only fire for the captured pointer anyway.
+  const pointerId = e.pointerId
+  const move = (ev: PointerEvent) => {
+    if (ev.pointerId !== pointerId) return
+    onMove(ev.clientX - startX, ev.clientY - startY)
+  }
+  const end = () => {
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
     window.removeEventListener('pointercancel', up)
-    target.removeEventListener('lostpointercapture', up)
+    target.removeEventListener('lostpointercapture', end)
     onEnd()
+  }
+  const up = (ev: PointerEvent) => {
+    if (ev.pointerId !== pointerId) return
+    end()
   }
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
   window.addEventListener('pointercancel', up)
-  target.addEventListener('lostpointercapture', up)
+  target.addEventListener('lostpointercapture', end)
 }
 
 interface LoadedConversation {

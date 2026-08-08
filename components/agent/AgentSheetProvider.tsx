@@ -228,6 +228,9 @@ export function AgentSheetProvider({
     // next change.
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
     persistTimerRef.current = setTimeout(() => {
+      // Null before writing: a fired timer is no longer pending, and the
+      // unmount flush below must not replay this (possibly stale) value.
+      persistTimerRef.current = null
       persistUiState({ agent_panel: serializeAgentPanelPrefs(panelPrefsRef.current) })
     }, 300)
   }, [])
