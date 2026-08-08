@@ -229,7 +229,22 @@ export default function RecurringInvoicesPage() {
                 >
                   <td className={`${TD_CLASS} font-medium`}>
                     <div className="flex items-center gap-2">
-                      {s.name}
+                      {/* Focusable edit affordance: the row onClick is mouse-only,
+                          so keyboard users open the editor through the name. */}
+                      {canWrite ? (
+                        <button
+                          type="button"
+                          className="hover:underline underline-offset-4"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            openEdit(s.id)
+                          }}
+                        >
+                          {s.name}
+                        </button>
+                      ) : (
+                        s.name
+                      )}
                       {s.last_run_warning && (
                         <AlertTriangle
                           className="h-4 w-4 text-warning-foreground"

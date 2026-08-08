@@ -8,7 +8,9 @@ import SectorCard from '@/components/extensions/SectorCard'
 export default async function ExtensionsPage() {
   const t = await getTranslations('extensions')
   const generalSector = SECTORS.find(s => s.slug === 'general')
-  const industrySectors = SECTORS.filter(s => s.slug !== 'general')
+  // Only sectors that actually ship extensions: a shell with zero extensions
+  // would render a dead card and an empty grid.
+  const industrySectors = SECTORS.filter(s => s.slug !== 'general' && s.extensions.length > 0)
 
   const generalSectorName = (() => {
     if (!generalSector) return ''
