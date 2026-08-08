@@ -120,6 +120,9 @@ export default function AttGoraSection({
   const [matches, setMatches] = useState(suggestedMatches)
   const [leavingIds, setLeavingIds] = useState<Set<string>>(new Set())
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
+  // A confirmed match books a journal entry, so the server-derived
+  // emptyLedger flag goes stale the moment one succeeds in this session.
+  const [postedSinceLoad, setPostedSinceLoad] = useState(false)
 
   async function refetchCounts() {
     try {
@@ -166,6 +169,7 @@ export default function AttGoraSection({
         return
       }
       toast({ title: t('suggested_confirmed_toast') })
+      setPostedSinceLoad(true)
       // Fade the row out, drop it, then re-sync every count from the source
       // of truth (the match also booked a transaction, so several numbers move).
       setLeavingIds((prev) => new Set(prev).add(match.transaction_id))
@@ -215,7 +219,7 @@ export default function AttGoraSection({
         <h2 className="font-sans text-sm font-medium">{t('att_gora_title')}</h2>
         <p className="text-xs text-muted-foreground tabular-nums" role="status" aria-live="polite">
           {allClear
-            ? emptyLedger
+            ? emptyLedger && !postedSinceLoad
               ? t('att_gora_new_status')
               : t('all_done')
             : t('att_gora_left', { count: displayTotal })}
@@ -224,7 +228,7 @@ export default function AttGoraSection({
 
       <div>
           {allClear ? (
-            emptyLedger ? (
+            emptyLedger && !postedSinceLoad ? (
               <EmptyState
                 icon={BookOpen}
                 title={t('att_gora_new_title')}

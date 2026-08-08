@@ -46,7 +46,7 @@ export default async function DashboardPage() {
     { count: sieImportCount },
     { count: skatteverketTokenCount },
     { count: inboxItemCount },
-    { count: postedEntryCount },
+    { count: postedEntryCount, error: postedEntryError },
     { data: nextVatDeadline },
     { data: profile },
     agentProfile,
@@ -133,9 +133,11 @@ export default async function DashboardPage() {
   })
 
   // "Empty ledger" only matters while the setup checklist is still open; once
-  // it is completed or dismissed the ordinary all-clear copy applies.
+  // it is completed or dismissed the ordinary all-clear copy applies. A failed
+  // count must NOT read as empty: that would tell a company with real
+  // bookkeeping that its ledger is blank, so errors degrade to the normal copy.
   const setupOpen = !settings.initial_setup_completed_at && !settings.initial_setup_dismissed_at
-  const emptyLedger = setupOpen && (postedEntryCount || 0) === 0
+  const emptyLedger = setupOpen && !postedEntryError && (postedEntryCount || 0) === 0
 
   const nowMs = now.getTime()
   const expiringBankConnections = (bankConnections || [])
