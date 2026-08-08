@@ -571,6 +571,18 @@ body {
   animation: scaleIn var(--duration-base) var(--ease-out);
 }
 
+/* Chrome/Safari autofill repaints the field in a browser-chosen blue/yellow
+   that ignores the theme. Painting an inset shadow in the input's own surface
+   color over it keeps autofilled fields inside the achromatic palette; the
+   text and caret colors follow the foreground token. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px hsl(var(--card)) inset;
+  -webkit-text-fill-color: hsl(var(--foreground));
+  caret-color: hsl(var(--foreground));
+}
+
 /* Soft focus states */
 .focus-ring:focus-visible {
   outline: none;

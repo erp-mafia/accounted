@@ -351,7 +351,7 @@ function RegisterPageContent() {
 
   if (duplicateEmail) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
             <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
@@ -367,7 +367,7 @@ function RegisterPageContent() {
             </p>
           </div>
 
-          <div className="rounded-lg border bg-card p-4">
+          <div className="rounded-xl border border-border bg-background p-4">
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
               {t('duplicate_hint')}
             </p>
@@ -404,7 +404,7 @@ function RegisterPageContent() {
     const webmailHint = detectWebmailHint(email, branding.authEmailFrom)
 
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
             <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
@@ -422,7 +422,7 @@ function RegisterPageContent() {
             </p>
           </div>
 
-          <div className="rounded-lg border bg-card p-4">
+          <div className="rounded-xl border border-border bg-background p-4">
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
               {t('confirm_email_hint')}
             </p>
@@ -452,7 +452,7 @@ function RegisterPageContent() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="text-center mb-10">
           <BrandWordmark size="hero" className="mb-2" />
@@ -461,7 +461,7 @@ function RegisterPageContent() {
           </p>
         </div>
 
-        <div className="rounded-lg border bg-card p-6">
+        <div className="rounded-xl border border-border bg-background p-6">
           {(bankIdEnabled || googleAuthEnabled) && !bankIdUser && (
             <>
               {bankIdEnabled && (

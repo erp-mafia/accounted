@@ -40,7 +40,18 @@ function GoogleMark() {
  * The flow=oauth marker lets the callback tag failures so the login page
  * shows Google-specific copy instead of the email-confirmation framing.
  */
-export function GoogleAuthButton({ onError }: { onError: (message: string) => void }) {
+export function GoogleAuthButton({
+  onError,
+  compact = false,
+}: {
+  onError: (message: string) => void
+  /**
+   * Half-width alternative-method chip on the login panel: shows just the
+   * mark and "Google" (a brand name, never translated), with the full label
+   * kept as the accessible name.
+   */
+  compact?: boolean
+}) {
   const [isRedirecting, setIsRedirecting] = useState(false)
   const supabase = createClient()
   const tAuth = useTranslations('auth')
@@ -70,16 +81,19 @@ export function GoogleAuthButton({ onError }: { onError: (message: string) => vo
     <Button
       type="button"
       variant="outline"
-      className="w-full h-11"
+      className={compact ? 'h-10 w-full gap-2' : 'w-full h-11'}
       onClick={handleClick}
       disabled={isRedirecting}
+      aria-label={tAuth('continue_with_google')}
     >
       {isRedirecting ? (
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        <Loader2 className={compact ? 'h-4 w-4 animate-spin' : 'mr-2 h-4 w-4 animate-spin'} />
       ) : (
-        <span className="mr-2 flex items-center"><GoogleMark /></span>
+        <span className={compact ? 'flex items-center' : 'mr-2 flex items-center'}>
+          <GoogleMark />
+        </span>
       )}
-      {tAuth('continue_with_google')}
+      {compact ? 'Google' : tAuth('continue_with_google')}
     </Button>
   )
 }
