@@ -11,6 +11,13 @@ import { parseStartMonthDay } from '@/lib/company/first-year-defaults'
 import { fetchCompanyLookup } from '@/lib/company-lookup/fetch-company-lookup'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import posthog from 'posthog-js'
+import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import {
+  BRANCH_PROVIDERS,
+  branchDestination,
+  type BranchChoice,
+} from '@/lib/onboarding-journey/branch'
 import {
   initJourney,
   journeyReducer,
@@ -53,6 +60,20 @@ function logError(message: string, extra?: Record<string, unknown>) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message: `onboarding-journey: ${message}`, extra }),
   }).catch(() => {})
+}
+
+/**
+ * Branch-question funnel event. Anonymous by design: AnalyticsIdentify only
+ * mounts in the dashboard layout, so this measures choice distribution, not
+ * people. Guarded + swallowed like every product capture.
+ */
+function captureBranch(choice: BranchChoice) {
+  if (!isAnalyticsEnabled()) return
+  try {
+    posthog.capture('onboarding_branch_chosen', { choice })
+  } catch {
+    // Telemetry must never affect the journey.
+  }
 }
 
 interface OnboardingJourneyProps {
@@ -634,10 +655,27 @@ export default function OnboardingJourney({
           <DoneStep
             t={t}
             state={state}
+            mode={mode}
             fyAnswer={fyAnswer}
             momsAnswer={momsAnswer}
             methodAnswer={methodAnswer}
             onOpen={() => router.push('/')}
+            onBranch={(choice) => {
+              const dest = branchDestination(choice)
+              if (dest.path) {
+                // Fire-and-forget: the checklist path is a nicety, routing is
+                // the point. A lost PATCH just leaves the Hem checklist
+                // unpathed; it must never block or delay the navigation.
+                fetch('/api/onboarding/state', {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ path: dest.path }),
+                  keepalive: true,
+                }).catch(() => logError('branch path persist failed', { choice }))
+              }
+              captureBranch(choice)
+              router.push(dest.href)
+            }}
           />
         )
     }
@@ -957,17 +995,21 @@ function FyEndStep({
 function DoneStep({
   t,
   state,
+  mode,
   fyAnswer,
   momsAnswer,
   methodAnswer,
   onOpen,
+  onBranch,
 }: {
   t: TFn
   state: JourneyState
+  mode: 'first' | 'add'
   fyAnswer: string | null
   momsAnswer: string | null
   methodAnswer: string | null
   onOpen: () => void
+  onBranch: (choice: BranchChoice) => void
 }) {
   const s = state.settings
   const shortName = (s.company_name ?? '').split(' ')[0] || ''
@@ -1017,13 +1059,62 @@ function DoneStep({
           ))}
         </div>
       ) : null}
-      <div className="jny-qactions">
-        <button type="button" className="jny-btn" onClick={onOpen}>
-          {t('journey_open_app')}
-        </button>
-      </div>
+      {mode === 'first' ? (
+        <Reveal delay={notes.length > 0 ? 1400 + notes.length * 260 : 1200}>
+          <div className="jny-done-branch">
+            <h2 className="jny-done-q">
+              <InkText text={t('journey_done_source_title')} />
+            </h2>
+            <p className="jny-done-sub">{t('journey_done_source_sub')}</p>
+            <div className="jny-chips">
+              {BRANCH_PROVIDERS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="jny-pick"
+                  onClick={() => onBranch(p.id)}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={p.logo} alt="" />
+                  {p.name}
+                </button>
+              ))}
+              <button type="button" className="jny-pick" onClick={() => onBranch('sie')}>
+                {t('journey_done_source_sie')}
+              </button>
+              <button type="button" className="jny-pick" onClick={() => onBranch('fresh')}>
+                {t('journey_done_source_fresh')}
+              </button>
+            </div>
+            <div className="jny-qactions">
+              <button type="button" className="jny-btn-quiet" onClick={() => onBranch('skip')}>
+                {t('journey_done_source_skip')}
+              </button>
+            </div>
+          </div>
+        </Reveal>
+      ) : (
+        <div className="jny-qactions">
+          <button type="button" className="jny-btn" onClick={onOpen}>
+            {t('journey_open_app')}
+          </button>
+        </div>
+      )}
     </div>
   )
+}
+
+/** Delayed mount so the branch question enters (with the standard .jny-qstep
+ *  rise) only after the profile card and notes have finished settling. */
+function Reveal({ delay, children }: { delay: number; children: React.ReactNode }) {
+  const [on, setOn] = useState(false)
+  useEffect(() => {
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const id = window.setTimeout(() => setOn(true), reduced ? 0 : delay)
+    return () => window.clearTimeout(id)
+  }, [delay])
+  if (!on) return null
+  return <div className="jny-qstep">{children}</div>
 }
 
 function CardRow({ label, value, delay }: { label: string; value: string; delay: number }) {

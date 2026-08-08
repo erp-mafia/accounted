@@ -1968,6 +1968,7 @@ type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'bank' | 'sie' | 'c
 export default function ImportPage() {
   const { isSandbox } = useCompany()
   const [mode, setMode] = useState<ImportMode>(null)
+  const [initialProvider, setInitialProvider] = useState<string | null>(null)
   const [view, setView] = useState<'import' | 'export'>('import')
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
@@ -2002,6 +2003,11 @@ export default function ImportPage() {
       const modeParam = searchParams.get('mode')
       if (modeParam && allowedModes.includes(modeParam)) {
         setMode(modeParam as ImportMode)
+      }
+      // Deep link from the onboarding branch question: preselect the old
+      // system so the wizard can jump straight to its connect step.
+      if (modeParam === 'migration' && !isSandbox) {
+        setInitialProvider(searchParams.get('provider'))
       }
     }
     const viewParam = searchParams.get('view')
@@ -2294,7 +2300,9 @@ export default function ImportPage() {
       {mode === 'bank' && <BankFileImportWizard />}
       {mode === 'sie' && <SIEImportWizard />}
       {mode === 'csv_data' && <CSVDataImportWizard />}
-      {mode === 'migration' && <MigrationWizard userId={userId} />}
+      {mode === 'migration' && (
+        <MigrationWizard userId={userId} initialProvider={initialProvider ?? undefined} />
+      )}
     </div>
   )
 }
