@@ -547,7 +547,7 @@ export async function ingestTransactions(
     // stripping it would corrupt meaning ("Egen insättning" is a title, not a
     // deposit label). Same predicate as isImportedTransaction(): a live
     // bank_connection_id marks a feed row even when import_source is unset.
-    // Mirrors the scope of the 20260730100100 backfill.
+    // Mirrors the scope of the 20260808090100 backfill.
     const isUserCreatedSource = !isImportedTransaction({
       bank_connection_id: raw.bank_connection_id ?? null,
       import_source: raw.import_source ?? null,

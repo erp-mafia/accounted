@@ -529,7 +529,7 @@ export type ImportSource =
  * Closed vocabulary for HOW money moved (the payment rail), classified at
  * ingest by classifyTransactionMethod() (lib/transactions/transaction-method.ts).
  * Mirrored by the transactions_transaction_method_check DB constraint
- * (migration 20260730100000): keep the three in sync when adding a value.
+ * (migration 20260808090000): keep the three in sync when adding a value.
  */
 export const TRANSACTION_METHODS = [
   'card',
@@ -605,7 +605,7 @@ export interface Transaction {
   mcc_code: number | null
   merchant_name: string | null
 
-  // Payment rail classified at ingest (or by the 20260730100100 backfill);
+  // Payment rail classified at ingest (or by the 20260808090100 backfill);
   // null = unclassifiable from the source data.
   transaction_method: TransactionMethod | null
   // Raw PSD2 transaction-type codes, verbatim provider evidence for the
