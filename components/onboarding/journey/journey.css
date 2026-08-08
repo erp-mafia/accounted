@@ -269,3 +269,12 @@
 @media (prefers-reduced-motion: reduce) {
   .jny *, .jny *::before, .jny *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* ── done-screen branch question ─────────────────────────────────── */
+.jny-done-branch { margin-top: 34px; }
+.jny-done-q { font-family: var(--font-display); font-size: 20px; font-weight: 400; margin: 0 0 4px; letter-spacing: -0.01em; }
+.jny-done-sub { font-size: 12.5px; color: hsl(var(--muted-foreground)); margin: 0 0 18px; }
+.jny-pick img { width: 16px; height: 16px; object-fit: contain; border-radius: 4px; background: #fff; vertical-align: -3px; margin-right: 8px; }
+@media (max-height: 780px) {
+  .jny-done-branch { margin-top: 22px; }
+}

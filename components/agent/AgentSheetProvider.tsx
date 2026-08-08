@@ -7,9 +7,17 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
 } from 'react'
 import dynamic from 'next/dynamic'
+import type { AgentPanelState } from '@/types'
+import {
+  resolveAgentPanelPrefs,
+  serializeAgentPanelPrefs,
+  type ResolvedAgentPanelPrefs,
+} from '@/lib/agent-panel/geometry'
+import { persistUiState } from '@/lib/ui-state/client'
 import {
   INITIAL_AGENT_STATUS,
   reduceAgentStatus,
@@ -31,8 +39,13 @@ function AgentSheetSkeleton() {
   return (
     <div
       aria-hidden="true"
-      className="fixed inset-y-0 right-0 z-[60] flex w-full max-w-[480px] flex-col border-l border-border bg-background shadow-lg"
-      style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
+      className="fixed inset-y-0 right-0 z-[60] flex w-full flex-col border-l border-border bg-background shadow-lg"
+      style={{
+        // Tracks the user's persisted dock width (set by the provider below)
+        // so the skeleton has the same geometry as the sheet it stands in for.
+        maxWidth: 'var(--agent-panel-w, 480px)',
+        paddingTop: 'env(safe-area-inset-top, 0px)',
+      }}
     >
       <div className="flex items-center gap-2 border-b border-border px-4 py-4">
         <Skeleton className="h-8 w-8 shrink-0 rounded-full" />
@@ -157,6 +170,12 @@ interface AgentSheetContextValue {
   // Width in px the docked panel is claiming from the page, or null when it is
   // overlaying instead. Set by the panel, read by the frame layout.
   setDockWidth: (px: number | null) => void
+  // Panel geometry preferences (docked width, floating rect, active mode).
+  // Owned here rather than in the sheet so they survive sheet remounts
+  // (intent changes bump the sheet's key) and persist across sessions via
+  // user_preferences.ui_state.agent_panel.
+  panelPrefs: ResolvedAgentPanelPrefs
+  updatePanelPrefs: (patch: Partial<ResolvedAgentPanelPrefs>) => void
   // Agent name + avatar: set once from the server-loaded agent_profile
   // and exposed through context so the trigger / chat headers can render
   // them without their own fetches. Null when the user hasn't verified a
@@ -169,9 +188,16 @@ const AgentSheetContext = createContext<AgentSheetContextValue | null>(null)
 interface AgentSheetProviderProps {
   children: React.ReactNode
   identity?: AgentIdentity
+  // Server-seeded ui_state.agent_panel, so the panel opens at the user's
+  // persisted size/mode without a first-paint jump.
+  initialPanelPrefs?: AgentPanelState
 }
 
-export function AgentSheetProvider({ children, identity }: AgentSheetProviderProps) {
+export function AgentSheetProvider({
+  children,
+  identity,
+  initialPanelPrefs,
+}: AgentSheetProviderProps) {
   useSheetPrefetch()
   const [activeArgs, setActiveArgs] = useState<OpenAgentSheetArgs | null>(null)
   // Collapsed = session alive but hidden. Kept separate from activeArgs so
@@ -182,6 +208,49 @@ export function AgentSheetProvider({ children, identity }: AgentSheetProviderPro
   const [restartNonce, setRestartNonce] = useState(0)
   const [status, publishAgentStatus] = useReducer(reduceAgentStatus, INITIAL_AGENT_STATUS)
   const [dockWidth, setDockWidth] = useState<number | null>(null)
+
+  // Geometry preferences. The ref mirrors the state so updatePanelPrefs can
+  // merge and persist from event handlers without a stale closure (drag
+  // commits fire from listeners installed at drag start).
+  const [panelPrefs, setPanelPrefs] = useState<ResolvedAgentPanelPrefs>(() =>
+    resolveAgentPanelPrefs(initialPanelPrefs),
+  )
+  const panelPrefsRef = useRef(panelPrefs)
+  // Trailing debounce on the POST only: local state stays immediate, but key
+  // auto-repeat on the resize handle (one updatePanelPrefs per repeat) must
+  // not become one read-merge-write against user_preferences per repeat.
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const updatePanelPrefs = useCallback((patch: Partial<ResolvedAgentPanelPrefs>) => {
+    const next = { ...panelPrefsRef.current, ...patch }
+    panelPrefsRef.current = next
+    setPanelPrefs(next)
+    // Fire-and-forget: cosmetic preference, a lost write self-corrects on the
+    // next change.
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+    persistTimerRef.current = setTimeout(() => {
+      // Null before writing: a fired timer is no longer pending, and the
+      // unmount flush below must not replay this (possibly stale) value.
+      persistTimerRef.current = null
+      persistUiState({ agent_panel: serializeAgentPanelPrefs(panelPrefsRef.current) })
+    }, 300)
+  }, [])
+  useEffect(
+    () => () => {
+      // Flush on unmount so a pending debounced write is not lost.
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current)
+        persistUiState({ agent_panel: serializeAgentPanelPrefs(panelPrefsRef.current) })
+      }
+    },
+    [],
+  )
+
+  // The lazy sheet's loading skeleton renders before the sheet can report any
+  // geometry, so the persisted dock width is published as a CSS variable for
+  // it (and only it) to read.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--agent-panel-w', `${panelPrefs.dockWidth}px`)
+  }, [panelPrefs.dockWidth])
 
   // Visibility drives whether a finished turn is news or not, so it is derived
   // from the session state rather than reported by the panel: closing counts as
@@ -244,6 +313,8 @@ export function AgentSheetProvider({ children, identity }: AgentSheetProviderPro
       status,
       publishAgentStatus,
       setDockWidth,
+      panelPrefs,
+      updatePanelPrefs,
       identity: resolvedIdentity,
     }),
     [
@@ -255,6 +326,8 @@ export function AgentSheetProvider({ children, identity }: AgentSheetProviderPro
       activeArgs,
       collapsed,
       status,
+      panelPrefs,
+      updatePanelPrefs,
       resolvedIdentity,
     ],
   )

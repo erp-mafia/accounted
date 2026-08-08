@@ -15,6 +15,7 @@ import { visibleWorklistTotal } from '@/lib/worklist/visible-total'
 import {
   ArrowLeftRight,
   ArrowRight,
+  BookOpen,
   CalendarClock,
   CheckCircle2,
   ChevronRight,
@@ -52,6 +53,12 @@ interface AttGoraSectionProps {
   worklist: WorklistCounts
   suggestedMatches: SuggestedMatch[]
   expiringBankConnections?: ExpiringBankConnection[]
+  /**
+   * True while the setup checklist is open and the company has zero posted
+   * journal entries. An empty ledger is not an achievement: the all-clear
+   * state then says "nothing here yet" instead of a false "all caught up".
+   */
+  emptyLedger?: boolean
 }
 
 interface WorklistRowProps {
@@ -99,6 +106,7 @@ export default function AttGoraSection({
   worklist,
   suggestedMatches,
   expiringBankConnections = [],
+  emptyLedger = false,
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
   const { toast } = useToast()
@@ -112,6 +120,9 @@ export default function AttGoraSection({
   const [matches, setMatches] = useState(suggestedMatches)
   const [leavingIds, setLeavingIds] = useState<Set<string>>(new Set())
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
+  // A confirmed match books a journal entry, so the server-derived
+  // emptyLedger flag goes stale the moment one succeeds in this session.
+  const [postedSinceLoad, setPostedSinceLoad] = useState(false)
 
   async function refetchCounts() {
     try {
@@ -158,6 +169,7 @@ export default function AttGoraSection({
         return
       }
       toast({ title: t('suggested_confirmed_toast') })
+      setPostedSinceLoad(true)
       // Fade the row out, drop it, then re-sync every count from the source
       // of truth (the match also booked a transaction, so several numbers move).
       setLeavingIds((prev) => new Set(prev).add(match.transaction_id))
@@ -206,18 +218,31 @@ export default function AttGoraSection({
       <div className="flex items-baseline justify-between border-b border-border px-1 pb-2.5">
         <h2 className="font-sans text-sm font-medium">{t('att_gora_title')}</h2>
         <p className="text-xs text-muted-foreground tabular-nums" role="status" aria-live="polite">
-          {allClear ? t('all_done') : t('att_gora_left', { count: displayTotal })}
+          {allClear
+            ? emptyLedger && !postedSinceLoad
+              ? t('att_gora_new_status')
+              : t('all_done')
+            : t('att_gora_left', { count: displayTotal })}
         </p>
       </div>
 
       <div>
           {allClear ? (
-            <EmptyState
-              icon={CheckCircle2}
-              title={t('att_gora_empty_title')}
-              description={t('att_gora_empty_body')}
-              className="py-10"
-            />
+            emptyLedger && !postedSinceLoad ? (
+              <EmptyState
+                icon={BookOpen}
+                title={t('att_gora_new_title')}
+                description={t('att_gora_new_body')}
+                className="py-10"
+              />
+            ) : (
+              <EmptyState
+                icon={CheckCircle2}
+                title={t('att_gora_empty_title')}
+                description={t('att_gora_empty_body')}
+                className="py-10"
+              />
+            )
           ) : (
             <div className="pb-2">
               {bokforRows && (

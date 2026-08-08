@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { RowStatus, type RowStatusDescriptor } from '@/components/ui/row-status'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle, DialogVeil } from '@/components/ui/dialog'
 import { DataListEmpty } from '@/components/ui/data-list'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { FyPicker } from '@/components/common/FyPicker'
@@ -48,8 +48,13 @@ import type { FiscalPeriod, Invoice } from '@/types'
 
 function NewInvoiceDialogLoading() {
   const t = useTranslations('invoices')
+  // Non-modal + veil, matching NewInvoiceDialog: a modal fallback would lock
+  // the whole route (body pointer-events: none, no close path) if this chunk
+  // ever hangs or 404s on a stale deploy, and would dead-click the agent
+  // sheet meanwhile.
   return (
-    <Dialog open>
+    <Dialog open modal={false}>
+      <DialogVeil />
       <DialogContent className="sm:max-w-3xl">
         <DialogTitle>{t('new_invoice')}</DialogTitle>
         <div className="space-y-4 py-4" role="status">

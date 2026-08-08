@@ -77,6 +77,27 @@ export interface UserUiState {
   // Split-button last-used create modes, keyed per surface (plan PR 3/4),
   // e.g. create_mode.bookkeeping = 'mall'.
   create_mode?: Record<string, string>
+  // Assistant panel geometry (components/agent/AgentSheet): docked width,
+  // undocked floating rect, and which of the two modes is active. Client
+  // re-clamps to the current viewport on read, so stale sizes from another
+  // screen are safe.
+  agent_panel?: AgentPanelState
+}
+
+export type AgentPanelMode = 'docked' | 'floating'
+
+// Viewport pixels of the undocked assistant window.
+export interface AgentPanelFloatRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface AgentPanelState {
+  mode?: AgentPanelMode
+  dock_width?: number
+  float?: AgentPanelFloatRect
 }
 
 // Transaction categories
@@ -2141,8 +2162,6 @@ export interface SIEExportOptions {
    * our closing entry would zero out the P&L accounts.
    */
   exclude_year_end_closing?: boolean
-  /** Emit #FORMAT PC8 in the header. Set true when the caller will encode the output as CP437. */
-  emit_format_pc8?: boolean
 }
 
 // Input types for creating entries
@@ -2356,6 +2375,8 @@ export interface OnboardingProgress {
   hasSIEImport: boolean
   /** True when the active user has a stored Skatteverket OAuth token. */
   hasSkatteverketConnected: boolean
+  /** True when the company has ever received an item in the document inbox. */
+  hasInboxItems: boolean
 }
 
 export type InitialSetupPath = 'migration' | 'bank' | 'fresh'
@@ -3164,6 +3185,21 @@ export interface VatDeclaration {
    * (lib/reports/vat-declaration.ts), never by hand.
    */
   rcInputAccountTotals?: Record<string, { debit: number; credit: number }>
+  /**
+   * Net debit balance of the reverse-charge BASIS accounts (44xx/45xx),
+   * grouped per momssats: r25/r12/r6. Carried so a caller that reads the
+   * declaration over HTTP can hand `withRcBasisGapFindings` its downgrade
+   * evidence (lib/reports/vat-filing-gate.ts): rutor 20-24 are partitioned by
+   * purchase type, not rate, so the per-rate identity against rutor 30-32 is
+   * only computable from these account-level figures.
+   *
+   * Optional because it crosses a JSON boundary: a client parsing a response
+   * from an older deploy must keep the blocking per-voucher behavior rather
+   * than fabricate zeros, which would read as "no basis booked at any rate"
+   * and block correct periods. Produced by `rcBasisTotalsByRate()`, never by
+   * hand.
+   */
+  rcBasisByRate?: { r25: number; r12: number; r6: number }
   // Supporting data
   invoiceCount: number
   transactionCount: number

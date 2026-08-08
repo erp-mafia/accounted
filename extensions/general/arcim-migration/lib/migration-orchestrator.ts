@@ -18,8 +18,10 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { MigrationProgress, MigrationResults, SkipReasons } from '../types'
+import type { MigrationProgress, MigrationResults, MigrationStepError, SkipReasons } from '../types'
 import type { ProviderName } from '@/lib/providers/types'
+import { classifyProviderError } from '@/lib/providers/with-provider-call'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import type { CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
 import { normalizeVatNumber, isValidSwedishVatNumber } from '@/lib/vat/vat-number'
@@ -82,6 +84,42 @@ function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = []
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
   return out
+}
+
+/**
+ * Codes that doom every remaining provider call in this run: dead/expired
+ * grant, missing integration license, API module not activated. Continuing
+ * would fail four more times with the same cause and then report a
+ * "successful" migration with zero rows (the failure mode that sent a real
+ * config issue to the bug tracker). Rethrow so /migrate answers with the
+ * structured code and the wizard shows the actual remediation.
+ */
+const FATAL_STEP_ERROR_CODES = new Set([
+  'PROVIDER_AUTH_EXPIRED',
+  'PROVIDER_LICENSE_MISSING',
+  'PROVIDER_API_MODULE_INACTIVE',
+])
+
+/**
+ * Record a failed step on the results so the UI can render it. Non-fatal
+ * failures keep the log-and-continue behavior (one bad step must not discard
+ * the others' already-persisted rows); fatal connection-level failures
+ * rethrow, see FATAL_STEP_ERROR_CODES.
+ */
+function recordStepError(
+  results: MigrationResults,
+  step: MigrationStepError['step'],
+  err: unknown,
+): void {
+  const code = classifyProviderError(err)
+  if (code && FATAL_STEP_ERROR_CODES.has(code)) throw err
+
+  const rawMessage = err instanceof Error ? err.message : String(err)
+  const entry = code ? getErrorEntry(code) : undefined
+  const message = entry?.message_sv ?? `Leverantören svarade med ett fel: ${rawMessage}`
+
+  results.stepErrors = results.stepErrors ?? []
+  results.stepErrors.push({ step, code, message })
 }
 
 function getOrgNumberFromParty(party: PartyDto): string | null {
@@ -178,6 +216,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
       } catch (err) {
         console.error('Failed to import company info:', err)
         results.companyInfo = { imported: false }
+        recordStepError(results, 'companyInfo', err)
       }
     }
 
@@ -341,6 +380,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         results.customers = { total: customers.length, imported, updated, skipped, skipReasons, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import customers:', err)
+        recordStepError(results, 'customers', err)
       }
     }
 
@@ -440,6 +480,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         results.suppliers = { total: suppliers.length, imported, skipped, skipReasons, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import suppliers:', err)
+        recordStepError(results, 'suppliers', err)
       }
     }
 
@@ -652,6 +693,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         results.salesInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import sales invoices:', err)
+        recordStepError(results, 'salesInvoices', err)
       }
     }
 
@@ -878,6 +920,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         results.supplierInvoices = { total: invoices.length, imported, skipped, skipReasons, fxUnresolved, errorSample: errorSample ?? undefined }
       } catch (err) {
         console.error('Failed to import supplier invoices:', err)
+        recordStepError(results, 'supplierInvoices', err)
       }
     }
 
@@ -902,6 +945,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         )
       } catch (err) {
         console.error('Failed to reconcile supplier invoice payments:', err)
+        recordStepError(results, 'reconciliation', err)
       }
     }
 

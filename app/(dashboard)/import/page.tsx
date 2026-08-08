@@ -1968,6 +1968,7 @@ type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'bank' | 'sie' | 'c
 export default function ImportPage() {
   const { isSandbox } = useCompany()
   const [mode, setMode] = useState<ImportMode>(null)
+  const [initialProvider, setInitialProvider] = useState<string | null>(null)
   const [view, setView] = useState<'import' | 'export'>('import')
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
@@ -2003,6 +2004,12 @@ export default function ImportPage() {
       if (modeParam && allowedModes.includes(modeParam)) {
         setMode(modeParam as ImportMode)
       }
+      // Deep link from the onboarding branch question: preselect the old
+      // system so the wizard can jump straight to its connect step. Cleared
+      // for every other mode so a stale preselect can't survive re-entry.
+      setInitialProvider(
+        modeParam === 'migration' && !isSandbox ? searchParams.get('provider') : null
+      )
     }
     const viewParam = searchParams.get('view')
     if (viewParam === 'export' || viewParam === 'import') {
@@ -2236,7 +2243,17 @@ export default function ImportPage() {
       )}
 
       {mode !== null && (
-        <Button variant="ghost" size="sm" onClick={() => setMode(null)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setMode(null)
+            // Mode is client state (not URL-synced), so the deep-linked
+            // preselect must be cleared here too or a re-entered migration
+            // mode would auto-jump again.
+            setInitialProvider(null)
+          }}
+        >
           <ArrowLeft className="mr-2 h-4 w-4" />
           {t('back_to_choices')}
         </Button>
@@ -2294,7 +2311,9 @@ export default function ImportPage() {
       {mode === 'bank' && <BankFileImportWizard />}
       {mode === 'sie' && <SIEImportWizard />}
       {mode === 'csv_data' && <CSVDataImportWizard />}
-      {mode === 'migration' && <MigrationWizard userId={userId} />}
+      {mode === 'migration' && (
+        <MigrationWizard userId={userId} initialProvider={initialProvider ?? undefined} />
+      )}
     </div>
   )
 }

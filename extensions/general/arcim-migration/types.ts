@@ -68,6 +68,19 @@ export interface SkipReasons {
 }
 
 /**
+ * A migration step that failed against the provider API, surfaced to the user
+ * instead of being swallowed into a "successful" empty sync. `message` is the
+ * user-facing Swedish text (mapped from the structured error registry when the
+ * failure classifies, otherwise a generic sentence with the provider's reply).
+ */
+export interface MigrationStepError {
+  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'reconciliation'
+  /** Structured code when the failure classifies (e.g. PROVIDER_API_MODULE_INACTIVE), else null. */
+  code: string | null
+  message: string
+}
+
+/**
  * Foreign-currency invoices that were imported but whose SEK value could not
  * be established (currency outside Riksbanken's series, or no observation for
  * the invoice's own date). They are counted in `imported`: the record itself is
@@ -89,6 +102,12 @@ export interface MigrationResults {
    * candidate voucher.
    */
   reconciliation?: { scanned: number; autoLinked: number; ambiguous: number; unmatched: number }
+  /**
+   * Steps that failed against the provider API. Present (non-empty) whenever a
+   * step's fetch or import threw: the result step must render these instead of
+   * implying the sync succeeded with zero rows.
+   */
+  stepErrors?: MigrationStepError[]
 }
 
 // ── Consent flow ────────────────────────────────────────────────────

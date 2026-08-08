@@ -95,7 +95,7 @@ export type INK2RSRUCode = keyof INK2RRutor
 export interface INK2Rutor {
   '7011': string  // Räkenskapsår fr.o.m. (YYYYMMDD)
   '7012': string  // Räkenskapsår t.o.m. (YYYYMMDD)
-  '7113': number  // 1.1 Överskott av näringsverksamhet
+  '7104': number  // 1.1 Överskott av näringsverksamhet
   '7114': number  // 1.2 Underskott av näringsverksamhet
 }
 

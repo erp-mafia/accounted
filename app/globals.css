@@ -103,6 +103,14 @@
   --duration-slow: 500ms;
 }
 
+/* While the assistant panel's width handle is being dragged, the page margin
+   must track the cursor 1:1: the page panel's 300ms margin transition would
+   trail the drag and leave a gap. AgentSheet sets the attribute for the
+   duration of the drag only. */
+:root[data-agent-resizing] #main-content {
+  transition: none !important;
+}
+
 .dark {
   color-scheme: dark;
 

@@ -294,6 +294,9 @@ export default async function DashboardLayout({
           avatarId: agentProfileIdentity?.avatar_id ?? null,
           isVerified: Boolean(agentProfileIdentity?.verified_at),
         }}
+        // Server-seeded panel geometry (docked width / floating rect / mode)
+        // so the assistant opens at the user's persisted size without a jump.
+        initialPanelPrefs={uiState.agent_panel}
       >
         <CompanyTabSync />
         <div

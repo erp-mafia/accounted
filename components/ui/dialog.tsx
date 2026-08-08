@@ -52,6 +52,22 @@ const DialogContent = React.forwardRef<
 ))
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
+/**
+ * Backdrop for non-modal dialogs. Radix renders no Overlay when the root has
+ * `modal={false}`, so dialogs that opt out of modality (to keep the agent
+ * sheet interactive above them) render this alongside DialogContent to keep
+ * the standard veil. z-40 sits under DialogContent (z-50) and the agent
+ * sheet (z-60).
+ */
+const DialogVeil = () => (
+  <DialogPortal>
+    <div
+      aria-hidden="true"
+      className="fixed inset-0 z-40 bg-black/50 dark:bg-black/60 animate-in fade-in-0"
+    />
+  </DialogPortal>
+)
+
 const DialogHeader = ({
   className,
   ...props
@@ -114,6 +130,7 @@ export {
   DialogClose,
   DialogTrigger,
   DialogContent,
+  DialogVeil,
   DialogHeader,
   DialogFooter,
   DialogTitle,
