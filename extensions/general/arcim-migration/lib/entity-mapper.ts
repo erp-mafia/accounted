@@ -517,7 +517,10 @@ export function mapSalesInvoice(
     user_id: userId,
     company_id: companyId,
     customer_id: customerId,
-    invoice_number: dto.invoiceNumber,
+    // Empty string must become NULL: the UNIQUE (company_id, invoice_number)
+    // index is partial on NOT NULL, so '' from a provider payload missing the
+    // field would collide on the second invoice and reject the insert.
+    invoice_number: dto.invoiceNumber || null,
     invoice_date: dto.issueDate,
     due_date: dto.dueDate || dto.issueDate,
     status: statusMap[dto.status] || 'sent',
@@ -540,6 +543,9 @@ export function mapSalesInvoice(
     document_type: isCreditNote ? 'credit_note' : 'invoice',
     paid_at: dto.paymentStatus.paid ? dto.paymentStatus.lastPaymentDate || dto.issueDate : null,
     paid_amount: dto.paymentStatus.paid ? total : round2(total - dto.paymentStatus.balance.value),
+    // remaining_amount is NOT NULL DEFAULT 0, so omitting it makes every
+    // migrated open invoice look fully settled in AR aging.
+    remaining_amount: dto.paymentStatus.paid ? 0 : Math.max(0, round2(dto.paymentStatus.balance.value)),
   }
 
   const items = dto.lines.map((line, idx) => mapSalesInvoiceLine(line, idx))
@@ -625,7 +631,11 @@ export function mapSupplierInvoice(
     user_id: userId,
     company_id: companyId,
     supplier_id: supplierId,
-    supplier_invoice_number: dto.invoiceNumber,
+    // Empty string must become NULL: with '' every number-less invoice from
+    // the same supplier collides on the UNIQUE
+    // (company_id, supplier_id, supplier_invoice_number) index, while NULLs
+    // are treated as distinct.
+    supplier_invoice_number: dto.invoiceNumber || null,
     invoice_date: dto.issueDate,
     due_date: dto.dueDate || dto.issueDate,
     received_date: dto.issueDate,

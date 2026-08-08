@@ -120,10 +120,10 @@ interface SkipReasons {
 
 interface MigrationResults {
   companyInfo?: { imported: boolean }
-  customers?: { total: number; imported: number; updated?: number; skipped: number; skipReasons?: SkipReasons }
-  suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
-  salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
-  supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons }
+  customers?: { total: number; imported: number; updated?: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
+  suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
+  salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
+  supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
 }
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import type { AccountMapping, ImportResult, ParsedSIEFile } from '@/lib/import/types'
@@ -1643,38 +1643,38 @@ function ResultStep({
                 <EntityResultRow
                   icon={<Users className="h-4 w-4" />}
                   label="Kunder"
-                  status="success"
+                  status={entityRowStatus(results.customers!.imported, results.customers!.skipReasons)}
                   statusText={results.customers!.updated
                     ? `${results.customers!.imported} importerade, ${results.customers!.updated} kompletterade`
                     : `${results.customers!.imported} importerade`}
-                  detail={results.customers!.skipped > 0 ? formatSkipReasons(results.customers!.skipReasons, 'customer') ?? `${results.customers!.skipped} hoppades över` : undefined}
+                  detail={results.customers!.skipped > 0 ? formatSkipReasons(results.customers!.skipReasons, 'customer', results.customers!.errorSample) ?? `${results.customers!.skipped} hoppades över` : undefined}
                 />
               )}
               {hasSuppliers && (
                 <EntityResultRow
                   icon={<Truck className="h-4 w-4" />}
                   label="Leverantörer"
-                  status="success"
+                  status={entityRowStatus(results.suppliers!.imported, results.suppliers!.skipReasons)}
                   statusText={`${results.suppliers!.imported} importerade`}
-                  detail={results.suppliers!.skipped > 0 ? formatSkipReasons(results.suppliers!.skipReasons, 'supplier') ?? `${results.suppliers!.skipped} hoppades över` : undefined}
+                  detail={results.suppliers!.skipped > 0 ? formatSkipReasons(results.suppliers!.skipReasons, 'supplier', results.suppliers!.errorSample) ?? `${results.suppliers!.skipped} hoppades över` : undefined}
                 />
               )}
               {hasSalesInvoices && (
                 <EntityResultRow
                   icon={<FileText className="h-4 w-4" />}
                   label="Kundfakturor"
-                  status="success"
+                  status={entityRowStatus(results.salesInvoices!.imported, results.salesInvoices!.skipReasons)}
                   statusText={`${results.salesInvoices!.imported} importerade`}
-                  detail={results.salesInvoices!.skipped > 0 ? formatSkipReasons(results.salesInvoices!.skipReasons, 'invoice') ?? `${results.salesInvoices!.skipped} hoppades över` : undefined}
+                  detail={results.salesInvoices!.skipped > 0 ? formatSkipReasons(results.salesInvoices!.skipReasons, 'invoice', results.salesInvoices!.errorSample) ?? `${results.salesInvoices!.skipped} hoppades över` : undefined}
                 />
               )}
               {hasSupplierInvoices && (
                 <EntityResultRow
                   icon={<FileText className="h-4 w-4" />}
                   label="Leverantörsfakturor"
-                  status="success"
+                  status={entityRowStatus(results.supplierInvoices!.imported, results.supplierInvoices!.skipReasons)}
                   statusText={`${results.supplierInvoices!.imported} importerade`}
-                  detail={results.supplierInvoices!.skipped > 0 ? formatSkipReasons(results.supplierInvoices!.skipReasons, 'invoice') ?? `${results.supplierInvoices!.skipped} hoppades över` : undefined}
+                  detail={results.supplierInvoices!.skipped > 0 ? formatSkipReasons(results.supplierInvoices!.skipReasons, 'invoice', results.supplierInvoices!.errorSample) ?? `${results.supplierInvoices!.skipped} hoppades över` : undefined}
                 />
               )}
             </div>
@@ -1742,7 +1742,11 @@ function ResultStep({
   )
 }
 
-function formatSkipReasons(reasons?: SkipReasons, entityType?: 'customer' | 'supplier' | 'invoice'): string | undefined {
+function formatSkipReasons(
+  reasons?: SkipReasons,
+  entityType?: 'customer' | 'supplier' | 'invoice',
+  errorSample?: string,
+): string | undefined {
   if (!reasons) return undefined
   const parts: string[] = []
   if (reasons.duplicate) parts.push(`${reasons.duplicate} fanns redan`)
@@ -1751,8 +1755,19 @@ function formatSkipReasons(reasons?: SkipReasons, entityType?: 'customer' | 'sup
     const matchLabel = entityType === 'invoice' ? 'utan matchning' : 'utan matchning'
     parts.push(`${reasons.noMatch} ${matchLabel}`)
   }
-  if (reasons.failed) parts.push(`${reasons.failed} misslyckades`)
+  if (reasons.failed) {
+    parts.push(
+      errorSample
+        ? `${reasons.failed} misslyckades: ${errorSample.slice(0, 140)}`
+        : `${reasons.failed} misslyckades`
+    )
+  }
   return parts.length > 0 ? parts.join(', ') : undefined
+}
+
+/** A step that failed everything it tried is an error, not a green checkmark. */
+function entityRowStatus(imported: number, reasons?: SkipReasons): 'success' | 'error' {
+  return imported === 0 && (reasons?.failed ?? 0) > 0 ? 'error' : 'success'
 }
 
 /** Simple row for non-SIE entity results (customers, invoices, etc.) */
@@ -1765,7 +1780,7 @@ function EntityResultRow({
 }: {
   icon: React.ReactNode
   label: string
-  status: 'success' | 'skipped'
+  status: 'success' | 'skipped' | 'error'
   statusText: string
   detail?: string
 }) {
@@ -1777,7 +1792,7 @@ function EntityResultRow({
         <p className="text-sm text-muted-foreground">{statusText}</p>
         {detail && <p className="text-sm text-muted-foreground/70">{detail}</p>}
       </div>
-      <StatusIcon status={status === 'success' ? 'success' : 'warning'} />
+      <StatusIcon status={status === 'skipped' ? 'warning' : status} />
     </div>
   )
 }
