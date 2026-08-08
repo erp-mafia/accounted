@@ -157,6 +157,55 @@ describe('extractInvoiceFields', () => {
     expect(data.supplier.name).toBeNull()
   })
 
+  // ── Fenced / prefixed model output (Sonnet 5 regression, 2026-08) ──
+  // Sonnet 5 intermittently wraps the JSON in markdown fences despite the
+  // JSON-only instruction; a fifth of prod extractions came back empty
+  // because JSON.parse saw the backticks.
+
+  it('parses a response wrapped in ```json fences', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse('```json\n' + JSON.stringify(VALID_RESULT) + '\n```')
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kvitto.pdf',
+    })
+    expect(data.supplier.name).toBe('Anthropic, PBC')
+    expect(data.totals.total).toBe(6.25)
+    expect(data.confidence).toBe(1)
+  })
+
+  it('parses a response wrapped in bare ``` fences', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse('```\n' + JSON.stringify(VALID_RESULT) + '\n```')
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kvitto.pdf',
+    })
+    expect(data.totals.total).toBe(6.25)
+    expect(data.confidence).toBe(1)
+  })
+
+  it('parses a response with prose before and after the JSON object', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse(
+        'Here is the extracted data:\n```json\n' +
+          JSON.stringify(VALID_RESULT) +
+          '\n```\nLet me know if you need anything else.'
+      )
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kvitto.pdf',
+    })
+    expect(data.supplier.name).toBe('Anthropic, PBC')
+    expect(data.confidence).toBe(1)
+  })
+
   it('returns empty result when AI response fails schema validation', async () => {
     mockCreate.mockReturnValueOnce(
       aiResponse({ supplier: { name: 'X' } /* missing required keys */ })

@@ -240,6 +240,18 @@ Rules:
 - lineItems: include every line. Empty array is fine if the document has no itemised lines.
 - vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.`
 
+// Sonnet 5 intermittently wraps its answer in markdown fences (```json ... ```)
+// or adds a short preamble, despite the JSON-only instruction in the system
+// prompt. Slice from the first '{' to the last '}' so fenced or prefixed
+// output still parses; Zod validation downstream still rejects garbage.
+// Returns the input unchanged when no object braces are found, so the
+// existing parse-failure path handles prose-only refusals.
+export function extractJsonObject(raw: string): string {
+  const start = raw.indexOf('{')
+  const end = raw.lastIndexOf('}')
+  return start !== -1 && end > start ? raw.slice(start, end + 1) : raw
+}
+
 export function emptyResult(): InvoiceExtractionResult {
   return {
     documentKind: null,
@@ -422,7 +434,7 @@ export async function extractInvoiceFields(
       })
     }
 
-    const parsed = JSON.parse(rawText)
+    const parsed = JSON.parse(extractJsonObject(rawText))
     const validated = ExtractionSchema.parse(parsed)
 
     return {
