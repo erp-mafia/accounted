@@ -216,14 +216,31 @@ export function AgentSheetProvider({
     resolveAgentPanelPrefs(initialPanelPrefs),
   )
   const panelPrefsRef = useRef(panelPrefs)
+  // Trailing debounce on the POST only: local state stays immediate, but key
+  // auto-repeat on the resize handle (one updatePanelPrefs per repeat) must
+  // not become one read-merge-write against user_preferences per repeat.
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const updatePanelPrefs = useCallback((patch: Partial<ResolvedAgentPanelPrefs>) => {
     const next = { ...panelPrefsRef.current, ...patch }
     panelPrefsRef.current = next
     setPanelPrefs(next)
     // Fire-and-forget: cosmetic preference, a lost write self-corrects on the
     // next change.
-    persistUiState({ agent_panel: serializeAgentPanelPrefs(next) })
+    if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+    persistTimerRef.current = setTimeout(() => {
+      persistUiState({ agent_panel: serializeAgentPanelPrefs(panelPrefsRef.current) })
+    }, 300)
   }, [])
+  useEffect(
+    () => () => {
+      // Flush on unmount so a pending debounced write is not lost.
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current)
+        persistUiState({ agent_panel: serializeAgentPanelPrefs(panelPrefsRef.current) })
+      }
+    },
+    [],
+  )
 
   // The lazy sheet's loading skeleton renders before the sheet can report any
   // geometry, so the persisted dock width is published as a CSS variable for

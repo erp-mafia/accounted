@@ -21,6 +21,8 @@ import AgentChat, {
 import type { AgentPanelFloatRect, StoredStagedOperation } from '@/types'
 import {
   DOCK_GUTTER,
+  DOCK_WIDTH_MAX,
+  DOCK_WIDTH_MIN,
   clampDockWidth,
   clampFloatRect,
   defaultFloatRect,
@@ -117,6 +119,25 @@ function readNavWidth(): number {
 }
 
 /**
+ * Reactive sidebar width: the nav toggle rewrites #dash-shell's inline
+ * --nav-w, which fires no resize event, so observe the style attribute
+ * instead of forcing a computed-style read on every render.
+ */
+function useNavWidth(): number {
+  const [w, setW] = useState(readNavWidth)
+  useEffect(() => {
+    const shell = document.getElementById('dash-shell')
+    if (!shell) return
+    const update = () => setW(readNavWidth())
+    update()
+    const mo = new MutationObserver(update)
+    mo.observe(shell, { attributes: true, attributeFilter: ['style'] })
+    return () => mo.disconnect()
+  }, [])
+  return w
+}
+
+/**
  * Minimal pointer drag: capture on the handle, report cursor deltas, call
  * onEnd exactly once on release or cancel. Deliberately not a library:
  * three call sites, no gesture semantics beyond delta tracking.
@@ -137,16 +158,23 @@ function startPointerDrag(
     // Capture is best-effort: without it the drag still works while the
     // cursor stays over the handle.
   }
+  // Listeners live on window, NOT on the handle: if capture fails (or the
+  // handle unmounts mid-drag), a pointerup outside the 8px strip would never
+  // reach the handle and onEnd would never run, leaving the drag's global
+  // side effects (transition suppression, data-agent-resizing) stuck for the
+  // rest of the session. lostpointercapture covers the mid-drag-unmount case.
   const move = (ev: PointerEvent) => onMove(ev.clientX - startX, ev.clientY - startY)
   const up = () => {
-    target.removeEventListener('pointermove', move)
-    target.removeEventListener('pointerup', up)
-    target.removeEventListener('pointercancel', up)
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+    window.removeEventListener('pointercancel', up)
+    target.removeEventListener('lostpointercapture', up)
     onEnd()
   }
-  target.addEventListener('pointermove', move)
-  target.addEventListener('pointerup', up)
-  target.addEventListener('pointercancel', up)
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
+  window.addEventListener('pointercancel', up)
+  target.addEventListener('lostpointercapture', up)
 }
 
 interface LoadedConversation {
@@ -194,14 +222,15 @@ export default function AgentSheet({
   const { identity, panelPrefs, updatePanelPrefs } = useAgentSheet()
   const viewport = useViewportSize()
   const isDesktop = useMinWidthMd()
+  const navW = useNavWidth()
 
   // Resolved geometry for this render. Floating exists on desktop only: below
   // md the sheet stays the full-screen mobile surface whatever the persisted
   // mode says. Everything re-clamps against the live viewport, so preferences
   // saved on another screen can never strand the panel off-screen.
   const floating = panelPrefs.mode === 'floating' && isDesktop
-  const dockW = clampDockWidth(panelPrefs.dockWidth, viewport.w, readNavWidth())
-  const expandedW = expandedDockWidth(viewport.w, readNavWidth())
+  const dockW = clampDockWidth(panelPrefs.dockWidth, viewport.w, navW)
+  const expandedW = expandedDockWidth(viewport.w, navW)
   const floatRect = floating
     ? clampFloatRect(
         panelPrefs.float ?? defaultFloatRect(viewport.w, viewport.h),
@@ -296,7 +325,9 @@ export default function AgentSheet({
       e,
       (dx) => {
         // The handle sits on the panel's left edge: dragging left widens.
-        const w = clampDockWidth(base - dx, window.innerWidth, readNavWidth())
+        // navW from the closure: the sidebar cannot change mid-drag, and this
+        // avoids a computed-style read on every pointer frame.
+        const w = clampDockWidth(base - dx, window.innerWidth, navW)
         pendingDockW.current = w
         el.style.maxWidth = `${w}px`
         document.documentElement.style.setProperty('--agent-dock-w', `${w + DOCK_GUTTER}px`)
@@ -321,13 +352,16 @@ export default function AgentSheet({
 
   function onDockResizeKey(e: React.KeyboardEvent) {
     const step = 24
+    // Step from the width the user actually sees: in focus mode that is
+    // expandedW, and the first keypress folds it into a custom dock width.
+    const base = expanded ? expandedW : dockW
     let next: number | null = null
-    if (e.key === 'ArrowLeft') next = dockW + step
-    if (e.key === 'ArrowRight') next = dockW - step
+    if (e.key === 'ArrowLeft') next = base + step
+    if (e.key === 'ArrowRight') next = base - step
     if (next === null) return
     e.preventDefault()
     setExpanded(false)
-    updatePanelPrefs({ dockWidth: clampDockWidth(next, viewport.w, readNavWidth()) })
+    updatePanelPrefs({ dockWidth: clampDockWidth(next, viewport.w, navW) })
   }
 
   // ── Floating move / resize ────────────────────────────────────────────
@@ -490,6 +524,9 @@ export default function AgentSheet({
           role="separator"
           aria-orientation="vertical"
           aria-label="Ändra panelens bredd"
+          aria-valuenow={expanded ? expandedW : dockW}
+          aria-valuemin={DOCK_WIDTH_MIN}
+          aria-valuemax={clampDockWidth(DOCK_WIDTH_MAX, viewport.w, navW)}
           tabIndex={0}
           onPointerDown={onDockResizeStart}
           onKeyDown={onDockResizeKey}
