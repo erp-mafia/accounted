@@ -28,7 +28,7 @@ registerEndpoint({
   pitfalls: [
     '`period_id` is required.',
     'The response is text/plain with Content-Disposition: attachment: clients should treat as a binary download. Filename uses the pattern `export_{period_id}.se`.',
-    'Default encoding is UTF-8 (no #FORMAT PC8 tag). Pass `encoding=cp437` to get a spec-compliant CP437-encoded file with #FORMAT PC8, required by some legacy desktop bookkeeping software.',
+    'The compulsory #FORMAT PC8 tag is always present, but default byte encoding is UTF-8 (the de-facto cloud convention; importers detect encoding from the bytes). Pass `encoding=cp437` for actual CP437 bytes, required by some legacy desktop bookkeeping software.',
     'Only `posted` entries are exported; drafts and reversed entries\' originals are included but marked accordingly.',
   ],
   example: {
@@ -76,7 +76,6 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
           company_name: (company as { company_name: string | null }).company_name || 'Unknown',
           org_number: (company as { org_number: string | null }).org_number,
           exclude_year_end_closing: excludeClosing,
-          emit_format_pc8: useCP437,
         }),
       { log: ctx.log, requestId: ctx.requestId, reportName: 'sie-export' },
     )
