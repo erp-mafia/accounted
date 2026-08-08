@@ -328,6 +328,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             if (outcome.error || !outcome.data) {
               if (outcome.error) {
                 console.error('[migration] Customer metadata enrichment failed:', outcome.error.message)
+                errorSample ??= outcome.error.message
               }
               skipReasons.failed = (skipReasons.failed ?? 0) + 1
               skipped++
@@ -577,10 +578,13 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
-        // Drop invoices whose customer couldn't be created.
+        // Drop invoices whose customer couldn't be created. That is a DB
+        // failure (the stub insert errored, errorSample carries it), not a
+        // matching miss: counting it as noMatch would render a green result
+        // row with the database error hidden.
         const ready = resolved.filter((r) => {
           if (r.customerId === '__FAILED__') {
-            skipReasons.noMatch = (skipReasons.noMatch ?? 0) + 1
+            skipReasons.failed = (skipReasons.failed ?? 0) + 1
             skipped++
             return false
           }
@@ -790,8 +794,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         const seenSuppInvKeys = new Set<string>()
         const ready = resolved.filter((r) => {
           if (r.supplierId === '__FAILED__' || !r.supplierId) {
+            // Failed stub insert = DB failure with errorSample set, so count
+            // it as failed; noMatch would hide the error in the result row.
             if (r.supplierId === '__FAILED__') {
-              skipReasons.noMatch = (skipReasons.noMatch ?? 0) + 1
+              skipReasons.failed = (skipReasons.failed ?? 0) + 1
               skipped++
             }
             return false
