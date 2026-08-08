@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
-import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import {
+  extractInvoiceFields,
+  extractJsonObject,
+} from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 
 // Mock the Bedrock SDK so tests drive the JSON parser without
 // network/credential needs.
@@ -242,6 +245,32 @@ describe('extractInvoiceFields', () => {
     })
     expect(data.supplier.address).toBe('Suite {B}, "Main" St 1')
     expect(data.confidence).toBe(1)
+  })
+
+  it('stays bounded on pathological brace-laden input and falls through unchanged', async () => {
+    // 100k unclosed braces: without the attempt cap this would scan
+    // quadratically; with it the helper bails fast and returns the input,
+    // which then lands in the existing empty-result path.
+    const pathological = '{'.repeat(100_000)
+    const startedAt = performance.now()
+    expect(extractJsonObject(pathological)).toBe(pathological)
+    expect(performance.now() - startedAt).toBeLessThan(1_000)
+
+    mockCreate.mockReturnValueOnce(aiResponse(pathological))
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'f.pdf',
+    })
+    expect(data.totals.total).toBeNull()
+    expect(data.confidence).toBe(0)
+  })
+
+  it('skips scanning entirely for oversized input', async () => {
+    // Above the 256 KB cap the helper must not scan at all; the raw text
+    // passes through unchanged even though it contains valid JSON.
+    const oversized = 'x'.repeat(300 * 1024) + JSON.stringify(VALID_RESULT)
+    expect(extractJsonObject(oversized)).toBe(oversized)
   })
 
   it('returns empty result when AI response fails schema validation', async () => {

@@ -249,9 +249,21 @@ Rules:
 // unchanged when no candidate parses, so the existing parse-failure path
 // handles prose-only refusals. Zod validation downstream still rejects
 // well-formed-but-wrong JSON.
+// Bounds for the candidate scan below. Real model output is already capped
+// by MAX_TOKENS (roughly 33 KB of text at 8192 tokens), so genuine responses
+// never come near these; they exist so pathological or adversarially
+// brace-laden text cannot make the scan quadratic (compliance review
+// A.8.28). Oversized or exhausted inputs fall through to the raw text and
+// land in the existing empty-result path.
+const MAX_SCAN_INPUT_LENGTH = 256 * 1024
+const MAX_CANDIDATE_ATTEMPTS = 50
+
 export function extractJsonObject(raw: string): string {
+  if (raw.length > MAX_SCAN_INPUT_LENGTH) return raw
+  let attempts = 0
   let start = raw.indexOf('{')
-  while (start !== -1) {
+  while (start !== -1 && attempts < MAX_CANDIDATE_ATTEMPTS) {
+    attempts++
     let depth = 0
     let inString = false
     let escaped = false
