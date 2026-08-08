@@ -10,8 +10,11 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/ui/empty-state'
+import { AttnLine } from '@/components/ui/attn-line'
+import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { AccountNumber } from '@/components/ui/account-number'
-import { AlertCircle, ChevronDown, ChevronRight, Link2, Unlink, Play, Eye, EyeOff, PiggyBank, MoreHorizontal } from 'lucide-react'
+import { AlertCircle, ChevronDown, ChevronRight, Landmark, Link2, Unlink, Play, Eye, EyeOff, PiggyBank, MoreHorizontal } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { CashAccountSelector } from '@/components/common/CashAccountSelector'
@@ -878,7 +881,7 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
       {error && (
         <Card>
           <CardContent className="py-3 text-center text-destructive text-sm">
@@ -898,14 +901,11 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
             <div className="flex items-center justify-between">
               <CardTitle>Avstämning mot <AccountNumber number={accountNumber} /></CardTitle>
               {status.is_reconciled ? (
-                <Badge variant="success">Avstämd</Badge>
+                <span className="text-sm text-muted-foreground">Avstämd</span>
               ) : (
                 <Badge variant="destructive">Ej avstämd</Badge>
               )}
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Avstämningen körs mot <AccountNumber number={accountNumber} /> ({accountCurrency}). Övriga bankkonton (t.ex. Plusgiro <AccountNumber number="1920" />, kreditkort <AccountNumber number="1940" /> eller valutakonton) stäms av separat. Välj kontot i listan nedan.
-            </p>
           </CardHeader>
           <CardContent>
             <div className="space-y-2 text-sm">
@@ -963,139 +963,124 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
         </Card>
       )}
 
-      {/* Action Bar */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-wrap items-end gap-4">
-            <CashAccountSelector
-              value={accountNumber}
-              onChange={setAccountNumber}
+      {/* Toolbar: flat on the panel, no box (UI-migration language) */}
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-end gap-4">
+          <CashAccountSelector
+            value={accountNumber}
+            onChange={setAccountNumber}
+          />
+          <div>
+            <Label>Datum från</Label>
+            <Input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="mt-1"
             />
-            <div>
-              <Label>Datum från</Label>
-              <Input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label>Datum till</Label>
-              <Input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className="mt-1"
-              />
-            </div>
-            <Button onClick={() => fetchAll()} variant={datesDirty ? 'default' : 'outline'}>
-              Filtrera
-            </Button>
-            <div className="flex-1" />
-            <Button onClick={handleDryRun} disabled={runLoading || datesDirty} variant="outline">
-              <Eye className="h-4 w-4 mr-2" />
-              {runLoading ? 'Analyserar...' : 'Förhandsgranska'}
-            </Button>
-            {dryRunResults && dryRunResults.length > 0 && (
-              <Button onClick={handleApply} disabled={applyLoading || selectedPairs.size === 0}>
-                <Play className="h-4 w-4 mr-2" />
-                {applyLoading
-                  ? 'Tillämpar...'
-                  : `Tillämpa ${selectedPairs.size} ${selectedPairs.size === 1 ? 'matchning' : 'matchningar'}`}
-              </Button>
-            )}
           </div>
-          {datesDirty && (
-            <p className="mt-3 text-xs text-muted-foreground">
-              Datumfiltret är ändrat men inte tillämpat: klicka Filtrera för att uppdatera
-              listorna innan du förhandsgranskar.
-            </p>
+          <div>
+            <Label>Datum till</Label>
+            <Input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="mt-1"
+            />
+          </div>
+          <Button onClick={() => fetchAll()} variant={datesDirty ? 'default' : 'outline'}>
+            Filtrera
+          </Button>
+          <div className="flex-1" />
+          <Button onClick={handleDryRun} disabled={runLoading || datesDirty} variant="outline">
+            <Eye className="h-4 w-4 mr-2" />
+            {runLoading ? 'Analyserar...' : 'Förhandsgranska'}
+          </Button>
+          {dryRunResults && dryRunResults.length > 0 && (
+            <Button onClick={handleApply} disabled={applyLoading || selectedPairs.size === 0}>
+              <Play className="h-4 w-4 mr-2" />
+              {applyLoading
+                ? 'Tillämpar...'
+                : `Tillämpa ${selectedPairs.size} ${selectedPairs.size === 1 ? 'matchning' : 'matchningar'}`}
+            </Button>
           )}
-        </CardContent>
-      </Card>
+        </div>
+        {datesDirty && (
+          <AttnLine>
+            Datumfiltret är ändrat men inte tillämpat: klicka Filtrera för att uppdatera
+            listorna innan du förhandsgranskar.
+          </AttnLine>
+        )}
+      </div>
 
       {/* Dry Run Preview */}
       {dryRunResults && dryRunResults.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">
-              Förhandsgranskning: {dryRunResults.length}{' '}
-              {dryRunResults.length === 1 ? 'matchning hittad' : 'matchningar hittade'}
-            </CardTitle>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Starka träffar är förvalda. Ungefärliga träffar kräver att du bockar i dem själv:
-              granska verifikationen först.
-            </p>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                  <tr className="border-b text-left">
-                    <th className="py-2 w-8"></th>
-                    <th className="py-2">Transaktion</th>
-                    <th className="py-2 w-24">Datum</th>
-                    <th className="py-2 w-28 text-right">Belopp</th>
-                    <th className="py-2 w-8 text-center">&harr;</th>
-                    <th className="py-2">Verifikation</th>
-                    <th className="py-2 w-24">Datum</th>
-                    <th className="py-2 w-28">Metod</th>
-                    <th className="py-2 w-20">Träff</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dryRunResults.map((m) => {
-                    const key = matchKey(m.transaction_id, m.journal_entry_id)
-                    const badge = confidenceLabel(m.confidence)
-                    return (
-                      <tr key={key} className="border-b last:border-0">
-                        <td className="py-2">
-                          <Checkbox
-                            checked={selectedPairs.has(key)}
-                            onCheckedChange={() => toggleMatchSelection(key)}
-                            aria-label={`Tillämpa matchning för ${m.transaction_description}`}
-                          />
-                        </td>
-                        <td className="py-2 truncate max-w-[180px]">{m.transaction_description}</td>
-                        <td className="py-2 tabular-nums">{formatDate(m.transaction_date)}</td>
-                        <td className="py-2 text-right tabular-nums">{formatAmount(m.transaction_amount)}</td>
-                        <td className="py-2 text-center text-muted-foreground">&harr;</td>
-                        <td className="py-2">
-                          <Link
-                            href={`/bookkeeping/${m.journal_entry_id}`}
-                            className="font-mono text-xs underline-offset-2 hover:underline"
-                            target="_blank"
-                          >
-                            {formatVoucher(m)}
-                          </Link>
-                          <span className="ml-2 text-muted-foreground truncate">{m.entry_description}</span>
-                        </td>
-                        <td className="py-2 tabular-nums">{formatDate(m.entry_date)}</td>
-                        <td className="py-2">
-                          <span className="text-xs text-muted-foreground">
-                            {METHOD_LABELS[m.method] || m.method}
-                          </span>
-                        </td>
-                        <td className="py-2">
-                          <Badge variant={badge.variant}>{badge.label}</Badge>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+            Förhandsgranskning ({dryRunResults.length})
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[13px]">
+              <thead>
+                <tr>
+                  <th className={`${TH_CLASS} w-8`}></th>
+                  <th className={TH_CLASS}>Transaktion</th>
+                  <th className={`${TH_CLASS} w-24`}>Datum</th>
+                  <th className={`${TH_CLASS} w-28 text-right`}>Belopp</th>
+                  <th className={`${TH_CLASS} w-8 text-center`}>&harr;</th>
+                  <th className={TH_CLASS}>Verifikation</th>
+                  <th className={`${TH_CLASS} w-24`}>Datum</th>
+                  <th className={`${TH_CLASS} w-28`}>Metod</th>
+                  <th className={`${TH_CLASS} w-20`}>Träff</th>
+                </tr>
+              </thead>
+              <tbody className="stagger-enter">
+                {dryRunResults.map((m) => {
+                  const key = matchKey(m.transaction_id, m.journal_entry_id)
+                  const badge = confidenceLabel(m.confidence)
+                  return (
+                    <tr key={key} className="transition-colors duration-150 hover:bg-secondary/35">
+                      <td className={TD_CLASS}>
+                        <Checkbox
+                          checked={selectedPairs.has(key)}
+                          onCheckedChange={() => toggleMatchSelection(key)}
+                          aria-label={`Tillämpa matchning för ${m.transaction_description}`}
+                        />
+                      </td>
+                      <td className={`${TD_CLASS} truncate max-w-[180px]`}>{m.transaction_description}</td>
+                      <td className={`${TD_CLASS} tabular-nums`}>{formatDate(m.transaction_date)}</td>
+                      <td className={`${TD_CLASS} text-right tabular-nums`}>{formatAmount(m.transaction_amount)}</td>
+                      <td className={`${TD_CLASS} text-center text-muted-foreground`}>&harr;</td>
+                      <td className={TD_CLASS}>
+                        <Link
+                          href={`/bookkeeping/${m.journal_entry_id}`}
+                          className="font-mono text-xs underline-offset-2 hover:underline"
+                          target="_blank"
+                        >
+                          {formatVoucher(m)}
+                        </Link>
+                        <span className="ml-2 text-muted-foreground truncate">{m.entry_description}</span>
+                      </td>
+                      <td className={`${TD_CLASS} tabular-nums`}>{formatDate(m.entry_date)}</td>
+                      <td className={`${TD_CLASS} text-xs text-muted-foreground`}>
+                        {METHOD_LABELS[m.method] || m.method}
+                      </td>
+                      <td className={TD_CLASS}>
+                        <Badge variant={badge.variant}>{badge.label}</Badge>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
 
       {dryRunResults && dryRunResults.length === 0 && (
-        <Card>
-          <CardContent className="p-6 text-center text-muted-foreground">
-            Inga automatiska matchningar hittades.
-          </CardContent>
-        </Card>
+        <p className="text-sm text-muted-foreground">
+          Inga automatiska matchningar hittades.
+        </p>
       )}
 
       {/* Unmatched Transactions */}
@@ -1278,230 +1263,208 @@ export function BankReconciliationView({ periodId, periodBounds }: BankReconcili
 
       {/* Unmatched GL Lines */}
       {unmatchedGlLines.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">
-              Omatchade verifikationer på <AccountNumber number={accountNumber} /> ({unmatchedGlLines.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="mb-3 text-xs text-muted-foreground">
-              Är en manuellt eller importerat bokförd verifikation egentligen en ingående balans? Markera den som IB: då räknas den inte med i avstämningen utan visas separat som ingående balans.
-            </p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                  <tr className="border-b text-left">
-                    <th className="py-2 w-16">Ver.nr</th>
-                    <th className="py-2 w-24">Datum</th>
-                    <th className="py-2">Beskrivning</th>
-                    <th className="py-2 w-28 text-right">Belopp</th>
-                    <th className="py-2 w-24">Typ</th>
-                    <th className="py-2 w-36"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {unmatchedGlLines.map((line) => {
-                    const amount = line.debit_amount > 0 ? line.debit_amount : -line.credit_amount
-                    const isRetaggable = line.source_type === 'manual' || line.source_type === 'import'
-                    return (
-                      <tr key={line.line_id} className="border-b last:border-0">
-                        <td className="py-2">
-                          <Link
-                            href={`/bookkeeping/${line.journal_entry_id}`}
-                            className="font-mono text-xs underline-offset-2 hover:underline"
-                            target="_blank"
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
+            Omatchade verifikationer på <AccountNumber number={accountNumber} /> ({unmatchedGlLines.length})
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[13px]">
+              <thead>
+                <tr>
+                  <th className={`${TH_CLASS} w-16`}>Ver.nr</th>
+                  <th className={`${TH_CLASS} w-24`}>Datum</th>
+                  <th className={TH_CLASS}>Beskrivning</th>
+                  <th className={`${TH_CLASS} w-28 text-right`}>Belopp</th>
+                  <th className={`${TH_CLASS} w-24`}>Typ</th>
+                  <th className={`${TH_CLASS} w-36`}></th>
+                </tr>
+              </thead>
+              <tbody className="stagger-enter">
+                {unmatchedGlLines.map((line) => {
+                  const amount = line.debit_amount > 0 ? line.debit_amount : -line.credit_amount
+                  const isRetaggable = line.source_type === 'manual' || line.source_type === 'import'
+                  return (
+                    <tr key={line.line_id} className="group transition-colors duration-150 hover:bg-secondary/35">
+                      <td className={TD_CLASS}>
+                        <Link
+                          href={`/bookkeeping/${line.journal_entry_id}`}
+                          className="font-mono text-xs underline-offset-2 hover:underline"
+                          target="_blank"
+                        >
+                          {formatVoucher(line)}
+                        </Link>
+                      </td>
+                      <td className={`${TD_CLASS} tabular-nums`}>{formatDate(line.entry_date)}</td>
+                      <td className={`${TD_CLASS} truncate max-w-[300px]`}>
+                        {line.line_description || line.entry_description}
+                      </td>
+                      <td className={`${TD_CLASS} text-right tabular-nums`}>
+                        {formatCurrency(amount)}
+                      </td>
+                      <td className={`${TD_CLASS} text-xs text-muted-foreground`}>
+                        {SOURCE_TYPE_LABELS[line.source_type] ?? line.source_type}
+                      </td>
+                      <td className={`${TD_CLASS} text-right`}>
+                        {isRetaggable && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 text-xs"
+                            disabled={markLoading === line.journal_entry_id}
+                            onClick={() => handleMarkOpeningBalance(line.journal_entry_id)}
+                            title="Markera verifikationen som ingående balans: den utesluts då från avstämningen"
                           >
-                            {formatVoucher(line)}
-                          </Link>
-                        </td>
-                        <td className="py-2 tabular-nums">{formatDate(line.entry_date)}</td>
-                        <td className="py-2 truncate max-w-[300px]">
-                          {line.line_description || line.entry_description}
-                        </td>
-                        <td className="py-2 text-right tabular-nums">
-                          {formatCurrency(amount)}
-                        </td>
-                        <td className="py-2 text-xs text-muted-foreground">
-                          {SOURCE_TYPE_LABELS[line.source_type] ?? line.source_type}
-                        </td>
-                        <td className="py-2 text-right">
-                          {isRetaggable && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-8 text-xs"
-                              disabled={markLoading === line.journal_entry_id}
-                              onClick={() => handleMarkOpeningBalance(line.journal_entry_id)}
-                              title="Markera verifikationen som ingående balans: den utesluts då från avstämningen"
-                            >
-                              {markLoading === line.journal_entry_id ? 'Markerar…' : 'Märk som IB'}
-                            </Button>
-                          )}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
+                            {markLoading === line.journal_entry_id ? 'Markerar…' : 'Märk som IB'}
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
 
       {/* Ignored transactions (undo) */}
       {ignoredTx.length > 0 && (
-        <Card>
-          <CardHeader
-            className="cursor-pointer"
+        <section className="space-y-3">
+          <button
+            type="button"
+            aria-expanded={showIgnored}
             onClick={() => setShowIgnored(!showIgnored)}
+            className="flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-muted-foreground transition-colors duration-150 hover:text-foreground"
           >
-            <div className="flex items-center gap-2">
-              {showIgnored ? (
-                <ChevronDown className="h-4 w-4" />
-              ) : (
-                <ChevronRight className="h-4 w-4" />
-              )}
-              <CardTitle className="text-base">
-                Ignorerade transaktioner ({ignoredTx.length})
-              </CardTitle>
-            </div>
-          </CardHeader>
+            {showIgnored ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+            Ignorerade transaktioner ({ignoredTx.length})
+          </button>
           {showIgnored && (
-            <CardContent>
-              <p className="text-xs text-muted-foreground mb-3">
-                Rader du valt att dölja från avstämningen. De påverkar inte saldot på <AccountNumber number={accountNumber} />: de är bara gömda från listan.
-              </p>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                    <tr className="border-b text-left">
-                      <th className="py-2 w-24">Datum</th>
-                      <th className="py-2">Beskrivning</th>
-                      <th className="py-2 w-20">Valuta</th>
-                      <th className="py-2 w-28 text-right">Belopp</th>
-                      <th className="py-2 w-28"></th>
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-[13px]">
+                <thead>
+                  <tr>
+                    <th className={`${TH_CLASS} w-24`}>Datum</th>
+                    <th className={TH_CLASS}>Beskrivning</th>
+                    <th className={`${TH_CLASS} w-20`}>Valuta</th>
+                    <th className={`${TH_CLASS} w-28 text-right`}>Belopp</th>
+                    <th className={`${TH_CLASS} w-28`}></th>
+                  </tr>
+                </thead>
+                <tbody className="stagger-enter">
+                  {ignoredTx.map((tx) => (
+                    <tr key={tx.id} className="text-muted-foreground transition-colors duration-150 hover:bg-secondary/35">
+                      <td className={`${TD_CLASS} tabular-nums`}>{formatDate(tx.date)}</td>
+                      <td className={`${TD_CLASS} truncate max-w-[300px]`}>{tx.description}</td>
+                      <td className={`${TD_CLASS} text-xs tabular-nums`}>{tx.currency}</td>
+                      <td className={`${TD_CLASS} text-right tabular-nums`}>
+                        {formatCurrency(tx.amount, tx.currency)}
+                      </td>
+                      <td className={TD_CLASS}>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={actionLoading === tx.id}
+                          onClick={() => handleUnignore(tx.id)}
+                        >
+                          {actionLoading === tx.id ? '...' : 'Återställ'}
+                        </Button>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {ignoredTx.map((tx) => (
-                      <tr key={tx.id} className="border-b last:border-0 text-muted-foreground">
-                        <td className="py-2 tabular-nums">{formatDate(tx.date)}</td>
-                        <td className="py-2 truncate max-w-[300px]">{tx.description}</td>
-                        <td className="py-2 text-xs">
-                          <span className="tabular-nums">{tx.currency}</span>
-                        </td>
-                        <td className="py-2 text-right tabular-nums">
-                          {formatCurrency(tx.amount, tx.currency)}
-                        </td>
-                        <td className="py-2">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={actionLoading === tx.id}
-                            onClick={() => handleUnignore(tx.id)}
-                          >
-                            {actionLoading === tx.id ? '...' : 'Återställ'}
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
-        </Card>
+        </section>
       )}
 
       {/* Recently Matched */}
       {matchedTx.length > 0 && (
-        <Card>
-          <CardHeader
-            className="cursor-pointer"
+        <section className="space-y-3">
+          <button
+            type="button"
+            aria-expanded={showMatched}
             onClick={() => setShowMatched(!showMatched)}
+            className="flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-muted-foreground transition-colors duration-150 hover:text-foreground"
           >
-            <div className="flex items-center gap-2">
-              {showMatched ? (
-                <ChevronDown className="h-4 w-4" />
-              ) : (
-                <ChevronRight className="h-4 w-4" />
-              )}
-              <CardTitle className="text-base">
-                Matchade transaktioner ({matchedTx.length})
-              </CardTitle>
-            </div>
-          </CardHeader>
+            {showMatched ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+            Matchade transaktioner ({matchedTx.length})
+          </button>
           {showMatched && (
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                    <tr className="border-b text-left">
-                      <th className="py-2 w-24">Datum</th>
-                      <th className="py-2">Beskrivning</th>
-                      <th className="py-2 w-28 text-right">Belopp</th>
-                      <th className="py-2 w-32">Metod</th>
-                      <th className="py-2 w-28">Verifikation</th>
-                      <th className="py-2 w-24"></th>
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-[13px]">
+                <thead>
+                  <tr>
+                    <th className={`${TH_CLASS} w-24`}>Datum</th>
+                    <th className={TH_CLASS}>Beskrivning</th>
+                    <th className={`${TH_CLASS} w-28 text-right`}>Belopp</th>
+                    <th className={`${TH_CLASS} w-32`}>Metod</th>
+                    <th className={`${TH_CLASS} w-28`}>Verifikation</th>
+                    <th className={`${TH_CLASS} w-24`}></th>
+                  </tr>
+                </thead>
+                <tbody className="stagger-enter">
+                  {matchedTx.map((tx) => (
+                    <tr key={tx.id} className="transition-colors duration-150 hover:bg-secondary/35">
+                      <td className={`${TD_CLASS} tabular-nums`}>{formatDate(tx.date)}</td>
+                      <td className={`${TD_CLASS} truncate max-w-[300px]`}>{tx.description}</td>
+                      <td className={`${TD_CLASS} text-right tabular-nums`}>
+                        {formatCurrency(tx.amount, accountCurrency)}
+                      </td>
+                      <td className={`${TD_CLASS} text-xs text-muted-foreground`}>
+                        {tx.reconciliation_method
+                          ? METHOD_LABELS[tx.reconciliation_method] || tx.reconciliation_method
+                          : null}
+                      </td>
+                      <td className={TD_CLASS}>
+                        {tx.journal_entry_id && (
+                          <Link
+                            href={`/bookkeeping/${tx.journal_entry_id}`}
+                            className="text-xs underline-offset-2 hover:underline"
+                            target="_blank"
+                          >
+                            Öppna verifikat
+                          </Link>
+                        )}
+                      </td>
+                      <td className={TD_CLASS}>
+                        {tx.reconciliation_method && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={unlinkLoading === tx.id}
+                            onClick={() => handleUnlink(tx.id)}
+                          >
+                            <Unlink className="h-3 w-3 mr-1" />
+                            {unlinkLoading === tx.id ? '...' : 'Avmatcha'}
+                          </Button>
+                        )}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {matchedTx.map((tx) => (
-                      <tr key={tx.id} className="border-b last:border-0">
-                        <td className="py-2 tabular-nums">{formatDate(tx.date)}</td>
-                        <td className="py-2 truncate max-w-[300px]">{tx.description}</td>
-                        <td className="py-2 text-right tabular-nums">
-                          {formatCurrency(tx.amount, accountCurrency)}
-                        </td>
-                        <td className="py-2">
-                          {tx.reconciliation_method && (
-                            <span className="text-xs text-muted-foreground">
-                              {METHOD_LABELS[tx.reconciliation_method] || tx.reconciliation_method}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2">
-                          {tx.journal_entry_id && (
-                            <Link
-                              href={`/bookkeeping/${tx.journal_entry_id}`}
-                              className="text-xs underline-offset-2 hover:underline"
-                              target="_blank"
-                            >
-                              Öppna verifikat
-                            </Link>
-                          )}
-                        </td>
-                        <td className="py-2">
-                          {tx.reconciliation_method && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              disabled={unlinkLoading === tx.id}
-                              onClick={() => handleUnlink(tx.id)}
-                            >
-                              <Unlink className="h-3 w-3 mr-1" />
-                              {unlinkLoading === tx.id ? '...' : 'Avmatcha'}
-                            </Button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
-        </Card>
+        </section>
       )}
 
       {/* Empty state */}
       {unmatchedTx.length === 0 && glLines.length === 0 && matchedTx.length === 0 && ignoredTx.length === 0 && !loading && (
-        <Card>
-          <CardContent className="p-8 text-center text-muted-foreground">
-            Inga transaktioner eller verifikationer att stämma av.
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={Landmark}
+          title="Inget att stämma av"
+          description="Det finns inga banktransaktioner eller verifikationer i den valda perioden. Importera eller synka banktransaktioner så visas de här."
+        />
       )}
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
