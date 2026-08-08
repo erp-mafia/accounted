@@ -240,6 +240,61 @@ Rules:
 - lineItems: include every line. Empty array is fine if the document has no itemised lines.
 - vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.`
 
+// Sonnet 5 intermittently wraps its answer in markdown fences (```json ... ```)
+// or adds prose around it, despite the JSON-only instruction in the system
+// prompt. Scan for balanced top-level '{'..'}' candidates (string- and
+// escape-aware, so braces inside JSON string values don't end a candidate
+// early) and return the first one JSON.parse accepts; prose braces around the
+// object form unparseable candidates and are skipped. Returns the input
+// unchanged when no candidate parses, so the existing parse-failure path
+// handles prose-only refusals. Zod validation downstream still rejects
+// well-formed-but-wrong JSON.
+// Bounds for the candidate scan below. Real model output is already capped
+// by MAX_TOKENS (roughly 33 KB of text at 8192 tokens), so genuine responses
+// never come near these; they exist so pathological or adversarially
+// brace-laden text cannot make the scan quadratic (compliance review
+// A.8.28). Oversized or exhausted inputs fall through to the raw text and
+// land in the existing empty-result path.
+const MAX_SCAN_INPUT_LENGTH = 256 * 1024
+const MAX_CANDIDATE_ATTEMPTS = 50
+
+export function extractJsonObject(raw: string): string {
+  if (raw.length > MAX_SCAN_INPUT_LENGTH) return raw
+  let attempts = 0
+  let start = raw.indexOf('{')
+  while (start !== -1 && attempts < MAX_CANDIDATE_ATTEMPTS) {
+    attempts++
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let i = start; i < raw.length; i++) {
+      const ch = raw[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+      } else if (ch === '"') {
+        inString = true
+      } else if (ch === '{') {
+        depth++
+      } else if (ch === '}') {
+        depth--
+        if (depth === 0) {
+          const candidate = raw.slice(start, i + 1)
+          try {
+            JSON.parse(candidate)
+            return candidate
+          } catch {
+            break
+          }
+        }
+      }
+    }
+    start = raw.indexOf('{', start + 1)
+  }
+  return raw
+}
+
 export function emptyResult(): InvoiceExtractionResult {
   return {
     documentKind: null,
@@ -422,7 +477,7 @@ export async function extractInvoiceFields(
       })
     }
 
-    const parsed = JSON.parse(rawText)
+    const parsed = JSON.parse(extractJsonObject(rawText))
     const validated = ExtractionSchema.parse(parsed)
 
     return {
