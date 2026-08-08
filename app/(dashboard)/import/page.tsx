@@ -837,7 +837,10 @@ function SIEImportWizard() {
           onExecute={handleExecuteImport} onBack={goBack} isLoading={isLoading}
           theaterModel={theaterModel} />
       )}
-      {step === 'result' && importResult && <ImportResultStep result={importResult} onNewImport={handleNewImport} onUndo={handleUndo} />}
+      {step === 'result' && importResult && (
+        <ImportResultStep result={importResult} onNewImport={handleNewImport} onUndo={handleUndo}
+          preview={preview} theaterModel={theaterModel} />
+      )}
     </div>
   )
 }
