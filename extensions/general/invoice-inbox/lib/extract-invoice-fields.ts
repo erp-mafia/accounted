@@ -241,15 +241,46 @@ Rules:
 - vatBreakdown: include one entry per distinct VAT rate. Empty array is fine.`
 
 // Sonnet 5 intermittently wraps its answer in markdown fences (```json ... ```)
-// or adds a short preamble, despite the JSON-only instruction in the system
-// prompt. Slice from the first '{' to the last '}' so fenced or prefixed
-// output still parses; Zod validation downstream still rejects garbage.
-// Returns the input unchanged when no object braces are found, so the
-// existing parse-failure path handles prose-only refusals.
+// or adds prose around it, despite the JSON-only instruction in the system
+// prompt. Scan for balanced top-level '{'..'}' candidates (string- and
+// escape-aware, so braces inside JSON string values don't end a candidate
+// early) and return the first one JSON.parse accepts; prose braces around the
+// object form unparseable candidates and are skipped. Returns the input
+// unchanged when no candidate parses, so the existing parse-failure path
+// handles prose-only refusals. Zod validation downstream still rejects
+// well-formed-but-wrong JSON.
 export function extractJsonObject(raw: string): string {
-  const start = raw.indexOf('{')
-  const end = raw.lastIndexOf('}')
-  return start !== -1 && end > start ? raw.slice(start, end + 1) : raw
+  let start = raw.indexOf('{')
+  while (start !== -1) {
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let i = start; i < raw.length; i++) {
+      const ch = raw[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+      } else if (ch === '"') {
+        inString = true
+      } else if (ch === '{') {
+        depth++
+      } else if (ch === '}') {
+        depth--
+        if (depth === 0) {
+          const candidate = raw.slice(start, i + 1)
+          try {
+            JSON.parse(candidate)
+            return candidate
+          } catch {
+            break
+          }
+        }
+      }
+    }
+    start = raw.indexOf('{', start + 1)
+  }
+  return raw
 }
 
 export function emptyResult(): InvoiceExtractionResult {

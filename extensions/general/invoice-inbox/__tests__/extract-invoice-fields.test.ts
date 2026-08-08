@@ -206,6 +206,44 @@ describe('extractInvoiceFields', () => {
     expect(data.confidence).toBe(1)
   })
 
+  it('parses JSON when the surrounding prose itself contains braces', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse(
+        'Note: fields use the shape {field: value}.\n```json\n' +
+          JSON.stringify(VALID_RESULT) +
+          '\n```\nAnything unclear {just ask}.'
+      )
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kvitto.pdf',
+    })
+    expect(data.supplier.name).toBe('Anthropic, PBC')
+    expect(data.totals.total).toBe(6.25)
+    expect(data.confidence).toBe(1)
+  })
+
+  it('handles braces inside JSON string values without ending the object early', async () => {
+    mockCreate.mockReturnValueOnce(
+      aiResponse(
+        '```json\n' +
+          JSON.stringify({
+            ...VALID_RESULT,
+            supplier: { ...VALID_RESULT.supplier, address: 'Suite {B}, "Main" St 1' },
+          }) +
+          '\n```'
+      )
+    )
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('%PDF'),
+      mimeType: 'application/pdf',
+      fileName: 'kvitto.pdf',
+    })
+    expect(data.supplier.address).toBe('Suite {B}, "Main" St 1')
+    expect(data.confidence).toBe(1)
+  })
+
   it('returns empty result when AI response fails schema validation', async () => {
     mockCreate.mockReturnValueOnce(
       aiResponse({ supplier: { name: 'X' } /* missing required keys */ })
