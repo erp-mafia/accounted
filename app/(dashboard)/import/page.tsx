@@ -61,6 +61,11 @@ import type {
   ImportResult,
   ParseIssue,
 } from '@/lib/import/types'
+import type { TheaterModel } from '@/lib/import/theater-model'
+
+/** Above this size the client-side theater parse is skipped (main-thread
+ *  parse of very large SIE files would jank the animation it exists for). */
+const THEATER_MAX_FILE_BYTES = 8 * 1024 * 1024
 import type { BASAccount } from '@/types'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import dynamic from 'next/dynamic'
@@ -441,6 +446,7 @@ function SIEImportWizard() {
   const [preview, setPreview] = useState<ImportPreview | null>(null)
   const [issues, setIssues] = useState<ParseIssue[]>([])
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
+  const [theaterModel, setTheaterModel] = useState<TheaterModel | null>(null)
   const [, setSieAccounts] = useState<{ number: string; name: string }[]>([])
   const [isCreatingAccounts, setIsCreatingAccounts] = useState(false)
 
@@ -708,6 +714,23 @@ function SIEImportWizard() {
     setIsLoading(true)
     setError(null)
 
+    // Import theater: parse the file client-side (the parser is browser-clean)
+    // so the graph can build itself while the server writes. Best-effort with
+    // a size cap: any failure just leaves the plain spinner takeover.
+    if (file.size <= THEATER_MAX_FILE_BYTES) {
+      void (async () => {
+        try {
+          const [{ parseSIEFile, detectEncoding, decodeBuffer }, { buildTheaterModel }] =
+            await Promise.all([import('@/lib/import/sie-parser'), import('@/lib/import/theater-model')])
+          const buffer = await file.arrayBuffer()
+          const parsed = parseSIEFile(decodeBuffer(buffer, detectEncoding(buffer)))
+          setTheaterModel(buildTheaterModel(parsed))
+        } catch {
+          // Theater is a nicety; the import itself is unaffected.
+        }
+      })()
+    }
+
     try {
       const formData = new FormData()
       formData.append('file', file)
@@ -773,7 +796,7 @@ function SIEImportWizard() {
     setStep('upload'); setFile(null); setParsed(null); setMappings([])
     setPreview(null); setIssues([]); setImportResult(null); setError(null); setErrorType(undefined)
     setValidationErrors([]); setValidationWarnings([]); setDuplicateImportId(null)
-    setSieAccounts([]); setIsCreatingAccounts(false)
+    setSieAccounts([]); setIsCreatingAccounts(false); setTheaterModel(null)
   }
 
   return (
@@ -811,7 +834,8 @@ function SIEImportWizard() {
       )}
       {step === 'review' && preview && (
         <ImportReviewStep preview={preview} mappings={mappings}
-          onExecute={handleExecuteImport} onBack={goBack} isLoading={isLoading} />
+          onExecute={handleExecuteImport} onBack={goBack} isLoading={isLoading}
+          theaterModel={theaterModel} />
       )}
       {step === 'result' && importResult && <ImportResultStep result={importResult} onNewImport={handleNewImport} onUndo={handleUndo} />}
     </div>
