@@ -59,6 +59,19 @@ describe('insertWithPerRowFallback', () => {
     expect(outcome.firstError).toBe(dup)
   })
 
+  it('bulk success with short read-back: never retries (rows are already in the table)', async () => {
+    const { supabase, calls } = makeSupabase([
+      { data: [{ id: 'a' }], error: null },  // succeeded, but returned 1 of 2
+    ])
+
+    const outcome = await insertWithPerRowFallback(supabase, 'customers', [row(1), row(2)], 'id')
+
+    expect(calls()).toBe(1)
+    expect(outcome.returned).toEqual([{ id: 'a' }, null])
+    expect(outcome.failedCount).toBe(1)
+    expect(outcome.firstError).toMatch(/could not be paired/)
+  })
+
   it('empty input: no statements at all', async () => {
     const { supabase, calls } = makeSupabase([{ data: [], error: null }])
 

@@ -36,10 +36,19 @@ export async function insertWithPerRowFallback(
   if (!bulk.error) {
     const data = (bulk.data ?? []) as unknown as Record<string, unknown>[]
     // PostgREST returns inserted rows in input order, so a full-length result
-    // pairs 1:1 with the input. Anything else is treated as a failed pairing
-    // rather than silently mis-attributing rows.
+    // pairs 1:1 with the input.
     if (data.length === rows.length) {
       return { returned: data, failedCount: 0, firstError: null }
+    }
+    // The statement SUCCEEDED but returned fewer rows than sent (an RLS
+    // read-back gap). The rows ARE in the table, so retrying per row would
+    // duplicate them: pair what came back and report the tail unpaired.
+    const returned: (Record<string, unknown> | null)[] = new Array(rows.length).fill(null)
+    for (let i = 0; i < data.length; i++) returned[i] = data[i]
+    return {
+      returned,
+      failedCount: rows.length - data.length,
+      firstError: `insert returned ${data.length} of ${rows.length} rows; unreturned rows were inserted but could not be paired`,
     }
   }
 
