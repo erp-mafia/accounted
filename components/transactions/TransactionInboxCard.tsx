@@ -103,6 +103,7 @@ export default function TransactionInboxCard({
   onToggleSelect,
 }: TransactionInboxCardProps) {
   const t = useTranslations('tx_inbox_card')
+  const tMethod = useTranslations('tx_method')
   // Attaching underlag is a write: hide the affordance from viewers so they
   // don't dead-end on a 403 (mirrors the gate in TransactionHistoryList).
   const { canWrite } = useCanWrite()
@@ -220,10 +221,10 @@ export default function TransactionInboxCard({
     })
 
   // The foldout carries row detail only (actions live on the row: pill + ⋯).
-  // Rows with nothing to show don't expand at all; once bank-tx metadata
-  // classification lands (see the transactions-metadata issue) every imported
-  // row will have foldout content again.
+  // Rows with nothing to show don't expand at all; classified imported rows
+  // always have at least the payment-method line.
   const hasFoldoutContent =
+    Boolean(transaction.transaction_method) ||
     (transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
     Boolean(transaction.title_edited_at && originalName) ||
     Boolean(skvCounterpartDate) ||
@@ -249,6 +250,10 @@ export default function TransactionInboxCard({
         onKeyDown={
           canExpand
             ? (e) => {
+                // Only when the row itself is focused: Enter/Space on a nested
+                // control (Bokför, ⋯, checkbox) bubbles here, and preventDefault
+                // would cancel the button's keyboard activation.
+                if (e.target !== e.currentTarget) return
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
                   onToggleExpand(transaction.id)
@@ -457,10 +462,18 @@ export default function TransactionInboxCard({
           <td colSpan={5} className="border-b border-border p-0">
             <RowFoldout>
               <div className="pb-6 pt-1">
-                {(transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
+                {transaction.transaction_method ||
+                (transaction.currency !== 'SEK' && transaction.amount_sek != null) ||
                 transaction.title_edited_at ||
                 skvCounterpartDate ? (
                   <div className="space-y-1 py-1 text-xs text-muted-foreground">
+                    {transaction.transaction_method && (
+                      <p>
+                        {t('method_line', {
+                          method: tMethod(transaction.transaction_method),
+                        })}
+                      </p>
+                    )}
                     {transaction.currency !== 'SEK' && transaction.amount_sek != null && (
                       <p className="tabular-nums">
                         {formatCurrency(transaction.amount, transaction.currency)}

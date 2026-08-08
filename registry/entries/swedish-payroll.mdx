@@ -1,0 +1,54 @@
+---
+title: "swedish-payroll — lön, arbetsgivaravgifter och förmånsbeskattning"
+description: "SKILL.md för svensk lönehantering. AGI-inlämning, sociala avgifter 31.42%, skatteavdrag enligt skattetabeller, förmånsbeskattning (bil/kost/friskvård), semesterlöneskuld, OB/övertid, traktamente, utlägg/milersättning, F-skatt vs A-skatt, BAS 7xxx-mappning, brutto/nettolöneavdrag, löneväxling, sjuklön."
+slug: "swedish-payroll"
+kind: "skill"
+author: "erp-mafia"
+status: "live"
+lang: "sv"
+personas: ["finance", "byra", "founder"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-08-08"
+repoUrl: "https://github.com/erp-mafia/swedish-accounting-skills/tree/main/.claude/skills/swedish-payroll"
+externalUrl: "https://github.com/erp-mafia/swedish-accounting-skills"
+version: "community"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Vad är skillnaden mellan arbetsgivaravgifter och egenavgifter?"
+    a: "Arbetsgivaravgift 31.42% (BAS 7510 mot 2731) gäller anställda. Egenavgift 28.97% gäller enskild näringsidkare och delägare i HB/KB, betalas via inkomstdeklarationen. Pensionärer över 65 har lägre avgift. Skillen visar exakta procentsatser och åldersbrytpunkter."
+  - q: "Hur förmånsbeskattas bil?"
+    a: "Bilförmånsvärde 2026: ramnummer + bränsletyp i Skatteverkets tabell. Hamnar i ruta 013 på AGI och bokas mot BAS 7385. Vid drivmedelsförmån läggs ett tillägg på 1.2x faktisk drivmedelskostnad. Skillen täcker både ordinarie bilförmån och drivmedelsförmån separat."
+  - q: "Vad är löneväxling?"
+    a: "Anställd byter en del av bruttolönen mot pensionsavsättning. Skattefördelaktigt för anställd och arbetsgivare (lägre arbetsgivaravgift på växlad del). Skillen visar BAS-bokning 7410 + 2710, och vad som krävs avtalsmässigt."
+---
+
+## Vad skillen täcker
+
+* AGI på individnivå: månadsinlämning, fältstruktur (KU10/KU13-schema), SUS-cert för API-flöde.
+* Sociala avgifter 31.42% (2026), inklusive åldersgränser (fyllda 66 vid årets ingång, 67 från 2026: 10.21%) och tillfällig ungdomsnedsättning 18-22 år (20.81%, apr 2026-sep 2027).
+* Skatteavdrag: skattetabeller per kommun, jämkning, kvarskatt.
+* Förmånsbeskattning: bil (Skatteverkets tabellvärde), kost (250 kr/dag vid full dygnsdebitering), bostad (regionvärden), friskvård (skattefri upp till 5 000 kr/år), trängselskatt, parkering.
+* Semesterlöneskuld: 12% schablon eller individuell beräkning, BAS 7290 mot 2920.
+* OB- och övertidsersättning: kollektivavtalsregler, BAS 7260.
+* Traktamente: schablon (300 kr/dag inrikes 2026), över schablon beskattas.
+* Utlägg och milersättning: 25 kr/mil skattefritt 2026.
+* F-skatt vs A-skatt: vilken som gäller per uppdragstyp, FA-skatt-kombinationen.
+* BAS 7xxx-mappning: löner 7010/7090, förmåner 7382–7388, arbetsgivaravgift 7510.
+* Bruttolöneavdrag vs nettolöneavdrag: vad som påverkar AGI vs vad som bara går utanför.
+* Sjuklön: dag 2–14, karensavdrag, ersättning från Försäkringskassan dag 15+.
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/swedish-accounting-skills.git
+cd swedish-accounting-skills
+claude
+```
+
+## Pairs med
+
+* [skatteverket-arbetsgivardeklaration](/community/registry/skatteverket-arbetsgivardeklaration) — accounted-skill som faktiskt genererar AGI-XML från en löneberäkning.
+
+## Licens
+
+MIT.

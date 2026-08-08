@@ -220,6 +220,108 @@ describe('ingestTransactions', () => {
   })
 
   // -----------------------------------------------------------------------
+  // 1d. Transaction-method classification at the insert boundary
+  // -----------------------------------------------------------------------
+  it('classifies transaction_method, strips the channel phrase from the title, and persists the raw codes', async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const raw = makeRaw({
+      description: 'Vercel Jul Överföring via internet',
+      bank_transaction_code: 'PMNT/ICDT',
+      proprietary_bank_transaction_code: 'Överföring',
+    })
+    const inserted = makeTransaction({ id: 'tx-1', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(result.imported).toBe(1)
+    const payload = (inserts['transactions'] ?? [])[0] as Record<string, unknown>
+    // Working title is the clean prefix; the immutable original keeps the
+    // full bank string (dedup-bridge + restore-original source).
+    expect(payload.description).toBe('Vercel Jul')
+    expect(payload.original_description).toBe('Vercel Jul Överföring via internet')
+    // The phrase beats the generic ISO family (ICDT = credit transfer).
+    expect(payload.transaction_method).toBe('transfer')
+    expect(payload.bank_transaction_code).toBe('PMNT/ICDT')
+    expect(payload.proprietary_bank_transaction_code).toBe('Överföring')
+  })
+
+  it('treats a bank_connection_id row as a feed even without import_source', async () => {
+    // The oldest PSD2 rows predate the import_source column; a live bank
+    // connection is the unambiguous feed marker (isImportedTransaction).
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const raw = makeRaw({
+      description: 'Vercel Jul Överföring via internet',
+      import_source: undefined,
+      bank_connection_id: 'bc-1',
+    })
+    const inserted = makeTransaction({ id: 'tx-1', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    const feedPayload = (inserts['transactions'] ?? [])[0] as Record<string, unknown>
+    expect(feedPayload.transaction_method).toBe('transfer')
+    expect(feedPayload.description).toBe('Vercel Jul')
+    expect(feedPayload.original_description).toBe('Vercel Jul Överföring via internet')
+  })
+
+  it('never classifies or strips user-created sources (manual/mcp)', async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    // A user-authored title that WOULD classify+strip if it came from a feed.
+    const raw = makeRaw({ description: 'Egen insättning', import_source: 'manual' })
+    const inserted = makeTransaction({ id: 'tx-1', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    const payload = (inserts['transactions'] ?? [])[0] as Record<string, unknown>
+    expect(payload.description).toBe('Egen insättning')
+    expect(payload.original_description).toBe('Egen insättning')
+    expect(payload.transaction_method).toBeNull()
+  })
+
+  it('leaves the title untouched and method null when nothing classifies', async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const raw = makeRaw({ description: 'Test transaction' })
+    const inserted = makeTransaction({ id: 'tx-1', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: inserted, error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    const payload = (inserts['transactions'] ?? [])[0] as Record<string, unknown>
+    expect(payload.description).toBe('Test transaction')
+    expect(payload.original_description).toBe('Test transaction')
+    expect(payload.transaction_method).toBeNull()
+    expect(payload.bank_transaction_code).toBeNull()
+    expect(payload.proprietary_bank_transaction_code).toBeNull()
+  })
+
+  // -----------------------------------------------------------------------
   // 2. Detects duplicates
   // -----------------------------------------------------------------------
   it('detects duplicates via external_id', async () => {

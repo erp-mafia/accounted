@@ -1,0 +1,55 @@
+---
+title: "swedish-tax-planning — periodiseringsfond, 3:12 och koncernbidrag"
+description: "SKILL.md för svensk bolagsskatteplanering. Periodiseringsfond (IL 30 kap, 25% avsättning, 6-årig återföring, schablonintäkt), överavskrivningar (30-regeln/20-regeln, BAS 2150/8850), koncernbidrag (IL 35 kap, >90% ägande), 3:12-reglerna (gränsbelopp, K10, löneunderlag, 2026 års reform), ränteavdragsbegränsningar, kapitalförsäkring."
+slug: "swedish-tax-planning"
+kind: "skill"
+author: "erp-mafia"
+status: "live"
+lang: "sv"
+personas: ["founder", "finance", "byra"]
+publishedAt: "2026-05-12"
+updatedAt: "2026-07-18"
+repoUrl: "https://github.com/erp-mafia/swedish-accounting-skills/tree/main/.claude/skills/swedish-tax-planning"
+externalUrl: "https://github.com/erp-mafia/swedish-accounting-skills"
+version: "community"
+ogImageEyebrow: "Skill"
+faq:
+  - q: "Vad är 2026 års 3:12-reform?"
+    a: "Från 1 januari 2026 försvinner valet mellan förenklingsregeln och huvudregeln. Alla fåmansbolagsägare delar samma modell. Sparat utdelningsutrymme räknas inte längre upp med ränta. Löneuttagskravet och 4%-ägarkravet tas bort. Skillen täcker den nya gränsbeloppsformeln steg för steg."
+  - q: "När är koncernbidrag tillåtet?"
+    a: "Givaren och mottagaren måste ha funnits i koncernen hela räkenskapsåret. Ägarandel >90% direkt eller indirekt. Bidraget måste vara redovisat i bokföringen. Mottagaren beskattas, givaren får avdrag. IL 35 kap. Skillen visar bokföringen (BAS 8820 mot 8830) och vad som händer vid förlust hos givaren."
+  - q: "Vad är schablonintäkt på periodiseringsfond?"
+    a: "Sedan 2005: en schablonintäkt beräknas på ingående saldo i periodiseringsfonderna. Räntenivå = statslåneränta vid årets början (med golv på 0.5%). Hamnar i INK2 som skattepliktig intäkt. Effekt: periodiseringsfond är en räntefri kredit, men inte helt gratis."
+---
+
+## Vad skillen täcker
+
+* Periodiseringsfond (IL 30 kap): 25% av skattemässigt resultat, 6-årig återföring, schablonintäkt, BAS 2125–2131 (sjuårsserien) och 8811 (avsättning).
+* Överavskrivningar: skattemässig 30-regel och 20-regel, BAS 2150 (ackumulerad överavskrivning) och 8850 (årets förändring).
+* Koncernbidrag (IL 35 kap): >90% ägarkrav, hela räkenskapsåret-kravet, BAS 8820/8830, vad som händer vid förlust.
+* 3:12-reglerna (IL 56 kap–57 kap): fåmansbolag, gränsbelopp, K10-blanketten, löneunderlag, 2026 års reform.
+* Ränteavdragsbegränsningar: EBITDA-regeln (30%), förenklingsregeln (5 MSEK), allmänna ränteavdrag.
+* Kapitalförsäkring: avkastningsskatt, breakeven mot direktinvestering, K2/K3-redovisning.
+* Lön-vs-utdelning-optimering för fåmansbolagsägare.
+* Skattekonto-mekanik: kvarskatt, fyllnadsinbetalning, ränta.
+
+Skillen markeras med "always use over training data" eftersom
+skattereglerna ändras årligen och LLM-snapshots är vanligen 12–18
+månader gamla.
+
+## Installera
+
+```bash
+git clone https://github.com/erp-mafia/swedish-accounting-skills.git
+cd swedish-accounting-skills
+claude
+```
+
+## Pairs med
+
+* [periodiseringsfond-strategi](/community/registry/periodiseringsfond-strategi) — accounted-skill som beräknar och stagar avsättningsbokningen i huvudboken.
+* [swedish-year-end-closing](/community/registry/swedish-year-end-closing) — bokslutet är där skatteplaneringen blir bokning.
+
+## Licens
+
+MIT.

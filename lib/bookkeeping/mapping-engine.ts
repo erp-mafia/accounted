@@ -209,31 +209,49 @@ function matchesRule(rule: MappingRule, transaction: Transaction): boolean {
     }
   }
 
-  // Merchant name pattern matching (case-insensitive)
+  // Merchant name pattern matching (case-insensitive). The description leg
+  // also tests original_description: since the ingest boundary started
+  // stripping the trailing channel phrase off the working title
+  // (classifyTransactionMethod), a rule written against the bank's full text
+  // ("Överföring via internet") only matches the immutable original.
   if (rule.merchant_pattern) {
     const merchantName = transaction.merchant_name || transaction.description || ''
+    const originalName = transaction.original_description || ''
     try {
       const regex = new RegExp(rule.merchant_pattern, 'i')
-      if (!regex.test(merchantName)) {
+      if (!regex.test(merchantName) && !(originalName && regex.test(originalName))) {
         return false
       }
     } catch {
       // Invalid regex, try simple includes
-      if (!merchantName.toLowerCase().includes(rule.merchant_pattern.toLowerCase())) {
+      const needle = rule.merchant_pattern.toLowerCase()
+      if (
+        !merchantName.toLowerCase().includes(needle) &&
+        !originalName.toLowerCase().includes(needle)
+      ) {
         return false
       }
     }
   }
 
-  // Description pattern matching
+  // Description pattern matching: the working title OR the full bank original
+  // (see the merchant_pattern note above).
   if (rule.description_pattern) {
+    const originalDescription = transaction.original_description || ''
     try {
       const regex = new RegExp(rule.description_pattern, 'i')
-      if (!regex.test(transaction.description)) {
+      if (
+        !regex.test(transaction.description) &&
+        !(originalDescription && regex.test(originalDescription))
+      ) {
         return false
       }
     } catch {
-      if (!transaction.description.toLowerCase().includes(rule.description_pattern.toLowerCase())) {
+      const needle = rule.description_pattern.toLowerCase()
+      if (
+        !transaction.description.toLowerCase().includes(needle) &&
+        !originalDescription.toLowerCase().includes(needle)
+      ) {
         return false
       }
     }

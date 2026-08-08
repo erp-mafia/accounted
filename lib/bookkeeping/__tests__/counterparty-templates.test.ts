@@ -142,7 +142,7 @@ describe('counterparty-templates', () => {
   describe('findCounterpartyTemplate', () => {
     it('returns null for transaction without merchant name', async () => {
       const { supabase } = createMockSupabase()
-      const tx = makeTransaction({ merchant_name: null, description: '' })
+      const tx = makeTransaction({ merchant_name: null, description: '', original_description: null })
       const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
       expect(result).toBeNull()
     })
@@ -235,6 +235,34 @@ describe('counterparty-templates', () => {
       expect(result).toBeNull()
     })
 
+    it('anchors identity on original_description: a template learned from the full bank string matches a stripped working title', async () => {
+      // Era-stability regression: the ingest boundary strips the trailing
+      // channel phrase off description ("SPOTIFY AB Kortköp" → "SPOTIFY AB"),
+      // but templates learned BEFORE that carry keys/aliases derived from the
+      // full string. Matching must read the immutable original, or a
+      // single-distinctive-token template (occurrence 1, below the
+      // MIN_SINGLE_TOKEN_OCCURRENCES gate) silently stops matching.
+      const fullString = 'SPOTIFY AB Kortköp'
+      const template = makeCategorizationTemplate({
+        counterparty_name: normalizeCounterpartyName(fullString),
+        confidence: 0.8,
+        counterparty_aliases: [fullString.toLowerCase()],
+        occurrence_count: 1,
+      })
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [template] })
+
+      const tx = makeTransaction({
+        merchant_name: null,
+        description: 'SPOTIFY AB', // stripped working title
+        original_description: fullString, // immutable bank original
+      })
+      const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
+
+      expect(result).not.toBeNull()
+      expect(result!.matchMethod).toBe('exact_alias')
+    })
+
     it('token-subset matches a template token buried in a card descriptor', async () => {
       // The reported Anthropic case: a template learned from manual bookings
       // ("Claude Dec" -> "claude") must match the bank's card descriptor even
@@ -250,6 +278,7 @@ describe('counterparty-templates', () => {
       const tx = makeTransaction({
         merchant_name: null,
         description: 'ANTHROPIC* CLAUDE SUB SAN FRANCISCO',
+        original_description: 'ANTHROPIC* CLAUDE SUB SAN FRANCISCO',
       })
       const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
 
@@ -272,6 +301,7 @@ describe('counterparty-templates', () => {
       const tx = makeTransaction({
         merchant_name: null,
         description: 'ANTHROPIC*CLAUDE SUB LONDON',
+        original_description: 'ANTHROPIC*CLAUDE SUB LONDON',
       })
       const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
 
@@ -291,7 +321,11 @@ describe('counterparty-templates', () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       enqueue({ data: [template] })
 
-      const tx = makeTransaction({ merchant_name: null, description: 'SWISH ANDERS JOHANSSON' })
+      const tx = makeTransaction({
+        merchant_name: null,
+        description: 'SWISH ANDERS JOHANSSON',
+        original_description: 'SWISH ANDERS JOHANSSON',
+      })
       const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
 
       expect(result).toBeNull()
@@ -310,6 +344,7 @@ describe('counterparty-templates', () => {
       const tx = makeTransaction({
         merchant_name: null,
         description: 'SQ *BLUE BOTTLE COFFEE OAKLAND',
+        original_description: 'SQ *BLUE BOTTLE COFFEE OAKLAND',
       })
       const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
 
@@ -353,6 +388,7 @@ describe('counterparty-templates', () => {
       const tx = makeTransaction({
         merchant_name: null,
         description: 'ANTHROPIC* CLAUDE SUB SAN FRANCISCO',
+        original_description: 'ANTHROPIC* CLAUDE SUB SAN FRANCISCO',
       })
       const result = await findCounterpartyTemplate(supabase as never, 'user-1', tx)
 
@@ -475,6 +511,38 @@ describe('counterparty-templates', () => {
       expect(supabase.from).toHaveBeenCalledWith('categorization_templates')
     })
 
+    it('learns the key from the immutable bank original, not the stripped working title', async () => {
+      // Learning and lookup must derive the key from the same string
+      // (original_description), or the ingest-time phrase strip would fork
+      // template identities by era. Tailored mock: the shared queued mock
+      // does not capture insert payloads.
+      const inserted: Record<string, unknown>[] = []
+      const chain = {
+        select: () => chain,
+        eq: () => chain,
+        maybeSingle: async () => ({ data: null, error: null }),
+        insert: async (payload: Record<string, unknown>) => {
+          inserted.push(payload)
+          return { error: null }
+        },
+      }
+      const supabase = { from: () => chain }
+      const tx = makeTransaction({
+        merchant_name: null,
+        description: 'SPOTIFY AB',
+        original_description: 'SPOTIFY AB Kortköp',
+        date: '2024-06-15',
+      })
+
+      await upsertCounterpartyTemplate(
+        supabase as never, 'user-1', tx, mappingResult, 'auto_learned'
+      )
+
+      expect(inserted).toHaveLength(1)
+      expect(inserted[0].counterparty_name).toBe(normalizeCounterpartyName('SPOTIFY AB Kortköp'))
+      expect(inserted[0].counterparty_aliases).toEqual(['spotify ab kortköp'])
+    })
+
     it('does not throw on insert error', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       const tx = makeTransaction({ merchant_name: 'New Company AB' })
@@ -530,7 +598,7 @@ describe('counterparty-templates', () => {
 
     it('skips upsert for transactions without merchant name', async () => {
       const { supabase } = createQueuedMockSupabase()
-      const tx = makeTransaction({ merchant_name: null, description: '' })
+      const tx = makeTransaction({ merchant_name: null, description: '', original_description: null })
 
       await upsertCounterpartyTemplate(
         supabase as never, 'user-1', tx, mappingResult, 'user_approved'

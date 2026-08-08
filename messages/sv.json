@@ -2555,7 +2555,24 @@
     "edit_title_original_hint": "Bankens originalnamn: {name}.",
     "edit_title_restore": "Återställ",
     "edit_title_cancel": "Avbryt",
-    "edit_title_save": "Spara"
+    "edit_title_save": "Spara",
+    "method_line": "Betalsätt: {method}"
+  },
+  "tx_method": {
+    "card": "Kortköp",
+    "transfer": "Överföring",
+    "bankgiro": "Bankgirobetalning",
+    "plusgiro": "Plusgirobetalning",
+    "swish": "Swish",
+    "autogiro": "Autogiro",
+    "e_invoice": "E-faktura",
+    "international": "Utlandsbetalning",
+    "deposit": "Insättning",
+    "withdrawal": "Uttag",
+    "salary": "Lön",
+    "fee": "Avgift",
+    "interest": "Ränta",
+    "adjustment": "Justering"
   },
   "tx_quick_review": {
     "open_attached_failed": "Kunde inte öppna underlaget",

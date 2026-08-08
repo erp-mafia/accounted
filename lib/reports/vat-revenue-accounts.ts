@@ -30,17 +30,19 @@ import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
  * .claude/skills/swedish-vat/references/vat-compliance-reference.md §7:
  *
  *   3211/3212/3220 → ruta 07 (vinstmarginalbeskattning)
- *   3231/3232/3233 → ruta 41 (försäljning där köparen är betalningsskyldig)
  *   3913           → ruta 08 (hyresinkomster, frivillig skattskyldighet)
  *
- * Rutor 07, 08 and 41 are not mappable yet (see the note in
+ * Rutor 07 and 08 are not mappable yet (see the note in
  * vat-declaration-checks.ts). Until they are, these accounts stay out of the
  * declaration entirely: that understates one ruta, whereas sweeping them into
  * ruta 05 would file the amount in the wrong box.
+ *
+ * 3231/3232/3233 (ruta 41, omvänd skattskyldighet) used to sit here for the
+ * same reason but are now statically mapped in ACCOUNT_RUTA/ACCOUNT_TO_BOX,
+ * so the ACCOUNT_TO_BOX guard below excludes them from ruta 05.
  */
 export const RUTA_05_EXCLUDED_ACCOUNTS = new Set([
   '3211', '3212', '3220',
-  '3231', '3232', '3233',
   '3913',
 ])
 

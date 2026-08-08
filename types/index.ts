@@ -525,6 +525,31 @@ export type ImportSource =
   | 'camt053'
   | 'manual'
 
+/**
+ * Closed vocabulary for HOW money moved (the payment rail), classified at
+ * ingest by classifyTransactionMethod() (lib/transactions/transaction-method.ts).
+ * Mirrored by the transactions_transaction_method_check DB constraint
+ * (migration 20260808090000): keep the three in sync when adding a value.
+ */
+export const TRANSACTION_METHODS = [
+  'card',
+  'transfer',
+  'bankgiro',
+  'plusgiro',
+  'swish',
+  'autogiro',
+  'e_invoice',
+  'international',
+  'deposit',
+  'withdrawal',
+  'salary',
+  'fee',
+  'interest',
+  'adjustment',
+] as const
+
+export type TransactionMethod = (typeof TRANSACTION_METHODS)[number]
+
 // Transaction
 export interface Transaction {
   id: string
@@ -579,6 +604,14 @@ export interface Transaction {
   journal_entry_id: string | null
   mcc_code: number | null
   merchant_name: string | null
+
+  // Payment rail classified at ingest (or by the 20260808090100 backfill);
+  // null = unclassifiable from the source data.
+  transaction_method: TransactionMethod | null
+  // Raw PSD2 transaction-type codes, verbatim provider evidence for the
+  // classification (previously dropped at insert). Null for non-PSD2 sources.
+  bank_transaction_code: string | null
+  proprietary_bank_transaction_code: string | null
 
   // Receipt link
   receipt_id: string | null
@@ -3756,6 +3789,16 @@ export interface RawTransaction {
    * doesn't accidentally collide BG numbers with IBAN strings.
    */
   counterparty_account?: string | null
+  /**
+   * Payment rail the source already knows structurally (e.g. the Stripe feed's
+   * balance-transaction type). Beats every ingest-side heuristic; leave unset
+   * to let classifyTransactionMethod() derive it from codes/description/MCC.
+   */
+  transaction_method?: TransactionMethod | null
+  /** ISO 20022 bank transaction code from PSD2, verbatim (e.g. PMNT-CCRD-POSD). */
+  bank_transaction_code?: string | null
+  /** ASPSP-proprietary transaction code from PSD2, verbatim. */
+  proprietary_bank_transaction_code?: string | null
 }
 
 /** Options for the transaction ingestion pipeline */

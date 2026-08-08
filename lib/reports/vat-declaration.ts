@@ -108,6 +108,12 @@ export const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side
   '3404': { box: 'ruta42', side: 'credit' },  // Momsfria uttag
   '3980': { box: 'ruta42', side: 'credit' },  // Erhållna offentliga stöd m.m.
   '3994': { box: 'ruta42', side: 'credit' },  // Övriga rörelseintäkter momsfria
+  // Revenue: omvänd skattskyldighet inom Sverige → ruta 41. The seller books
+  // NO output VAT (the buyer accounts for it via rutor 23-24/30-32), so these
+  // deliberately stay OUT of the ruta 05-08 vs 10-12 pairing checks.
+  '3231': { box: 'ruta41', side: 'credit' },  // Försäljning byggsektorn, omvänd betalningsskyldighet
+  '3232': { box: 'ruta41', side: 'credit' },  // Omvänd betalningsskyldighet, övriga (skrot m.m.)
+  '3233': { box: 'ruta41', side: 'credit' },  // Omvänd betalningsskyldighet, övriga
   // Reverse-charge purchase bases (debit on cost accounts) → ruta 20-24, 50
   '4515': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 25%
   '4516': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 12%
