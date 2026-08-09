@@ -88,7 +88,11 @@ export function BankSyncProgressDialog({
   // Same authenticated endpoint the dashboard pane refetches; best-effort.
   const [workCounts, setWorkCounts] = useState<{ book: number; matches: number } | null>(null)
   useEffect(() => {
-    if (!open || state.kind !== 'done' || state.summary.imported === 0) return
+    if (!open || state.kind !== 'done' || state.summary.imported === 0) {
+      // A later sync must not inherit the previous run's numbers.
+      setWorkCounts(null)
+      return
+    }
     let cancelled = false
     fetch('/api/worklist/counts')
       .then((res) => (res.ok ? res.json() : null))
