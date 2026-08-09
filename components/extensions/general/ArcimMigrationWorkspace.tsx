@@ -118,12 +118,19 @@ interface SkipReasons {
   noMatch?: number
 }
 
+interface MigrationStepError {
+  step: 'companyInfo' | 'customers' | 'suppliers' | 'salesInvoices' | 'supplierInvoices' | 'reconciliation'
+  code: string | null
+  message: string
+}
+
 interface MigrationResults {
   companyInfo?: { imported: boolean }
   customers?: { total: number; imported: number; updated?: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   suppliers?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   salesInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
   supplierInvoices?: { total: number; imported: number; skipped: number; skipReasons?: SkipReasons; errorSample?: string }
+  stepErrors?: MigrationStepError[]
 }
 import AccountMappingStep from '@/components/import/AccountMappingStep'
 import type { AccountMapping, ImportResult, ParsedSIEFile } from '@/lib/import/types'
@@ -1559,11 +1566,17 @@ function ResultStep({
     (results.salesInvoices && (results.salesInvoices.imported > 0 || results.salesInvoices.skipped > 0)) ||
     (results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0))
   )
-  const nothingNew = sieResults.length === 0 && !entityImported
+
+  // Steps that failed against the provider API. An empty sync with failed
+  // steps must never present as "Allt är uppdaterat": that reading sent a
+  // real subscription problem to the bug tracker as a sync bug.
+  const stepErrors = results?.stepErrors ?? []
+  const apiFailed = stepErrors.length > 0
+  const nothingNew = sieResults.length === 0 && !entityImported && !apiFailed
 
   // Overall status
   const overallIcon = anySieFailed ? 'error' as const :
-    (!allSieSucceeded || totalErrors > 0) ? 'warning' as const : 'success' as const
+    (apiFailed || !allSieSucceeded || totalErrors > 0) ? 'warning' as const : 'success' as const
 
   return (
     <div className="space-y-4">
@@ -1573,7 +1586,7 @@ function ResultStep({
           <CardTitle className="flex items-center gap-2">
             <StatusIcon status={nothingNew ? 'success' : overallIcon} />
             {nothingNew ? 'Allt är uppdaterat' :
-             anySieFailed ? 'Migrering delvis genomförd' :
+             (anySieFailed || apiFailed) ? 'Migrering delvis genomförd' :
              !allSieSucceeded ? 'Migrering klar med anmärkningar' :
              'Migrering klar'}
           </CardTitle>
@@ -1597,6 +1610,23 @@ function ResultStep({
           </CardDescription>
         </CardHeader>
       </Card>
+
+      {/* ── Steps that failed against the provider API ── */}
+      {stepErrors.length > 0 && (
+        <div className="space-y-2">
+          {groupStepErrors(stepErrors).map((group, i) => (
+            <div key={i} className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+              <div>
+                <p className="text-sm font-medium text-destructive">
+                  Kunde inte hämta: {group.steps.map((s) => STEP_ERROR_LABELS[s]).join(', ')}
+                </p>
+                <p className="mt-1 text-sm text-muted-foreground">{group.message}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── Per-fiscal-year SIE breakdown ── */}
       {sieResults.length > 0 && (
@@ -1740,6 +1770,29 @@ function ResultStep({
       </div>
     </div>
   )
+}
+
+const STEP_ERROR_LABELS: Record<MigrationStepError['step'], string> = {
+  companyInfo: 'Företagsinformation',
+  customers: 'Kunder',
+  suppliers: 'Leverantörer',
+  salesInvoices: 'Kundfakturor',
+  supplierInvoices: 'Leverantörsfakturor',
+  reconciliation: 'Avstämning av betalningar',
+}
+
+/**
+ * Group step errors that share the same message (a provider outage hits every
+ * step identically) so the result shows one card per cause, not one per step.
+ */
+function groupStepErrors(errors: MigrationStepError[]): { message: string; steps: MigrationStepError['step'][] }[] {
+  const groups = new Map<string, MigrationStepError['step'][]>()
+  for (const e of errors) {
+    const steps = groups.get(e.message) ?? []
+    steps.push(e.step)
+    groups.set(e.message, steps)
+  }
+  return [...groups.entries()].map(([message, steps]) => ({ message, steps }))
 }
 
 function formatSkipReasons(
@@ -1899,13 +1952,19 @@ export default function ArcimMigrationWorkspace({
         const data = await res.json().catch(() => ({}))
         // A dead connection (expired/revoked refresh token) is recoverable in
         // place: flag it so the UI offers "Återanslut" instead of a dead end.
-        // A missing Fortnox integration license shows the same CTA but keeps the
-        // SIE fallback, because re-auth loops until the license is re-ordered.
+        // A missing Fortnox integration license or an inactive Visma API
+        // module shows the same CTA but keeps the SIE fallback, because
+        // re-auth loops until the customer fixes the subscription (re-orders
+        // the license / activates the API module).
         const code = apiErrorCode(data)
-        if (code === 'PROVIDER_AUTH_EXPIRED' || code === 'PROVIDER_LICENSE_MISSING') {
+        if (
+          code === 'PROVIDER_AUTH_EXPIRED' ||
+          code === 'PROVIDER_LICENSE_MISSING' ||
+          code === 'PROVIDER_API_MODULE_INACTIVE'
+        ) {
           setAuthExpired(true)
         }
-        if (code === 'PROVIDER_LICENSE_MISSING') {
+        if (code === 'PROVIDER_LICENSE_MISSING' || code === 'PROVIDER_API_MODULE_INACTIVE') {
           setLicenseMissing(true)
         }
         throw new Error(apiErrorMessage(data, `HTTP ${res.status}`))
@@ -2315,6 +2374,7 @@ export default function ArcimMigrationWorkspace({
         migrationOptions.importSalesInvoices ||
         migrationOptions.importSupplierInvoices
 
+      let hadStepErrors = false
       if (hasApiImport) {
         setMigrationStep('Importerar kunder, leverantörer och fakturor...')
         setMigrationProgress(55)
@@ -2339,6 +2399,7 @@ export default function ArcimMigrationWorkspace({
 
         const data = await res.json()
         setMigrationResults(data.results)
+        hadStepErrors = ((data.results as MigrationResults | undefined)?.stepErrors?.length ?? 0) > 0
       }
 
       // Mark consent as fully accepted now that import is complete
@@ -2353,10 +2414,18 @@ export default function ArcimMigrationWorkspace({
       setMigrationProgress(100)
       setStep('result')
 
-      toast({
-        title: 'Migrering klar',
-        description: 'Din bokföringsdata har importerats.',
-      })
+      if (hadStepErrors) {
+        toast({
+          title: 'Migrering delvis genomförd',
+          description: 'Vissa delar kunde inte hämtas från leverantören. Se detaljerna i resultatet.',
+          variant: 'destructive',
+        })
+      } else {
+        toast({
+          title: 'Migrering klar',
+          description: 'Din bokföringsdata har importerats.',
+        })
+      }
     } catch (err) {
       setError(displayError(err))
       setStep('result')

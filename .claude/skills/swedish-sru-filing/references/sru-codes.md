@@ -22,14 +22,14 @@ Complete field code (fältkod) tables for INK2, INK2R, and INK2S blankett types,
 |---|---|---|
 | 7011 | N/A | Räkenskapsår fr.o.m. (YYYYMMDD) |
 | 7012 | N/A | Räkenskapsår t.o.m. (YYYYMMDD) |
-| 7113 | 1.1 | Överskott av näringsverksamhet |
+| 7104 | 1.1 | Överskott av näringsverksamhet |
 | 7114 | 1.2 | Underskott av näringsverksamhet |
 | 7132 | 1.4 | Underlag för särskild löneskatt på pensionskostnader |
 | 7133 | 1.5 | Negativt underlag särskild löneskatt |
 | 7153 | 1.6a | Avkastningsskatt 15% |
 | 7155 | 1.7a | Avkastningsskatt 30% |
 
-Fields 7113/7114 correspond directly to INK2S fields 8020/8021.
+Fields 7104/7114 correspond directly to INK2S fields 8020/8021. (Verified against Skatteverket's official 2025P4 field list: 1.1 is 7104, NOT 7113; 7113 does not exist on INK2 and Skatteverket rejects it with "är inte ett giltigt postnamn".)
 
 ---
 
@@ -168,7 +168,7 @@ Fields 7113/7114 correspond directly to INK2S fields 8020/8021.
 | 7763 | 4.14a | Outnyttjat underskott från föregående beskattningsår |
 | 7664 | 4.14b | Reduktion av underskott (beloppsspärr/ackord) |
 | 7670 | 4.14c | Reduktion pga koncernbidragsspärr/fusionsspärr |
-| 8020 | 4.15 | Överskott → överförs till punkt 1.1 (INK2 field 7113) |
+| 8020 | 4.15 | Överskott → överförs till punkt 1.1 (INK2 field 7104) |
 | 8021 | 4.16 | Underskott → överförs till punkt 1.2 (INK2 field 7114) |
 | 7770 | 4.20 | Lån från aktieägare (fysisk person) vid beskattningsårets utgång |
 

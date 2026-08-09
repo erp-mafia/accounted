@@ -40,8 +40,8 @@ export default async function SectorExtensionsPage({
 
       {/* Header */}
       <div className="flex items-start gap-4 mb-8">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 flex-shrink-0">
-          <Icon className="h-6 w-6 text-primary" />
+        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-secondary flex-shrink-0">
+          <Icon className="h-6 w-6 text-foreground" />
         </div>
         <div>
           <h1 className="font-display text-2xl leading-8 tracking-tight">{sectorName}</h1>
@@ -50,7 +50,7 @@ export default async function SectorExtensionsPage({
       </div>
 
       {/* Extensions grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 stagger-enter">
         {sector.extensions.map(ext => (
           <ExtensionCard key={ext.slug} extension={ext} />
         ))}

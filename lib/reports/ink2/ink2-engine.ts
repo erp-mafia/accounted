@@ -1024,7 +1024,7 @@ export async function generateINK2Declaration(
   const ink2: INK2Rutor = {
     '7011': fyStart,
     '7012': fyEnd,
-    '7113': taxableResult >= 0 ? taxableResult : 0,
+    '7104': taxableResult >= 0 ? taxableResult : 0,
     '7114': taxableResult < 0 ? Math.abs(taxableResult) : 0,
   }
 

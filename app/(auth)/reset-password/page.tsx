@@ -208,7 +208,7 @@ function ResetPasswordInner() {
         : t('subtitle')
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="text-center mb-10">
           <div className="flex justify-center mb-4">

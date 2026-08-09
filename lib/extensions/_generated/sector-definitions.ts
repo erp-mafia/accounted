@@ -158,5 +158,16 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "longDescription": "Anslut din WooCommerce-butik så hämtas betalda ordrar och återbetalningar automatiskt varje natt till transaktionsinkorgen, som ett bankflöde för butiken. Inget bokförs automatiskt: du bokför raderna själv precis som vanliga banktransaktioner.",
           "hasOwnData": true
     },
+    {
+          "slug": "shopify",
+          "name": "Shopify",
+          "sector": "general",
+          "category": "import",
+          "icon": "ShoppingBag",
+          "dataPattern": "manual",
+          "description": "Hämta betalda ordrar och återbetalningar från din Shopify-butik till transaktionsinkorgen",
+          "longDescription": "Anslut din Shopify-butik så hämtas betalda ordrar och återbetalningar automatiskt varje natt till transaktionsinkorgen, som ett bankflöde för butiken. Inget bokförs automatiskt: du bokför raderna själv precis som vanliga banktransaktioner.",
+          "hasOwnData": true
+    },
   ],
 }

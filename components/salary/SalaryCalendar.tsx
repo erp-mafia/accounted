@@ -29,6 +29,8 @@ import {
 } from 'lucide-react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -696,7 +698,7 @@ function BulkWorkedDialog({
         <div className="space-y-3">
           <div className="space-y-1.5">
             <label className="text-xs font-medium" htmlFor="bulk-w-hours">{t('hours_per_day')}</label>
-            <input
+            <Input
               id="bulk-w-hours"
               type="number"
               min={0}
@@ -705,7 +707,7 @@ function BulkWorkedDialog({
               value={hours}
               onChange={(e) => setHours(e.target.value)}
               autoFocus
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm tabular-nums shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="tabular-nums"
             />
             <p className="text-[11px] text-muted-foreground">
               {t('hours_zero_hint')}
@@ -714,13 +716,13 @@ function BulkWorkedDialog({
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium" htmlFor="bulk-w-notes">{t('notes_label')}</label>
-            <textarea
+            <Textarea
               id="bulk-w-notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
               maxLength={2000}
-              className="flex w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="min-h-0"
             />
           </div>
 
@@ -853,7 +855,7 @@ function BulkAbsenceDialog({
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium" htmlFor="bulk-a-hours">{t('hours_per_day')}</label>
-            <input
+            <Input
               id="bulk-a-hours"
               type="number"
               min={0.5}
@@ -861,19 +863,19 @@ function BulkAbsenceDialog({
               step={0.5}
               value={hours}
               onChange={(e) => setHours(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm tabular-nums shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="tabular-nums"
             />
           </div>
 
           <div className="space-y-1.5">
             <label className="text-xs font-medium" htmlFor="bulk-a-notes">{t('notes_label')}</label>
-            <textarea
+            <Textarea
               id="bulk-a-notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
               maxLength={2000}
-              className="flex w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="min-h-0"
             />
           </div>
 

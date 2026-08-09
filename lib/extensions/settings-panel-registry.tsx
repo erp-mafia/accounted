@@ -22,6 +22,9 @@ const SETTINGS_PANELS: Record<string, ComponentType> = {
   woocommerce: dynamic(
     () => import('@/extensions/general/woocommerce/components/WooCommerceSettingsPanel')
   ),
+  shopify: dynamic(
+    () => import('@/extensions/general/shopify/components/ShopifySettingsPanel')
+  ),
 }
 
 /**

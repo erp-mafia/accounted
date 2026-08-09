@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -528,9 +529,10 @@ export default function ChartOfAccountsManager() {
       </div>
 
       {loading ? (
-        <div className="p-8 text-center text-muted-foreground">
-          <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
-          {t('loading')}
+        <div className="space-y-2 py-2">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <Skeleton key={i} className="h-8 w-full" />
+          ))}
         </div>
       ) : view === 'my-accounts' ? (
         filteredAccounts.length === 0 ? (
@@ -669,9 +671,10 @@ export default function ChartOfAccountsManager() {
       ) : (
         <div>
           {referenceLoading && referenceAccounts.length === 0 ? (
-            <div className="p-8 text-center text-muted-foreground">
-              <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />
-              {t('loading')}
+            <div className="space-y-2 py-2">
+              {[1, 2, 3, 4, 5, 6].map((i) => (
+                <Skeleton key={i} className="h-8 w-full" />
+              ))}
             </div>
           ) : filteredReference.length === 0 ? (
             <p className="px-1 py-12 text-center text-sm text-muted-foreground">{t('no_matches')}</p>

@@ -640,6 +640,16 @@ export const arcimMigrationExtension: Extension = {
             const companyInfo = await fetchCompanyInfoDirect(provider, resolved.accessToken, resolved.providerCompanyId)
             mapped = companyInfo ? mapCompanyInfo(companyInfo) : null
           } catch (err) {
+            // A missing integration license / inactive API module dooms every
+            // later call in the wizard too: fail the preview with the typed
+            // code (via the outer catch) so the user reads the remediation at
+            // connect time, not after a silently empty migration. Other
+            // failures stay soft: the preview is still useful without company
+            // info (e.g. SIE-over-API can work with narrower scopes).
+            const classified = classifyProviderError(err)
+            if (classified === 'PROVIDER_API_MODULE_INACTIVE' || classified === 'PROVIDER_LICENSE_MISSING') {
+              throw err
+            }
             log.info('Company info fetch failed:', err instanceof Error ? err.message : String(err))
           }
 
