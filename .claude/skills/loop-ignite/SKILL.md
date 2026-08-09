@@ -21,12 +21,20 @@ audits. All loops run locally now.
    - Local schedule: `CronList` for session-local jobs invoking `/loop-*` skills.
    - Evidence of firing: recent `loop/*` branches, PR comments by the loop, `loop:needs-human` labels
      (`gh pr list`, `gh issue list --label loop:needs-human`).
-2. **Report a one-screen status table**: loop, expected cadence, last observed run, verdict (LIVE / DEAD / NEVER RAN).
+   - Slow loops: last `<!-- loop-docs-freshness-run: ... -->` marker on `loop:docs` issues (due
+     weekly) and last `<!-- loop-regeluppdat-run: YYYY-MM -->` marker on the `Regeluppdat scan log`
+     issue (due monthly).
+2. **Report a one-screen status table**: loop, expected cadence, last observed run, verdict (LIVE / DEAD / NEVER RAN / NOT DUE).
 3. **Ignite what is dead.** For each non-live loop:
    - Run the loop skill once NOW (`/loop-pr-ci-triage`, `/loop-issue-triage`, `/loop-vercel-errors`)
      so the backlog is cleared this session.
    - Then schedule a session-local cadence (`CronCreate` invoking the matching `/loop-*` skill) and
      say clearly that it only runs while this session is alive (7-day auto-expiry).
+   - **Slow loops run when due, not on a cron**: session crons cannot outlive 7 days, so weekly and
+     monthly cadences cannot be scheduled directly. If the docs-freshness marker is older than 6
+     days (or absent), run `/loop-docs-freshness` once now; if the regeluppdat marker is not from
+     the current calendar month, run `/loop-regeluppdat` once now. Both self-gate, so running them
+     again is a cheap no-op.
    - If a loop cannot run at all, file the blocker as a GitHub issue so the gap is visible instead of silent.
 4. **Switch-on check (mandatory):** after igniting, verify via `CronList` that the jobs exist.
    End with either "ALL LOOPS LIVE (session-local)" or "NOT SWITCHED ON YET: <loop> - <what remains, who flips it>".
