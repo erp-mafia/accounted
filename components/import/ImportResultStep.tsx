@@ -107,10 +107,6 @@ export default function ImportResultStep({
                     {t('reveal_skipped', { count: skipped.total })}
                   </p>
                 )}
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {result.fiscalPeriodId ? t('reveal_meta_period_created') : t('reveal_meta_period_existing')}
-                  {result.openingBalanceEntryId ? ` · ${t('reveal_meta_ib')}` : ''}
-                </p>
                 <div className="mt-6 border-t border-border pt-4">
                   {/* Sandbox strips live bank connections from /import, so the
                       bridge quiets down to the plain way onward there. */}

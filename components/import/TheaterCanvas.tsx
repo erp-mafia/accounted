@@ -32,6 +32,13 @@ const BUCKET_LABEL: Record<TheaterBucket, string> = {
   kostnader: 'KOSTNADER',
 }
 
+/** Real BAS names run long ("4531 Inköp av tjänster från ett land utanför
+ *  EU, 25 % moms"); labels truncate hard so the constellation stays a
+ *  constellation. */
+function truncateLabel(label: string, max: number): string {
+  return label.length <= max ? label : label.slice(0, max - 1).trimEnd() + '…'
+}
+
 /** Deterministic [0,1) hash so the constellation is stable per file. */
 function rand01(seed: string): number {
   let h = 1779033703 ^ seed.length
@@ -80,16 +87,16 @@ function buildEngine(model: TheaterModel, allBorn: boolean): Engine {
   const maxAccountWeight = Math.max(1, ...model.accounts.map((a) => a.weight))
   model.accounts.forEach((a, i) => {
     const base = BUCKET_ANGLE[a.bucket]
-    const spread = (rand01(a.number) - 0.5) * 0.9
-    const rad = 192 + rand01(a.number + 'r') * 40
+    const spread = (rand01(a.number) - 0.5) * 1.2
+    const rad = 185 + rand01(a.number + 'r') * 70
     nodes.push({
       id: a.number,
       kind: 'account',
       x: Math.cos(base + spread) * rad,
       y: Math.sin(base + spread) * rad,
       r: 2.4 + (a.weight / maxAccountWeight) * 3.4,
-      label: `${a.number} ${a.name}`.trim(),
-      lab: i < 8,
+      label: truncateLabel(`${a.number} ${a.name}`.trim(), 24),
+      lab: i < 5,
       wave: i % 4,
       born: null,
     })
@@ -99,16 +106,16 @@ function buildEngine(model: TheaterModel, allBorn: boolean): Engine {
   model.counterparties.forEach((c, i) => {
     const anchor = nodes.find((n) => n.id === c.account)
     const base = anchor ? Math.atan2(anchor.y, anchor.x) : BUCKET_ANGLE.kostnader
-    const spread = (rand01(c.name) - 0.5) * 0.5
-    const rad = 262 + rand01(c.name + 'r') * 38
+    const spread = (rand01(c.name) - 0.5) * 0.7
+    const rad = 258 + rand01(c.name + 'r') * 52
     nodes.push({
       id: `cp${i}`,
       kind: 'counterparty',
       x: Math.cos(base + spread) * rad,
       y: Math.sin(base + spread) * rad,
       r: 1.8 + (c.weight / maxCpWeight) * 2.4,
-      label: c.name,
-      lab: i < 7,
+      label: truncateLabel(c.name, 16),
+      lab: i < 5,
       wave: i % 3,
       born: null,
     })
@@ -286,6 +293,13 @@ const TheaterCanvas = forwardRef<TheaterCanvasHandle, {
         }
       }
 
+      // Greedy label collision culling: node order is hub → buckets →
+      // heaviest accounts → heaviest counterparties, so when labels would
+      // overlap (real files cluster hard in one region), the least important
+      // one silently keeps only its dot.
+      const drawnLabels: { x0: number; y0: number; x1: number; y1: number }[] = []
+      const overlaps = (x0: number, y0: number, x1: number, y1: number) =>
+        drawnLabels.some((b) => x0 < b.x1 && x1 > b.x0 && y0 < b.y1 && y1 > b.y0)
       for (const n of engine.nodes) {
         if (n.born == null || n.kind === 'ring') continue
         const p = ease(age(n))
@@ -314,7 +328,13 @@ const TheaterCanvas = forwardRef<TheaterCanvasHandle, {
           if (align === 'left') lx = Math.min(lx, W - 6 - tw)
           else if (align === 'right') lx = Math.max(lx, 6 + tw)
           else lx = Math.min(Math.max(lx, 6 + tw / 2), W - 6 - tw / 2)
-          ctx.fillText(n.label, lx, q.y + (n.kind === 'hub' ? r + 15 : 3.5))
+          const ly = q.y + (n.kind === 'hub' ? r + 15 : 3.5)
+          const x0 = align === 'left' ? lx : align === 'right' ? lx - tw : lx - tw / 2
+          const rect = { x0: x0 - 3, y0: ly - 11, x1: x0 + tw + 3, y1: ly + 4 }
+          if (n.kind === 'hub' || n.kind === 'bucket' || !overlaps(rect.x0, rect.y0, rect.x1, rect.y1)) {
+            drawnLabels.push(rect)
+            ctx.fillText(n.label, lx, ly)
+          }
           ctx.globalAlpha = 1
         }
       }
