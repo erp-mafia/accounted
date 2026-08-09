@@ -130,6 +130,27 @@ async function buildArcimOAuthUrl(consentId: string, provider: ArcimProvider): P
 }
 
 /**
+ * Map a failed /migrate run to its structured error response. Shared by the
+ * JSON path (returned as-is) and the NDJSON path (body re-sent as the
+ * terminal `error` event, since the stream's 200 status is already
+ * committed). Consent missing or owned by another company: same 404 either way.
+ */
+function migrateFailureResponse(error: unknown, consentId: string): NextResponse {
+  if (error instanceof ConsentNotFoundError) {
+    return errorResponseFromCode('PROVIDER_CONSENT_NOT_FOUND', moduleLog, {
+      details: { consentId },
+    })
+  }
+  const classified = classifyProviderError(error)
+  return errorResponseFromCode(classified ?? 'PROVIDER_MIGRATE_FAILED', moduleLog, {
+    details: {
+      reason: error instanceof Error ? error.message : 'unknown',
+      classified: classified ?? 'unclassified',
+    },
+  })
+}
+
+/**
  * Provider Migration extension
  *
  * Migrates bookkeeping data from external Swedish accounting systems
@@ -1093,7 +1114,7 @@ export const arcimMigrationExtension: Extension = {
 
           log.info(`Starting migration for user ${user.id} from ${consent.provider}`)
 
-          const results = await executeMigration({
+          const migrationOptions = {
             consentId,
             companyId,
             userId: user.id,
@@ -1104,7 +1125,59 @@ export const arcimMigrationExtension: Extension = {
             importSalesInvoices,
             importSupplierInvoices,
             reconcileVouchers,
-          })
+          }
+
+          // Streaming mode (the migration wizard opts in via Accept): one
+          // NDJSON line per orchestrator progress event, then a terminal
+          // `done` or `error` line. Errors after the stream opens cannot
+          // change the HTTP status, so the terminal `error` line carries the
+          // same structured envelope the JSON path answers with. Callers
+          // without the Accept header keep the original JSON contract.
+          if ((request.headers.get('accept') ?? '').includes('application/x-ndjson')) {
+            const encoder = new TextEncoder()
+            const stream = new ReadableStream<Uint8Array>({
+              async start(controller) {
+                const send = (event: Record<string, unknown>) => {
+                  try {
+                    controller.enqueue(encoder.encode(JSON.stringify(event) + '\n'))
+                  } catch {
+                    // Reader cancelled (tab closed, navigation). The migration
+                    // keeps running server-side; we just stop narrating.
+                  }
+                }
+                try {
+                  const results = await executeMigration({
+                    ...migrationOptions,
+                    onProgress: (p) => send({
+                      kind: 'progress',
+                      status: p.status,
+                      currentStep: p.currentStep,
+                      progress: p.progress,
+                    }),
+                  })
+                  log.info('Migration completed:', results)
+                  // Mark consent as fully accepted now that data has been imported
+                  await acceptConsent(consentId)
+                  send({ kind: 'done', success: true, results })
+                } catch (error) {
+                  log.error('arcim migration failed', error as Error)
+                  const envelope = await migrateFailureResponse(error, consentId).json()
+                  send({ kind: 'error', ...envelope })
+                } finally {
+                  controller.close()
+                }
+              },
+            })
+            return new Response(stream, {
+              headers: {
+                'Content-Type': 'application/x-ndjson; charset=utf-8',
+                'Cache-Control': 'no-store',
+                'X-Accel-Buffering': 'no',
+              },
+            })
+          }
+
+          const results = await executeMigration(migrationOptions)
 
           log.info('Migration completed:', results)
 
@@ -1114,19 +1187,7 @@ export const arcimMigrationExtension: Extension = {
           return NextResponse.json({ success: true, results })
         } catch (error) {
           log.error('arcim migration failed', error as Error)
-          // Consent missing or owned by another company: same 404 either way.
-          if (error instanceof ConsentNotFoundError) {
-            return errorResponseFromCode('PROVIDER_CONSENT_NOT_FOUND', moduleLog, {
-              details: { consentId },
-            })
-          }
-          const classified = classifyProviderError(error)
-          return errorResponseFromCode(classified ?? 'PROVIDER_MIGRATE_FAILED', moduleLog, {
-            details: {
-              reason: error instanceof Error ? error.message : 'unknown',
-              classified: classified ?? 'unclassified',
-            },
-          })
+          return migrateFailureResponse(error, consentId)
         }
       },
     },

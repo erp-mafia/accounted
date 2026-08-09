@@ -101,6 +101,72 @@ function displayError(err: unknown, nonErrorFallback?: string): string {
   return getUserErrorMessage(err)
 }
 
+/**
+ * Read the /migrate NDJSON stream: one JSON object per line. `progress`
+ * events carry the orchestrator's real step labels and anchors; the stream
+ * ends with a terminal `done` line (results) or `error` line (the same
+ * structured envelope the JSON path answers with, thrown here so the catch
+ * block shows it verbatim).
+ */
+async function consumeMigrationStream(
+  body: ReadableStream<Uint8Array>,
+  onProgress: (currentStep: string | undefined, progress: number) => void,
+): Promise<MigrationResults> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let results: MigrationResults | undefined
+
+  const handleLine = (line: string) => {
+    if (!line.trim()) return
+    let event: {
+      kind?: string
+      currentStep?: string
+      progress?: number
+      results?: MigrationResults
+    }
+    try {
+      event = JSON.parse(line)
+    } catch {
+      return // torn line from an intermediary flush; terminal lines are whole
+    }
+    if (event.kind === 'progress' && typeof event.progress === 'number') {
+      onProgress(
+        typeof event.currentStep === 'string' && event.currentStep ? event.currentStep : undefined,
+        event.progress,
+      )
+    } else if (event.kind === 'done') {
+      results = event.results ?? {}
+    } else if (event.kind === 'error') {
+      throw apiError(event, 'Migreringen misslyckades.')
+    }
+  }
+
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+      for (const line of lines) handleLine(line)
+    }
+    buffer += decoder.decode()
+    if (buffer) handleLine(buffer)
+  } finally {
+    reader.releaseLock()
+  }
+
+  if (!results) {
+    // The connection dropped before the terminal line. The migration keeps
+    // running server-side, so a blind retry could double-import.
+    throw new UserFacingError(
+      'Anslutningen bröts innan migreringen bekräftades. Ladda om sidan och kontrollera om kunder och fakturor redan har importerats innan du försöker igen.'
+    )
+  }
+  return results
+}
+
 /** Pull the structured error `code` from an envelope, if present. */
 function apiErrorCode(data: unknown): string | null {
   const err = (data as { error?: unknown } | null)?.error
@@ -2381,7 +2447,7 @@ export default function ArcimMigrationWorkspace({
 
         const res = await fetch('/api/extensions/ext/arcim-migration/migrate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
           body: JSON.stringify({
             consentId,
             importCompanyInfo: migrationOptions.importCompanyInfo,
@@ -2397,9 +2463,23 @@ export default function ArcimMigrationWorkspace({
           throw apiError(data, `HTTP ${res.status}`)
         }
 
-        const data = await res.json()
-        setMigrationResults(data.results)
-        hadStepErrors = ((data.results as MigrationResults | undefined)?.stepErrors?.length ?? 0) > 0
+        const contentType = res.headers.get('content-type') ?? ''
+        let results: MigrationResults | undefined
+        if (contentType.includes('application/x-ndjson') && res.body) {
+          results = await consumeMigrationStream(res.body, (currentStep, progress) => {
+            if (currentStep) setMigrationStep(currentStep)
+            // The orchestrator reports 0-100 on its own scale; the wizard bar
+            // reserves 55-100 for the entity phase (SIE holds 10-50).
+            setMigrationProgress(55 + Math.round(progress * 0.45))
+          })
+        } else {
+          // Pre-stream server (or a proxy that stripped the stream): the
+          // original single-JSON contract.
+          const data = await res.json()
+          results = data.results as MigrationResults | undefined
+        }
+        setMigrationResults(results ?? null)
+        hadStepErrors = (results?.stepErrors?.length ?? 0) > 0
       }
 
       // Mark consent as fully accepted now that import is complete
