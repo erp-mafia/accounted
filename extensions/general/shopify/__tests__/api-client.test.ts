@@ -91,7 +91,7 @@ describe('exchangeAccessToken', () => {
     })
   })
 
-  it('classifies any 4xx as revoked credentials', async () => {
+  it('classifies a non-retryable 4xx as revoked credentials', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({ error: 'invalid_client' }, 400),
     )
@@ -100,6 +100,17 @@ describe('exchangeAccessToken', () => {
     expect(isRevokedCredentialsError(error)).toBe(true)
     expect((error as ShopifyApiError).code).toBe('invalid_client')
   })
+
+  it('does NOT classify sustained throttling (429) as revoked credentials', async () => {
+    // A persistent 429 that survives every retry is still throttling.
+    // Classifying it as revoked would delete the stored credentials and force
+    // the merchant to reconnect over a rate limit.
+    fetchMock.mockResolvedValue(jsonResponse({}, 429))
+    const error = await exchangeAccessToken(CREDS).catch((e) => e)
+    expect(error).toBeInstanceOf(ShopifyApiError)
+    expect((error as ShopifyApiError).status).toBe(429)
+    expect(isRevokedCredentialsError(error)).toBe(false)
+  }, 15_000)
 })
 
 describe('shopifyGraphQL', () => {

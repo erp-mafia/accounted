@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 const listOrdersPage = vi.fn()
@@ -40,7 +40,13 @@ import {
 } from '../lib/order-sync'
 import type { ShopifyConnection, ShopifyOrder, ShopifyRefund } from '../types'
 
-process.env.SHOPIFY_CREDENTIALS_ENCRYPTION_KEY = 'test-key'
+beforeAll(() => {
+  vi.stubEnv('SHOPIFY_CREDENTIALS_ENCRYPTION_KEY', 'test-key')
+})
+
+afterAll(() => {
+  vi.unstubAllEnvs()
+})
 
 function makeConnection(overrides: Partial<ShopifyConnection> = {}): ShopifyConnection {
   return {
@@ -287,11 +293,14 @@ describe('syncShopifyOrders', () => {
     expect(ingestOptions).toEqual({ settlementAccount: '1584', skipAutoCategorization: true })
 
     // Cursor persisted from the page's max updatedAt, and any stale
-    // error_message is cleared on progress.
+    // error_message is cleared on progress. A fully-listed window then
+    // advances the watermark to the run start time.
     const cursors = cursorUpdates(updates)
-    expect(cursors).toHaveLength(1)
+    expect(cursors).toHaveLength(2)
     expect(cursors[0].values.last_order_synced_at).toBe('2026-08-01T09:05:00.000Z')
     expect(cursors[0].values.error_message).toBeNull()
+    const watermarkMs = Date.parse(cursors[1].values.last_order_synced_at as string)
+    expect(Math.abs(watermarkMs - Date.now())).toBeLessThan(60_000)
     // hasNextPage: false terminates without a second list call.
     expect(listOrdersPage).toHaveBeenCalledTimes(1)
   })
@@ -350,13 +359,21 @@ describe('syncShopifyOrders', () => {
     expect((rows as Array<{ external_id: string }>).map((r) => r.external_id)).toEqual([
       'shopify_minbutik.myshopify.com_refund_77',
     ])
-    // The cursor still advances: the drop is by design, not a failure.
-    expect(cursorUpdates(updates)).toHaveLength(1)
+    // The cursor still advances (page + watermark): the drop is by design,
+    // not a failure.
+    expect(cursorUpdates(updates)).toHaveLength(2)
   })
 
   it('holds the cursor below a page whose ingest reported errors', async () => {
     const { client, updates } = makeSupabaseMock()
-    listOrdersPage.mockResolvedValueOnce(page([makeOrder()]))
+    // Two orders so the assertion distinguishes "first updatedAt minus 1s"
+    // (the floor rule) from "max updatedAt minus 1s".
+    listOrdersPage.mockResolvedValueOnce(
+      page([
+        makeOrder(),
+        makeOrder({ legacyResourceId: '1043', name: '#1043', updatedAt: '2026-08-02T08:00:00Z' }),
+      ]),
+    )
     vi.mocked(ingestTransactions).mockResolvedValueOnce({
       imported: 0,
       duplicates: 0,
@@ -366,7 +383,8 @@ describe('syncShopifyOrders', () => {
     const summary = await syncShopifyOrders(client, makeConnection())
 
     expect(summary.errors).toBe(1)
-    // Page's first updatedAt 09:05:00 minus 1s: the next run re-lists it.
+    // Page's FIRST updatedAt 09:05:00 minus 1s: the next run re-lists it.
+    // The floor also caps the end-of-run watermark, so no second update.
     const cursors = cursorUpdates(updates)
     expect(cursors).toHaveLength(1)
     expect(cursors[0].values.last_order_synced_at).toBe('2026-08-01T09:04:59.000Z')
@@ -415,8 +433,23 @@ describe('syncShopifyOrders', () => {
 
     expect(summary.errors).toBe(1)
     expect(ingestTransactions).not.toHaveBeenCalled()
-    // Deliberate: a permanently corrupt total must not stall the feed.
-    expect(cursorUpdates(updates)).toHaveLength(1)
+    // Deliberate: a permanently corrupt total must not stall the feed
+    // (page cursor + end-of-run watermark both persist).
+    expect(cursorUpdates(updates)).toHaveLength(2)
+  })
+
+  it('advances a watermark on an empty first run so quiet stores rotate in the cron', async () => {
+    const { client, updates } = makeSupabaseMock()
+
+    const summary = await syncShopifyOrders(client, makeConnection())
+
+    expect(summary.fetched).toBe(0)
+    // Without this, an empty store keeps a NULL cursor forever and the cron's
+    // nullsFirst selection re-picks it every night ahead of everyone else.
+    const cursors = cursorUpdates(updates)
+    expect(cursors).toHaveLength(1)
+    const watermarkMs = Date.parse(cursors[0].values.last_order_synced_at as string)
+    expect(Math.abs(watermarkMs - Date.now())).toBeLessThan(60_000)
   })
 
   it('does nothing for a connection without credentials or not active', async () => {

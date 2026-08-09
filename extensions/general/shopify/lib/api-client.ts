@@ -151,11 +151,18 @@ export async function exchangeAccessToken(creds: ShopifyCredentials): Promise<st
       error?: string
       error_description?: string
     } | null
+    // Only non-retryable 4xx means the credentials are unusable. A 429 that
+    // survived every retry is still throttling, not revocation: mapping it to
+    // 401 would classify as revoked and delete the stored credentials.
+    const credentialFailure =
+      response.status >= 400 &&
+      response.status < 500 &&
+      !RETRYABLE_STATUS.has(response.status)
     throw new ShopifyApiError(
       `Shopify token exchange ${response.status}${
         errorBody?.error_description ? `: ${errorBody.error_description}` : ''
       }`,
-      response.status >= 400 && response.status < 500 ? 401 : response.status,
+      credentialFailure ? 401 : response.status,
       errorBody?.error ?? null,
     )
   }

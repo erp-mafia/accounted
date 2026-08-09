@@ -469,7 +469,7 @@
   },
   "shopify": {
     "title": "Shopify",
-    "description": "Koppla din Shopify-butik så hämtas betalda ordrar och återbetalningar till transaktionsinkorgen, som ett bankflöde för butiken. Du bokför raderna som vanligt från inkorgen.",
+    "description": "Koppla din Shopify-butik så hämtas betalda ordrar och återbetalningar till transaktionsinkorgen, som ett bankflöde för butiken. Du bokför raderna som vanligt från inkorgen. Observera att en order kan innehålla flera momssatser (25/12/6 %); dela upp momsen därefter när du bokför raden.",
     "not_configured": "Shopify-integrationen är inte konfigurerad på den här installationen. Kontakta administratören.",
     "load_failed": "Kunde inte läsa Shopify-statusen. Kontrollera din uppkoppling och försök igen.",
     "action_timeout": "Åtgärden tog för lång tid. Ladda om sidan för att se om den gick igenom.",

@@ -469,7 +469,7 @@
   },
   "shopify": {
     "title": "Shopify",
-    "description": "Connect your Shopify store to fetch paid orders and refunds into the transaction inbox, as a bank-style feed for the store. You book the rows from the inbox as usual.",
+    "description": "Connect your Shopify store to fetch paid orders and refunds into the transaction inbox, as a bank-style feed for the store. You book the rows from the inbox as usual. Note that an order can mix VAT rates (25/12/6%); split the VAT accordingly when you book the row.",
     "not_configured": "The Shopify integration is not configured on this installation. Contact your administrator.",
     "load_failed": "Could not read the Shopify status. Check your connection and try again.",
     "action_timeout": "The action took too long. Reload the page to see whether it went through.",

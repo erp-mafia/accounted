@@ -38,12 +38,15 @@ const defaultLog = createLogger('shopify/order-sync')
  * Pagination: one fixed updated_at window per run, walked with Relay cursors
  * (sortKey UPDATED_AT ascending). Cursors are stable across same-second ties,
  * so there is no offset fallback (unlike the WooCommerce sync). The persisted
- * cursor is shopify_connections.last_order_synced_at = the max updatedAt
- * processed, re-polled with a 24h overlap; (company_id, external_id) dedup
- * makes overlaps no-ops. It never advances past failed work: a page with
- * ingest errors caps the persisted cursor just below the page's first
- * updatedAt, so the next run re-lists exactly the orders whose rows are
- * incomplete. First run fetches BACKFILL_DAYS back.
+ * cursor is shopify_connections.last_order_synced_at: per page the max
+ * updatedAt processed, and after a fully-listed window the run's start time
+ * (a scanned-through watermark, so quiet and empty-first-run stores still
+ * rotate to the back of the cron's oldest-first selection). Re-polled with a
+ * 24h overlap; (company_id, external_id) dedup makes overlaps no-ops. It
+ * never advances past failed work: a page with ingest errors caps the
+ * persisted cursor just below the page's first updatedAt, so the next run
+ * re-lists exactly the orders whose rows are incomplete. First run fetches
+ * BACKFILL_DAYS back.
  *
  * Lock-date guard: the window selects on updatedAt, but rows are dated by
  * processedAt / refund createdAt, which can be arbitrarily older (a refund
@@ -395,6 +398,7 @@ export async function syncShopifyOrders(
   const firstRun = !connection.last_order_synced_at
   const lockThrough = await fetchLockThrough(supabase, connection.company_id)
 
+  const runStartMs = Date.now()
   const updatedAtMin = resolveWindowStartIso(connection)
   let after: string | null = null
   let prevCursorMs = connection.last_order_synced_at
@@ -402,6 +406,8 @@ export async function syncShopifyOrders(
     : 0
   // Earliest incomplete work this run; the persisted cursor never passes it.
   let failureFloorMs = Number.POSITIVE_INFINITY
+  // True once the whole window was listed to its end (empty page or last page).
+  let windowExhausted = false
   let accountEnsured = false
 
   try {
@@ -421,7 +427,10 @@ export async function syncShopifyOrders(
       }
 
       const page = await listOrdersPage(session, { updatedAtMin, after })
-      if (page.orders.length === 0) break
+      if (page.orders.length === 0) {
+        windowExhausted = true
+        break
+      }
       summary.fetched += page.orders.length
 
       // Deferred until the window is known non-empty so a quiet store costs
@@ -480,7 +489,10 @@ export async function syncShopifyOrders(
         prevCursorMs = candidateMs
       }
 
-      if (!page.hasNextPage) break
+      if (!page.hasNextPage) {
+        windowExhausted = true
+        break
+      }
       after = page.endCursor
 
       if (summary.fetched >= MAX_ORDERS_PER_RUN) {
@@ -489,6 +501,26 @@ export async function syncShopifyOrders(
           cap: MAX_ORDERS_PER_RUN,
         })
         break
+      }
+    }
+
+    // Watermark advance: a fully-listed window means "scanned through run
+    // start", even when it produced no rows. Without this, an empty first run
+    // keeps a NULL cursor forever, and the cron's oldest-first selection
+    // (nullsFirst, limit 50) lets quiet stores permanently occupy the batch
+    // and starve other connections. Capped by the failure floor like every
+    // other cursor write; the 24h overlap re-poll still covers updates that
+    // landed while the run was in flight.
+    if (windowExhausted) {
+      const watermarkMs = Math.min(runStartMs, failureFloorMs)
+      if (watermarkMs > prevCursorMs) {
+        const cursorIso = new Date(watermarkMs).toISOString()
+        await supabase
+          .from('shopify_connections')
+          .update({ last_order_synced_at: cursorIso, error_message: null })
+          .eq('id', connection.id)
+        connection.last_order_synced_at = cursorIso
+        prevCursorMs = watermarkMs
       }
     }
   } catch (err) {

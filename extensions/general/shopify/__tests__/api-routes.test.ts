@@ -241,6 +241,16 @@ describe('shopify extension routes', () => {
   })
 
   describe('POST /sync', () => {
+    it('returns 401 without a user', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
+      const res = await findRoute('POST', '/sync').handler(
+        makeRequest('POST'),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(401)
+    })
+
     it('returns 404 without an active connection', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
@@ -276,6 +286,16 @@ describe('shopify extension routes', () => {
   })
 
   describe('POST /transaction-sync', () => {
+    it('returns 401 without a user', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
+      const res = await findRoute('POST', '/transaction-sync').handler(
+        makeRequest('POST', { enabled: true }),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(401)
+    })
+
     it('rejects a non-boolean enabled with 400', async () => {
       const { supabase } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
@@ -302,6 +322,16 @@ describe('shopify extension routes', () => {
   })
 
   describe('DELETE /disconnect', () => {
+    it('returns 401 without a user', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
+      const res = await findRoute('DELETE', '/disconnect').handler(
+        makeRequest('DELETE', {}),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(401)
+    })
+
     it('returns 404 when no connection exists', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
