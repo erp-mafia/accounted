@@ -72,7 +72,10 @@ export const MAX_CANDIDATES_PER_MERCHANT = 25
  * judgement about what is worth having: a company that pays the same supplier
  * monthly genuinely has twelve receipts, and the rest wait for tomorrow.
  */
-export const MAX_RECEIPTS_PER_RUN = 25
+export const MAX_RECEIPTS_PER_RUN = (() => {
+  const parsed = Number(process.env.RECEIPT_HUNT_MAX_RECEIPTS)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 25
+})()
 
 /**
  * Mails read by the model in one run.

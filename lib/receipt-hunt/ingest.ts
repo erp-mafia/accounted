@@ -16,6 +16,45 @@ import { createLogger } from '@/lib/logger'
 
 const log = createLogger('receipt-hunt-ingest')
 
+/**
+ * What the bytes actually are, rather than what the mail claims.
+ *
+ * A mail's declared content type is untrusted metadata. Forwarded receipts
+ * routinely arrive as `application/octet-stream` whatever they really are, and
+ * uploadDocument validates the content against the type it is given, so
+ * trusting the mail means every such receipt is rejected at the door. Measured
+ * on a real mailbox: the first live fetch, an Elgiganten PDF, failed exactly
+ * this way.
+ *
+ * Magic bytes first, then the filename, then whatever the mail said.
+ */
+export function sniffMimeType(bytes: Buffer, declared: string, filename: string): string {
+  const head = bytes.subarray(0, 12)
+  if (head.subarray(0, 4).toString('latin1') === '%PDF') return 'application/pdf'
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image/jpeg'
+  if (head.subarray(0, 8).toString('latin1') === '\x89PNG\r\n\x1a\n') return 'image/png'
+  if (head.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif'
+  if (
+    head.subarray(0, 4).toString('latin1') === 'RIFF' &&
+    bytes.subarray(8, 12).toString('latin1') === 'WEBP'
+  ) {
+    return 'image/webp'
+  }
+
+  const ext = filename.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1]
+  const byExt: Record<string, string> = {
+    pdf: 'application/pdf',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    webp: 'image/webp',
+  }
+  if (ext && byExt[ext]) return byExt[ext]
+
+  return declared
+}
+
 /** Largest attachment worth pulling. Receipts are small; anything larger is a report. */
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 
@@ -95,17 +134,23 @@ export async function ingestMailCandidate(
     if (fetched.bytes.byteLength > MAX_ATTACHMENT_BYTES) continue
 
     try {
+      // The name the search already reported beats the one the provider
+      // re-derives on fetch: a second lookup can come back empty and fall back
+      // to a generic "underlag.pdf", throwing away "2332687551.pdf".
+      const knownName = candidate.attachmentNames?.[0]
+      const fileName = knownName && knownName.length > 0 ? knownName : fetched.filename
+
       const document = await uploadDocument(
         supabase,
         userId,
         companyId,
         {
-          name: fetched.filename,
+          name: fileName,
           buffer: fetched.bytes.buffer.slice(
             fetched.bytes.byteOffset,
             fetched.bytes.byteOffset + fetched.bytes.byteLength,
           ) as ArrayBuffer,
-          type: fetched.mimeType,
+          type: sniffMimeType(fetched.bytes, fetched.mimeType, fileName),
         },
         { upload_source: 'mail_hunt' },
       )
@@ -151,7 +196,7 @@ export async function ingestMailCandidate(
       return {
         documentId: document.id,
         inboxItemId: (item as { id: string }).id,
-        fileName: fetched.filename,
+        fileName,
         mailbox: candidate.mailbox,
       }
     } catch (error) {

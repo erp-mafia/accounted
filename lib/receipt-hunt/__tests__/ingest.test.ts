@@ -20,7 +20,7 @@ vi.mock('@/lib/mail-search/service', () => ({
   }),
 }))
 
-import { ingestMailCandidate } from '../ingest'
+import { ingestMailCandidate, sniffMimeType } from '../ingest'
 
 function candidate(overrides: Partial<MailCandidate> = {}): MailCandidate {
   return {
@@ -167,5 +167,32 @@ describe('ingestMailCandidate', () => {
     mockUploadDocument.mockRejectedValue(new Error('File content does not match'))
     const { client } = mockSupabase(null)
     await expect(ingestMailCandidate(client, 'co-1', 'user-1', candidate())).resolves.toBeNull()
+  })
+})
+
+/**
+ * The first live fetch died here: Gmail declared a PDF as
+ * application/octet-stream, and uploadDocument validates content against the
+ * declared type, so the receipt was rejected at the door.
+ */
+describe('sniffMimeType', () => {
+  it('believes the bytes over a mail that says octet-stream', () => {
+    const pdf = Buffer.from('%PDF-1.4 ...')
+    expect(sniffMimeType(pdf, 'application/octet-stream', 'kvitto.pdf')).toBe('application/pdf')
+  })
+
+  it('recognises a photographed receipt', () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0])
+    expect(sniffMimeType(jpeg, 'application/octet-stream', 'IMG_5626')).toBe('image/jpeg')
+  })
+
+  it('falls back to the filename when the bytes say nothing', () => {
+    const unknown = Buffer.from('not a known header at all')
+    expect(sniffMimeType(unknown, 'application/octet-stream', 'faktura.pdf')).toBe('application/pdf')
+  })
+
+  it('keeps the declared type when nothing else identifies it', () => {
+    const unknown = Buffer.from('mystery bytes')
+    expect(sniffMimeType(unknown, 'text/plain', 'anteckning')).toBe('text/plain')
   })
 })

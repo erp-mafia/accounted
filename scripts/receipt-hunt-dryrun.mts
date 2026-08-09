@@ -1,21 +1,25 @@
 /**
  * Provkörning of the receipt hunt against a real company.
  *
- *   npx tsx scripts/receipt-hunt-dryrun.mts <company_id>          # Underlag only
- *   npx tsx scripts/receipt-hunt-dryrun.mts <company_id> --mail   # also search mailboxes
+ *   npx tsx scripts/receipt-hunt-dryrun.mts <company_id>                 # Underlag only
+ *   npx tsx scripts/receipt-hunt-dryrun.mts <company_id> --mail          # also search mailboxes
+ *   npx tsx scripts/receipt-hunt-dryrun.mts <company_id> --mail --live   # actually fetch and stage
  *
- * READ-ONLY. huntCompany runs with dryRun, which scores and reports but writes
- * nothing: no pending operations, and with --mail it lists what the mailbox
- * search found without downloading or storing any of it.
+ * Without --live nothing is written: the hunt scores and reports, and with
+ * --mail it lists what the mailboxes hold without copying any of it.
+ *
+ * Everything is imported dynamically, after .env.local is read into
+ * process.env. Static imports are hoisted and would run before the environment
+ * exists, which makes the Supabase client fail inside the extension that
+ * extracts uploaded documents: the failure is silent apart from one event-bus
+ * error, and it leaves every fetched receipt without an amount.
  */
 import { readFileSync } from 'node:fs'
-import { createClient } from '@supabase/supabase-js'
-import { huntCompany } from '@/lib/receipt-hunt/hunt'
-import '@/lib/init'
 
 const companyId = process.argv[2]
 const withMail = process.argv.includes('--mail')
-if (!companyId) throw new Error('usage: npx tsx scripts/receipt-hunt-dryrun.mts <company_id> [--mail]')
+const live = process.argv.includes('--live')
+if (!companyId) throw new Error('usage: npx tsx scripts/receipt-hunt-dryrun.mts <company_id> [--mail] [--live]')
 
 const env = new Map<string, string>()
 for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
@@ -28,25 +32,38 @@ const url = env.get('NEXT_PUBLIC_SUPABASE_URL')
 const key = env.get('SUPABASE_SERVICE_ROLE_KEY')
 if (!url || !key) throw new Error('missing Supabase credentials in .env.local')
 
-const supabase = createClient(url, key, { auth: { persistSession: false } })
-const result = await huntCompany(supabase, companyId, 'dryrun', { dryRun: true, searchMail: withMail })
+const { createClient } = await import('@supabase/supabase-js')
+// Wiring the event bus is what lets document.uploaded reach the extraction
+// extension. Importing lib/init is not enough; it has to be called.
+const { ensureInitialized } = await import('@/lib/init')
+ensureInitialized()
+const { huntCompany } = await import('@/lib/receipt-hunt/hunt')
 
-console.log('\n=== PROVKÖRNING (inget skrivet) ===')
+const supabase = createClient(url, key, { auth: { persistSession: false } })
+const result = await huntCompany(supabase, companyId, live ? `live-${Date.now()}` : 'dryrun', {
+  dryRun: !live,
+  searchMail: withMail,
+})
+
+if (live) {
+  console.log(`\n*** SKARP KÖRNING: ${result.mail?.ingested ?? 0} underlag hämtade, ${result.proposed} förslag lagda ***`)
+}
+
+console.log(`\n=== ${live ? 'KÖRNING' : 'PROVKÖRNING (inget skrivet)'} ===`)
 console.log(`obokförda köp utan kvitto : ${result.candidates}`)
 console.log(`kvitton i Underlag        : ${result.poolSize}`)
-console.log(`skulle föreslå            : ${result.proposed}\n`)
+console.log(`förslag                   : ${result.proposed}\n`)
 
 for (const p of result.proposals ?? []) {
   console.log(`  ${p.merchant_name ?? '(okänd)'}  ${p.total_amount} ${p.currency ?? ''}`)
   console.log(`    confidence ${p.confidence}  [${p.matchReasons.join(', ')}]`)
 }
-if ((result.proposals ?? []).length === 0) console.log('  (inga par ur Underlag nådde tröskeln)')
 
 if (result.mail) {
   console.log(`\n=== BREVLÅDOR ===`)
   console.log(`köp genomsökta   : ${result.mail.searched}`)
   console.log(`underlag hittade : ${result.mail.withCandidates}`)
-  console.log(`skulle hämta     : ${result.mail.candidates.length}\n`)
+  console.log(`hämtade          : ${result.mail.ingested}\n`)
   for (const c of result.mail.candidates) {
     console.log(`  [${c.merchant}] ${c.fileName ?? '(bilaga)'}`)
     console.log(`    ur ${c.mailbox}: "${c.subject ?? '(utan ämne)'}" från ${c.from ?? '?'}`)
