@@ -1019,6 +1019,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
     'WhatsApp bot conversation state (company_id is only a which-company pin); receipts live in document_attachments',
   webhooks: 'automation config with signing secrets',
   woocommerce_connections: 'WooCommerce connection state (encrypted API secrets)',
+  shopify_connections: 'Shopify connection state (encrypted API secrets)',
 }
 
 /** Max parent ids per `IN (...)` chunk: keeps the PostgREST URL well under limits. */

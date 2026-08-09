@@ -82,6 +82,9 @@ export type CoreEvent =
   // party's API credentials are granted/dropped).
   | { type: 'woocommerce.connected'; payload: { connectionId: string; storeUrl: string; userId: string; companyId: string } }
   | { type: 'woocommerce.disconnected'; payload: { connectionId: string; storeUrl: string | null; reason: 'user' | 'revoked_upstream'; userId: string; companyId: string } }
+  // Shopify store lifecycle: same audit doctrine as stripe.*/woocommerce.*.
+  | { type: 'shopify.connected'; payload: { connectionId: string; shopDomain: string; userId: string; companyId: string } }
+  | { type: 'shopify.disconnected'; payload: { connectionId: string; shopDomain: string | null; reason: 'user' | 'revoked_upstream'; userId: string; companyId: string } }
   // Periods
   | { type: 'period.locked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
   | { type: 'period.unlocked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }

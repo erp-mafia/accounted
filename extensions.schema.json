@@ -32,7 +32,9 @@
           "cloud-backup",
           "document-extraction",
           "whatsapp-inbox",
-          "woocommerce"
+          "woocommerce",
+          "stripe",
+          "shopify"
         ]
       },
       "description": "Extension IDs to enable. Each ID must match a manifest.json in the extensions/ directory."

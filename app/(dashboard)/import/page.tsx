@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, CreditCard, Landmark, Loader2, ChevronRight, Download, AlertTriangle, ShoppingCart } from 'lucide-react'
+import { ArrowLeft, CreditCard, Landmark, Loader2, ChevronRight, Download, AlertTriangle, ShoppingBag, ShoppingCart } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -1959,11 +1959,14 @@ const StripePanel = getSettingsPanel('stripe')
 // an import source in the same category as the Stripe feed above.
 const WooCommercePanel = getSettingsPanel('woocommerce')
 
+// And for the Shopify order feed: same category as the WooCommerce feed above.
+const ShopifyPanel = getSettingsPanel('shopify')
+
 // ============================================================
 // Import Page with Selection Cards
 // ============================================================
 
-type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'bank' | 'sie' | 'csv_data' | 'migration'
+type ImportMode = null | 'psd2' | 'stripe' | 'woocommerce' | 'shopify' | 'bank' | 'sie' | 'csv_data' | 'migration'
 
 export default function ImportPage() {
   const { isSandbox } = useCompany()
@@ -1996,7 +1999,7 @@ export default function ImportPage() {
     // Manual file-import modes (bank file, CSV/Excel, SIE) stay reachable.
     const allowedModes = isSandbox
       ? ['bank', 'sie', 'csv_data']
-      : ['psd2', 'stripe', 'woocommerce', 'bank', 'sie', 'csv_data', 'migration']
+      : ['psd2', 'stripe', 'woocommerce', 'shopify', 'bank', 'sie', 'csv_data', 'migration']
     if (!isSandbox && searchParams.get('migration')) {
       setMode('migration')
     } else {
@@ -2051,6 +2054,8 @@ export default function ImportPage() {
   const hasWooCommerceExtension = ENABLED_EXTENSION_IDS.has('woocommerce')
   // Same doctrine as Stripe: external credentials never leave the sandbox.
   const woocommerceDisabled = isSandbox
+  const hasShopifyExtension = ENABLED_EXTENSION_IDS.has('shopify')
+  const shopifyDisabled = isSandbox
 
   return (
     <div className="space-y-8">
@@ -2129,6 +2134,15 @@ export default function ImportPage() {
                     chips={<LogoChip src="/logos/woocommerce.svg" name="WooCommerce" />}
                     disabled={woocommerceDisabled}
                     onClick={() => setMode('woocommerce')}
+                  />
+                )}
+                {hasShopifyExtension && (
+                  <ImportRow
+                    title={t('shopify_title')}
+                    sub={t('shopify_description')}
+                    chips={<LogoChip src="/logos/shopify.svg" name="Shopify" />}
+                    disabled={shopifyDisabled}
+                    onClick={() => setMode('shopify')}
                   />
                 )}
                 {hasMigrationExtension && (
@@ -2303,6 +2317,21 @@ export default function ImportPage() {
               <p className="mb-1 font-medium">{t('woocommerce_not_enabled_title')}</p>
               <p className="max-w-md text-sm text-muted-foreground">
                 {t('woocommerce_not_enabled_description')}
+              </p>
+            </CardContent>
+          </Card>
+        )
+      )}
+      {mode === 'shopify' && (
+        hasShopifyExtension && ShopifyPanel ? (
+          <ShopifyPanel />
+        ) : (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <ShoppingBag className="mb-4 h-10 w-10 text-muted-foreground/40" />
+              <p className="mb-1 font-medium">{t('shopify_not_enabled_title')}</p>
+              <p className="max-w-md text-sm text-muted-foreground">
+                {t('shopify_not_enabled_description')}
               </p>
             </CardContent>
           </Card>

@@ -30,6 +30,10 @@
       "schedule": "45 3 * * *"
     },
     {
+      "path": "/api/extensions/shopify/orders/cron",
+      "schedule": "15 3 * * *"
+    },
+    {
       "path": "/api/documents/verify/cron",
       "schedule": "0 3 * * *"
     },
