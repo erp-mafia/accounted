@@ -169,6 +169,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [showBookConfirm, setShowBookConfirm] = useState(false)
   const [bookVoucherPreview, setBookVoucherPreview] = useState<string | null>(null)
   const [reminderDays, setReminderDays] = useState<[number, number, number]>([15, 30, 45])
+  const [autoRemindersEnabled, setAutoRemindersEnabled] = useState(true)
 
   const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
   const reminderLevelLabel = (level: 1 | 2 | 3): string => t(`reminder_level_${level}`)
@@ -213,7 +214,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     const settingsPromise = company?.id
       ? supabase
           .from('company_settings')
-          .select('ore_rounding, vat_registered, accounting_method, defer_invoice_booking, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3')
+          .select('ore_rounding, vat_registered, accounting_method, defer_invoice_booking, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3, send_invoice_reminders')
           .eq('company_id', company.id)
           .maybeSingle()
       : Promise.resolve(null)
@@ -311,6 +312,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         settings?.reminder_days_level_2 ?? 30,
         settings?.reminder_days_level_3 ?? 45,
       ])
+      setAutoRemindersEnabled(settings?.send_invoice_reminders ?? true)
     }
 
     // Related documents need the invoice row but do not gate the main detail
@@ -1482,11 +1484,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 </CardTitle>
                 {reminders.length === 0 && (
                   <CardDescription>
-                    {t('reminders_description', {
-                      day1: reminderDays[0],
-                      day2: reminderDays[1],
-                      day3: reminderDays[2],
-                    })}
+                    {autoRemindersEnabled
+                      ? t('reminders_description', {
+                          day1: reminderDays[0],
+                          day2: reminderDays[1],
+                          day3: reminderDays[2],
+                        })
+                      : t('reminders_disabled')}
                   </CardDescription>
                 )}
               </CardHeader>
