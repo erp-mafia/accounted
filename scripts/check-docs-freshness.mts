@@ -33,7 +33,17 @@ ModuleCtor._load = function (request: string, ...rest: unknown[]) {
   return originalLoad.call(this, request, ...rest)
 }
 
-let errors, reference, connectClaude, changelog, versioning, webhooks, cookbook
+// Explicit types: these are read inside buildExpectedPages(), and TS cannot
+// infer a closure-captured let assigned in a try block (implicit-any error
+// under next build's type check; the export script gets away with the bare
+// pattern only because it reads the variables at top level).
+let errors!: typeof import('@/lib/docs/content/errors')
+let reference!: typeof import('@/lib/docs/content/reference')
+let connectClaude!: typeof import('@/lib/docs/content/connect-claude')
+let changelog!: typeof import('@/lib/docs/content/changelog')
+let versioning!: typeof import('@/lib/docs/content/versioning')
+let webhooks!: typeof import('@/lib/docs/content/webhooks')
+let cookbook!: typeof import('@/lib/docs/content/cookbook')
 try {
   errors = await import('@/lib/docs/content/errors')
   reference = await import('@/lib/docs/content/reference')
