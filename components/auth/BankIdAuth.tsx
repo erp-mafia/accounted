@@ -41,6 +41,12 @@ export interface BankIdResult {
 interface BankIdAuthProps {
   mode: 'login' | 'signup' | 'link'
   onComplete: (result: BankIdResult) => void
+  /**
+   * Render the idle button as the panel's primary action (filled pill) instead
+   * of the default outline. Used by the login page, where BankID owns the
+   * primary zone; register and settings keep the quieter outline.
+   */
+  hero?: boolean
 }
 
 const API_BASE = '/api/extensions/ext/tic/bankid'
@@ -127,7 +133,7 @@ function launchBankIdApp(autoStartToken: string): void {
  * Handles QR code display (desktop) or app deep link (mobile),
  * polling, and result handling.
  */
-export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
+export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) {
   const [status, setStatus] = useState<BankIdStatus>('idle')
   const [session, setSession] = useState<BankIdSession | null>(null)
   const [hintMessage, setHintMessage] = useState<string>('')
@@ -446,10 +452,12 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
     return (
       <Button
         onClick={startSession}
-        variant="outline"
-        className="w-full gap-2 border-[1.5px] py-6 text-base"
+        variant={hero ? 'default' : 'outline'}
+        className={hero ? 'h-11 w-full gap-2' : 'w-full gap-2 border-[1.5px] py-6 text-base'}
       >
-        <BankIdIcon />
+        {/* On the filled pill the logo must counter-invert: primary is dark in
+            light mode (white logo) and light in dark mode (black logo). */}
+        <BankIdIcon className={hero ? 'invert dark:invert-0' : undefined} />
         {label}
       </Button>
     )
@@ -546,14 +554,15 @@ export function BankIdAuth({ mode, onComplete }: BankIdAuthProps) {
   )
 }
 
-function BankIdIcon() {
+function BankIdIcon({ className }: { className?: string }) {
   return (
     <Image
       src="/logos/bankid-seeklogo.svg"
       alt="BankID"
       width={20}
       height={20}
-      className="dark:invert"
+      loading="eager"
+      className={className ?? 'dark:invert'}
     />
   )
 }

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, Suspense } from 'react'
 import dynamic from 'next/dynamic'
+import Image from 'next/image'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -10,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Check, Loader2, Mail, ArrowLeft, ExternalLink } from 'lucide-react'
+import { Check, Loader2, Mail, ArrowLeft, ExternalLink, Eye, EyeOff } from 'lucide-react'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid'
@@ -26,6 +27,7 @@ import { AuthFormError } from '@/components/auth/AuthFormError'
 import { GoogleAuthButton } from '@/components/auth/GoogleAuthButton'
 import { isGoogleAuthEnabled } from '@/lib/auth/google-oauth'
 import { classifyAuthError, type AuthErrorKind } from '@/lib/auth/classify-auth-error'
+import { persistLoginMethodHint, type LoginMethod } from '@/lib/auth/login-method'
 import { cn } from '@/lib/utils'
 
 const branding = getBranding()
@@ -72,16 +74,42 @@ function RegisterPageContent() {
   const [formError, setFormError] = useState<{ kind: AuthErrorKind | 'bankid' | 'oauth'; message: string } | null>(null)
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [confirmError, setConfirmError] = useState<string | null>(null)
+  const [showPassword, setShowPassword] = useState(false)
   const passwordInputRef = useRef<HTMLInputElement>(null)
   const confirmInputRef = useRef<HTMLInputElement>(null)
+  const emailInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const router = useRouter()
   const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
   const googleAuthEnabled = isGoogleAuthEnabled()
   const t = useTranslations('register')
+  const tAuth = useTranslations('auth')
   const tInvite = useTranslations('invite')
   const errorLocale = useLocale() as ErrorLocale
+
+  // Which method owns the panel (mirrors the login page): BankID is the
+  // Swedish default for a fresh signup; the email form is one chip away.
+  const [method, setMethod] = useState<LoginMethod>(bankIdEnabled ? 'bankid' : 'email')
+  const prevMethodRef = useRef(method)
+
+  // Switching to the email form should land the caret in the first field,
+  // except when an invite pre-filled and locked it.
+  useEffect(() => {
+    if (prevMethodRef.current !== method) {
+      prevMethodRef.current = method
+      if (method === 'email' && !inviteEmail) emailInputRef.current?.focus()
+    }
+  }, [method, inviteEmail])
+
+  const switchMethod = (next: LoginMethod) => {
+    setFormError(null)
+    setMethod(next)
+  }
+
+  const showBankIdChip = method === 'email' && bankIdEnabled
+  const showEmailChip = method === 'bankid'
+  const chipCount = (showBankIdChip ? 1 : 0) + (showEmailChip ? 1 : 0) + (googleAuthEnabled ? 1 : 0)
 
   // Accept a pending invite, if any, and report a non-definitive failure.
   // Returns true when the caller should land the user in the app directly.
@@ -130,6 +158,7 @@ function RegisterPageContent() {
   const handleBankIdComplete = (result: BankIdResult) => {
     if (result.error === 'service_unavailable') {
       setBankIdUnavailable(true)
+      setMethod('email')
       return
     }
 
@@ -202,6 +231,8 @@ function RegisterPageContent() {
       // invitee who registers with BankID lands on /select-company with no
       // membership and gets funneled into creating a company instead of
       // joining the one they were invited to.
+      persistLoginMethodHint('bankid')
+
       if (await acceptPendingInvite()) {
         window.location.href = '/'
         return
@@ -298,6 +329,8 @@ function RegisterPageContent() {
         return
       }
 
+      persistLoginMethodHint('email')
+
       // If auto-confirmed (local dev), process invite immediately and redirect
       if (data.session) {
         const cookieMatch = document.cookie.match(/gnubok-invite-token=([^;]+)/)
@@ -351,7 +384,7 @@ function RegisterPageContent() {
 
   if (duplicateEmail) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
             <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
@@ -367,7 +400,7 @@ function RegisterPageContent() {
             </p>
           </div>
 
-          <div className="rounded-lg border bg-card p-4">
+          <div className="rounded-xl border border-border bg-background p-4">
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
               {t('duplicate_hint')}
             </p>
@@ -404,7 +437,7 @@ function RegisterPageContent() {
     const webmailHint = detectWebmailHint(email, branding.authEmailFrom)
 
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
             <div className="h-14 w-14 rounded-2xl bg-primary/8 flex items-center justify-center">
@@ -422,7 +455,7 @@ function RegisterPageContent() {
             </p>
           </div>
 
-          <div className="rounded-lg border bg-card p-4">
+          <div className="rounded-xl border border-border bg-background p-4">
             <p className="text-sm text-muted-foreground text-center leading-relaxed">
               {t('confirm_email_hint')}
             </p>
@@ -452,51 +485,22 @@ function RegisterPageContent() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-frame p-4">
       <div className="w-full max-w-sm animate-slide-up">
-        <div className="text-center mb-10">
-          <BrandWordmark size="hero" className="mb-2" />
-          <p className="text-muted-foreground text-sm mt-3">
-            {t('subtitle')}
-          </p>
-        </div>
+        <header className="text-center mb-8">
+          <h1 className="sr-only">{t('create_account')}</h1>
+          <BrandWordmark size="hero" />
+        </header>
 
-        <div className="rounded-lg border bg-card p-6">
-          {(bankIdEnabled || googleAuthEnabled) && !bankIdUser && (
-            <>
-              {bankIdEnabled && (
-                <div className="mb-5">
-                  <BankIdAuth mode="signup" onComplete={handleBankIdComplete} />
-                </div>
-              )}
-              {googleAuthEnabled && (
-                <div className="mb-5">
-                  <GoogleAuthButton
-                    onError={(message) => setFormError({ kind: 'oauth', message })}
-                  />
-                </div>
-              )}
-              <div className="relative mb-5">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t" />
-                </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-card px-2 text-muted-foreground">{t('or_email_divider')}</span>
-                </div>
-              </div>
-            </>
-          )}
-
+        <div className="rounded-xl border border-border bg-background p-6">
           {bankIdUnavailable && !bankIdUser && (
-            <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-900 dark:bg-blue-950/30">
-              <p className="text-sm text-blue-700 dark:text-blue-300">
-                {t('bankid_unavailable_body')}
-              </p>
-            </div>
+            <p className="mb-4 text-[13px] leading-5 text-muted-foreground">
+              {t('bankid_unavailable_body')}
+            </p>
           )}
 
           {formError && (
-            <div className="mb-5">
+            <div className="mb-4">
               <AuthFormError
                 message={formError.message}
                 action={
@@ -514,7 +518,7 @@ function RegisterPageContent() {
           )}
 
           {bankIdUser ? (
-            <form onSubmit={handleBankIdSignup} className="space-y-5">
+            <form onSubmit={handleBankIdSignup} className="space-y-4">
               <div className="rounded-lg border bg-muted/30 p-3">
                 <p className="text-sm font-medium">
                   {bankIdUser.givenName} {bankIdUser.surname}
@@ -566,10 +570,15 @@ function RegisterPageContent() {
               </Button>
             </form>
           ) : (
-          <form onSubmit={handleRegister} className="space-y-5">
+          <div key={method} className="animate-fade-in">
+          {method === 'bankid' && bankIdEnabled ? (
+            <BankIdAuth mode="signup" hero onComplete={handleBankIdComplete} />
+          ) : (
+          <form onSubmit={handleRegister} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="email">{t('email_label')}</Label>
               <Input
+                ref={emailInputRef}
                 id="email"
                 name="email"
                 type="email"
@@ -590,27 +599,42 @@ function RegisterPageContent() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">{t('password_label')}</Label>
-              <Input
-                ref={passwordInputRef}
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="new-password"
-                placeholder={t('password_placeholder')}
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value)
-                  if (passwordError && isStrongPassword(e.target.value)) {
-                    setPasswordError(null)
-                  }
-                }}
-                required
-                minLength={8}
-                disabled={isLoading}
-                aria-invalid={passwordError ? true : undefined}
-                aria-describedby="password-requirements"
-                className="h-11"
-              />
+              <div className="relative">
+                <Input
+                  ref={passwordInputRef}
+                  id="password"
+                  name="password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  placeholder={t('password_placeholder')}
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value)
+                    if (passwordError && isStrongPassword(e.target.value)) {
+                      setPasswordError(null)
+                    }
+                  }}
+                  required
+                  minLength={8}
+                  disabled={isLoading}
+                  aria-invalid={passwordError ? true : undefined}
+                  aria-describedby="password-requirements"
+                  className="h-11 pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((visible) => !visible)}
+                  className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground transition-colors"
+                  aria-label={showPassword ? tAuth('hide_password') : tAuth('show_password')}
+                  aria-pressed={showPassword}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <Eye className="h-4 w-4" aria-hidden="true" />
+                  )}
+                </button>
+              </div>
               <ul
                 id="password-requirements"
                 className="grid grid-cols-2 gap-x-3 gap-y-1 pt-1"
@@ -688,19 +712,72 @@ function RegisterPageContent() {
             </Button>
           </form>
           )}
+          </div>
+          )}
+
+          {!bankIdUser && chipCount > 0 && (
+            <>
+              <div className="relative my-6">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-border" />
+                </div>
+                <div className="relative flex justify-center">
+                  <span className="bg-background px-3 text-xs text-muted-foreground">
+                    {tAuth('or_divider')}
+                  </span>
+                </div>
+              </div>
+              <div className={chipCount === 2 ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
+                {showBankIdChip && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 w-full gap-2"
+                    onClick={() => switchMethod('bankid')}
+                  >
+                    <Image
+                      src="/logos/bankid-seeklogo.svg"
+                      alt=""
+                      width={18}
+                      height={18}
+                      className="dark:invert"
+                    />
+                    BankID
+                  </Button>
+                )}
+                {googleAuthEnabled && (
+                  <GoogleAuthButton
+                    compact
+                    onError={(message) => setFormError({ kind: 'oauth', message })}
+                  />
+                )}
+                {showEmailChip && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 w-full gap-2"
+                    onClick={() => switchMethod('email')}
+                  >
+                    <Mail className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    {tAuth('method_email_chip')}
+                  </Button>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
-        <p className="mt-6 text-center text-sm text-muted-foreground">
+        <p className="mt-6 text-center text-[13px] text-muted-foreground">
           {t('already_have_account')}{' '}
           <Link
             href="/login"
-            className="font-medium text-foreground underline underline-offset-2 hover:text-primary transition-colors"
+            className="font-medium text-foreground underline underline-offset-2 hover:opacity-80 transition-opacity"
           >
             {t('sign_in')}
           </Link>
         </p>
 
-        <p className="mt-4 text-center text-xs text-muted-foreground leading-relaxed">
+        <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
           {t('terms_prefix')}{' '}
           <a href="#" className="underline underline-offset-2 hover:text-foreground transition-colors">
             {t('terms_link')}

@@ -277,7 +277,7 @@ export function LedgerGraph({ deep, companyName }: { deep: DeepLedgerContext; co
   if (model.payees.length === 0) {
     return (
       <div
-        className="rounded-xl border p-16 text-center text-sm"
+        className="rounded-lg border border-border p-16 text-center text-sm"
         style={{ background: INK, borderColor: HAIR, color: MUTED }}
       >
         {t('none_cp')}
@@ -304,7 +304,7 @@ export function LedgerGraph({ deep, companyName }: { deep: DeepLedgerContext; co
 
   return (
     <div
-      className="relative overflow-hidden rounded-xl border"
+      className="relative overflow-hidden rounded-lg border border-border"
       style={{
         borderColor: HAIR_STRONG,
         background: `radial-gradient(120% 120% at 50% 42%, #17171b 0%, ${INK} 62%)`,

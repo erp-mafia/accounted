@@ -77,6 +77,27 @@ export interface UserUiState {
   // Split-button last-used create modes, keyed per surface (plan PR 3/4),
   // e.g. create_mode.bookkeeping = 'mall'.
   create_mode?: Record<string, string>
+  // Assistant panel geometry (components/agent/AgentSheet): docked width,
+  // undocked floating rect, and which of the two modes is active. Client
+  // re-clamps to the current viewport on read, so stale sizes from another
+  // screen are safe.
+  agent_panel?: AgentPanelState
+}
+
+export type AgentPanelMode = 'docked' | 'floating'
+
+// Viewport pixels of the undocked assistant window.
+export interface AgentPanelFloatRect {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface AgentPanelState {
+  mode?: AgentPanelMode
+  dock_width?: number
+  float?: AgentPanelFloatRect
 }
 
 // Transaction categories

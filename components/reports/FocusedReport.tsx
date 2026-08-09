@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { ChevronLeft } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -119,6 +120,20 @@ function FocusedReportInner({
       {!isStandalone && (
         <PageHeader
           title={reportName}
+          // Page help behind a "?" (UI-migration convention 7): the report
+          // bodies carry no instructional copy in the page flow.
+          help={
+            slug === 'bank-reconciliation' ? (
+              <HelpPopover>
+                <div className="space-y-2">
+                  <p>{t('help_bank_reconciliation_scope')}</p>
+                  <p>{t('help_bank_reconciliation_preview')}</p>
+                  <p>{t('help_bank_reconciliation_ib')}</p>
+                  <p>{t('help_bank_reconciliation_ignored')}</p>
+                </div>
+              </HelpPopover>
+            ) : undefined
+          }
           action={
             <FyPicker
               value={selectedPeriod || null}
