@@ -337,3 +337,27 @@ describe('a receipt already offered elsewhere', () => {
     expect(result).toEqual([])
   })
 })
+
+/**
+ * The per-run fetch key. A filename is not an identity: half the world's
+ * billing systems attach "invoice.pdf", so two suppliers would collide.
+ */
+describe('per-run duplicate key', () => {
+  const key = (vendor: string | null, file: string | null, messageId: string) =>
+    `${(vendor ?? '').toLowerCase()}::${(file ?? messageId).toLowerCase()}`
+
+  it('collapses the same invoice arriving four times', () => {
+    // Original, reminder and two forwards, all carrying the identical file.
+    const keys = new Set([
+      key('Visma', 'Invoice_13041840.pdf', 'm1'),
+      key('Visma', 'Invoice_13041840.pdf', 'm2'),
+      key('Visma', 'invoice_13041840.pdf', 'm3'),
+      key('Visma', 'Invoice_13041840.pdf', 'm4'),
+    ])
+    expect(keys.size).toBe(1)
+  })
+
+  it('keeps two suppliers who both call it invoice.pdf', () => {
+    expect(key('Loopia', 'invoice.pdf', 'm1')).not.toBe(key('Hetzner', 'invoice.pdf', 'm2'))
+  })
+})

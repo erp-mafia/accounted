@@ -196,3 +196,34 @@ describe('sniffMimeType', () => {
     expect(sniffMimeType(unknown, 'text/plain', 'anteckning')).toBe('text/plain')
   })
 })
+
+/**
+ * A message can carry several receipts. Whichever one is stored has to be
+ * filed under its own identity: recording index 0 while the loop is on a later
+ * attachment would both mislabel the row and permanently block the sibling,
+ * since the file key is unique.
+ */
+describe('ingestMailCandidate, over several attachments', () => {
+  it('files the attachment it actually stored, not the first one', async () => {
+    // The first attachment cannot be fetched, so the second is stored.
+    mockFetchAttachment
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        filename: 'ignored-by-caller.pdf',
+        mimeType: 'application/pdf',
+        bytes: Buffer.from('%PDF-1.4 fake'),
+      })
+    const { client, inserted } = mockSupabase(null)
+    const result = await ingestMailCandidate(
+      client,
+      'co-1',
+      'user-1',
+      candidate({ attachmentIds: ['att-1', 'att-2'], attachmentNames: ['first.pdf', 'second.pdf'] }),
+    )
+
+    const ctx = inserted[0].channel_context as Record<string, unknown>
+    expect(ctx.mail_attachment_id).toBe('att-2')
+    expect(ctx.mail_file_key).toBe('msg-1::att-2')
+    expect(result?.fileName).toBe('second.pdf')
+  })
+})

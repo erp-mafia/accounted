@@ -73,14 +73,16 @@ export interface IngestedReceipt {
  * mailbox a receipt came from must survive that. Same rule the WhatsApp intake
  * follows.
  */
-function buildChannelContext(candidate: MailCandidate) {
+function buildChannelContext(candidate: MailCandidate, attachmentId: string) {
   return {
     channel: 'mail_hunt',
     mail_message_id: candidate.messageId,
-    mail_attachment_id: candidate.attachmentIds[0] ?? null,
+    mail_attachment_id: attachmentId,
     // Message + attachment, because one forward can carry receipts for several
-    // different purchases and each must be able to land separately.
-    mail_file_key: `${candidate.messageId}::${candidate.attachmentIds[0] ?? ''}`,
+    // different purchases and each must be able to land separately. Taken from
+    // the attachment being stored, not from index 0: filing a later attachment
+    // under its sibling's key would block the sibling from ever landing.
+    mail_file_key: `${candidate.messageId}::${attachmentId}`,
     mail_mailbox: candidate.mailbox,
     mail_provider: candidate.provider,
     mail_subject: candidate.subject,
@@ -105,21 +107,22 @@ export async function ingestMailCandidate(
 ): Promise<IngestedReceipt | null> {
   if (candidate.attachmentIds.length === 0) return null
 
-  // Cheap pre-check so an already-known file costs no provider call. The
-  // partial unique index is still the real guard against a race.
-  const fileKey = `${candidate.messageId}::${candidate.attachmentIds[0] ?? ''}`
-  const { data: existing } = await supabase
-    .from('invoice_inbox_items')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('source', 'mail_hunt')
-    .eq('channel_context->>mail_file_key', fileKey)
-    .maybeSingle()
-  if (existing) return null
-
   const service = getMailSearchService()
 
-  for (const attachmentId of candidate.attachmentIds) {
+  for (const [index, attachmentId] of candidate.attachmentIds.entries()) {
+    // Per attachment, not per message: the check has to name the file it is
+    // about, and it sits inside the loop so trying a second attachment is not
+    // suppressed by the first one already being filed.
+    const fileKey = `${candidate.messageId}::${attachmentId}`
+    const { data: existing } = await supabase
+      .from('invoice_inbox_items')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('source', 'mail_hunt')
+      .eq('channel_context->>mail_file_key', fileKey)
+      .maybeSingle()
+    if (existing) continue
+
     let fetched
     try {
       fetched = await service.fetchAttachment(candidate.connectionId, candidate.messageId, attachmentId)
@@ -137,7 +140,7 @@ export async function ingestMailCandidate(
       // The name the search already reported beats the one the provider
       // re-derives on fetch: a second lookup can come back empty and fall back
       // to a generic "underlag.pdf", throwing away "2332687551.pdf".
-      const knownName = candidate.attachmentNames?.[0]
+      const knownName = candidate.attachmentNames?.[index]
       const fileName = knownName && knownName.length > 0 ? knownName : fetched.filename
 
       const document = await uploadDocument(
@@ -181,7 +184,7 @@ export async function ingestMailCandidate(
           email_subject: candidate.subject,
           email_received_at: candidate.receivedAt,
           extracted_data: extracted ?? null,
-          channel_context: buildChannelContext(candidate),
+          channel_context: buildChannelContext(candidate, attachmentId),
         })
         .select('id')
         .single()

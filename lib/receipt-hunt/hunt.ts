@@ -537,8 +537,14 @@ async function harvestReceiptsFromMail(
     if (!candidate) continue
 
     // The same invoice arrives as an original, a reminder and two forwards,
-    // every one carrying the identical attachment.
-    const fileKey = (doc.attachmentName ?? doc.messageId).toLowerCase()
+    // every one carrying the identical attachment, so the filename alone
+    // collapses those four into one fetch.
+    //
+    // Scoped by vendor as well, because a bare filename is not an identity:
+    // "invoice.pdf" and "Faktura.pdf" are what half the world's billing systems
+    // call their attachment, and keying on the filename alone would silently
+    // drop a second supplier's invoice as a duplicate of the first.
+    const fileKey = `${(doc.vendor ?? '').toLowerCase()}::${(doc.attachmentName ?? doc.messageId).toLowerCase()}`
     if (claimedFiles.has(fileKey)) continue
     claimedFiles.add(fileKey)
     summary.withCandidates++

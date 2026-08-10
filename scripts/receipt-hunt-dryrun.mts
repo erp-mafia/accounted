@@ -35,6 +35,16 @@ const url = env.get('NEXT_PUBLIC_SUPABASE_URL')
 const key = env.get('SUPABASE_SERVICE_ROLE_KEY')
 if (!url || !key) throw new Error('missing Supabase credentials in .env.local')
 
+// --live writes to whatever database .env.local points at, which for this repo
+// is production. Requiring the company id to be named again is the cheapest
+// guard that a stray --live on a recalled command cannot pass.
+if (live && process.env.RECEIPT_HUNT_CONFIRM !== companyId) {
+  throw new Error(
+    `--live writes documents and proposals to the database in .env.local.\n` +
+      `Re-run with RECEIPT_HUNT_CONFIRM=${companyId} to confirm.`,
+  )
+}
+
 const { createClient } = await import('@supabase/supabase-js')
 // Wiring the event bus is what lets document.uploaded reach the extraction
 // extension. Importing lib/init is not enough; it has to be called.
