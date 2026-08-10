@@ -54,6 +54,14 @@ const LEGAL_FORM_TOKENS =
  */
 const CARD_TOKEN = /\bk\d{4}\b/g
 const CARD_VERB = /\bkort(kop|kop\/uttag)?\b|\buttag\b/g
+/**
+ * Swedish words a bank statement puts around a merchant name that are not part
+ * of it. "Utlägg Norwegian" is an expense reimbursement for a Norwegian
+ * ticket, not a company called Utlägg: leaving the word in cost the pair its
+ * token-subset match and dropped merchant similarity to 0.18, which was enough
+ * to keep an exact 1 998 kr match from ever being proposed.
+ */
+const PAYMENT_NOISE = /\butl[aä]gg\b|\b[oö]verf[oö]ring\b|\bvia internet\b|\bbg-?bet\b|\bautogiro\b/g
 const CARD_DATE_PREFIX = /^\s*kortkop\s+\d{6}\s*/
 const TRAILING_DATE = /\s*\/?\s*\d{2}-\d{2}-\d{2}\s*$/
 /**
@@ -94,6 +102,7 @@ export function normalizeForMatch(name: string): string {
   s = s.replace(TRAILING_DATE, ' ')
   s = s.replace(CARD_TOKEN, ' ')
   s = s.replace(CARD_VERB, ' ')
+  s = s.replace(PAYMENT_NOISE, ' ')
   s = s.replace(DOMAIN_TAIL, ' ')
   s = s.replace(/\bwww\b/g, ' ')
 

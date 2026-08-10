@@ -39,8 +39,16 @@ const PURCHASES_PER_RUN = 25
 /** Mails read per press. The real cost bound, and what the numbers above buy. */
 const MAILS_PER_RUN = 100
 
-/** Receipts fetched per press, so one press cannot bury the granskningskö. */
-const RECEIPTS_PER_RUN = 10
+/**
+ * Receipts fetched per press.
+ *
+ * The binding constraint on the whole route. Searching and reading mail bodies
+ * costs about 85s; every receipt after that costs another ~37s, because it is
+ * downloaded, stored, and then read by a model that opens the PDF. Measured on
+ * a real ledger: 7 receipts took 5.8 minutes, which a 300s function would have
+ * killed. Four keeps a full press inside the budget with room to spare.
+ */
+const RECEIPTS_PER_RUN = 4
 
 export const maxDuration = 300
 

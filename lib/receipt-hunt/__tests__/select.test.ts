@@ -339,12 +339,23 @@ describe('a receipt already offered elsewhere', () => {
 })
 
 /**
- * The per-run fetch key. A filename is not an identity: half the world's
- * billing systems attach "invoice.pdf", so two suppliers would collide.
+ * The per-run fetch key. One underlag per purchase, and a purchase is its
+ * vendor and its total: a mail carries the invoice and the receipt for the
+ * same thing under different names, and the same receipt reaches a second
+ * mailbox on a different message. Fetching each puts identical candidates in
+ * the pool, and the matcher then refuses to propose any of them.
  */
 describe('per-run duplicate key', () => {
-  const key = (vendor: string | null, file: string | null, messageId: string) =>
-    `${(vendor ?? '').toLowerCase()}::${(file ?? messageId).toLowerCase()}`
+  const key = (
+    vendor: string | null,
+    file: string | null,
+    messageId: string,
+    amount: number | null = null,
+    currency = 'SEK',
+  ) =>
+    amount != null
+      ? `${(vendor ?? '').toLowerCase()}::${amount}::${currency.toLowerCase()}`
+      : `${(vendor ?? '').toLowerCase()}::${(file ?? messageId).toLowerCase()}`
 
   it('collapses the same invoice arriving four times', () => {
     // Original, reminder and two forwards, all carrying the identical file.
@@ -359,5 +370,24 @@ describe('per-run duplicate key', () => {
 
   it('keeps two suppliers who both call it invoice.pdf', () => {
     expect(key('Loopia', 'invoice.pdf', 'm1')).not.toBe(key('Hetzner', 'invoice.pdf', 'm2'))
+  })
+
+  it('collapses the invoice and the receipt for one purchase', () => {
+    // A single Anthropic mail carries Invoice-E19DBF63-0021.pdf beside
+    // Receipt-2066-0204-8388.pdf. Both describe the same 180 EUR purchase, and
+    // fetching both is what made the matcher refuse to propose either.
+    expect(key('Anthropic', 'Invoice-E19DBF63-0021.pdf', 'm1', 180, 'EUR')).toBe(
+      key('Anthropic', 'Receipt-2066-0204-8388.pdf', 'm1', 180, 'EUR'),
+    )
+  })
+
+  it('collapses the same receipt arriving in a second mailbox', () => {
+    expect(key('Norwegian', 'Resekvitto.pdf', 'm1', 1998)).toBe(
+      key('Norwegian', 'Resekvitto YJUQB5.pdf', 'm2', 1998),
+    )
+  })
+
+  it('keeps two different amounts from the same supplier apart', () => {
+    expect(key('Uber', 'a.pdf', 'm1', 99)).not.toBe(key('Uber', 'b.pdf', 'm2', 376))
   })
 })

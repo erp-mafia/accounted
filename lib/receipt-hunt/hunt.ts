@@ -557,15 +557,24 @@ async function harvestReceiptsFromMail(
     const candidate = byMessage.get(doc.messageId)
     if (!candidate) continue
 
-    // The same invoice arrives as an original, a reminder and two forwards,
-    // every one carrying the identical attachment, so the filename alone
-    // collapses those four into one fetch.
+    // One underlag per purchase, and a purchase is identified by its vendor and
+    // its total.
     //
-    // Scoped by vendor as well, because a bare filename is not an identity:
-    // "invoice.pdf" and "Faktura.pdf" are what half the world's billing systems
-    // call their attachment, and keying on the filename alone would silently
-    // drop a second supplier's invoice as a duplicate of the first.
-    const fileKey = `${(doc.vendor ?? '').toLowerCase()}::${(doc.attachmentName ?? doc.messageId).toLowerCase()}`
+    // Keying on the filename is not enough. A single mail routinely carries the
+    // invoice AND the receipt for the same purchase under different names
+    // ("Invoice-E19DBF63-0021.pdf" beside "Receipt-2066-0204-8388.pdf"), and the
+    // same receipt also arrives in a second mailbox on a different message.
+    // Fetching each of them puts identical candidates in the pool, and the
+    // matcher then refuses to propose any of them rather than flip a coin: on a
+    // real ledger that turned three matching amounts into zero proposals.
+    //
+    // The cost is a vendor who charges the same amount twice on one day, where
+    // the second receipt waits for a later run. That is the right way round:
+    // a missing proposal is a delay, duplicates block every proposal.
+    const fileKey =
+      doc.amount != null
+        ? `${(doc.vendor ?? '').toLowerCase()}::${doc.amount}::${(doc.currency ?? 'SEK').toLowerCase()}`
+        : `${(doc.vendor ?? '').toLowerCase()}::${(doc.attachmentName ?? doc.messageId).toLowerCase()}`
     if (claimedFiles.has(fileKey)) continue
     claimedFiles.add(fileKey)
     summary.withCandidates++

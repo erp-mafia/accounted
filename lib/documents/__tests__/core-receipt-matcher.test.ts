@@ -244,3 +244,25 @@ describe('calculateMerchantSimilarity on real confirmed pairs', () => {
     expect(calculateMerchantSimilarity(a, b)).toBeLessThan(0.6)
   })
 })
+
+/**
+ * Swedish bank vocabulary that wraps a merchant name without being part of it.
+ * Drawn from a real ledger, where "Utlägg Norwegian" against "Norwegian Air
+ * Shuttle AOC AS" scored 0.18 and an exact 1 998 kr match was never proposed.
+ */
+describe('payment words are not merchant names', () => {
+  it('sees through an expense reimbursement', () => {
+    expect(calculateMerchantSimilarity('Utlägg Norwegian', 'Norwegian Air Shuttle AOC AS'))
+      .toBeGreaterThan(0.8)
+  })
+
+  it('sees through a transfer', () => {
+    expect(calculateMerchantSimilarity('Kontorsplatser j Bg-bet. via internet', 'Kontorsplatser AB'))
+      .toBeGreaterThan(0.8)
+  })
+
+  it('still tells two different merchants apart', () => {
+    expect(calculateMerchantSimilarity('Utlägg Norwegian', 'Scandinavian Airlines System'))
+      .toBeLessThan(0.5)
+  })
+})
