@@ -57,9 +57,9 @@ export function applyTemplate(
     if (line.type === 'vat' && line.vat_rate) {
       amount = isReverseChargeVatAccount(line.account)
         ? // Self-assessed VAT on top of the base (the total)
-          Math.round(totalAmount * line.vat_rate * 100) / 100
+          roundOre(totalAmount * line.vat_rate)
         : // VAT extracted from the total inclusive amount
-          Math.round(totalAmount * line.vat_rate / (1 + line.vat_rate) * 100) / 100
+          roundOre(totalAmount * line.vat_rate / (1 + line.vat_rate))
     } else if (line.type === 'settlement') {
       amount = Math.round(totalAmount * (line.ratio ?? 1) * 100) / 100
     } else {
