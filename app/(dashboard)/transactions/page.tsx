@@ -22,6 +22,7 @@ import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
 import { AttnLine } from '@/components/ui/attn-line'
 import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
+import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
 import TransactionHistoryList from '@/components/transactions/TransactionHistoryList'
 import InboxZeroState from '@/components/transactions/InboxZeroState'
@@ -2663,6 +2664,7 @@ export default function TransactionsPage() {
         )}
         <BankSyncStatusChip />
         <BankSyncNowButton />
+        <BankSyncSinceLastVisit />
         <Link
           href="/reports/bank-reconciliation"
           className="ml-auto transition-colors duration-150 hover:text-foreground"

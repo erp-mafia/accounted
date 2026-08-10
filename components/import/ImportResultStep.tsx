@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -19,16 +20,39 @@ import {
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { formatCurrency } from '@/lib/utils'
-import type { ImportResult } from '@/lib/import/types'
+import { useCompany } from '@/contexts/CompanyContext'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import TheaterCanvas from '@/components/import/TheaterCanvas'
+import type { ImportPreview, ImportResult } from '@/lib/import/types'
+import type { TheaterModel } from '@/lib/import/theater-model'
 
 interface ImportResultStepProps {
   result: ImportResult
   onNewImport: () => void
   onUndo?: (importId: string) => Promise<void> | void
+  /** When the theater ran, the reveal replaces the plain success header:
+   *  the settled constellation beside the personalized story + the bank
+   *  bridge. Absent (failure, oversized file, parse miss) = plain header. */
+  preview?: ImportPreview | null
+  theaterModel?: TheaterModel | null
 }
 
-export default function ImportResultStep({ result, onNewImport, onUndo }: ImportResultStepProps) {
+export default function ImportResultStep({
+  result,
+  onNewImport,
+  onUndo,
+  preview = null,
+  theaterModel = null,
+}: ImportResultStepProps) {
+  const t = useTranslations('import')
   const { dialogProps, confirm } = useDestructiveConfirm()
+  const { isSandbox } = useCompany()
+  const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
+  // The reveal only tells a story that is true: it needs the theater model,
+  // the preview, and actual imported entries (an opening-balances-only run
+  // must not claim "history in place" over an untouched constellation).
+  const showReveal =
+    result.success && !!theaterModel && !!preview && result.journalEntriesCreated > 0
 
   const handleUndoClick = async () => {
     if (!result.importId || !onUndo) return
@@ -54,31 +78,88 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
 
   return (
     <div className="space-y-6">
-      {/* Success/Failure header */}
-      <Card className={result.success ? 'border-border' : 'border-destructive/50'}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            {result.success ? (
-              <>
-                <CheckCircle className="h-6 w-6 text-success" />
-                Import genomförd
-              </>
-            ) : (
-              <>
-                <XCircle className="h-6 w-6 text-destructive" />
-                Import misslyckades
-              </>
-            )}
-          </CardTitle>
-          <CardDescription>
-            {result.success
-              ? skipped && skipped.total > 0
-                ? `Din bokföring har importerats. ${result.journalEntriesCreated} verifikationer skapades, ${skipped.total} hoppades över: se detaljer nedan.`
-                : 'Din bokföring har importerats framgångsrikt.'
-              : 'Det uppstod fel under importen. Läs felmeddelanden nedan för att förstå vad som gick snett och hur du kan åtgärda det.'}
-          </CardDescription>
-        </CardHeader>
-      </Card>
+      {/* "Din historia" reveal (theater ran) or the plain success/failure header */}
+      {showReveal && theaterModel && preview ? (
+        <Card>
+          <CardContent className="pt-6">
+            <div className="grid items-center gap-6 md:grid-cols-[minmax(280px,380px)_1fr]">
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  {t('reveal_eyebrow')}
+                </p>
+                <h2 className="mt-2 font-display text-2xl leading-8 tracking-tight text-balance">
+                  {t('reveal_title', { years: Math.max(theaterModel.years.length, 1) })}
+                </h2>
+                <p className="mt-3 text-[13px] text-muted-foreground tabular-nums">
+                  {t('reveal_stats', {
+                    vouchers: result.journalEntriesCreated,
+                    accounts: preview.accountCount,
+                    counterparties: theaterModel.totalCounterparties,
+                  })}
+                </p>
+                {/* The balance claim comes from the pre-import file check; it
+                    stays honest only when no unbalanced voucher was skipped. */}
+                {preview.trialBalance.isBalanced && !(skipped && skipped.unbalanced > 0) && (
+                  <p className="mt-1 text-[13px] tabular-nums text-success">{t('reveal_tie_ok')}</p>
+                )}
+                {skipped && skipped.total > 0 && (
+                  <p className="mt-1 text-[13px] text-warning">
+                    {t('reveal_skipped', { count: skipped.total })}
+                  </p>
+                )}
+                <div className="mt-6 border-t border-border pt-4">
+                  {/* Sandbox strips live bank connections from /import, so the
+                      bridge quiets down to the plain way onward there. */}
+                  {!isSandbox && <p className="font-display text-base">{t('reveal_bridge')}</p>}
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    {!isSandbox && (
+                      <Button asChild size="sm">
+                        <Link href={hasBanking ? '/import?mode=psd2' : '/import?mode=bank'}>
+                          {t('reveal_cta_bank')}
+                        </Link>
+                      </Button>
+                    )}
+                    <Link
+                      href="/"
+                      className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+                    >
+                      {t('reveal_cta_open')}
+                    </Link>
+                  </div>
+                </div>
+              </div>
+              <div className="relative hidden min-h-[360px] md:block">
+                <TheaterCanvas model={theaterModel} settled />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className={result.success ? 'border-border' : 'border-destructive/50'}>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              {result.success ? (
+                <>
+                  <CheckCircle className="h-6 w-6 text-success" />
+                  Import genomförd
+                </>
+              ) : (
+                <>
+                  <XCircle className="h-6 w-6 text-destructive" />
+                  Import misslyckades
+                </>
+              )}
+            </CardTitle>
+            <CardDescription>
+              {result.success
+                ? skipped && skipped.total > 0
+                  ? `Din bokföring har importerats. ${result.journalEntriesCreated} verifikationer skapades, ${skipped.total} hoppades över: se detaljer nedan.`
+                  : 'Din bokföring har importerats framgångsrikt.'
+                : 'Det uppstod fel under importen. Läs felmeddelanden nedan för att förstå vad som gick snett och hur du kan åtgärda det.'}
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
 
       {/* IB resync notice (prior-year backfill) */}
       {result.success && result.nextPeriodIBResync && (
@@ -140,7 +221,7 @@ export default function ImportResultStep({ result, onNewImport, onUndo }: Import
       )}
 
       {/* Statistics */}
-      {result.success && (
+      {result.success && !showReveal && (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
           <Card>
             <CardContent className="pt-6">

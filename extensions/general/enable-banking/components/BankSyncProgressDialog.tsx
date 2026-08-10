@@ -83,6 +83,34 @@ export function BankSyncProgressDialog({
   // grace period the user may background the (still-running) sync.
   const blockClose = state.kind === 'syncing' && !overGrace
 
+  // The payoff: once the first sync lands, name the work now waiting so the
+  // moment points onward instead of stranding the user on the settings panel.
+  // Same authenticated endpoint the dashboard pane refetches; best-effort.
+  const [workCounts, setWorkCounts] = useState<{ book: number; matches: number } | null>(null)
+  useEffect(() => {
+    if (!open || state.kind !== 'done' || state.summary.imported === 0) {
+      // A later sync must not inherit the previous run's numbers.
+      setWorkCounts(null)
+      return
+    }
+    let cancelled = false
+    fetch('/api/worklist/counts')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json: { data?: { counts?: Record<string, number> } } | null) => {
+        if (cancelled || !json?.data?.counts) return
+        setWorkCounts({
+          book: json.data.counts.book_transaction ?? 0,
+          matches: json.data.counts.suggested_match ?? 0,
+        })
+      })
+      .catch(() => {
+        // The CTA degrades to a plain link; the numbers are a nicety.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, state])
+
   return (
     <Dialog
       open={open}
@@ -152,7 +180,7 @@ export function BankSyncProgressDialog({
         )}
 
         {state.kind === 'done' && (
-          <DoneBody summary={state.summary} />
+          <DoneBody summary={state.summary} workCounts={workCounts} />
         )}
 
         {state.kind === 'failed' && (
@@ -162,22 +190,47 @@ export function BankSyncProgressDialog({
         )}
 
         <DialogFooter>
-          <Button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            disabled={blockClose}
-          >
-            {state.kind === 'syncing'
-              ? (overGrace ? 'Fortsätt i bakgrunden' : 'Hämtar…')
-              : 'Klar'}
-          </Button>
+          {state.kind === 'done' && state.summary.imported > 0 ? (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => onOpenChange(false)}
+              >
+                Stäng
+              </Button>
+              <Button asChild>
+                <Link href="/transactions">
+                  {workCounts && workCounts.book > 0
+                    ? `Visa ${workCounts.book} att bokföra`
+                    : 'Öppna transaktionerna'}
+                </Link>
+              </Button>
+            </>
+          ) : (
+            <Button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              disabled={blockClose}
+            >
+              {state.kind === 'syncing'
+                ? (overGrace ? 'Fortsätt i bakgrunden' : 'Hämtar…')
+                : 'Klar'}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
 }
 
-function DoneBody({ summary }: { summary: SyncProgressSummary }) {
+function DoneBody({
+  summary,
+  workCounts,
+}: {
+  summary: SyncProgressSummary
+  workCounts: { book: number; matches: number } | null
+}) {
   const requestedDays = daysBetween(summary.requested_from)
   const returnedDays =
     summary.returned_min_date && summary.returned_max_date
@@ -197,6 +250,12 @@ function DoneBody({ summary }: { summary: SyncProgressSummary }) {
           {summary.returned_min_date && summary.returned_max_date && (
             <p className="text-xs text-muted-foreground">
               Datum: {summary.returned_min_date} → {summary.returned_max_date}
+            </p>
+          )}
+          {workCounts && workCounts.book > 0 && (
+            <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+              {workCounts.book} att bokföra
+              {workCounts.matches > 0 && <> · {workCounts.matches} matchar fakturor</>}
             </p>
           )}
         </div>
