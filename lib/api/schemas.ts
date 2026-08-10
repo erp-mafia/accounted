@@ -1082,6 +1082,39 @@ export const UpdateSupplierInvoiceSchema = z.object({
 })
 
 // ============================================================
+// Supplier payment batch (betalfil) schemas
+// ============================================================
+
+// v1 gates the API to pain001; the DB CHECK also allows 'bg_lb' so a future
+// format lands without a migration.
+const supplierPaymentBatchFormat = z.enum(['pain001'])
+
+export const PreviewSupplierPaymentBatchSchema = z.object({
+  format: supplierPaymentBatchFormat,
+  ids: z.array(z.string().uuid()).min(1).max(100),
+})
+
+export const SupplierPaymentBatchItemInputSchema = z.object({
+  supplier_invoice_id: z.string().uuid(),
+  // Defaults to the invoice's remaining amount.
+  amount: z.number().positive().optional(),
+  // Defaults to max(due_date, today); past dates are normalized to today.
+  payment_date: isoDate.optional(),
+})
+
+export const CreateSupplierPaymentBatchSchema = z.object({
+  format: supplierPaymentBatchFormat,
+  items: z.array(SupplierPaymentBatchItemInputSchema).min(1).max(100),
+  confirm_already_batched: z.boolean().optional(),
+})
+
+export const SupplierPaymentBatchListQuerySchema = z.object({
+  status: z.enum(['created', 'cancelled', 'all']).default('all'),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+})
+
+// ============================================================
 // Journal entry schemas
 // ============================================================
 
