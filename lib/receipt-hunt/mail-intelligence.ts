@@ -21,8 +21,8 @@
  * afterwards by the same deterministic amount-and-merchant matcher that scores
  * every other underlag, so mail and Underlag get one matcher rather than two.
  */
-import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
 import { z } from 'zod'
+import { createAiClient, toProviderModelId, type AiClient } from '@/lib/ai/provider'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('receipt-hunt-intelligence')
@@ -33,7 +33,7 @@ const log = createLogger('receipt-hunt-intelligence')
 const MODEL =
   process.env.RECEIPT_HUNT_MODEL_ID ||
   process.env.BEDROCK_MODEL_ID ||
-  'eu.anthropic.claude-sonnet-5'
+  toProviderModelId('claude-sonnet-5')
 
 export interface CandidateForReview {
   messageId: string
@@ -139,8 +139,8 @@ is_receipt=false och lämna resten null. Ta hellre med en osäker faktura än
 missa ett kvitto: en handling utan matchande belopp faller bort av sig själv
 senare.`
 
-function client(): AnthropicBedrock {
-  return new AnthropicBedrock({ awsRegion: process.env.AWS_REGION })
+function client(): AiClient {
+  return createAiClient()
 }
 
 async function ask(

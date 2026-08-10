@@ -170,7 +170,13 @@ The self-hosted image ships with all extensions enabled (except Enable Banking, 
 
 ### AI Features (document-extraction, invoice-inbox, AI assistant)
 
-All AI runs Claude via AWS Bedrock; provide AWS credentials with Bedrock model access to Claude:
+All AI runs Claude. Provide either a direct Anthropic API key:
+
+```env
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+or AWS credentials with Bedrock model access to Claude, which keeps inference in eu-north-1:
 
 ```env
 AWS_ACCESS_KEY_ID=...
@@ -178,7 +184,7 @@ AWS_SECRET_ACCESS_KEY=...
 AWS_REGION=eu-north-1
 ```
 
-`ANTHROPIC_API_KEY` and `OPENAI_API_KEY` from earlier versions are no longer used (plain-key support is tracked in [#1406](https://github.com/erp-mafia/accounted/issues/1406)). See [SELF-HOSTING.md](./SELF-HOSTING.md#ai-features) for optional model overrides.
+If both are set, Bedrock is used; `AI_PROVIDER=bedrock|anthropic` forces the choice. `OPENAI_API_KEY` from earlier versions is not read by any code path. See [SELF-HOSTING.md](./SELF-HOSTING.md#ai-features) for optional model overrides.
 
 ### Email (invoice sending, reminders)
 
