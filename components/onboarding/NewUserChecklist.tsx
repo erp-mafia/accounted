@@ -78,10 +78,10 @@ export default function NewUserChecklist({
   const [state, setState] = useState(initialState)
   const [saving, setSaving] = useState<InitialSetupPath | 'dismiss' | 'complete' | null>(null)
   // The completion signature: 'verdict' shows the orb check-morph and the
-  // verdict line, 'closing' fades the block, null lets the render gate
-  // retire it. Plays only in the session that finishes the last step
-  // (companies whose completedAt arrives from the server never see it).
-  const [retiring, setRetiring] = useState<'verdict' | 'closing' | null>(null)
+  // verdict line, 'closing' fades the block, 'done' keeps it retired for the
+  // rest of the session. Plays only in the session that finishes the last
+  // step (companies whose completedAt arrives from the server never see it).
+  const [retiring, setRetiring] = useState<'verdict' | 'closing' | 'done' | null>(null)
   const retireStartedRef = useRef(false)
 
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
@@ -145,11 +145,11 @@ export default function NewUserChecklist({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step1Done, step2Done, step3Done, step4Done, step5Done, saving, state.completedAt])
 
-  // Beat timing: hold the verdict, then fade, then hand over to the gate.
+  // Beat timing: hold the verdict, then fade, then stay retired.
   useEffect(() => {
     if (retiring !== 'verdict') return
     const toClosing = window.setTimeout(() => setRetiring('closing'), 2600)
-    const toGone = window.setTimeout(() => setRetiring(null), 3200)
+    const toGone = window.setTimeout(() => setRetiring('done'), 3200)
     return () => {
       window.clearTimeout(toClosing)
       window.clearTimeout(toGone)
@@ -159,7 +159,13 @@ export default function NewUserChecklist({
   const numbers = checklistNumbers({ hasSkatteverket, hasInbox })
   const stepCount = numbers.count
 
-  if (state.dismissedAt || (state.completedAt && !retiring)) return null
+  if (state.dismissedAt) return null
+  // After the beat, stay retired even while the completion PATCH is still in
+  // flight or retrying: falling through to the full checklist here would
+  // flash it after the verdict already played. A failed PATCH keeps retrying
+  // invisibly; the next visit renders from server truth either way.
+  if (retiring === 'done') return null
+  if (state.completedAt && !retiring) return null
 
   if (retiring) {
     return (
