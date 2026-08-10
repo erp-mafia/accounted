@@ -222,10 +222,15 @@ async function extraction(path: string): Promise<void> {
       fail('extraction', 'tomt resultat (nycklar saknas, filtyp stöds inte, eller JSON-parsen föll)')
       return
     }
+    // documentKind arrived with the receipt-aware extraction work. Read it
+    // defensively so this script still compiles against a checkout from
+    // before that landed: the whole point of it is to be runnable anywhere
+    // the app runs, including an older self-hosted deployment.
+    const kind = (data as { documentKind?: string | null }).documentKind ?? '-'
     console.log(
       `  ok extraction: ${Date.now() - start}ms, leverantör="${data.supplier.name ?? '-'}", ` +
         `nummer=${data.invoice.invoiceNumber ?? '-'}, datum=${data.invoice.invoiceDate ?? '-'}, ` +
-        `typ=${data.documentKind ?? '-'}`
+        `typ=${kind}`
     )
   } catch (err) {
     fail('extraction', err)
