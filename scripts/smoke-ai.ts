@@ -9,8 +9,10 @@
  * than in front of a user:
  *
  *   1. A plain `messages.create` on both agent model ids.
- *   2. A streamed turn carrying adaptive thinking, an effort level, a cached
- *      system prompt and a tool: the exact parameter set the chat loop sends.
+ *   2a. A streamed turn with a tool, the shape the chat loop sends.
+ *   2b. Adaptive thinking, an effort level and a cached system prompt: the
+ *       rest of that parameter set, probed separately because one turn cannot
+ *       falsify both tool use and thinking at once (see the note there).
  *   3. Document extraction end to end, when given a file.
  *
  * Works against whichever backend lib/ai/provider.ts resolves (AWS Bedrock or
@@ -71,27 +73,18 @@ async function ping(model: string): Promise<void> {
 /**
  * Step 2: the chat loop's parameter set.
  *
- * Adaptive thinking, effort, an hour-long cache breakpoint and a tool are
- * accepted differently across backends, and they are what a plain ping does
- * not exercise. The question is deliberately one that needs a tool call, so a
- * silently ignored `tools` array shows up as a missing tool_use block rather
- * than a plausible-looking answer.
+ * Split in two because one turn cannot falsify both things at once. A question
+ * that needs a tool gets answered by calling the tool, and adaptive thinking
+ * correctly declines to reason about it, so a zero thinking-block count there
+ * means nothing. Each probe therefore asks for one behaviour and nothing else.
  */
-async function streamingTurn(): Promise<void> {
+async function streamingWithTool(): Promise<void> {
   const start = Date.now()
   try {
     const stream = getAnthropic().messages.stream({
       model: SONNET_MODEL,
       max_tokens: MAX_TOKENS_DEEP,
-      thinking: { type: 'adaptive', display: 'summarized' },
-      output_config: { effort: EFFORT_DEEP },
-      system: [
-        {
-          type: 'text',
-          text: 'Du är en svensk redovisningsassistent. Använd verktyget när du behöver ett kontosaldo.',
-          cache_control: { type: 'ephemeral', ttl: '1h' },
-        },
-      ],
+      system: 'Du är en svensk redovisningsassistent. Använd verktyget när du behöver ett kontosaldo.',
       tools: [
         {
           name: 'get_account_balance',
@@ -113,22 +106,88 @@ async function streamingTurn(): Promise<void> {
       deltas++
     })
     const message = await stream.finalMessage()
-
-    const thinking = message.content.filter((b) => b.type === 'thinking').length
     const toolUse = message.content.filter((b) => b.type === 'tool_use').length
-    const cacheWrite = message.usage.cache_creation_input_tokens ?? 0
-    const cacheRead = message.usage.cache_read_input_tokens ?? 0
 
     console.log(
-      `  ok streaming: ${Date.now() - start}ms, stop=${message.stop_reason}, ` +
-        `textdeltan=${deltas}, thinking-block=${thinking}, tool_use=${toolUse}, ` +
-        `cache write/read=${cacheWrite}/${cacheRead}`
+      `  ok verktyg+streaming: ${Date.now() - start}ms, stop=${message.stop_reason}, ` +
+        `textdeltan=${deltas}, tool_use=${toolUse}`
     )
     if (toolUse === 0) {
       console.warn('     varning: inget tool_use-block, verktyget kan ha ignorerats')
     }
   } catch (err) {
-    fail('streaming', err)
+    fail('verktyg+streaming', err)
+  }
+}
+
+/**
+ * Step 2b: adaptive thinking, effort and prompt caching.
+ *
+ * The question needs several dependent steps (reverse charge, then a partial
+ * deduction, then which boxes move), because adaptive thinking is supposed to
+ * skip reasoning it does not need: asking something easy cannot distinguish
+ * "declined to think" from "parameter ignored".
+ *
+ * The system prompt is padded past the 1024-token minimum cacheable prefix.
+ * Below it the API caches nothing and reports no error, so a short prompt
+ * makes the cache counters read zero no matter whether caching works.
+ */
+async function thinkingTurn(): Promise<void> {
+  const start = Date.now()
+  const filler = 'Svara alltid på svenska och hänvisa till BAS-konton med nummer. '.repeat(120)
+  try {
+    const stream = getAnthropic().messages.stream({
+      model: SONNET_MODEL,
+      max_tokens: MAX_TOKENS_DEEP,
+      thinking: { type: 'adaptive', display: 'summarized' },
+      output_config: { effort: EFFORT_DEEP },
+      system: [
+        {
+          type: 'text',
+          text: `Du är en svensk redovisningsassistent. ${filler}`,
+          cache_control: { type: 'ephemeral', ttl: '1h' },
+        },
+      ],
+      messages: [
+        {
+          role: 'user',
+          content:
+            'Ett svenskt momsregistrerat bolag köper en konsulttjänst från Tyskland för 10 000 kr. ' +
+            'Bolaget har blandad verksamhet med 60 procent avdragsrätt. Hur bokförs affären, ' +
+            'och vilka rutor i momsdeklarationen påverkas?',
+        },
+      ],
+    })
+
+    const message = await stream.finalMessage()
+
+    const thinkingBlocks = message.content.filter((b) => b.type === 'thinking')
+    const thinkingChars = thinkingBlocks
+      .map((b) => (b as { type: 'thinking'; thinking: string }).thinking?.length ?? 0)
+      .reduce((a, b) => a + b, 0)
+    const cacheWrite = message.usage.cache_creation_input_tokens ?? 0
+    const cacheRead = message.usage.cache_read_input_tokens ?? 0
+
+    console.log(
+      `  ok thinking+cache: ${Date.now() - start}ms, stop=${message.stop_reason}, ` +
+        `thinking-block=${thinkingBlocks.length}, thinking-tecken=${thinkingChars}, ` +
+        `cache write/read=${cacheWrite}/${cacheRead}`
+    )
+    if (thinkingBlocks.length === 0) {
+      console.warn(
+        '     varning: inget thinking-block pa en fraga som kraver flera steg. ' +
+          'Chattens "Tankte…"-block skulle da aldrig fyllas.'
+      )
+    } else if (thinkingChars === 0) {
+      console.warn(
+        '     varning: thinking-block utan text, sa display:"summarized" slog inte igenom.'
+      )
+    }
+    if (cacheWrite === 0 && cacheRead === 0) {
+      console.warn('     varning: ingenting cachat trots prefix over minimigransen')
+    }
+  } catch (err) {
+    fail('thinking+cache', err)
   }
 }
 
@@ -194,8 +253,11 @@ async function main(): Promise<void> {
   await ping(SONNET_MODEL)
   if (OPUS_MODEL !== SONNET_MODEL) await ping(OPUS_MODEL)
 
-  console.log('\n2. Streaming med thinking, effort, cache och verktyg')
-  await streamingTurn()
+  console.log('\n2a. Streaming med verktyg')
+  await streamingWithTool()
+
+  console.log('\n2b. Adaptive thinking, effort och prompt-cache')
+  await thinkingTurn()
 
   const path = process.argv[2]
   console.log('\n3. Dokumenttolkning')
