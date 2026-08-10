@@ -9,7 +9,6 @@ import {
   ReceiptText,
   Users,
   ArrowLeftRight,
-  Camera,
   Building2,
   FileText,
   Calendar,
@@ -137,19 +136,6 @@ export function EmptyTransactions() {
       actionLabel={t('preset_transactions_action')}
       actionHref="/import"
       supportHint
-    />
-  )
-}
-
-export function EmptyReceipts() {
-  const t = useTranslations('empty')
-  return (
-    <EmptyState
-      icon={Camera}
-      title={t('preset_receipts_title')}
-      description={t('preset_receipts_description')}
-      actionLabel={t('preset_receipts_action')}
-      actionHref="/receipts/scan"
     />
   )
 }
