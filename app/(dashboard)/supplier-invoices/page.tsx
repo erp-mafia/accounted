@@ -7,6 +7,7 @@ import { useTranslations } from 'next-intl'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { DataListEmpty } from '@/components/ui/data-list'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
@@ -28,6 +29,24 @@ const NewSupplierInvoiceDialog = dynamic(
   () => import('@/components/supplier-invoices/NewSupplierInvoiceDialog'),
   { loading: DialogLoadingSkeleton },
 )
+
+const PaymentFileDialog = dynamic(
+  () => import('@/components/supplier-invoices/PaymentFileDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+
+// Rough client-side gate for the payment-file bulk selection: the statuses
+// mark-paid accepts, SEK only, something left to pay, not a credit note. The
+// preview re-evaluates server-side (payee, OCR, active batches), so this only
+// decides which rows get a checkbox.
+function isBatchSelectable(inv: SupplierInvoice): boolean {
+  return (
+    ['registered', 'approved', 'partially_paid', 'overdue'].includes(inv.status) &&
+    !inv.is_credit_note &&
+    inv.currency === 'SEK' &&
+    inv.remaining_amount > 0.005
+  )
+}
 
 // One derivable chip per row (concept scene 21): Registrerad is the "waiting
 // for attest" state (outline), Godkänd the beige ready-to-pay state; paid is
@@ -79,6 +98,10 @@ export default function SupplierInvoicesPage() {
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
   const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
   const [approvingId, setApprovingId] = useState<string | null>(null)
+  // Payment-file bulk selection + the "already in an active betalfil" chip map.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [activeBatchInvoiceIds, setActiveBatchInvoiceIds] = useState<Set<string>>(new Set())
+  const [showPaymentDialog, setShowPaymentDialog] = useState(false)
 
   // The "Registrera leverantörsfaktura" modal is driven by the URL (?new=1,
   // optionally with inbox_item_id for the invoice-inbox conversion flow) so
@@ -98,8 +121,26 @@ export default function SupplierInvoicesPage() {
     setIsLoading(false)
   }
 
+  // Which invoices already sit in an active (not cancelled) betalfil: feeds
+  // the "I betalfil" chip. Non-blocking; the list renders without it.
+  async function fetchActiveBatchMembership() {
+    try {
+      const res = await fetch('/api/supplier-invoices/payment-batches?status=created')
+      if (!res.ok) return
+      const { data } = await res.json()
+      const ids = new Set<string>()
+      for (const batch of (data ?? []) as Array<{ supplier_invoice_ids?: string[] }>) {
+        for (const id of batch.supplier_invoice_ids ?? []) ids.add(id)
+      }
+      setActiveBatchInvoiceIds(ids)
+    } catch {
+      // Chip data only; the list stays functional without it.
+    }
+  }
+
   useEffect(() => {
     fetchInvoices()
+    fetchActiveBatchMembership()
   }, [])
 
   // Mirrors the old standalone page's post-create navigation: inbox
@@ -148,6 +189,34 @@ export default function SupplierInvoicesPage() {
   const toPayCount = invoices.filter(
     (inv) => inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue',
   ).length
+
+  const selectableInvoices = filteredInvoices.filter(isBatchSelectable)
+  const allSelectableSelected =
+    selectableInvoices.length > 0 && selectableInvoices.every((inv) => selectedIds.has(inv.id))
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  // Labels the excluded rows in the payment dialog ("Derome CD3014794407"),
+  // so a server-side exclusion never reads as a bare UUID.
+  const invoiceLabelById = new Map(
+    invoices.map((inv) => [
+      inv.id,
+      `${inv.supplier?.name ?? ''} ${inv.supplier_invoice_number}`.trim(),
+    ]),
+  )
+
+  const handleBatchCreated = () => {
+    setSelectedIds(new Set())
+    fetchInvoices()
+    fetchActiveBatchMembership()
+  }
 
   async function handleApprove(id: string) {
     setApprovingId(id)
@@ -245,7 +314,10 @@ export default function SupplierInvoicesPage() {
             className="h-9 pl-10"
           />
         </div>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-4">
+          <Link href="/supplier-invoices/payment-files" className={QUIET_LINK_CLASS}>
+            {t('payment_files_link')}
+          </Link>
           <FyPicker
             value={fyPeriodId}
             onChange={(periodId, period) => {
@@ -256,6 +328,37 @@ export default function SupplierInvoicesPage() {
           />
         </div>
       </div>
+
+      {/* Bulkbar: appears once anything is selected (transactions-page shape). */}
+      {selectedIds.size > 0 && (
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+          <span className="whitespace-nowrap">
+            <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
+            {t('bulkbar_selected', { count: selectedIds.size })}
+          </span>
+          <Button size="sm" onClick={() => setShowPaymentDialog(true)}>
+            {t('bulk_create_file')}
+          </Button>
+          {!allSelectableSelected && (
+            <button
+              type="button"
+              className={QUIET_LINK_CLASS}
+              onClick={() =>
+                setSelectedIds(new Set(selectableInvoices.map((inv) => inv.id)))
+              }
+            >
+              {t('bulk_select_all', { count: selectableInvoices.length })}
+            </button>
+          )}
+          <button
+            type="button"
+            className={QUIET_LINK_CLASS}
+            onClick={() => setSelectedIds(new Set())}
+          >
+            {t('bulk_clear')}
+          </button>
+        </div>
+      )}
 
       {isLoading ? (
         <div className="space-y-3">
@@ -288,6 +391,7 @@ export default function SupplierInvoicesPage() {
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
+                {canWrite && <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>}
                 <th className={cn(TH_CLASS, 'w-full')}>{t('th_supplier')}</th>
                 <th className={TH_CLASS}>{t('th_invoice_number')}</th>
                 <th className={cn(TH_CLASS, 'hidden text-right md:table-cell')}>{t('th_invoice_date')}</th>
@@ -311,12 +415,37 @@ export default function SupplierInvoicesPage() {
                 // them there), so attest keys off approved_at, not the status.
                 const canApprove =
                   canApproveSupplierInvoice(inv) && !inv.is_credit_note && canWrite
+                const selectable = canWrite && isBatchSelectable(inv)
                 return (
                   <tr
                     key={inv.id}
-                    className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
+                    className={cn(
+                      'group cursor-pointer transition-colors duration-150 hover:bg-secondary/35',
+                      selectedIds.has(inv.id) && 'bg-secondary/40',
+                    )}
                     onClick={() => router.push(`/supplier-invoices/${inv.id}`)}
                   >
+                    {/* Hover-revealed selection checkbox (JournalEntryList shape). */}
+                    {canWrite && (
+                      <td
+                        className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px]')}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {selectable && (
+                          <Checkbox
+                            checked={selectedIds.has(inv.id)}
+                            onCheckedChange={() => toggleSelect(inv.id)}
+                            aria-label={t('bulk_select_row')}
+                            className={cn(
+                              'transition-opacity duration-150',
+                              selectedIds.has(inv.id) || selectedIds.size > 0
+                                ? 'opacity-100'
+                                : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100',
+                            )}
+                          />
+                        )}
+                      </td>
+                    )}
                     <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
                       <span className="block truncate">{inv.supplier?.name || '-'}</span>
                     </td>
@@ -348,9 +477,16 @@ export default function SupplierInvoicesPage() {
                       {formatCurrency(inv.remaining_amount, inv.currency)}
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
-                      <Badge variant={chipVariant} className="font-normal">
-                        {chipLabel}
-                      </Badge>
+                      <span className="inline-flex items-center gap-1">
+                        <Badge variant={chipVariant} className="font-normal">
+                          {chipLabel}
+                        </Badge>
+                        {activeBatchInvoiceIds.has(inv.id) && inv.status !== 'paid' && (
+                          <Badge variant="outline" className="font-normal">
+                            {t('in_batch_chip')}
+                          </Badge>
+                        )}
+                      </span>
                     </td>
                     {/* Attest as a hover action on registered rows (concept):
                         approval gates payment, so it lives right on the row. */}
@@ -388,6 +524,18 @@ export default function SupplierInvoicesPage() {
           }}
           inboxItemId={inboxItemId}
           onCreated={handleCreated}
+        />
+      )}
+
+      {showPaymentDialog && (
+        <PaymentFileDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setShowPaymentDialog(false)
+          }}
+          invoiceIds={Array.from(selectedIds)}
+          invoiceLabelById={invoiceLabelById}
+          onCreated={handleBatchCreated}
         />
       )}
     </div>

@@ -44,6 +44,8 @@ export default function SupplierForm({
     plusgiro: z.string().optional(),
     iban: z.string().optional(),
     bic: z.string().optional(),
+    clearing_number: z.string().optional(),
+    account_number: z.string().optional(),
     default_expense_account: z.string().optional(),
     default_payment_terms: z.number().min(1).optional(),
     default_currency: z.string().optional(),
@@ -74,6 +76,8 @@ export default function SupplierForm({
       plusgiro: initialData?.plusgiro || '',
       iban: initialData?.iban || '',
       bic: initialData?.bic || '',
+      clearing_number: initialData?.clearing_number || '',
+      account_number: initialData?.account_number || '',
       default_expense_account: initialData?.default_expense_account || '',
       default_payment_terms: initialData?.default_payment_terms || 30,
       default_currency: initialData?.default_currency || 'SEK',
@@ -209,6 +213,16 @@ export default function SupplierForm({
           <div className="space-y-2">
             <Label htmlFor="plusgiro">{t('plusgiro_label')}</Label>
             <Input id="plusgiro" placeholder="XXXXXXX-X" {...register('plusgiro')} />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="clearing_number">{t('clearing_label')}</Label>
+            <Input id="clearing_number" placeholder="XXXX" {...register('clearing_number')} />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="account_number">{t('account_number_label')}</Label>
+            <Input id="account_number" placeholder="XXXXXXXXX" {...register('account_number')} />
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

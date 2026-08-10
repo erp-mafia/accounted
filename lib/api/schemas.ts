@@ -941,6 +941,8 @@ export const CreateSupplierSchema = z.object({
   bank_account: z.string().optional(),
   iban: z.string().optional(),
   bic: z.string().optional(),
+  clearing_number: z.string().optional(),
+  account_number: z.string().optional(),
   default_expense_account: accountNumber.optional(),
   default_payment_terms: z.number().int().positive().optional(),
   default_currency: CurrencySchema.nullable().optional(),
