@@ -64,17 +64,9 @@ function parseLine(line: string): { table: number; row: TaxRow } | null {
   const table = parseInt(tableStr, 10)
   if (!Number.isInteger(table)) return null
 
-  const parseField = (start: number, width: number): number => {
-    const raw = clean.slice(start, start + width).trim()
-    if (raw === '') return 0
-    const n = parseInt(raw, 10)
-    return Number.isFinite(n) ? n : 0
-  }
-
   // Column values must be well-formed whole numbers. A malformed value falling
   // back to 0 would bake 0 kr / 0 % withholding into the emitted fallback data,
-  // so fail the import instead. (income_to may legitimately be blank: the
-  // open-ended top %-row.)
+  // so fail the import instead.
   const parseColumn = (start: number): number => {
     const raw = clean.slice(start, start + 5).trim()
     if (!/^\d+$/.test(raw)) {
@@ -83,8 +75,24 @@ function parseLine(line: string): { table: number; row: TaxRow } | null {
     return parseInt(raw, 10)
   }
 
-  const incomeFrom = parseField(5, 7)
-  const incomeTo = parseField(12, 7)
+  // Income boundaries get the same digits-only rule: parseInt would accept
+  // "100abc" and turn other garbage into 0, silently corrupting bracket
+  // ranges. A blank income_to is legal only on the open-ended top %-row
+  // (emitted as 0, mapped to the open-ended sentinel by the loader).
+  const parseIncome = (start: number, allowBlank: boolean): number => {
+    const raw = clean.slice(start, start + 7).trim()
+    if (raw === '') {
+      if (!allowBlank) throw new Error(`Missing income boundary in line: ${clean}`)
+      return 0
+    }
+    if (!/^\d+$/.test(raw)) {
+      throw new Error(`Malformed income boundary "${raw}" in line: ${clean}`)
+    }
+    return parseInt(raw, 10)
+  }
+
+  const incomeFrom = parseIncome(5, false)
+  const incomeTo = parseIncome(12, isPercent)
   const c1 = parseColumn(19)
   const c2 = parseColumn(24)
   const c3 = parseColumn(29)

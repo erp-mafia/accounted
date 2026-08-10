@@ -248,6 +248,28 @@ describe('fetchTaxTableRates fallback behavior', () => {
     expect(result.source).toBe('fallback')
   })
 
+  it('falls back when the API returns a malformed income boundary', async () => {
+    globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      const isPercentQuery = url.includes(encodeURIComponent('30%'))
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          resultCount: 1,
+          results: isPercentQuery
+            ? [apiRow('80001', '', '32')]
+            // Malformed upper bound on a krona row: parseInt would read 20100
+            : [apiRow('20001', '20100abc', '2800')],
+        }),
+      } as Response
+    }) as typeof fetch
+
+    const result = await fetchTaxTableRates(2026, 33, 1)
+
+    expect(result.source).toBe('fallback')
+  })
+
   it('falls back when the API returns a malformed kolumn value instead of storing 0', async () => {
     globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
       const url = String(input)

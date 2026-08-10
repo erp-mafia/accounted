@@ -330,22 +330,40 @@ export async function fetchTaxTableRates(
       }
       return parseFloat(cleaned)
     }
-    const parseRow = (r: ApiTaxRow) => ({
+    // Income boundaries get the same strictness: a malformed boundary would
+    // silently corrupt a bracket range (parseInt accepts "100abc"; || turns
+    // garbage into 0 or an open-ended bracket). An empty upper bound is legal
+    // only on percent rows (the open-ended top row).
+    const parseIncomeBoundary = (raw: string | undefined, allowEmpty: boolean): number => {
+      const cleaned = (raw ?? '').trim()
+      if (cleaned === '') {
+        if (allowEmpty) return 9999999
+        throw new Error(
+          `Skatteverket API returned an empty income boundary for table ${tableNumber} year ${year}`
+        )
+      }
+      if (!/^\d+$/.test(cleaned)) {
+        throw new Error(
+          `Skatteverket API returned malformed income boundary "${raw}" for table ${tableNumber} year ${year}`
+        )
+      }
+      return parseInt(cleaned, 10)
+    }
+    const parseRow = (r: ApiTaxRow, allowOpenEnd: boolean) => ({
       tableYear: year,
       tableNumber: tableNumber,
       columnNumber: column,
-      incomeFrom: parseInt(r['inkomst fr.o.m.']) || 0,
-      // The top percent row has an empty upper bound (open-ended).
-      incomeTo: parseInt(r['inkomst t.o.m.']) || 9999999,
+      incomeFrom: parseIncomeBoundary(r['inkomst fr.o.m.'], false),
+      incomeTo: parseIncomeBoundary(r['inkomst t.o.m.'], allowOpenEnd),
     })
     const rates: TaxTableRate[] = [
       ...amountRows.map(r => ({
-        ...parseRow(r),
+        ...parseRow(r, false),
         kind: 'amount' as const,
         taxAmount: parseKolumnValue(r),
       })),
       ...percentRows.map(r => ({
-        ...parseRow(r),
+        ...parseRow(r, true),
         kind: 'percent' as const,
         taxPercent: parseKolumnValue(r),
       })),
