@@ -324,6 +324,14 @@
     "sign_in_again": "Logga in igen"
   },
   "mail": {
+    "hunt_title": "Leta efter underlag",
+    "hunt_help": "Vi söker i de kopplade brevlådorna efter kvitton och fakturor till köp som saknar underlag, läser beloppet ur filen och lägger fram förslagen i Granskning. Inget bokförs.",
+    "hunt_row": "Sök igenom brevlådorna",
+    "hunt_action": "Leta nu",
+    "hunt_running": "Letar…",
+    "hunt_found": "{count} underlag hämtade. {left} köp kvar att söka igenom.",
+    "hunt_none": "Inga nya underlag den här gången. {left} köp kvar att söka igenom.",
+    "hunt_failed": "Sökningen gick inte att slutföra. Försök igen.",
     "connected": "Kopplade brevlådor",
     "help": "Varje brevlåda kopplas av sin egen ägare. Vi kan aldrig koppla en kollegas brevlåda åt dem: skicka en inbjudan i stället.",
     "none_label": "Ingen kopplad",

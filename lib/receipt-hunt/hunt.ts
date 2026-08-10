@@ -148,6 +148,13 @@ export interface HuntOptions {
   /** How many unexplained purchases to search mail for in one run. */
   mailSearchLimit?: number
   /**
+   * Receipts fetched in one run, overriding the environment default.
+   *
+   * A person pressing a button wants a pass that ends, reports, and can be
+   * repeated. The nightly default is a different budget from a manual one.
+   */
+  maxReceipts?: number
+  /**
    * Score and decide, but write nothing.
    *
    * The provkörning the flow concept calls for: a company can see exactly what
@@ -352,6 +359,7 @@ export async function huntCompany(
     dryRun = false,
     searchMail = false,
     mailSearchLimit = MAX_MAIL_SEARCHES_PER_RUN,
+    maxReceipts = MAX_RECEIPTS_PER_RUN,
   } = options
 
   const [transactions, suppression] = await Promise.all([
@@ -381,6 +389,7 @@ export async function huntCompany(
         transactions.filter((t) => !suppression.claimedTransactionIds.has(t.id)),
         mailSearchLimit,
         dryRun,
+        maxReceipts,
       )
     : undefined
 
@@ -459,6 +468,7 @@ async function harvestReceiptsFromMail(
   purchases: readonly HuntTransaction[],
   limit: number,
   dryRun: boolean,
+  maxReceipts: number,
 ): Promise<MailHuntSummary> {
   const service = getMailSearchService()
   const summary: MailHuntSummary = { searched: 0, withCandidates: 0, ingested: 0, candidates: [] }
@@ -563,7 +573,7 @@ async function harvestReceiptsFromMail(
     // provkörning is that no mailbox content is copied anywhere.
     if (dryRun || !userId) continue
     if (candidate.attachmentIds.length === 0) continue
-    if (summary.ingested >= MAX_RECEIPTS_PER_RUN) break
+    if (summary.ingested >= maxReceipts) break
 
     const names = candidate.attachmentNames ?? []
     const at = doc.attachmentName ? names.indexOf(doc.attachmentName) : 0

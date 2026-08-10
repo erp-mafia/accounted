@@ -15,6 +15,14 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import { formatDateLong } from '@/lib/utils'
 
+interface HuntResult {
+  searched: number
+  fetched: number
+  proposed: number
+  remaining: number
+  failed?: boolean
+}
+
 interface MailConnection {
   id: string
   provider: 'gmail' | 'microsoft'
@@ -34,6 +42,8 @@ export function MailConnectionsPanel() {
   const [loading, setLoading] = useState(true)
   const [connecting, setConnecting] = useState(false)
   const [pendingDisconnect, setPendingDisconnect] = useState<MailConnection | null>(null)
+  const [hunting, setHunting] = useState(false)
+  const [huntResult, setHuntResult] = useState<HuntResult | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -70,6 +80,32 @@ export function MailConnectionsPanel() {
       else window.location.href = body.url
     } finally {
       setConnecting(false)
+    }
+  }
+
+  /**
+   * One bounded pass, on request.
+   *
+   * Deliberately not a background job: a sweep of a real mailbox runs longer
+   * than a serverless function may live, so the honest shape is a pass that
+   * ends, says what it found and what is left, and can be pressed again.
+   */
+  async function hunt() {
+    setHunting(true)
+    setHuntResult(null)
+    try {
+      const response = await fetch('/api/receipt-hunt/run', { method: 'POST' })
+      if (!response.ok) {
+        setHuntResult({ searched: 0, fetched: 0, proposed: 0, remaining: 0, failed: true })
+        return
+      }
+      const body = (await response.json()) as { data: HuntResult }
+      setHuntResult(body.data)
+      void load()
+    } catch {
+      setHuntResult({ searched: 0, fetched: 0, proposed: 0, remaining: 0, failed: true })
+    } finally {
+      setHunting(false)
     }
   }
 
@@ -121,6 +157,28 @@ export function MailConnectionsPanel() {
           ))
         )}
       </SettingsGroup>
+
+      {connections.length > 0 ? (
+        <SettingsGroup label={t('hunt_title')} help={t('hunt_help')}>
+          <SettingsRow label={t('hunt_row')} borderless>
+            <SettingsRowEnd>
+              {huntResult ? (
+                <SettingsRowNote>
+                  {huntResult.failed
+                    ? t('hunt_failed')
+                    : huntResult.fetched > 0
+                      ? t('hunt_found', { count: huntResult.fetched, left: huntResult.remaining })
+                      : t('hunt_none', { left: huntResult.remaining })}
+                </SettingsRowNote>
+              ) : null}
+              <Button variant="secondary" size="sm" onClick={hunt} disabled={hunting}>
+                {hunting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {hunting ? t('hunt_running') : t('hunt_action')}
+              </Button>
+            </SettingsRowEnd>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-3">
         <Button onClick={connect} disabled={connecting || !configured}>

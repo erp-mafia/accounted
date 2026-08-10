@@ -324,6 +324,14 @@
     "sign_in_again": "Sign in again"
   },
   "mail": {
+    "hunt_title": "Look for receipts",
+    "hunt_help": "We search the connected mailboxes for receipts and invoices belonging to purchases without one, read the amount from the file, and put the matches in Review. Nothing is posted.",
+    "hunt_row": "Search the mailboxes",
+    "hunt_action": "Look now",
+    "hunt_running": "Looking…",
+    "hunt_found": "{count} receipts fetched. {left} purchases left to search.",
+    "hunt_none": "No new receipts this time. {left} purchases left to search.",
+    "hunt_failed": "The search could not be completed. Try again.",
     "connected": "Connected mailboxes",
     "help": "Each mailbox is connected by its own owner. We can never connect a colleague's mailbox for them: send an invitation instead.",
     "none_label": "None connected",
