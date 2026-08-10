@@ -787,6 +787,8 @@ export interface SupplierPaymentBatchDebtor {
   org_number: string
   iban: string
   bic: string
+  /** Absent on batches created before the Swedbank MIG fixes (2026-08-10). */
+  bankgiro?: string | null
 }
 
 export interface SupplierPaymentBatch {

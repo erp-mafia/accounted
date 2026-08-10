@@ -4,13 +4,14 @@
  *
  * Dialect: Swedish DOMESTIC giro credit transfers per the Swedish Common
  * Interpretation of ISO 20022 payment messages (Svenska Bankforeningen,
- * "Common Payment Types in Sweden", Appendix 1: bankgiro, plusgiro and
- * account payees), cross-checked against Nordea Corporate Access Payables
- * pain.001 examples v2.6 (2026-06-22). Target banks: Swedbank, SEB,
- * Handelsbanken, Nordea (pain.001.001.03 uploaded in the corporate portal).
+ * "Common Payment Types in Sweden", Appendix 1), cross-checked against
+ * Nordea Corporate Access Payables pain.001 examples v2.6 (2026-06-22) and
+ * validated against Swedbank Validex (eken.validex.net, Swedbank MIG 1.0,
+ * run 2026-08-10). Target banks: Swedbank, SEB, Handelsbanken, Nordea
+ * (pain.001.001.03 uploaded in the corporate portal).
  *
- * Wire-format constraints this file encodes (do not "improve" without a bank
- * implementation guide in hand):
+ * Wire-format constraints this file encodes (do not "improve" without a
+ * bank implementation guide in hand):
  *
  *  - No SvcLvl element: SvcLvl SEPA means a SEPA credit transfer (EUR-only);
  *    the domestic default (NURG) applies when SvcLvl is omitted. No CtgyPurp:
@@ -22,15 +23,31 @@
  *    SESBA member and the account (without clearing) as BBAN, through the
  *    same splitDomesticBankAccount used by the salary generator so the two
  *    files can never route an account differently.
- *  - A Luhn-valid OCR reference rides RmtInf/Strd/CdtrRefInf with type code
- *    SCOR, exactly one per transaction. Anything else is an unstructured
+ *  - Swedbank MIG (Validex PFH_pain_001_001_03_219): a BGNR creditor demands
+ *    a BGNR debtor. When the company has a bankgiro, bankgiro-payee payments
+ *    are grouped into their own PmtInf debited from the company bankgiro
+ *    (DbtrAcct Othr/BGNR); other payees are debited from the IBAN. Without a
+ *    company bankgiro everything debits the IBAN, which Validex rule 020
+ *    accepts as long as the creditor carries a postal country, so Cdtr
+ *    always carries PstlAdr/Ctry SE (v1 is domestic-only by scope).
+ *  - InitgPty and Dbtr always carry OrgId (Validex PFH_002: InitgPty
+ *    other/Id must be stated); the batch service refuses to create a batch
+ *    for a company without an organisationsnummer.
+ *  - A Luhn-valid OCR reference rides RmtInf/Strd with the amount repeated
+ *    as RfrdDocAmt/RmtdAmt (Validex PFH_217) and CdtrRefInf type SCOR,
+ *    exactly one per transaction. Anything else is an unstructured
  *    RmtInf/Ustrd message (the giro "meddelande" field).
+ *  - Free text is restricted to the MIG character set (Validex PFH_214):
+ *    Swedish letters survive, other accented letters transliterate (e for
+ *    e-acute, u for u-umlaut), anything else becomes '?'. Identifiers and
+ *    references are ASCII digits by construction.
  *  - MsgId, PmtInfId, InstrId and EndToEndId are Max35Text.
  *  - ReqdExctnDt sits on PmtInf, so payments are grouped into one PmtInf per
- *    distinct payment date.
+ *    distinct (payment date, debtor account form).
  *  - Determinism: CreDtTm comes from the caller (the batch row's created_at),
  *    never from the clock, so re-generating a stored batch is byte-identical
- *    and bank-side duplicate detection (keyed on MsgId) stays meaningful.
+ *    for the same generator version and bank-side duplicate detection (keyed
+ *    on MsgId) stays meaningful.
  *
  * Per BFL: the generated file is rakenskapsinformation (underlag) for the
  * payments it initiates. Subject to 7-year retention.
@@ -45,6 +62,8 @@ export interface SupplierPain001Debtor {
   orgNumber: string
   iban: string
   bic: string
+  /** Company bankgiro (digits); enables the BGNR-to-BGNR debit Swedbank wants. */
+  bankgiro?: string | null
 }
 
 export interface SupplierPain001Payment {
@@ -78,20 +97,31 @@ export function generateSupplierPain001(
   const creDtTm = new Date(options.createdAt).toISOString().replace(/\.\d{3}Z$/, 'Z')
   const msgId = max35(options.messageId)
   const orgDigits = debtor.orgNumber.replace(/\D/g, '')
+  if (!orgDigits) {
+    // Validex PFH_002: InitgPty other/Id must be stated. The batch service
+    // guarantees this; a missing org number here is a programming error.
+    throw new Error('Organisationsnummer saknas för betalfilens avsändare')
+  }
+  const debtorBankgiro = (debtor.bankgiro ?? '').replace(/\D/g, '')
+  const debtorName = sanitizeText(debtor.name)
   // Sum the per-transaction amounts exactly as they are rendered (rounded to
   // ore): CtrlSum must equal the sum of the InstdAmt values or banks reject
   // the file, and summing raw floats then rounding once can differ by an ore.
   const totalAmount = sumRendered(payments)
 
-  // One PmtInf per distinct execution date, dates ascending; original order
-  // preserved within a date so the file reads like the batch it came from.
-  const byDate = new Map<string, SupplierPain001Payment[]>()
+  // One PmtInf per distinct (execution date, debtor account form): a BGNR
+  // creditor must debit the company bankgiro (Swedbank rule 219), everything
+  // else debits the IBAN, and ReqdExctnDt is PmtInf-level. Original order is
+  // preserved within a group so the file reads like the batch it came from.
+  const byGroup = new Map<string, SupplierPain001Payment[]>()
   for (const payment of payments) {
-    const group = byDate.get(payment.paymentDate)
+    const bgnrDebit = debtorBankgiro !== '' && payment.payee.type === 'bankgiro'
+    const key = `${payment.paymentDate}|${bgnrDebit ? 'bgnr' : 'acct'}`
+    const group = byGroup.get(key)
     if (group) group.push(payment)
-    else byDate.set(payment.paymentDate, [payment])
+    else byGroup.set(key, [payment])
   }
-  const dates = [...byDate.keys()].sort()
+  const groupKeys = [...byGroup.keys()].sort()
 
   const lines: string[] = []
   lines.push('<?xml version="1.0" encoding="UTF-8"?>')
@@ -105,22 +135,22 @@ export function generateSupplierPain001(
   lines.push(`      <NbOfTxs>${payments.length}</NbOfTxs>`)
   lines.push(`      <CtrlSum>${formatDecimal(totalAmount)}</CtrlSum>`)
   lines.push('      <InitgPty>')
-  lines.push(`        <Nm>${escapeXml(debtor.name)}</Nm>`)
-  if (orgDigits) {
-    lines.push('        <Id>')
-    lines.push('          <OrgId>')
-    lines.push(`            <Othr><Id>${escapeXml(orgDigits)}</Id></Othr>`)
-    lines.push('          </OrgId>')
-    lines.push('        </Id>')
-  }
+  lines.push(`        <Nm>${escapeXml(debtorName)}</Nm>`)
+  lines.push('        <Id>')
+  lines.push('          <OrgId>')
+  lines.push(`            <Othr><Id>${escapeXml(orgDigits)}</Id></Othr>`)
+  lines.push('          </OrgId>')
+  lines.push('        </Id>')
   lines.push('      </InitgPty>')
   lines.push('    </GrpHdr>')
 
   let txCounter = 0
-  for (let g = 0; g < dates.length; g++) {
-    const date = dates[g]
-    const group = byDate.get(date) as SupplierPain001Payment[]
+  for (let g = 0; g < groupKeys.length; g++) {
+    const key = groupKeys[g]
+    const [date, form] = key.split('|')
+    const group = byGroup.get(key) as SupplierPain001Payment[]
     const groupTotal = sumRendered(group)
+    const bgnrDebit = form === 'bgnr'
 
     lines.push('    <PmtInf>')
     lines.push(`      <PmtInfId>${escapeXml(suffixId(msgId, `-P${g + 1}`))}</PmtInfId>`)
@@ -130,18 +160,23 @@ export function generateSupplierPain001(
     lines.push(`      <CtrlSum>${formatDecimal(groupTotal)}</CtrlSum>`)
     lines.push(`      <ReqdExctnDt>${date}</ReqdExctnDt>`)
     lines.push('      <Dbtr>')
-    lines.push(`        <Nm>${escapeXml(debtor.name)}</Nm>`)
-    if (orgDigits) {
-      lines.push('        <Id>')
-      lines.push('          <OrgId>')
-      lines.push(`            <Othr><Id>${escapeXml(orgDigits)}</Id></Othr>`)
-      lines.push('          </OrgId>')
-      lines.push('        </Id>')
-    }
+    lines.push(`        <Nm>${escapeXml(debtorName)}</Nm>`)
+    lines.push('        <Id>')
+    lines.push('          <OrgId>')
+    lines.push(`            <Othr><Id>${escapeXml(orgDigits)}</Id></Othr>`)
+    lines.push('          </OrgId>')
+    lines.push('        </Id>')
     lines.push('      </Dbtr>')
     lines.push('      <DbtrAcct>')
     lines.push('        <Id>')
-    lines.push(`          <IBAN>${escapeXml(debtor.iban)}</IBAN>`)
+    if (bgnrDebit) {
+      lines.push('          <Othr>')
+      lines.push(`            <Id>${escapeXml(debtorBankgiro)}</Id>`)
+      lines.push('            <SchmeNm><Prtry>BGNR</Prtry></SchmeNm>')
+      lines.push('          </Othr>')
+    } else {
+      lines.push(`          <IBAN>${escapeXml(debtor.iban)}</IBAN>`)
+    }
     lines.push('        </Id>')
     lines.push('        <Ccy>SEK</Ccy>')
     lines.push('      </DbtrAcct>')
@@ -164,7 +199,7 @@ export function generateSupplierPain001(
       lines.push(`          <InstdAmt Ccy="SEK">${formatDecimal(payment.amount)}</InstdAmt>`)
       lines.push('        </Amt>')
       pushCreditor(lines, payment)
-      pushRemittance(lines, payment.reference)
+      pushRemittance(lines, payment.reference, payment.amount)
       lines.push('      </CdtTrfTxInf>')
     }
 
@@ -213,7 +248,13 @@ function pushCreditor(lines: string[], payment: SupplierPain001Payment): void {
   lines.push('          </FinInstnId>')
   lines.push('        </CdtrAgt>')
   lines.push('        <Cdtr>')
-  lines.push(`          <Nm>${escapeXml(payment.payeeName)}</Nm>`)
+  lines.push(`          <Nm>${escapeXml(sanitizeText(payment.payeeName))}</Nm>`)
+  // Postal country always: v1 payees are Swedish-domestic by scope, and the
+  // Swedbank MIG (Validex PFH_020/PFH_237) wants a creditor postal address
+  // whenever the debit is not BGNR-to-BGNR. Harmless where not required.
+  lines.push('          <PstlAdr>')
+  lines.push('            <Ctry>SE</Ctry>')
+  lines.push('          </PstlAdr>')
   lines.push('        </Cdtr>')
   lines.push('        <CdtrAcct>')
   lines.push('          <Id>')
@@ -225,10 +266,15 @@ function pushCreditor(lines: string[], payment: SupplierPain001Payment): void {
   lines.push('        </CdtrAcct>')
 }
 
-function pushRemittance(lines: string[], reference: PaymentReference): void {
+function pushRemittance(lines: string[], reference: PaymentReference, amount: number): void {
   lines.push('        <RmtInf>')
   if (reference.type === 'ocr') {
     lines.push('          <Strd>')
+    // Validex PFH_217: RfrdDocAmt must be stated when Strd is provided. The
+    // remitted amount equals the instructed amount for a full-line payment.
+    lines.push('            <RfrdDocAmt>')
+    lines.push(`              <RmtdAmt Ccy="SEK">${formatDecimal(amount)}</RmtdAmt>`)
+    lines.push('            </RfrdDocAmt>')
     lines.push('            <CdtrRefInf>')
     lines.push('              <Tp>')
     lines.push('                <CdOrPrtry><Cd>SCOR</Cd></CdOrPrtry>')
@@ -237,7 +283,7 @@ function pushRemittance(lines: string[], reference: PaymentReference): void {
     lines.push('            </CdtrRefInf>')
     lines.push('          </Strd>')
   } else {
-    lines.push(`          <Ustrd>${escapeXml(reference.value.slice(0, USTRD_MAX))}</Ustrd>`)
+    lines.push(`          <Ustrd>${escapeXml(sanitizeText(reference.value).slice(0, USTRD_MAX))}</Ustrd>`)
   }
   lines.push('        </RmtInf>')
 }
@@ -250,6 +296,34 @@ function pushRemittance(lines: string[], reference: PaymentReference): void {
 /** Control sums add the amounts AS RENDERED: each rounded to öre first. */
 function sumRendered(payments: readonly SupplierPain001Payment[]): number {
   return payments.reduce((sum, p) => sum + roundOre(p.amount), 0)
+}
+
+/**
+ * MIG character-set restriction (Validex PFH_pain_001_001_03_214): Swedish
+ * letters pass through, other accented Latin letters transliterate to their
+ * base letter, and anything still outside the allowed set becomes '?', the
+ * same substitution the Bankgirot LB generator uses. Sanitize BEFORE
+ * escapeXml so entity-encoded characters are never mangled.
+ */
+const TRANSLITERATIONS: Record<string, string> = {
+  'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e', 'É': 'E', 'È': 'E', 'Ê': 'E', 'Ë': 'E',
+  'á': 'a', 'à': 'a', 'â': 'a', 'ã': 'a', 'Á': 'A', 'À': 'A', 'Â': 'A', 'Ã': 'A',
+  'í': 'i', 'ì': 'i', 'î': 'i', 'ï': 'i', 'Í': 'I', 'Ì': 'I', 'Î': 'I', 'Ï': 'I',
+  'ó': 'o', 'ò': 'o', 'ô': 'o', 'õ': 'o', 'Ó': 'O', 'Ò': 'O', 'Ô': 'O', 'Õ': 'O',
+  'ú': 'u', 'ù': 'u', 'û': 'u', 'ü': 'u', 'Ú': 'U', 'Ù': 'U', 'Û': 'U', 'Ü': 'U',
+  'ý': 'y', 'ÿ': 'y', 'Ý': 'Y', 'ñ': 'n', 'Ñ': 'N', 'ç': 'c', 'Ç': 'C',
+  'ø': 'o', 'Ø': 'O', 'æ': 'a', 'Æ': 'A', 'ß': 'ss',
+  'š': 's', 'Š': 'S', 'ž': 'z', 'Ž': 'Z', 'đ': 'd', 'Đ': 'D',
+  // '+' is in the allowed set and reads naturally where Swedish names use '&'.
+  '&': '+',
+}
+
+const DISALLOWED_TEXT = /[^0-9A-Za-zåäöÅÄÖ/\-?:().,'+ ]/g
+
+function sanitizeText(value: string): string {
+  let transliterated = ''
+  for (const ch of value) transliterated += TRANSLITERATIONS[ch] ?? ch
+  return transliterated.replace(DISALLOWED_TEXT, '?')
 }
 
 function escapeXml(str: string): string {

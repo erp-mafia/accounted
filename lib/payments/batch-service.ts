@@ -17,6 +17,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBranding } from '@/lib/branding/service'
 import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
+import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import {
   lookupBicByClearing,
   lookupBicByBankName,
@@ -46,17 +47,21 @@ export interface BatchDebtor {
   org_number: string
   iban: string
   bic: string
+  /** Company bankgiro digits; enables the BGNR-to-BGNR debit Swedbank wants. */
+  bankgiro: string | null
 }
 
 export type DebtorResolution =
   | { ok: true; debtor: BatchDebtor }
-  | { ok: false; missing: 'iban' | 'bic' }
+  | { ok: false; missing: 'iban' | 'bic' | 'org_number' }
 
 /**
  * Resolve the paying company (pain.001 debtor) from settings, mirroring the
  * salary pain001 route: saved BIC first, then derivation from the clearing
  * number or bank name the company already entered, so most users only ever
- * fill in the IBAN.
+ * fill in the IBAN. The org number is required: InitgPty must carry an OrgId
+ * (Swedbank Validex PFH_002). The bankgiro rides along when valid so
+ * bankgiro payees can be debited BGNR-to-BGNR.
  */
 export async function resolveBatchDebtor(
   supabase: SupabaseClient,
@@ -66,7 +71,7 @@ export async function resolveBatchDebtor(
     supabase.from('companies').select('name, org_number').eq('id', companyId).single(),
     supabase
       .from('company_settings')
-      .select('company_name, iban, bic, clearing_number, bank_name')
+      .select('company_name, org_number, iban, bic, bankgiro, clearing_number, bank_name')
       .eq('company_id', companyId)
       .single(),
   ])
@@ -80,13 +85,22 @@ export async function resolveBatchDebtor(
     lookupBicByBankName(settings?.bank_name)
   if (!bic) return { ok: false, missing: 'bic' }
 
+  // Settings first: it is the maintained value; companies.org_number is the
+  // write-once onboarding snapshot and may be empty.
+  const orgNumber = settings?.org_number?.trim() || company?.org_number?.trim() || ''
+  if (!orgNumber.replace(/\D/g, '')) return { ok: false, missing: 'org_number' }
+
+  const bankgiroRaw = settings?.bankgiro ?? ''
+  const bankgiro = validateBankgiroNumber(bankgiroRaw) ? bankgiroRaw.replace(/\D/g, '') : null
+
   return {
     ok: true,
     debtor: {
       name: settings?.company_name || company?.name || '',
-      org_number: company?.org_number || '',
+      org_number: orgNumber,
       iban,
       bic,
+      bankgiro,
     },
   }
 }
@@ -135,7 +149,7 @@ export interface BatchPreview {
   excluded: Array<{ id: string; reason: BatchExclusionReason | 'not_found' }>
   total: number
   debtor_ok: boolean
-  debtor_missing?: 'iban' | 'bic'
+  debtor_missing?: 'iban' | 'bic' | 'org_number'
 }
 
 export async function previewSupplierPaymentBatch(
@@ -216,7 +230,7 @@ export interface CreateBatchInput {
 
 export type CreateBatchResult =
   | { ok: true; batch: SupplierPaymentBatch }
-  | { ok: false; code: 'debtor_incomplete'; missing: 'iban' | 'bic' }
+  | { ok: false; code: 'debtor_incomplete'; missing: 'iban' | 'bic' | 'org_number' }
   | { ok: false; code: 'ineligible'; details: Array<{ id: string; reason: string }> }
   | { ok: false; code: 'amount_exceeds_remaining'; details: Array<{ id: string }> }
   | { ok: false; code: 'invalid_amount'; details: Array<{ id: string }> }
@@ -394,7 +408,13 @@ export function renderSupplierPaymentBatchFile(
 
   const debtor = batch.debtor_snapshot
   const content = generateSupplierPain001(
-    { name: debtor.name, orgNumber: debtor.org_number, iban: debtor.iban, bic: debtor.bic },
+    {
+      name: debtor.name,
+      orgNumber: debtor.org_number,
+      iban: debtor.iban,
+      bic: debtor.bic,
+      bankgiro: debtor.bankgiro ?? null,
+    },
     payments,
     { messageId: batch.msg_id, createdAt: batch.created_at },
   )

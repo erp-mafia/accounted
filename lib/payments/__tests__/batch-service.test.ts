@@ -15,8 +15,10 @@ const USER_ID = 'u0000000-0000-0000-0000-000000000001'
 const companyRow = { name: 'Testbolaget AB', org_number: '556677-8899' }
 const settingsRow = {
   company_name: 'Testbolaget AB',
+  org_number: '556677-8899',
   iban: 'SE3550000000054910000003',
   bic: 'ESSESESS',
+  bankgiro: '991-2346',
   clearing_number: null,
   bank_name: null,
 }
@@ -213,6 +215,7 @@ describe('createSupplierPaymentBatch', () => {
         org_number: '556677-8899',
         iban: 'SE3550000000054910000003',
         bic: 'ESSESESS',
+        bankgiro: '9912346',
       },
     })
     const msgId = batchInsert.msg_id as string
@@ -371,6 +374,23 @@ describe('createSupplierPaymentBatch', () => {
     )
 
     expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'iban' })
+  })
+
+  it('requires an organisation number for the InitgPty OrgId', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: { ...companyRow, org_number: null } },
+      { data: { ...settingsRow, org_number: null } },
+    ])
+
+    const result = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+    )
+
+    expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'org_number' })
   })
 })
 

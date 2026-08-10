@@ -910,6 +910,7 @@
     "pain001_agreement_warning": "Filen är i ISO 20022-format (pain.001) och laddas upp i internetbanken. Vissa banker kräver filkommunikationsavtal; kontrollera att din bank tar emot filen i god tid före betaldagen.",
     "debtor_missing_iban": "Företagets IBAN saknas och behövs som avsändarkonto i betalfilen.",
     "debtor_missing_bic": "Företagsbankens BIC saknas och kunde inte härledas.",
+    "debtor_missing_org": "Företagets organisationsnummer saknas och måste anges som avsändaridentitet i betalfilen.",
     "debtor_missing_link": "Öppna Inställningar → Fakturering",
     "history_title": "Betalfiler",
     "th_created": "Skapad",

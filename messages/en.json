@@ -910,6 +910,7 @@
     "pain001_agreement_warning": "The file is in ISO 20022 format (pain.001) and is uploaded in your internet bank. Some banks require a file communication agreement; verify that your bank accepts the file well before the payment date.",
     "debtor_missing_iban": "The company IBAN is missing and is needed as the sender account in the payment file.",
     "debtor_missing_bic": "The company bank's BIC is missing and could not be derived.",
+    "debtor_missing_org": "The company organisation number is missing and must be stated as the sender identity in the payment file.",
     "debtor_missing_link": "Open Settings → Invoicing",
     "history_title": "Payment files",
     "th_created": "Created",
