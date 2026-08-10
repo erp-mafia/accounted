@@ -1164,7 +1164,12 @@ export const arcimMigrationExtension: Extension = {
                   const envelope = await migrateFailureResponse(error, consentId).json()
                   send({ kind: 'error', ...envelope })
                 } finally {
-                  controller.close()
+                  try {
+                    controller.close()
+                  } catch {
+                    // Already closed because the reader cancelled; close()
+                    // would otherwise reject start() as an unhandled rejection.
+                  }
                 }
               },
             })

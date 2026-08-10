@@ -106,12 +106,14 @@ export default function ArcimMigrationTheater({
     <Card>
       <CardContent className="p-6">
         <div className="grid gap-6 md:grid-cols-[280px_1fr]">
-          <div role="status" aria-live="polite">
+          <div>
             <p className="text-sm font-medium">Migrering pågår</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
               Vi hämtar och importerar din bokföringsdata. Det kan ta några minuter.
             </p>
-            <ol className="mt-4 space-y-0">
+            {/* The live region covers only the step labels: the per-second
+                timer below would drown them out in a screen reader. */}
+            <ol className="mt-4 space-y-0" role="status" aria-live="polite">
               {log.map((line, i) => {
                 const active = i === log.length - 1
                 return (
@@ -127,7 +129,10 @@ export default function ArcimMigrationTheater({
               })}
             </ol>
             <div className="mt-4 space-y-1">
-              <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
+              <div
+                className="flex justify-between text-xs text-muted-foreground tabular-nums"
+                aria-hidden="true"
+              >
                 <span>{elapsed}s</span>
                 <span>{progress}%</span>
               </div>
