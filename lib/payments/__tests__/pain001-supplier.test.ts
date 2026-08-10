@@ -135,6 +135,38 @@ describe('generateSupplierPain001', () => {
     expect(debtorAccounts[0]).not.toContain('BGNR')
   })
 
+  it('omits the creditor address on BGNR-debited payments (TwnNm rule)', () => {
+    const xml = generateSupplierPain001(
+      { ...debtor, bankgiro: '9912346' },
+      [bgPayment()],
+      options,
+    )
+    const creditor = xml.match(/<Cdtr>[\s\S]*?<\/Cdtr>/)![0]
+    expect(creditor).not.toContain('<PstlAdr>')
+  })
+
+  it('carries the supplier town on IBAN-debited payments when known', () => {
+    const xml = generateSupplierPain001(
+      debtor,
+      [bgPayment({ payeeCity: 'Göteborg' })],
+      options,
+    )
+    const creditor = xml.match(/<Cdtr>[\s\S]*?<\/Cdtr>/)![0]
+    expect(creditor).toContain('<TwnNm>Göteborg</TwnNm>')
+    expect(creditor.indexOf('<TwnNm>')).toBeLessThan(creditor.indexOf('<Ctry>'))
+  })
+
+  it('carries the company town on the debtor when known', () => {
+    const xml = generateSupplierPain001(
+      { ...debtor, city: 'Stockholm' },
+      [bgPayment()],
+      options,
+    )
+    const debtorBlock = xml.match(/<Dbtr>[\s\S]*?<\/Dbtr>/)![0]
+    expect(debtorBlock).toContain('<TwnNm>Stockholm</TwnNm>')
+    expect(debtorBlock.indexOf('<PstlAdr>')).toBeLessThan(debtorBlock.indexOf('<Id>'))
+  })
+
   it('transliterates disallowed characters in names (MIG character set)', () => {
     const xml = generateSupplierPain001(
       debtor,

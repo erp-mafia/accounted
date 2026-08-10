@@ -789,6 +789,8 @@ export interface SupplierPaymentBatchDebtor {
   bic: string
   /** Absent on batches created before the Swedbank MIG fixes (2026-08-10). */
   bankgiro?: string | null
+  /** Company town for Dbtr/PstlAdr; absent on pre-TownName-fix batches. */
+  city?: string | null
 }
 
 export interface SupplierPaymentBatch {
@@ -827,6 +829,8 @@ export interface SupplierPaymentBatchItem {
   payee_clearing: string | null
   payee_account: string | null
   payee_name: string
+  /** Supplier town at creation; feeds Cdtr/PstlAdr/TwnNm on IBAN-debited payments. */
+  payee_city: string | null
   reference_type: SupplierPaymentBatchReferenceType
   reference: string
   created_at: string

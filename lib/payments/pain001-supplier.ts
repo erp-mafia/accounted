@@ -26,10 +26,13 @@
  *  - Swedbank MIG (Validex PFH_pain_001_001_03_219): a BGNR creditor demands
  *    a BGNR debtor. When the company has a bankgiro, bankgiro-payee payments
  *    are grouped into their own PmtInf debited from the company bankgiro
- *    (DbtrAcct Othr/BGNR); other payees are debited from the IBAN. Without a
- *    company bankgiro everything debits the IBAN, which Validex rule 020
- *    accepts as long as the creditor carries a postal country, so Cdtr
- *    always carries PstlAdr/Ctry SE (v1 is domestic-only by scope).
+ *    (DbtrAcct Othr/BGNR); other payees are debited from the IBAN.
+ *  - Creditor postal address only where required (Validex round 2, rule
+ *    PFH_222): a present PstlAdr must carry TwnNm from November 2026, so
+ *    BGNR-debited payments carry NO creditor address (rule 020 does not
+ *    require one there), and IBAN-debited payments carry TwnNm (the
+ *    supplier's town, when known) plus Ctry SE (v1 is domestic-only). The
+ *    debtor address rides along the same way from company settings.
  *  - InitgPty and Dbtr always carry OrgId (Validex PFH_002: InitgPty
  *    other/Id must be stated); the batch service refuses to create a batch
  *    for a company without an organisationsnummer.
@@ -64,11 +67,15 @@ export interface SupplierPain001Debtor {
   bic: string
   /** Company bankgiro (digits); enables the BGNR-to-BGNR debit Swedbank wants. */
   bankgiro?: string | null
+  /** Company town; emitted as Dbtr/PstlAdr/TwnNm when present. */
+  city?: string | null
 }
 
 export interface SupplierPain001Payment {
   payee: SupplierPayee
   payeeName: string
+  /** Supplier town; Cdtr/PstlAdr/TwnNm on IBAN-debited payments when known. */
+  payeeCity?: string | null
   amount: number
   /** YYYY-MM-DD requested execution date. */
   paymentDate: string
@@ -161,6 +168,13 @@ export function generateSupplierPain001(
     lines.push(`      <ReqdExctnDt>${date}</ReqdExctnDt>`)
     lines.push('      <Dbtr>')
     lines.push(`        <Nm>${escapeXml(debtorName)}</Nm>`)
+    // XSD order in PostalAddress6: TwnNm before Ctry; PstlAdr before Id.
+    if (debtor.city?.trim()) {
+      lines.push('        <PstlAdr>')
+      lines.push(`          <TwnNm>${escapeXml(sanitizeText(debtor.city.trim()))}</TwnNm>`)
+      lines.push('          <Ctry>SE</Ctry>')
+      lines.push('        </PstlAdr>')
+    }
     lines.push('        <Id>')
     lines.push('          <OrgId>')
     lines.push(`            <Othr><Id>${escapeXml(orgDigits)}</Id></Othr>`)
@@ -198,7 +212,7 @@ export function generateSupplierPain001(
       lines.push('        <Amt>')
       lines.push(`          <InstdAmt Ccy="SEK">${formatDecimal(payment.amount)}</InstdAmt>`)
       lines.push('        </Amt>')
-      pushCreditor(lines, payment)
+      pushCreditor(lines, payment, bgnrDebit)
       pushRemittance(lines, payment.reference, payment.amount)
       lines.push('      </CdtTrfTxInf>')
     }
@@ -213,7 +227,11 @@ export function generateSupplierPain001(
 }
 
 /** XSD order within CdtTrfTxInf: CdtrAgt before Cdtr before CdtrAcct. */
-function pushCreditor(lines: string[], payment: SupplierPain001Payment): void {
+function pushCreditor(
+  lines: string[],
+  payment: SupplierPain001Payment,
+  bgnrDebit: boolean,
+): void {
   const { payee } = payment
 
   let memberId: string
@@ -249,12 +267,18 @@ function pushCreditor(lines: string[], payment: SupplierPain001Payment): void {
   lines.push('        </CdtrAgt>')
   lines.push('        <Cdtr>')
   lines.push(`          <Nm>${escapeXml(sanitizeText(payment.payeeName))}</Nm>`)
-  // Postal country always: v1 payees are Swedish-domestic by scope, and the
-  // Swedbank MIG (Validex PFH_020/PFH_237) wants a creditor postal address
-  // whenever the debit is not BGNR-to-BGNR. Harmless where not required.
-  lines.push('          <PstlAdr>')
-  lines.push('            <Ctry>SE</Ctry>')
-  lines.push('          </PstlAdr>')
+  // Creditor address only where required (Validex rules 020/237 vs 222): a
+  // BGNR-to-BGNR payment needs none, and a present PstlAdr must carry TwnNm
+  // from November 2026, so an address is emitted only on IBAN-debited
+  // payments: the supplier's town when known, and country SE (v1 scope).
+  if (!bgnrDebit) {
+    lines.push('          <PstlAdr>')
+    if (payment.payeeCity?.trim()) {
+      lines.push(`            <TwnNm>${escapeXml(sanitizeText(payment.payeeCity.trim()))}</TwnNm>`)
+    }
+    lines.push('            <Ctry>SE</Ctry>')
+    lines.push('          </PstlAdr>')
+  }
   lines.push('        </Cdtr>')
   lines.push('        <CdtrAcct>')
   lines.push('          <Id>')

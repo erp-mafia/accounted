@@ -16,6 +16,7 @@ const companyRow = { name: 'Testbolaget AB', org_number: '556677-8899' }
 const settingsRow = {
   company_name: 'Testbolaget AB',
   org_number: '556677-8899',
+  city: 'Stockholm',
   iban: 'SE3550000000054910000003',
   bic: 'ESSESESS',
   bankgiro: '991-2346',
@@ -37,6 +38,7 @@ function invoiceRow(overrides: Record<string, unknown> = {}) {
     supplier: {
       id: 'sup-1',
       name: 'Derome Bygg & Industri AB',
+      city: 'Veddige',
       bankgiro: '5050-1055',
       plusgiro: null,
       bank_account: null,
@@ -216,6 +218,7 @@ describe('createSupplierPaymentBatch', () => {
         iban: 'SE3550000000054910000003',
         bic: 'ESSESESS',
         bankgiro: '9912346',
+        city: 'Stockholm',
       },
     })
     const msgId = batchInsert.msg_id as string
@@ -235,6 +238,7 @@ describe('createSupplierPaymentBatch', () => {
       payee_type: 'bankgiro',
       payee_bankgiro: '50501055',
       payee_name: 'Derome Bygg & Industri AB',
+      payee_city: 'Veddige',
       reference_type: 'invoice_number',
       reference: 'CD3014794407',
     })
@@ -436,6 +440,7 @@ describe('renderSupplierPaymentBatchFile', () => {
         payee_clearing: null,
         payee_account: null,
         payee_name: 'Derome Bygg & Industri AB',
+        payee_city: null,
         reference_type: 'invoice_number',
         reference: 'CD3014794407',
         created_at: '2026-08-10T12:00:00Z',

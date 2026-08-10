@@ -34,13 +34,13 @@ import { generateSupplierPain001, type SupplierPain001Payment } from './pain001-
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
 type InvoiceRow = BatchInvoiceFacts & {
-  supplier: (SupplierPayeeSource & { id: string; name: string }) | null
+  supplier: (SupplierPayeeSource & { id: string; name: string; city: string | null }) | null
 }
 
 const INVOICE_SELECT =
   'id, status, approved_at, due_date, remaining_amount, currency, is_credit_note, ' +
   'payment_reference, supplier_invoice_number, ' +
-  'supplier:suppliers(id, name, bankgiro, plusgiro, bank_account, clearing_number, account_number)'
+  'supplier:suppliers(id, name, city, bankgiro, plusgiro, bank_account, clearing_number, account_number)'
 
 export interface BatchDebtor {
   name: string
@@ -49,6 +49,8 @@ export interface BatchDebtor {
   bic: string
   /** Company bankgiro digits; enables the BGNR-to-BGNR debit Swedbank wants. */
   bankgiro: string | null
+  /** Company town; Dbtr/PstlAdr/TwnNm (mandatory from Nov 2026 when present). */
+  city: string | null
 }
 
 export type DebtorResolution =
@@ -71,7 +73,7 @@ export async function resolveBatchDebtor(
     supabase.from('companies').select('name, org_number').eq('id', companyId).single(),
     supabase
       .from('company_settings')
-      .select('company_name, org_number, iban, bic, bankgiro, clearing_number, bank_name')
+      .select('company_name, org_number, city, iban, bic, bankgiro, clearing_number, bank_name')
       .eq('company_id', companyId)
       .single(),
   ])
@@ -101,6 +103,7 @@ export async function resolveBatchDebtor(
       iban,
       bic,
       bankgiro,
+      city: settings?.city?.trim() || null,
     },
   }
 }
@@ -315,6 +318,7 @@ export async function createSupplierPaymentBatch(
       payee_clearing: payee.type === 'bank_account' ? payee.clearing : null,
       payee_account: payee.type === 'bank_account' ? payee.account : null,
       payee_name: invoice.supplier.name,
+      payee_city: invoice.supplier.city?.trim() || null,
       reference_type: evaluation.reference.type,
       reference: evaluation.reference.value,
     })
@@ -401,6 +405,7 @@ export function renderSupplierPaymentBatchFile(
               account: item.payee_account ?? '',
             },
     payeeName: item.payee_name,
+    payeeCity: item.payee_city ?? null,
     amount: item.amount,
     paymentDate: item.payment_date,
     reference: { type: item.reference_type, value: item.reference },
@@ -414,6 +419,7 @@ export function renderSupplierPaymentBatchFile(
       iban: debtor.iban,
       bic: debtor.bic,
       bankgiro: debtor.bankgiro ?? null,
+      city: debtor.city ?? null,
     },
     payments,
     { messageId: batch.msg_id, createdAt: batch.created_at },
