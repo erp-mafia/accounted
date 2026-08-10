@@ -154,49 +154,63 @@ async function fetchPotentialMatches(
   supabase: SupabaseClient,
   rows: { potential_invoice_id: string | null; potential_supplier_invoice_id: string | null }[],
 ) {
-  const potentialInvoiceIds = rows
-    .filter((t) => t.potential_invoice_id)
-    .map((t) => t.potential_invoice_id)
-  const potentialSupplierInvoiceIds = rows
-    .filter((t) => t.potential_supplier_invoice_id)
-    .map((t) => t.potential_supplier_invoice_id)
+  const potentialInvoiceIds = Array.from(
+    new Set(rows.flatMap((t) => (t.potential_invoice_id ? [t.potential_invoice_id] : []))),
+  )
+  const potentialSupplierInvoiceIds = Array.from(
+    new Set(rows.flatMap((t) => (t.potential_supplier_invoice_id ? [t.potential_supplier_invoice_id] : []))),
+  )
+
+  // Chunked .in() lists (PostgREST .in() URL-length convention, same 150 as
+  // the underlag-status effect below): the caller may pass the full pending
+  // backlog, not just one page.
+  const IN_CLAUSE_CHUNK = 150
+  const chunks = <T,>(ids: T[]) => {
+    const out: T[][] = []
+    for (let i = 0; i < ids.length; i += IN_CLAUSE_CHUNK) out.push(ids.slice(i, i + IN_CLAUSE_CHUNK))
+    return out
+  }
 
   // The hint columns are never revisited once written, so an invoice settled
   // by a different transaction leaves a stale pointer behind. Revalidate here:
   // an unmatchable candidate must not reach the row or the match dialog, which
   // would otherwise compare the transaction against a 0 kr remaining balance
   // and call it a partial payment.
-  const [invoiceResult, supplierInvoiceResult] = await Promise.all([
-    potentialInvoiceIds.length > 0
-      ? supabase
+  const [invoiceResults, supplierInvoiceResults] = await Promise.all([
+    Promise.all(
+      chunks(potentialInvoiceIds).map((ids) =>
+        supabase
           .from('invoices')
           .select('*, customer:customers(*)')
-          .in('id', potentialInvoiceIds)
+          .in('id', ids)
           .in('status', [...MATCHABLE_INVOICE_STATUSES])
-          .gt('remaining_amount', 0)
-      : Promise.resolve({ data: null, error: null }),
-    potentialSupplierInvoiceIds.length > 0
-      ? supabase
+          .gt('remaining_amount', 0),
+      ),
+    ),
+    Promise.all(
+      chunks(potentialSupplierInvoiceIds).map((ids) =>
+        supabase
           .from('supplier_invoices')
           .select('*, supplier:suppliers(*)')
-          .in('id', potentialSupplierInvoiceIds)
+          .in('id', ids)
           .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
-          .gt('remaining_amount', 0)
-      : Promise.resolve({ data: null, error: null }),
+          .gt('remaining_amount', 0),
+      ),
+    ),
   ])
 
   // Non-fatal: the transaction list still renders without match hints, but
   // log so a DB failure isn't mistaken for "no potential match".
-  if (invoiceResult.error) {
-    console.error('[fetchPotentialMatches] invoices query failed', invoiceResult.error)
+  for (const r of invoiceResults) {
+    if (r.error) console.error('[fetchPotentialMatches] invoices query failed', r.error)
   }
-  if (supplierInvoiceResult.error) {
-    console.error('[fetchPotentialMatches] supplier_invoices query failed', supplierInvoiceResult.error)
+  for (const r of supplierInvoiceResults) {
+    if (r.error) console.error('[fetchPotentialMatches] supplier_invoices query failed', r.error)
   }
 
   return {
-    invoiceMap: buildInvoiceMap(invoiceResult.data),
-    supplierInvoiceMap: buildSupplierInvoiceMap(supplierInvoiceResult.data),
+    invoiceMap: buildInvoiceMap(invoiceResults.flatMap((r) => r.data ?? [])),
+    supplierInvoiceMap: buildSupplierInvoiceMap(supplierInvoiceResults.flatMap((r) => r.data ?? [])),
   }
 }
 
@@ -637,7 +651,11 @@ export default function TransactionsPage() {
           .from('transactions')
           .select('*')
           .eq('company_id', companyId)
+          // The id tie-breaker keeps offset paging deterministic when many
+          // rows share a date; without it .range() pages can skip or repeat
+          // same-date rows.
           .order('date', { ascending: false })
+          .order('id', { ascending: true })
           .limit(PAGE_SIZE),
         supabase
           .from('transactions')
@@ -648,8 +666,10 @@ export default function TransactionsPage() {
           // rows are handled, not pending.
           .eq('is_ignored', false),
         // The inbox is a worklist: it must contain every pending row, even ones
-        // older than the newest-first window above. Soft-fails to null so the
-        // page still renders the windowed rows if this fetch dies.
+        // older than the newest-first window above. Falls back to null so the
+        // page still renders the windowed rows if this fetch dies; the failure
+        // is surfaced below, never silently absorbed (an inbox that renders as
+        // complete while missing older pending rows would be a lie).
         fetchAllRows<TransactionWithInvoice>(({ from, to }) =>
           supabase
             .from('transactions')
@@ -660,12 +680,21 @@ export default function TransactionsPage() {
             .order('date', { ascending: false })
             .order('id', { ascending: true })
             .range(from, to),
-        ).catch(() => null),
+        ).catch((error: unknown) => {
+          console.error('[transactions] pending backlog fetch failed; inbox may be missing older rows', error)
+          return null
+        }),
       ])
 
       if (txError) {
         toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
         return
+      }
+
+      if (pendingRows === null) {
+        // Partial load: the windowed rows render, but older pending rows are
+        // absent. Say so instead of presenting a complete-looking inbox.
+        toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
       }
 
       const rows = txData || []
@@ -722,7 +751,10 @@ export default function TransactionsPage() {
       .from('transactions')
       .select('*')
       .eq('company_id', companyId)
+      // Same stable order as the initial window fetch: offset paging over a
+      // date-only order can skip or repeat same-date rows between pages.
       .order('date', { ascending: false })
+      .order('id', { ascending: true })
       .range(offset, offset + PAGE_SIZE - 1)
 
     if (txError || !txData) {
