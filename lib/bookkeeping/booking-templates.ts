@@ -1282,9 +1282,11 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     deductibility: 'full',
     mcc_codes: [],
     // 'dans' keywords: tillträde till danstillställningar dropped from 25% to
-    // 6% on 2026-07-01 (aligned with other cultural events). Admission dated
-    // before that is 25%; the descriptor reflects current law only. (#1483)
-    keywords: ['bok', 'böcker', 'tidning', 'tidskrift', 'e-bok', 'persontransport', 'taxi', 'buss', 'tåg', 'kultur', 'konsert', 'teater', 'museum', 'bio', 'idrott', 'dans', 'danstillställning', 'dansband', 'entré', 'books', 'culture', 'transport'],
+    // 6% on 2026-07-01 (2025/26:SkU25, aligned with other cultural events).
+    // Admission sold and paid before that stays 25%; the descriptor reflects
+    // current law only. Deliberately no bare 'entré' keyword: generic
+    // admission is not always reduced-rate. (#1483)
+    keywords: ['bok', 'böcker', 'tidning', 'tidskrift', 'e-bok', 'persontransport', 'taxi', 'buss', 'tåg', 'kultur', 'konsert', 'teater', 'museum', 'bio', 'idrott', 'dans', 'danstillställning', 'dansband', 'books', 'culture', 'transport'],
     risk_level: 'NONE',
     requires_review: false,
     impact_score: 5,
