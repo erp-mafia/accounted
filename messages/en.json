@@ -1360,6 +1360,7 @@
     "security_note": "Your data is encrypted and stored securely in Sweden"
   },
   "initial_setup": {
+    "completed_verdict": "Your bookkeeping is up and running.",
     "title": "{count} steps and your bookkeeping is running",
     "step_books_title": "Get your books in",
     "step_books_description": "Import from another system or upload a SIE file. New business?",
