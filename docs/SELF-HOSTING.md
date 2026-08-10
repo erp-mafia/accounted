@@ -230,6 +230,17 @@ When both credential sets are present, Bedrock wins, so that adding an Anthropic
 
 Without working credentials the rest of the app runs normally: uploads are stored but not auto-interpreted, and the AI assistant cannot answer.
 
+#### Verifying the setup
+
+`scripts/smoke-ai.ts` sends real traffic to whichever backend your environment resolves to, so a wrong key, an unavailable model or a rejected parameter surfaces here rather than in front of a user:
+
+```bash
+npx tsx scripts/smoke-ai.ts                  # credentials, models, chat loop
+npx tsx scripts/smoke-ai.ts ./receipt.pdf    # also runs document extraction
+```
+
+It prints the resolved provider and model ids first, then exercises a plain request, a streamed turn carrying the assistant's full parameter set (adaptive thinking, effort, prompt caching and a tool), and finally extraction of the file you pass. It exits non-zero if any step fails, so it works as a post-deploy check.
+
 > **Note:** `OPENAI_API_KEY` from earlier versions is not read by any code path; there is no OpenAI route in the app. Pluggable providers beyond Claude are tracked in [#1406](https://github.com/erp-mafia/accounted/issues/1406).
 
 ### Email (Invoice Sending and Reminders)
