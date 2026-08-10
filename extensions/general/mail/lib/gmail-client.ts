@@ -124,6 +124,21 @@ export async function searchMessageIds(
 }
 
 /**
+ * Messages already read, keyed by connection and id.
+ *
+ * A press searches many purchases across every mailbox, and one receipt mail
+ * answers several of those queries, so the same message was being downloaded
+ * dozens of times: 25 purchases against 2 mailboxes could ask for well over a
+ * thousand fetches to end up with a hundred distinct mails. Deduplication
+ * happened afterwards, which was too late to save the work.
+ *
+ * A mail's content never changes, so caching it needs no invalidation. The cap
+ * is what keeps a long-lived server from growing without bound.
+ */
+const summaryCache = new Map<string, MailCandidate>()
+const SUMMARY_CACHE_MAX = 1_000
+
+/**
  * Subject, sender, date and which parts are attachments.
  *
  * `format=full` rather than `format=metadata`: metadata returns headers only
@@ -139,11 +154,15 @@ export async function getMessageSummary(
   connectionId: string,
   mailbox: string,
 ): Promise<MailCandidate> {
+  const cacheKey = `${connectionId}::${messageId}`
+  const cached = summaryCache.get(cacheKey)
+  if (cached) return cached
+
   const msg = await gmailFetch<GmailMessage>(accessToken, `/messages/${messageId}?format=full`)
   const attachments: Array<{ id: string; filename: string }> = []
   collectAttachments(msg.payload, attachments)
 
-  return {
+  const candidate: MailCandidate = {
     connectionId,
     mailbox,
     provider: 'gmail',
@@ -161,6 +180,20 @@ export async function getMessageSummary(
     bodyText: readableBody(msg),
     bodyIsReceipt: attachments.length === 0,
   }
+
+  // Oldest out first: the working set of one press is what matters, and a
+  // press that overflows the cap was going to refetch anyway.
+  if (summaryCache.size >= SUMMARY_CACHE_MAX) {
+    const oldest = summaryCache.keys().next().value
+    if (oldest) summaryCache.delete(oldest)
+  }
+  summaryCache.set(cacheKey, candidate)
+  return candidate
+}
+
+/** Drop everything read so far. Tests reuse message ids; production does not. */
+export function clearMessageCache(): void {
+  summaryCache.clear()
 }
 
 export async function fetchAttachmentBytes(

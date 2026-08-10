@@ -7,7 +7,7 @@
  * the format and the MIME walk.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { getMessageSummary } from '../gmail-client'
+import { clearMessageCache, getMessageSummary } from '../gmail-client'
 
 const mockFetch = vi.fn()
 vi.stubGlobal('fetch', (...args: unknown[]) => mockFetch(...args))
@@ -25,7 +25,11 @@ const HEADERS = [
   { name: 'From', value: 'info@tic.io' },
 ]
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  // The cache is keyed by message id, and these tests reuse ids.
+  clearMessageCache()
+})
 
 describe('getMessageSummary', () => {
   it('asks for the full message, because metadata omits the parts tree', async () => {
@@ -98,5 +102,32 @@ describe('getMessageSummary', () => {
     const candidate = await getMessageSummary('token', 'm1', 'conn-1', 'invoice@arcim.io')
     expect(candidate.bodyIsReceipt).toBe(true)
     expect(candidate.subject).toBe('Faktura-20251070')
+  })
+})
+
+/**
+ * One receipt mail answers many purchases' queries, so the same message was
+ * downloaded dozens of times per press. Content never changes, so reading it
+ * once is both correct and the difference between a press that fits its time
+ * budget and one that does not.
+ */
+describe('message reads are not repeated', () => {
+  it('fetches a given message once per mailbox', async () => {
+    respond({ id: 'cache-me', payload: { headers: HEADERS } })
+
+    await getMessageSummary('token', 'cache-me', 'conn-1', 'invoice@arcim.io')
+    await getMessageSummary('token', 'cache-me', 'conn-1', 'invoice@arcim.io')
+    await getMessageSummary('token', 'cache-me', 'conn-1', 'invoice@arcim.io')
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps mailboxes apart, since a hit in one says nothing about the other', async () => {
+    respond({ id: 'shared', payload: { headers: HEADERS } })
+
+    await getMessageSummary('token', 'shared', 'conn-1', 'invoice@arcim.io')
+    await getMessageSummary('token', 'shared', 'conn-2', 'jakob@arcim.io')
+
+    expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 })
