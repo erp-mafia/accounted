@@ -244,12 +244,12 @@
     "version": 3
   },
   "horizontal/swedish-year-end-closing/closing-process": {
-    "hash": "bce8e129860dd26c04e5e406dc9312e2d42dea6aa8c0139f168de43529abf939",
-    "version": 2
+    "hash": "2d23c29bcf8a7f5d6ce72e677abe518efdf8300ed11360269377a342f51945b5",
+    "version": 3
   },
   "horizontal/swedish-year-end-closing/journal-entries": {
-    "hash": "acd171ade0305bcbb4142e0f9817482f845dc6e1b3620a62eb36b6e8eef6110a",
-    "version": 2
+    "hash": "b4891b88b6cf409f00c76c70b7acb9dbf20e13ac05814886f978b80b878ab0a9",
+    "version": 3
   },
   "horizontal/swedish-year-end-closing/k2-vs-k3": {
     "hash": "e3fa066d0e1fe4284661df669736241daf05e08599f893b40f5a6f94722d0bce",
