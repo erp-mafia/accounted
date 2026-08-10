@@ -42,13 +42,17 @@ const MAILS_PER_RUN = 100
 /**
  * Receipts fetched per press.
  *
- * The binding constraint on the whole route. Searching and reading mail bodies
- * costs about 85s; every receipt after that costs another ~37s, because it is
- * downloaded, stored, and then read by a model that opens the PDF. Measured on
- * a real ledger: 7 receipts took 5.8 minutes, which a 300s function would have
- * killed. Four keeps a full press inside the budget with room to spare.
+ * The binding constraint on the whole route, and it is the model reading the
+ * PDF rather than the network: measured on a real ledger, a fetched receipt
+ * costs about 50s from download to a stored amount, while searching and
+ * reading a hundred mail bodies costs roughly 100s in total. Seven receipts
+ * took 5.8 minutes and four took 5.1, both past the 300s a function gets.
+ *
+ * Three is what fits. It is also a stopgap: doing the fetch inside the request
+ * is the wrong shape for work this slow, and the honest fix is to move it off
+ * the request entirely rather than keep shaving this number.
  */
-const RECEIPTS_PER_RUN = 4
+const RECEIPTS_PER_RUN = 3
 
 export const maxDuration = 300
 

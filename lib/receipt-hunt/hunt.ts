@@ -471,6 +471,45 @@ export async function huntCompany(
  * no mailbox is connected. Finding a candidate is NOT the same as having the
  * receipt: ingesting it is the next step and stays behind human approval.
  */
+/**
+ * Vendor and total of every receipt the hunt has already filed.
+ *
+ * The per-run key only stops duplicates inside one pass. Across passes the
+ * check was the message and attachment, which does not recognise the same
+ * purchase arriving as an invoice in one mail and a receipt in another: those
+ * have different file keys and were fetched twice, filling the pool with
+ * identical candidates the matcher then refuses to choose between.
+ */
+async function fetchAlreadyHeld(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<Set<string>> {
+  const rows = await fetchAllRows<{ extracted_data: unknown }>((range) =>
+    supabase
+      .from('invoice_inbox_items')
+      .select('extracted_data')
+      .eq('company_id', companyId)
+      .eq('source', 'mail_hunt')
+      .order('id', { ascending: true })
+      .range(range.from, range.to),
+  )
+
+  const held = new Set<string>()
+  for (const row of rows) {
+    const data = row.extracted_data as
+      | { supplier?: { name?: string }; invoice?: { currency?: string }; totals?: { total?: number } }
+      | null
+    const total = data?.totals?.total
+    if (total == null) continue
+    held.add(
+      `${(data?.supplier?.name ?? '').toLowerCase()}::${total}::${(
+        data?.invoice?.currency ?? 'SEK'
+      ).toLowerCase()}`,
+    )
+  }
+  return held
+}
+
 async function harvestReceiptsFromMail(
   supabase: SupabaseClient,
   companyId: string,
@@ -552,7 +591,9 @@ async function harvestReceiptsFromMail(
     worthFetching(doc, searchable, retrievedBy.get(doc.messageId) ?? []),
   )
 
-  const claimedFiles = new Set<string>()
+  // Seeded with what is already filed, so a press spends its budget on
+  // documents the company does not have rather than refetching its own.
+  const claimedFiles = await fetchAlreadyHeld(supabase, companyId)
   for (const doc of wanted) {
     const candidate = byMessage.get(doc.messageId)
     if (!candidate) continue
