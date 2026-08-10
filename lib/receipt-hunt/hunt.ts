@@ -148,6 +148,14 @@ export interface HuntOptions {
   /** How many unexplained purchases to search mail for in one run. */
   mailSearchLimit?: number
   /**
+   * Mails read in one run, overriding the environment default.
+   *
+   * The cap is what bounds cost, and it interacts with the largest-first
+   * ordering: a low cap spends the whole budget on the biggest purchases,
+   * which on a real ledger are the least likely to have a findable receipt.
+   */
+  maxMails?: number
+  /**
    * Receipts fetched in one run, overriding the environment default.
    *
    * A person pressing a button wants a pass that ends, reports, and can be
@@ -360,6 +368,7 @@ export async function huntCompany(
     searchMail = false,
     mailSearchLimit = MAX_MAIL_SEARCHES_PER_RUN,
     maxReceipts = MAX_RECEIPTS_PER_RUN,
+    maxMails = MAX_MAILS_READ_PER_RUN,
   } = options
 
   const [transactions, suppression] = await Promise.all([
@@ -390,6 +399,7 @@ export async function huntCompany(
         mailSearchLimit,
         dryRun,
         maxReceipts,
+        maxMails,
       )
     : undefined
 
@@ -469,6 +479,7 @@ async function harvestReceiptsFromMail(
   limit: number,
   dryRun: boolean,
   maxReceipts: number,
+  maxMails: number,
 ): Promise<MailHuntSummary> {
   const service = getMailSearchService()
   const summary: MailHuntSummary = { searched: 0, withCandidates: 0, ingested: 0, candidates: [] }
@@ -514,7 +525,7 @@ async function harvestReceiptsFromMail(
   }
   if (byMessage.size === 0) return summary
 
-  const mails = [...byMessage.values()].slice(0, MAX_MAILS_READ_PER_RUN)
+  const mails = [...byMessage.values()].slice(0, maxMails)
   const toReview = mails.map((c) => ({
     messageId: c.messageId,
     mailbox: c.mailbox,

@@ -24,8 +24,20 @@ ensureInitialized()
  * `attach_document_to_transaction` proposal that still waits for approval.
  */
 
-/** Purchases whose mailboxes are searched per press. */
-const PURCHASES_PER_RUN = 8
+/**
+ * Purchases whose mailboxes are searched per press.
+ *
+ * Purchases are searched largest first, and on a real ledger the largest rows
+ * are the least likely to have a findable receipt: rent already invoiced,
+ * bare payment references, direct debits. A press that only reaches the top of
+ * that list finds nothing and looks broken. Measured: 8 purchases and 40 mails
+ * took 43s of the 300 available, so the budget was being spent on the wrong
+ * end rather than being scarce.
+ */
+const PURCHASES_PER_RUN = 25
+
+/** Mails read per press. The real cost bound, and what the numbers above buy. */
+const MAILS_PER_RUN = 100
 
 /** Receipts fetched per press, so one press cannot bury the granskningskö. */
 const RECEIPTS_PER_RUN = 10
@@ -51,6 +63,7 @@ export const POST = withRouteContext('receipt_hunt.run', async (_request, ctx) =
   const result = await huntCompany(supabase, companyId, runId, {
     searchMail: true,
     mailSearchLimit: PURCHASES_PER_RUN,
+    maxMails: MAILS_PER_RUN,
     maxReceipts: RECEIPTS_PER_RUN,
   })
 

@@ -60,7 +60,7 @@ beforeEach(() => {
 describe('POST /api/receipt-hunt/run', () => {
   it('refuses an unauthenticated caller', async () => {
     unauthorized = true
-    const response = await POST(createMockRequest('http://localhost/api/receipt-hunt/run'))
+    const response = await POST(createMockRequest('http://localhost/api/receipt-hunt/run'), undefined as never)
     expect(response.status).toBe(401)
     expect(mockHuntCompany).not.toHaveBeenCalled()
   })
@@ -71,26 +71,26 @@ describe('POST /api/receipt-hunt/run', () => {
     mockRequireCapability.mockResolvedValue(
       new Response(JSON.stringify({ error: 'capability_blocked' }), { status: 402 }),
     )
-    const response = await POST(createMockRequest('http://localhost/api/receipt-hunt/run'))
+    const response = await POST(createMockRequest('http://localhost/api/receipt-hunt/run'), undefined as never)
     expect(response.status).toBe(402)
     expect(mockHuntCompany).not.toHaveBeenCalled()
   })
 
   it('searches the mailboxes, which the nightly run still does not', async () => {
-    await POST(createMockRequest('http://localhost/api/receipt-hunt/run'))
+    await POST(createMockRequest('http://localhost/api/receipt-hunt/run'), undefined as never)
     const [, , , options] = mockHuntCompany.mock.calls[0]
     expect(options.searchMail).toBe(true)
   })
 
   it('bounds the pass so one press cannot run past the function timeout', async () => {
-    await POST(createMockRequest('http://localhost/api/receipt-hunt/run'))
+    await POST(createMockRequest('http://localhost/api/receipt-hunt/run'), undefined as never)
     const [, , , options] = mockHuntCompany.mock.calls[0]
     expect(options.mailSearchLimit).toBeGreaterThan(0)
     expect(options.maxReceipts).toBeGreaterThan(0)
   })
 
   it('reports what is left, so pressing again is an informed choice', async () => {
-    const response = await POST(createMockRequest('http://localhost/api/receipt-hunt/run'))
+    const response = await POST(createMockRequest('http://localhost/api/receipt-hunt/run'), undefined as never)
     const { body } = await parseJsonResponse<{
       data: { searched: number; fetched: number; proposed: number; remaining: number }
     }>(response)
@@ -108,7 +108,7 @@ describe('POST /api/receipt-hunt/run', () => {
       proposed: 0,
       mail: { searched: 8, withCandidates: 0, ingested: 0, candidates: [] },
     })
-    const response = await POST(createMockRequest('http://localhost/api/receipt-hunt/run'))
+    const response = await POST(createMockRequest('http://localhost/api/receipt-hunt/run'), undefined as never)
     const { body } = await parseJsonResponse<{ data: { remaining: number } }>(response)
     expect(body.data.remaining).toBe(0)
   })
@@ -122,7 +122,7 @@ describe('POST /api/receipt-hunt/run', () => {
       poolSize: 2,
       proposed: 1,
     })
-    const response = await POST(createMockRequest('http://localhost/api/receipt-hunt/run'))
+    const response = await POST(createMockRequest('http://localhost/api/receipt-hunt/run'), undefined as never)
     const { body } = await parseJsonResponse<{ data: { searched: number; fetched: number } }>(
       response,
     )
