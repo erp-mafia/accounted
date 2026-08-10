@@ -506,7 +506,11 @@ async function fetchAlreadyHeld(
   const held = new Set<string>()
   for (const row of rows) {
     const data = row.extracted_data as
-      | { supplier?: { name?: string }; invoice?: { currency?: string }; totals?: { total?: number } }
+      | {
+          supplier?: { name?: string }
+          invoice?: { currency?: string; invoiceDate?: string | null }
+          totals?: { total?: number }
+        }
       | null
     // Prefer the identity written when the receipt was filed: it came from the
     // same reading that the incoming candidate's does, so the two compare
@@ -521,8 +525,9 @@ async function fetchAlreadyHeld(
       vendor: data?.supplier?.name ?? null,
       amount: data?.totals?.total ?? null,
       currency: data?.invoice?.currency ?? null,
+      date: data?.invoice?.invoiceDate ?? null,
     })
-    if (key.startsWith('file::')) continue
+    if (key.includes('::file::')) continue
     held.add(key)
   }
   return held

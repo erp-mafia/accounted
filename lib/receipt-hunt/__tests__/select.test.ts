@@ -347,36 +347,47 @@ describe('a receipt already offered elsewhere', () => {
  */
 describe('receiptIdentity', () => {
   it('collapses the invoice and the receipt for one purchase', () => {
-    expect(
-      receiptIdentity({ vendor: 'Anthropic', amount: 180, currency: 'EUR', attachmentName: 'Invoice-E19DBF63-0021.pdf' }),
-    ).toBe(
-      receiptIdentity({ vendor: 'Anthropic', amount: 180, currency: 'EUR', attachmentName: 'Receipt-2066-0204-8388.pdf' }),
+    const d = { vendor: 'Anthropic', amount: 180, currency: 'EUR', date: '2026-06-15', messageId: 'm1' }
+    expect(receiptIdentity({ ...d, attachmentName: 'Invoice-E19DBF63-0021.pdf' })).toBe(
+      receiptIdentity({ ...d, attachmentName: 'Receipt-2066-0204-8388.pdf' }),
     )
+  })
+
+  it('keeps a subscription billing the same amount every month apart', () => {
+    // Without the date, July would look like a duplicate of June and be
+    // suppressed forever: a permanent, silent loss.
+    expect(
+      receiptIdentity({ vendor: 'Anthropic', amount: 225, currency: 'EUR', date: '2026-06-15' }),
+    ).not.toBe(
+      receiptIdentity({ vendor: 'Anthropic', amount: 225, currency: 'EUR', date: '2026-07-15' }),
+    )
+  })
+
+  it('reads equivalent totals as one amount', () => {
+    expect(
+      receiptIdentity({ vendor: 'Uber', amount: 0.1 + 0.2, currency: 'SEK', date: '2026-06-01' }),
+    ).toBe(receiptIdentity({ vendor: 'Uber', amount: 0.3, currency: 'SEK', date: '2026-06-01' }))
   })
 
   it('ignores wrapping the matcher already folds away', () => {
-    expect(receiptIdentity({ vendor: 'Loopia AB', amount: 388, currency: 'SEK' })).toBe(
-      receiptIdentity({ vendor: 'LOOPIA', amount: 388, currency: 'SEK' }),
-    )
-  })
-
-  it('keeps two amounts from one supplier apart', () => {
-    expect(receiptIdentity({ vendor: 'Uber', amount: 99, currency: 'SEK' })).not.toBe(
-      receiptIdentity({ vendor: 'Uber', amount: 376, currency: 'SEK' }),
+    expect(receiptIdentity({ vendor: 'Loopia AB', amount: 388, currency: 'SEK', date: '2026-06-11' })).toBe(
+      receiptIdentity({ vendor: 'LOOPIA', amount: 388, currency: 'SEK', date: '2026-06-11' }),
     )
   })
 
   it('keeps two suppliers apart', () => {
-    expect(receiptIdentity({ vendor: 'Loopia', amount: 388, currency: 'SEK' })).not.toBe(
-      receiptIdentity({ vendor: 'Hetzner', amount: 388, currency: 'SEK' }),
+    expect(receiptIdentity({ vendor: 'Loopia', amount: 388, currency: 'SEK', date: '2026-06-11' })).not.toBe(
+      receiptIdentity({ vendor: 'Hetzner', amount: 388, currency: 'SEK', date: '2026-06-11' }),
     )
   })
 
   it('never lets a missing vendor make two documents the same', () => {
-    // Without a vendor there is nothing to anchor an amount to: two unrelated
-    // documents that happen to cost the same would otherwise collapse.
-    const a = receiptIdentity({ vendor: null, amount: 500, currency: 'SEK', attachmentName: 'a.pdf' })
-    const b = receiptIdentity({ vendor: '', amount: 500, currency: 'SEK', attachmentName: 'b.pdf' })
-    expect(a).not.toBe(b)
+    // "invoice.pdf" is what half the world's billing systems attach, so the
+    // message has to be part of the identity when there is no vendor.
+    expect(
+      receiptIdentity({ vendor: null, amount: 500, currency: 'SEK', messageId: 'm1', attachmentName: 'invoice.pdf' }),
+    ).not.toBe(
+      receiptIdentity({ vendor: '', amount: 500, currency: 'SEK', messageId: 'm2', attachmentName: 'invoice.pdf' }),
+    )
   })
 })

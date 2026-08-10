@@ -301,24 +301,31 @@ export function worthFetching(
  * A mail carries the invoice and the receipt for the same purchase under
  * different names, and the same receipt reaches a second mailbox on another
  * message, so neither the filename nor the message id identifies anything.
- * The vendor and the total do.
+ * The vendor, the total and the date do.
  *
- * The vendor is normalised through the same folding the matcher uses, so
- * "Norwegian" and "Norwegian Air Shuttle AOC AS" resolve alike rather than
- * looking like two suppliers. Without a vendor there is nothing to anchor an
- * amount to: two unrelated documents that happen to cost the same would
- * collapse into one, so those fall back to the file they came from.
+ * The date is what keeps a subscription working. Anthropic bills the same
+ * amount every month, and without a date every month after the first would be
+ * treated as a duplicate of it and suppressed forever: a worse failure than
+ * the duplicates this key exists to prevent, because it is permanent and
+ * silent. Two documents for one purchase share a date; June and July do not.
+ *
+ * Without a vendor there is nothing to anchor an amount to, so those fall back
+ * to the message and the file. The filename alone is not enough: half the
+ * world's billing systems attach "invoice.pdf".
  */
 export function receiptIdentity(doc: {
   vendor: string | null
   amount: number | null
   currency: string | null
+  date?: string | null
   attachmentName?: string | null
   messageId?: string | null
 }): string {
   const vendor = normalizeForMatch(doc.vendor ?? '').trim()
   if (vendor && doc.amount != null) {
-    return `${vendor}::${doc.amount}::${(doc.currency ?? 'SEK').toLowerCase()}`
+    // Öre, not floating point: 0.1 + 0.2 must not read as a different total.
+    const amount = Math.round(doc.amount * 100) / 100
+    return `v1::${vendor}::${amount}::${(doc.currency ?? 'SEK').toLowerCase()}::${doc.date ?? ''}`
   }
-  return `file::${(doc.attachmentName ?? doc.messageId ?? '').toLowerCase()}`
+  return `v1::file::${(doc.messageId ?? '').toLowerCase()}::${(doc.attachmentName ?? '').toLowerCase()}`
 }
