@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Mail, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -12,6 +12,7 @@ import {
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import { formatDateLong } from '@/lib/utils'
 
 interface MailConnection {
@@ -89,7 +90,19 @@ export function MailConnectionsPanel() {
           </SettingsRow>
         ) : (
           connections.map((connection) => (
-            <SettingsRow key={connection.id} label={connection.provider === 'gmail' ? 'Gmail' : 'Microsoft 365'}>
+            <SettingsRow
+              key={connection.id}
+              label={
+                <span className="flex items-center gap-2">
+                  {connection.provider === 'gmail' ? (
+                    <GoogleMark className="h-3.5 w-3.5" />
+                  ) : (
+                    <MicrosoftMark className="h-3.5 w-3.5" />
+                  )}
+                  {connection.provider === 'gmail' ? 'Gmail' : 'Microsoft 365'}
+                </span>
+              }
+            >
               <span className="truncate">{connection.emailAddress}</span>
               {connection.status === 'needs_reconsent' ? (
                 <Badge variant="warning">{t('needs_reconsent')}</Badge>
@@ -111,7 +124,11 @@ export function MailConnectionsPanel() {
 
       <div className="flex flex-wrap items-center gap-3">
         <Button onClick={connect} disabled={connecting || !configured}>
-          {connecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}
+          {connecting ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : (
+            <GoogleMark className="mr-2 h-4 w-4" />
+          )}
           {t('connect')}
         </Button>
         {!configured ? <SettingsRowNote>{t('not_configured')}</SettingsRowNote> : null}
