@@ -850,6 +850,19 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     denormalize: { prefix: 'supplier_invoice_', columns: ['currency', 'exchange_rate'] },
   },
   { name: 'supplier_invoice_payments', file: 'supplier_invoice_payments.json' },
+  // Payment batches (betalfil): the immutable instruction snapshots a
+  // generated bank payment file derives from; underlag for the payments it
+  // initiated, so they leave with the archive.
+  {
+    name: 'supplier_payment_batches',
+    file: 'supplier_payment_batches.json',
+    orderBy: 'created_at',
+  },
+  {
+    name: 'supplier_payment_batch_items',
+    file: 'supplier_payment_batch_items.json',
+    orderBy: 'created_at',
+  },
   // Underlag intake: the chat answers behind a verifikat.
   //
   // A projection, not the whole table. `channel_context` holds the human
