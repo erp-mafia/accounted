@@ -30,6 +30,22 @@ import {
 export const HUNT_MIN_CONFIDENCE = 0.7
 
 /**
+ * Above this the arithmetic decides alone.
+ *
+ * An exact amount from a merchant the matcher recognises needs no second
+ * opinion, and paying for one on every pair would be latency and cost for a
+ * verdict nobody doubts.
+ */
+export const CERTAIN_CONFIDENCE = 0.8
+
+/**
+ * Below this nothing is worth a second opinion either: the signals disagree,
+ * and asking a model to rescue a pair the evidence does not support is how
+ * plausible-sounding wrong answers get made.
+ */
+export const UNCERTAIN_FLOOR = 0.6
+
+/**
  * How far clear the winner must be before we propose it.
  *
  * Two receipts scoring the same against one purchase is a signal, not a tie to
@@ -75,6 +91,10 @@ export interface HuntProposal {
   receipt_date: string | null
   total_amount: number | null
   currency: string | null
+  /** The total in kronor, when a rate was resolved: both sides then compare. */
+  sek_total?: number | null
+  /** Settled by a second opinion rather than by the formula alone. */
+  wasAdjudicated?: boolean
   /**
    * Where the document came from, carried through from the inbox item so the
    * proposal can say "found in your mailbox" rather than implying a human
@@ -125,6 +145,11 @@ export function selectProposals(
   pool: readonly HuntPoolItem[],
   suppression: SuppressionSets,
   limit: number = MAX_PROPOSALS_PER_RUN,
+  /**
+   * Lowest confidence worth returning. The caller lowers it to collect the
+   * band it intends to adjudicate; every other guard still applies.
+   */
+  minConfidence: number = HUNT_MIN_CONFIDENCE,
 ): HuntProposal[] {
   if (pool.length === 0) return []
 
@@ -154,7 +179,7 @@ export function selectProposals(
     if (scored.length === 0) continue
 
     const [winner, runnerUp] = scored
-    if (winner.confidence < HUNT_MIN_CONFIDENCE) continue
+    if (winner.confidence < minConfidence) continue
     if (runnerUp && winner.confidence - runnerUp.confidence < AMBIGUITY_MARGIN) continue
 
     const documentId = winner.document_id as string
@@ -181,6 +206,7 @@ export function selectProposals(
       receipt_date: winner.receipt_date,
       total_amount: winner.total_amount,
       currency: winner.currency,
+      sek_total: poolById.get(winner.inbox_item_id)?.sek_total ?? null,
     })
   }
 

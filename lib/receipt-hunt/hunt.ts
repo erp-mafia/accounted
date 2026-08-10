@@ -18,10 +18,13 @@ import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { getMailSearchService } from '@/lib/mail-search/service'
 import { ingestMailCandidate } from './ingest'
 import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
+import { adjudicate } from './adjudicate'
 import { attachSekTotals } from './fx'
 import { extractMailDocuments } from './mail-intelligence'
 import {
+  CERTAIN_CONFIDENCE,
   MAX_PROPOSALS_PER_RUN,
+  UNCERTAIN_FLOOR,
   canHaveEmailReceipt,
   receiptIdentity,
   worthFetching,
@@ -430,7 +433,56 @@ export async function huntCompany(
   }
   if (pool.length === 0) return base
 
-  const proposals = selectProposals(transactions, pool, suppression, limit)
+  // Collect the whole band the formula can speak to, then split it: what it is
+  // sure of goes straight through, what it is not gets a second opinion.
+  const scored = selectProposals(transactions, pool, suppression, limit, UNCERTAIN_FLOOR)
+  const certain = scored.filter((p) => p.confidence >= CERTAIN_CONFIDENCE)
+  const uncertain = scored.filter((p) => p.confidence < CERTAIN_CONFIDENCE)
+
+  // Adjudicated on a dry run too. A provkörning is supposed to show exactly
+  // what a real run would propose, and skipping the second opinion would show
+  // a different, smaller answer than the one that lands.
+  const byIdForPairs = new Map(transactions.map((t) => [t.id, t]))
+  const verdicts = await adjudicate(
+        uncertain.map((p) => {
+          const tx = byIdForPairs.get(p.transaction_id) as HuntTransaction
+          return {
+            key: `${p.transaction_id}::${p.document_id}`,
+            purchase: {
+              description: tx.merchant_name || tx.description || '',
+              amount: Math.abs(tx.amount ?? 0),
+              currency: tx.currency ?? 'SEK',
+              date: tx.date ?? '',
+            },
+            receipt: {
+              vendor: p.merchant_name,
+              total: p.total_amount,
+              currency: p.currency,
+              sekTotal: p.sek_total ?? null,
+              date: p.receipt_date,
+              fileName: fileNames.get(p.document_id) ?? null,
+            },
+            confidence: p.confidence,
+            matchReasons: p.matchReasons,
+      }
+    }),
+  )
+
+  const accepted = new Map(verdicts.map((v) => [v.key, v.reason]))
+  const adjudicated = uncertain
+    .filter((p) => accepted.has(`${p.transaction_id}::${p.document_id}`))
+    .map((p) => ({
+      ...p,
+      // The verdict replaces the arithmetic's reasons, because it is what a
+      // human is being asked to check. The score stays as the formula computed
+      // it, unflattered: it is a real record of what the arithmetic made of
+      // the pair, and dressing it up would hide the very uncertainty that sent
+      // the pair for a second opinion.
+      matchReasons: [accepted.get(`${p.transaction_id}::${p.document_id}`) as string],
+      wasAdjudicated: true,
+    }))
+
+  const proposals = [...certain, ...adjudicated]
   if (proposals.length === 0) return base
   if (dryRun) return { ...base, proposed: proposals.length, proposals }
   if (!userId) return { ...base, skippedNoOwner: true }
@@ -469,6 +521,9 @@ export async function huntCompany(
         inbox_item_id: proposal.inbox_item_id,
         confidence: proposal.confidence,
         match_reasons: proposal.matchReasons,
+        // Which instrument decided: the arithmetic alone, or a second opinion
+        // on a pair the arithmetic could not settle.
+        decided_by: proposal.wasAdjudicated ? 'adjudicator' : 'matcher',
       },
     }
   })
