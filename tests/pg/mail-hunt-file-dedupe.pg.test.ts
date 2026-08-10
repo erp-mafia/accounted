@@ -19,7 +19,7 @@ import { seedCompany } from './fixtures'
 async function insertHunted(companyId: string, userId: string, fileKey: string) {
   return getPool().query(
     `INSERT INTO public.invoice_inbox_items (company_id, user_id, source, status, channel_context)
-     VALUES ($1, $2, 'mail_hunt', 'received', jsonb_build_object('mail_file_key', $3))
+     VALUES ($1, $2, 'mail_hunt', 'received', jsonb_build_object('mail_file_key', $3::text))
      RETURNING id`,
     [companyId, userId, fileKey],
   )
