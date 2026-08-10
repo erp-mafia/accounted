@@ -3401,6 +3401,7 @@ export type AuditAction =
   | 'RETENTION_BLOCK'
   | 'SECURITY_EVENT'
   | 'INTEGRITY_FAILURE'
+  | 'COMMITTED_AT_OVERRIDE'
 
 export interface AuditLogEntry {
   id: string

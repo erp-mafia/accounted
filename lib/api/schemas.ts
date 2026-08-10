@@ -2175,6 +2175,7 @@ const auditActions = [
   'INSERT', 'UPDATE', 'DELETE', 'COMMIT', 'REVERSE', 'CORRECT',
   'LOCK_PERIOD', 'CLOSE_PERIOD', 'DOCUMENT_DELETE_BLOCKED',
   'RETENTION_BLOCK', 'SECURITY_EVENT', 'INTEGRITY_FAILURE',
+  'COMMITTED_AT_OVERRIDE',
 ] as const satisfies readonly AuditAction[]
 
 export const AuditTrailQuerySchema = z.object({
