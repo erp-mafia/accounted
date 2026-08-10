@@ -199,6 +199,8 @@ interface MigrationResults {
   stepErrors?: MigrationStepError[]
 }
 import AccountMappingStep from '@/components/import/AccountMappingStep'
+import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
+import type { TheaterModel } from '@/lib/import/theater-model'
 import type { AccountMapping, ImportResult, ParsedSIEFile } from '@/lib/import/types'
 import type { BASAccount } from '@/types'
 
@@ -1967,6 +1969,9 @@ export default function ArcimMigrationWorkspace({
   const [migrationProgress, setMigrationProgress] = useState(0)
   const [migrationResults, setMigrationResults] = useState<MigrationResults | null>(null)
   const [sieImportResults, setSieImportResults] = useState<ImportResult[]>([])
+  // Knowledge-graph theater for the migrating step, built from the already
+  // client-held parsed SIE. Null falls back to the plain progress card.
+  const [theaterModel, setTheaterModel] = useState<TheaterModel | null>(null)
 
   // Wizard progress: only user-interactive steps
   const userSteps = STEPS.filter(s => {
@@ -2376,6 +2381,19 @@ export default function ArcimMigrationWorkspace({
     setMigrationProgress(5)
     setError(null)
 
+    // Build the theater from the parsed SIE the client already holds.
+    // Best-effort: any failure just leaves the plain progress card.
+    if (sieData?.parsed) {
+      try {
+        const { buildTheaterModel } = await import('@/lib/import/theater-model')
+        setTheaterModel(buildTheaterModel(sieData.parsed))
+      } catch {
+        setTheaterModel(null)
+      }
+    } else {
+      setTheaterModel(null)
+    }
+
     try {
       // ── Phase 1: SIE import ──────────────────────────────────
       if (migrationOptions.importSIEData && sieData && sieData.rawContent.length > 0) {
@@ -2524,6 +2542,7 @@ export default function ArcimMigrationWorkspace({
     setMigrationOptions(DEFAULT_OPTIONS)
     setMigrationResults(null)
     setSieImportResults([])
+    setTheaterModel(null)
     setError(null)
     // Refresh status so provider step shows updated import history
     fetchStatus()
@@ -2627,7 +2646,15 @@ export default function ArcimMigrationWorkspace({
       )}
 
       {step === 'migrating' && (
-        <MigratingStep currentStep={migrationStep} progress={migrationProgress} />
+        theaterModel ? (
+          <ArcimMigrationTheater
+            model={theaterModel}
+            currentStep={migrationStep}
+            progress={migrationProgress}
+          />
+        ) : (
+          <MigratingStep currentStep={migrationStep} progress={migrationProgress} />
+        )
       )}
 
       {step === 'result' && (
