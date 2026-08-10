@@ -23,6 +23,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
+  CONVERTED_AMOUNT_TOLERANCE_PERCENT,
   amountVarianceForMatch,
   calculateMatchConfidence,
   calculateMerchantSimilarity,
@@ -84,6 +85,14 @@ interface ScorableItem {
   document_id: string | null
   extracted_data: InvoiceExtractionResult | null
   channel_context: InboxChannelContext | null
+  /**
+   * The receipt's total in kronor, when a caller has resolved a rate for it.
+   *
+   * Left undefined by every surface that has not, which keeps the old
+   * behaviour exactly: a cross-currency pair stays incomparable rather than
+   * being scored on date and merchant alone.
+   */
+  sek_total?: number | null
 }
 
 /** Pull the fields the matcher needs out of an extraction blob. */
@@ -126,10 +135,10 @@ export function scoreUnderlagCandidates(
     const amountVariance = amountVarianceForMatch(
       sig.total,
       sig.currency,
-      // No stored SEK value on the inbox item, so cross-currency pairs are
-      // deliberately not comparable and the matcher drops the amount signal
-      // rather than matching 750 EUR to 750 SEK.
-      null,
+      // A SEK value only when someone resolved a rate for this receipt.
+      // Without one the pair stays incomparable, rather than matching 750 EUR
+      // to 750 SEK.
+      item.sek_total ?? null,
       tx.amount,
       txCurrency,
       txSek,
@@ -150,10 +159,15 @@ export function scoreUnderlagCandidates(
       : Number.POSITIVE_INFINITY
     const similarity = sig.supplier ? calculateMerchantSimilarity(sig.supplier, txMerchant) : 0
 
+    // A converted total is judged against the wider bar, because the rate
+    // spread is a known error rather than a disagreement about the sum.
+    const converted = sig.currency !== txCurrency && item.sek_total != null
     const { confidence, matchReasons } = calculateMatchConfidence(
       dateVariance,
       amountVariance,
       similarity,
+      undefined,
+      converted ? CONVERTED_AMOUNT_TOLERANCE_PERCENT : undefined,
     )
     if (confidence < CANDIDATE_MIN_CONFIDENCE) continue
 

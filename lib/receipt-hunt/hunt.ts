@@ -18,6 +18,7 @@ import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { getMailSearchService } from '@/lib/mail-search/service'
 import { ingestMailCandidate } from './ingest'
 import { normalizeForMatch } from '@/lib/documents/core-receipt-matcher'
+import { attachSekTotals } from './fx'
 import { extractMailDocuments } from './mail-intelligence'
 import {
   MAX_PROPOSALS_PER_RUN,
@@ -412,7 +413,13 @@ export async function huntCompany(
     }
   }
 
-  const { pool, fileNames } = await fetchPool(supabase, companyId)
+  const { pool: rawPool, fileNames } = await fetchPool(supabase, companyId)
+
+  // A receipt in USD or EUR carries a number the bank statement never shows.
+  // Resolving it into kronor is what lets the ordinary matcher weigh the
+  // amount at all; without it those pairs are refused, which on a SaaS-heavy
+  // ledger is most of them.
+  const pool = await attachSekTotals(supabase, rawPool)
 
   const base: HuntCompanyResult = {
     companyId,

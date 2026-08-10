@@ -60,6 +60,8 @@ export interface HuntPoolItem {
   document_id: string | null
   extracted_data: unknown
   channel_context: unknown
+  /** The receipt's total in kronor, resolved from a rate before scoring. */
+  sek_total?: number | null
 }
 
 export interface HuntProposal {

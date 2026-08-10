@@ -6,8 +6,35 @@
  */
 
 // Matching configuration (re-exported for consumers)
-export const DATE_TOLERANCE_DAYS = 3
+/**
+ * How far a receipt's date may sit from the bank's before the date stops
+ * counting as agreement.
+ *
+ * Ten days, not three. A card purchase settles days after it happens, an
+ * international one routinely a week later, and a forwarded receipt carries
+ * the date of the purchase while the statement carries the date of the
+ * posting. At three days the signal scored zero for ordinary, correct pairs
+ * and took a quarter of the weight down with it: a receipt matching to within
+ * 1% from a merchant the matcher recognised still capped at 0.62, under every
+ * threshold that decides anything.
+ *
+ * The date remains real evidence at this width. A receipt from March still
+ * disagrees with a purchase in September.
+ */
+export const DATE_TOLERANCE_DAYS = 10
 export const AMOUNT_TOLERANCE_PERCENT = 0.05
+
+/**
+ * Tolerance for a total that had to be converted into kronor first.
+ *
+ * A same-currency comparison is two readings of one number, so 5% is generous.
+ * A converted one carries a second, known error: Riksbanken publishes a mid
+ * rate and a card issuer charges its own, typically a point or two away, on a
+ * settlement day that need not be the receipt's. Holding both to the same bar
+ * treats a rate spread as if it were a disagreement about the sum. Measured
+ * against real statements, the spread ran 1.2% to 3%.
+ */
+export const CONVERTED_AMOUNT_TOLERANCE_PERCENT = 0.09
 export const MIN_MATCH_CONFIDENCE = 0.4
 
 /**
