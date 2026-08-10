@@ -84,7 +84,20 @@ export const MAX_RECEIPTS_PER_RUN = (() => {
  * cost boundary: one call carrying this many mail bodies, rather than a call
  * per mail.
  */
-export const MAX_MAILS_READ_PER_RUN = 40
+export const MAX_MAILS_READ_PER_RUN = (() => {
+  const parsed = Number(process.env.RECEIPT_HUNT_MAX_MAILS)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 40
+})()
+
+/**
+ * Mails per extraction call.
+ *
+ * The model reads bodies, so a single call carrying 150 of them would be both
+ * enormous and fragile: one malformed reply loses the whole sweep. Chunking
+ * keeps each call small enough to be reliable and lets a backfill read a whole
+ * mailbox, which a first run on an existing company needs.
+ */
+export const MAILS_PER_EXTRACTION_CALL = 25
 
 const OPERATION_TYPE = 'attach_document_to_transaction'
 
@@ -243,6 +256,7 @@ async function fetchSuppression(supabase: SupabaseClient, companyId: string) {
   )
 
   const claimedTransactionIds = new Set<string>()
+  const claimedDocumentIds = new Set<string>()
   const rejectedPairs = new Set<string>()
   for (const row of rows) {
     const txId = row.params?.transaction_id
@@ -252,9 +266,15 @@ async function fetchSuppression(supabase: SupabaseClient, companyId: string) {
       if (docId) rejectedPairs.add(pairKey(txId, docId))
     } else {
       claimedTransactionIds.add(txId)
+      // A receipt already offered to one purchase is spoken for. Within a run
+      // spentDocumentIds handles this, but nothing carried it across runs, so
+      // one H&M receipt was proposed for a -358 purchase on one night and a
+      // -354 purchase on the next. Approving both would put the same underlag
+      // on two verifikat.
+      if (docId) claimedDocumentIds.add(docId)
     }
   }
-  return { claimedTransactionIds, rejectedPairs }
+  return { claimedTransactionIds, claimedDocumentIds, rejectedPairs }
 }
 
 /**
@@ -485,17 +505,22 @@ async function harvestReceiptsFromMail(
   if (byMessage.size === 0) return summary
 
   const mails = [...byMessage.values()].slice(0, MAX_MAILS_READ_PER_RUN)
-  const documents = await extractMailDocuments(
-    mails.map((c) => ({
-      messageId: c.messageId,
-      mailbox: c.mailbox,
-      subject: c.subject,
-      from: c.from,
-      receivedAt: c.receivedAt,
-      bodyText: c.bodyText ?? null,
-      attachmentNames: c.attachmentNames ?? [],
-    })),
-  )
+  const toReview = mails.map((c) => ({
+    messageId: c.messageId,
+    mailbox: c.mailbox,
+    subject: c.subject,
+    from: c.from,
+    receivedAt: c.receivedAt,
+    bodyText: c.bodyText ?? null,
+    attachmentNames: c.attachmentNames ?? [],
+  }))
+
+  // Read in chunks so a sweep over a whole mailbox stays within one model call's
+  // useful size, and so one bad reply costs a chunk rather than the run.
+  const documents: Awaited<ReturnType<typeof extractMailDocuments>> = []
+  for (let i = 0; i < toReview.length; i += MAILS_PER_EXTRACTION_CALL) {
+    documents.push(...(await extractMailDocuments(toReview.slice(i, i + MAILS_PER_EXTRACTION_CALL))))
+  }
   if (documents.length === 0) return summary
 
   // The gate before spending a download: the amount when the body stated it,

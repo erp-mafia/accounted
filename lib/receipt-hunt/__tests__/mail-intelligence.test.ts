@@ -124,6 +124,21 @@ describe('extractMailDocuments', () => {
     expect(out.map((d) => d.amount)).toEqual([162.02, 425])
   })
 
+  it('refuses to guess which file, when the mail carries several', async () => {
+    // Without a filename the caller would fetch attachment number one and hope.
+    // On a batch forward that is a coin flip, so the document is dropped.
+    mockCreate.mockResolvedValue(toolReply({ documents: [doc({ attachment_name: null })] }))
+    await expect(
+      extractMailDocuments([candidate({ attachmentNames: ['a.pdf', 'b.pdf', 'c.pdf'] })]),
+    ).resolves.toEqual([])
+  })
+
+  it('still accepts a body-only receipt, where there is nothing to choose', async () => {
+    mockCreate.mockResolvedValue(toolReply({ documents: [doc({ attachment_name: null })] }))
+    const out = await extractMailDocuments([candidate({ attachmentNames: [] })])
+    expect(out).toHaveLength(1)
+  })
+
   it('accepts an array the model sent as a JSON string', async () => {
     mockCreate.mockResolvedValue(toolReply({ documents: JSON.stringify([doc()]) }))
     await expect(extractMailDocuments([candidate()])).resolves.toHaveLength(1)

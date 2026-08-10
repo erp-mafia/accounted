@@ -220,6 +220,11 @@ export async function extractMailDocuments(
       const available = attachmentsByMessage.get(d.message_id) ?? new Set<string>()
       if (d.attachment_name && !available.has(d.attachment_name)) continue
 
+      // No filename on a mail carrying several files is not an answer, it is a
+      // shrug: the caller would fetch the first attachment and hope. A batch
+      // forward with five receipts is exactly where that goes wrong.
+      if (!d.attachment_name && available.size > 1) continue
+
       out.push({
         messageId: d.message_id,
         attachmentName: d.attachment_name,

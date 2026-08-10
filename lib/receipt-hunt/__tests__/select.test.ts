@@ -47,6 +47,7 @@ function item(overrides: Partial<HuntPoolItem> = {}, extraction: Record<string, 
 
 const noSuppression = {
   claimedTransactionIds: new Set<string>(),
+  claimedDocumentIds: new Set<string>(),
   rejectedPairs: new Set<string>(),
 }
 
@@ -69,6 +70,7 @@ describe('selectProposals', () => {
   it('skips a transaction that already has a live proposal', () => {
     const result = selectProposals([tx()], [item()], {
       claimedTransactionIds: new Set(['tx-1']),
+      claimedDocumentIds: new Set<string>(),
       rejectedPairs: new Set<string>(),
     })
     expect(result).toEqual([])
@@ -77,6 +79,7 @@ describe('selectProposals', () => {
   it('never re-proposes a pair a human rejected', () => {
     const result = selectProposals([tx()], [item()], {
       claimedTransactionIds: new Set<string>(),
+      claimedDocumentIds: new Set<string>(),
       rejectedPairs: new Set([pairKey('tx-1', 'doc-1')]),
     })
     expect(result).toEqual([])
@@ -86,6 +89,7 @@ describe('selectProposals', () => {
     const other = item({ id: 'item-2', document_id: 'doc-2' })
     const result = selectProposals([tx()], [item(), other], {
       claimedTransactionIds: new Set<string>(),
+      claimedDocumentIds: new Set<string>(),
       rejectedPairs: new Set([pairKey('tx-1', 'doc-1')]),
     })
     expect(result).toHaveLength(1)
@@ -317,5 +321,19 @@ describe('worthFetching, on the search that found it', () => {
     const landlord = tx({ description: 'Kontorsplatser j BG', merchant_name: null, amount: -15000, date: '2026-07-04' })
     const stale = { vendor: 'Stockholm Innovation & Growth AB', date: '2025-11-02', amount: null, currency: null }
     expect(worthFetching(stale, [landlord], [landlord])).toBe(false)
+  })
+})
+
+describe('a receipt already offered elsewhere', () => {
+  it('is not offered again to a second purchase', () => {
+    // Caught on a real ledger: one H&M receipt was proposed against a -358
+    // purchase, then against a -354 purchase on the next run. Approving both
+    // would put the same underlag on two verifikat.
+    const result = selectProposals([tx()], [item()], {
+      claimedTransactionIds: new Set<string>(),
+      claimedDocumentIds: new Set(['doc-1']),
+      rejectedPairs: new Set<string>(),
+    })
+    expect(result).toEqual([])
   })
 })

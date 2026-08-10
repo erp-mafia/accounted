@@ -19,6 +19,9 @@ import { readFileSync } from 'node:fs'
 const companyId = process.argv[2]
 const withMail = process.argv.includes('--mail')
 const live = process.argv.includes('--live')
+// --sweep searches every candidate purchase instead of the nightly top slice.
+// For a company with a backlog the first run is a backfill, not a nightly tick.
+const sweep = process.argv.includes('--sweep')
 if (!companyId) throw new Error('usage: npx tsx scripts/receipt-hunt-dryrun.mts <company_id> [--mail] [--live]')
 
 const env = new Map<string, string>()
@@ -43,6 +46,7 @@ const supabase = createClient(url, key, { auth: { persistSession: false } })
 const result = await huntCompany(supabase, companyId, live ? `live-${Date.now()}` : 'dryrun', {
   dryRun: !live,
   searchMail: withMail,
+  ...(sweep ? { mailSearchLimit: 500 } : {}),
 })
 
 if (live) {

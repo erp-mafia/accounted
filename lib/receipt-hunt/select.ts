@@ -90,6 +90,12 @@ export interface SuppressionSets {
    */
   claimedTransactionIds: ReadonlySet<string>
   /**
+   * Receipts already offered to some purchase and not yet rejected. One
+   * underlag belongs to one verifikat, and a proposal is a claim on it until a
+   * human says otherwise.
+   */
+  claimedDocumentIds: ReadonlySet<string>
+  /**
    * Pairs a human already said no to, as `${transaction_id}:${document_id}`.
    * Scoped to the pair rather than the transaction so a rejection retires one
    * wrong guess without retiring the purchase.
@@ -137,6 +143,7 @@ export function selectProposals(
       (candidate) =>
         candidate.document_id != null &&
         !spentDocumentIds.has(candidate.document_id) &&
+        !suppression.claimedDocumentIds.has(candidate.document_id) &&
         !suppression.rejectedPairs.has(pairKey(tx.id, candidate.document_id)),
     )
     if (scored.length === 0) continue
