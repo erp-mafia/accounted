@@ -66,10 +66,11 @@ export function isReverseChargeBasisAccount(account: string): boolean {
  * Fiktiv-moms VAT accounts: self-assessed output VAT for reverse charge
  * (2614/2624/2634) and import (2615/2625/2635), plus the offsetting calculated
  * input legs (2645 EU/non-EU, 2647 domestic RC). The foreign supplier charged
- * no VAT, so an amount booked against these accounts is the tax BASE
- * (beskattningsunderlag): the VAT is amount * rate added on top, never
- * rate/(1+rate) extracted out of the amount. Mirrors the private set in
- * counterparty-templates.ts used to keep these legs out of learned patterns.
+ * no VAT, so the transaction total IS the tax base (beskattningsunderlag), and
+ * the amount booked on these accounts is the self-assessed VAT: total * rate
+ * added on top, never rate/(1+rate) extracted out of the total. Mirrors the
+ * private set in counterparty-templates.ts used to keep these legs out of
+ * learned patterns.
  */
 export const REVERSE_CHARGE_VAT_ACCOUNTS: ReadonlySet<string> = new Set([
   '2614', '2624', '2634', '2615', '2625', '2635', '2645', '2647',
