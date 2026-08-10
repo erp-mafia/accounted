@@ -1935,6 +1935,8 @@
     "default_notes_help": "Föreslås automatiskt vid ny faktura.",
     "reminder_days_heading": "Automatiska påminnelser",
     "reminder_days_help": "Ange hur många dagar efter förfallodatum varje påminnelse skickas. Dagarna måste vara i stigande ordning.",
+    "send_reminders_label": "Skicka automatiska påminnelser",
+    "send_reminders_help": "När detta är avstängt skickas inga automatiska påminnelsemejl till kunder med förfallna fakturor.",
     "reminder_days_level_1": "Första påminnelsen (dagar)",
     "reminder_days_level_2": "Andra påminnelsen (dagar)",
     "reminder_days_level_3": "Slutlig påminnelse (dagar)"
@@ -3502,6 +3504,7 @@
     "payment_status_empty": "Inga registrerade betalningar ännu.",
     "reminders_card_title": "Påminnelser",
     "reminders_description": "Automatiska påminnelser skickas när fakturan varit förfallen i {day1}, {day2} och {day3} dagar",
+    "reminders_disabled": "Automatiska påminnelser är avstängda i inställningarna.",
     "reminders_empty": "Inga påminnelser har skickats ännu.",
     "reminder_level_label": "Nivå {level}",
     "reminder_level_1": "Vänlig påminnelse",

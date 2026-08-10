@@ -1935,6 +1935,8 @@
     "default_notes_help": "Suggested automatically for new invoices.",
     "reminder_days_heading": "Automatic reminders",
     "reminder_days_help": "Choose how many days after the due date each reminder is sent. The days must be in ascending order.",
+    "send_reminders_label": "Send automatic reminders",
+    "send_reminders_help": "When off, no automatic reminder emails are sent to customers with overdue invoices.",
     "reminder_days_level_1": "First reminder (days)",
     "reminder_days_level_2": "Second reminder (days)",
     "reminder_days_level_3": "Final reminder (days)"
@@ -3502,6 +3504,7 @@
     "payment_status_empty": "No payments recorded yet.",
     "reminders_card_title": "Reminders",
     "reminders_description": "Automatic reminders are sent when the invoice is {day1}, {day2} and {day3} days overdue",
+    "reminders_disabled": "Automatic reminders are turned off in settings.",
     "reminders_empty": "No reminders have been sent yet.",
     "reminder_level_label": "Level {level}",
     "reminder_level_1": "Friendly reminder",
