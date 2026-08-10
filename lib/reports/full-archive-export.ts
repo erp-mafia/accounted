@@ -972,8 +972,6 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
  */
 export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   agent_conversations: 'AI assistant state, not räkenskapsinformation',
-  mail_connections:
-    'OAuth mailbox grants for receipt hunting: credentials and health, not räkenskapsinformation. The receipts they find are archived as documents.',
   agent_memory: 'AI assistant state, not räkenskapsinformation',
   agent_profiles: 'AI assistant state, not räkenskapsinformation',
   api_keys: 'secrets',
@@ -999,7 +997,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   graph_transaction_counterparties: 'derived AI context graph, regenerable',
   idempotency_keys: 'infrastructure',
   inbox_rate_counters: 'infrastructure',
-  mail_connections: 'mailbox OAuth grants (live refresh tokens), not portable',
+  mail_connections:
+    'mailbox OAuth grants (live refresh tokens), not portable. The receipts they find are archived as documents.',
   mcp_tasks: 'MCP task handles: transient tool-call state with a 1-hour TTL',
   metered_events: 'billing telemetry',
   notification_log: 'notification dedup log',
