@@ -127,7 +127,7 @@ export const mailExtension: Extension = {
         if (!ctx) return jsonError('Missing context', 500)
         const id = new URL(request.url).searchParams.get('id')
         if (!id) return jsonError('missing_id', 400)
-        await disconnect(createServiceClientNoCookies(), ctx.companyId, id)
+        await disconnect(createServiceClientNoCookies(), ctx.companyId, id, ctx.userId)
         return NextResponse.json({ data: { disconnected: true } })
       },
     },

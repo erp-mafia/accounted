@@ -180,8 +180,42 @@ export async function disconnect(
   supabase: SupabaseClient,
   companyId: string,
   connectionId: string,
+  userId: string,
 ): Promise<void> {
+  // Read the address before the row goes, so the audit entry can name the
+  // mailbox that stopped being searched.
+  const { data: existing } = await supabase
+    .from('mail_connections')
+    .select('email_address, provider')
+    .eq('id', connectionId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
   // Hard delete: the point of disconnecting is that the token is gone. Receipts
   // already approved stay, because they belong to the bookkeeping now.
   await supabase.from('mail_connections').delete().eq('id', connectionId).eq('company_id', companyId)
+  if (!existing) return
+
+  const row = existing as { email_address: string; provider: string }
+
+  // BFNAR 2013:2 kap 8 (behandlingshistorik): which mailboxes feed underlag into
+  // the books is a control over how räkenskapsinformation is produced, so
+  // switching one off has to be reconstructable years later.
+  //
+  // Written by hand rather than by the write_audit_log trigger the accounting
+  // tables use. That trigger copies the whole row into audit_log, which here
+  // would mean copying an encrypted refresh token into a second table and
+  // keeping it after the point of the delete was to destroy it. The sibling
+  // credential tables (shopify_connections) omit the trigger for the same
+  // reason. Only the safe columns are recorded.
+  await supabase.from('audit_log').insert({
+    user_id: userId,
+    company_id: companyId,
+    action: 'DELETE',
+    table_name: 'mail_connections',
+    record_id: connectionId,
+    description: `Brevlåda frånkopplad: ${row.email_address} (${row.provider})`,
+    old_state: { email_address: row.email_address, provider: row.provider },
+    new_state: null,
+  })
 }
