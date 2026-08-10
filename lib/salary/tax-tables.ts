@@ -27,14 +27,26 @@ const KOMMUN_RATES_API = 'https://skatteverket.entryscape.net/rowstore/dataset/c
 
 export type TaxTableSource = 'api' | 'fallback'
 
-export interface TaxTableRate {
+interface TaxTableRateBase {
   tableYear: number
   tableNumber: number
   columnNumber: number
   incomeFrom: number
   incomeTo: number
-  taxAmount: number
 }
+
+/**
+ * One bracket of a Skatteverket monthly tax table.
+ *
+ * Skatteverket's tables have two sections: krona brackets ("30B" rows, incomes
+ * up to 80 000 kr/month) where the withholding is a fixed SEK amount, and
+ * percent brackets ("30%" rows, incomes above) where the withholding is the
+ * given percent of the WHOLE monthly income. The top percent bracket is
+ * open-ended (no upper bound in the source data).
+ */
+export type TaxTableRate =
+  | (TaxTableRateBase & { kind: 'amount'; taxAmount: number })
+  | (TaxTableRateBase & { kind: 'percent'; taxPercent: number })
 
 export interface TaxTableRatesResult {
   rates: TaxTableRate[]
@@ -113,18 +125,36 @@ export function lookupTaxAmount(
 
   for (const rate of matchingRates) {
     if (roundedIncome >= rate.incomeFrom && roundedIncome <= rate.incomeTo) {
-      return rate.taxAmount
+      return taxForRate(rate, roundedIncome)
     }
   }
 
-  // Above all brackets: use last bracket (matches Skatteverket's published behavior
-  // where the top B-row applies until %-rows take over; we only load B-rows)
+  // Last-resort guard. The top percent bracket is open-ended, so with fully
+  // loaded rates this is unreachable; hitting it means the percent rows are
+  // missing and clamping to the last krona bracket UNDER-withholds for high
+  // incomes. Warn loudly so it surfaces in logs.
   const lastRate = matchingRates[matchingRates.length - 1]
   if (roundedIncome > lastRate.incomeTo) {
-    return lastRate.taxAmount
+    log.warn(
+      `Income ${roundedIncome} exceeds all loaded brackets for table ${tableNumber} col ${column} ` +
+        `(top bracket ends at ${lastRate.incomeTo}): percent rows appear to be missing, clamping to last bracket`
+    )
+    return taxForRate(lastRate, roundedIncome)
   }
 
   return 0
+}
+
+/**
+ * Withholding for one matched bracket. Percent brackets apply their percent to
+ * the whole monthly income; öre are dropped since skatteavdrag is stated in
+ * whole kronor (SFF 2011:1261 22 kap. 1 §: öretal bortfaller).
+ */
+function taxForRate(rate: TaxTableRate, roundedIncome: number): number {
+  if (rate.kind === 'percent') {
+    return Math.floor((roundedIncome * rate.taxPercent) / 100)
+  }
+  return rate.taxAmount
 }
 
 /**
@@ -142,16 +172,86 @@ function getFallbackRates(
   if (!rows) return null
   if (column < 1 || column > 6) return null
 
-  // Columns 1-6 map to tuple indices 2-7 ([incomeFrom, incomeTo, col1..col6])
+  // Columns 1-6 map to tuple indices 2-7 ([incomeFrom, incomeTo, col1..col6, isPercent])
   const colIndex = column + 1
-  return rows.map(row => ({
-    tableYear: year,
-    tableNumber,
-    columnNumber: column,
-    incomeFrom: row[0],
-    incomeTo: row[1] || 9999999,
-    taxAmount: row[colIndex] as number,
-  }))
+  return rows.map(row => {
+    const base = {
+      tableYear: year,
+      tableNumber,
+      columnNumber: column,
+      incomeFrom: row[0],
+      incomeTo: row[1] || 9999999,
+    }
+    return row[8] === 1
+      ? { ...base, kind: 'percent' as const, taxPercent: row[colIndex] as number }
+      : { ...base, kind: 'amount' as const, taxAmount: row[colIndex] as number }
+  })
+}
+
+interface ApiTaxRow {
+  'år': string
+  'tabellnr': string
+  'inkomst fr.o.m.': string
+  'inkomst t.o.m.': string
+  'kolumn 1': string
+  'kolumn 2': string
+  'kolumn 3': string
+  'kolumn 4': string
+  'kolumn 5': string
+  'kolumn 6': string
+}
+
+/**
+ * Fetch all rows of one table section ("30B" = monthly krona amounts,
+ * "30%" = monthly percent rows) from Skatteverket's rowstore API, following
+ * pagination. The API field names have Swedish characters: "år",
+ * "inkomst fr.o.m.", "inkomst t.o.m.".
+ */
+async function fetchApiRows(
+  year: number,
+  tableNumber: number,
+  antalDgr: '30B' | '30%'
+): Promise<ApiTaxRow[]> {
+  const buildParams = (offset?: number) => {
+    const params = new URLSearchParams({
+      'år': year.toString(),
+      'tabellnr': tableNumber.toString(),
+      'antal dgr': antalDgr,
+      '_limit': '500',
+    })
+    if (offset !== undefined) params.set('_offset', offset.toString())
+    return params
+  }
+
+  const response = await fetch(`${TAX_TABLE_API}?${buildParams().toString()}`, {
+    headers: { 'Accept': 'application/json' },
+    signal: AbortSignal.timeout(10000),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Skatteverket API returned ${response.status}`)
+  }
+
+  const data = await response.json() as { results: ApiTaxRow[]; resultCount: number }
+
+  // If more than 500 results, fetch remaining pages
+  let allResults = data.results
+  if (data.resultCount > 500) {
+    let offset = 500
+    while (offset < data.resultCount) {
+      const pageRes = await fetch(`${TAX_TABLE_API}?${buildParams(offset).toString()}`, {
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(10000),
+      })
+      if (pageRes.ok) {
+        const pageData = await pageRes.json() as { results: ApiTaxRow[] }
+        allResults = allResults.concat(pageData.results)
+      }
+      offset += 500
+    }
+  }
+
+  return allResults
 }
 
 /**
@@ -176,83 +276,48 @@ export async function fetchTaxTableRates(
   }
 
   try {
-    // Fetch all B-rows (absolute amounts) for this table/year
-    // The API field names have Swedish characters: "år", "inkomst fr.o.m.", "inkomst t.o.m."
-    const params = new URLSearchParams({
-      'år': year.toString(),
-      'tabellnr': tableNumber.toString(),
-      'antal dgr': '30B', // Monthly table, absolute amounts
-      '_limit': '500',
-    })
-
-    const url = `${TAX_TABLE_API}?${params.toString()}`
     log.info(`Fetching tax table ${tableNumber} col ${column} for ${year} from Skatteverket API`)
 
-    const response = await fetch(url, {
-      headers: { 'Accept': 'application/json' },
-      signal: AbortSignal.timeout(10000),
-    })
+    // Fetch both sections of the table: "30B" rows (fixed SEK amounts, incomes
+    // up to 80 000 kr) and "30%" rows (percent of the whole income, above).
+    // Loading only the B-rows would silently clamp high incomes to the last
+    // krona bracket and under-withhold.
+    const [amountRows, percentRows] = await Promise.all([
+      fetchApiRows(year, tableNumber, '30B'),
+      fetchApiRows(year, tableNumber, '30%'),
+    ])
 
-    if (!response.ok) {
-      throw new Error(`Skatteverket API returned ${response.status}`)
-    }
-
-    const data = await response.json() as {
-      results: Array<{
-        'år': string
-        'tabellnr': string
-        'inkomst fr.o.m.': string
-        'inkomst t.o.m.': string
-        'kolumn 1': string
-        'kolumn 2': string
-        'kolumn 3': string
-        'kolumn 4': string
-        'kolumn 5': string
-        'kolumn 6': string
-      }>
-      resultCount: number
-    }
-
-    // If more than 500 results, fetch remaining pages
-    let allResults = data.results
-    if (data.resultCount > 500) {
-      let offset = 500
-      while (offset < data.resultCount) {
-        const pageParams = new URLSearchParams({
-          'år': year.toString(),
-          'tabellnr': tableNumber.toString(),
-          'antal dgr': '30B',
-          '_limit': '500',
-          '_offset': offset.toString(),
-        })
-        const pageRes = await fetch(`${TAX_TABLE_API}?${pageParams.toString()}`, {
-          headers: { 'Accept': 'application/json' },
-          signal: AbortSignal.timeout(10000),
-        })
-        if (pageRes.ok) {
-          const pageData = await pageRes.json() as { results: typeof data.results }
-          allResults = allResults.concat(pageData.results)
-        }
-        offset += 500
-      }
-    }
-
-    if (allResults.length === 0) {
-      // API responded but has no rows for this year/table: treat like failure
-      // so the fallback path runs below.
-      throw new Error(`Skatteverket API returned no rows for table ${tableNumber} year ${year}`)
+    if (amountRows.length === 0 || percentRows.length === 0) {
+      // API responded but is missing a section for this year/table: treat like
+      // failure so the fallback path runs below.
+      throw new Error(
+        `Skatteverket API returned no ${amountRows.length === 0 ? 'amount' : 'percent'} rows ` +
+          `for table ${tableNumber} year ${year}`
+      )
     }
 
     // Parse results: each row has all 6 columns, we extract the requested one
-    const columnKey = `kolumn ${column}` as keyof typeof allResults[0]
-    const rates: TaxTableRate[] = allResults.map(r => ({
+    const columnKey = `kolumn ${column}` as keyof ApiTaxRow
+    const parseRow = (r: ApiTaxRow) => ({
       tableYear: year,
       tableNumber: tableNumber,
       columnNumber: column,
       incomeFrom: parseInt(r['inkomst fr.o.m.']) || 0,
+      // The top percent row has an empty upper bound (open-ended).
       incomeTo: parseInt(r['inkomst t.o.m.']) || 9999999,
-      taxAmount: parseInt(r[columnKey] as string) || 0,
-    }))
+    })
+    const rates: TaxTableRate[] = [
+      ...amountRows.map(r => ({
+        ...parseRow(r),
+        kind: 'amount' as const,
+        taxAmount: parseInt(r[columnKey] as string) || 0,
+      })),
+      ...percentRows.map(r => ({
+        ...parseRow(r),
+        kind: 'percent' as const,
+        taxPercent: parseInt(r[columnKey] as string) || 0,
+      })),
+    ]
 
     rateCache.set(cacheKey, { rates, source: 'api', fetchedAt: Date.now() })
     log.info(`Fetched ${rates.length} tax brackets for table ${tableNumber} col ${column} (${year})`)

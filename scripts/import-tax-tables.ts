@@ -7,19 +7,20 @@
  * Output: lib/salary/tax-tables-fallback.ts
  *
  * Record format (49 chars per line):
- *   chars 0-4   (width 5): prefix : "30B29" = monthly/belopp, table 29
+ *   chars 0-4   (width 5): prefix : "30B29" = monthly/belopp, table 29;
+ *                          "30%29" = monthly/percent, table 29
  *   chars 5-11  (width 7): income_from
- *   chars 12-18 (width 7): income_to
- *   chars 19-23 (width 5): column 1 tax amount (SEK)
+ *   chars 12-18 (width 7): income_to (blank on the open-ended top %-row)
+ *   chars 19-23 (width 5): column 1 (SEK on B-rows, percent on %-rows)
  *   chars 24-28 (width 5): column 2
  *   chars 29-33 (width 5): column 3
  *   chars 34-38 (width 5): column 4
  *   chars 39-43 (width 5): column 5
  *   chars 44-48 (width 5): column 6
  *
- * We import only B-rows (absolute amounts). %-rows (percentage-based, used for
- * incomes above the highest B-row bracket) are skipped: matches the behavior
- * of the Skatteverket API path which also fetches only B-rows.
+ * Both B-rows (absolute amounts, incomes up to 80 000 kr/month) and %-rows
+ * (percent of the whole income, above 80 000 kr/month) are imported. The
+ * emitted tuple carries an isPercent flag as its last element.
  *
  * Usage:
  *   npx tsx scripts/import-tax-tables.ts --year 2026
@@ -28,7 +29,7 @@
 import { readFileSync, writeFileSync } from 'fs'
 import { resolve } from 'path'
 
-type TaxRow = readonly [number, number, number, number, number, number, number, number]
+type TaxRow = readonly [number, number, number, number, number, number, number, number, number]
 
 interface ParsedTable {
   tableNumber: number
@@ -54,8 +55,10 @@ function parseLine(line: string): { table: number; row: TaxRow } | null {
   if (clean.length < 49) return null
 
   const prefix = clean.slice(0, 5)
-  // B-rows only (absolute amounts). Skip %-rows.
-  if (prefix[2] !== 'B') return null
+  // B-rows carry absolute SEK amounts, %-rows carry percentages for incomes
+  // above the highest B-row bracket. Both are needed for correct withholding.
+  if (prefix[2] !== 'B' && prefix[2] !== '%') return null
+  const isPercent = prefix[2] === '%'
 
   const tableStr = prefix.slice(3, 5)
   const table = parseInt(tableStr, 10)
@@ -79,7 +82,7 @@ function parseLine(line: string): { table: number; row: TaxRow } | null {
 
   return {
     table,
-    row: [incomeFrom, incomeTo, c1, c2, c3, c4, c5, c6] as const,
+    row: [incomeFrom, incomeTo, c1, c2, c3, c4, c5, c6, isPercent ? 1 : 0] as const,
   }
 }
 
@@ -137,9 +140,15 @@ function emitModule(year: number, tables: ParsedTable[]): string {
  * Rows: ${totalRows} across tables ${tableNumbers}
  */
 
-/** [incomeFrom, incomeTo, col1, col2, col3, col4, col5, col6] */
+/**
+ * [incomeFrom, incomeTo, col1, col2, col3, col4, col5, col6, isPercent]
+ *
+ * isPercent 0: columns are SEK amounts (incomes up to 80 000 kr/month).
+ * isPercent 1: columns are percent of the whole monthly income (above
+ * 80 000 kr/month). incomeTo 0 marks the open-ended top row.
+ */
 export type FallbackTaxRow = readonly [
-  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number, number,
 ]
 
 /** Tables keyed by municipal tax rate number (29-42). */
@@ -166,11 +175,21 @@ function main() {
   const tables = parseFile(inputPath)
 
   if (tables.length === 0) {
-    throw new Error('No B-rows parsed: check input file format')
+    throw new Error('No rows parsed: check input file format')
+  }
+
+  // Every table must have both sections: a B-only table would clamp high
+  // incomes to the last krona bracket and silently under-withhold.
+  for (const t of tables) {
+    const percentRows = t.rows.filter(r => r[8] === 1).length
+    if (percentRows === 0 || percentRows === t.rows.length) {
+      throw new Error(`Table ${t.tableNumber}: expected both B-rows and %-rows, got ${percentRows}/${t.rows.length} percent rows`)
+    }
   }
 
   const totalRows = tables.reduce((sum, t) => sum + t.rows.length, 0)
-  console.log(`Parsed ${tables.length} tables (${tables.map(t => t.tableNumber).join(', ')}), ${totalRows} B-rows total`)
+  const percentTotal = tables.reduce((sum, t) => sum + t.rows.filter(r => r[8] === 1).length, 0)
+  console.log(`Parsed ${tables.length} tables (${tables.map(t => t.tableNumber).join(', ')}), ${totalRows} rows total (${percentTotal} percent rows)`)
 
   const moduleSource = emitModule(year, tables)
   writeFileSync(outputPath, moduleSource, 'utf-8')
