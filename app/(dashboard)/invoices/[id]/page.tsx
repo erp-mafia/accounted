@@ -169,7 +169,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [showBookConfirm, setShowBookConfirm] = useState(false)
   const [bookVoucherPreview, setBookVoucherPreview] = useState<string | null>(null)
   const [reminderDays, setReminderDays] = useState<[number, number, number]>([15, 30, 45])
-  const [autoRemindersEnabled, setAutoRemindersEnabled] = useState(true)
+  // null = settings row not loaded; don't promise a reminder schedule then.
+  const [autoRemindersEnabled, setAutoRemindersEnabled] = useState<boolean | null>(null)
 
   const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
   const reminderLevelLabel = (level: 1 | 2 | 3): string => t(`reminder_level_${level}`)
@@ -312,7 +313,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         settings?.reminder_days_level_2 ?? 30,
         settings?.reminder_days_level_3 ?? 45,
       ])
-      setAutoRemindersEnabled(settings?.send_invoice_reminders ?? true)
+      if (settings) {
+        setAutoRemindersEnabled(settings.send_invoice_reminders ?? true)
+      }
     }
 
     // Related documents need the invoice row but do not gate the main detail
@@ -1482,7 +1485,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   <Bell className="h-5 w-5" />
                   {t('reminders_card_title')}
                 </CardTitle>
-                {reminders.length === 0 && (
+                {reminders.length === 0 && autoRemindersEnabled !== null && (
                   <CardDescription>
                     {autoRemindersEnabled
                       ? t('reminders_description', {
