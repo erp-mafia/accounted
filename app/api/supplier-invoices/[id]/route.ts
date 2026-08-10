@@ -252,6 +252,28 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
   }
 
+  // A payment-batch item documents a payment instruction possibly already
+  // handed to the bank; supplier_payment_batch_items.supplier_invoice_id is
+  // ON DELETE RESTRICT, so like (c) the invoice DELETE would fail AFTER the
+  // items were deleted. Same fail-closed rule as the lookups above.
+  const { data: linkedBatchItem, error: batchLookupError } = await supabase
+    .from('supplier_payment_batch_items')
+    .select('id, batch_id')
+    .eq('company_id', companyId)
+    .eq('supplier_invoice_id', id)
+    .limit(1)
+    .maybeSingle()
+
+  if (batchLookupError) {
+    return NextResponse.json({ error: getUserErrorMessage(batchLookupError) }, { status: 500 })
+  }
+
+  if (linkedBatchItem) {
+    return errorResponseFromCode('SI_DELETE_IN_PAYMENT_BATCH', log, {
+      details: { batchId: linkedBatchItem.batch_id },
+    })
+  }
+
   // Delete items first, then invoice
   await supabase.from('supplier_invoice_items').delete().eq('supplier_invoice_id', id)
 
