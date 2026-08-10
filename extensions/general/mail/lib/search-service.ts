@@ -17,6 +17,7 @@ import type {
 } from '@/lib/mail-search/service'
 import { buildGmailQuery, looksLikeReceipt } from './gmail-query'
 import {
+  clearMessageCache,
   describeAttachment,
   fetchAttachmentBytes,
   getMessageSummary,
@@ -45,6 +46,15 @@ function canonicalOrigin(): string {
 export class GmailSearchService implements MailSearchService {
   isConfigured(): boolean {
     return isGoogleMailConfigured()
+  }
+
+  /**
+   * Messages are cached so one mail is not downloaded once per purchase, and a
+   * cached message carries its body. The hunt calls this when it is done, so a
+   * body never outlives the run that read it.
+   */
+  releaseCache(): void {
+    clearMessageCache()
   }
 
   async search(companyId: string, query: MailSearchQuery): Promise<MailCandidate[]> {

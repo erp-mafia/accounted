@@ -104,6 +104,15 @@ export async function ingestMailCandidate(
   companyId: string,
   userId: string,
   candidate: MailCandidate,
+  /**
+   * What this document is paperwork for, as the reading model saw it.
+   *
+   * Stored so a later run compares like with like. Deriving it again from the
+   * extraction would compare the model's "Norwegian" against the PDF's
+   * "Norwegian Air Shuttle AOC AS" and conclude they are two suppliers, which
+   * is how an already-held receipt got fetched a second time.
+   */
+  receiptIdentity?: string,
 ): Promise<IngestedReceipt | null> {
   if (candidate.attachmentIds.length === 0) return null
 
@@ -184,7 +193,10 @@ export async function ingestMailCandidate(
           email_subject: candidate.subject,
           email_received_at: candidate.receivedAt,
           extracted_data: extracted ?? null,
-          channel_context: buildChannelContext(candidate, attachmentId),
+          channel_context: {
+            ...buildChannelContext(candidate, attachmentId),
+            ...(receiptIdentity ? { receipt_identity: receiptIdentity } : {}),
+          },
         })
         .select('id')
         .single()

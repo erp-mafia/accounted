@@ -96,6 +96,14 @@ export interface MailSearchService {
   ): Promise<FetchedAttachment | null>
   /** True when at least one provider has credentials configured. */
   isConfigured(): boolean
+  /**
+   * Drop anything the adapter held for the duration of a hunt.
+   *
+   * Adapters cache messages so one mail is not downloaded once per purchase,
+   * and a cached message carries its body. Body text is read to extract fields
+   * and must not outlive the run that read it, so the caller says when that is.
+   */
+  releaseCache?(): void
 }
 
 class NoopMailSearchService implements MailSearchService {
@@ -108,6 +116,7 @@ class NoopMailSearchService implements MailSearchService {
   isConfigured(): boolean {
     return false
   }
+  releaseCache(): void {}
 }
 
 let mailSearchService: MailSearchService = new NoopMailSearchService()

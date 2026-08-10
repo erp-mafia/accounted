@@ -22,6 +22,7 @@ import { extractMailDocuments } from './mail-intelligence'
 import {
   MAX_PROPOSALS_PER_RUN,
   canHaveEmailReceipt,
+  receiptIdentity,
   worthFetching,
   pairKey,
   selectProposals,
@@ -390,8 +391,10 @@ export async function huntCompany(
   // in a Gmail preview. So the receipt is filed, the extraction that already
   // runs on upload reads its amount, and the pairing below is the same
   // deterministic amount-and-merchant match used for every other underlag.
-  const mail = searchMail
-    ? await harvestReceiptsFromMail(
+  let mail: MailHuntSummary | undefined
+  if (searchMail) {
+    try {
+      mail = await harvestReceiptsFromMail(
         supabase,
         companyId,
         userId,
@@ -401,7 +404,13 @@ export async function huntCompany(
         maxReceipts,
         maxMails,
       )
-    : undefined
+    } finally {
+      // Cached messages carry their bodies. A body is read to extract fields
+      // and must not outlive the run that read it, including when the run
+      // fails partway.
+      getMailSearchService().releaseCache?.()
+    }
+  }
 
   const { pool, fileNames } = await fetchPool(supabase, companyId)
 
@@ -484,10 +493,10 @@ async function fetchAlreadyHeld(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<Set<string>> {
-  const rows = await fetchAllRows<{ extracted_data: unknown }>((range) =>
+  const rows = await fetchAllRows<{ extracted_data: unknown; channel_context: unknown }>((range) =>
     supabase
       .from('invoice_inbox_items')
-      .select('extracted_data')
+      .select('extracted_data, channel_context')
       .eq('company_id', companyId)
       .eq('source', 'mail_hunt')
       .order('id', { ascending: true })
@@ -499,13 +508,22 @@ async function fetchAlreadyHeld(
     const data = row.extracted_data as
       | { supplier?: { name?: string }; invoice?: { currency?: string }; totals?: { total?: number } }
       | null
-    const total = data?.totals?.total
-    if (total == null) continue
-    held.add(
-      `${(data?.supplier?.name ?? '').toLowerCase()}::${total}::${(
-        data?.invoice?.currency ?? 'SEK'
-      ).toLowerCase()}`,
-    )
+    // Prefer the identity written when the receipt was filed: it came from the
+    // same reading that the incoming candidate's does, so the two compare
+    // exactly. Rows filed before that was stored fall back to the extraction,
+    // which is weaker but better than nothing.
+    const stored = row.channel_context as { receipt_identity?: string } | null
+    if (stored?.receipt_identity) {
+      held.add(stored.receipt_identity)
+      continue
+    }
+    const key = receiptIdentity({
+      vendor: data?.supplier?.name ?? null,
+      amount: data?.totals?.total ?? null,
+      currency: data?.invoice?.currency ?? null,
+    })
+    if (key.startsWith('file::')) continue
+    held.add(key)
   }
   return held
 }
@@ -565,6 +583,8 @@ async function harvestReceiptsFromMail(
   if (byMessage.size === 0) return summary
 
   const mails = [...byMessage.values()].slice(0, maxMails)
+  // Everything read from here on is released in the finally below: mail bodies
+  // are read to extract fields and must not outlive this run.
   const toReview = mails.map((c) => ({
     messageId: c.messageId,
     mailbox: c.mailbox,
@@ -598,24 +618,9 @@ async function harvestReceiptsFromMail(
     const candidate = byMessage.get(doc.messageId)
     if (!candidate) continue
 
-    // One underlag per purchase, and a purchase is identified by its vendor and
-    // its total.
-    //
-    // Keying on the filename is not enough. A single mail routinely carries the
-    // invoice AND the receipt for the same purchase under different names
-    // ("Invoice-E19DBF63-0021.pdf" beside "Receipt-2066-0204-8388.pdf"), and the
-    // same receipt also arrives in a second mailbox on a different message.
-    // Fetching each of them puts identical candidates in the pool, and the
-    // matcher then refuses to propose any of them rather than flip a coin: on a
-    // real ledger that turned three matching amounts into zero proposals.
-    //
-    // The cost is a vendor who charges the same amount twice on one day, where
-    // the second receipt waits for a later run. That is the right way round:
-    // a missing proposal is a delay, duplicates block every proposal.
-    const fileKey =
-      doc.amount != null
-        ? `${(doc.vendor ?? '').toLowerCase()}::${doc.amount}::${(doc.currency ?? 'SEK').toLowerCase()}`
-        : `${(doc.vendor ?? '').toLowerCase()}::${(doc.attachmentName ?? doc.messageId).toLowerCase()}`
+    // One underlag per purchase: see receiptIdentity for why neither the
+    // filename nor the message identifies anything here.
+    const fileKey = receiptIdentity(doc)
     if (claimedFiles.has(fileKey)) continue
     claimedFiles.add(fileKey)
     summary.withCandidates++
@@ -639,11 +644,17 @@ async function harvestReceiptsFromMail(
     const names = candidate.attachmentNames ?? []
     const at = doc.attachmentName ? names.indexOf(doc.attachmentName) : 0
     const index = at >= 0 ? at : 0
-    const ingested = await ingestMailCandidate(supabase, companyId, userId, {
-      ...candidate,
-      attachmentIds: [candidate.attachmentIds[index] ?? candidate.attachmentIds[0]],
-      attachmentNames: [names[index] ?? names[0] ?? ''],
-    })
+    const ingested = await ingestMailCandidate(
+      supabase,
+      companyId,
+      userId,
+      {
+        ...candidate,
+        attachmentIds: [candidate.attachmentIds[index] ?? candidate.attachmentIds[0]],
+        attachmentNames: [names[index] ?? names[0] ?? ''],
+      },
+      fileKey,
+    )
     if (ingested) summary.ingested++
   }
   return summary

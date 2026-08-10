@@ -9,6 +9,7 @@ import {
   HUNT_MIN_CONFIDENCE,
   canHaveEmailReceipt,
   pairKey,
+  receiptIdentity,
   worthFetching,
   selectProposals,
   type HuntPoolItem,
@@ -339,55 +340,43 @@ describe('a receipt already offered elsewhere', () => {
 })
 
 /**
- * The per-run fetch key. One underlag per purchase, and a purchase is its
- * vendor and its total: a mail carries the invoice and the receipt for the
- * same thing under different names, and the same receipt reaches a second
- * mailbox on a different message. Fetching each puts identical candidates in
- * the pool, and the matcher then refuses to propose any of them.
+ * What identifies one purchase's paperwork. A mail carries the invoice and the
+ * receipt for the same purchase under different names, and the same receipt
+ * reaches a second mailbox on another message, so fetching per file filled the
+ * pool with identical candidates the matcher then refused to choose between.
  */
-describe('per-run duplicate key', () => {
-  const key = (
-    vendor: string | null,
-    file: string | null,
-    messageId: string,
-    amount: number | null = null,
-    currency = 'SEK',
-  ) =>
-    amount != null
-      ? `${(vendor ?? '').toLowerCase()}::${amount}::${currency.toLowerCase()}`
-      : `${(vendor ?? '').toLowerCase()}::${(file ?? messageId).toLowerCase()}`
-
-  it('collapses the same invoice arriving four times', () => {
-    // Original, reminder and two forwards, all carrying the identical file.
-    const keys = new Set([
-      key('Visma', 'Invoice_13041840.pdf', 'm1'),
-      key('Visma', 'Invoice_13041840.pdf', 'm2'),
-      key('Visma', 'invoice_13041840.pdf', 'm3'),
-      key('Visma', 'Invoice_13041840.pdf', 'm4'),
-    ])
-    expect(keys.size).toBe(1)
-  })
-
-  it('keeps two suppliers who both call it invoice.pdf', () => {
-    expect(key('Loopia', 'invoice.pdf', 'm1')).not.toBe(key('Hetzner', 'invoice.pdf', 'm2'))
-  })
-
+describe('receiptIdentity', () => {
   it('collapses the invoice and the receipt for one purchase', () => {
-    // A single Anthropic mail carries Invoice-E19DBF63-0021.pdf beside
-    // Receipt-2066-0204-8388.pdf. Both describe the same 180 EUR purchase, and
-    // fetching both is what made the matcher refuse to propose either.
-    expect(key('Anthropic', 'Invoice-E19DBF63-0021.pdf', 'm1', 180, 'EUR')).toBe(
-      key('Anthropic', 'Receipt-2066-0204-8388.pdf', 'm1', 180, 'EUR'),
+    expect(
+      receiptIdentity({ vendor: 'Anthropic', amount: 180, currency: 'EUR', attachmentName: 'Invoice-E19DBF63-0021.pdf' }),
+    ).toBe(
+      receiptIdentity({ vendor: 'Anthropic', amount: 180, currency: 'EUR', attachmentName: 'Receipt-2066-0204-8388.pdf' }),
     )
   })
 
-  it('collapses the same receipt arriving in a second mailbox', () => {
-    expect(key('Norwegian', 'Resekvitto.pdf', 'm1', 1998)).toBe(
-      key('Norwegian', 'Resekvitto YJUQB5.pdf', 'm2', 1998),
+  it('ignores wrapping the matcher already folds away', () => {
+    expect(receiptIdentity({ vendor: 'Loopia AB', amount: 388, currency: 'SEK' })).toBe(
+      receiptIdentity({ vendor: 'LOOPIA', amount: 388, currency: 'SEK' }),
     )
   })
 
-  it('keeps two different amounts from the same supplier apart', () => {
-    expect(key('Uber', 'a.pdf', 'm1', 99)).not.toBe(key('Uber', 'b.pdf', 'm2', 376))
+  it('keeps two amounts from one supplier apart', () => {
+    expect(receiptIdentity({ vendor: 'Uber', amount: 99, currency: 'SEK' })).not.toBe(
+      receiptIdentity({ vendor: 'Uber', amount: 376, currency: 'SEK' }),
+    )
+  })
+
+  it('keeps two suppliers apart', () => {
+    expect(receiptIdentity({ vendor: 'Loopia', amount: 388, currency: 'SEK' })).not.toBe(
+      receiptIdentity({ vendor: 'Hetzner', amount: 388, currency: 'SEK' }),
+    )
+  })
+
+  it('never lets a missing vendor make two documents the same', () => {
+    // Without a vendor there is nothing to anchor an amount to: two unrelated
+    // documents that happen to cost the same would otherwise collapse.
+    const a = receiptIdentity({ vendor: null, amount: 500, currency: 'SEK', attachmentName: 'a.pdf' })
+    const b = receiptIdentity({ vendor: '', amount: 500, currency: 'SEK', attachmentName: 'b.pdf' })
+    expect(a).not.toBe(b)
   })
 })

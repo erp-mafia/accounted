@@ -13,7 +13,10 @@
  * without a database; the caller owns the reads and the staging write.
  */
 import { scoreUnderlagCandidates, type CandidateTransaction } from '@/lib/agent-context/underlag-candidates'
-import { calculateMerchantSimilarity } from '@/lib/documents/core-receipt-matcher'
+import {
+  calculateMerchantSimilarity,
+  normalizeForMatch,
+} from '@/lib/documents/core-receipt-matcher'
 
 /**
  * Confidence a candidate must reach to be proposed unattended.
@@ -290,4 +293,32 @@ export function worthFetching(
     if (daysBetween(doc.date, tx.date) <= FETCH_DATE_WINDOW_DAYS) return true
   }
   return false
+}
+
+/**
+ * What identifies one purchase's paperwork, for deciding whether to fetch it.
+ *
+ * A mail carries the invoice and the receipt for the same purchase under
+ * different names, and the same receipt reaches a second mailbox on another
+ * message, so neither the filename nor the message id identifies anything.
+ * The vendor and the total do.
+ *
+ * The vendor is normalised through the same folding the matcher uses, so
+ * "Norwegian" and "Norwegian Air Shuttle AOC AS" resolve alike rather than
+ * looking like two suppliers. Without a vendor there is nothing to anchor an
+ * amount to: two unrelated documents that happen to cost the same would
+ * collapse into one, so those fall back to the file they came from.
+ */
+export function receiptIdentity(doc: {
+  vendor: string | null
+  amount: number | null
+  currency: string | null
+  attachmentName?: string | null
+  messageId?: string | null
+}): string {
+  const vendor = normalizeForMatch(doc.vendor ?? '').trim()
+  if (vendor && doc.amount != null) {
+    return `${vendor}::${doc.amount}::${(doc.currency ?? 'SEK').toLowerCase()}`
+  }
+  return `file::${(doc.attachmentName ?? doc.messageId ?? '').toLowerCase()}`
 }
