@@ -113,7 +113,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "icon": "MessageCircle",
           "dataPattern": "both",
           "description": "Läser kvitton och fakturor med AI och fyller i leverantör, belopp, moms och datum automatiskt",
-          "longDescription": "Lyssnar på document.uploaded-händelser och kör Sonnet 4.6 via AWS Bedrock på varje uppladdat kvitto eller faktura (PDF eller bild). De extraherade fälten skrivs till document_attachments.extracted_data så att den specialiserade bokföringsassistenten kan föreslå rätt BAS-konto utan att fråga användaren om sådant som redan står på underlaget. Hoppar över dokument som redan extraherats av andra extensions (t.ex. invoice-inbox) för att undvika dubbla AI-anrop.",
+          "longDescription": "Lyssnar på document.uploaded-händelser och kör Claude på varje uppladdat kvitto eller faktura (PDF eller bild), via AWS Bedrock eller Anthropics API beroende på vilka nycklar som är satta. De extraherade fälten skrivs till document_attachments.extracted_data så att den specialiserade bokföringsassistenten kan föreslå rätt BAS-konto utan att fråga användaren om sådant som redan står på underlaget. Hoppar över dokument som redan extraherats av andra extensions (t.ex. invoice-inbox) för att undvika dubbla AI-anrop.",
           "readsCoreTables": [
                 "document_attachments",
                 "invoice_inbox_items"
