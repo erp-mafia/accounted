@@ -65,8 +65,14 @@ export async function attachSekTotals(
   const rates = new Map<string, number | null>()
 
   const rateFor = async (currency: string, date: string | null): Promise<number | null> => {
+    // No date, no conversion. Reaching for today's rate would put a receipt
+    // whose age nobody knows into amount matching on the strength of a guess,
+    // and a rate two years out is how an incomparable receipt becomes a
+    // confident wrong pairing.
+    if (!date) return null
+
     // Riksbanken publishes per day, so the day is the whole cache key.
-    const day = date ?? new Date().toISOString().slice(0, 10)
+    const day = date
     const key = `${currency}::${day}`
     if (rates.has(key)) return rates.get(key) ?? null
 

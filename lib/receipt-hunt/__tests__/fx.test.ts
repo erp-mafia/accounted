@@ -97,6 +97,14 @@ describe('attachSekTotals', () => {
     expect(mockFetchRate).not.toHaveBeenCalled()
   })
 
+  it('refuses to date an undated receipt with today', async () => {
+    // Today's rate on a receipt of unknown age would make something
+    // incomparable look comparable, which is how a wrong pairing gets
+    // confidence it has not earned.
+    const [out] = await attachSekTotals({} as never, [item('EUR', 180, null)])
+    expect(out.sek_total).toBeUndefined()
+  })
+
   it('ignores a receipt with no total to convert', async () => {
     const [out] = await attachSekTotals({} as never, [item('EUR', null)])
     expect(out.sek_total).toBeUndefined()
