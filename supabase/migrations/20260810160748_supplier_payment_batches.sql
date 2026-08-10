@@ -142,6 +142,18 @@ BEGIN
      AND NOT (OLD.status = 'created' AND NEW.status = 'cancelled') THEN
     RAISE EXCEPTION 'supplier_payment_batches: the only status transition is created -> cancelled';
   END IF;
+  -- Cancellation metadata is audit data: it may only be written as part of
+  -- the created -> cancelled transition. Exception: cancelled_by may become
+  -- NULL at any time, because the FK's ON DELETE SET NULL fires this same
+  -- trigger when the cancelling user's account is deleted.
+  IF NOT (OLD.status = 'created' AND NEW.status = 'cancelled') THEN
+    IF NEW.cancelled_at IS DISTINCT FROM OLD.cancelled_at THEN
+      RAISE EXCEPTION 'supplier_payment_batches: cancelled_at may only be set by the created -> cancelled transition';
+    END IF;
+    IF NEW.cancelled_by IS DISTINCT FROM OLD.cancelled_by AND NEW.cancelled_by IS NOT NULL THEN
+      RAISE EXCEPTION 'supplier_payment_batches: cancelled_by may only be set by the created -> cancelled transition';
+    END IF;
+  END IF;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

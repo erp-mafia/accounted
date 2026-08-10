@@ -282,11 +282,22 @@ describe('supplier_payment_batches constraints', () => {
       ),
     ).rejects.toThrow(/immutable snapshots/)
 
-    // The sanctioned transition works, and cannot be reversed.
+    // Cancellation metadata cannot be written outside the transition.
+    await expect(
+      getPool().query(
+        `UPDATE public.supplier_payment_batches SET cancelled_at = now() WHERE id = $1`,
+        [ctx.batchId],
+      ),
+    ).rejects.toThrow(/cancelled_at may only be set/)
+
+    // The sanctioned transition works, and cannot be reversed. The canceller
+    // is deliberately NOT the batch owner: deleting the owner would CASCADE
+    // the batch away, and the SET NULL assertion below needs it to survive.
+    const cancellerId = await insertAuthUser()
     await getPool().query(
       `UPDATE public.supplier_payment_batches
-          SET status = 'cancelled', cancelled_at = now() WHERE id = $1`,
-      [ctx.batchId],
+          SET status = 'cancelled', cancelled_at = now(), cancelled_by = $2 WHERE id = $1`,
+      [ctx.batchId, cancellerId],
     )
     await expect(
       getPool().query(
@@ -294,6 +305,24 @@ describe('supplier_payment_batches constraints', () => {
         [ctx.batchId],
       ),
     ).rejects.toThrow(/created -> cancelled/)
+
+    // Audit data on a cancelled batch cannot be rewritten to another user...
+    const otherUser = await insertAuthUser()
+    await expect(
+      getPool().query(
+        `UPDATE public.supplier_payment_batches SET cancelled_by = $2 WHERE id = $1`,
+        [ctx.batchId, otherUser],
+      ),
+    ).rejects.toThrow(/cancelled_by may only be set/)
+
+    // ...but the FK's ON DELETE SET NULL path must stay open: deleting the
+    // cancelling user's account nulls the reference through this trigger.
+    await getPool().query(`DELETE FROM auth.users WHERE id = $1`, [cancellerId])
+    const after = await getPool().query(
+      `SELECT cancelled_by FROM public.supplier_payment_batches WHERE id = $1`,
+      [ctx.batchId],
+    )
+    expect(after.rows[0].cancelled_by).toBeNull()
   })
 
   it('touches updated_at on batch update', async () => {
