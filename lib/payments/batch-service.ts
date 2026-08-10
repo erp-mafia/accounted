@@ -15,6 +15,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBranding } from '@/lib/branding/service'
+import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
 import {
   lookupBicByClearing,
@@ -90,16 +91,24 @@ export async function resolveBatchDebtor(
   }
 }
 
-/** invoice id -> id of the active (created) batch it already sits in. */
+/**
+ * invoice id -> id of the active (created) batch it already sits in.
+ *
+ * Fails CLOSED: a lookup error must abort the caller, because treating it as
+ * "no active batches" would silently disable the duplicate-batch guard and
+ * let a second payable file be created without confirm_already_batched.
+ */
 export async function loadActiveBatchMap(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<Map<string, string>> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('supplier_payment_batch_items')
     .select('supplier_invoice_id, batch:supplier_payment_batches!inner(id, status)')
     .eq('company_id', companyId)
     .eq('batch.status', 'created')
+
+  if (error) throw error
 
   const map = new Map<string, string>()
   for (const row of data ?? []) {
@@ -134,7 +143,10 @@ export async function previewSupplierPaymentBatch(
   companyId: string,
   input: { ids: string[] },
 ): Promise<BatchPreview> {
-  const today = new Date().toISOString().slice(0, 10)
+  // Swedish calendar date, not UTC: between 00:00 and 01:59 Swedish summer
+  // time a UTC slice is still yesterday, and "pay today" would produce an
+  // execution date the bank rejects as passed.
+  const today = getSwedishLocalDate()
 
   const [{ data: invoices }, activeBatchIdByInvoice, debtorResolution] = await Promise.all([
     supabase
@@ -217,7 +229,7 @@ export async function createSupplierPaymentBatch(
   userId: string,
   input: CreateBatchInput,
 ): Promise<CreateBatchResult> {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = getSwedishLocalDate()
   const ids = input.items.map((item) => item.supplier_invoice_id)
 
   const debtorResolution = await resolveBatchDebtor(supabase, companyId)

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { eventBus } from '@/lib/events'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   createSupplierPaymentBatch,
@@ -74,6 +75,7 @@ function batchRow(overrides: Record<string, unknown> = {}): SupplierPaymentBatch
 describe('previewSupplierPaymentBatch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventBus.clear()
   })
 
   it('returns eligible lines with payee, reference and totals', async () => {
@@ -129,6 +131,22 @@ describe('previewSupplierPaymentBatch', () => {
     ])
   })
 
+  it('fails closed when the active-batch lookup errors', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: [invoiceRow()] },
+      { error: { message: 'relation missing' } },
+      { data: companyRow },
+      { data: settingsRow },
+    ])
+
+    await expect(
+      previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, {
+        ids: ['inv-1'],
+      }),
+    ).rejects.toBeTruthy()
+  })
+
   it('reports a missing debtor IBAN without blocking the preview', async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueueMany([
@@ -153,6 +171,7 @@ describe('previewSupplierPaymentBatch', () => {
 describe('createSupplierPaymentBatch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventBus.clear()
   })
 
   // from() order for create: companies, settings (debtor first), then
@@ -320,6 +339,24 @@ describe('createSupplierPaymentBatch', () => {
     )
 
     expect(result.ok).toBe(true)
+  })
+
+  it('fails closed when the active-batch lookup errors instead of skipping the guard', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: settingsRow },
+      { data: [invoiceRow()] },
+      { error: { message: 'relation missing' } },
+    ])
+
+    await expect(
+      createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, USER_ID, {
+        format: 'pain001',
+        items: [{ supplier_invoice_id: 'inv-1' }],
+      }),
+    ).rejects.toBeTruthy()
+    expect(mock.findCall('supplier_payment_batches', 'insert')).toBeUndefined()
   })
 
   it('fails up front when the debtor is incomplete', async () => {

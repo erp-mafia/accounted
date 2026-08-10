@@ -35,17 +35,24 @@ CREATE TABLE public.supplier_payment_batches (
   cancelled_at      timestamptz,
   cancelled_by      uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at        timestamptz NOT NULL DEFAULT now(),
-  updated_at        timestamptz NOT NULL DEFAULT now()
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  -- Composite-FK target so items can enforce company agreement with their
+  -- batch. Trivially unique (id is the PK).
+  CONSTRAINT uq_supplier_payment_batches_id_company UNIQUE (id, company_id)
 );
+
+-- Composite-FK target on the invoice side, same reasoning as above.
+CREATE UNIQUE INDEX uq_supplier_invoices_id_company
+  ON public.supplier_invoices (id, company_id);
 
 CREATE TABLE public.supplier_payment_batch_items (
   id                  uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  batch_id            uuid NOT NULL REFERENCES public.supplier_payment_batches(id) ON DELETE CASCADE,
+  batch_id            uuid NOT NULL,
   company_id          uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
   -- RESTRICT: a batch item documents a payment instruction possibly already
   -- handed to a bank; the invoice behind it must not vanish. The supplier
   -- invoice DELETE route pre-checks and returns a friendly error.
-  supplier_invoice_id uuid NOT NULL REFERENCES public.supplier_invoices(id) ON DELETE RESTRICT,
+  supplier_invoice_id uuid NOT NULL,
   amount              numeric NOT NULL CHECK (amount > 0),
   payment_date        date NOT NULL,
   -- Payee and reference snapshot at creation; supplier edits after batch
@@ -60,6 +67,15 @@ CREATE TABLE public.supplier_payment_batch_items (
   reference           text NOT NULL,
   created_at          timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT uq_supplier_payment_batch_invoice UNIQUE (batch_id, supplier_invoice_id),
+  -- Composite FKs: company_id must agree with BOTH parents, so a user who
+  -- belongs to two companies can never cross-link a batch in one company to
+  -- an invoice in another (plain per-column FKs would allow it).
+  CONSTRAINT fk_supplier_payment_batch_items_batch
+    FOREIGN KEY (batch_id, company_id)
+    REFERENCES public.supplier_payment_batches (id, company_id) ON DELETE CASCADE,
+  CONSTRAINT fk_supplier_payment_batch_items_invoice
+    FOREIGN KEY (supplier_invoice_id, company_id)
+    REFERENCES public.supplier_invoices (id, company_id) ON DELETE RESTRICT,
   CONSTRAINT supplier_payment_batch_items_payee_fields_match CHECK (
     (payee_type = 'bankgiro' AND payee_bankgiro IS NOT NULL)
     OR (payee_type = 'plusgiro' AND payee_plusgiro IS NOT NULL)
@@ -101,6 +117,38 @@ CREATE INDEX idx_supplier_payment_batch_items_supplier_invoice_id
   ON public.supplier_payment_batch_items (supplier_invoice_id);
 CREATE INDEX idx_supplier_payment_batch_items_company_id
   ON public.supplier_payment_batch_items (company_id);
+
+-- The RLS UPDATE policy cannot compare OLD and NEW, so column-level
+-- immutability is a trigger: a batch is a snapshot a bank file regenerates
+-- from, and rewriting msg_id/amounts/debtor after creation would break the
+-- byte-identical re-download contract. Only lifecycle (created -> cancelled,
+-- with its who/when) and download metadata may change.
+CREATE OR REPLACE FUNCTION public.enforce_supplier_payment_batch_immutability()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.id IS DISTINCT FROM OLD.id
+     OR NEW.company_id IS DISTINCT FROM OLD.company_id
+     OR NEW.user_id IS DISTINCT FROM OLD.user_id
+     OR NEW.format IS DISTINCT FROM OLD.format
+     OR NEW.currency IS DISTINCT FROM OLD.currency
+     OR NEW.total_amount IS DISTINCT FROM OLD.total_amount
+     OR NEW.item_count IS DISTINCT FROM OLD.item_count
+     OR NEW.msg_id IS DISTINCT FROM OLD.msg_id
+     OR NEW.debtor_snapshot IS DISTINCT FROM OLD.debtor_snapshot
+     OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+    RAISE EXCEPTION 'supplier_payment_batches are immutable snapshots: only lifecycle and download metadata may change';
+  END IF;
+  IF NEW.status IS DISTINCT FROM OLD.status
+     AND NOT (OLD.status = 'created' AND NEW.status = 'cancelled') THEN
+    RAISE EXCEPTION 'supplier_payment_batches: the only status transition is created -> cancelled';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER enforce_supplier_payment_batch_immutability
+  BEFORE UPDATE ON public.supplier_payment_batches
+  FOR EACH ROW EXECUTE FUNCTION public.enforce_supplier_payment_batch_immutability();
 
 CREATE TRIGGER set_updated_at_supplier_payment_batches
   BEFORE UPDATE ON public.supplier_payment_batches

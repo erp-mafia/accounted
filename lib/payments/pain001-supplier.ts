@@ -78,7 +78,10 @@ export function generateSupplierPain001(
   const creDtTm = new Date(options.createdAt).toISOString().replace(/\.\d{3}Z$/, 'Z')
   const msgId = max35(options.messageId)
   const orgDigits = debtor.orgNumber.replace(/\D/g, '')
-  const totalAmount = payments.reduce((sum, p) => sum + p.amount, 0)
+  // Sum the per-transaction amounts exactly as they are rendered (rounded to
+  // ore): CtrlSum must equal the sum of the InstdAmt values or banks reject
+  // the file, and summing raw floats then rounding once can differ by an ore.
+  const totalAmount = sumRendered(payments)
 
   // One PmtInf per distinct execution date, dates ascending; original order
   // preserved within a date so the file reads like the batch it came from.
@@ -117,7 +120,7 @@ export function generateSupplierPain001(
   for (let g = 0; g < dates.length; g++) {
     const date = dates[g]
     const group = byDate.get(date) as SupplierPain001Payment[]
-    const groupTotal = group.reduce((sum, p) => sum + p.amount, 0)
+    const groupTotal = sumRendered(group)
 
     lines.push('    <PmtInf>')
     lines.push(`      <PmtInfId>${escapeXml(suffixId(msgId, `-P${g + 1}`))}</PmtInfId>`)
@@ -243,6 +246,11 @@ function pushRemittance(lines: string[], reference: PaymentReference): void {
 // Helpers (deliberately duplicated from the salary generator: that dialect is
 // production-hardened and stays untouched; see DECISIONS.md 2026-08-10)
 // ============================================================
+
+/** Control sums add the amounts AS RENDERED: each rounded to öre first. */
+function sumRendered(payments: readonly SupplierPain001Payment[]): number {
+  return payments.reduce((sum, p) => sum + roundOre(p.amount), 0)
+}
 
 function escapeXml(str: string): string {
   return str

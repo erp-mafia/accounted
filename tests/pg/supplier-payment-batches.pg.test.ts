@@ -238,6 +238,64 @@ describe('supplier_payment_batches constraints', () => {
     ).rejects.toThrow(/format/)
   })
 
+  it('rejects an item whose company differs from its batch or invoice', async () => {
+    const ctx = await seedBatchWithItem()
+    const other = await seedCompany()
+    const otherSupplier = await insertSupplier(other.companyId, other.userId)
+    const otherInvoice = await insertSupplierInvoice(other.companyId, other.userId, otherSupplier)
+
+    // Batch in ctx's company, invoice + company_id from the other company:
+    // the composite FK on (batch_id, company_id) must refuse the cross-link.
+    await expect(
+      insertItem({
+        batchId: ctx.batchId,
+        companyId: other.companyId,
+        supplierInvoiceId: otherInvoice,
+      }),
+    ).rejects.toThrow(/fk_supplier_payment_batch_items_batch/)
+
+    // Invoice from the other company under ctx's company_id: the composite FK
+    // on (supplier_invoice_id, company_id) must refuse it too.
+    await expect(
+      insertItem({
+        batchId: ctx.batchId,
+        companyId: ctx.companyId,
+        supplierInvoiceId: otherInvoice,
+      }),
+    ).rejects.toThrow(/fk_supplier_payment_batch_items_invoice/)
+  })
+
+  it('keeps batches immutable outside lifecycle and download metadata', async () => {
+    const ctx = await seedBatchWithItem()
+
+    await expect(
+      getPool().query(
+        `UPDATE public.supplier_payment_batches SET total_amount = 999 WHERE id = $1`,
+        [ctx.batchId],
+      ),
+    ).rejects.toThrow(/immutable snapshots/)
+
+    await expect(
+      getPool().query(
+        `UPDATE public.supplier_payment_batches SET msg_id = 'REWRITTEN' WHERE id = $1`,
+        [ctx.batchId],
+      ),
+    ).rejects.toThrow(/immutable snapshots/)
+
+    // The sanctioned transition works, and cannot be reversed.
+    await getPool().query(
+      `UPDATE public.supplier_payment_batches
+          SET status = 'cancelled', cancelled_at = now() WHERE id = $1`,
+      [ctx.batchId],
+    )
+    await expect(
+      getPool().query(
+        `UPDATE public.supplier_payment_batches SET status = 'created' WHERE id = $1`,
+        [ctx.batchId],
+      ),
+    ).rejects.toThrow(/created -> cancelled/)
+  })
+
   it('touches updated_at on batch update', async () => {
     const ctx = await seedBatchWithItem()
 

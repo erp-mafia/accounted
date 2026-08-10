@@ -153,6 +153,19 @@ describe('generateSupplierPain001', () => {
     expect(xml).toContain('<InstdAmt Ccy="SEK">199.29</InstdAmt>')
   })
 
+  it('control sums equal the sum of the rendered amounts, not the raw floats', () => {
+    // Raw floats: 0.014 + 0.014 = 0.028 -> rounded once = 0.03, but each
+    // InstdAmt renders as 0.01. Banks reject CtrlSum != sum(InstdAmt).
+    const xml = generateSupplierPain001(
+      debtor,
+      [bgPayment({ amount: 0.014 }), bgPayment({ amount: 0.014 })],
+      options,
+    )
+    expect(xml.match(/<InstdAmt Ccy="SEK">0\.01<\/InstdAmt>/g)).toHaveLength(2)
+    expect(xml).toContain('<CtrlSum>0.02</CtrlSum>')
+    expect(xml).not.toContain('<CtrlSum>0.03</CtrlSum>')
+  })
+
   it('refuses an empty batch', () => {
     expect(() => generateSupplierPain001(debtor, [], options)).toThrow()
   })
