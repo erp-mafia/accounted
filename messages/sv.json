@@ -324,6 +324,8 @@
     "sign_in_again": "Logga in igen"
   },
   "mail": {
+    "hunt_stop": "Stoppa",
+    "hunt_progress": "{fetched} hämtade…",
     "hunt_title": "Leta efter underlag",
     "hunt_help": "Vi söker i de kopplade brevlådorna efter kvitton och fakturor till köp som saknar underlag, läser beloppet ur filen och lägger fram förslagen i Granskning. Inget bokförs.",
     "hunt_row": "Sök igenom brevlådorna",

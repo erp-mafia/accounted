@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -35,6 +35,13 @@ interface MailConnection {
 
 const BASE = '/api/extensions/ext/mail'
 
+/**
+ * Backstop on the loop. Each pass fetches a few receipts, so this is far more
+ * than any real backlog needs; it exists so a pass that keeps reporting work
+ * it never completes cannot run forever.
+ */
+const MAX_PASSES = 25
+
 export function MailConnectionsPanel() {
   const t = useTranslations('mail')
   const [connections, setConnections] = useState<MailConnection[]>([])
@@ -44,6 +51,10 @@ export function MailConnectionsPanel() {
   const [pendingDisconnect, setPendingDisconnect] = useState<MailConnection | null>(null)
   const [hunting, setHunting] = useState(false)
   const [huntResult, setHuntResult] = useState<HuntResult | null>(null)
+  const [progress, setProgress] = useState<{ passes: number; fetched: number; proposed: number } | null>(null)
+  // Read inside the loop, so pressing Stop takes effect on the current pass
+  // rather than after every remaining pass has run.
+  const stopped = useRef(false)
 
   const load = useCallback(async () => {
     try {
@@ -90,24 +101,59 @@ export function MailConnectionsPanel() {
    * than a serverless function may live, so the honest shape is a pass that
    * ends, says what it found and what is left, and can be pressed again.
    */
+  /**
+   * Keep asking until the mailboxes stop yielding.
+   *
+   * Each request is a bounded pass, because fetching a receipt means
+   * downloading it and having a model read the PDF, which is far too slow to
+   * finish a backlog inside one serverless invocation. The loop lives here
+   * rather than in a queue drained by cron: the finest schedule this app runs
+   * is hourly, so a queue would mean pressing a button and waiting an hour.
+   *
+   * It stops when a pass finds nothing new, which is the honest signal that
+   * the mailboxes hold nothing more for the purchases still open. The cap is a
+   * backstop against a pass that keeps reporting work it cannot finish.
+   */
   async function hunt() {
     setHunting(true)
     setHuntResult(null)
+    stopped.current = false
+
+    let passes = 0
+    let fetched = 0
+    let proposed = 0
+
     try {
-      const response = await fetch('/api/receipt-hunt/run', { method: 'POST' })
-      if (!response.ok) {
-        setHuntResult({ searched: 0, fetched: 0, proposed: 0, remaining: 0, failed: true })
-        return
+      while (!stopped.current && passes < MAX_PASSES) {
+        const response = await fetch('/api/receipt-hunt/run', { method: 'POST' })
+        if (!response.ok) {
+          setHuntResult({ searched: 0, fetched, proposed, remaining: 0, failed: true })
+          return
+        }
+
+        const body = (await response.json()) as { data: HuntResult }
+        passes++
+        fetched += body.data.fetched
+        proposed += body.data.proposed
+        setProgress({ passes, fetched, proposed })
+        void load()
+
+        // Nothing new this pass: the mailboxes have no more for what is open.
+        if (body.data.fetched === 0) {
+          setHuntResult({ ...body.data, fetched, proposed })
+          return
+        }
       }
-      const body = (await response.json()) as { data: HuntResult }
-      setHuntResult(body.data)
-      void load()
+
+      setHuntResult({ searched: 0, fetched, proposed, remaining: 0 })
     } catch {
-      setHuntResult({ searched: 0, fetched: 0, proposed: 0, remaining: 0, failed: true })
+      setHuntResult({ searched: 0, fetched, proposed, remaining: 0, failed: true })
     } finally {
       setHunting(false)
+      setProgress(null)
     }
   }
+
 
   async function disconnect(connection: MailConnection) {
     await fetch(`${BASE}/connections?id=${encodeURIComponent(connection.id)}`, { method: 'DELETE' })
@@ -171,9 +217,18 @@ export function MailConnectionsPanel() {
                       : t('hunt_none', { left: huntResult.remaining })}
                 </SettingsRowNote>
               ) : null}
+              {hunting ? (
+                <Button variant="ghost" size="sm" onClick={() => { stopped.current = true }}>
+                  {t('hunt_stop')}
+                </Button>
+              ) : null}
               <Button variant="secondary" size="sm" onClick={hunt} disabled={hunting}>
                 {hunting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                {hunting ? t('hunt_running') : t('hunt_action')}
+                {hunting
+                  ? progress
+                    ? t('hunt_progress', { fetched: progress.fetched })
+                    : t('hunt_running')
+                  : t('hunt_action')}
               </Button>
             </SettingsRowEnd>
           </SettingsRow>
