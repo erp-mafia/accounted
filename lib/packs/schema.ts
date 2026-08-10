@@ -27,8 +27,10 @@ import { accountNumberSchema } from '@/lib/invariants/zod'
  * `applyTemplate()` in `lib/bookkeeping/template-library.ts` turns a total
  * amount into lines, and the three types are not decorative:
  *
- * - `vat`: amount is `total * vat_rate / (1 + vat_rate)`, so it carries
- *   `vat_rate` and never `ratio`.
+ * - `vat`: carries `vat_rate` and never `ratio`. Amount is
+ *   `total * vat_rate / (1 + vat_rate)`, except on fiktiv-moms accounts
+ *   (reverse charge/import, e.g. 2614/2645) where the total is the tax base
+ *   and the amount is `total * vat_rate` on top.
  * - `business` and `settlement`: amount is `total * ratio`, so they carry
  *   `ratio` and never `vat_rate`.
  *
