@@ -889,6 +889,7 @@
     "warning_unattested": "Ej attesterad",
     "warning_already_batched": "I betalfil",
     "warning_ocr_invalid": "Ogiltigt OCR-nr",
+    "warning_payee_city_missing": "Ort saknas på leverantören",
     "confirm_already_batched": "En eller flera fakturor ingår redan i en aktiv betalfil. Jag förstår att en ny fil skapar ytterligare en betalning för dem.",
     "excluded_title": "Ingår inte i betalfilen",
     "excluded_reason_not_payable": "kan inte betalas i nuvarande status",

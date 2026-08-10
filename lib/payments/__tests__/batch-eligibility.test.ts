@@ -15,6 +15,7 @@ const supplier = {
   bank_account: null,
   clearing_number: null,
   account_number: null,
+  city: 'Stockholm',
 }
 
 function invoice(overrides: Partial<BatchInvoiceFacts> = {}): BatchInvoiceFacts {
@@ -138,6 +139,13 @@ describe('evaluateInvoiceForBatch', () => {
       type: 'invoice_number',
       value: 'CD3014794407',
     })
+  })
+
+  it('warns when the supplier has no town (Swedbank address rules)', () => {
+    const result = evaluateInvoiceForBatch(invoice(), { ...supplier, city: null }, {
+      today: TODAY,
+    })
+    expect(result.eligible && result.warnings).toContain('payee_city_missing')
   })
 
   it('carries a clean OCR through as the structured reference', () => {

@@ -42,7 +42,14 @@ export type BatchExclusionReason =
   | 'payee_missing'
   | 'payee_invalid'
 
-export type BatchItemWarning = 'unattested' | 'already_batched' | 'ocr_invalid'
+export type BatchItemWarning =
+  | 'unattested'
+  | 'already_batched'
+  | 'ocr_invalid'
+  // Swedbank rejects a creditor address without a town (Validex rules
+  // 237 + 222), and the address itself is mandatory; warn so the user fills
+  // in the supplier's city before the bank bounces the file.
+  | 'payee_city_missing'
 
 export interface BatchInvoiceFacts {
   id: string
@@ -76,7 +83,7 @@ export type BatchInvoiceEvaluation =
 
 export function evaluateInvoiceForBatch(
   invoice: BatchInvoiceFacts,
-  supplier: SupplierPayeeSource,
+  supplier: SupplierPayeeSource & { city?: string | null },
   options: BatchEvaluationOptions,
 ): BatchInvoiceEvaluation {
   if (invoice.is_credit_note) return { eligible: false, reason: 'credit_note' }
@@ -98,6 +105,7 @@ export function evaluateInvoiceForBatch(
   const activeBatchId = options.activeBatchIdByInvoice?.get(invoice.id) ?? null
   if (activeBatchId) warnings.push('already_batched')
   if (ocrInvalid) warnings.push('ocr_invalid')
+  if (!supplier.city?.trim()) warnings.push('payee_city_missing')
 
   return {
     eligible: true,

@@ -29,7 +29,7 @@ interface PreviewLine {
   payment_date: string
   payee: { type: string; label: string }
   reference: { type: 'ocr' | 'invoice_number'; value: string }
-  warnings: Array<'unattested' | 'already_batched' | 'ocr_invalid'>
+  warnings: Array<'unattested' | 'already_batched' | 'ocr_invalid' | 'payee_city_missing'>
   active_batch_id: string | null
 }
 

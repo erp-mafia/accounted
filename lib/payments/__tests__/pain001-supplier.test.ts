@@ -135,14 +135,15 @@ describe('generateSupplierPain001', () => {
     expect(debtorAccounts[0]).not.toContain('BGNR')
   })
 
-  it('omits the creditor address on BGNR-debited payments (TwnNm rule)', () => {
+  it('carries the creditor address on the BGNR path too (rule 237 is absolute)', () => {
     const xml = generateSupplierPain001(
       { ...debtor, bankgiro: '9912346' },
-      [bgPayment()],
+      [bgPayment({ payeeCity: 'Veddige' })],
       options,
     )
     const creditor = xml.match(/<Cdtr>[\s\S]*?<\/Cdtr>/)![0]
-    expect(creditor).not.toContain('<PstlAdr>')
+    expect(creditor).toContain('<TwnNm>Veddige</TwnNm>')
+    expect(creditor).toContain('<Ctry>SE</Ctry>')
   })
 
   it('carries the supplier town on IBAN-debited payments when known', () => {

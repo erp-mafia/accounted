@@ -889,6 +889,7 @@
     "warning_unattested": "Not approved",
     "warning_already_batched": "In payment file",
     "warning_ocr_invalid": "Invalid OCR",
+    "warning_payee_city_missing": "Supplier town missing",
     "confirm_already_batched": "One or more invoices are already part of an active payment file. I understand that a new file creates another payment for them.",
     "excluded_title": "Not included in the payment file",
     "excluded_reason_not_payable": "cannot be paid in its current status",
