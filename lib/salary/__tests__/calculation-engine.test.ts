@@ -925,7 +925,7 @@ describe('hardening: tax table lookup (not just flat fallback)', () => {
   const taxRates: TaxTableRate[] = [
     { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 0, incomeTo: 20000, kind: 'amount', taxAmount: 3000 },
     { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 20001, incomeTo: 30000, kind: 'amount', taxAmount: 5500 },
-    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 30001, incomeTo: 50000, kind: 'amount', taxAmount: 10000 },
+    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 30001, incomeTo: 80000, kind: 'amount', taxAmount: 10000 },
     { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 80001, incomeTo: 9999999, kind: 'percent', taxPercent: 35 },
   ]
 

@@ -73,6 +73,18 @@ describe('lookupTaxAmount', () => {
     expect(() => lookupTaxAmount(99, 1, 40000, sampleRates)).toThrow(/table 99/)
   })
 
+  it('throws when the loaded brackets have a gap instead of silently withholding 0', () => {
+    const gappyRates: TaxTableRate[] = [
+      { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 1, incomeTo: 20000, kind: 'amount', taxAmount: 2800 },
+      // gap: 20001-29999 missing (e.g. partial API data)
+      { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 30000, incomeTo: 9999999, kind: 'percent', taxPercent: 35 },
+    ]
+    expect(() => lookupTaxAmount(33, 1, 25000, gappyRates)).toThrow(TaxTableUnavailableError)
+    expect(() => lookupTaxAmount(33, 1, 25000, gappyRates)).toThrow(/gap/)
+    // Below the first bracket is not a gap: no withholding due
+    expect(lookupTaxAmount(33, 1, 0, gappyRates)).toBe(0)
+  })
+
   it('filters by correct column', () => {
     const rates: TaxTableRate[] = [
       ...sampleRates,
@@ -207,6 +219,54 @@ describe('fetchTaxTableRates fallback behavior', () => {
     // Krona rows alone would clamp high incomes: incomplete API data must not win
     expect(result.source).toBe('fallback')
     expect(result.rates.some((r) => r.kind === 'percent')).toBe(true)
+  })
+
+  it('falls back when a pagination page fails (no silent gap in the bracket list)', async () => {
+    globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.includes('_offset=500')) {
+        return { ok: false, status: 502 } as Response
+      }
+      const isPercentQuery = url.includes(encodeURIComponent('30%'))
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          // First page claims more rows exist, forcing the paginated path
+          resultCount: isPercentQuery ? 1 : 600,
+          results: isPercentQuery
+            ? [apiRow('80001', '', '32')]
+            : Array.from({ length: 500 }, (_, i) =>
+                apiRow(String(i * 100 + 1), String((i + 1) * 100), '1000')
+              ),
+        }),
+      } as Response
+    }) as typeof fetch
+
+    const result = await fetchTaxTableRates(2026, 33, 1)
+
+    expect(result.source).toBe('fallback')
+  })
+
+  it('falls back when the API returns a malformed kolumn value instead of storing 0', async () => {
+    globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input)
+      const isPercentQuery = url.includes(encodeURIComponent('30%'))
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          resultCount: 1,
+          results: isPercentQuery
+            ? [apiRow('80001', '', 'N/A')]
+            : [apiRow('20001', '20100', '2800')],
+        }),
+      } as Response
+    }) as typeof fetch
+
+    const result = await fetchTaxTableRates(2026, 33, 1)
+
+    expect(result.source).toBe('fallback')
   })
 
   it('throws TaxTableUnavailableError when API fails and year has no fallback', async () => {

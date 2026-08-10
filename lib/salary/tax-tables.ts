@@ -142,13 +142,26 @@ export function lookupTaxAmount(
     return taxForRate(lastRate, roundedIncome)
   }
 
+  // Income above the first bracket's start but inside no bracket means the
+  // loaded rates have a gap (e.g. partial API data). Withholding 0 there would
+  // be silent under-withholding: fail loudly instead.
+  if (roundedIncome > matchingRates[0].incomeFrom) {
+    throw new TaxTableUnavailableError(
+      `Tax table ${tableNumber} column ${column} has no bracket covering income ${roundedIncome}: ` +
+        `loaded rates contain a gap.`,
+      { year: matchingRates[0].tableYear, tableNumber, column }
+    )
+  }
+
+  // Below the first bracket: no withholding due.
   return 0
 }
 
 /**
  * Withholding for one matched bracket. Percent brackets apply their percent to
  * the whole monthly income; öre are dropped since skatteavdrag is stated in
- * whole kronor (SFF 2011:1261 22 kap. 1 §: öretal bortfaller).
+ * whole kronor (öretal bortfaller: the whole-krona rule in SFF 2011:1261
+ * 22 kap. 1 § as applied by Skatteverket's tabellavdrag guidance).
  */
 function taxForRate(rate: TaxTableRate, roundedIncome: number): number {
   if (rate.kind === 'percent') {
@@ -234,7 +247,9 @@ async function fetchApiRows(
 
   const data = await response.json() as { results: ApiTaxRow[]; resultCount: number }
 
-  // If more than 500 results, fetch remaining pages
+  // If more than 500 results, fetch remaining pages. A silently skipped page
+  // would leave a gap in the bracket list, so any page failure fails the whole
+  // fetch and lets the bundled fallback serve complete data instead.
   let allResults = data.results
   if (data.resultCount > 500) {
     let offset = 500
@@ -243,10 +258,14 @@ async function fetchApiRows(
         headers: { 'Accept': 'application/json' },
         signal: AbortSignal.timeout(10000),
       })
-      if (pageRes.ok) {
-        const pageData = await pageRes.json() as { results: ApiTaxRow[] }
-        allResults = allResults.concat(pageData.results)
+      if (!pageRes.ok) {
+        throw new Error(`Skatteverket API returned ${pageRes.status} for page offset ${offset}`)
       }
+      const pageData = await pageRes.json() as { results: ApiTaxRow[] }
+      if (pageData.results.length === 0) {
+        throw new Error(`Skatteverket API returned an empty page at offset ${offset}`)
+      }
+      allResults = allResults.concat(pageData.results)
       offset += 500
     }
   }
@@ -296,8 +315,21 @@ export async function fetchTaxTableRates(
       )
     }
 
-    // Parse results: each row has all 6 columns, we extract the requested one
+    // Parse results: each row has all 6 columns, we extract the requested one.
+    // Kolumn values are parsed strictly: a malformed value must not silently
+    // become 0 kr / 0 % withholding, it fails the fetch so the fallback runs.
     const columnKey = `kolumn ${column}` as keyof ApiTaxRow
+    const parseKolumnValue = (r: ApiTaxRow): number => {
+      const raw = (r[columnKey] as string | undefined) ?? ''
+      const cleaned = raw.trim().replace(',', '.')
+      if (!/^\d+(\.\d+)?$/.test(cleaned)) {
+        throw new Error(
+          `Skatteverket API returned unparsable ${String(columnKey)} value "${raw}" ` +
+            `for table ${tableNumber} year ${year} (income ${r['inkomst fr.o.m.']})`
+        )
+      }
+      return parseFloat(cleaned)
+    }
     const parseRow = (r: ApiTaxRow) => ({
       tableYear: year,
       tableNumber: tableNumber,
@@ -310,12 +342,12 @@ export async function fetchTaxTableRates(
       ...amountRows.map(r => ({
         ...parseRow(r),
         kind: 'amount' as const,
-        taxAmount: parseInt(r[columnKey] as string) || 0,
+        taxAmount: parseKolumnValue(r),
       })),
       ...percentRows.map(r => ({
         ...parseRow(r),
         kind: 'percent' as const,
-        taxPercent: parseInt(r[columnKey] as string) || 0,
+        taxPercent: parseKolumnValue(r),
       })),
     ]
 

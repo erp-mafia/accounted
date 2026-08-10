@@ -71,14 +71,26 @@ function parseLine(line: string): { table: number; row: TaxRow } | null {
     return Number.isFinite(n) ? n : 0
   }
 
+  // Column values must be well-formed whole numbers. A malformed value falling
+  // back to 0 would bake 0 kr / 0 % withholding into the emitted fallback data,
+  // so fail the import instead. (income_to may legitimately be blank: the
+  // open-ended top %-row.)
+  const parseColumn = (start: number): number => {
+    const raw = clean.slice(start, start + 5).trim()
+    if (!/^\d+$/.test(raw)) {
+      throw new Error(`Malformed column value "${raw}" in line: ${clean}`)
+    }
+    return parseInt(raw, 10)
+  }
+
   const incomeFrom = parseField(5, 7)
   const incomeTo = parseField(12, 7)
-  const c1 = parseField(19, 5)
-  const c2 = parseField(24, 5)
-  const c3 = parseField(29, 5)
-  const c4 = parseField(34, 5)
-  const c5 = parseField(39, 5)
-  const c6 = parseField(44, 5)
+  const c1 = parseColumn(19)
+  const c2 = parseColumn(24)
+  const c3 = parseColumn(29)
+  const c4 = parseColumn(34)
+  const c5 = parseColumn(39)
+  const c6 = parseColumn(44)
 
   return {
     table,
