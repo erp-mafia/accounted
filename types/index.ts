@@ -763,6 +763,8 @@ export interface Supplier {
   bank_account: string | null
   iban: string | null
   bic: string | null
+  clearing_number: string | null
+  account_number: string | null
 
   default_expense_account: string | null
   default_payment_terms: number
@@ -772,6 +774,60 @@ export interface Supplier {
 
   created_at: string
   updated_at: string
+}
+
+// Supplier payment batch (betalfil): an immutable snapshot of payment
+// instructions handed to the bank as a file. Generating or downloading a
+// batch books nothing; settlement stays in mark-paid / bank matching.
+export type SupplierPaymentBatchFormat = 'pain001' | 'bg_lb'
+export type SupplierPaymentBatchStatus = 'created' | 'cancelled'
+
+export interface SupplierPaymentBatchDebtor {
+  name: string
+  org_number: string
+  iban: string
+  bic: string
+}
+
+export interface SupplierPaymentBatch {
+  id: string
+  company_id: string
+  user_id: string
+  format: SupplierPaymentBatchFormat
+  status: SupplierPaymentBatchStatus
+  currency: string
+  total_amount: number
+  item_count: number
+  /** pain.001 MsgId, fixed at creation; re-downloads reuse it verbatim. */
+  msg_id: string
+  debtor_snapshot: SupplierPaymentBatchDebtor
+  file_generated_at: string | null
+  download_count: number
+  cancelled_at: string | null
+  cancelled_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type SupplierPaymentBatchPayeeType = 'bankgiro' | 'plusgiro' | 'bank_account'
+export type SupplierPaymentBatchReferenceType = 'ocr' | 'invoice_number'
+
+export interface SupplierPaymentBatchItem {
+  id: string
+  batch_id: string
+  company_id: string
+  supplier_invoice_id: string
+  amount: number
+  payment_date: string
+  payee_type: SupplierPaymentBatchPayeeType
+  payee_bankgiro: string | null
+  payee_plusgiro: string | null
+  payee_clearing: string | null
+  payee_account: string | null
+  payee_name: string
+  reference_type: SupplierPaymentBatchReferenceType
+  reference: string
+  created_at: string
 }
 
 // Article (artikelregister): reusable invoice-line preset. NON-INVENTORY:
@@ -1413,6 +1469,8 @@ export interface CreateSupplierInput {
   bank_account?: string
   iban?: string
   bic?: string
+  clearing_number?: string
+  account_number?: string
   default_expense_account?: string
   default_payment_terms?: number
   default_currency?: string
