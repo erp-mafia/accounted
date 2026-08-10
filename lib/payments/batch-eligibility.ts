@@ -12,6 +12,7 @@
  * route the payment to).
  */
 
+import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import {
   resolvePaymentReference,
   resolveSupplierPayee,
@@ -32,8 +33,6 @@ export const PAYABLE_SUPPLIER_INVOICE_STATUSES = [
   'overdue',
 ] as const
 
-/** Mirrors FULLY_PAID_EPSILON in lib/supplier-invoices/lifecycle.ts. */
-const REMAINING_EPSILON = 0.005
 
 export type BatchExclusionReason =
   | 'not_payable'
@@ -84,7 +83,7 @@ export function evaluateInvoiceForBatch(
   if (!(PAYABLE_SUPPLIER_INVOICE_STATUSES as readonly string[]).includes(invoice.status)) {
     return { eligible: false, reason: 'not_payable' }
   }
-  if (invoice.remaining_amount <= REMAINING_EPSILON) {
+  if (invoice.remaining_amount <= ORE_TOLERANCE) {
     return { eligible: false, reason: 'nothing_remaining' }
   }
   if (invoice.currency !== 'SEK') return { eligible: false, reason: 'foreign_currency' }
@@ -103,7 +102,7 @@ export function evaluateInvoiceForBatch(
   return {
     eligible: true,
     defaults: {
-      amount: Math.round(invoice.remaining_amount * 100) / 100,
+      amount: roundOre(invoice.remaining_amount),
       // A due date in the future is honored; a passed one pays as soon as the
       // bank can execute.
       payment_date: invoice.due_date > options.today ? invoice.due_date : options.today,

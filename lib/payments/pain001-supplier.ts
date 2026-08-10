@@ -36,6 +36,7 @@
  * payments it initiates. Subject to 7-year retention.
  */
 
+import { roundOre } from '@/lib/money'
 import { splitDomesticBankAccount } from '@/lib/salary/payment/bank-account'
 import type { PaymentReference, SupplierPayee } from './supplier-payee'
 
@@ -253,7 +254,7 @@ function escapeXml(str: string): string {
 }
 
 function formatDecimal(amount: number): string {
-  return (Math.round(amount * 100) / 100).toFixed(2)
+  return roundOre(amount).toFixed(2)
 }
 
 function max35(value: string): string {

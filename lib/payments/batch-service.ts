@@ -15,6 +15,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBranding } from '@/lib/branding/service'
+import { ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
 import {
   lookupBicByClearing,
   lookupBicByBankName,
@@ -178,7 +179,7 @@ export async function previewSupplierPaymentBatch(
     })
   }
 
-  const total = Math.round(eligible.reduce((sum, line) => sum + line.amount, 0) * 100) / 100
+  const total = sumOre(eligible.map((line) => line.amount))
 
   return {
     eligible,
@@ -209,9 +210,6 @@ export type CreateBatchResult =
   | { ok: false; code: 'invalid_amount'; details: Array<{ id: string }> }
   | { ok: false; code: 'already_batched'; details: Array<{ id: string; batch_id: string }> }
   | { ok: false; code: 'create_failed' }
-
-/** Amount override tolerance vs remaining_amount, mirroring FULLY_PAID_EPSILON. */
-const AMOUNT_EPSILON = 0.005
 
 export async function createSupplierPaymentBatch(
   supabase: SupabaseClient,
@@ -264,13 +262,12 @@ export async function createSupplierPaymentBatch(
       continue
     }
 
-    const amount =
-      item.amount !== undefined ? Math.round(item.amount * 100) / 100 : evaluation.defaults.amount
+    const amount = item.amount !== undefined ? roundOre(item.amount) : evaluation.defaults.amount
     if (amount <= 0) {
       invalidAmount.push({ id: invoice.id })
       continue
     }
-    if (amount > invoice.remaining_amount + AMOUNT_EPSILON) {
+    if (amount > invoice.remaining_amount + ORE_TOLERANCE) {
       excessive.push({ id: invoice.id })
       continue
     }
@@ -308,8 +305,7 @@ export async function createSupplierPaymentBatch(
   const batchId = crypto.randomUUID()
   const orgDigits = debtor.org_number.replace(/\D/g, '')
   const msgId = `${getBranding().appName.toUpperCase()}-${orgDigits}-B${batchId.replace(/-/g, '').slice(0, 8).toUpperCase()}`.slice(0, 35)
-  const totalAmount =
-    Math.round(itemRows.reduce((sum, row) => sum + row.amount, 0) * 100) / 100
+  const totalAmount = sumOre(itemRows.map((row) => row.amount))
 
   const { data: batch, error: batchError } = await supabase
     .from('supplier_payment_batches')
