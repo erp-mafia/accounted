@@ -321,8 +321,10 @@ const TRANSLITERATIONS: Record<string, string> = {
 const DISALLOWED_TEXT = /[^0-9A-Za-zåäöÅÄÖ/\-?:().,'+ ]/g
 
 function sanitizeText(value: string): string {
+  // NFC first: decomposed input (base letter + combining mark, common in text
+  // pasted from PDFs) must fold to the precomposed forms the map knows.
   let transliterated = ''
-  for (const ch of value) transliterated += TRANSLITERATIONS[ch] ?? ch
+  for (const ch of value.normalize('NFC')) transliterated += TRANSLITERATIONS[ch] ?? ch
   return transliterated.replace(DISALLOWED_TEXT, '?')
 }
 

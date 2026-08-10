@@ -376,6 +376,31 @@ describe('createSupplierPaymentBatch', () => {
     expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'iban' })
   })
 
+  it('drops an invalid company bankgiro from the snapshot instead of debiting it', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: { ...settingsRow, bankgiro: '1234-5678' } },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: batchRow() },
+      { data: null },
+    ])
+
+    const result = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+    )
+
+    expect(result.ok).toBe(true)
+    const batchInsert = mock.findCall('supplier_payment_batches', 'insert')?.[0] as {
+      debtor_snapshot: { bankgiro: string | null }
+    }
+    expect(batchInsert.debtor_snapshot.bankgiro).toBeNull()
+  })
+
   it('requires an organisation number for the InitgPty OrgId', async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueueMany([

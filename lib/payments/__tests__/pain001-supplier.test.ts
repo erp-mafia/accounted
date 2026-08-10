@@ -144,6 +144,17 @@ describe('generateSupplierPain001', () => {
     expect(xml).toContain('<Nm>Demokafe + Creme AB</Nm>')
   })
 
+  it('folds decomposed Unicode before transliterating', () => {
+    // 'e' + combining acute (U+0301) and 'a' + combining ring (U+030A):
+    // NFC folds them to é and å, which then map per the MIG set.
+    const xml = generateSupplierPain001(
+      debtor,
+      [bgPayment({ payeeName: 'Café Ångby' })],
+      options,
+    )
+    expect(xml).toContain('<Nm>Cafe Ångby</Nm>')
+  })
+
   it('renders an invoice-number reference as unstructured text, truncated to 25 chars', () => {
     const xml = generateSupplierPain001(
       debtor,

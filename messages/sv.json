@@ -912,6 +912,7 @@
     "debtor_missing_bic": "Företagsbankens BIC saknas och kunde inte härledas.",
     "debtor_missing_org": "Företagets organisationsnummer saknas och måste anges som avsändaridentitet i betalfilen.",
     "debtor_missing_link": "Öppna Inställningar → Fakturering",
+    "debtor_missing_org_link": "Öppna Inställningar → Företag",
     "history_title": "Betalfiler",
     "th_created": "Skapad",
     "th_count": "Antal",

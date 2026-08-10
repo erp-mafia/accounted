@@ -221,13 +221,11 @@ export default function PaymentFileDialog({
           <div className="space-y-4">
             {!preview.debtor_ok && (
               <AttnLine
-                action={{
-                  label: t('debtor_missing_link'),
-                  href:
-                    preview.debtor_missing === 'org_number'
-                      ? '/settings/company'
-                      : '/settings/invoicing',
-                }}
+                action={
+                  preview.debtor_missing === 'org_number'
+                    ? { label: t('debtor_missing_org_link'), href: '/settings/company' }
+                    : { label: t('debtor_missing_link'), href: '/settings/invoicing' }
+                }
               >
                 {preview.debtor_missing === 'bic'
                   ? t('debtor_missing_bic')

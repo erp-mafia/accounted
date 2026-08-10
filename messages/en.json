@@ -912,6 +912,7 @@
     "debtor_missing_bic": "The company bank's BIC is missing and could not be derived.",
     "debtor_missing_org": "The company organisation number is missing and must be stated as the sender identity in the payment file.",
     "debtor_missing_link": "Open Settings → Invoicing",
+    "debtor_missing_org_link": "Open Settings → Company",
     "history_title": "Payment files",
     "th_created": "Created",
     "th_count": "Count",
