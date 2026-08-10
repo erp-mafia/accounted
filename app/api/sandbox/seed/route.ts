@@ -167,6 +167,12 @@ export async function POST(request: Request) {
         next_invoice_number: 5,
         next_delivery_note_number: 1,
         invoice_default_days: 30,
+        // Sender bank details: the pain.001 debtor for the betalfil demo.
+        // Example IBAN from the Swedish IBAN documentation range; BIC derives
+        // from it being an SEB-style example. Demo-only values.
+        iban: 'SE3550000000054910000003',
+        bic: 'ESSESESS',
+        bankgiro: '991-2346',
         onboarding_step: 6,
         onboarding_complete: true,
         initial_setup_path: 'fresh',
@@ -867,7 +873,9 @@ export async function POST(request: Request) {
           org_number: '5559000001',
           vat_number: 'SE555900000101',
           email: 'demo+telekom@example.com',
-          bankgiro: '5559-0001',
+          // Luhn-valid (Bankgirot check digit): the betalfil flow validates
+          // payee numbers, so demo suppliers must carry numbers that pass.
+          bankgiro: '5559-0004',
           address_line1: 'Demovägen 10',
           postal_code: '111 22',
           city: 'Stockholm',
@@ -881,7 +889,7 @@ export async function POST(request: Request) {
           supplier_type: 'swedish_business',
           org_number: '5559000002',
           vat_number: 'SE555900000201',
-          bankgiro: '5559-0002',
+          bankgiro: '5559-0012',
           address_line1: 'Demovägen 11',
           postal_code: '111 22',
           city: 'Stockholm',
@@ -923,6 +931,9 @@ export async function POST(request: Request) {
           payment_reference: '47112026031',
           paid_at: toDateStr(fifteenDaysAgo),
           paid_amount: 600,
+          // Same normalization rule as paid_amount below: the other row in
+          // this bulk insert sets remaining_amount, so this one must too.
+          remaining_amount: 0,
         },
         {
           user_id: userId,
@@ -938,11 +949,17 @@ export async function POST(request: Request) {
           subtotal: 240,
           vat_amount: 28.80,
           total: 268.80,
+          // Luhn-valid OCR so the betalfil preview demos the structured
+          // reference path instead of the invoice-number fallback.
+          payment_reference: '882456',
           // Must be set explicitly: PostgREST normalizes columns across
           // rows in a bulk insert, so omitting paid_amount here while the
           // first row sets it sends null instead of falling through to the
           // schema default (0), violating the NOT NULL constraint.
           paid_amount: 0,
+          // No trigger derives this; without it the unpaid demo invoice
+          // shows "0 kr kvar att betala" and cannot join a betalfil.
+          remaining_amount: 268.80,
         },
       ])
       .select('id, supplier_invoice_number')
