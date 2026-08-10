@@ -204,6 +204,30 @@ describe('committed_at override audit trail', () => {
     expect(new Date(rows[0].new_state.preset_committed_at).toISOString()).toBe(BACKDATED_ISO)
   })
 
+  it('stamps wall_clock at the update moment, not the transaction start', async () => {
+    // The seeding flows post many entries inside one transaction; now() would
+    // pin every override to the BEGIN. The writer must use clock_timestamp().
+    const { entryId } = await seedBackdatedDraft()
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      const {
+        rows: [{ txn_start }],
+      } = await client.query<{ txn_start: Date }>(`SELECT now() AS txn_start`)
+      await client.query(`SELECT pg_sleep(1.2)`)
+      await client.query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [
+        entryId,
+      ])
+      await client.query('COMMIT')
+      const rows = await fetchOverrideRows(entryId)
+      expect(rows).toHaveLength(1)
+      const wallClock = new Date(rows[0].new_state.wall_clock).getTime()
+      expect(wallClock).toBeGreaterThanOrEqual(txn_start.getTime() + 1_000)
+    } finally {
+      client.release()
+    }
+  })
+
   it('writes no override row when an authenticated member posts (stamp path)', async () => {
     const { entryId, userId } = await seedBackdatedDraft()
     await withUserContext(userId, async (client) => {

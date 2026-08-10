@@ -42,6 +42,11 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+  -- clock_timestamp(), not now(): the seeding flows post many entries inside
+  -- one transaction, and now() would stamp every override with the
+  -- transaction start instead of the moment it actually happened.
+  v_wall_clock timestamptz := clock_timestamp();
 BEGIN
   INSERT INTO public.audit_log (
     user_id, company_id, action, table_name, record_id, actor_id,
@@ -57,12 +62,12 @@ BEGIN
     NULL,
     jsonb_build_object(
       'preset_committed_at', p_entry.committed_at,
-      'wall_clock', now(),
+      'wall_clock', v_wall_clock,
       'jwt_role', COALESCE(NULLIF(p_jwt_role, ''), 'none')
     ),
     format(
       'Preserved preset committed_at %s on draft-to-posted; wall clock %s (jwt role: %s)',
-      p_entry.committed_at, now(), COALESCE(NULLIF(p_jwt_role, ''), 'none')
+      p_entry.committed_at, v_wall_clock, COALESCE(NULLIF(p_jwt_role, ''), 'none')
     ),
     COALESCE(NULLIF(current_setting('gnubok.actor_type', true), ''), 'system'),
     NULLIF(current_setting('gnubok.actor_label', true), '')
