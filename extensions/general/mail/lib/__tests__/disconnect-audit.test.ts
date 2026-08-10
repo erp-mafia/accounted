@@ -7,16 +7,30 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { disconnect } from '../connections'
 
-function mockSupabase(existing: Record<string, unknown> | null) {
+function mockSupabase(
+  existing: Record<string, unknown> | null,
+  deleteError: { message: string } | null = null,
+) {
   const inserted: Array<Record<string, unknown>> = []
   const deleted: string[] = []
   const client = {
     from(table: string) {
       const chain: Record<string, unknown> = {}
-      for (const m of ['select', 'eq']) chain[m] = vi.fn(() => chain)
+      for (const m of ['select']) chain[m] = vi.fn(() => chain)
+      let eqCalls = 0
+      chain.eq = vi.fn(() => {
+        eqCalls++
+        // The delete chain resolves after its second .eq(); the select chain
+        // ends in .maybeSingle() instead.
+        return chain.deleting && eqCalls >= 2
+          ? Promise.resolve({ error: deleteError })
+          : chain
+      })
       chain.maybeSingle = vi.fn(() => Promise.resolve({ data: existing, error: null }))
       chain.delete = vi.fn(() => {
         deleted.push(table)
+        ;(chain as Record<string, unknown>).deleting = true
+        eqCalls = 0
         return chain
       })
       chain.insert = vi.fn((row: Record<string, unknown>) => {
@@ -64,6 +78,17 @@ describe('disconnect', () => {
     const blob = JSON.stringify(inserted[0])
     expect(blob).not.toContain('SECRET')
     expect(blob).not.toContain('encrypted_refresh_token')
+  })
+
+  it('does not claim a disconnect that the database refused', async () => {
+    // An audit entry saying the mailbox was disconnected, while the credential
+    // is still live, is worse than no entry at all.
+    const { client, inserted } = mockSupabase(
+      { email_address: 'ekonomi@nordvik.se', provider: 'gmail' },
+      { message: 'permission denied' },
+    )
+    await expect(disconnect(client, 'co-1', 'conn-1', 'user-1')).rejects.toThrow('permission denied')
+    expect(inserted).toEqual([])
   })
 
   it('writes nothing when there was no such connection', async () => {

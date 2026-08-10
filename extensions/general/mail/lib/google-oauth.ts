@@ -12,6 +12,15 @@
 export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
 
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth'
+/**
+ * Deadline on the token endpoint.
+ *
+ * A refresh happens inside every mailbox search, and searches run with
+ * Promise.all, so a stalled token endpoint would hold the whole company's hunt
+ * open. On timeout the connection simply yields nothing this run.
+ */
+export const TOKEN_TIMEOUT_MS = 15_000
+
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
 
 export interface GoogleOAuthEnv {
@@ -57,8 +66,10 @@ export function buildAuthorizationUrl(env: GoogleOAuthEnv, state: string): strin
     // offline + consent is what returns a refresh token at all; without it a
     // grant dies in an hour and the nightly hunt silently stops.
     access_type: 'offline',
+    // No include_granted_scopes: it lets Google add scopes this app was granted
+    // elsewhere to the token it returns here, so a mailbox grant could quietly
+    // carry more authority than the consent screen showed.
     prompt: 'consent',
-    include_granted_scopes: 'true',
   })
   return `${AUTH_ENDPOINT}?${params.toString()}`
 }
@@ -101,6 +112,7 @@ export async function exchangeCodeForTokens(
 ): Promise<GoogleTokens> {
   const response = await fetch(TOKEN_ENDPOINT, {
     method: 'POST',
+    signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       code,
@@ -145,6 +157,7 @@ export async function refreshAccessToken(
 ): Promise<{ accessToken: string; expiresAt: Date }> {
   const response = await fetch(TOKEN_ENDPOINT, {
     method: 'POST',
+    signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       refresh_token: refreshToken,

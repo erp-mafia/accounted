@@ -6,6 +6,15 @@ import type { MailCandidate } from '@/lib/mail-search/service'
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me'
 
+/**
+ * Deadline on every Gmail call.
+ *
+ * Mailboxes are searched with Promise.all, so one stalled request would hold
+ * the whole company's hunt open until the platform killed the run. A timeout
+ * turns that into one mailbox missing from tonight's sweep.
+ */
+export const GMAIL_TIMEOUT_MS = 15_000
+
 /** Hits to consider per mailbox per purchase. */
 export const MAX_RESULTS = 8
 
@@ -92,6 +101,7 @@ function collectAttachments(
 async function gmailFetch<T>(accessToken: string, path: string): Promise<T> {
   const response = await fetch(`${API}${path}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(GMAIL_TIMEOUT_MS),
   })
   if (!response.ok) {
     const text = await response.text().catch(() => '')

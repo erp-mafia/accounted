@@ -98,6 +98,10 @@ describe('buildAuthorizationUrl', () => {
     expect(params.get('scope')).not.toContain('gmail.modify')
     expect(params.get('scope')).not.toContain('gmail.send')
     expect(params.get('access_type')).toBe('offline')
+    // Not incremental: include_granted_scopes would let Google fold scopes this
+    // app was granted elsewhere into the token issued here, so a mailbox grant
+    // could carry more authority than the consent screen showed.
+    expect(params.get('include_granted_scopes')).toBeNull()
   })
 })
 

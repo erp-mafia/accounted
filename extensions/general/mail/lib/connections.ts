@@ -5,6 +5,7 @@
  * enabled with no policies precisely so a live refresh token can never be
  * selected by a browser session.
  */
+import { createLogger } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { decryptToken, encryptToken } from './crypto'
 import {
@@ -12,6 +13,8 @@ import {
   getGoogleOAuthEnv,
   refreshAccessToken,
 } from './google-oauth'
+
+const log = createLogger('mail-connections')
 
 export interface MailConnectionRow {
   id: string
@@ -193,7 +196,14 @@ export async function disconnect(
 
   // Hard delete: the point of disconnecting is that the token is gone. Receipts
   // already approved stay, because they belong to the bookkeeping now.
-  await supabase.from('mail_connections').delete().eq('id', connectionId).eq('company_id', companyId)
+  const { error: deleteError } = await supabase
+    .from('mail_connections')
+    .delete()
+    .eq('id', connectionId)
+    .eq('company_id', companyId)
+  // A failed delete must not leave an audit entry claiming the mailbox was
+  // disconnected when the credential is still live.
+  if (deleteError) throw new Error(deleteError.message)
   if (!existing) return
 
   const row = existing as { email_address: string; provider: string }
@@ -208,7 +218,7 @@ export async function disconnect(
   // keeping it after the point of the delete was to destroy it. The sibling
   // credential tables (shopify_connections) omit the trigger for the same
   // reason. Only the safe columns are recorded.
-  await supabase.from('audit_log').insert({
+  const { error: auditError } = await supabase.from('audit_log').insert({
     user_id: userId,
     company_id: companyId,
     action: 'DELETE',
@@ -218,4 +228,15 @@ export async function disconnect(
     old_state: { email_address: row.email_address, provider: row.provider },
     new_state: null,
   })
+  // Deliberately not rolled back into one transaction. The two statements can
+  // only diverge one way now: the credential is destroyed and the note about it
+  // is missing. Recreating the credential to keep them in step would be worse
+  // than a missing note, so the gap is surfaced loudly instead of hidden.
+  if (auditError) {
+    log.error('mailbox disconnected but the audit entry failed to write', {
+      connectionId,
+      companyId,
+      error: auditError.message,
+    })
+  }
 }
