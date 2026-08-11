@@ -29,11 +29,19 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isTransactionBooked } from '@/lib/transactions/is-booked'
 
 /**
- * Kept equal to the receipt hunt's own thresholds (MIN_AMOUNT_SEK,
- * LOOKBACK_MONTHS in lib/receipt-hunt/hunt.ts). A page that showed purchases
- * the hunt never looks for would offer a row it can never resolve on its own.
+ * Deliberately below the receipt hunt's own floor (MIN_AMOUNT_SEK = 100 in
+ * lib/receipt-hunt/hunt.ts), and the two are not meant to match.
+ *
+ * The hunt has a floor because every candidate costs a mail search and a model
+ * read, so chasing a 45 kr purchase is not worth the spend. This list costs a
+ * query. Bokföringslagen wants an underlag for the 45 kr purchase exactly as
+ * much as for the 4 500 kr one, and the person can always upload it by hand
+ * even when the hunt will not go looking.
+ *
+ * Matching the hunt's floor hid 52 of one real company's 119 unreceipted
+ * purchases: the page under-reported by 44% and looked tidier for it.
  */
-export const MIN_PURCHASE_AMOUNT_SEK = 100
+export const MIN_PURCHASE_AMOUNT_SEK = 0
 export const PURCHASE_LOOKBACK_MONTHS = 12
 
 export interface PurchaseWithoutUnderlag {
@@ -83,8 +91,8 @@ export async function fetchPurchasesWithoutUnderlag(
       // "business, not yet booked". Only an explicit false means the user
       // called it private, and a private purchase needs no underlag.
       .not('is_business', 'is', false)
-      // Outflows only, and amount <= -MIN covers the floor in one filter.
-      .lte('amount', -minAmount)
+      // Outflows only. With no floor this is simply every negative row.
+      .lt('amount', minAmount > 0 ? -minAmount : 0)
       .gte('date', sinceDate)
       .order('date', { ascending: false })
       .range(range.from, range.to),
