@@ -1816,10 +1816,17 @@ function ProposedBooking({ itemId }: { itemId: string }) {
   const [data, setData] = useState<SuggestedBooking | null>(null)
 
   useEffect(() => {
+    // Arrowing down a list fires one of these per row. Without the abort the
+    // superseded requests still run to completion server-side, and a slow one
+    // can resolve after a faster later one.
+    const controller = new AbortController()
     let cancelled = false
     setState('loading')
     setData(null)
-    fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}/suggest-booking`, { method: 'POST' })
+    fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}/suggest-booking`, {
+      method: 'POST',
+      signal: controller.signal,
+    })
       .then(async (res) => {
         if (!res.ok) throw new Error(String(res.status))
         return (await res.json()) as { data: SuggestedBooking }
@@ -1836,6 +1843,7 @@ function ProposedBooking({ itemId }: { itemId: string }) {
       })
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [itemId])
 
@@ -1864,6 +1872,15 @@ function ProposedBooking({ itemId }: { itemId: string }) {
       </div>
 
       <table className="w-full border-collapse text-xs">
+        <thead>
+          <tr className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            <th className="pb-1 pr-2 text-left font-medium" colSpan={2}>
+              Konto
+            </th>
+            <th className="pb-1 text-right font-medium w-20">Debet</th>
+            <th className="pb-1 pl-2 text-right font-medium w-20">Kredit</th>
+          </tr>
+        </thead>
         <tbody>
           {data.lines.map((l, i) => (
             <tr key={`${l.account_number}-${i}`} className="border-b border-border/40 last:border-0">
