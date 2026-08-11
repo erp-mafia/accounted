@@ -274,6 +274,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const { toast } = useToast()
   const t = useTranslations('inbox_workspace')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  // Its own input: sharing the header's would upload without the purchase.
+  const purchaseFileInputRef = useRef<HTMLInputElement | null>(null)
   const { openAgentSheet, identity } = useAgentSheet()
 
   const [items, setItems] = useState<InboxItem[]>([])
@@ -786,6 +788,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       if (options.autoSelect && json.data?.inbox_item_id) {
         await handleSelect(json.data.inbox_item_id)
       }
+      return json.data?.inbox_item_id as string | undefined
     } catch (err) {
       setItems((prev) => prev.filter((it) => it.id !== tempId))
       if (options.autoSelect) {
@@ -805,6 +808,45 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // Sequential queue: running multiple extractions concurrently would
   // hammer pdfjs on slow boxes. Per-file placeholder rows + the queue
   // counter on the upload button surface progress.
+  /**
+   * Upload a file and make it the underlag for one specific purchase.
+   *
+   * The generic upload only carries the file, so a document dropped while a
+   * purchase was selected landed in the inbox unmatched: the pane showed that
+   * purchase's amount and date under the drop zone and then quietly did not
+   * use either. Matching afterwards through the endpoint that already exists
+   * keeps the promise the copy makes.
+   */
+  const uploadForPurchase = useCallback(async (files: File[], transactionId: string) => {
+    const file = files[0]
+    if (!file) return
+    const itemId = await uploadFile(file, { autoSelect: false })
+    if (!itemId) return
+    try {
+      const res = await fetch(
+        `/api/extensions/ext/invoice-inbox/items/${itemId}/match-transaction`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ transaction_id: transactionId }),
+        },
+      )
+      if (!res.ok) throw new Error(String(res.status))
+      toast({ title: 'Underlag kopplat', description: file.name })
+      setSelectedPurchaseId(null)
+      await Promise.all([fetchItems(), fetchPurchases()])
+    } catch {
+      // The document is safely filed either way; only the link failed, and
+      // the user can still make it by hand from the inbox.
+      toast({
+        title: 'Uppladdat, men inte kopplat',
+        description: 'Dokumentet ligger i inkorgen. Koppla det till köpet därifrån.',
+        variant: 'destructive',
+      })
+      await fetchItems()
+    }
+  }, [uploadFile, toast, fetchItems, fetchPurchases])
+
   const uploadFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return
     if (files.length === 1) {
@@ -834,8 +876,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     e.preventDefault()
     setIsDragging(false)
     const files = Array.from(e.dataTransfer.files ?? [])
-    if (files.length > 0) await uploadFiles(files)
-  }, [uploadFiles])
+    if (files.length === 0) return
+    // Dropping while a purchase is selected means "this is that purchase's
+    // receipt", wherever on the page it landed. Ignoring the selection would
+    // file it loose and leave the user to match by hand what they had already
+    // told us.
+    if (selectedPurchaseId) {
+      await uploadForPurchase(files, selectedPurchaseId)
+      return
+    }
+    await uploadFiles(files)
+  }, [uploadFiles, uploadForPurchase, selectedPurchaseId])
 
   // ── Delete ─────────────────────────────────────────────────
 
@@ -1446,9 +1497,20 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   </Button>
                 )}
 
+                <input
+                  ref={purchaseFileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept="application/pdf,image/jpeg,image/png,image/heic,image/heif,image/webp"
+                  onChange={async (e) => {
+                    const files = Array.from(e.target.files ?? [])
+                    if (files.length > 0) await uploadForPurchase(files, selectedPurchase.id)
+                    if (purchaseFileInputRef.current) purchaseFileInputRef.current.value = ''
+                  }}
+                />
                 <button
                   type="button"
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => purchaseFileInputRef.current?.click()}
                   disabled={isUploading}
                   className={cn(
                     'mt-4 w-full rounded-lg border border-dashed px-4 py-6 text-xs transition-colors',
