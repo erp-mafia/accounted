@@ -43,6 +43,7 @@ import {
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
+import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt'
 import { createClient } from '@/lib/supabase/client'
@@ -2231,7 +2232,14 @@ const SUGGESTION_EMPTY_REASON: Record<string, string> = {
     'Köpet är i utländsk valuta och matchades av en konteringsregel. Momsen skulle bli fel, så vi visar inget förslag.',
 }
 
-function ProposedBooking({ itemId }: { itemId: string }) {
+function ProposedBooking({
+  itemId,
+  onLoaded,
+}: {
+  itemId: string
+  /** Hands the loaded proposal up so the editor can open pre-filled with it. */
+  onLoaded?: (data: SuggestedBooking | null) => void
+}) {
   const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
   const [data, setData] = useState<SuggestedBooking | null>(null)
 
@@ -2254,17 +2262,24 @@ function ProposedBooking({ itemId }: { itemId: string }) {
       .then((json) => {
         if (cancelled) return
         setData(json.data)
+        onLoaded?.(json.data)
         setState('ready')
       })
       .catch(() => {
         // A suggestion that cannot be fetched is not something the user did:
         // stay quiet rather than showing an error beside their document.
-        if (!cancelled) setState('failed')
+        if (!cancelled) {
+          onLoaded?.(null)
+          setState('failed')
+        }
       })
     return () => {
       cancelled = true
       controller.abort()
     }
+    // onLoaded is intentionally excluded: a new identity each render
+    // would refetch on every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemId])
 
   if (state === 'loading') return <Skeleton className="h-24 w-full" />
@@ -2382,6 +2397,15 @@ function FieldsRail({
   const { toast } = useToast()
   const hasAi = useCapability(CAPABILITY.ai)
   const data = item.extracted_data
+  const [proposal, setProposal] = useState<SuggestedBooking | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
+  // A proposal belongs to one item; carrying it to the next would offer the
+  // previous underlag's accounts for this one's money.
+  useEffect(() => {
+    setProposal(null)
+    setEditOpen(false)
+  }, [item.id])
+
   const isProcessed = !!item.created_supplier_invoice_id
   const isBookedDirectly = !isProcessed && !!item.created_journal_entry_id
   // "Resolved" now means a journal entry exists: matched_transaction_id alone
@@ -2625,7 +2649,7 @@ function FieldsRail({
             are the evidence you check when the decision looks wrong, so they
             fold. Reading order used to be the other way round, which meant
             scrolling past nine values to reach the one thing to approve. */}
-        {isLinkedToTransaction && <ProposedBooking itemId={item.id} />}
+        {isLinkedToTransaction && <ProposedBooking itemId={item.id} onLoaded={setProposal} />}
 
         <details className="group" open={!isLinkedToTransaction}>
           <summary className="flex items-center gap-1.5 cursor-pointer list-none text-xs uppercase tracking-wide text-muted-foreground font-medium hover:text-foreground">
@@ -2725,13 +2749,18 @@ function FieldsRail({
                 Fråga assistenten
               </Button>
             )}
+            {/* One control, and its scope is the whole verifikat. It opens
+                pre-filled with the proposal when there is one and empty when
+                there is not, so there is no separate "book manually" path to
+                choose between. Nothing posts from here without the form's own
+                review step (convention 14). */}
             <Button
               variant="outline"
               size="sm"
               className="w-full"
-              onClick={onBookDirect}
+              onClick={() => setEditOpen(true)}
             >
-              Bokför manuellt
+              {proposal?.lines.length ? 'Granska och bokför' : 'Bokför manuellt'}
             </Button>
             <button
               type="button"
@@ -2842,6 +2871,26 @@ function FieldsRail({
         )}
       </div>
       )}
+
+      <EditKonteringDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        itemId={item.id}
+        documentId={item.document_id ?? null}
+        documentMime={docMime}
+        documentUrl={null}
+        fileName={item.fileName ?? null}
+        transactionId={item.matched_transaction_id ?? null}
+        entryDate={proposal?.entry_date ?? new Date().toISOString().slice(0, 10)}
+        description={data?.supplier?.name ?? item.email_subject ?? 'Underlag'}
+        lines={proposal?.lines ?? []}
+        onBooked={() => {
+          // The row's refresh comes from the realtime subscription on
+          // invoice_inbox_items, which book-direct trips: the same path that
+          // keeps a booking made in another tab from stranding this one.
+          setEditOpen(false)
+        }}
+      />
     </div>
   )
 }
