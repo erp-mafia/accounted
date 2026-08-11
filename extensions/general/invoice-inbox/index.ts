@@ -391,8 +391,19 @@ export const invoiceInboxExtension: Extension = {
 
         // Merge user edits into existing extracted_data so we don't lose
         // line items, vatBreakdown, or AI-confidence on partial updates.
+        //
+        // The spread of `current` is load-bearing and must come first. Naming
+        // the surviving keys one by one, as this did, silently destroyed every
+        // field the list happened not to mention: documentKind,
+        // merchantCategory, legibility, purchaseTime, payment and
+        // suggestedTemplateId were all wiped the first time somebody corrected
+        // a single field by hand. The classification is not recoverable
+        // afterwards without re-running extraction, and nothing surfaced the
+        // loss. Spreading means anything added to InvoiceExtractionResult later
+        // survives by default instead of waiting to be noticed missing.
         const current = (item.extracted_data ?? {}) as InvoiceExtractionResult
         const merged: InvoiceExtractionResult = {
+          ...current,
           supplier: { ...current.supplier, ...body.supplier },
           invoice: { ...current.invoice, ...body.invoice },
           totals: { ...current.totals, ...body.totals },
