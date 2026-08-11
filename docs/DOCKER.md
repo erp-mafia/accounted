@@ -186,6 +186,11 @@ AWS_REGION=eu-north-1
 
 If both are set, Bedrock is used; `AI_PROVIDER=bedrock|anthropic` forces the choice. `OPENAI_API_KEY` from earlier versions is not read by any code path. See [SELF-HOSTING.md](./SELF-HOSTING.md#ai-features) for optional model overrides.
 
+Note: these credentials select the AI *provider*, not which AI features are
+available. Document extraction additionally requires the
+`document-extraction` extension to be packaged into your image; it is not
+included in the stock self-hosted image.
+
 ### Email (invoice sending, reminders)
 
 ```env
