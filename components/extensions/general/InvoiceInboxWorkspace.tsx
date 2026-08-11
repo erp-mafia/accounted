@@ -289,7 +289,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // ones stay visible.
   // 'missing' is the odd one out: it lists bank purchases, not inbox items, so
   // the list and both panes branch on it.
-  const [filter, setFilter] = useState<'todo' | 'linked' | 'booked' | 'error' | 'all' | 'missing'>('todo')
+  const [filter, setFilter] = useState<
+    'todo' | 'linked' | 'booked' | 'error' | 'all' | 'missing' | 'portal'
+  >('todo')
   const [searchTerm, setSearchTerm] = useState('')
   // Bulk selection. Items linked to a supplier invoice are skipped at delete
   // time (server returns 409); we still allow them to be selected so the
@@ -488,7 +490,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // the mailboxes we search, WhatsApp for photographed receipts, and the
   // forwarding address that works with nothing connected at all.
   const [mailConnections, setMailConnections] = useState<InboxMailConnection[]>([])
-  const [whatsapp, setWhatsapp] = useState<{ linked: boolean; phone_masked?: string } | null>(null)
+  const [whatsapp, setWhatsapp] = useState<{ linked: boolean; phone_masked?: string; verified_at?: string | null } | null>(null)
   const [sourcesOpen, setSourcesOpen] = useState(false)
 
   useEffect(() => {
@@ -506,7 +508,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       try {
         const res = await fetch('/api/extensions/ext/whatsapp-inbox/link')
         if (!res.ok) return
-        const json = (await res.json()) as { data?: { linked: boolean; phone_masked?: string } }
+        const json = (await res.json()) as {
+          data?: { linked: boolean; phone_masked?: string; verified_at?: string | null }
+        }
         if (json.data) setWhatsapp(json.data)
       } catch {
         // Same: not every company has it.
@@ -551,6 +555,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     stop: stopHunt,
     hunting,
     progress: huntProgress,
+    result: huntResult,
   } = useReceiptHunt(() => {
     void fetchItems()
     void fetchPurchases()
@@ -560,6 +565,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     () => purchases.find((p) => p.id === selectedPurchaseId) ?? null,
     [purchases, selectedPurchaseId],
   )
+
+  const portalPurchases = useMemo(() => purchases.filter((p) => p.portal), [purchases])
+  const otherPurchases = useMemo(() => purchases.filter((p) => !p.portal), [purchases])
 
   // Per-status counts for the filter pills. Computed once over the full list.
   const statusCounts = useMemo(() => {
@@ -582,31 +590,37 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       { key: 'linked', label: 'Kopplade', count: statusCounts.linked },
       { key: 'booked', label: 'Bokförda', count: statusCounts.booked },
     ]
-    // Only worth a pill when there is something behind it: a company that
-    // keeps every receipt should not be shown a permanent empty accusation.
-    if (purchases.length > 0 || filter === 'missing') {
-      list.push({ key: 'missing', label: 'Saknar underlag', count: purchases.length })
+    // Two lists, because they are two different jobs. A purchase whose
+    // supplier keeps invoices behind a login is one you can settle now by
+    // going there; one with nothing known needs somebody to be asked. Mixing
+    // them buries the twelve you can act on among the hundred you cannot.
+    if (portalPurchases.length > 0 || filter === 'portal') {
+      list.push({ key: 'portal', label: 'Hämta från portal', count: portalPurchases.length })
+    }
+    if (otherPurchases.length > 0 || filter === 'missing') {
+      list.push({ key: 'missing', label: 'Saknar underlag', count: otherPurchases.length })
     }
     if (statusCounts.error > 0 || filter === 'error') {
       list.push({ key: 'error', label: 'Fel', count: statusCounts.error })
     }
     list.push({ key: 'all', label: 'Alla', count: statusCounts.all })
     return list
-  }, [statusCounts, filter, purchases.length])
+  }, [statusCounts, filter, portalPurchases.length, otherPurchases.length])
 
   const activePill = useMemo(() => pills.find((p) => p.key === filter), [pills, filter])
 
   const filteredPurchases = useMemo(() => {
+    const base = filter === 'portal' ? portalPurchases : otherPurchases
     const term = searchTerm.trim().toLowerCase()
-    if (term === '') return purchases
-    return purchases.filter((p) =>
+    if (term === '') return base
+    return base.filter((p) =>
       [p.merchant_name, p.description].some((v) => v?.toLowerCase().includes(term)),
     )
-  }, [purchases, searchTerm])
+  }, [portalPurchases, otherPurchases, filter, searchTerm])
 
   const filteredItems = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
-    if (filter === 'missing') return []
+    if (filter === 'missing' || filter === 'portal') return []
     return items.filter((item) => {
       // Status filter. "todo" is the active inbox: everything except booked.
       const status = deriveInboxStatus(item)
@@ -1077,6 +1091,27 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         </div>
       </header>
 
+      {huntResult && (
+        <div className="border-b px-4 py-2 text-xs flex items-center gap-2">
+          {huntResult.failed ? (
+            <span className="text-warning">
+              Sökningen kunde inte slutföras. Brevlådan svarade inte, försök igen.
+            </span>
+          ) : huntResult.fetched > 0 ? (
+            <span>
+              <b className="font-medium tabular-nums">{huntResult.fetched}</b> nya underlag hämtade.
+              {huntResult.proposed > 0
+                ? ` ${huntResult.proposed} kopplades till ett köp.`
+                : ' Inget kunde kopplas till ett köp automatiskt.'}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">
+              Inga nya underlag i brevlådorna för de köp som saknar ett.
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Opened from the chip. Three ways in, each with the one fact that
           matters about it: an address you can forward to, mailboxes we search,
           and the number receipts arrive from. Nothing here is configuration;
@@ -1088,9 +1123,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <div className="min-w-0 flex-1">
                 <span className="tabular-nums">{inboxAddress.address}</span>
-                <div className="text-muted-foreground text-[11px]">
-                  Vidarebefordra hit, eller be en leverantör skicka direkt
-                </div>
               </div>
               <InboxAddressBar
                 address={inboxAddress.address}
@@ -1139,15 +1171,23 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           ))}
 
           {whatsapp?.linked && (
-            <div className="flex items-center gap-3 px-4 py-2 border-b border-border/50">
-              <WhatsAppMark className="h-3.5 w-3.5 shrink-0" />
-              <div className="min-w-0 flex-1">
-                <span className="tabular-nums">{whatsapp.phone_masked ?? 'WhatsApp'}</span>
-                <div className="text-muted-foreground text-[11px]">
-                  Kvitton fotade i mobilen. Avsändaren är känd, så utlägg kan tillskrivas rätt person.
+            <details className="group border-b border-border/50">
+              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
+                <WhatsAppMark className="h-3.5 w-3.5 shrink-0" />
+                <span className="flex-1 truncate">WhatsApp</span>
+                <ChevronRight className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
+              </summary>
+              <dl className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-0.5">
+                <div className="flex gap-2">
+                  <dt className="w-24 shrink-0">Nummer</dt>
+                  <dd className="tabular-nums">{whatsapp.phone_masked ?? '–'}</dd>
                 </div>
-              </div>
-            </div>
+                <div className="flex gap-2">
+                  <dt className="w-24 shrink-0">Status</dt>
+                  <dd>{whatsapp.verified_at ? 'Verifierat' : 'Inte verifierat än'}</dd>
+                </div>
+              </dl>
+            </details>
           )}
 
         </div>
@@ -1201,7 +1241,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                         setFilter(pill.key)
                         // The panes show one kind of row at a time; a stale
                         // selection from the other kind would outlive its list.
-                        if (pill.key === 'missing') setSelectedId(null)
+                        if (pill.key === 'missing' || pill.key === 'portal') setSelectedId(null)
                         else setSelectedPurchaseId(null)
                       }}
                       className="justify-between text-xs"
@@ -1332,17 +1372,19 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 Inkorgen är tom.
               </div>
             )
-          ) : (filter === 'missing' ? filteredPurchases.length : filteredItems.length) === 0 ? (
+          ) : (filter === 'missing' || filter === 'portal' ? filteredPurchases.length : filteredItems.length) === 0 ? (
             <div className="p-6 text-center text-xs text-muted-foreground">
               {filter === 'todo'
                 ? 'Inget att åtgärda; allt är bearbetat.'
-                : filter === 'missing'
-                  ? 'Varje köp har sitt underlag.'
+                : filter === 'portal'
+                  ? 'Inga köp väntar på en faktura från en portal.'
+                  : filter === 'missing'
+                    ? 'Varje köp har sitt underlag.'
                   : 'Inga poster matchar filtret.'}
             </div>
           ) : (
             <ul>
-              {filter === 'missing'
+              {filter === 'missing' || filter === 'portal'
                 ? filteredPurchases.map((p) => (
                     <PurchaseRow
                       key={p.id}
@@ -1720,7 +1762,10 @@ function InboxRow({
           ) : item.source === 'email' ? (
             <Mail className="h-3 w-3 text-muted-foreground shrink-0" />
           ) : item.source === 'whatsapp' ? (
-            <MessageCircle className="h-3 w-3 text-muted-foreground shrink-0" />
+            // The one channel we can name for certain. An emailed document
+            // carries no record of which mailbox fetched it, so those keep the
+            // generic mark rather than claiming a provider.
+            <WhatsAppMark className="h-3 w-3 shrink-0" />
           ) : (
             <Upload className="h-3 w-3 text-muted-foreground shrink-0" />
           )}
