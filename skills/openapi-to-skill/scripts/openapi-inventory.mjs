@@ -269,6 +269,11 @@ export function formatOpLine(entry) {
   return `${method} ${path} : ${summary}${badgeStr}`
 }
 
+/** Escape a string for use inside a Markdown table cell. */
+function mdCell(text) {
+  return text.replace(/\\/g, '\\\\').replace(/\|/g, '\\|')
+}
+
 function collectParameters(spec, entry) {
   const seen = new Set()
   const params = []
@@ -317,7 +322,7 @@ export function renderOperationMd(spec, entry) {
       const type = condenseSchema(spec, p.schema, { depth: 2 })
       const note = (p.description ?? '').replace(/\s+/g, ' ').trim()
       lines.push(
-        `| \`${p.name}\` | ${p.in} | \`${type.replace(/\|/g, '\\|')}\` | ${p.required ? 'yes' : 'no'} | ${note.replace(/\|/g, '\\|')} |`,
+        `| \`${p.name}\` | ${p.in} | \`${mdCell(type)}\` | ${p.required ? 'yes' : 'no'} | ${mdCell(note)} |`,
       )
     }
     lines.push('')
