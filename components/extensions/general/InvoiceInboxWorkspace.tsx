@@ -490,7 +490,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // the mailboxes we search, WhatsApp for photographed receipts, and the
   // forwarding address that works with nothing connected at all.
   const [mailConnections, setMailConnections] = useState<InboxMailConnection[]>([])
-  const [whatsapp, setWhatsapp] = useState<{ linked: boolean; phone_masked?: string; verified_at?: string | null } | null>(null)
+  const [whatsapp, setWhatsapp] = useState<{ linked: boolean; phoneMasked?: string; verifiedAt?: string | null } | null>(null)
   const [sourcesOpen, setSourcesOpen] = useState(false)
 
   useEffect(() => {
@@ -508,8 +508,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       try {
         const res = await fetch('/api/extensions/ext/whatsapp-inbox/link')
         if (!res.ok) return
+        // The route answers in camelCase (phoneMasked / verifiedAt); reading
+        // snake_case here silently rendered a linked number as "–".
         const json = (await res.json()) as {
-          data?: { linked: boolean; phone_masked?: string; verified_at?: string | null }
+          data?: { linked: boolean; phoneMasked?: string; verifiedAt?: string | null }
         }
         if (json.data) setWhatsapp(json.data)
       } catch {
@@ -1180,11 +1182,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               <dl className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-0.5">
                 <div className="flex gap-2">
                   <dt className="w-24 shrink-0">Nummer</dt>
-                  <dd className="tabular-nums">{whatsapp.phone_masked ?? '–'}</dd>
+                  <dd className="tabular-nums">{whatsapp.phoneMasked ?? '–'}</dd>
                 </div>
                 <div className="flex gap-2">
                   <dt className="w-24 shrink-0">Status</dt>
-                  <dd>{whatsapp.verified_at ? 'Verifierat' : 'Inte verifierat än'}</dd>
+                  <dd>{whatsapp.verifiedAt ? 'Verifierat' : 'Inte verifierat än'}</dd>
                 </div>
               </dl>
             </details>
@@ -1422,17 +1424,54 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           )}
         >
           {selectedPurchase ? (
-            // There is no file to show, so the pane says why instead of
-            // rendering an empty frame.
+            // There is no file to show, so the pane says why and then offers
+            // the one thing that resolves it. Telling somebody a document is
+            // missing without a place to put it is half an answer.
             <div className="h-full flex items-center justify-center p-8">
-              <div className="text-center max-w-sm">
+              <div className="text-center max-w-sm w-full">
                 <FileQuestion className="h-6 w-6 mx-auto mb-3 text-muted-foreground opacity-60" />
                 <p className="text-sm">Inget underlag hittat</p>
                 <p className="text-xs text-muted-foreground mt-1.5">
                   {selectedPurchase.portal
-                    ? `${selectedPurchase.portal.vendor} skickar ingen fil. Hämta fakturan och ladda upp den här, så kopplas den till köpet.`
-                    : 'Vi har sökt i brevlådorna och i portalkatalogen. Ladda upp kvittot här, eller vidarebefordra det till inkorgsadressen.'}
+                    ? `${selectedPurchase.portal.vendor} skickar ingen fil. Hämta fakturan och släpp den här.`
+                    : 'Vi har sökt i brevlådorna. Släpp kvittot här, eller vidarebefordra det till inkorgsadressen.'}
                 </p>
+
+                {selectedPurchase.portal && (
+                  <Button size="sm" variant="outline" className="mt-4" asChild>
+                    <a href={selectedPurchase.portal.url} target="_blank" rel="noopener noreferrer">
+                      Öppna {selectedPurchase.portal.vendor}
+                      <ExternalLink className="h-3.5 w-3.5 ml-1.5" />
+                    </a>
+                  </Button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading}
+                  className={cn(
+                    'mt-4 w-full rounded-lg border border-dashed px-4 py-6 text-xs transition-colors',
+                    'text-muted-foreground hover:border-foreground hover:text-foreground',
+                    isDragging && 'border-foreground text-foreground bg-secondary/40',
+                  )}
+                >
+                  {isUploading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Laddar upp…
+                    </span>
+                  ) : (
+                    <>
+                      Släpp filen här, eller klicka för att välja
+                      <span className="block mt-1 opacity-70">
+                        {formatCurrency(Math.abs(selectedPurchase.amount), selectedPurchase.currency ?? undefined)}
+                        {' · '}
+                        {formatDate(selectedPurchase.date)}
+                      </span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           ) : selected ? (

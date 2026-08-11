@@ -52,8 +52,22 @@ export interface PortalEntry {
 
 /**
  * Ordered by how many companies actually pay them, measured across production
- * ledgers, cross-checked against a customer poll. Google and OpenAI lead on
- * both counts by a wide margin.
+ * ledgers, cross-checked against a customer poll.
+ *
+ * The bar is "does not send the invoice", not "also has a portal". Almost every
+ * vendor here has a billing page; what earns an entry is that the invoice does
+ * not arrive by mail, so a person has no other way to get it.
+ *
+ * Anthropic, Vercel and Supabase were removed after a founder pointed out that
+ * all three do email their invoices, at least to European customers. The poll
+ * they came from asked which portals people log into, and people answered with
+ * where the invoice can ALSO be found. Listing them told somebody to go and log
+ * in for a document already sitting in their inbox, which is worse than saying
+ * nothing: it sends them away from the answer.
+ *
+ * The same objection may reach further down this list. An entry is a claim that
+ * the invoice cannot be had any other way, and that claim is worth checking per
+ * vendor rather than assuming.
  */
 export const PORTAL_DIRECTORY: PortalEntry[] = [
   {
@@ -110,16 +124,6 @@ export const PORTAL_DIRECTORY: PortalEntry[] = [
     url: 'https://admin.atlassian.com/billing',
   },
   {
-    vendor: 'Anthropic',
-    aliases: ['anthropic', 'claude ai', 'claude sub'],
-    url: 'https://console.anthropic.com/settings/billing',
-  },
-  {
-    vendor: 'Vercel',
-    aliases: ['vercel'],
-    url: 'https://vercel.com/account/invoices',
-  },
-  {
     vendor: 'Hetzner',
     aliases: ['hetzner'],
     url: 'https://accounts.hetzner.com/invoice',
@@ -128,11 +132,6 @@ export const PORTAL_DIRECTORY: PortalEntry[] = [
     vendor: 'GitHub',
     aliases: ['github'],
     url: 'https://github.com/settings/billing',
-  },
-  {
-    vendor: 'Supabase',
-    aliases: ['supabase'],
-    url: 'https://supabase.com/dashboard/org/_/billing',
   },
   {
     vendor: 'Cursor',
