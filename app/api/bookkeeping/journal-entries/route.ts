@@ -155,6 +155,10 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
         .order('voucher_series', { ascending: tiebreakAscending })
         .order('voucher_number', { ascending: tiebreakAscending })
     }
+    // Final id tiebreak: series+number repeat across fiscal years, so on an
+    // all-years scope equal sort keys could reshuffle between page requests
+    // and duplicate or drop rows at page boundaries.
+    query = query.order('id', { ascending: sortKeys[sortKeys.length - 1].ascending })
   } else if (sortDate === 'asc' || sortDate === 'desc') {
     // Legacy sort_date param (older clients). Tiebreak same-date vouchers in
     // the SAME direction as the date sort (#972).
@@ -162,10 +166,12 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       .order('entry_date', { ascending: dateAscending })
       .order('voucher_series', { ascending: dateAscending })
       .order('voucher_number', { ascending: dateAscending })
+      .order('id', { ascending: dateAscending })
   } else {
     query = query
       .order('voucher_series', { ascending: true })
       .order('voucher_number', { ascending: true })
+      .order('id', { ascending: true })
   }
 
   query = query.range(offset, offset + limit - 1)

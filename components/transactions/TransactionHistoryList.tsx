@@ -216,7 +216,12 @@ export default function TransactionHistoryList({
         </div>
       )}
 
-      {hasMore && onLoadMore && !searchTerm && filtered.length > 0 && (
+      {/* Pagination pages BANK rows: keep it reachable whenever more exist,
+          even when the current page has no rows matching an acct:/bank:other
+          scope (filtered.length would hide the only way to older matches),
+          and drop it for the skattekonto scope where it cannot change the
+          visible list. */}
+      {hasMore && onLoadMore && !searchTerm && sourceFilter !== 'skatteverket' && (
         <div className="flex justify-center">
           <Button variant="outline" onClick={onLoadMore} disabled={isLoadingMore}>
             {isLoadingMore ? (

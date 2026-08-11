@@ -207,12 +207,15 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     expect(status).toBe(200)
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
     // Priority order preserved, then the voucher tiebreak in the LAST key's
-    // direction (ascending here) for stable pagination.
+    // direction (ascending here), then the globally unique id tiebreak:
+    // series+number repeat across fiscal years, so equal keys need a total
+    // order for stable pagination.
     expect(findCalls('journal_entries', 'order')).toEqual([
       ['total_amount', { ascending: false }],
       ['description', { ascending: true }],
       ['voucher_series', { ascending: true }],
       ['voucher_number', { ascending: true }],
+      ['id', { ascending: true }],
     ])
   })
 
@@ -231,13 +234,34 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     expect(status).toBe(200)
     // date deduped (first token wins), the unknown token is ignored, and the
     // stack caps at three keys (date, voucher, total): description never
-    // makes it in. Voucher is in the stack, so no extra tiebreak is appended.
+    // makes it in. Voucher is in the stack, so no series+number tiebreak is
+    // appended; the id tiebreak always is (duplicate series+number across
+    // fiscal years on the all-years scope).
     expect(findCalls('journal_entries', 'order')).toEqual([
       ['entry_date', { ascending: false }],
       ['voucher_series', { ascending: false }],
       ['voucher_number', { ascending: false }],
       ['total_amount', { ascending: true }],
+      ['id', { ascending: true }],
     ])
+  })
+
+  it('appends the id tiebreak on the all-years scope where voucher identifiers repeat', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    // No period_id: the "Alla räkenskapsår" scope, where A-1 exists once per
+    // fiscal year. Without a globally unique final key, rows with equal
+    // (entry_date, series, number) can swap between page requests and be
+    // duplicated or dropped at page boundaries.
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { include_related: 'false', sort_by: 'date_desc' },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const orderCalls = findCalls('journal_entries', 'order')
+    expect(orderCalls[orderCalls.length - 1]).toEqual(['id', { ascending: false }])
   })
 
   it('still serves a single date sort key through the include_related RPC', async () => {

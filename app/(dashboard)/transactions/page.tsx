@@ -520,9 +520,14 @@ export default function TransactionsPage() {
     return sekBalances.reduce((sum, a) => sum + (a.balance ?? 0), 0)
   }, [cashAccounts])
 
+  // The picker is shared by both view modes (convention 8), so 'bank:other'
+  // must surface when EITHER dataset holds unassigned rows: history can hold
+  // older null-account rows after every pending row got assigned.
   const hasUnassignedBankRows = useMemo(
-    () => uncategorizedTransactions.some((tx) => tx.cash_account_id == null),
-    [uncategorizedTransactions],
+    () =>
+      uncategorizedTransactions.some((tx) => tx.cash_account_id == null) ||
+      historyTransactions.some((tx) => tx.cash_account_id == null),
+    [uncategorizedTransactions, historyTransactions],
   )
 
   const sourceItems = useMemo<ContextPickerItem[]>(() => {

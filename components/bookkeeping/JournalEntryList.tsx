@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useEffect, useCallback } from 'react'
+import { Fragment, useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -473,7 +473,14 @@ export default function JournalEntryList() {
     return () => clearTimeout(handle)
   }, [searchInput])
 
+  // Sort/filter changes fire fetchEntries while an earlier request may still
+  // be in flight; only the newest request may write state, or a slow earlier
+  // response would overwrite the current sort's rows after they rendered.
+  const fetchGenRef = useRef(0)
+
   async function fetchEntries() {
+    const gen = ++fetchGenRef.current
+    const isCurrent = () => fetchGenRef.current === gen
     setLoading(true)
     setSelectedIds(new Set()) // selection is page-scoped, reset on reload
     const params = new URLSearchParams({
@@ -495,38 +502,50 @@ export default function JournalEntryList() {
     }
     if (search) params.set('search', search)
 
-    const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
-    if (!res.ok) {
-      // Surface the failure: stale rows (if any) stay on screen, the empty
-      // case renders the error state below, and the toast covers refetches.
-      setLoadFailed(true)
-      toast({ title: t('load_failed_title'), variant: 'destructive' })
+    try {
+      const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
+      if (!isCurrent()) return
+      if (!res.ok) {
+        // Surface the failure: stale rows (if any) stay on screen, the empty
+        // case renders the error state below, and the toast covers refetches.
+        setLoadFailed(true)
+        toast({ title: t('load_failed_title'), variant: 'destructive' })
+        setHasLoaded(true)
+        return
+      }
+      setLoadFailed(false)
+      const { data, count: total } = await res.json()
+      if (!isCurrent()) return
+      const loadedEntries = data || []
+      setEntries(loadedEntries)
+      setCount(total || 0)
+
+      // The pristine empty card vs. the (toggle-bearing) "drafts exist" state hinges
+      // on draftCount. When the committed list comes back empty, resolve the draft
+      // count BEFORE clearing loading so the toggle doesn't flash out for a frame on
+      // a stale count of 0. Every other case refreshes the badge in the background.
+      if (loadedEntries.length === 0 && listMode === 'committed') {
+        await fetchDraftCount()
+      } else {
+        fetchDraftCount()
+      }
+      if (!isCurrent()) return
       setHasLoaded(true)
-      setLoading(false)
-      return
-    }
-    setLoadFailed(false)
-    const { data, count: total } = await res.json()
-    const loadedEntries = data || []
-    setEntries(loadedEntries)
-    setCount(total || 0)
 
-    // The pristine empty card vs. the (toggle-bearing) "drafts exist" state hinges
-    // on draftCount. When the committed list comes back empty, resolve the draft
-    // count BEFORE clearing loading so the toggle doesn't flash out for a frame on
-    // a stale count of 0. Every other case refreshes the badge in the background.
-    if (loadedEntries.length === 0 && listMode === 'committed') {
-      await fetchDraftCount()
-    } else {
-      fetchDraftCount()
+      // Fetch attachment counts + rättelse markers for the loaded entries
+      const ids = loadedEntries.map((e: JournalEntry) => e.id)
+      fetchAttachmentCounts(ids)
+      fetchRattelseFlags(ids)
+    } catch {
+      // Network-level rejection (offline, aborted response body): same
+      // surfacing as a non-OK response, or the list stays dimmed forever.
+      if (!isCurrent()) return
+      setLoadFailed(true)
+      setHasLoaded(true)
+      toast({ title: t('load_failed_title'), variant: 'destructive' })
+    } finally {
+      if (isCurrent()) setLoading(false)
     }
-    setHasLoaded(true)
-    setLoading(false)
-
-    // Fetch attachment counts + rättelse markers for the loaded entries
-    const ids = loadedEntries.map((e: JournalEntry) => e.id)
-    fetchAttachmentCounts(ids)
-    fetchRattelseFlags(ids)
   }
 
   // Cheap count-only query for the "Utkast" badge, all years, so the badge
