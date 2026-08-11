@@ -36,6 +36,8 @@ import {
   ArrowRight,
   Plus,
   Link2,
+  ExternalLink,
+  FileQuestion,
   Search,
   Circle,
   X,
@@ -45,7 +47,8 @@ import {
   Maximize2,
 } from 'lucide-react'
 import Link from 'next/link'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt'
 import { createClient } from '@/lib/supabase/client'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
@@ -193,8 +196,8 @@ function deriveInboxStatus(item: InboxItem): InboxStatus {
 
 function WorkspaceSkeleton() {
   return (
-    <div className="h-[calc(100vh-1px)] md:h-full p-4 md:p-6">
-      <div className="h-full flex flex-col rounded-lg border bg-card overflow-hidden">
+    <div className="h-[calc(100vh-1px)] md:h-full">
+      <div className="h-full flex flex-col overflow-hidden">
         <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5">
           <div className="flex items-center gap-2 min-w-0">
             <Skeleton className="h-4 w-4 shrink-0" />
@@ -256,7 +259,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // Defaults to 'todo': the active inbox (everything not yet booked), so
   // booked underlag drop out of the default view while attached-but-unbooked
   // ones stay visible.
-  const [filter, setFilter] = useState<'todo' | 'linked' | 'booked' | 'error' | 'all'>('todo')
+  // 'missing' is the odd one out: it lists bank purchases, not inbox items, so
+  // the list and both panes branch on it.
+  const [filter, setFilter] = useState<'todo' | 'linked' | 'booked' | 'error' | 'all' | 'missing'>('todo')
   const [searchTerm, setSearchTerm] = useState('')
   // Bulk selection. Items linked to a supplier invoice are skipped at delete
   // time (server returns 409); we still allow them to be selected so the
@@ -444,6 +449,66 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   // ── List filter + search (client-side over the fetched list) ─
 
+  // Purchases with no underlag at all. They are not inbox items and never
+  // become them, so they live beside `items` rather than inside it: widening
+  // InboxItem to cover a bank row would put a null document, a null extraction
+  // and a null status through every consumer of that type.
+  const [purchases, setPurchases] = useState<PurchaseWithoutUnderlag[]>([])
+  const [selectedPurchaseId, setSelectedPurchaseId] = useState<string | null>(null)
+
+  // Whether any mailbox can actually be searched. Counting rows would not
+  // answer that: a revoked or expired connection is still a row, and the hunt
+  // skips it, so the button would promise a search that returns nothing every
+  // pass. A dead mailbox looking healthy is the exact failure this feature
+  // exists to surface, so it must not start by doing it in its own header.
+  const [mailConnected, setMailConnected] = useState(false)
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch('/api/extensions/ext/mail/connections')
+        if (!res.ok) return
+        const json = (await res.json()) as {
+          data?: { connections?: { status?: string }[] }
+        }
+        setMailConnected((json.data?.connections ?? []).some((c) => c.status === 'active'))
+      } catch {
+        // The extension may not be enabled at all; stay quiet.
+      }
+    })()
+  }, [])
+
+  const fetchPurchases = useCallback(async () => {
+    try {
+      const res = await fetch('/api/extensions/ext/invoice-inbox/purchases')
+      if (!res.ok) return
+      const json = (await res.json()) as { data: { purchases: PurchaseWithoutUnderlag[] } }
+      setPurchases(json.data.purchases ?? [])
+    } catch {
+      // A missing count is better than an error beside the user's documents.
+    }
+  }, [])
+
+  useEffect(() => {
+    void fetchPurchases()
+  }, [fetchPurchases])
+
+  // A pass can attach a document to a purchase, which moves a row from one
+  // list to the other, so both refresh as the run goes rather than at the end.
+  const {
+    hunt,
+    stop: stopHunt,
+    hunting,
+    progress: huntProgress,
+  } = useReceiptHunt(() => {
+    void fetchItems()
+    void fetchPurchases()
+  })
+
+  const selectedPurchase = useMemo(
+    () => purchases.find((p) => p.id === selectedPurchaseId) ?? null,
+    [purchases, selectedPurchaseId],
+  )
+
   // Per-status counts for the filter pills. Computed once over the full list.
   const statusCounts = useMemo(() => {
     const counts = { todo: 0, linked: 0, booked: 0, error: 0, all: items.length }
@@ -465,15 +530,29 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       { key: 'linked', label: 'Kopplade', count: statusCounts.linked },
       { key: 'booked', label: 'Bokförda', count: statusCounts.booked },
     ]
+    // Only worth a pill when there is something behind it: a company that
+    // keeps every receipt should not be shown a permanent empty accusation.
+    if (purchases.length > 0 || filter === 'missing') {
+      list.push({ key: 'missing', label: 'Saknar underlag', count: purchases.length })
+    }
     if (statusCounts.error > 0 || filter === 'error') {
       list.push({ key: 'error', label: 'Fel', count: statusCounts.error })
     }
     list.push({ key: 'all', label: 'Alla', count: statusCounts.all })
     return list
-  }, [statusCounts, filter])
+  }, [statusCounts, filter, purchases.length])
+
+  const filteredPurchases = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase()
+    if (term === '') return purchases
+    return purchases.filter((p) =>
+      [p.merchant_name, p.description].some((v) => v?.toLowerCase().includes(term)),
+    )
+  }, [purchases, searchTerm])
 
   const filteredItems = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
+    if (filter === 'missing') return []
     return items.filter((item) => {
       // Status filter. "todo" is the active inbox: everything except booked.
       const status = deriveInboxStatus(item)
@@ -552,6 +631,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   const handleSelect = useCallback(async (id: string) => {
     setSelectedId(id)
+    setSelectedPurchaseId(null)
     setSelected(null)
     setDocUrl(null)
     setDocMime(null)
@@ -830,7 +910,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   return (
     <div
-      className="min-h-[calc(100vh-1px)] md:min-h-full xl:h-full p-4 md:p-6"
+      className="min-h-[calc(100vh-1px)] md:min-h-full xl:h-full"
       onDragOver={(e) => { e.preventDefault(); if (!isDragging) setIsDragging(true) }}
       onDragLeave={(e) => {
         // only clear when leaving the workspace itself, not children
@@ -838,7 +918,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       }}
       onDrop={handleDrop}
     >
-    <div className="xl:h-full flex flex-col rounded-lg border bg-card xl:overflow-hidden">
+    {/* No card of its own: /e/ routes render full-bleed inside the dashboard
+        panel, which already supplies the border, the 12px radius and the
+        background. Wrapping the workspace in a second rounded, bordered
+        surface drew two frames 24px apart with mismatched radii. */}
+    <div className="xl:h-full flex flex-col xl:overflow-hidden">
       {/* Top bar */}
       <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
@@ -886,6 +970,26 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             className="hidden"
             onChange={handleFileInputChange}
           />
+          {/* The hunt lived only in Settings, so the button that fills this
+              page sat on a different page. It runs in passes and reports as it
+              goes, because a backlog does not clear in one request. */}
+          {mailConnected && (
+            <Button variant="ghost" size="sm" onClick={hunting ? stopHunt : hunt} disabled={false}>
+              {hunting ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                  {huntProgress
+                    ? `Letar… ${huntProgress.fetched} hittade`
+                    : 'Letar…'}
+                </>
+              ) : (
+                <>
+                  <Search className="h-3.5 w-3.5 mr-1.5" />
+                  Leta i mejlen
+                </>
+              )}
+            </Button>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -930,7 +1034,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   <button
                     key={pill.key}
                     type="button"
-                    onClick={() => setFilter(pill.key)}
+                    onClick={() => {
+                      setFilter(pill.key)
+                      // The panes show one kind of row at a time; a stale
+                      // selection from the other kind would outlive its list.
+                      if (pill.key === 'missing') setSelectedId(null)
+                      else setSelectedPurchaseId(null)
+                    }}
                     className={cn(
                       'text-[11px] px-2 py-0.5 rounded-full border transition-colors',
                       filter === pill.key
@@ -1064,25 +1174,39 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 Inkorgen är tom.
               </div>
             )
-          ) : filteredItems.length === 0 ? (
+          ) : (filter === 'missing' ? filteredPurchases.length : filteredItems.length) === 0 ? (
             <div className="p-6 text-center text-xs text-muted-foreground">
               {filter === 'todo'
                 ? 'Inget att åtgärda; allt är bearbetat.'
-                : 'Inga poster matchar filtret.'}
+                : filter === 'missing'
+                  ? 'Varje köp har sitt underlag.'
+                  : 'Inga poster matchar filtret.'}
             </div>
           ) : (
             <ul>
-              {filteredItems.map((item) => (
-                <InboxRow
-                  key={item.id}
-                  item={item}
-                  selected={item.id === selectedId}
-                  onClick={() => handleSelect(item.id)}
-                  isChecked={selectedIds.has(item.id)}
-                  onToggleChecked={() => toggleSelected(item.id)}
-                  anyChecked={selectedIds.size > 0}
-                />
-              ))}
+              {filter === 'missing'
+                ? filteredPurchases.map((p) => (
+                    <PurchaseRow
+                      key={p.id}
+                      purchase={p}
+                      selected={p.id === selectedPurchaseId}
+                      onClick={() => {
+                        setSelectedPurchaseId(p.id)
+                        setSelectedId(null)
+                      }}
+                    />
+                  ))
+                : filteredItems.map((item) => (
+                    <InboxRow
+                      key={item.id}
+                      item={item}
+                      selected={item.id === selectedId}
+                      onClick={() => handleSelect(item.id)}
+                      isChecked={selectedIds.has(item.id)}
+                      onToggleChecked={() => toggleSelected(item.id)}
+                      anyChecked={selectedIds.size > 0}
+                    />
+                  ))}
             </ul>
           )}
         </aside>
@@ -1097,7 +1221,21 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             !hasAnyItem && 'hidden xl:block'
           )}
         >
-          {selected ? (
+          {selectedPurchase ? (
+            // There is no file to show, so the pane says why instead of
+            // rendering an empty frame.
+            <div className="h-full flex items-center justify-center p-8">
+              <div className="text-center max-w-sm">
+                <FileQuestion className="h-6 w-6 mx-auto mb-3 text-muted-foreground opacity-60" />
+                <p className="text-sm">Inget underlag hittat</p>
+                <p className="text-xs text-muted-foreground mt-1.5">
+                  {selectedPurchase.portal
+                    ? `${selectedPurchase.portal.vendor} skickar ingen fil. Hämta fakturan och ladda upp den här, så kopplas den till köpet.`
+                    : 'Vi har sökt i brevlådorna och i portalkatalogen. Ladda upp kvittot här, eller vidarebefordra det till inkorgsadressen.'}
+                </p>
+              </div>
+            </div>
+          ) : selected ? (
             <DocumentPreview
               docUrl={docUrl}
               docMime={docMime}
@@ -1144,7 +1282,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             !hasAnyItem && 'hidden xl:block'
           )}
         >
-          {selected ? (
+          {selectedPurchase ? (
+            <PurchaseRail purchase={selectedPurchase} />
+          ) : selected ? (
             <FieldsRail
               item={selected}
               docMime={docMime}
@@ -1785,6 +1925,289 @@ function EmptyPreview({
   )
 }
 
+// ── Purchases with no underlag ───────────────────────────────
+
+/**
+ * A bank purchase that has no document at all.
+ *
+ * These have never been on this page, because the page lists documents and a
+ * purchase without one has nothing to list. They are the other half of the
+ * question the receipt hunt asks, and the half a person can act on: fetch the
+ * invoice from wherever the supplier keeps it, or ask whoever made the purchase.
+ */
+export interface PurchaseWithoutUnderlag {
+  id: string
+  date: string
+  description: string | null
+  merchant_name: string | null
+  amount: number
+  currency: string | null
+  amount_sek: number | null
+  portal: { vendor: string; url: string; note: string | null } | null
+}
+
+function PurchaseRow({
+  purchase,
+  selected,
+  onClick,
+}: {
+  purchase: PurchaseWithoutUnderlag
+  selected: boolean
+  onClick: () => void
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          'w-full text-left px-3 py-2 border-b transition-colors',
+          selected ? 'bg-secondary' : 'hover:bg-secondary/60',
+        )}
+      >
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-[13px] truncate">
+            {purchase.merchant_name || purchase.description || 'Okänt köp'}
+          </span>
+          <span className="text-xs tabular-nums shrink-0">
+            {formatCurrency(Math.abs(purchase.amount), purchase.currency ?? undefined)}
+          </span>
+        </div>
+        <div className="flex items-baseline justify-between gap-2 mt-0.5">
+          <span className="text-xs text-muted-foreground tabular-nums">{formatDate(purchase.date)}</span>
+          {/* A chip only when the row deviates: here, when we can actually
+              tell the user where to go. */}
+          {purchase.portal && (
+            <Badge variant="outline" className="text-[10px] font-normal">
+              {purchase.portal.vendor}
+            </Badge>
+          )}
+        </div>
+      </button>
+    </li>
+  )
+}
+
+function PurchaseRail({ purchase }: { purchase: PurchaseWithoutUnderlag }) {
+  return (
+    <div className="p-4 space-y-4">
+      <div>
+        <h3 className="text-sm font-medium">
+          {purchase.merchant_name || purchase.description || 'Okänt köp'}
+        </h3>
+        <p className="text-xs text-muted-foreground mt-0.5">Köp utan underlag</p>
+      </div>
+
+      <dl className="space-y-1.5 text-xs">
+        <div className="flex justify-between gap-3">
+          <dt className="text-muted-foreground">Datum</dt>
+          <dd className="tabular-nums">{formatDate(purchase.date)}</dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt className="text-muted-foreground">Belopp</dt>
+          <dd className="tabular-nums">
+            {formatCurrency(Math.abs(purchase.amount), purchase.currency ?? undefined)}
+          </dd>
+        </div>
+        {purchase.description && (
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground shrink-0">Kontotext</dt>
+            <dd className="text-muted-foreground text-right break-words">{purchase.description}</dd>
+          </div>
+        )}
+      </dl>
+
+      {purchase.portal ? (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            {purchase.portal.note ??
+              `${purchase.portal.vendor} skickar ingen fil. Fakturan ligger bakom en inloggning.`}
+          </p>
+          {/* We never log in for anyone. Knowing where the invoice is costs no
+              password and is most of the value. */}
+          <Button size="sm" className="w-full" asChild>
+            <a href={purchase.portal.url} target="_blank" rel="noopener noreferrer">
+              Öppna {purchase.portal.vendor}
+              <ExternalLink className="h-3.5 w-3.5 ml-1.5" />
+            </a>
+          </Button>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Vi hittade ingen bilaga och känner inte till någon portal för den här leverantören. Ladda upp
+          kvittot här, eller vidarebefordra det till inkorgsadressen.
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── Proposed kontering ───────────────────────────────────────
+
+/**
+ * What this underlag would be booked as, for a matched transaction.
+ *
+ * Read-only on purpose. Per convention 14 nothing AI-suggested posts without
+ * review, so this shows the answer and the existing booking dialog remains the
+ * only way to commit it. The lines come from the same builder the commit path
+ * uses, so what is shown here is what would be posted.
+ *
+ * The route answers honestly when it cannot propose: a company with no rule and
+ * no history, a foreign-currency row the engine would mis-VAT, a transaction
+ * that already carries a verifikat. Each of those renders as a sentence rather
+ * than as an empty table, because "we have nothing for this" is information.
+ */
+type SuggestedBooking = {
+  source:
+    | 'mapping_rule'
+    | 'booking_template'
+    | 'counterparty_template'
+    | 'no_mapping'
+    | 'no_transaction'
+    | 'already_booked'
+    | 'currency_unsupported'
+  lines: { account_number: string; debit_amount: number; credit_amount: number; description: string }[]
+  confidence: number | null
+  requires_review?: boolean
+  direction_mismatch?: boolean
+  description?: string
+  rule_name?: string | null
+  entry_date?: string
+}
+
+const SUGGESTION_SOURCE_LABEL: Record<string, string> = {
+  counterparty_template: 'Så du brukar bokföra den här leverantören',
+  booking_template: 'Från en bokföringsmall',
+  mapping_rule: 'Från en konteringsregel',
+}
+
+/** Why there is no proposal, said plainly rather than shown as an empty table. */
+const SUGGESTION_EMPTY_REASON: Record<string, string> = {
+  no_mapping:
+    'Vi har inget förslag: leverantören är obekant och ingen regel matchar. Bokför manuellt en gång, så känns den igen nästa gång.',
+  currency_unsupported:
+    'Köpet är i utländsk valuta och matchades av en konteringsregel. Momsen skulle bli fel, så vi visar inget förslag.',
+}
+
+function ProposedBooking({ itemId }: { itemId: string }) {
+  const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
+  const [data, setData] = useState<SuggestedBooking | null>(null)
+
+  useEffect(() => {
+    // Arrowing down a list fires one of these per row. Without the abort the
+    // superseded requests still run to completion server-side, and a slow one
+    // can resolve after a faster later one.
+    const controller = new AbortController()
+    let cancelled = false
+    setState('loading')
+    setData(null)
+    fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}/suggest-booking`, {
+      method: 'POST',
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status))
+        return (await res.json()) as { data: SuggestedBooking }
+      })
+      .then((json) => {
+        if (cancelled) return
+        setData(json.data)
+        setState('ready')
+      })
+      .catch(() => {
+        // A suggestion that cannot be fetched is not something the user did:
+        // stay quiet rather than showing an error beside their document.
+        if (!cancelled) setState('failed')
+      })
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [itemId])
+
+  if (state === 'loading') return <Skeleton className="h-24 w-full" />
+  if (state === 'failed' || !data) return null
+  if (data.source === 'already_booked' || data.source === 'no_transaction') return null
+
+  if (data.lines.length === 0) {
+    const reason = SUGGESTION_EMPTY_REASON[data.source]
+    return reason ? <p className="text-xs text-muted-foreground">{reason}</p> : null
+  }
+
+  const debit = data.lines.reduce((t, l) => t + (l.debit_amount || 0), 0)
+  const credit = data.lines.reduce((t, l) => t + (l.credit_amount || 0), 0)
+  const balanced = Math.round((debit - credit) * 100) === 0
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-xs font-medium">Föreslagen kontering</h3>
+        {data.entry_date && (
+          <span className="text-[11px] text-muted-foreground tabular-nums">
+            Bokförs {formatDate(data.entry_date)}
+          </span>
+        )}
+      </div>
+
+      <table className="w-full border-collapse text-xs">
+        <thead>
+          <tr className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            <th className="pb-1 pr-2 text-left font-medium" colSpan={2}>
+              Konto
+            </th>
+            <th className="pb-1 text-right font-medium w-20">Debet</th>
+            <th className="pb-1 pl-2 text-right font-medium w-20">Kredit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.lines.map((l, i) => (
+            <tr key={`${l.account_number}-${i}`} className="border-b border-border/40 last:border-0">
+              <td className="py-1 pr-2 tabular-nums text-muted-foreground w-10">{l.account_number}</td>
+              <td className="py-1 pr-2 truncate" title={l.description}>
+                {l.description}
+              </td>
+              <td className="py-1 text-right tabular-nums whitespace-nowrap w-20">
+                {l.debit_amount ? formatCurrency(l.debit_amount) : ''}
+              </td>
+              <td className="py-1 pl-2 text-right tabular-nums whitespace-nowrap w-20 text-muted-foreground">
+                {l.credit_amount ? formatCurrency(l.credit_amount) : ''}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* Balance is stated rather than assumed: the builder balances by
+          construction, so a mismatch here means something upstream is wrong
+          and the user should see it before booking. */}
+      {!balanced && (
+        <p className="text-[11px] text-warning">
+          Debet {formatCurrency(debit)} · Kredit {formatCurrency(credit)}
+        </p>
+      )}
+
+      {(SUGGESTION_SOURCE_LABEL[data.source] || data.requires_review || data.direction_mismatch) && (
+        <details className="text-[11px] text-muted-foreground">
+          <summary className="cursor-pointer hover:text-foreground">Varför så här?</summary>
+          <div className="pt-1.5 space-y-1">
+            {SUGGESTION_SOURCE_LABEL[data.source] && <p>{SUGGESTION_SOURCE_LABEL[data.source]}</p>}
+            {data.rule_name && <p>Regel: {data.rule_name}</p>}
+            {data.direction_mismatch && (
+              <p className="text-warning">
+                Beloppets riktning stämmer inte med hur leverantören brukar bokföras. Kontrollera innan du
+                bokför.
+              </p>
+            )}
+            {data.requires_review && !data.direction_mismatch && (
+              <p>Förslaget är osäkert och bör granskas innan du bokför.</p>
+            )}
+          </div>
+        </details>
+      )}
+    </div>
+  )
+}
+
 // ── Fields rail ──────────────────────────────────────────────
 
 function FieldsRail({
@@ -2154,6 +2577,10 @@ function FieldsRail({
                 Öppna transaktionen →
               </Link>
             </div>
+
+            {/* The answer the rail never gave: what this would be booked as.
+                Read-only; booking still goes through the dialog below. */}
+            <ProposedBooking itemId={item.id} />
             {onAskAssistant && (
               <Button
                 variant="default"

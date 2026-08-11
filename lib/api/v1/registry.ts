@@ -275,9 +275,33 @@ function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
     case 'optional':
     case 'ZodOptional':
     case 'nullable':
-    case 'ZodNullable': {
+    case 'ZodNullable':
+    // A `.default()` field accepts the inner type on input; the object case
+    // below additionally treats it as not-required.
+    case 'default':
+    case 'ZodDefault': {
       const inner = (def as { innerType: ZodTypeAny }).innerType
       return zodToJsonSchema(inner)
+    }
+    case 'record':
+    case 'ZodRecord': {
+      const valueType = (def as { valueType?: ZodTypeAny }).valueType
+      return {
+        type: 'object',
+        additionalProperties: valueType ? zodToJsonSchema(valueType) : true,
+      }
+    }
+    // `.transform()` / `.pipe()` wrappers: describe the INPUT side, which is
+    // what an API caller must send.
+    case 'pipe':
+    case 'ZodPipeline': {
+      const input = (def as { in?: ZodTypeAny }).in
+      return input ? zodToJsonSchema(input) : {}
+    }
+    case 'effects':
+    case 'ZodEffects': {
+      const inner = (def as { schema?: ZodTypeAny }).schema
+      return inner ? zodToJsonSchema(inner) : {}
     }
     case 'object':
     case 'ZodObject': {
@@ -288,7 +312,9 @@ function zodToJsonSchema(schema: ZodTypeAny): JsonSchema {
         properties[key] = zodToJsonSchema(value)
         const valueDef = (value as unknown as { _def: { typeName?: string; type?: string } })._def
         const valueDisc = valueDef.type ?? valueDef.typeName ?? ''
-        if (valueDisc !== 'optional' && valueDisc !== 'ZodOptional') {
+        // Optional and defaulted fields may be omitted by the caller.
+        const mayOmit = ['optional', 'ZodOptional', 'default', 'ZodDefault'].includes(valueDisc)
+        if (!mayOmit) {
           required.push(key)
         }
       }
@@ -362,6 +388,44 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       ? { '204': { description: 'No Content' } }
       : { '200': { description: 'Success', content: successContent } }
 
+    // Path parameters, derived from the `:param` pattern itself so every
+    // templated segment is declared even though routes don't register a
+    // params schema. All v1 path params are string ids.
+    const parameters = [...def.path.matchAll(/:([^/]+)/g)].map(([, name]) => ({
+      name,
+      in: 'path',
+      required: true,
+      schema: { type: 'string' },
+    }))
+
+    // Request body from the registered Zod schema. In multipart bodies a
+    // part registered as `z.unknown()` is by convention the binary file part
+    // (see documents.upload); the converter turns it into an empty schema,
+    // which is rewritten here to `format: binary` so client generators
+    // produce correct multipart uploads.
+    let requestBody: Record<string, unknown> | undefined
+    if (def.request?.body) {
+      const contentType = def.request.contentType ?? 'application/json'
+      let bodySchema = zodToJsonSchema(def.request.body)
+      if (contentType === 'multipart/form-data' && bodySchema.properties) {
+        bodySchema = {
+          ...bodySchema,
+          properties: Object.fromEntries(
+            Object.entries(bodySchema.properties).map(([key, prop]) => [
+              key,
+              Object.keys(prop).length === 0
+                ? { type: 'string', format: 'binary' }
+                : prop,
+            ]),
+          ),
+        }
+      }
+      requestBody = {
+        required: true,
+        content: { [contentType]: { schema: bodySchema } },
+      }
+    }
+
     const operationDef: Record<string, unknown> = {
       operationId: def.operation,
       summary: def.summary,
@@ -377,6 +441,8 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       'x-reversible': def.reversible,
       'x-dry-run-supported': def.dryRunSupported,
       ...(def.scope ? { 'x-required-scope': def.scope } : {}),
+      ...(parameters.length > 0 ? { parameters } : {}),
+      ...(requestBody ? { requestBody } : {}),
       responses: {
         ...successResponse,
         '400': { description: 'Validation error', $ref: '#/components/responses/Error' },

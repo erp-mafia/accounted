@@ -50,6 +50,7 @@ declarations, ingest SIE files, and subscribe to webhooks for state changes.
 
 ## Resources
 
+- Agent skill (full API surface for coding agents): \`npx skills add erp-mafia/accounted --skill accounted-api\`
 - OpenAPI 3.1 spec: ${base}/api/v1/openapi.json
 - Skills catalogue: ${base}/.well-known/skills/index.json
 - Health check: ${base}/api/v1/health

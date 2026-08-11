@@ -80,11 +80,20 @@ export const POST = withRouteContext('receipt_hunt.run', async (_request, ctx) =
   })
 
   const searched = result.mail?.searched ?? 0
+  const searchFailures = result.mail?.searchFailures ?? 0
+  if (searchFailures > 0) {
+    log.warn('manual receipt hunt: some mailboxes refused the search', {
+      companyId,
+      runId,
+      searchFailures,
+    })
+  }
   log.info('manual receipt hunt finished', {
     companyId,
     runId,
     searched,
     fetched: result.mail?.ingested ?? 0,
+    searchFailures,
     proposed: result.proposed,
   })
 
@@ -96,6 +105,10 @@ export const POST = withRouteContext('receipt_hunt.run', async (_request, ctx) =
       fetched: result.mail?.ingested ?? 0,
       proposed: result.proposed,
       remaining: Math.max(0, result.candidates - searched),
+      // Non-zero means a mailbox could not be read. Zero fetched then means
+      // "we could not look", not "there is nothing there", and the caller must
+      // neither say the second nor treat the run as finished.
+      searchFailures,
     },
   })
 })

@@ -201,6 +201,23 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse
   }
 
+  // Public agent-discovery + API docs surfaces. /llms.txt and /llms-full.txt
+  // exist FOR anonymous consumers (the llms.txt convention targets logged-out
+  // crawlers and IDE agents), and /docs is the public API documentation the
+  // OpenAPI spec and the installable accounted-api skill link to. None of it
+  // reads the session. Without this branch every anonymous hit 307-bounced to
+  // /login, which silently broke agent discovery on the hosted product
+  // (openapi.json only escaped because the proxy matcher skips .json paths).
+  // Logged-in users fall through to the same content: no redirect either way.
+  if (
+    pathname === '/llms.txt' ||
+    pathname === '/llms-full.txt' ||
+    pathname === '/docs' ||
+    pathname.startsWith('/docs/')
+  ) {
+    return supabaseResponse
+  }
+
   // Public auth routes: allow access
   if (
     pathname.startsWith('/login') ||

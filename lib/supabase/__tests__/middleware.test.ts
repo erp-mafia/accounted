@@ -249,6 +249,32 @@ describe('updateSession redirect destinations', () => {
     })
   })
 
+  // ── Public agent-discovery + docs surfaces ────────────────────────────
+
+  describe('anonymous access to agent-discovery and docs surfaces', () => {
+    it.each(['/llms.txt', '/llms-full.txt', '/docs/api', '/docs/api.md', '/docs/api/reference.md', '/docs/api/cookbook/quickstart.md'])(
+      'serves %s without a login bounce',
+      async (path) => {
+        const response = await run(path)
+        expect(response.status).not.toBe(307)
+        expect(locationOf(response)).toBeNull()
+      },
+    )
+
+    it('does not treat a /docs prefix on another route as public', async () => {
+      // /docsy-dashboard must still bounce: only /docs and /docs/* are public.
+      const response = await run('/docsy-dashboard')
+      expect(response.status).toBe(307)
+      expect(new URL(locationOf(response)!).pathname).toBe('/login')
+    })
+
+    it('serves docs to a signed-in user without redirecting away', async () => {
+      state.user = SIGNED_IN
+      const response = await run('/docs/api')
+      expect(response.status).not.toBe(307)
+    })
+  })
+
   // ── Site 1: protected-route bounce ────────────────────────────────────
 
   describe('protected route bounce to /login', () => {
