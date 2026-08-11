@@ -27,6 +27,8 @@ export interface HuntResult {
   proposed: number
   remaining: number
   failed?: boolean
+  /** Connections that refused the search. See the stop condition below. */
+  searchFailures?: number
 }
 
 export interface HuntProgress {
@@ -79,6 +81,15 @@ export function useReceiptHunt(onPass?: () => void) {
         onPass?.()
 
         // Nothing new this pass: the mailboxes have no more for what is open.
+        //
+        // Unless a mailbox refused to be read, in which case zero fetched says
+        // nothing about what is in there. Stopping on it, and reporting it as
+        // "hittade inget", would tell the user their receipts do not exist
+        // because Gmail was busy. Treat it as a failure and let them retry.
+        if ((body.data.searchFailures ?? 0) > 0) {
+          setResult({ ...body.data, fetched, proposed, failed: true })
+          return
+        }
         if (body.data.fetched === 0) {
           setResult({ ...body.data, fetched, proposed })
           return
