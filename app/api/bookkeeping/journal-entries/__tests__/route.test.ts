@@ -7,7 +7,7 @@ import {
 } from '@/tests/helpers'
 
 // Mock dependencies
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -154,6 +154,45 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     // the route must fall through to the direct PostgREST query.
     expect(mockSupabase.from).toHaveBeenCalledWith('journal_entries')
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('orders by the total_amount computed column on amount sort, bypassing the RPC', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', sort_by: 'total_desc' },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    // Amount sort orders by a PostgREST computed column (migration
+    // 20260811100000) that the include_related RPC can't express, so the
+    // route must fall through to the direct query (strict period view),
+    // exactly like voucher sort.
+    expect(mockSupabase.from).toHaveBeenCalledWith('journal_entries')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(findCalls('journal_entries', 'order')[0]).toEqual([
+      'total_amount',
+      { ascending: false },
+    ])
+  })
+
+  it('orders by description on description sort, bypassing the RPC', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', sort_by: 'description_asc' },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(findCalls('journal_entries', 'order')[0]).toEqual([
+      'description',
+      { ascending: true },
+    ])
   })
 
   it('accepts a large limit (the "Alla" page size) and a negative offset without erroring', async () => {

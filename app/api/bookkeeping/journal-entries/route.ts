@@ -48,10 +48,16 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // never widens it.
   const search = searchParams.get('search')?.trim() || null
   // 'date_desc' (default) | 'date_asc' | 'voucher_asc' | 'voucher_desc'
+  // | 'total_asc' | 'total_desc' | 'description_asc' | 'description_desc'
   // sort_by overrides sort_date when present. sort_date is kept for backwards
   // compatibility with older clients.
   const sortBy = searchParams.get('sort_by')
   const isVoucherSort = sortBy === 'voucher_asc' || sortBy === 'voucher_desc'
+  // Amount sort orders by the total_amount computed column (sum of debit
+  // lines, migration 20260811100000): PostgREST evaluates it per row, which
+  // the RPC path below cannot express.
+  const isTotalSort = sortBy === 'total_asc' || sortBy === 'total_desc'
+  const isDescriptionSort = sortBy === 'description_asc' || sortBy === 'description_desc'
   // Default on: when a fiscal period is selected, include follow-up entries
   // booked in later periods whose source aggregate (invoice, supplier invoice)
   // is dated inside the selected period. Pass include_related=false to
@@ -61,16 +67,16 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   const dateAscending = sortDate === 'asc' || sortBy === 'date_asc'
   const sortDateParam = sortBy === 'date_asc' || sortDate === 'asc' ? 'asc' : 'desc'
 
-  // Voucher-sort path: include_related RPC doesn't support voucher ordering,
-  // so fall through to the direct query below. This means voucher sort is
-  // *strict by fiscal_period_id*: cross-period follow-up entries that the
-  // RPC normally surfaces under date sort are excluded under voucher sort.
+  // Voucher/total/description-sort path: the include_related RPC only orders
+  // by date, so fall through to the direct query below. This means these
+  // sorts are *strict by fiscal_period_id*: cross-period follow-up entries
+  // that the RPC normally surfaces under date sort are excluded.
   // That's intentional: voucher numbers are series-scoped within a fiscal
   // year (BFL 5 kap 6-7 §§), so showing series A1, A2 … alongside entries
   // belonging to a different year's series would be misleading. The trade-off
   // is that the visible row count may differ between sort modes for the same
   // period; the strict count is the BFL-compliant view of that year.
-  if (periodId && includeRelated && !isVoucherSort && !search) {
+  if (periodId && includeRelated && !isVoucherSort && !isTotalSort && !isDescriptionSort && !search) {
     const { data, error } = await supabase.rpc('list_fiscal_period_entries_with_related', {
       p_company_id: companyId,
       p_period_id: periodId,
@@ -113,6 +119,19 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     query = query
       .order('voucher_series', { ascending: voucherAscending })
       .order('voucher_number', { ascending: voucherAscending })
+  } else if (isTotalSort) {
+    // total_amount is a computed column (a function on the row type), which
+    // PostgREST accepts in order=. Voucher tiebreak keeps pagination stable
+    // when many entries share an amount.
+    query = query
+      .order('total_amount', { ascending: sortBy === 'total_asc' })
+      .order('voucher_series', { ascending: true })
+      .order('voucher_number', { ascending: true })
+  } else if (isDescriptionSort) {
+    query = query
+      .order('description', { ascending: sortBy === 'description_asc' })
+      .order('voucher_series', { ascending: true })
+      .order('voucher_number', { ascending: true })
   } else if (sortDate === 'asc' || sortDate === 'desc' || sortBy === 'date_asc' || sortBy === 'date_desc') {
     // Tiebreak same-date vouchers in the SAME direction as the date sort, and
     // by series before number so the order matches the RPC path (#972).

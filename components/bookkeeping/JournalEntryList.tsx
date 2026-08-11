@@ -39,7 +39,7 @@ import {
   QUIET_LINK_CLASS,
   RowFoldout,
 } from '@/components/ui/dry-table'
-import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
 import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -67,12 +67,92 @@ const NEEDS_ATTACHMENT = new Set([
   'import',
 ])
 
-type SortBy = 'date_desc' | 'date_asc' | 'voucher_asc' | 'voucher_desc'
+type SortBy =
+  | 'date_desc'
+  | 'date_asc'
+  | 'voucher_asc'
+  | 'voucher_desc'
+  | 'total_asc'
+  | 'total_desc'
+  | 'description_asc'
+  | 'description_desc'
 
-// Per-company persistence of the sort dropdown. Mirrors the localStorage
+// Per-company persistence of the sort order. Mirrors the localStorage
 // convention used by FiscalYearSelector ('Accounted:fiscal-year:<companyId>').
 const SORT_STORAGE_KEY_PREFIX = 'Accounted:journal-sort:'
-const SORT_VALUES = new Set<SortBy>(['date_desc', 'date_asc', 'voucher_asc', 'voucher_desc'])
+const SORT_VALUES = new Set<SortBy>([
+  'date_desc',
+  'date_asc',
+  'voucher_asc',
+  'voucher_desc',
+  'total_asc',
+  'total_desc',
+  'description_asc',
+  'description_desc',
+])
+
+// Column-header sorting (support feedback: "filtrera/sortera alla rubriker").
+// Every SortBy value is `${column}_${direction}`, so the active column and
+// direction derive from the persisted string.
+type SortColumn = 'voucher' | 'date' | 'description' | 'total'
+type SortDirection = 'asc' | 'desc'
+
+// The list's resting order, and the third step of the header toggle cycle.
+const DEFAULT_SORT: SortBy = 'date_desc'
+
+// Same shape as the invoices list header (app/(dashboard)/invoices/page.tsx):
+// first click sorts ascending, a second click flips; inactive columns show a
+// dimmed two-way arrow. One deliberate difference: a third click returns to
+// DEFAULT_SORT so a sort is always escapable from the header itself. The
+// invoices list starts unsorted and has no default order to return to, so it
+// stays a two-state toggle.
+interface SortableHeaderProps {
+  label: string
+  sortLabel: string
+  column: SortColumn
+  activeColumn: SortColumn
+  direction: SortDirection
+  onSort: (column: SortColumn) => void
+  className?: string
+  align?: 'left' | 'right'
+}
+
+function SortableHeader({
+  label,
+  sortLabel,
+  column,
+  activeColumn,
+  direction,
+  onSort,
+  className,
+  align = 'left',
+}: SortableHeaderProps) {
+  const active = activeColumn === column
+  const SortIcon = !active ? ArrowUpDown : direction === 'asc' ? ArrowUp : ArrowDown
+
+  return (
+    <th
+      className={cn(TH_CLASS, className)}
+      aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      <button
+        type="button"
+        className={cn(
+          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+          align === 'right' && 'ml-auto justify-end',
+        )}
+        aria-label={sortLabel}
+        onClick={() => onSort(column)}
+      >
+        <span>{label}</span>
+        <SortIcon
+          aria-hidden="true"
+          className={cn('h-3.5 w-3.5 shrink-0', !active && 'text-muted-foreground/60')}
+        />
+      </button>
+    </th>
+  )
+}
 
 // Compact row density (support feedback: "kompakt visning av verifikat").
 // Persisted per company, mirroring the sort key convention.
@@ -105,6 +185,11 @@ export default function JournalEntryList() {
   // dims them, so the list never collapses to a spinner and springs back to
   // full height under the pointer. Growing lists were causing real mis-clicks.
   const [hasLoaded, setHasLoaded] = useState(false)
+  // A failed list fetch must NEVER render as an empty ledger: the sort order
+  // is persisted per company, so a sort the backend rejects (e.g. a computed
+  // column missing on this environment) would otherwise masquerade as "all
+  // entries gone" on every reload, with no toolbar to escape through.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [count, setCount] = useState(0)
   const [page, setPage] = useState(0)
@@ -131,7 +216,7 @@ export default function JournalEntryList() {
   const [reverseEntryTarget, setReverseEntryTarget] = useState<JournalEntry | null>(null)
   const [isReversing, setIsReversing] = useState(false)
   const [previewEntryId, setPreviewEntryId] = useState<string | null>(null)
-  const [sortBy, setSortBy] = useState<SortBy>('date_desc')
+  const [sortBy, setSortBy] = useState<SortBy>(DEFAULT_SORT)
   const [sortHydrated, setSortHydrated] = useState(false)
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [periodHydrated, setPeriodHydrated] = useState(false)
@@ -391,10 +476,15 @@ export default function JournalEntryList() {
 
     const res = await fetch(`/api/bookkeeping/journal-entries?${params}`)
     if (!res.ok) {
+      // Surface the failure: stale rows (if any) stay on screen, the empty
+      // case renders the error state below, and the toast covers refetches.
+      setLoadFailed(true)
+      toast({ title: t('load_failed_title'), variant: 'destructive' })
       setHasLoaded(true)
       setLoading(false)
       return
     }
+    setLoadFailed(false)
     const { data, count: total } = await res.json()
     const loadedEntries = data || []
     setEntries(loadedEntries)
@@ -691,6 +781,37 @@ export default function JournalEntryList() {
     }
   }
 
+  // Apply a sort order, whether it came from a column header or the dialog
+  // select. Resets to the first page and persists the choice per company.
+  const applySort = (next: SortBy) => {
+    setSortBy(next)
+    setPage(0)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(SORT_STORAGE_KEY_PREFIX + (company?.id ?? 'default'), next)
+    }
+  }
+
+  // Active column + direction derive from the SortBy string ('total_desc' ->
+  // column 'total', direction 'desc').
+  const sortColumn = sortBy.slice(0, sortBy.lastIndexOf('_')) as SortColumn
+  const sortDirection: SortDirection = sortBy.endsWith('_asc') ? 'asc' : 'desc'
+
+  // Header toggle cycle: ascending -> descending -> back to the default order
+  // (date, newest first). On the DATUM column descending IS the default, so
+  // that column degenerates to a plain asc/desc toggle instead of wasting the
+  // third click on a no-op.
+  const handleHeaderSort = (column: SortColumn) => {
+    if (sortColumn !== column) {
+      applySort(`${column}_asc` as SortBy)
+    } else if (sortDirection === 'asc') {
+      applySort(`${column}_desc` as SortBy)
+    } else if (sortBy === DEFAULT_SORT) {
+      applySort(`${column}_asc` as SortBy)
+    } else {
+      applySort(DEFAULT_SORT)
+    }
+  }
+
   const clearAllFilters = () => {
     setPeriodId(null)
     // Mirror the selector's "Alla räkenskapsår" write so the cleared scope
@@ -728,7 +849,7 @@ export default function JournalEntryList() {
   // whole component: every other empty state (a draft exists, or we're in the
   // drafts view) must fall through to the main render below so the
   // Verifikat/Utkast toggle stays reachable.
-  if (!loading && entries.length === 0 && !hasActiveFilters && listMode === 'committed' && draftCount === 0) {
+  if (!loading && entries.length === 0 && !loadFailed && !hasActiveFilters && listMode === 'committed' && draftCount === 0) {
     return (
       <DataList className="stagger-enter">
         <DataListEmpty
@@ -841,14 +962,7 @@ export default function JournalEntryList() {
                 <Label className="text-sm font-medium">{t('filter_section_sort')}</Label>
                 <Select
                   value={sortBy}
-                  onValueChange={(v) => {
-                    const next = v as SortBy
-                    setSortBy(next)
-                    setPage(0)
-                    if (typeof window !== 'undefined') {
-                      window.localStorage.setItem(SORT_STORAGE_KEY_PREFIX + (company?.id ?? 'default'), next)
-                    }
-                  }}
+                  onValueChange={(v) => applySort(v as SortBy)}
                 >
                   <SelectTrigger className="h-9 w-full text-sm">
                     <SelectValue />
@@ -858,6 +972,10 @@ export default function JournalEntryList() {
                     <SelectItem value="date_asc">{t('sort_date_asc')}</SelectItem>
                     <SelectItem value="voucher_asc">{t('sort_voucher_asc')}</SelectItem>
                     <SelectItem value="voucher_desc">{t('sort_voucher_desc')}</SelectItem>
+                    <SelectItem value="total_desc">{t('sort_total_desc')}</SelectItem>
+                    <SelectItem value="total_asc">{t('sort_total_asc')}</SelectItem>
+                    <SelectItem value="description_asc">{t('sort_description_asc')}</SelectItem>
+                    <SelectItem value="description_desc">{t('sort_description_desc')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -989,6 +1107,22 @@ export default function JournalEntryList() {
         <DataList className="stagger-enter">
           <DataListLoading />
         </DataList>
+      ) : loadFailed && filteredEntries.length === 0 ? (
+        // Failed load with nothing on screen: an explicit error state with a
+        // retry, never the "empty ledger" card. The toolbar above stays
+        // mounted so the sort/filter that caused the failure can be changed.
+        <DataList className={cn('stagger-enter', loading && 'opacity-60')} aria-busy={loading || undefined}>
+          <DataListEmpty
+            icon={<CircleSlash className="h-6 w-6" />}
+            title={t('load_failed_title')}
+            description={t('load_failed_description')}
+            action={
+              <Button variant="outline" size="sm" onClick={() => fetchEntries()}>
+                {t('load_failed_retry')}
+              </Button>
+            }
+          />
+        </DataList>
       ) : filteredEntries.length === 0 ? (
         // Empty placeholder, scoped to the situation: an empty drafts view, a
         // filtered committed view with no matches, or a committed view with no
@@ -1088,10 +1222,42 @@ export default function JournalEntryList() {
             <thead>
               <tr>
                 <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>
-                <th className={TH_CLASS}>{t('th_voucher')}</th>
-                <th className={cn(TH_CLASS, 'hidden sm:table-cell')}>{t('th_date')}</th>
-                <th className={cn(TH_CLASS, 'w-full')}>{t('th_description')}</th>
-                <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
+                <SortableHeader
+                  label={t('th_voucher')}
+                  sortLabel={t('sort_by', { column: t('th_voucher') })}
+                  column="voucher"
+                  activeColumn={sortColumn}
+                  direction={sortDirection}
+                  onSort={handleHeaderSort}
+                />
+                <SortableHeader
+                  label={t('th_date')}
+                  sortLabel={t('sort_by', { column: t('th_date') })}
+                  column="date"
+                  activeColumn={sortColumn}
+                  direction={sortDirection}
+                  onSort={handleHeaderSort}
+                  className="hidden sm:table-cell"
+                />
+                <SortableHeader
+                  label={t('th_description')}
+                  sortLabel={t('sort_by', { column: t('th_description') })}
+                  column="description"
+                  activeColumn={sortColumn}
+                  direction={sortDirection}
+                  onSort={handleHeaderSort}
+                  className="w-full"
+                />
+                <SortableHeader
+                  label={t('th_amount')}
+                  sortLabel={t('sort_by', { column: t('th_amount') })}
+                  column="total"
+                  activeColumn={sortColumn}
+                  direction={sortDirection}
+                  onSort={handleHeaderSort}
+                  className="text-right"
+                  align="right"
+                />
                 <th className={TH_CLASS} aria-hidden="true"></th>
               </tr>
             </thead>
