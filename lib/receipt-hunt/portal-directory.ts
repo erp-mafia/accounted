@@ -68,12 +68,32 @@ export interface PortalEntry {
  * The same objection may reach further down this list. An entry is a claim that
  * the invoice cannot be had any other way, and that claim is worth checking per
  * vendor rather than assuming.
+ *
+ * ## The URLs were wrong, and shipped anyway
+ *
+ * Every path here was hand-written and none was opened. The file said so and
+ * shipped regardless, and a founder then hit a 404 on Google Workspace. A
+ * subsequent HTTP sweep found GitHub's billing path 404 as well. Both are
+ * corrected; Trygg Hansa was removed because neither of its candidate URLs
+ * could be reached at all, and an unverifiable link is the same promise this
+ * comment keeps warning about.
+ *
+ * Prefer the shallowest URL that certainly resolves. A link landing one click
+ * short of the invoice is a small cost; one landing on an error page spends
+ * the trust the whole feature runs on. Several hosts here (Google, OpenAI,
+ * Hetzner) refuse an automated request, so they cannot be swept: those stay
+ * shallow on purpose.
  */
 export const PORTAL_DIRECTORY: PortalEntry[] = [
   {
     vendor: 'Google Workspace',
     aliases: ['google workspace', 'google gsuite', 'google apps'],
-    url: 'https://admin.google.com/ac/billing/history',
+    // The console root, not a deep billing path. /ac/billing/history returned
+    // a 404 in a real browser, and admin.google.com blocks the checker, so no
+    // deeper path can be verified from here. The root certainly resolves and
+    // billing is one click from it; a link that lands slightly short beats one
+    // that lands on an error page.
+    url: 'https://admin.google.com',
     note: 'Fakturor ligger under Fakturering i adminkonsolen.',
   },
   {
@@ -131,7 +151,7 @@ export const PORTAL_DIRECTORY: PortalEntry[] = [
   {
     vendor: 'GitHub',
     aliases: ['github'],
-    url: 'https://github.com/settings/billing',
+    url: 'https://github.com/settings/billing/summary',
   },
   {
     vendor: 'Cursor',
@@ -142,12 +162,6 @@ export const PORTAL_DIRECTORY: PortalEntry[] = [
     vendor: 'Loopia',
     aliases: ['loopia'],
     url: 'https://customerzone.loopia.se',
-  },
-  {
-    vendor: 'Trygg Hansa',
-    aliases: ['trygg hansa', 'trygghansa'],
-    url: 'https://mitt.trygghansa.se',
-    note: 'Försäkringsbrev och fakturor under Mina sidor.',
   },
 ]
 
