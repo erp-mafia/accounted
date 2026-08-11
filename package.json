@@ -7,6 +7,8 @@
     "setup:extensions": "npx tsx scripts/generate-extension-registry.ts",
     "skills:generate": "npx tsx scripts/generate-skill-bodies.ts",
     "skills:check": "npx tsx scripts/generate-skill-bodies.ts --check",
+    "apiskill:generate": "npx tsx --conditions react-server scripts/api-skill/generate.ts",
+    "apiskill:check": "npx tsx --conditions react-server scripts/api-skill/generate.ts --check",
     "crontabs:generate": "npx tsx scripts/generate-crontabs.ts",
     "taxonomy:generate": "npx tsx scripts/generate-taxonomy-registry.ts",
     "taxonomy:check": "npx tsx scripts/generate-taxonomy-registry.ts --check",

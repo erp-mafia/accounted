@@ -44,6 +44,13 @@ jobs:
         # so drift here means filings tagged against a stale concept set.
         run: npm run taxonomy:check
 
+      - name: Verify the accounted-api agent skill is in sync with the registry
+        # Fails if a v1 endpoint / registry schema / overlay changed without
+        # regenerating skills/accounted-api (npm run apiskill:generate). The
+        # skill is the installable API reference for external coding agents;
+        # drift here means agents integrate against stale endpoint contracts.
+        run: npm run apiskill:check
+
       - name: Lint ratchet (no new ESLint errors)
         # `npm run lint` was never wired into CI, so ~60 legacy errors
         # accumulated. This ratchet (sibling of check:guards) fails only when
