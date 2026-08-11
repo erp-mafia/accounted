@@ -36,6 +36,7 @@ import {
   Circle,
   X,
   ChevronDown,
+  ChevronRight,
   Sparkles,
   MessageCircle,
 } from 'lucide-react'
@@ -163,6 +164,37 @@ function hasAnyExtractedField(data: InvoiceExtractionResult | null): boolean {
     inv?.invoiceNumber || inv?.invoiceDate || inv?.dueDate || inv?.paymentReference ||
     t?.subtotal != null || t?.vatAmount != null || t?.total != null ||
     (data.lineItems?.length ?? 0) > 0 || (data.vatBreakdown?.length ?? 0) > 0
+  )
+}
+
+/**
+ * The fields the extraction is scored against, in the order a person reads
+ * them. Deliberately the same list hasAnyExtractedField checks, so the summary
+ * cannot claim a field the "is anything here at all" test does not count.
+ */
+const EXTRACTED_FIELD_ACCESSORS: ((d: InvoiceExtractionResult) => unknown)[] = [
+  (d) => d.supplier?.name,
+  (d) => d.supplier?.orgNumber,
+  (d) => d.supplier?.vatNumber,
+  (d) => d.supplier?.bankgiro,
+  (d) => d.supplier?.plusgiro,
+  (d) => d.invoice?.invoiceNumber,
+  (d) => d.invoice?.invoiceDate,
+  (d) => d.invoice?.dueDate,
+  (d) => d.invoice?.paymentReference,
+  (d) => d.totals?.subtotal,
+  (d) => d.totals?.vatAmount,
+  (d) => d.totals?.total,
+]
+
+export const EXTRACTED_FIELD_COUNT = EXTRACTED_FIELD_ACCESSORS.length
+
+/** How many of them the extraction actually filled in. */
+function countExtractedFields(data: InvoiceExtractionResult | null): number {
+  if (!data) return 0
+  return EXTRACTED_FIELD_ACCESSORS.reduce(
+    (n, get) => n + (get(data) != null && get(data) !== '' ? 1 : 0),
+    0,
   )
 }
 
@@ -2588,11 +2620,26 @@ function FieldsRail({
           </div>
         )}
 
-      {/* Extracted fields */}
-      <div className="flex-1 overflow-y-auto px-4 py-3">
-        <h3 className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-3">
-          Extraherade fält
-        </h3>
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        {/* The proposed kontering comes first: it is the decision. The fields
+            are the evidence you check when the decision looks wrong, so they
+            fold. Reading order used to be the other way round, which meant
+            scrolling past nine values to reach the one thing to approve. */}
+        {isLinkedToTransaction && <ProposedBooking itemId={item.id} />}
+
+        <details className="group" open={!isLinkedToTransaction}>
+          <summary className="flex items-center gap-1.5 cursor-pointer list-none text-xs uppercase tracking-wide text-muted-foreground font-medium hover:text-foreground">
+            <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
+            <span className="flex-1">Extraherade fält</span>
+            {/* How much the extraction actually got, so a thin one is visible
+                without opening it. */}
+            {!item.isPlaceholder && (
+              <span className="tabular-nums normal-case tracking-normal">
+                {countExtractedFields(data)} av {EXTRACTED_FIELD_COUNT}
+              </span>
+            )}
+          </summary>
+          <div className="pt-3">
         {item.isPlaceholder ? (
           <div className="space-y-2">
             <div className="text-xs text-muted-foreground italic flex items-center gap-2 mb-2">
@@ -2629,6 +2676,8 @@ function FieldsRail({
             onUpdated={onFieldsUpdated}
           />
         )}
+          </div>
+        </details>
       </div>
 
       {/* Actions: hidden while AI extraction is in flight */}
@@ -2666,9 +2715,6 @@ function FieldsRail({
               </Link>
             </div>
 
-            {/* The answer the rail never gave: what this would be booked as.
-                Read-only; booking still goes through the dialog below. */}
-            <ProposedBooking itemId={item.id} />
             {onAskAssistant && (
               <Button
                 variant="default"
