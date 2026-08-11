@@ -186,8 +186,8 @@ function deriveInboxStatus(item: InboxItem): InboxStatus {
 
 function WorkspaceSkeleton() {
   return (
-    <div className="h-[calc(100vh-1px)] md:h-full p-4 md:p-6">
-      <div className="h-full flex flex-col rounded-lg border bg-card overflow-hidden">
+    <div className="h-[calc(100vh-1px)] md:h-full">
+      <div className="h-full flex flex-col overflow-hidden">
         <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5">
           <div className="flex items-center gap-2 min-w-0">
             <Skeleton className="h-4 w-4 shrink-0" />
@@ -818,7 +818,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   return (
     <div
-      className="min-h-[calc(100vh-1px)] md:min-h-full xl:h-full p-4 md:p-6"
+      className="min-h-[calc(100vh-1px)] md:min-h-full xl:h-full"
       onDragOver={(e) => { e.preventDefault(); if (!isDragging) setIsDragging(true) }}
       onDragLeave={(e) => {
         // only clear when leaving the workspace itself, not children
@@ -826,7 +826,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       }}
       onDrop={handleDrop}
     >
-    <div className="xl:h-full flex flex-col rounded-lg border bg-card xl:overflow-hidden">
+    {/* No card of its own: /e/ routes render full-bleed inside the dashboard
+        panel, which already supplies the border, the 12px radius and the
+        background. Wrapping the workspace in a second rounded, bordered
+        surface drew two frames 24px apart with mismatched radii. */}
+    <div className="xl:h-full flex flex-col xl:overflow-hidden">
       {/* Top bar */}
       <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
