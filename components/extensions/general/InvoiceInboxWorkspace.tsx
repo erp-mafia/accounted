@@ -535,6 +535,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     return list
   }, [statusCounts, filter, purchases.length])
 
+  const activePill = useMemo(() => pills.find((p) => p.key === filter), [pills, filter])
+
   const filteredPurchases = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
     if (term === '') return purchases
@@ -1017,39 +1019,53 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   className="pl-8 h-8 text-xs"
                 />
               </div>
-              <div className="flex flex-wrap gap-1">
-                {pills.map((pill) => (
-                  <button
-                    key={pill.key}
-                    type="button"
-                    onClick={() => {
-                      setFilter(pill.key)
-                      // The panes show one kind of row at a time; a stale
-                      // selection from the other kind would outlive its list.
-                      if (pill.key === 'missing') setSelectedId(null)
-                      else setSelectedPurchaseId(null)
-                    }}
-                    className={cn(
-                      'text-[11px] px-2 py-0.5 rounded-full border transition-colors',
-                      filter === pill.key
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-background text-muted-foreground border-border hover:text-foreground'
-                    )}
+              {/* One row instead of three. Five filters wrapped to three lines
+                  in a 280px column, and the counts are what people actually
+                  read, so they stay visible on the trigger and inside the menu
+                  rather than being traded away for the space. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-between h-8 px-2.5 text-xs font-normal"
                   >
-                    {pill.label}
-                    {pill.count > 0 && (
-                      <span
-                        className={cn(
-                          'ml-1 tabular-nums',
-                          filter === pill.key ? 'opacity-80' : 'opacity-50'
-                        )}
-                      >
-                        {pill.count}
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span className="truncate">{activePill?.label ?? 'Att göra'}</span>
+                      <span className="tabular-nums text-muted-foreground">
+                        {activePill?.count ?? 0}
                       </span>
-                    )}
-                  </button>
-                ))}
-              </div>
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5 opacity-60 shrink-0" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-[--radix-dropdown-menu-trigger-width]">
+                  {pills.map((pill) => (
+                    <DropdownMenuItem
+                      key={pill.key}
+                      onSelect={() => {
+                        setFilter(pill.key)
+                        // The panes show one kind of row at a time; a stale
+                        // selection from the other kind would outlive its list.
+                        if (pill.key === 'missing') setSelectedId(null)
+                        else setSelectedPurchaseId(null)
+                      }}
+                      className="justify-between text-xs"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Check
+                          className={cn(
+                            'h-3.5 w-3.5',
+                            filter === pill.key ? 'opacity-100' : 'opacity-0',
+                          )}
+                        />
+                        {pill.label}
+                      </span>
+                      <span className="tabular-nums text-muted-foreground">{pill.count}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           )}
           {selectedIds.size > 0 && (
