@@ -244,7 +244,7 @@ async function main(): Promise<void> {
   if (provider === 'bedrock') console.log(`Region:       ${process.env.AWS_REGION || 'eu-north-1'}`)
   console.log(`Modeller:     ${SONNET_MODEL} / ${OPUS_MODEL}`)
 
-  if (!hasAiCredentials()) {
+  if (!hasAiCredentials() && process.env.AI_PROVIDER !== 'bedrock') 
     console.error(
       '\nInga synliga nycklar. Sätt ANTHROPIC_API_KEY, eller AWS_ACCESS_KEY_ID +\n' +
         'AWS_SECRET_ACCESS_KEY för Bedrock. (Bedrock via instansprofil/IRSA syns\n' +
@@ -267,7 +267,7 @@ async function main(): Promise<void> {
   const path = process.argv[2]
   console.log('\n3. Dokumenttolkning')
   if (path) await extraction(path)
-  else console.log('  – hoppas över, ingen fil angiven (npx tsx scripts/smoke-ai.ts <fil>)')
+  else console.log(' - skipping, no file given (npx tsx scripts/smoke-ai.ts <file>)')
 
   console.log(failures === 0 ? '\nAllt grönt.' : `\n${failures} steg föll.`)
   if (failures > 0) process.exitCode = 1
