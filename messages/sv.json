@@ -4355,6 +4355,7 @@
     "sort_description_asc": "Beskrivning, A till Ö",
     "sort_description_desc": "Beskrivning, Ö till A",
     "sort_by": "Sortera efter {column}",
+    "sort_stack_hint": "Tips: Shift-klicka på en kolumnrubrik för att lägga till den som sekundär sortering.",
     "date_from_placeholder": "Från YYYY-MM-DD",
     "date_to_placeholder": "Till YYYY-MM-DD",
     "filter": "Filtrera",

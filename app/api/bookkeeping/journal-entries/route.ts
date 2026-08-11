@@ -47,27 +47,38 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // year's series (the BFL-compliant per-year view). It narrows the period, it
   // never widens it.
   const search = searchParams.get('search')?.trim() || null
-  // 'date_desc' (default) | 'date_asc' | 'voucher_asc' | 'voucher_desc'
-  // | 'total_asc' | 'total_desc' | 'description_asc' | 'description_desc'
-  // sort_by overrides sort_date when present. sort_date is kept for backwards
-  // compatibility with older clients.
-  const sortBy = searchParams.get('sort_by')
-  const isVoucherSort = sortBy === 'voucher_asc' || sortBy === 'voucher_desc'
-  // Amount sort orders by the total_amount computed column (sum of debit
-  // lines, migration 20260811100000): PostgREST evaluates it per row, which
-  // the RPC path below cannot express.
-  const isTotalSort = sortBy === 'total_asc' || sortBy === 'total_desc'
-  const isDescriptionSort = sortBy === 'description_asc' || sortBy === 'description_desc'
+  // sort_by is a comma-separated priority list of `${column}_${direction}`
+  // tokens over date | voucher | total | description (single tokens, the old
+  // format, stay valid). Unknown tokens are ignored, repeated columns are
+  // deduped, and the list is capped at 3 keys to bound DB work. Amount keys
+  // order by the total_amount computed column (sum of debit lines, migration
+  // 20260811100000): PostgREST evaluates it per row, which the RPC path
+  // below cannot express. sort_by overrides sort_date when present;
+  // sort_date is kept for backwards compatibility with older clients.
+  const SORT_TOKEN_RE = /^(date|voucher|total|description)_(asc|desc)$/
+  const MAX_SORT_KEYS = 3
+  const sortKeys: { column: 'date' | 'voucher' | 'total' | 'description'; ascending: boolean }[] = []
+  for (const token of (searchParams.get('sort_by') ?? '').split(',')) {
+    const m = SORT_TOKEN_RE.exec(token.trim())
+    if (!m) continue
+    const column = m[1] as (typeof sortKeys)[number]['column']
+    if (sortKeys.some((k) => k.column === column)) continue
+    sortKeys.push({ column, ascending: m[2] === 'asc' })
+    if (sortKeys.length === MAX_SORT_KEYS) break
+  }
+  // A single date key (or no keys at all) is the only shape the RPC path can
+  // serve, via p_sort_date. Everything else falls through to the direct query.
+  const soloDateKey = sortKeys.length === 1 && sortKeys[0].column === 'date' ? sortKeys[0] : null
   // Default on: when a fiscal period is selected, include follow-up entries
   // booked in later periods whose source aggregate (invoice, supplier invoice)
   // is dated inside the selected period. Pass include_related=false to
   // restore strict fiscal_period_id filtering.
   const includeRelated = searchParams.get('include_related') !== 'false'
 
-  const dateAscending = sortDate === 'asc' || sortBy === 'date_asc'
-  const sortDateParam = sortBy === 'date_asc' || sortDate === 'asc' ? 'asc' : 'desc'
+  const dateAscending = sortDate === 'asc'
+  const sortDateParam = soloDateKey ? (soloDateKey.ascending ? 'asc' : 'desc') : sortDate === 'asc' ? 'asc' : 'desc'
 
-  // Voucher/total/description-sort path: the include_related RPC only orders
+  // Non-date sorts (and stacked sorts): the include_related RPC only orders
   // by date, so fall through to the direct query below. This means these
   // sorts are *strict by fiscal_period_id*: cross-period follow-up entries
   // that the RPC normally surfaces under date sort are excluded.
@@ -76,7 +87,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // belonging to a different year's series would be misleading. The trade-off
   // is that the visible row count may differ between sort modes for the same
   // period; the strict count is the BFL-compliant view of that year.
-  if (periodId && includeRelated && !isVoucherSort && !isTotalSort && !isDescriptionSort && !search) {
+  if (periodId && includeRelated && (sortKeys.length === 0 || soloDateKey) && !search) {
     const { data, error } = await supabase.rpc('list_fiscal_period_entries_with_related', {
       p_company_id: companyId,
       p_period_id: periodId,
@@ -114,27 +125,39 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     .select('*, lines:journal_entry_lines(*)', { count: 'exact' })
     .eq('company_id', companyId)
 
-  if (isVoucherSort) {
-    const voucherAscending = sortBy === 'voucher_asc'
-    query = query
-      .order('voucher_series', { ascending: voucherAscending })
-      .order('voucher_number', { ascending: voucherAscending })
-  } else if (isTotalSort) {
-    // total_amount is a computed column (a function on the row type), which
-    // PostgREST accepts in order=. Voucher tiebreak keeps pagination stable
-    // when many entries share an amount.
-    query = query
-      .order('total_amount', { ascending: sortBy === 'total_asc' })
-      .order('voucher_series', { ascending: true })
-      .order('voucher_number', { ascending: true })
-  } else if (isDescriptionSort) {
-    query = query
-      .order('description', { ascending: sortBy === 'description_asc' })
-      .order('voucher_series', { ascending: true })
-      .order('voucher_number', { ascending: true })
-  } else if (sortDate === 'asc' || sortDate === 'desc' || sortBy === 'date_asc' || sortBy === 'date_desc') {
-    // Tiebreak same-date vouchers in the SAME direction as the date sort, and
-    // by series before number so the order matches the RPC path (#972).
+  if (sortKeys.length > 0) {
+    // Apply the priority list in order. total_amount is a computed column (a
+    // function on the row type), which PostgREST accepts in order=.
+    for (const key of sortKeys) {
+      switch (key.column) {
+        case 'voucher':
+          query = query
+            .order('voucher_series', { ascending: key.ascending })
+            .order('voucher_number', { ascending: key.ascending })
+          break
+        case 'date':
+          query = query.order('entry_date', { ascending: key.ascending })
+          break
+        case 'total':
+          query = query.order('total_amount', { ascending: key.ascending })
+          break
+        case 'description':
+          query = query.order('description', { ascending: key.ascending })
+          break
+      }
+    }
+    // Stable pagination needs a total order: unless voucher is already a key,
+    // tiebreak by series+number in the LAST key's direction, so a plain date
+    // sort keeps same-date vouchers running the same way as the RPC (#972).
+    if (!sortKeys.some((k) => k.column === 'voucher')) {
+      const tiebreakAscending = sortKeys[sortKeys.length - 1].ascending
+      query = query
+        .order('voucher_series', { ascending: tiebreakAscending })
+        .order('voucher_number', { ascending: tiebreakAscending })
+    }
+  } else if (sortDate === 'asc' || sortDate === 'desc') {
+    // Legacy sort_date param (older clients). Tiebreak same-date vouchers in
+    // the SAME direction as the date sort (#972).
     query = query
       .order('entry_date', { ascending: dateAscending })
       .order('voucher_series', { ascending: dateAscending })

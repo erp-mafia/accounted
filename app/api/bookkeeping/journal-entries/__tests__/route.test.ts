@@ -195,6 +195,67 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     ])
   })
 
+  it('chains stacked sort keys in priority order and bypasses the RPC', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', sort_by: 'total_desc,description_asc' },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    // Priority order preserved, then the voucher tiebreak in the LAST key's
+    // direction (ascending here) for stable pagination.
+    expect(findCalls('journal_entries', 'order')).toEqual([
+      ['total_amount', { ascending: false }],
+      ['description', { ascending: true }],
+      ['voucher_series', { ascending: true }],
+      ['voucher_number', { ascending: true }],
+    ])
+  })
+
+  it('dedupes repeated sort columns and caps the stack at three keys', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: {
+        include_related: 'false',
+        sort_by: 'date_desc,date_asc,nonsense,voucher_desc,total_asc,description_asc',
+      },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    // date deduped (first token wins), the unknown token is ignored, and the
+    // stack caps at three keys (date, voucher, total): description never
+    // makes it in. Voucher is in the stack, so no extra tiebreak is appended.
+    expect(findCalls('journal_entries', 'order')).toEqual([
+      ['entry_date', { ascending: false }],
+      ['voucher_series', { ascending: false }],
+      ['voucher_number', { ascending: false }],
+      ['total_amount', { ascending: true }],
+    ])
+  })
+
+  it('still serves a single date sort key through the include_related RPC', async () => {
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', sort_by: 'date_asc' },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'list_fiscal_period_entries_with_related',
+      expect.objectContaining({ p_sort_date: 'asc' }),
+    )
+  })
+
   it('accepts a large limit (the "Alla" page size) and a negative offset without erroring', async () => {
     enqueue({ data: [], error: null, count: 0 })
 

@@ -67,52 +67,65 @@ const NEEDS_ATTACHMENT = new Set([
   'import',
 ])
 
-type SortBy =
-  | 'date_desc'
-  | 'date_asc'
-  | 'voucher_asc'
-  | 'voucher_desc'
-  | 'total_asc'
-  | 'total_desc'
-  | 'description_asc'
-  | 'description_desc'
+// Column-header sorting (support feedback: "filtrera/sortera alla rubriker").
+// The sort order is a priority-ordered STACK of keys (max 3): the second key
+// breaks ties in the first, and so on. Plain click sets a single key;
+// shift-click stacks.
+type SortColumn = 'voucher' | 'date' | 'description' | 'total'
+type SortDirection = 'asc' | 'desc'
+interface SortKey {
+  column: SortColumn
+  direction: SortDirection
+}
 
 // Per-company persistence of the sort order. Mirrors the localStorage
 // convention used by FiscalYearSelector ('Accounted:fiscal-year:<companyId>').
+// The stored value is the serialized stack (see serializeSortStack).
 const SORT_STORAGE_KEY_PREFIX = 'Accounted:journal-sort:'
-const SORT_VALUES = new Set<SortBy>([
-  'date_desc',
-  'date_asc',
-  'voucher_asc',
-  'voucher_desc',
-  'total_asc',
-  'total_desc',
-  'description_asc',
-  'description_desc',
-])
+const MAX_SORT_KEYS = 3
+const SORT_TOKEN_RE = /^(voucher|date|description|total)_(asc|desc)$/
 
-// Column-header sorting (support feedback: "filtrera/sortera alla rubriker").
-// Every SortBy value is `${column}_${direction}`, so the active column and
-// direction derive from the persisted string.
-type SortColumn = 'voucher' | 'date' | 'description' | 'total'
-type SortDirection = 'asc' | 'desc'
+// The list's resting order, and the exit of the header toggle cycle.
+const DEFAULT_SORT_STACK: SortKey[] = [{ column: 'date', direction: 'desc' }]
 
-// The list's resting order, and the third step of the header toggle cycle.
-const DEFAULT_SORT: SortBy = 'date_desc'
+// 'total_desc,description_asc' <-> [{total desc}, {description asc}]. The
+// single-token form is the pre-stack format, so persisted values from before
+// stacking (and the dialog's single-choice select) parse with the same code.
+// Any invalid token rejects the whole value: a corrupt stored string falls
+// back to the default rather than silently sorting by half a stack.
+function parseSortStack(raw: string | null): SortKey[] | null {
+  if (!raw) return null
+  const keys: SortKey[] = []
+  for (const token of raw.split(',')) {
+    const m = SORT_TOKEN_RE.exec(token.trim())
+    if (!m) return null
+    const column = m[1] as SortColumn
+    if (keys.some((k) => k.column === column)) continue
+    keys.push({ column, direction: m[2] as SortDirection })
+    if (keys.length === MAX_SORT_KEYS) break
+  }
+  return keys.length > 0 ? keys : null
+}
+
+const serializeSortStack = (stack: SortKey[]): string =>
+  stack.map((k) => `${k.column}_${k.direction}`).join(',')
+
+const sortStacksEqual = (a: SortKey[], b: SortKey[]): boolean =>
+  serializeSortStack(a) === serializeSortStack(b)
 
 // Same shape as the invoices list header (app/(dashboard)/invoices/page.tsx):
-// first click sorts ascending, a second click flips; inactive columns show a
-// dimmed two-way arrow. One deliberate difference: a third click returns to
-// DEFAULT_SORT so a sort is always escapable from the header itself. The
-// invoices list starts unsorted and has no default order to return to, so it
-// stays a two-state toggle.
+// click cycles the sort, inactive columns show a dimmed two-way arrow. Two
+// deliberate differences: the plain-click cycle has a third step back to
+// DEFAULT_SORT_STACK so a sort is always escapable from the header itself
+// (the invoices list starts unsorted and has nothing to return to), and
+// shift-click stacks the column as a secondary/tertiary key, shown with a
+// priority number next to the arrow.
 interface SortableHeaderProps {
   label: string
   sortLabel: string
   column: SortColumn
-  activeColumn: SortColumn
-  direction: SortDirection
-  onSort: (column: SortColumn) => void
+  stack: SortKey[]
+  onSort: (column: SortColumn, additive: boolean) => void
   className?: string
   align?: 'left' | 'right'
 }
@@ -121,13 +134,14 @@ function SortableHeader({
   label,
   sortLabel,
   column,
-  activeColumn,
-  direction,
+  stack,
   onSort,
   className,
   align = 'left',
 }: SortableHeaderProps) {
-  const active = activeColumn === column
+  const index = stack.findIndex((k) => k.column === column)
+  const active = index !== -1
+  const direction = active ? stack[index].direction : null
   const SortIcon = !active ? ArrowUpDown : direction === 'asc' ? ArrowUp : ArrowDown
 
   return (
@@ -142,13 +156,18 @@ function SortableHeader({
           align === 'right' && 'ml-auto justify-end',
         )}
         aria-label={sortLabel}
-        onClick={() => onSort(column)}
+        onClick={(e) => onSort(column, e.shiftKey)}
       >
         <span>{label}</span>
         <SortIcon
           aria-hidden="true"
           className={cn('h-3.5 w-3.5 shrink-0', !active && 'text-muted-foreground/60')}
         />
+        {active && stack.length > 1 && (
+          <span className="text-[10px] font-medium tabular-nums text-muted-foreground" aria-hidden="true">
+            {index + 1}
+          </span>
+        )}
       </button>
     </th>
   )
@@ -216,7 +235,7 @@ export default function JournalEntryList() {
   const [reverseEntryTarget, setReverseEntryTarget] = useState<JournalEntry | null>(null)
   const [isReversing, setIsReversing] = useState(false)
   const [previewEntryId, setPreviewEntryId] = useState<string | null>(null)
-  const [sortBy, setSortBy] = useState<SortBy>(DEFAULT_SORT)
+  const [sortStack, setSortStack] = useState<SortKey[]>(DEFAULT_SORT_STACK)
   const [sortHydrated, setSortHydrated] = useState(false)
   const [periodId, setPeriodId] = useState<string | null>(null)
   const [periodHydrated, setPeriodHydrated] = useState(false)
@@ -361,8 +380,10 @@ export default function JournalEntryList() {
   // the saved order, no flash of the default sort.
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const stored = window.localStorage.getItem(SORT_STORAGE_KEY_PREFIX + (company?.id ?? 'default'))
-      if (stored && SORT_VALUES.has(stored as SortBy)) setSortBy(stored as SortBy)
+      const stored = parseSortStack(
+        window.localStorage.getItem(SORT_STORAGE_KEY_PREFIX + (company?.id ?? 'default')),
+      )
+      if (stored) setSortStack(stored)
     }
     setSortHydrated(true)
   }, [company?.id])
@@ -458,7 +479,7 @@ export default function JournalEntryList() {
     const params = new URLSearchParams({
       limit: String(pageSize),
       offset: String(page * pageSize),
-      sort_by: sortBy,
+      sort_by: serializeSortStack(sortStack),
     })
     if (listMode === 'drafts') {
       // Drafts get their own view spanning all years: they're work-in-progress
@@ -521,10 +542,14 @@ export default function JournalEntryList() {
     }
   }
 
+  // The stack serializes to a string for the dependency array: a stable
+  // primitive, so refetches fire on real sort changes, not array identity.
+  const sortParam = serializeSortStack(sortStack)
+
   useEffect(() => {
     if (!sortHydrated || !periodHydrated || !pageSizeHydrated) return
     fetchEntries()
-  }, [periodId, page, pageSize, sortBy, dateFrom, dateTo, seriesFilter, search, listMode, collapseCorrections, sortHydrated, periodHydrated, pageSizeHydrated])
+  }, [periodId, page, pageSize, sortParam, dateFrom, dateTo, seriesFilter, search, listMode, collapseCorrections, sortHydrated, periodHydrated, pageSizeHydrated])
 
   const handleAttachmentCountChange = useCallback((entryId: string, count: number) => {
     setAttachmentCounts((prev) => ({ ...prev, [entryId]: count }))
@@ -781,34 +806,50 @@ export default function JournalEntryList() {
     }
   }
 
-  // Apply a sort order, whether it came from a column header or the dialog
+  // Apply a sort stack, whether it came from a column header or the dialog
   // select. Resets to the first page and persists the choice per company.
-  const applySort = (next: SortBy) => {
-    setSortBy(next)
+  const applySort = (next: SortKey[]) => {
+    setSortStack(next)
     setPage(0)
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem(SORT_STORAGE_KEY_PREFIX + (company?.id ?? 'default'), next)
+      window.localStorage.setItem(
+        SORT_STORAGE_KEY_PREFIX + (company?.id ?? 'default'),
+        serializeSortStack(next),
+      )
     }
   }
 
-  // Active column + direction derive from the SortBy string ('total_desc' ->
-  // column 'total', direction 'desc').
-  const sortColumn = sortBy.slice(0, sortBy.lastIndexOf('_')) as SortColumn
-  const sortDirection: SortDirection = sortBy.endsWith('_asc') ? 'asc' : 'desc'
-
-  // Header toggle cycle: ascending -> descending -> back to the default order
-  // (date, newest first). On the DATUM column descending IS the default, so
-  // that column degenerates to a plain asc/desc toggle instead of wasting the
-  // third click on a no-op.
-  const handleHeaderSort = (column: SortColumn) => {
-    if (sortColumn !== column) {
-      applySort(`${column}_asc` as SortBy)
-    } else if (sortDirection === 'asc') {
-      applySort(`${column}_desc` as SortBy)
-    } else if (sortBy === DEFAULT_SORT) {
-      applySort(`${column}_asc` as SortBy)
+  // Plain click: single-key tri-state, replacing any stack: ascending ->
+  // descending -> back to the default order. On the DATUM column descending
+  // IS the default, so that column degenerates to a plain asc/desc toggle
+  // instead of wasting the third click on a no-op.
+  // Shift-click stacks (max 3 keys): adds the column as the next priority
+  // (ascending), a second shift-click flips it, a third removes it again.
+  const handleHeaderSort = (column: SortColumn, additive: boolean) => {
+    if (additive) {
+      const index = sortStack.findIndex((k) => k.column === column)
+      if (index === -1) {
+        if (sortStack.length >= MAX_SORT_KEYS) return
+        applySort([...sortStack, { column, direction: 'asc' }])
+      } else if (sortStack[index].direction === 'asc') {
+        applySort(
+          sortStack.map((k, i) => (i === index ? { column, direction: 'desc' as const } : k)),
+        )
+      } else {
+        const next = sortStack.filter((_, i) => i !== index)
+        applySort(next.length > 0 ? next : DEFAULT_SORT_STACK)
+      }
+      return
+    }
+    const solo = sortStack.length === 1 && sortStack[0].column === column ? sortStack[0] : null
+    if (!solo) {
+      applySort([{ column, direction: 'asc' }])
+    } else if (solo.direction === 'asc') {
+      applySort([{ column, direction: 'desc' }])
+    } else if (sortStacksEqual(sortStack, DEFAULT_SORT_STACK)) {
+      applySort([{ column, direction: 'asc' }])
     } else {
-      applySort(DEFAULT_SORT)
+      applySort(DEFAULT_SORT_STACK)
     }
   }
 
@@ -960,9 +1001,15 @@ export default function JournalEntryList() {
               {/* Sortering */}
               <div className="space-y-2">
                 <Label className="text-sm font-medium">{t('filter_section_sort')}</Label>
+                {/* The select models a SINGLE sort key: it shows the primary
+                    key of the stack, and picking an option resets the whole
+                    stack to that one key. Stacking lives on the headers. */}
                 <Select
-                  value={sortBy}
-                  onValueChange={(v) => applySort(v as SortBy)}
+                  value={`${sortStack[0].column}_${sortStack[0].direction}`}
+                  onValueChange={(v) => {
+                    const parsed = parseSortStack(v)
+                    if (parsed) applySort(parsed)
+                  }}
                 >
                   <SelectTrigger className="h-9 w-full text-sm">
                     <SelectValue />
@@ -978,6 +1025,7 @@ export default function JournalEntryList() {
                     <SelectItem value="description_desc">{t('sort_description_desc')}</SelectItem>
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">{t('sort_stack_hint')}</p>
               </div>
 
               {/* Verifikationsserie */}
@@ -1226,16 +1274,14 @@ export default function JournalEntryList() {
                   label={t('th_voucher')}
                   sortLabel={t('sort_by', { column: t('th_voucher') })}
                   column="voucher"
-                  activeColumn={sortColumn}
-                  direction={sortDirection}
+                  stack={sortStack}
                   onSort={handleHeaderSort}
                 />
                 <SortableHeader
                   label={t('th_date')}
                   sortLabel={t('sort_by', { column: t('th_date') })}
                   column="date"
-                  activeColumn={sortColumn}
-                  direction={sortDirection}
+                  stack={sortStack}
                   onSort={handleHeaderSort}
                   className="hidden sm:table-cell"
                 />
@@ -1243,8 +1289,7 @@ export default function JournalEntryList() {
                   label={t('th_description')}
                   sortLabel={t('sort_by', { column: t('th_description') })}
                   column="description"
-                  activeColumn={sortColumn}
-                  direction={sortDirection}
+                  stack={sortStack}
                   onSort={handleHeaderSort}
                   className="w-full"
                 />
@@ -1252,8 +1297,7 @@ export default function JournalEntryList() {
                   label={t('th_amount')}
                   sortLabel={t('sort_by', { column: t('th_amount') })}
                   column="total"
-                  activeColumn={sortColumn}
-                  direction={sortDirection}
+                  stack={sortStack}
                   onSort={handleHeaderSort}
                   className="text-right"
                   align="right"

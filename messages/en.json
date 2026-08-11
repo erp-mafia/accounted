@@ -4355,6 +4355,7 @@
     "sort_description_asc": "Description, A to Z",
     "sort_description_desc": "Description, Z to A",
     "sort_by": "Sort by {column}",
+    "sort_stack_hint": "Tip: Shift-click a column header to add it as a secondary sort.",
     "date_from_placeholder": "From YYYY-MM-DD",
     "date_to_placeholder": "To YYYY-MM-DD",
     "filter": "Filter",
