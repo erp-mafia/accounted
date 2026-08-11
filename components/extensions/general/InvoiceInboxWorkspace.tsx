@@ -40,7 +40,9 @@ import {
   MessageCircle,
 } from 'lucide-react'
 import Link from 'next/link'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
+import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
+import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt'
 import { createClient } from '@/lib/supabase/client'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
@@ -449,26 +451,50 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [purchases, setPurchases] = useState<PurchaseWithoutUnderlag[]>([])
   const [selectedPurchaseId, setSelectedPurchaseId] = useState<string | null>(null)
 
-  // Whether any mailbox can actually be searched. Counting rows would not
-  // answer that: a revoked or expired connection is still a row, and the hunt
-  // skips it, so the button would promise a search that returns nothing every
-  // pass. A dead mailbox looking healthy is the exact failure this feature
-  // exists to surface, so it must not start by doing it in its own header.
-  const [mailConnected, setMailConnected] = useState(false)
+  // Where underlag come from. Three routes in, and the page should say so:
+  // the mailboxes we search, WhatsApp for photographed receipts, and the
+  // forwarding address that works with nothing connected at all.
+  const [mailConnections, setMailConnections] = useState<InboxMailConnection[]>([])
+  const [whatsapp, setWhatsapp] = useState<{ linked: boolean; phone_masked?: string } | null>(null)
+  const [sourcesOpen, setSourcesOpen] = useState(false)
+
   useEffect(() => {
     void (async () => {
       try {
         const res = await fetch('/api/extensions/ext/mail/connections')
         if (!res.ok) return
-        const json = (await res.json()) as {
-          data?: { connections?: { status?: string }[] }
-        }
-        setMailConnected((json.data?.connections ?? []).some((c) => c.status === 'active'))
+        const json = (await res.json()) as { data?: { connections?: InboxMailConnection[] } }
+        setMailConnections(json.data?.connections ?? [])
       } catch {
         // The extension may not be enabled at all; stay quiet.
       }
     })()
+    void (async () => {
+      try {
+        const res = await fetch('/api/extensions/ext/whatsapp-inbox/link')
+        if (!res.ok) return
+        const json = (await res.json()) as { data?: { linked: boolean; phone_masked?: string } }
+        if (json.data) setWhatsapp(json.data)
+      } catch {
+        // Same: not every company has it.
+      }
+    })()
   }, [])
+
+  // Counting rows would not answer whether anything is searchable: a revoked
+  // or expired connection is still a row, and the hunt skips it, so the button
+  // would promise a search that returns nothing every pass. A dead mailbox
+  // looking healthy is the exact failure this feature exists to surface, so it
+  // must not start by doing it in its own header.
+  const mailConnected = useMemo(
+    () => mailConnections.some((c) => c.status === 'active'),
+    [mailConnections],
+  )
+  const ailingMailbox = useMemo(
+    () => mailConnections.find((c) => c.status !== 'active') ?? null,
+    [mailConnections],
+  )
+  const sourceCount = mailConnections.length + (whatsapp?.linked ? 1 : 0) + (inboxAddress ? 1 : 0)
 
   const fetchPurchases = useCallback(async () => {
     try {
@@ -918,12 +944,30 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         <div className="flex items-center gap-2 min-w-0">
           <Inbox className="h-4 w-4 text-muted-foreground shrink-0" />
           <h1 className="font-medium text-sm shrink-0">Dokumentinkorg</h1>
-          {inboxAddress ? (
-            <InboxAddressBar
-              address={inboxAddress.address}
-              onRotate={handleRotateAddress}
-              isRotating={isRotating}
-            />
+          {/* Where the page's contents come from, behind one chip. The detail
+              (which mailbox, when it was last read) is a thing people look up
+              when something seems wrong, not something they read every visit.
+              A mailbox that has stopped working is the exception, so that
+              surfaces on the chip itself. */}
+          {sourceCount > 0 ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSourcesOpen((v) => !v)}
+              className={cn('h-7 px-2 text-xs font-normal shrink-0', ailingMailbox && 'text-warning')}
+              aria-expanded={sourcesOpen}
+            >
+              <span
+                className={cn(
+                  'h-1.5 w-1.5 rounded-full mr-1.5',
+                  ailingMailbox ? 'bg-warning' : 'bg-success',
+                )}
+              />
+              {ailingMailbox
+                ? `${ailingMailbox.emailAddress} behöver återanslutas`
+                : `${sourceCount} ${sourceCount === 1 ? 'källa' : 'källor'}`}
+              <ChevronDown className="h-3 w-3 ml-1 opacity-60" />
+            </Button>
           ) : addressLoadFailed ? (
             // We do not know whether an address exists, so we offer a retry
             // rather than an activate button that would rotate a live address.
@@ -999,6 +1043,73 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           </Button>
         </div>
       </header>
+
+      {/* Opened from the chip. Three ways in, each with the one fact that
+          matters about it: an address you can forward to, mailboxes we search,
+          and the number receipts arrive from. Nothing here is configuration;
+          that still lives in Inställningar. */}
+      {sourcesOpen && (
+        <div className="border-b bg-muted/20 text-xs">
+          {inboxAddress && (
+            <div className="flex items-center gap-3 px-4 py-2 border-b border-border/50">
+              <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <div className="min-w-0 flex-1">
+                <span className="tabular-nums">{inboxAddress.address}</span>
+                <div className="text-muted-foreground text-[11px]">
+                  Vidarebefordra hit, eller be en leverantör skicka direkt
+                </div>
+              </div>
+              <InboxAddressBar
+                address={inboxAddress.address}
+                onRotate={handleRotateAddress}
+                isRotating={isRotating}
+              />
+            </div>
+          )}
+
+          {mailConnections.map((c) => (
+            <div key={c.id} className="flex items-center gap-3 px-4 py-2 border-b border-border/50">
+              {c.provider === 'gmail' ? (
+                <GoogleMark className="h-3.5 w-3.5 shrink-0" />
+              ) : (
+                <MicrosoftMark className="h-3.5 w-3.5 shrink-0" />
+              )}
+              <div className="min-w-0 flex-1">
+                <span className="truncate">{c.emailAddress}</span>
+                <div className="text-muted-foreground text-[11px]">
+                  {c.status !== 'active'
+                    ? 'Söks inte igenom förrän den återanslutits'
+                    : c.lastSearchedAt
+                      ? `Söktes senast ${formatDateLong(c.lastSearchedAt)}`
+                      : 'Har inte sökts igenom än'}
+                </div>
+              </div>
+              {c.status !== 'active' && (
+                <Badge variant="warning" className="text-[10px] font-normal shrink-0">
+                  Behöver återanslutas
+                </Badge>
+              )}
+            </div>
+          ))}
+
+          {whatsapp?.linked && (
+            <div className="flex items-center gap-3 px-4 py-2 border-b border-border/50">
+              <WhatsAppMark className="h-3.5 w-3.5 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <span className="tabular-nums">{whatsapp.phone_masked ?? 'WhatsApp'}</span>
+                <div className="text-muted-foreground text-[11px]">
+                  Kvitton fotade i mobilen. Avsändaren är känd, så utlägg kan tillskrivas rätt person.
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="px-4 py-2 text-[11px] text-muted-foreground">
+            Anslut och koppla bort brevlådor i Inställningar.
+          </div>
+        </div>
+      )}
+
 
       {/* Three-section body. Below xl (iPad portrait/landscape + phone) the
           sections stack vertically as a single scrollable feed. With the app
@@ -1914,6 +2025,14 @@ function EmptyPreview({
       </div>
     </div>
   )
+}
+
+interface InboxMailConnection {
+  id: string
+  provider: 'gmail' | 'microsoft'
+  emailAddress: string
+  status: 'active' | 'needs_reconsent' | 'revoked'
+  lastSearchedAt: string | null
 }
 
 // ── Purchases with no underlag ───────────────────────────────
