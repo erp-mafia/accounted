@@ -236,6 +236,11 @@ Without working credentials the rest of the app runs normally: uploads are store
 
 ```bash
 npx tsx scripts/smoke-ai.ts                  # credentials, models, chat loop
+# Note: this check only detects static credentials (ANTHROPIC_API_KEY or
+# AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY). Bedrock deployments using an
+# instance profile or IRSA won't be picked up automatically — set
+# AI_PROVIDER=bedrock to run the probes against the AWS credential chain
+# anyway.
 npx tsx scripts/smoke-ai.ts ./receipt.pdf    # also runs document extraction
 ```
 
