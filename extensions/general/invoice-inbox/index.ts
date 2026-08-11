@@ -55,6 +55,11 @@ import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInbox
 import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
 import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
+import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
+import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import type { Transaction, EntityType } from '@/types'
+import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { simpleParser } from 'mailparser'
@@ -2242,6 +2247,207 @@ export const invoiceInboxExtension: Extension = {
             skipped,
           },
         })
+      },
+    },
+
+    // ── What this underlag would be booked as ─────────────────────
+    //
+    // Read-only. Nothing here writes, and nothing here is authoritative: the
+    // answer is a suggestion the user approves, edits or ignores, and the
+    // actual posting still goes through book-direct → createJournalEntry.
+    //
+    // Derived on demand rather than stored on the row, so it cannot go stale
+    // against a corrected amount, a re-matched transaction or a template the
+    // company taught itself yesterday. The receipt hunt deliberately does not
+    // compute it: the nightly run is already at its time ceiling, and a
+    // proposal nobody opens is wasted work.
+    //
+    // The lines come from buildTransactionEntryLines, the same function the
+    // commit path and the pending-operations preview use, so what is shown
+    // here cannot drift from what gets posted.
+    {
+      method: 'POST',
+      path: '/items/:id/suggest-booking',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        const url = new URL(request.url)
+        const id = url.searchParams.get('_id')
+        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
+
+        // A dropped `error` here would report a missing column or a lagging
+        // migration as "Posten hittades inte", pointing the user at their
+        // document instead of at the database.
+        const { data: item, error: itemError } = await ctx.supabase
+          .from('invoice_inbox_items')
+          .select('id, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id')
+          .eq('id', id)
+          .eq('company_id', ctx.companyId)
+          .maybeSingle()
+
+        if (itemError) {
+          ctx.log.error('suggest-booking: inbox lookup failed', { itemId: id, error: itemError.message })
+          return NextResponse.json({ error: 'Kunde inte läsa posten' }, { status: 500 })
+        }
+        if (!item) return NextResponse.json({ error: 'Posten hittades inte' }, { status: 404 })
+
+        // Already resolved: there is nothing left to propose, and showing a
+        // suggestion beside a posted verifikat invites double-booking.
+        if (item.created_journal_entry_id || item.created_supplier_invoice_id) {
+          return NextResponse.json({
+            data: { source: 'already_booked' as const, lines: [], confidence: null },
+          })
+        }
+
+        if (!item.matched_transaction_id) {
+          // Without a transaction there is no amount we trust, no settlement
+          // account and no learned counterparty. The honest answer is that we
+          // cannot propose one yet; the UI asks the user to match first.
+          return NextResponse.json({
+            data: { source: 'no_transaction' as const, lines: [], confidence: null },
+          })
+        }
+
+        // The transaction is queried explicitly by company even though RLS
+        // would narrow it: service-role paths have none, and the filter is the
+        // defense-in-depth this repo mandates.
+        const { data: tx, error: txError } = await ctx.supabase
+          .from('transactions')
+          .select('*')
+          .eq('id', item.matched_transaction_id)
+          .eq('company_id', ctx.companyId)
+          .maybeSingle()
+
+        if (txError) {
+          ctx.log.error('suggest-booking: transaction lookup failed', {
+            itemId: id,
+            error: txError.message,
+          })
+          return NextResponse.json({ error: 'Kunde inte läsa transaktionen' }, { status: 500 })
+        }
+        if (!tx) {
+          return NextResponse.json({ error: 'Transaktionen hittades inte' }, { status: 404 })
+        }
+
+        // The inbox row is not the only way a purchase gets booked. Booking the
+        // bank line from Transaktioner, from bulk-book or over MCP stamps the
+        // transaction and leaves invoice_inbox_items.created_journal_entry_id
+        // null, so trusting the inbox row alone proposes a second verifikat for
+        // money that already has one.
+        if ((tx as Transaction).journal_entry_id) {
+          return NextResponse.json({
+            data: { source: 'already_booked' as const, lines: [], confidence: null },
+          })
+        }
+
+        try {
+          const { data: settings } = await ctx.supabase
+            .from('company_settings')
+            .select('entity_type')
+            .eq('company_id', ctx.companyId)
+            .maybeSingle()
+          // Same default as categorize-core. Leaving it undefined silently
+          // proposed enskild-firma accounts to aktiebolag: 2013 instead of
+          // 2893 for an owner expense, 6991 instead of 7610 for a course.
+          const entityType: EntityType = (settings?.entity_type as EntityType) || 'enskild_firma'
+
+          const settlementAccount = await resolveSettlementAccount(
+            ctx.supabase,
+            ctx.companyId,
+            (tx as Transaction).cash_account_id,
+            createLogger('invoice-inbox.suggest-booking'),
+          )
+          // evaluateMappingRules applies the settlement account itself on every
+          // return path. Applying it again rewrote a legitimate 1930 leg, which
+          // on an own-account transfer collapsed both sides onto one account.
+          const mapping = await evaluateMappingRules(
+            ctx.supabase,
+            ctx.companyId,
+            tx as Transaction,
+            entityType,
+            settlementAccount,
+          )
+
+          // getDefaultResult is the engine's way of saying it has nothing: a
+          // 6991 placeholder at confidence 0.1. Rendering that as a proposal
+          // dresses "no idea" up as an answer, so it is reported as no_mapping,
+          // which is what the empty branch was always meant to cover.
+          const isPlaceholder =
+            !mapping.rule && !mapping.template_id && mapping.confidence <= 0.1
+          if (isPlaceholder || !mapping.debit_account || !mapping.credit_account) {
+            return NextResponse.json({
+              data: { source: 'no_mapping' as const, lines: [], confidence: mapping.confidence ?? null },
+            })
+          }
+
+          // mapping-engine's rule branch computes VAT from the transaction's own
+          // currency while every other line is built in SEK (see the NOTE at
+          // buildResult). On a non-SEK row that understates ingående moms by the
+          // exchange rate: 100 EUR at 11.5 shows 20 kr of moms instead of 230.
+          // The entry still balances, so nothing downstream catches it. Until
+          // that is fixed in the engine, this surface does not render it: a
+          // wrong number one click from the ledger is worse than no number.
+          const sekAmount = (tx as Transaction).amount_sek
+          const isForeign =
+            (tx as Transaction).currency !== 'SEK' &&
+            sekAmount != null &&
+            Math.abs(sekAmount) !== Math.abs((tx as Transaction).amount)
+          if (mapping.rule && isForeign) {
+            ctx.log.info('suggest-booking: withheld a rule-branch proposal on a foreign-currency row', {
+              itemId: id,
+              currency: (tx as Transaction).currency,
+            })
+            return NextResponse.json({
+              data: { source: 'currency_unsupported' as const, lines: [], confidence: null },
+            })
+          }
+
+          const lines = buildTransactionEntryLines(tx as Transaction, mapping).map((l) => ({
+            account_number: l.account_number,
+            debit_amount: l.debit_amount,
+            credit_amount: l.credit_amount,
+            description: l.line_description ?? '',
+          }))
+
+          return NextResponse.json({
+            data: {
+              // template_id marks a static library template; a learned
+              // counterparty template sets neither field. Reading it the other
+              // way round labelled the konteringskarta's most trusted match
+              // 'default', the same word the 6991 placeholder gets.
+              source: mapping.rule
+                ? ('mapping_rule' as const)
+                : mapping.template_id
+                  ? ('booking_template' as const)
+                  : ('counterparty_template' as const),
+              lines,
+              // Everything below is what the "Varför så här?" fold reads. It
+              // already existed on MappingResult and nothing rendered it.
+              confidence: mapping.confidence,
+              requires_review: mapping.requires_review,
+              direction_mismatch: mapping.direction_mismatch ?? false,
+              risk_level: mapping.risk_level,
+              description: mapping.description,
+              rule_name: mapping.rule?.rule_name ?? null,
+              template_id: mapping.template_id ?? null,
+              dimensions: mapping.dimensions ?? null,
+              // The day the money moved, not the day printed on the document:
+              // it is what decides the period the entry lands in.
+              entry_date: (tx as Transaction).date,
+            },
+          })
+        } catch (err) {
+          ctx.log.warn('suggest-booking failed', {
+            itemId: id,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          // A suggestion that cannot be produced is not an error the user did
+          // anything about: fall back to the empty proposal and let them book
+          // by hand.
+          return NextResponse.json({
+            data: { source: 'no_mapping' as const, lines: [], confidence: null },
+          })
+        }
       },
     },
   ],
