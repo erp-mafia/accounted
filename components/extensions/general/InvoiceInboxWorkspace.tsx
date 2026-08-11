@@ -449,16 +449,21 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [purchases, setPurchases] = useState<PurchaseWithoutUnderlag[]>([])
   const [selectedPurchaseId, setSelectedPurchaseId] = useState<string | null>(null)
 
-  // Whether any mailbox is connected. Without one the hunt has nothing to
-  // search, and offering the button would promise something it cannot do.
+  // Whether any mailbox can actually be searched. Counting rows would not
+  // answer that: a revoked or expired connection is still a row, and the hunt
+  // skips it, so the button would promise a search that returns nothing every
+  // pass. A dead mailbox looking healthy is the exact failure this feature
+  // exists to surface, so it must not start by doing it in its own header.
   const [mailConnected, setMailConnected] = useState(false)
   useEffect(() => {
     void (async () => {
       try {
         const res = await fetch('/api/extensions/ext/mail/connections')
         if (!res.ok) return
-        const json = (await res.json()) as { data?: { connections?: unknown[] } }
-        setMailConnected((json.data?.connections?.length ?? 0) > 0)
+        const json = (await res.json()) as {
+          data?: { connections?: { status?: string }[] }
+        }
+        setMailConnected((json.data?.connections ?? []).some((c) => c.status === 'active'))
       } catch {
         // The extension may not be enabled at all; stay quiet.
       }
