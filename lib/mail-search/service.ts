@@ -104,6 +104,15 @@ export interface MailSearchService {
    * and must not outlive the run that read it, so the caller says when that is.
    */
   releaseCache?(): void
+  /**
+   * How many connections refused the last search.
+   *
+   * A refused mailbox yields no candidates, exactly like an empty one. Without
+   * a way to tell them apart, a run that Gmail rate-limited reports "found
+   * nothing" and the caller stops looking, which is the worst possible answer:
+   * it is wrong, and it sounds final.
+   */
+  searchFailureCount?(): number
 }
 
 class NoopMailSearchService implements MailSearchService {

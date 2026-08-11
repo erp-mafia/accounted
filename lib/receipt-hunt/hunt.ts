@@ -128,6 +128,14 @@ export interface MailHuntSummary {
   withCandidates: number
   /** Receipts actually fetched and filed, ready for the amount match. */
   ingested: number
+  /**
+   * Connections that refused a search during this run.
+   *
+   * Non-zero means "we could not read a mailbox", which is not the same as
+   * "the mailbox held nothing". The caller must not report the second when the
+   * first happened, and must not treat the run as finished.
+   */
+  searchFailures: number
   candidates: Array<{
     /** Merchant the model resolved the bank descriptor to. */
     merchant: string
@@ -606,7 +614,7 @@ async function harvestReceiptsFromMail(
   maxMails: number,
 ): Promise<MailHuntSummary> {
   const service = getMailSearchService()
-  const summary: MailHuntSummary = { searched: 0, withCandidates: 0, ingested: 0, candidates: [] }
+  const summary: MailHuntSummary = { searched: 0, withCandidates: 0, ingested: 0, searchFailures: 0, candidates: [] }
   if (!service.isConfigured() || purchases.length === 0) return summary
 
   // Salary and tax runs are a company's largest outgoing rows, so without this
@@ -639,6 +647,9 @@ async function harvestReceiptsFromMail(
       useDateWindow: false,
       limit: MAX_CANDIDATES_PER_MERCHANT,
     })
+    // Accumulated across every merchant searched in this run: one refusal is
+    // enough to make "found nothing" a lie.
+    summary.searchFailures += service.searchFailureCount?.() ?? 0
     // The same mail answers several purchases from one supplier; it is read once.
     for (const c of found) {
       if (!byMessage.has(c.messageId)) byMessage.set(c.messageId, c)
