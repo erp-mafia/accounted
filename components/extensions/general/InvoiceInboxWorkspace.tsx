@@ -30,6 +30,8 @@ import {
   ArrowRight,
   Plus,
   Link2,
+  ExternalLink,
+  FileQuestion,
   Search,
   Circle,
   X,
@@ -249,7 +251,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // Defaults to 'todo': the active inbox (everything not yet booked), so
   // booked underlag drop out of the default view while attached-but-unbooked
   // ones stay visible.
-  const [filter, setFilter] = useState<'todo' | 'linked' | 'booked' | 'error' | 'all'>('todo')
+  // 'missing' is the odd one out: it lists bank purchases, not inbox items, so
+  // the list and both panes branch on it.
+  const [filter, setFilter] = useState<'todo' | 'linked' | 'booked' | 'error' | 'all' | 'missing'>('todo')
   const [searchTerm, setSearchTerm] = useState('')
   // Bulk selection. Items linked to a supplier invoice are skipped at delete
   // time (server returns 409); we still allow them to be selected so the
@@ -437,6 +441,33 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   // ── List filter + search (client-side over the fetched list) ─
 
+  // Purchases with no underlag at all. They are not inbox items and never
+  // become them, so they live beside `items` rather than inside it: widening
+  // InboxItem to cover a bank row would put a null document, a null extraction
+  // and a null status through every consumer of that type.
+  const [purchases, setPurchases] = useState<PurchaseWithoutUnderlag[]>([])
+  const [selectedPurchaseId, setSelectedPurchaseId] = useState<string | null>(null)
+
+  const fetchPurchases = useCallback(async () => {
+    try {
+      const res = await fetch('/api/extensions/ext/invoice-inbox/purchases')
+      if (!res.ok) return
+      const json = (await res.json()) as { data: { purchases: PurchaseWithoutUnderlag[] } }
+      setPurchases(json.data.purchases ?? [])
+    } catch {
+      // A missing count is better than an error beside the user's documents.
+    }
+  }, [])
+
+  useEffect(() => {
+    void fetchPurchases()
+  }, [fetchPurchases])
+
+  const selectedPurchase = useMemo(
+    () => purchases.find((p) => p.id === selectedPurchaseId) ?? null,
+    [purchases, selectedPurchaseId],
+  )
+
   // Per-status counts for the filter pills. Computed once over the full list.
   const statusCounts = useMemo(() => {
     const counts = { todo: 0, linked: 0, booked: 0, error: 0, all: items.length }
@@ -458,15 +489,29 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       { key: 'linked', label: 'Kopplade', count: statusCounts.linked },
       { key: 'booked', label: 'Bokförda', count: statusCounts.booked },
     ]
+    // Only worth a pill when there is something behind it: a company that
+    // keeps every receipt should not be shown a permanent empty accusation.
+    if (purchases.length > 0 || filter === 'missing') {
+      list.push({ key: 'missing', label: 'Saknar underlag', count: purchases.length })
+    }
     if (statusCounts.error > 0 || filter === 'error') {
       list.push({ key: 'error', label: 'Fel', count: statusCounts.error })
     }
     list.push({ key: 'all', label: 'Alla', count: statusCounts.all })
     return list
-  }, [statusCounts, filter])
+  }, [statusCounts, filter, purchases.length])
+
+  const filteredPurchases = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase()
+    if (term === '') return purchases
+    return purchases.filter((p) =>
+      [p.merchant_name, p.description].some((v) => v?.toLowerCase().includes(term)),
+    )
+  }, [purchases, searchTerm])
 
   const filteredItems = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
+    if (filter === 'missing') return []
     return items.filter((item) => {
       // Status filter. "todo" is the active inbox: everything except booked.
       const status = deriveInboxStatus(item)
@@ -540,6 +585,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   const handleSelect = useCallback(async (id: string) => {
     setSelectedId(id)
+    setSelectedPurchaseId(null)
     setSelected(null)
     setDocUrl(null)
     setDocMime(null)
@@ -922,7 +968,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   <button
                     key={pill.key}
                     type="button"
-                    onClick={() => setFilter(pill.key)}
+                    onClick={() => {
+                      setFilter(pill.key)
+                      // The panes show one kind of row at a time; a stale
+                      // selection from the other kind would outlive its list.
+                      if (pill.key === 'missing') setSelectedId(null)
+                      else setSelectedPurchaseId(null)
+                    }}
                     className={cn(
                       'text-[11px] px-2 py-0.5 rounded-full border transition-colors',
                       filter === pill.key
@@ -1056,25 +1108,39 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 Inkorgen är tom.
               </div>
             )
-          ) : filteredItems.length === 0 ? (
+          ) : (filter === 'missing' ? filteredPurchases.length : filteredItems.length) === 0 ? (
             <div className="p-6 text-center text-xs text-muted-foreground">
               {filter === 'todo'
                 ? 'Inget att åtgärda; allt är bearbetat.'
-                : 'Inga poster matchar filtret.'}
+                : filter === 'missing'
+                  ? 'Varje köp har sitt underlag.'
+                  : 'Inga poster matchar filtret.'}
             </div>
           ) : (
             <ul>
-              {filteredItems.map((item) => (
-                <InboxRow
-                  key={item.id}
-                  item={item}
-                  selected={item.id === selectedId}
-                  onClick={() => handleSelect(item.id)}
-                  isChecked={selectedIds.has(item.id)}
-                  onToggleChecked={() => toggleSelected(item.id)}
-                  anyChecked={selectedIds.size > 0}
-                />
-              ))}
+              {filter === 'missing'
+                ? filteredPurchases.map((p) => (
+                    <PurchaseRow
+                      key={p.id}
+                      purchase={p}
+                      selected={p.id === selectedPurchaseId}
+                      onClick={() => {
+                        setSelectedPurchaseId(p.id)
+                        setSelectedId(null)
+                      }}
+                    />
+                  ))
+                : filteredItems.map((item) => (
+                    <InboxRow
+                      key={item.id}
+                      item={item}
+                      selected={item.id === selectedId}
+                      onClick={() => handleSelect(item.id)}
+                      isChecked={selectedIds.has(item.id)}
+                      onToggleChecked={() => toggleSelected(item.id)}
+                      anyChecked={selectedIds.size > 0}
+                    />
+                  ))}
             </ul>
           )}
         </aside>
@@ -1089,7 +1155,21 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             !hasAnyItem && 'hidden xl:block'
           )}
         >
-          {selected ? (
+          {selectedPurchase ? (
+            // There is no file to show, so the pane says why instead of
+            // rendering an empty frame.
+            <div className="h-full flex items-center justify-center p-8">
+              <div className="text-center max-w-sm">
+                <FileQuestion className="h-6 w-6 mx-auto mb-3 text-muted-foreground opacity-60" />
+                <p className="text-sm">Inget underlag hittat</p>
+                <p className="text-xs text-muted-foreground mt-1.5">
+                  {selectedPurchase.portal
+                    ? `${selectedPurchase.portal.vendor} skickar ingen fil. Hämta fakturan och ladda upp den här, så kopplas den till köpet.`
+                    : 'Vi har sökt i brevlådorna och i portalkatalogen. Ladda upp kvittot här, eller vidarebefordra det till inkorgsadressen.'}
+                </p>
+              </div>
+            </div>
+          ) : selected ? (
             <DocumentPreview
               docUrl={docUrl}
               docMime={docMime}
@@ -1136,7 +1216,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             !hasAnyItem && 'hidden xl:block'
           )}
         >
-          {selected ? (
+          {selectedPurchase ? (
+            <PurchaseRail purchase={selectedPurchase} />
+          ) : selected ? (
             <FieldsRail
               item={selected}
               docMime={docMime}
@@ -1760,6 +1842,123 @@ function EmptyPreview({
           Ladda upp en fil
         </Button>
       </div>
+    </div>
+  )
+}
+
+// ── Purchases with no underlag ───────────────────────────────
+
+/**
+ * A bank purchase that has no document at all.
+ *
+ * These have never been on this page, because the page lists documents and a
+ * purchase without one has nothing to list. They are the other half of the
+ * question the receipt hunt asks, and the half a person can act on: fetch the
+ * invoice from wherever the supplier keeps it, or ask whoever made the purchase.
+ */
+export interface PurchaseWithoutUnderlag {
+  id: string
+  date: string
+  description: string | null
+  merchant_name: string | null
+  amount: number
+  currency: string | null
+  amount_sek: number | null
+  portal: { vendor: string; url: string; note: string | null } | null
+}
+
+function PurchaseRow({
+  purchase,
+  selected,
+  onClick,
+}: {
+  purchase: PurchaseWithoutUnderlag
+  selected: boolean
+  onClick: () => void
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          'w-full text-left px-3 py-2 border-b transition-colors',
+          selected ? 'bg-secondary' : 'hover:bg-secondary/60',
+        )}
+      >
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-[13px] truncate">
+            {purchase.merchant_name || purchase.description || 'Okänt köp'}
+          </span>
+          <span className="text-xs tabular-nums shrink-0">
+            {formatCurrency(Math.abs(purchase.amount), purchase.currency ?? undefined)}
+          </span>
+        </div>
+        <div className="flex items-baseline justify-between gap-2 mt-0.5">
+          <span className="text-xs text-muted-foreground tabular-nums">{formatDate(purchase.date)}</span>
+          {/* A chip only when the row deviates: here, when we can actually
+              tell the user where to go. */}
+          {purchase.portal && (
+            <Badge variant="outline" className="text-[10px] font-normal">
+              {purchase.portal.vendor}
+            </Badge>
+          )}
+        </div>
+      </button>
+    </li>
+  )
+}
+
+function PurchaseRail({ purchase }: { purchase: PurchaseWithoutUnderlag }) {
+  return (
+    <div className="p-4 space-y-4">
+      <div>
+        <h3 className="text-sm font-medium">
+          {purchase.merchant_name || purchase.description || 'Okänt köp'}
+        </h3>
+        <p className="text-xs text-muted-foreground mt-0.5">Köp utan underlag</p>
+      </div>
+
+      <dl className="space-y-1.5 text-xs">
+        <div className="flex justify-between gap-3">
+          <dt className="text-muted-foreground">Datum</dt>
+          <dd className="tabular-nums">{formatDate(purchase.date)}</dd>
+        </div>
+        <div className="flex justify-between gap-3">
+          <dt className="text-muted-foreground">Belopp</dt>
+          <dd className="tabular-nums">
+            {formatCurrency(Math.abs(purchase.amount), purchase.currency ?? undefined)}
+          </dd>
+        </div>
+        {purchase.description && (
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground shrink-0">Kontotext</dt>
+            <dd className="text-muted-foreground text-right break-words">{purchase.description}</dd>
+          </div>
+        )}
+      </dl>
+
+      {purchase.portal ? (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            {purchase.portal.note ??
+              `${purchase.portal.vendor} skickar ingen fil. Fakturan ligger bakom en inloggning.`}
+          </p>
+          {/* We never log in for anyone. Knowing where the invoice is costs no
+              password and is most of the value. */}
+          <Button size="sm" className="w-full" asChild>
+            <a href={purchase.portal.url} target="_blank" rel="noopener noreferrer">
+              Öppna {purchase.portal.vendor}
+              <ExternalLink className="h-3.5 w-3.5 ml-1.5" />
+            </a>
+          </Button>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Vi hittade ingen bilaga och känner inte till någon portal för den här leverantören. Ladda upp
+          kvittot här, eller vidarebefordra det till inkorgsadressen.
+        </p>
+      )}
     </div>
   )
 }
