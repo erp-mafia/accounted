@@ -38,7 +38,7 @@ import {
   MessageCircle,
 } from 'lucide-react'
 import Link from 'next/link'
-import { cn, formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
@@ -1764,6 +1764,155 @@ function EmptyPreview({
   )
 }
 
+// ── Proposed kontering ───────────────────────────────────────
+
+/**
+ * What this underlag would be booked as, for a matched transaction.
+ *
+ * Read-only on purpose. Per convention 14 nothing AI-suggested posts without
+ * review, so this shows the answer and the existing booking dialog remains the
+ * only way to commit it. The lines come from the same builder the commit path
+ * uses, so what is shown here is what would be posted.
+ *
+ * The route answers honestly when it cannot propose: a company with no rule and
+ * no history, a foreign-currency row the engine would mis-VAT, a transaction
+ * that already carries a verifikat. Each of those renders as a sentence rather
+ * than as an empty table, because "we have nothing for this" is information.
+ */
+type SuggestedBooking = {
+  source:
+    | 'mapping_rule'
+    | 'booking_template'
+    | 'counterparty_template'
+    | 'no_mapping'
+    | 'no_transaction'
+    | 'already_booked'
+    | 'currency_unsupported'
+  lines: { account_number: string; debit_amount: number; credit_amount: number; description: string }[]
+  confidence: number | null
+  requires_review?: boolean
+  direction_mismatch?: boolean
+  description?: string
+  rule_name?: string | null
+  entry_date?: string
+}
+
+const SUGGESTION_SOURCE_LABEL: Record<string, string> = {
+  counterparty_template: 'Så du brukar bokföra den här leverantören',
+  booking_template: 'Från en bokföringsmall',
+  mapping_rule: 'Från en konteringsregel',
+}
+
+/** Why there is no proposal, said plainly rather than shown as an empty table. */
+const SUGGESTION_EMPTY_REASON: Record<string, string> = {
+  no_mapping:
+    'Vi har inget förslag: leverantören är obekant och ingen regel matchar. Bokför manuellt en gång, så känns den igen nästa gång.',
+  currency_unsupported:
+    'Köpet är i utländsk valuta och matchades av en konteringsregel. Momsen skulle bli fel, så vi visar inget förslag.',
+}
+
+function ProposedBooking({ itemId }: { itemId: string }) {
+  const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
+  const [data, setData] = useState<SuggestedBooking | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setState('loading')
+    setData(null)
+    fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}/suggest-booking`, { method: 'POST' })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status))
+        return (await res.json()) as { data: SuggestedBooking }
+      })
+      .then((json) => {
+        if (cancelled) return
+        setData(json.data)
+        setState('ready')
+      })
+      .catch(() => {
+        // A suggestion that cannot be fetched is not something the user did:
+        // stay quiet rather than showing an error beside their document.
+        if (!cancelled) setState('failed')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [itemId])
+
+  if (state === 'loading') return <Skeleton className="h-24 w-full" />
+  if (state === 'failed' || !data) return null
+  if (data.source === 'already_booked' || data.source === 'no_transaction') return null
+
+  if (data.lines.length === 0) {
+    const reason = SUGGESTION_EMPTY_REASON[data.source]
+    return reason ? <p className="text-xs text-muted-foreground">{reason}</p> : null
+  }
+
+  const debit = data.lines.reduce((t, l) => t + (l.debit_amount || 0), 0)
+  const credit = data.lines.reduce((t, l) => t + (l.credit_amount || 0), 0)
+  const balanced = Math.round((debit - credit) * 100) === 0
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-xs font-medium">Föreslagen kontering</h3>
+        {data.entry_date && (
+          <span className="text-[11px] text-muted-foreground tabular-nums">
+            Bokförs {formatDate(data.entry_date)}
+          </span>
+        )}
+      </div>
+
+      <table className="w-full border-collapse text-xs">
+        <tbody>
+          {data.lines.map((l, i) => (
+            <tr key={`${l.account_number}-${i}`} className="border-b border-border/40 last:border-0">
+              <td className="py-1 pr-2 tabular-nums text-muted-foreground w-10">{l.account_number}</td>
+              <td className="py-1 pr-2 truncate" title={l.description}>
+                {l.description}
+              </td>
+              <td className="py-1 text-right tabular-nums whitespace-nowrap w-20">
+                {l.debit_amount ? formatCurrency(l.debit_amount) : ''}
+              </td>
+              <td className="py-1 pl-2 text-right tabular-nums whitespace-nowrap w-20 text-muted-foreground">
+                {l.credit_amount ? formatCurrency(l.credit_amount) : ''}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* Balance is stated rather than assumed: the builder balances by
+          construction, so a mismatch here means something upstream is wrong
+          and the user should see it before booking. */}
+      {!balanced && (
+        <p className="text-[11px] text-warning">
+          Debet {formatCurrency(debit)} · Kredit {formatCurrency(credit)}
+        </p>
+      )}
+
+      {(SUGGESTION_SOURCE_LABEL[data.source] || data.requires_review || data.direction_mismatch) && (
+        <details className="text-[11px] text-muted-foreground">
+          <summary className="cursor-pointer hover:text-foreground">Varför så här?</summary>
+          <div className="pt-1.5 space-y-1">
+            {SUGGESTION_SOURCE_LABEL[data.source] && <p>{SUGGESTION_SOURCE_LABEL[data.source]}</p>}
+            {data.rule_name && <p>Regel: {data.rule_name}</p>}
+            {data.direction_mismatch && (
+              <p className="text-warning">
+                Beloppets riktning stämmer inte med hur leverantören brukar bokföras. Kontrollera innan du
+                bokför.
+              </p>
+            )}
+            {data.requires_review && !data.direction_mismatch && (
+              <p>Förslaget är osäkert och bör granskas innan du bokför.</p>
+            )}
+          </div>
+        </details>
+      )}
+    </div>
+  )
+}
+
 // ── Fields rail ──────────────────────────────────────────────
 
 function FieldsRail({
@@ -2111,6 +2260,10 @@ function FieldsRail({
                 Öppna transaktionen →
               </Link>
             </div>
+
+            {/* The answer the rail never gave: what this would be booked as.
+                Read-only; booking still goes through the dialog below. */}
+            <ProposedBooking itemId={item.id} />
             {onAskAssistant && (
               <Button
                 variant="default"
