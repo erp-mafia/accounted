@@ -300,7 +300,12 @@ export default function JournalEntryList() {
     }
   }
 
-  const fetchAttachmentCounts = useCallback(async (entryIds: string[]) => {
+  // isCurrent: the caller's request-generation guard (see fetchGenRef). The
+  // metadata writes land after their own awaits, so a stale list request's
+  // late completion must not overwrite counts/flags for the rows a newer
+  // request just rendered: wrong counts here flip the missing-underlag
+  // warning and bulk-exemption eligibility.
+  const fetchAttachmentCounts = useCallback(async (entryIds: string[], isCurrent: () => boolean = () => true) => {
     if (entryIds.length === 0) {
       setAttachmentCounts({})
       setAttachmentCountsLoaded(true)
@@ -330,15 +335,18 @@ export default function JournalEntryList() {
           return (data || {}) as Record<string, number>
         })
       )
+      if (!isCurrent()) return
       setAttachmentCounts(Object.assign({}, ...results))
     } catch {
       // Non-critical: silently ignore
     } finally {
-      setAttachmentCountsLoaded(true)
+      // A stale run must not flip the loaded flag either: the newer run set
+      // it false on entry and owns setting it true when ITS counts land.
+      if (isCurrent()) setAttachmentCountsLoaded(true)
     }
   }, [])
 
-  const fetchRattelseFlags = useCallback(async (entryIds: string[]) => {
+  const fetchRattelseFlags = useCallback(async (entryIds: string[], isCurrent: () => boolean = () => true) => {
     if (entryIds.length === 0) {
       setRattelseFlags(new Set())
       return
@@ -349,6 +357,7 @@ export default function JournalEntryList() {
       )
       if (!res.ok) return
       const { data } = await res.json()
+      if (!isCurrent()) return
       setRattelseFlags(new Set((data || []) as string[]))
     } catch {
       // Non-critical: silently ignore
@@ -532,10 +541,12 @@ export default function JournalEntryList() {
       if (!isCurrent()) return
       setHasLoaded(true)
 
-      // Fetch attachment counts + rättelse markers for the loaded entries
+      // Fetch attachment counts + rättelse markers for the loaded entries,
+      // carrying the generation guard so their late completions can't
+      // overwrite metadata a newer request just rendered.
       const ids = loadedEntries.map((e: JournalEntry) => e.id)
-      fetchAttachmentCounts(ids)
-      fetchRattelseFlags(ids)
+      fetchAttachmentCounts(ids, isCurrent)
+      fetchRattelseFlags(ids, isCurrent)
     } catch {
       // Network-level rejection (offline, aborted response body): same
       // surfacing as a non-OK response, or the list stays dimmed forever.
