@@ -15,14 +15,6 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import { formatDateLong } from '@/lib/utils'
 
-interface HuntResult {
-  searched: number
-  fetched: number
-  proposed: number
-  remaining: number
-  failed?: boolean
-}
-
 interface MailConnection {
   id: string
   provider: 'gmail' | 'microsoft'
@@ -33,14 +25,9 @@ interface MailConnection {
   lastErrorCode: string | null
 }
 
-const BASE = '/api/extensions/ext/mail'
+import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt'
 
-/**
- * Backstop on the loop. Each pass fetches a few receipts, so this is far more
- * than any real backlog needs; it exists so a pass that keeps reporting work
- * it never completes cannot run forever.
- */
-const MAX_PASSES = 25
+const BASE = '/api/extensions/ext/mail'
 
 export function MailConnectionsPanel() {
   const t = useTranslations('mail')
@@ -49,12 +36,9 @@ export function MailConnectionsPanel() {
   const [loading, setLoading] = useState(true)
   const [connecting, setConnecting] = useState(false)
   const [pendingDisconnect, setPendingDisconnect] = useState<MailConnection | null>(null)
-  const [hunting, setHunting] = useState(false)
-  const [huntResult, setHuntResult] = useState<HuntResult | null>(null)
-  const [progress, setProgress] = useState<{ passes: number; fetched: number; proposed: number } | null>(null)
+  const { hunt, stop: stopHunt, hunting, progress, result: huntResult } = useReceiptHunt(() => void load())
   // Read inside the loop, so pressing Stop takes effect on the current pass
   // rather than after every remaining pass has run.
-  const stopped = useRef(false)
 
   const load = useCallback(async () => {
     try {
@@ -114,46 +98,6 @@ export function MailConnectionsPanel() {
    * the mailboxes hold nothing more for the purchases still open. The cap is a
    * backstop against a pass that keeps reporting work it cannot finish.
    */
-  async function hunt() {
-    setHunting(true)
-    setHuntResult(null)
-    stopped.current = false
-
-    let passes = 0
-    let fetched = 0
-    let proposed = 0
-
-    try {
-      while (!stopped.current && passes < MAX_PASSES) {
-        const response = await fetch('/api/receipt-hunt/run', { method: 'POST' })
-        if (!response.ok) {
-          setHuntResult({ searched: 0, fetched, proposed, remaining: 0, failed: true })
-          return
-        }
-
-        const body = (await response.json()) as { data: HuntResult }
-        passes++
-        fetched += body.data.fetched
-        proposed += body.data.proposed
-        setProgress({ passes, fetched, proposed })
-        void load()
-
-        // Nothing new this pass: the mailboxes have no more for what is open.
-        if (body.data.fetched === 0) {
-          setHuntResult({ ...body.data, fetched, proposed })
-          return
-        }
-      }
-
-      setHuntResult({ searched: 0, fetched, proposed, remaining: 0 })
-    } catch {
-      setHuntResult({ searched: 0, fetched, proposed, remaining: 0, failed: true })
-    } finally {
-      setHunting(false)
-      setProgress(null)
-    }
-  }
-
 
   async function disconnect(connection: MailConnection) {
     await fetch(`${BASE}/connections?id=${encodeURIComponent(connection.id)}`, { method: 'DELETE' })
@@ -218,7 +162,7 @@ export function MailConnectionsPanel() {
                 </SettingsRowNote>
               ) : null}
               {hunting ? (
-                <Button variant="ghost" size="sm" onClick={() => { stopped.current = true }}>
+                <Button variant="ghost" size="sm" onClick={stopHunt}>
                   {t('hunt_stop')}
                 </Button>
               ) : null}
