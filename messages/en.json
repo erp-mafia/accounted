@@ -3073,6 +3073,7 @@
     "heic_hint": "HEIC images cannot be AI-extracted yet. Upload the receipt as JPEG or PDF, or fill in the fields manually.",
     "skipped_hint": "AI extraction did not run for this document. You can link the document to a transaction or create a supplier invoice manually.",
     "retry_overwrite_confirm": "Re-running extraction overwrites the fields, including your own edits. Continue?",
+    "expand_fields": "Open the fields in a larger view",
     "wa_block_title": "From WhatsApp",
     "wa_caption_label": "Message",
     "wa_participants_label": "Participants",
