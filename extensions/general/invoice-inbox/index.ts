@@ -60,6 +60,8 @@ import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entrie
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import type { Transaction, EntityType } from '@/types'
 import { createLogger } from '@/lib/logger'
+import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-without-underlag'
+import { lookupPortal } from '@/lib/receipt-hunt/portal-directory'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { simpleParser } from 'mailparser'
@@ -2447,6 +2449,54 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({
             data: { source: 'no_mapping' as const, lines: [], confidence: null },
           })
+        }
+      },
+    },
+
+    // ── Purchases still missing their underlag ────────────────────
+    //
+    // The page has always listed documents, so a purchase with no document at
+    // all could not appear on it. That is exactly the gap the receipt hunt
+    // exists to close, and the half a user can act on: fetch the invoice from
+    // the supplier's portal, or ask whoever made the purchase.
+    //
+    // Read-only. The predicate is shared with the hunt so the page and the
+    // nightly run cannot disagree about what "missing its receipt" means.
+    {
+      method: 'GET',
+      path: '/purchases',
+      handler: async (_request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+        try {
+          const purchases = await fetchPurchasesWithoutUnderlag(ctx.supabase, ctx.companyId)
+
+          return NextResponse.json({
+            data: {
+              count: purchases.length,
+              purchases: purchases.map((p) => {
+                // Where the invoice lives, when the supplier does not send one.
+                // lookupPortal answers null for salary and tax, which have no
+                // invoice to fetch: a link there would be worse than silence.
+                const portal = lookupPortal(p.merchant_name || p.description)
+                return {
+                  id: p.id,
+                  date: p.date,
+                  description: p.description,
+                  merchant_name: p.merchant_name,
+                  amount: p.amount,
+                  currency: p.currency,
+                  amount_sek: p.amount_sek,
+                  portal: portal ? { vendor: portal.vendor, url: portal.url, note: portal.note ?? null } : null,
+                }
+              }),
+            },
+          })
+        } catch (err) {
+          ctx.log.error('purchases lookup failed', {
+            error: err instanceof Error ? err.message : String(err),
+          })
+          return NextResponse.json({ error: 'Kunde inte hämta köpen' }, { status: 500 })
         }
       },
     },
