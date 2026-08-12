@@ -899,6 +899,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // NOTE: the date column on transactions is `date` (a previous spec said
   // booking_date, which does not exist: every backup got an error stub).
   { name: 'transactions', file: 'transactions.json', orderBy: 'date' },
+  // Webshop order rows are booking underlag (and carry customer personal
+  // data), so they belong in the archive like transactions do.
+  { name: 'webshop_orders', file: 'webshop_orders.json', orderBy: 'order_date' },
+  { name: 'webshop_store_settings', file: 'webshop_store_settings.json' },
   { name: 'transaction_voucher_links', file: 'transaction_voucher_links.json' },
   { name: 'bank_file_imports', file: 'bank_file_imports.json', orderBy: 'created_at' },
   { name: 'cash_accounts', file: 'cash_accounts.json' },

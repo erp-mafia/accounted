@@ -69,21 +69,27 @@ async function guardConnectPreconditions(auth: AuthedContext): Promise<NextRespo
 }
 
 /**
- * Existing-connection preflight for both connect paths: 409 on an active
- * connection or a fresh pending handshake, and supersede stale pendings so
- * their oauth_state can never complete a late callback.
+ * Existing-connection preflight for both connect paths, scoped to the SAME
+ * store: 409 when this store is already actively connected or mid-handshake,
+ * and supersede stale pendings for it so their oauth_state can never
+ * complete a late callback. Other stores are untouched: a company may
+ * connect several stores (multi-store, migration 20260811073422).
  */
-async function blockOrSupersedeExisting(auth: AuthedContext): Promise<NextResponse | null> {
+async function blockOrSupersedeExisting(
+  auth: AuthedContext,
+  storeUrl: string,
+): Promise<NextResponse | null> {
   const { data: existing } = await auth.supabase
     .from('woocommerce_connections')
     .select('id, status, created_at')
     .eq('company_id', auth.companyId)
+    .eq('store_url', storeUrl)
     .in('status', ['active', 'pending'])
     .order('created_at', { ascending: false })
 
   if (existing?.some((c) => c.status === 'active')) {
     return NextResponse.json(
-      { error: 'Företaget har redan en ansluten WooCommerce-butik. Koppla från den först.' },
+      { error: 'Butiken är redan ansluten. Koppla från den först om du vill ansluta om den.' },
       { status: 409 },
     )
   }
@@ -106,6 +112,7 @@ async function blockOrSupersedeExisting(auth: AuthedContext): Promise<NextRespon
         oauth_state: null,
       })
       .eq('company_id', auth.companyId)
+      .eq('store_url', storeUrl)
       .eq('status', 'pending')
   }
   return null
@@ -119,19 +126,23 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       const auth = await requireUserAndCompany(ctx)
       if (auth instanceof NextResponse) return auth
 
-      // Prefer the active connection; otherwise surface the most recent row
-      // so the panel can show pending/error/revoked states.
+      // Multi-store: every active connection, plus the most recent inactive
+      // row when nothing is active (so the panel can show a pending/error/
+      // revoked state instead of an empty list). `connection` mirrors the
+      // first entry for callers of the old single-store shape.
       const { data: rows } = await auth.supabase
         .from('woocommerce_connections')
         .select(STATUS_COLUMNS)
         .eq('company_id', auth.companyId)
         .order('created_at', { ascending: false })
-        .limit(10)
+        .limit(25)
 
-      const connection = rows?.find((r) => r.status === 'active') ?? rows?.[0] ?? null
+      const active = (rows ?? []).filter((r) => r.status === 'active')
+      const connections = active.length > 0 ? active : rows?.[0] ? [rows[0]] : []
       const payload: WooCommerceStatusResponse = {
         configured: isWooCommerceConfigured(),
-        connection,
+        connection: connections[0] ?? null,
+        connections,
       }
       return NextResponse.json(payload)
     },
@@ -168,7 +179,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      const conflict = await blockOrSupersedeExisting(auth)
+      const conflict = await blockOrSupersedeExisting(auth, storeUrl)
       if (conflict) return conflict
 
       // Persist the CSRF state BEFORE handing the user to the store: the
@@ -252,7 +263,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      const conflict = await blockOrSupersedeExisting(auth)
+      const conflict = await blockOrSupersedeExisting(auth, storeUrl)
       if (conflict) return conflict
 
       // Verify before storing: a typo'd key must fail here, not at 03:45.
@@ -335,7 +346,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/sync',
-    handler: async (_request: Request, ctx?: ExtensionContext) => {
+    handler: async (request: Request, ctx?: ExtensionContext) => {
       const log = ctx?.log ?? console
       const auth = await requireUserAndCompany(ctx)
       if (auth instanceof NextResponse) return auth
@@ -355,17 +366,23 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       if (!rl.ok) return rl.response!
 
       // Membership-scoped lookup via the user client; the sync itself runs on
-      // the service client (cursor updates and ingest are service paths). The
-      // manual button ignores transaction_sync_enabled (that flag gates the
-      // nightly cron): pressing it IS the opt-in.
-      const { data: connection } = await auth.supabase
+      // the service client (cursor updates and upserts are service paths).
+      // The manual button ignores transaction_sync_enabled (that flag gates
+      // the nightly cron): pressing it IS the opt-in. connection_id targets
+      // one store; omitted, every active store syncs within one time budget.
+      const body = (await request.json().catch(() => ({}))) as { connection_id?: string }
+      let query = auth.supabase
         .from('woocommerce_connections')
         .select('*')
         .eq('company_id', auth.companyId)
         .eq('status', 'active')
-        .maybeSingle()
+      if (body.connection_id) query = query.eq('id', body.connection_id)
+      const { data: connections } = await query.order('last_order_synced_at', {
+        ascending: true,
+        nullsFirst: true,
+      })
 
-      if (!connection) {
+      if (!connections || connections.length === 0) {
         return NextResponse.json(
           { error: 'Ingen ansluten WooCommerce-butik.' },
           { status: 404 },
@@ -378,17 +395,44 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         // a slow host would be killed at the dispatcher's maxDuration with no
         // cursor persisted; with one it stops cleanly, reports a partial sync
         // and resumes where it stopped on the next press.
-        const summary = await syncWooCommerceOrders(
-          serviceClient,
-          connection as WooCommerceConnection,
-          undefined,
-          Date.now() + 240_000,
-        )
-        return NextResponse.json({ success: true, transactions: summary })
+        const deadlineMs = Date.now() + 240_000
+        // One entry per processed store, plus an explicit skipped count:
+        // returning only the last summary hid per-store failures and reported
+        // success for zero work when the deadline expired early.
+        const results: Array<{
+          connection_id: string
+          store_url: string
+          summary: Awaited<ReturnType<typeof syncWooCommerceOrders>>
+        }> = []
+        let skipped = 0
+        for (const connection of connections as WooCommerceConnection[]) {
+          if (Date.now() >= deadlineMs) {
+            skipped += 1
+            continue
+          }
+          const summary = await syncWooCommerceOrders(
+            serviceClient,
+            connection,
+            undefined,
+            deadlineMs,
+          )
+          results.push({
+            connection_id: connection.id,
+            store_url: connection.store_url,
+            summary,
+          })
+        }
+        return NextResponse.json({
+          success: true,
+          results,
+          skipped,
+          // Single-store shape kept for the panel's toast summary: the panel
+          // always syncs one connection_id, so this IS that store's summary.
+          transactions: results[results.length - 1]?.summary ?? null,
+        })
       } catch (error) {
         log.error('[woocommerce] Manual sync failed', {
           message: error instanceof Error ? error.message : String(error),
-          connection_id: connection.id,
         })
         return NextResponse.json(
           { error: 'Synkroniseringen misslyckades. Försök igen.' },
@@ -418,17 +462,21 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       })
       if (!rl.ok) return rl.response!
 
-      const body = (await request.json().catch(() => ({}))) as { enabled?: unknown }
+      const body = (await request.json().catch(() => ({}))) as {
+        enabled?: unknown
+        connection_id?: string
+      }
       if (typeof body.enabled !== 'boolean') {
         return NextResponse.json({ error: 'enabled (boolean) krävs.' }, { status: 400 })
       }
 
-      const { data: updated, error: updateError } = await auth.supabase
+      let updateQuery = auth.supabase
         .from('woocommerce_connections')
         .update({ transaction_sync_enabled: body.enabled })
         .eq('company_id', auth.companyId)
         .eq('status', 'active')
-        .select('id')
+      if (body.connection_id) updateQuery = updateQuery.eq('id', body.connection_id)
+      const { data: updated, error: updateError } = await updateQuery.select('id')
 
       if (updateError) {
         return NextResponse.json(

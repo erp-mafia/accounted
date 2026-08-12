@@ -1690,6 +1690,7 @@ export type JournalEntrySourceType =
   | 'rot_rut_payout'
   | 'vat_settlement'
   | 'stripe_payout'
+  | 'webshop_order'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'
@@ -3956,6 +3957,99 @@ export interface IngestResult {
    * how often the rule would fire, for validation before any enforcement.
    */
   shadow_date_drift_candidates?: number
+}
+
+// ── Webshop orders (Orders page; synced by the woocommerce/shopify extensions) ──
+
+export type WebshopPlatform = 'woocommerce' | 'shopify'
+export type WebshopOrderRowType = 'order' | 'refund'
+
+/** One VAT rate bucket of an order, in the order's currency. */
+export interface WebshopVatBreakdownLine {
+  /** Percent as a number (25, 12, 6, 0). */
+  rate: number
+  net: number
+  tax: number
+}
+
+/** One order line, in the order's currency. */
+export interface WebshopOrderLineItem {
+  name: string
+  quantity: number
+  total: number
+  total_tax: number
+  /** Percent; null when the rate could not be resolved from tax_lines. */
+  vat_rate: number | null
+}
+
+/** Row shape of public.webshop_orders. */
+export interface WebshopOrder {
+  id: string
+  company_id: string
+  user_id: string
+  platform: WebshopPlatform
+  /** Normalized store host(+path); the identity frozen into external_id. */
+  store_scope: string
+  store_label: string | null
+  /** Soft pointer to the platform's *_connections row (no FK). */
+  connection_id: string | null
+  row_type: WebshopOrderRowType
+  parent_order_id: string | null
+  /** Frozen feed scheme: woo_{scope}_order_{id} / woo_{scope}_refund_{id}. */
+  external_id: string
+  platform_order_id: string
+  order_number: string
+  /** Raw platform status (pending/processing/completed/refunded/...). */
+  status: string
+  is_paid: boolean
+  order_date: string
+  paid_date: string | null
+  currency: string
+  /** Gross incl. tax and shipping; negative on refund rows. */
+  total: number
+  total_tax: number
+  /** Null until the FX rate resolves; booking is blocked while null. */
+  total_sek: number | null
+  exchange_rate: number | null
+  vat_breakdown: WebshopVatBreakdownLine[]
+  line_items: WebshopOrderLineItem[]
+  customer_name: string | null
+  customer_company: string | null
+  customer_email: string | null
+  /** Best effort; must be user-confirmed before use in legal fields. */
+  customer_orgnr: string | null
+  /** Billing country, ISO 3166-1 alpha-2; drives the export/EU 0%-sale hint. */
+  customer_country: string | null
+  payment_method: string | null
+  payment_method_title: string | null
+  gateway_reference: string | null
+  /** Order rows: informational sum of refunds seen so far. */
+  refunded_total: number
+  journal_entry_id: string | null
+  invoice_id: string | null
+  /** Same money event already imported by the legacy transactions feed. */
+  legacy_transaction_id: string | null
+  /** Financial delta arrived from the store after booking froze this row. */
+  remote_changed_after_freeze: boolean
+  created_at: string
+  updated_at: string
+}
+
+/** Per-payment-method booking policy in webshop_store_settings. */
+export type WebshopPaymentMethodPolicy =
+  | { mode: 'book'; account: string }
+  | { mode: 'invoice' }
+
+/** Row shape of public.webshop_store_settings. */
+export interface WebshopStoreSettings {
+  id: string
+  company_id: string
+  user_id: string
+  platform: WebshopPlatform
+  store_scope: string
+  payment_method_account_map: Record<string, WebshopPaymentMethodPolicy>
+  created_at: string
+  updated_at: string
 }
 
 // ── Invoice extraction (used by invoice-inbox extension and core utils) ──

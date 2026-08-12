@@ -3343,6 +3343,80 @@ const NETWORK_TRANSIENT_ENTRY: StructuredErrorEntry = {
   retryable: true,
 }
 
+const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
+  WEBSHOP_ORDER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Ordern hittades inte.',
+    message_en: 'The order was not found.',
+  },
+  WEBSHOP_ORDER_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Ordern är redan bokförd.',
+    message_en: 'The order is already booked.',
+  },
+  WEBSHOP_ORDER_ALREADY_INVOICED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är kopplad till en kundfaktura. Bokföringen sker via fakturaflödet, inte direkt från ordern.',
+    message_en:
+      'The order is linked to a customer invoice. Bookkeeping happens through the invoice flow, not directly from the order.',
+  },
+  WEBSHOP_ORDER_NOT_PAID: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är inte betald ännu. Obetalda ordrar bokförs när betalningen kommer, eller faktureras via Skapa faktura.',
+    message_en:
+      'The order is not paid yet. Unpaid orders are booked when payment arrives, or invoiced via Create invoice.',
+  },
+  WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN: {
+    httpStatus: 409,
+    message_sv:
+      'Samma order ligger redan som en obokförd transaktion under Transaktioner (importerad av det tidigare orderflödet). Bokför eller ignorera den transaktionen först, så att samma affärshändelse inte bokförs två gånger.',
+    message_en:
+      'The same order already exists as an unbooked transaction under Transactions (imported by the previous order feed). Book or ignore that transaction first so the same business event is not booked twice.',
+  },
+  WEBSHOP_ORDER_LEGACY_TRANSACTION_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är redan bokförd via en transaktion under Transaktioner (importerad av det tidigare orderflödet).',
+    message_en:
+      'The order is already booked via a transaction under Transactions (imported by the previous order feed).',
+  },
+  WEBSHOP_ORDER_FX_UNRESOLVED: {
+    httpStatus: 422,
+    message_sv:
+      'Växelkursen för orderns valuta kunde inte hämtas ännu. Försök igen om en stund; ordern kan inte bokföras i SEK utan kurs.',
+    message_en:
+      'The exchange rate for the order currency could not be fetched yet. Try again shortly; the order cannot be booked in SEK without a rate.',
+  },
+  WEBSHOP_ORDER_REFUND_NOT_CONVERTIBLE: {
+    httpStatus: 409,
+    message_sv:
+      'Återbetalningar kan inte omvandlas till fakturor. Hantera återbetalningen med en kreditfaktura från kundfakturan, eller bokför återbetalningsraden direkt.',
+    message_en:
+      'Refunds cannot be converted to invoices. Handle the refund with a credit note from the customer invoice, or book the refund row directly.',
+  },
+  WEBSHOP_ORDER_REFUND_PARENT_INVOICED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern fakturerades via en kundfaktura. Återbetalningen hanteras med en kreditfaktura, inte genom att bokföra återbetalningsraden direkt.',
+    message_en:
+      'The order was invoiced through a customer invoice. Handle the refund with a credit note instead of booking the refund row directly.',
+  },
+  WEBSHOP_ORDER_CREATE_INVOICE_CUSTOMER_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunden kunde inte skapas från orderns uppgifter.',
+    message_en: 'The customer could not be created from the order data.',
+  },
+  WEBSHOP_ORDER_CREATE_INVOICE_MISSING_CUSTOMER: {
+    httpStatus: 422,
+    message_sv:
+      'Ordern saknar kunduppgifter. Välj en befintlig kund att fakturera.',
+    message_en:
+      'The order has no customer data. Choose an existing customer to invoice.',
+  },
+}
+
 const NODE_SYSTEM: Record<string, StructuredErrorEntry> = {
   ECONNREFUSED: NETWORK_TRANSIENT_ENTRY,
   ECONNRESET: NETWORK_TRANSIENT_ENTRY,
@@ -3396,6 +3470,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...BOLAGSVERKET,
   ...ASSETS,
   ...DIMENSION,
+  ...WEBSHOP_ORDERS,
   ...NODE_SYSTEM,
 }
 

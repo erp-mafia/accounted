@@ -274,6 +274,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'rot_rut_payout',
   'vat_settlement',
   'stripe_payout',
+  'webshop_order',
 ])
 
 /** Query params for GET /api/bookkeeping/voucher-sequences/next. */
@@ -1410,6 +1411,51 @@ export const BookTransactionSchema = z
     message: 'expected_duplicate_transaction_id or expected_duplicate_journal_entry_id is required when force=true',
     path: ['expected_duplicate_journal_entry_id'],
   })
+
+// ── Webshop orders (Orders page) ──────────────────────────────
+
+export const WebshopPlatformSchema = z.enum(['woocommerce', 'shopify'])
+
+export const WebshopOrdersListQuerySchema = z.object({
+  platform: WebshopPlatformSchema.optional(),
+  store_scope: z.string().max(255).optional(),
+  status: z.string().max(64).optional(),
+  row_type: z.enum(['order', 'refund']).optional(),
+  paid: z.enum(['paid', 'unpaid']).optional(),
+  booked: z.enum(['booked', 'unbooked']).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+})
+
+export const BookWebshopOrderSchema = z.object({
+  fiscal_period_id: uuid,
+  entry_date: isoDate,
+  description: z.string().min(1, 'Description is required').max(500),
+  lines: z.array(CreateJournalEntryLineSchema).min(2, 'At least two lines are required'),
+  voucher_series: z
+    .string()
+    .regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z')
+    .optional(),
+  notes: z.string().max(2000).optional(),
+})
+
+export const CreateInvoiceFromWebshopOrderSchema = z.object({
+  /** Omitted: match by email/orgnr within the company, else create. */
+  customer_id: uuid.optional(),
+})
+
+/** {"<payment_method>": {mode:'book', account:'1930'} | {mode:'invoice'}} */
+export const WebshopStoreSettingsUpdateSchema = z.object({
+  platform: WebshopPlatformSchema,
+  store_scope: z.string().min(1).max(255),
+  payment_method_account_map: z.record(
+    z.string().min(1).max(64),
+    z.discriminatedUnion('mode', [
+      z.object({ mode: z.literal('book'), account: accountNumber }),
+      z.object({ mode: z.literal('invoice') }),
+    ]),
+  ),
+})
 
 /**
  * Edit a bank transaction's title (description). Only the working label:

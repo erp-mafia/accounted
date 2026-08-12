@@ -1,9 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { ingestTransactions } from '@/lib/transactions/ingest'
-import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
-import { syncMappedAccounts } from '@/lib/import/account-sync'
+import { upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
+import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { createLogger, type Logger } from '@/lib/logger'
-import type { RawTransaction } from '@/types'
+import { roundOre as round } from '@/lib/money'
+import type { WebshopOrderLineItem, WebshopVatBreakdownLine } from '@/types'
 import {
   listOrdersPage,
   listOrderRefunds,
@@ -17,23 +17,24 @@ import type { WooCommerceConnection, WooOrder, WooRefund } from '../types'
 const defaultLog = createLogger('woocommerce/order-sync')
 
 /**
- * WooCommerce order sync: the store's paid orders and refunds treated as a
- * bank-style feed.
+ * WooCommerce order sync: the store's orders and refunds as rich rows in
+ * public.webshop_orders (the Orders page), replacing the earlier
+ * transactions-inbox feed.
  *
- * The store becomes a cash account on ledger 1680 (Andra kortfristiga
- * fordringar: money the payment gateways owe the merchant), and orders land
- * in the transactions inbox exactly like PSD2 bank rows: deduped on
- * external_id, bound to the cash account so booking settles against 1680, and
- * categorized/booked by the user through the normal flows. Nothing here
- * auto-books. 1686 (Fordringar för kontokort och kuponger) would be the
- * closest BAS account but is owned by the Stripe feed, and cash_accounts
- * enforces one account per ledger per company.
+ * Every non-trash order imports (including unpaid ones: the Orders page shows
+ * order state and the invoice flow needs pre-payment orders), carrying the
+ * full booking underlag the wc/v3 payload already contains: customer billing
+ * snapshot, payment method, per-rate VAT breakdown and line items. Refunds
+ * are separate negative rows parented to their order. Nothing here books
+ * anything: booking is a manual per-order act on the Orders page (feed-only
+ * doctrine, same as before, one table over).
  *
- * Row model: a paid order produces one positive row for its gross total; each
- * refund produces one negative row. Payment-processor fees never appear:
- * core wc/v3 does not expose them (they belong to the gateway, e.g. the
- * Stripe feed for Stripe-gateway stores). order.transaction_id rides along as
- * the row reference for later gateway-side reconciliation.
+ * The write path is upsertWebshopOrders() (lib/webshop-orders/ingest), which
+ * owns FX enrichment, the frozen-row rules for booked orders and the
+ * cross-mark against rows the retired transactions feed already imported.
+ * Rows already imported as transactions stay bookable there; the external_id
+ * scheme below is shared with that feed precisely so the overlap is a string
+ * join.
  *
  * Pagination is CURSOR-based, not offset-based: each request asks for the
  * oldest orders with date_modified strictly after the current cursor
@@ -50,32 +51,24 @@ const defaultLog = createLogger('woocommerce/order-sync')
  * picked up by the next run's overlap re-poll.
  *
  * Cursor: woocommerce_connections.last_order_synced_at, re-polled with a 24h
- * overlap. It never advances past failed work: a page with refund-fetch
- * failures, ingest errors, or deadline-skipped refunds caps the persisted
- * cursor just below the earliest affected order's date_modified, so the next
- * run re-lists exactly the orders whose rows are incomplete (re-seen complete
- * rows collide on (company_id, external_id) and are skipped). First run
- * fetches BACKFILL_DAYS back.
+ * overlap. Overlap re-polls are how status changes, late date_paid and new
+ * refunds land: they are real upserts now, not dedup no-ops. The cursor
+ * never advances past failed work: a page with refund-fetch failures, upsert
+ * errors, or deadline-skipped refunds caps the persisted cursor just below
+ * the earliest affected order's date_modified, so the next run re-lists
+ * exactly the orders whose rows are incomplete. First run fetches
+ * BACKFILL_DAYS back.
  *
- * Lock-date guard: modified_after selects on date_modified, but rows are
- * dated by date_paid / refund date_created, which can be arbitrarily older
- * (a refund or edit bumps date_modified long after payment). Rows dated on or
- * before company_settings.bookkeeping_locked_through are therefore dropped at
- * map time on EVERY run: the enforce_company_lock_date trigger makes them
- * permanently unbookable, and feed rows are undeletable by design, so
- * importing them would create permanent inbox noise. Dropped rows are counted
- * in skipped_locked and logged.
+ * Rows behind company_settings.bookkeeping_locked_through import too (the
+ * page is an order overview, not just a booking queue); the booking route
+ * and the period-lock triggers refuse to BOOK them, and the UI explains why.
  */
 
-/** BAS ledger account for the WooCommerce store cash account. */
-export const WOOCOMMERCE_LEDGER_ACCOUNT = '1680'
-/** BAS 2026 name for 1680; used when creating the chart account. */
-const WOOCOMMERCE_LEDGER_ACCOUNT_NAME = 'Andra kortfristiga fordringar'
-/** transactions.import_source for WooCommerce feed rows. */
+/** transactions.import_source the retired feed used; kept for reference. */
 export const WOOCOMMERCE_IMPORT_SOURCE = 'woocommerce'
 /** First-run backfill window (matches the Enable Banking convention). */
 export const BACKFILL_DAYS = 90
-/** Cursor re-poll overlap; external_id dedup makes duplicates no-ops. */
+/** Cursor re-poll overlap; upsert-on-external_id makes overlaps idempotent. */
 const CURSOR_OVERLAP_MS = 24 * 60 * 60 * 1000
 /**
  * Safety cap on orders per run (matches the Stripe feed's MAX_TXNS_PER_RUN).
@@ -86,11 +79,12 @@ const CURSOR_OVERLAP_MS = 24 * 60 * 60 * 1000
 const MAX_ORDERS_PER_RUN = 10_000
 
 /**
- * ⚠️ STORED-KEY FORMATS. These are persisted to transactions.external_id and
- * dedup compares stored ids byte-for-byte, exactly like the Stripe and Enable
- * Banking schemes. Changing a template silently orphans every prior row and
- * re-imports the whole feed on the next sync. Locked by the frozen-format
- * test in order-sync.test.ts; any change MUST ship a coordinated backfill.
+ * ⚠️ STORED-KEY FORMATS. These are persisted to webshop_orders.external_id
+ * (and historically to transactions.external_id by the retired feed; the
+ * cross-mark join depends on the schemes staying byte-identical). Changing a
+ * template silently orphans every prior row and re-imports the whole feed on
+ * the next sync. Locked by the frozen-format test in order-sync.test.ts; any
+ * change MUST ship a coordinated backfill.
  *
  * The scope is the store's normalized host(+path), NOT the connection id, so
  * a disconnect/reconnect of the same store keeps every previously imported
@@ -113,12 +107,16 @@ export interface WooCommerceSyncSummary {
   fetched: number
   /** Refund objects fetched for refunded orders in the window. */
   refundsFetched: number
-  /** New inbox rows inserted. */
-  imported: number
-  /** Rows skipped by external_id / content dedup. */
-  duplicates: number
-  /** Rows dropped because they are dated on/before the bookkeeping lock. */
-  skippedLocked: number
+  /** New webshop_orders rows inserted. */
+  inserted: number
+  /** Existing rows refreshed (status, refunds, billing, FX). */
+  updated: number
+  /** Re-polled rows with nothing new. */
+  unchanged: number
+  /** Booked rows whose financials drifted remotely (flagged, not touched). */
+  frozenFlagged: number
+  /** Rows linked to a row the retired transactions feed already imported. */
+  crossMarked: number
   errors: number
   /** Set when the caller's time budget ran out before all pages processed. */
   deadlineReached?: boolean
@@ -126,19 +124,16 @@ export interface WooCommerceSyncSummary {
   revoked?: boolean
 }
 
-const round = (n: number) => Math.round(n * 100) / 100
-
 /**
  * Money fields arrive as strings; unparseable input returns null so callers
- * can tell a corrupt total (counted + logged in buildPageRows) from a
- * legitimate zero (silently skipped).
+ * can tell a corrupt total (counted + logged) from a legitimate zero.
  */
 function parseAmount(value: string): number | null {
   const parsed = Number.parseFloat(value)
   return Number.isFinite(parsed) ? round(parsed) : null
 }
 
-/** Whether a qualifying order's total cannot be read as money. */
+/** Whether an order's total cannot be read as money. */
 export function orderAmountUnparseable(order: Pick<WooOrder, 'total'>): boolean {
   return parseAmount(order.total) === null
 }
@@ -157,172 +152,321 @@ function gmtToMs(timestamp: string): number {
   return Date.parse(gmtToIso(timestamp))
 }
 
-/**
- * Whether an order belongs in the feed: it must have been paid (date_paid is
- * the revenue signal; pending/failed/cancelled-before-payment orders never
- * carry one) and not be trashed. Status 'refunded' stays IN: a fully refunded
- * order was still paid, and its refunds land as separate negative rows so the
- * pair nets to zero instead of the gross silently disappearing.
- */
-export function orderQualifies(order: Pick<WooOrder, 'status' | 'date_paid_gmt'>): boolean {
-  return Boolean(order.date_paid_gmt) && order.status !== 'trash'
+/** Whether the order has been paid (drives is_paid and refund fetching). */
+export function orderIsPaid(order: Pick<WooOrder, 'date_paid_gmt'>): boolean {
+  return Boolean(order.date_paid_gmt)
+}
+
+/** Every non-trash order imports; trash is the store's recycle bin. */
+export function orderImports(order: Pick<WooOrder, 'status'>): boolean {
+  return order.status !== 'trash'
 }
 
 /**
- * Map a paid order to its gross feed row. Dates use date_paid (when the money
- * event happened), not date_created: booked entries, invoice matching, and
- * month boundaries all want the payment date. Descriptions are deterministic
- * from immutable data (order numbers never change) because the content-dedup
- * bridge keys off them.
+ * Best-effort Swedish orgnr from the billing company field or B2B-plugin
+ * meta. NEVER trusted for legal invoice fields without user confirmation:
+ * plugins vary and customers typo.
  */
-export function mapOrder(storeScope: string, order: WooOrder): RawTransaction[] {
-  if (!orderQualifies(order)) return []
-  const amount = parseAmount(order.total)
-  if (amount === null || amount === 0) return []
-  return [
-    {
-      date: isoDateOfGmt(order.date_paid_gmt!),
-      description: `WooCommerce-order #${order.number}`,
-      amount,
-      currency: order.currency.toUpperCase(),
-      external_id: wooOrderExternalId(storeScope, order.id),
-      import_source: WOOCOMMERCE_IMPORT_SOURCE,
-      reference: order.transaction_id || null,
-    },
-  ]
-}
-
-/** Map one refund of a paid order to its negative feed row. */
-export function mapRefund(
-  storeScope: string,
-  order: Pick<WooOrder, 'number' | 'currency'>,
-  refund: WooRefund,
-): RawTransaction[] {
-  const amount = parseAmount(refund.amount)
-  if (amount === null || amount === 0) return []
-  return [
-    {
-      date: isoDateOfGmt(refund.date_created_gmt),
-      description: `WooCommerce-återbetalning order #${order.number}`,
-      amount: -amount,
-      currency: order.currency.toUpperCase(),
-      external_id: wooRefundExternalId(storeScope, refund.id),
-      import_source: WOOCOMMERCE_IMPORT_SOURCE,
-      reference: null,
-    },
-  ]
-}
-
-/** Company lock date (YYYY-MM-DD) or null; read once per run. */
-async function fetchLockThrough(
-  supabase: SupabaseClient,
-  companyId: string,
-): Promise<string | null> {
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('bookkeeping_locked_through')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  return (
-    (settings as { bookkeeping_locked_through?: string | null } | null)
-      ?.bookkeeping_locked_through ?? null
-  )
-}
-
-/** Whether a feed-row date is on/before the lock date (=> never bookable). */
-export function rowBehindLock(rowDate: string, lockThrough: string | null): boolean {
-  return lockThrough !== null && rowDate <= lockThrough
-}
-
-/**
- * Window start (ISO, UTC) for the first modified_after list call. With a
- * cursor: cursor minus the 24h overlap. First run: BACKFILL_DAYS back. (The
- * lock date no longer floors the window: it selects on date_modified while
- * rows are dated by date_paid, so the real guard is rowBehindLock at map
- * time, applied on every run.)
- */
-function resolveWindowStartIso(connection: WooCommerceConnection): string {
-  if (connection.last_order_synced_at) {
-    const cursorMs = Date.parse(connection.last_order_synced_at)
-    return new Date(Math.max(0, cursorMs - CURSOR_OVERLAP_MS)).toISOString()
+export function extractOrgnr(order: Pick<WooOrder, 'billing' | 'meta_data'>): string | null {
+  const ORGNR = /(\d{6})[-\s]?(\d{4})/
+  const fromCompany = order.billing?.company?.match(ORGNR)
+  if (fromCompany) return `${fromCompany[1]}-${fromCompany[2]}`
+  for (const meta of order.meta_data ?? []) {
+    if (typeof meta.value !== 'string') continue
+    if (!/org(anisations)?[._\s-]*n(umme)?r/i.test(meta.key)) continue
+    const match = meta.value.match(ORGNR)
+    if (match) return `${match[1]}-${match[2]}`
   }
-  return new Date(Date.now() - BACKFILL_DAYS * 86_400_000).toISOString()
+  return null
 }
 
-/**
- * Make sure the store cash account exists (ledger 1680, source manual so a
- * later remap/promotion follows the normal cash-account rules) and, on the
- * first run, that 1680 exists in the chart of accounts: the booking dialog
- * and AccountPicker only list chart accounts.
- *
- * Currency comes from the store settings read at connect time, falling back
- * to the first fetched order's real currency (settings/general is blocked on
- * some hardened stores, and guessing SEK for an EUR store would poison the
- * account). A conflict with an existing 1680 cash account throws; the caller
- * surfaces that on the connection so the panel shows why nothing syncs.
- */
-async function ensureStoreAccount(
-  supabase: SupabaseClient,
-  connection: WooCommerceConnection,
-  fallbackCurrency: string | undefined,
-  firstRun: boolean,
-  log: Logger,
-): Promise<void> {
-  const currency =
-    connection.currency?.toUpperCase() || fallbackCurrency?.toUpperCase() || 'SEK'
-  try {
-    await ensureManualCashAccount(
-      supabase,
-      connection.company_id,
-      WOOCOMMERCE_LEDGER_ACCOUNT,
-      currency,
-      'WooCommerce-saldo',
-    )
-  } catch (accountError) {
-    // Typically a currency conflict with an existing 1680 cash account. Made
-    // visible on the connection: without this the panel shows a healthy
-    // "Ansluten" store that silently never syncs.
-    await supabase
-      .from('woocommerce_connections')
-      .update({
-        error_message:
-          'Kassakontot för butiken (1680) kunde inte skapas. Kontrollera att befintligt konto 1680 har samma valuta som butiken.',
-      })
-      .eq('id', connection.id)
-    throw accountError
-  }
-  if (firstRun) {
-    const sync = await syncMappedAccounts(
-      supabase,
-      connection.company_id,
-      connection.user_id,
-      [
-        {
-          sourceAccount: WOOCOMMERCE_LEDGER_ACCOUNT,
-          sourceName: WOOCOMMERCE_LEDGER_ACCOUNT_NAME,
-          targetAccount: WOOCOMMERCE_LEDGER_ACCOUNT,
-          targetName: WOOCOMMERCE_LEDGER_ACCOUNT_NAME,
-          confidence: 1,
-          matchType: 'exact',
-          isOverride: false,
-        },
-      ],
-      false,
-    )
-    if (sync.error) {
-      // Rows still import and bind to the cash account; only the chart
-      // listing is affected (the account can be added manually), so this is
-      // deliberately non-fatal.
-      log.warn('chart sync for 1680 failed', {
-        companyId: connection.company_id,
-        error: sync.error,
-      })
+/** A money-bearing part of an order: product line, shipping or fee. */
+interface WooTaxablePart {
+  total: string
+  total_tax: string
+  taxes?: Array<{ id: number; total: string }>
+}
+
+function rateMapOf(order: Pick<WooOrder, 'tax_lines'>): Map<number, number> {
+  const rateByTaxId = new Map<number, number>()
+  for (const taxLine of order.tax_lines ?? []) {
+    if (typeof taxLine.rate_percent === 'number') {
+      rateByTaxId.set(taxLine.rate_id, taxLine.rate_percent)
     }
   }
+  return rateByTaxId
+}
+
+/** Resolve one part's VAT rate: tax_lines join first, own ratio second. */
+function rateOfPart(part: WooTaxablePart, rateByTaxId: Map<number, number>): number {
+  const net = parseAmount(part.total) ?? 0
+  const tax = parseAmount(part.total_tax) ?? 0
+  const taxId = part.taxes?.find((t) => parseAmount(t.total) !== null)?.id
+  const joined = taxId !== undefined ? rateByTaxId.get(taxId) : undefined
+  if (joined !== undefined) return joined
+  // Signed ratio: a negative discount line at 25% has tax/net > 0 too.
+  return tax !== 0 && net !== 0
+    ? ([25, 12, 6].find((r) => Math.abs(tax / net - r / 100) < 0.01) ?? 25)
+    : 0
+}
+
+/**
+ * Group the order's line, shipping and fee taxes into per-rate buckets.
+ * Buckets carry SIGNED amounts: a discount/gift-card line contributes a
+ * negative net so the booking split books it as a revenue reduction, not
+ * flipped revenue. When the payload carries no usable tax data at all but
+ * the order total says tax was charged (hardened stores stripping tax
+ * detail), returns [] and the booking dialog falls back to ratio inference.
+ */
+export function buildVatBreakdown(order: WooOrder): WebshopVatBreakdownLine[] {
+  const rateByTaxId = rateMapOf(order)
+
+  const buckets = new Map<number, { net: number; tax: number }>()
+  const add = (rate: number, net: number, tax: number) => {
+    const bucket = buckets.get(rate) ?? { net: 0, tax: 0 }
+    bucket.net = round(bucket.net + net)
+    bucket.tax = round(bucket.tax + tax)
+    buckets.set(rate, bucket)
+  }
+
+  const parts: WooTaxablePart[] = [
+    ...(order.line_items ?? []),
+    ...(order.shipping_lines ?? []),
+    ...(order.fee_lines ?? []),
+  ]
+  if (parts.length === 0) return []
+
+  // "Tax data" means an actual per-line tax allocation. wc/v3 serializes
+  // `taxes: []` on every line even when the store hides tax detail, so an
+  // empty array proves nothing; a non-empty taxes array or a non-zero
+  // total_tax does.
+  let sawTaxData = false
+  for (const part of parts) {
+    const net = parseAmount(part.total) ?? 0
+    const tax = parseAmount(part.total_tax) ?? 0
+    if ((part.taxes && part.taxes.length > 0) || tax !== 0) sawTaxData = true
+    add(rateOfPart(part, rateByTaxId), net, tax)
+  }
+
+  const orderTax = parseAmount(order.total_tax) ?? 0
+  if (!sawTaxData && orderTax > 0) return []
+
+  return Array.from(buckets.entries())
+    .filter(([, { net, tax }]) => net !== 0 || tax !== 0)
+    .map(([rate, { net, tax }]) => ({ rate, net, tax }))
+    .sort((a, b) => b.rate - a.rate)
+}
+
+/**
+ * VAT buckets for one refund. Preference order:
+ * 1. The refund's own line allocation (line_items with negative totals):
+ *    grouped exactly like the order's parts; magnitudes are returned
+ *    positive (the refund row's row_type carries the direction).
+ * 2. Amount-only refunds: prorate the PARENT order's breakdown by
+ *    refund/order ratio, so the VAT reversal follows the sale's actual mix.
+ *    Never returns a confident 0%-bucket for a sale that carried VAT: that
+ *    would book a refund with no moms reversal (skeptic finding).
+ */
+export function buildRefundVatBreakdown(
+  order: WooOrder,
+  refund: WooRefund,
+): { breakdown: WebshopVatBreakdownLine[]; totalTax: number } {
+  const rateByTaxId = rateMapOf(order)
+  const refundParts = (refund.line_items ?? []).filter(
+    (part) => (parseAmount(part.total) ?? 0) !== 0 || (parseAmount(part.total_tax) ?? 0) !== 0,
+  )
+
+  if (refundParts.length > 0) {
+    const buckets = new Map<number, { net: number; tax: number }>()
+    for (const part of refundParts) {
+      const net = Math.abs(parseAmount(part.total) ?? 0)
+      const tax = Math.abs(parseAmount(part.total_tax) ?? 0)
+      const rate = rateOfPart(part, rateByTaxId)
+      const bucket = buckets.get(rate) ?? { net: 0, tax: 0 }
+      bucket.net = round(bucket.net + net)
+      bucket.tax = round(bucket.tax + tax)
+      buckets.set(rate, bucket)
+    }
+    const breakdown = Array.from(buckets.entries())
+      .map(([rate, { net, tax }]) => ({ rate, net, tax }))
+      .sort((a, b) => b.rate - a.rate)
+    const totalTax = round(breakdown.reduce((sum, b) => sum + b.tax, 0))
+    return { breakdown, totalTax }
+  }
+
+  // Amount-only refund: prorate the order's mix. Per-bucket rounding drift
+  // lands on the booking's 3740 residual line.
+  const orderBreakdown = buildVatBreakdown(order)
+  const orderTotal = Math.abs(parseAmount(order.total) ?? 0)
+  const refundAmount = Math.abs(parseAmount(refund.amount) ?? 0)
+  if (orderBreakdown.length === 0 || orderTotal === 0 || refundAmount === 0) {
+    return { breakdown: [], totalTax: 0 }
+  }
+  const ratio = refundAmount / orderTotal
+  const breakdown = orderBreakdown
+    .map(({ rate, net, tax }) => ({
+      rate,
+      net: round(net * ratio),
+      tax: round(tax * ratio),
+    }))
+    .filter(({ net, tax }) => net !== 0 || tax !== 0)
+  const totalTax = round(breakdown.reduce((sum, b) => sum + b.tax, 0))
+  return { breakdown, totalTax }
+}
+
+/**
+ * The stored line snapshot covers EVERYTHING inside order.total: product
+ * lines, shipping and fees. The invoice conversion builds its rows from
+ * this snapshot, so an omitted shipping line would silently shrink the
+ * customer's invoice (skeptic finding).
+ */
+function mapLineItems(order: WooOrder): WebshopOrderLineItem[] {
+  const rateByTaxId = rateMapOf(order)
+  const rateOrNull = (part: WooTaxablePart): number | null => {
+    const taxId = part.taxes?.find((t) => parseAmount(t.total) !== null)?.id
+    return taxId !== undefined ? (rateByTaxId.get(taxId) ?? null) : null
+  }
+  const products = (order.line_items ?? []).map((item) => ({
+    name: item.name,
+    quantity: item.quantity,
+    total: parseAmount(item.total) ?? 0,
+    total_tax: parseAmount(item.total_tax) ?? 0,
+    vat_rate: rateOrNull(item),
+  }))
+  const shipping = (order.shipping_lines ?? [])
+    .filter((line) => (parseAmount(line.total) ?? 0) !== 0)
+    .map((line) => ({
+      name: line.method_title || 'Frakt',
+      quantity: 1,
+      total: parseAmount(line.total) ?? 0,
+      total_tax: parseAmount(line.total_tax) ?? 0,
+      vat_rate: rateOrNull(line),
+    }))
+  const fees = (order.fee_lines ?? [])
+    .filter((line) => (parseAmount(line.total) ?? 0) !== 0)
+    .map((line) => ({
+      name: line.name || 'Avgift',
+      quantity: 1,
+      total: parseAmount(line.total) ?? 0,
+      total_tax: parseAmount(line.total_tax) ?? 0,
+      vat_rate: rateOrNull(line),
+    }))
+  return [...products, ...shipping, ...fees]
+}
+
+function customerName(order: WooOrder): string | null {
+  const name = [order.billing?.first_name, order.billing?.last_name]
+    .filter(Boolean)
+    .join(' ')
+    .trim()
+  return name || null
+}
+
+/** Sum of refund totals (positive) reported inline on the order. */
+function refundedTotal(order: WooOrder): number {
+  let sum = 0
+  for (const refund of order.refunds ?? []) {
+    const amount = parseAmount(refund.total)
+    if (amount !== null) sum = round(sum + Math.abs(amount))
+  }
+  return sum
+}
+
+/** Map one order to its webshop_orders upsert row. */
+export function mapOrderToWebshopRow(
+  connection: Pick<WooCommerceConnection, 'id' | 'store_name'>,
+  storeScope: string,
+  order: WooOrder,
+): WebshopOrderUpsert[] {
+  if (!orderImports(order)) return []
+  const total = parseAmount(order.total)
+  // Zero-total orders (100% coupon) carry no bookable money event; importing
+  // them would strand an unbookable "Att bokföra" row (the engine refuses
+  // zero-sum entries and feed rows are undeletable).
+  if (total === null || total === 0) return []
+  return [
+    {
+      platform: 'woocommerce',
+      store_scope: storeScope,
+      store_label: connection.store_name,
+      connection_id: connection.id,
+      row_type: 'order',
+      parent_external_id: null,
+      external_id: wooOrderExternalId(storeScope, order.id),
+      platform_order_id: String(order.id),
+      order_number: order.number,
+      status: order.status,
+      is_paid: orderIsPaid(order),
+      order_date: isoDateOfGmt(order.date_created_gmt),
+      paid_date: order.date_paid_gmt ? isoDateOfGmt(order.date_paid_gmt) : null,
+      currency: order.currency.toUpperCase(),
+      total,
+      total_tax: parseAmount(order.total_tax) ?? 0,
+      vat_breakdown: buildVatBreakdown(order),
+      line_items: mapLineItems(order),
+      customer_name: customerName(order),
+      customer_company: order.billing?.company || null,
+      customer_email: order.billing?.email || null,
+      customer_orgnr: extractOrgnr(order),
+      customer_country: order.billing?.country?.toUpperCase() || null,
+      payment_method: order.payment_method || null,
+      payment_method_title: order.payment_method_title || null,
+      gateway_reference: order.transaction_id || null,
+      refunded_total: refundedTotal(order),
+    },
+  ]
+}
+
+/** Map one refund of a paid order to its negative upsert row. */
+export function mapRefundToWebshopRow(
+  connection: Pick<WooCommerceConnection, 'id' | 'store_name'>,
+  storeScope: string,
+  order: WooOrder,
+  refund: WooRefund,
+): WebshopOrderUpsert[] {
+  const amount = parseAmount(refund.amount)
+  if (amount === null || amount === 0) return []
+  // The refund's VAT reversal: from its own line allocation, else prorated
+  // from the parent order's mix. Without this the refund books with zero
+  // moms and ruta 10 stays over-declared (skeptic finding). Buckets hold
+  // positive magnitudes; row_type 'refund' carries the direction, and
+  // total/total_tax are negative like the money movement.
+  const { breakdown, totalTax } = buildRefundVatBreakdown(order, refund)
+  return [
+    {
+      platform: 'woocommerce',
+      store_scope: storeScope,
+      store_label: connection.store_name,
+      connection_id: connection.id,
+      row_type: 'refund',
+      parent_external_id: wooOrderExternalId(storeScope, order.id),
+      external_id: wooRefundExternalId(storeScope, refund.id),
+      platform_order_id: String(refund.id),
+      order_number: order.number,
+      status: 'refund',
+      is_paid: true,
+      order_date: isoDateOfGmt(refund.date_created_gmt),
+      paid_date: isoDateOfGmt(refund.date_created_gmt),
+      currency: order.currency.toUpperCase(),
+      total: -Math.abs(amount),
+      total_tax: -totalTax,
+      vat_breakdown: breakdown,
+      line_items: [],
+      customer_name: customerName(order),
+      customer_company: order.billing?.company || null,
+      customer_email: order.billing?.email || null,
+      customer_orgnr: extractOrgnr(order),
+      customer_country: order.billing?.country?.toUpperCase() || null,
+      payment_method: order.payment_method || null,
+      payment_method_title: order.payment_method_title || null,
+      gateway_reference: null,
+      refunded_total: 0,
+    },
+  ]
 }
 
 interface PageRowsOutcome {
-  rows: RawTransaction[]
+  rows: WebshopOrderUpsert[]
   /**
    * date_modified (ms) of every order whose refund rows are incomplete this
    * run (fetch failed or skipped on deadline). The cursor must not advance
@@ -332,44 +476,34 @@ interface PageRowsOutcome {
   hitDeadline: boolean
 }
 
-/** Rows for one page of orders: gross rows plus refund rows where present. */
+/** Upsert rows for one page of orders: order rows plus refund rows. */
 async function buildPageRows(
   creds: WooCredentials,
+  connection: WooCommerceConnection,
   storeScope: string,
   orders: WooOrder[],
-  lockThrough: string | null,
   summary: WooCommerceSyncSummary,
   log: Logger,
   deadlineMs?: number,
 ): Promise<PageRowsOutcome> {
   const outcome: PageRowsOutcome = { rows: [], incompleteModifiedMs: [], hitDeadline: false }
 
-  const push = (mapped: RawTransaction[]) => {
-    for (const row of mapped) {
-      if (rowBehindLock(row.date, lockThrough)) {
-        summary.skippedLocked += 1
-        continue
-      }
-      outcome.rows.push(row)
-    }
-  }
-
   for (const order of orders) {
     // A corrupt total is counted and logged, never silently identical to a
     // zero-total order. Deliberately NOT held via the cursor: a permanently
     // corrupt total would stall the whole feed forever, where a skipped row
     // plus a loud error can be followed up.
-    if (orderQualifies(order) && orderAmountUnparseable(order)) {
+    if (orderImports(order) && orderAmountUnparseable(order)) {
       summary.errors += 1
       log.warn('unparseable order total; row skipped', {
         orderId: order.id,
         total: order.total,
       })
     }
-    push(mapOrder(storeScope, order))
-    // Refunds only exist for qualifying (paid) orders: a refund row without
-    // its gross counterpart would be an unexplainable negative in the inbox.
-    if (!orderQualifies(order) || order.refunds.length === 0) continue
+    outcome.rows.push(...mapOrderToWebshopRow(connection, storeScope, order))
+    // Refunds only exist for paid orders; a refund row without its parent
+    // would be an unexplainable negative.
+    if (!orderIsPaid(order) || (order.refunds?.length ?? 0) === 0) continue
 
     // Refund fetches are one request per refunded order against a slow host;
     // without this check a single mass-refund page could blow through the
@@ -392,7 +526,7 @@ async function buildPageRows(
             amount: refund.amount,
           })
         }
-        push(mapRefund(storeScope, order, refund))
+        outcome.rows.push(...mapRefundToWebshopRow(connection, storeScope, order, refund))
       }
     } catch (refundError) {
       // The order row still imports; the cursor is capped below this order's
@@ -406,6 +540,18 @@ async function buildPageRows(
     }
   }
   return outcome
+}
+
+/**
+ * Window start (ISO, UTC) for the first modified_after list call. With a
+ * cursor: cursor minus the 24h overlap. First run: BACKFILL_DAYS back.
+ */
+function resolveWindowStartIso(connection: WooCommerceConnection): string {
+  if (connection.last_order_synced_at) {
+    const cursorMs = Date.parse(connection.last_order_synced_at)
+    return new Date(Math.max(0, cursorMs - CURSOR_OVERLAP_MS)).toISOString()
+  }
+  return new Date(Date.now() - BACKFILL_DAYS * 86_400_000).toISOString()
 }
 
 export async function syncWooCommerceOrders(
@@ -423,9 +569,11 @@ export async function syncWooCommerceOrders(
   const summary: WooCommerceSyncSummary = {
     fetched: 0,
     refundsFetched: 0,
-    imported: 0,
-    duplicates: 0,
-    skippedLocked: 0,
+    inserted: 0,
+    updated: 0,
+    unchanged: 0,
+    frozenFlagged: 0,
+    crossMarked: 0,
     errors: 0,
   }
   if (
@@ -438,8 +586,6 @@ export async function syncWooCommerceOrders(
 
   const creds = credentialsOf(connection)
   const storeScope = wooStoreScope(connection.store_url)
-  const firstRun = !connection.last_order_synced_at
-  const lockThrough = await fetchLockThrough(supabase, connection.company_id)
 
   let modifiedAfter = resolveWindowStartIso(connection)
   // Offset page within a same-timestamp tie only; 1 whenever the cursor moves.
@@ -449,7 +595,6 @@ export async function syncWooCommerceOrders(
     : 0
   // Earliest incomplete work this run; the persisted cursor never passes it.
   let failureFloorMs = Number.POSITIVE_INFINITY
-  let accountEnsured = false
 
   try {
     for (;;) {
@@ -457,7 +602,7 @@ export async function syncWooCommerceOrders(
         summary.deadlineReached = true
         log.info('time budget exhausted; stopping order sync', {
           connectionId: connection.id,
-          processed: summary.imported + summary.duplicates,
+          processed: summary.inserted + summary.updated + summary.unchanged,
         })
         break
       }
@@ -469,19 +614,11 @@ export async function syncWooCommerceOrders(
       if (orders.length === 0) break
       summary.fetched += orders.length
 
-      // Deferred until the window is known non-empty so a quiet store costs
-      // one API call and zero DB writes; also gives us a real order currency
-      // as the fallback for stores whose settings are unreadable.
-      if (!accountEnsured) {
-        await ensureStoreAccount(supabase, connection, orders[0].currency, firstRun, log)
-        accountEnsured = true
-      }
-
       const page = await buildPageRows(
         creds,
+        connection,
         storeScope,
         orders,
-        lockThrough,
         summary,
         log,
         deadlineMs,
@@ -492,24 +629,22 @@ export async function syncWooCommerceOrders(
       const lastMs = gmtToMs(orders[orders.length - 1].date_modified_gmt)
 
       if (page.rows.length > 0) {
-        // Auto-categorization is skipped on purpose: booking WooCommerce
-        // money is a human decision in the inbox (feed-only doctrine, same
-        // as the Stripe feed). Invoice matching still runs (suggestions
-        // only), and FX enrichment covers non-SEK stores.
-        const result = await ingestTransactions(
+        const result = await upsertWebshopOrders(
           supabase,
           connection.company_id,
           connection.user_id,
           page.rows,
-          { settlementAccount: WOOCOMMERCE_LEDGER_ACCOUNT, skipAutoCategorization: true },
         )
-        summary.imported += result.imported
-        summary.duplicates += result.duplicates
+        summary.inserted += result.inserted
+        summary.updated += result.updated
+        summary.unchanged += result.unchanged
+        summary.frozenFlagged += result.frozenFlagged
+        summary.crossMarked += result.crossMarked
         summary.errors += result.errors
         if (result.errors > 0) {
-          // Failed inserts are dropped inside ingest; hold the cursor below
-          // this page so the next run re-lists and retries it rather than
-          // turning a transient DB error into permanently missing rows.
+          // Failed upserts are dropped inside the service; hold the cursor
+          // below this page so the next run re-lists and retries it rather
+          // than turning a transient DB error into permanently missing rows.
           failureFloorMs = Math.min(failureFloorMs, firstMs - 1000)
         }
       }
@@ -579,12 +714,6 @@ export async function syncWooCommerceOrders(
     throw err
   }
 
-  if (summary.skippedLocked > 0) {
-    log.info('rows behind the bookkeeping lock were skipped', {
-      connectionId: connection.id,
-      skippedLocked: summary.skippedLocked,
-    })
-  }
   log.info('woocommerce order sync done', {
     connectionId: connection.id,
     ...summary,

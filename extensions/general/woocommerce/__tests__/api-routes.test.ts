@@ -261,7 +261,7 @@ describe('woocommerce extension routes', () => {
     it('returns 404 without an active connection', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-      enqueue({ data: null })
+      enqueue({ data: [] })
       const res = await findRoute('POST', '/sync').handler(
         makeRequest('POST'),
         makeContext(supabase),
@@ -272,12 +272,15 @@ describe('woocommerce extension routes', () => {
     it('runs the sync on the service client and returns the summary', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-      enqueue({ data: { id: 'conn-1', status: 'active' } })
+      enqueue({ data: [{ id: 'conn-1', status: 'active' }] })
       vi.mocked(syncWooCommerceOrders).mockResolvedValue({
         fetched: 3,
         refundsFetched: 1,
-        imported: 4,
-        duplicates: 0,
+        inserted: 4,
+        updated: 0,
+        unchanged: 0,
+        frozenFlagged: 0,
+        crossMarked: 0,
         errors: 0,
       })
       const res = await findRoute('POST', '/sync').handler(
@@ -286,7 +289,7 @@ describe('woocommerce extension routes', () => {
       )
       expect(res.status).toBe(200)
       const body = await res.json()
-      expect(body.transactions.imported).toBe(4)
+      expect(body.transactions.inserted).toBe(4)
       expect(vi.mocked(syncWooCommerceOrders).mock.calls[0][0]).toEqual({ service: true })
     })
   })

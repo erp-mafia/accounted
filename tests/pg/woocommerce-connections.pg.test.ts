@@ -12,7 +12,8 @@ const uniqueStore = (label: string) => 'https://' + label + '-' + randomUUID() +
  * Covers migration 20260806170000_woocommerce_connections:
  *   1. RLS: members insert and read their own company's connection,
  *      non-members see nothing and cannot insert for a foreign company.
- *   2. One ACTIVE connection per company (partial unique index).
+ *   2. Multiple ACTIVE connections per company (multi-store: the
+ *      one-active-per-company index was dropped in 20260811073422).
  *   3. One store actively connected to at most one company.
  *   4. No DELETE policy: a member DELETE silently affects zero rows.
  */
@@ -66,20 +67,19 @@ describe('woocommerce_connections RLS', () => {
     })
   })
 
-  it('only one ACTIVE connection per company is allowed', async () => {
+  it('a company may hold several ACTIVE connections (multi-store)', async () => {
     const { userId, companyId } = await seedCompany()
     await getPool().query(
       `INSERT INTO public.woocommerce_connections (company_id, user_id, store_url, status)
        VALUES ($1, $2, $3, 'active')`,
       [companyId, userId, uniqueStore('store-one')],
     )
-    await expect(
-      getPool().query(
-        `INSERT INTO public.woocommerce_connections (company_id, user_id, store_url, status)
-         VALUES ($1, $2, $3, 'active')`,
-        [companyId, userId, uniqueStore('store-two')],
-      ),
-    ).rejects.toMatchObject({ code: '23505' }) // unique_violation
+    const second = await getPool().query(
+      `INSERT INTO public.woocommerce_connections (company_id, user_id, store_url, status)
+       VALUES ($1, $2, $3, 'active') RETURNING id`,
+      [companyId, userId, uniqueStore('store-two')],
+    )
+    expect(second.rows).toHaveLength(1)
   })
 
   it('a store may be actively connected to at most one company', async () => {

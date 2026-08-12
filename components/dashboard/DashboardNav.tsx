@@ -45,6 +45,7 @@ import {
   PanelLeftClose,
   Library,
   BookCheck,
+  ShoppingCart,
 } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -81,6 +82,10 @@ interface DashboardNavProps {
   // switched on. Drives visibility of the Kostnadsställen & projekt row:
   // same mechanism as paysSalaries: fetched by the dashboard layout.
   dimensionsEnabled?: boolean
+  // Whether the company has a webshop hooked up (active WooCommerce/Shopify
+  // connection, or existing webshop_orders rows). Drives visibility of the
+  // Order row: same mechanism as paysSalaries, fetched by the layout.
+  hasWebshop?: boolean
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
   // Signed-in user's full name + email: drives the bottom-left account
@@ -101,6 +106,7 @@ type NavLabelKey =
   | 'kpi'
   | 'invoice_inbox'
   | 'invoices'
+  | 'sales_orders'
   | 'customers'
   | 'articles'
   | 'supplier_invoices'
@@ -162,6 +168,10 @@ interface NavItem {
   // company_settings.dimensions_enabled (UI-visibility gate only; the pages
   // and APIs work regardless, dimensions plan §2).
   requiresDimensions?: boolean
+  // Webshop surfaces: visible only when the company has an active
+  // WooCommerce/Shopify connection or already-imported order rows.
+  // UI-visibility gate only; the page and APIs work regardless.
+  requiresWebshop?: boolean
   // Paywall surfaces: hidden unless the active company holds this paid
   // capability. Cosmetic only, the page and API gates are the real
   // enforcement; this just keeps the sidebar honest for non-payers.
@@ -191,6 +201,11 @@ const navItems: NavItem[] = [
   { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight, group: 'arbeta' },
   { href: '/pending', labelKey: 'review', icon: ClipboardCheck, group: 'arbeta' },
   { href: '/invoices', labelKey: 'invoices', icon: ReceiptText, group: 'arbeta' },
+  // Webshop orders: visible only for companies that actually have a webshop
+  // hooked up (active WooCommerce/Shopify connection or existing order rows).
+  // Deliberately NOT capability-gated: a company whose entitlement lapsed
+  // must still reach its already-imported orders (accounting underlag).
+  { href: '/orders', labelKey: 'sales_orders', icon: ShoppingCart, group: 'arbeta', requiresWebshop: true },
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
   { href: '/salary', labelKey: 'salary', icon: HandCoins, group: 'arbeta', employerOnly: true },
   // Körjournal is deliberately hidden from the nav; the /mileage route stays live.
@@ -268,7 +283,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, hasWebshop = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null, initialUiState }: DashboardNavProps) {
   const pathname = usePathname()
   const router = useRouter()
   const supabase = useRealtimeSupabase()
@@ -485,6 +500,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // Dimension surfaces are hidden until the company opts in via the
     // bookkeeping settings toggle (company_settings.dimensions_enabled).
     if (item.requiresDimensions && !dimensionsEnabled) return false
+    // Webshop surfaces are hidden until a store is connected (or order rows
+    // already exist from a since-disconnected store).
+    if (item.requiresWebshop && !hasWebshop) return false
     // Paywalled surfaces (e.g. the AI-only Dokumentinkorg) are hidden unless
     // the active company holds the capability. The page + API gates enforce
     // the paywall; this keeps the sidebar from advertising a dead workspace.
