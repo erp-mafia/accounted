@@ -21,9 +21,11 @@ interface DetailPagerProps {
 }
 
 /**
- * Compact prev/next control for detail pages: two chevrons around an
- * "n av m" position. Renders nothing when no list context exists (deep
- * link or new tab), so pages degrade gracefully.
+ * Quiet prev/next wayfinding for detail pages: two muted chevrons around an
+ * "n av m" position. Belongs on the back-link row (right-aligned), never
+ * inside the title cluster, so the heading keeps a stable position while
+ * stepping. Renders nothing when no list context exists (deep link or new
+ * tab) or when the list holds a single record, so pages degrade gracefully.
  */
 export function DetailPager({
   contextKey,
@@ -34,29 +36,31 @@ export function DetailPager({
 }: DetailPagerProps) {
   const t = useTranslations('common')
   const pager = useDetailPager(contextKey, basePath, currentId, { keyboard })
-  if (pager.index === null || pager.total === null) return null
+  if (pager.index === null || pager.total === null || pager.total < 2) return null
   return (
-    <div className={cn('flex items-center gap-1', className)}>
+    <div className={cn('flex items-center', className)}>
       <Button
         variant="ghost"
         size="icon"
+        className="text-muted-foreground hover:text-foreground"
         onClick={pager.goPrev}
         disabled={!pager.prevId}
         aria-label={t('pager_previous')}
       >
-        <ChevronLeft className="h-5 w-5" />
+        <ChevronLeft className="h-4 w-4" />
       </Button>
-      <span className="whitespace-nowrap text-sm tabular-nums text-muted-foreground">
+      <span className="min-w-12 whitespace-nowrap px-1 text-center text-xs tabular-nums text-muted-foreground">
         {t('pager_position', { index: pager.index, total: pager.total })}
       </span>
       <Button
         variant="ghost"
         size="icon"
+        className="text-muted-foreground hover:text-foreground"
         onClick={pager.goNext}
         disabled={!pager.nextId}
         aria-label={t('pager_next')}
       >
-        <ChevronRight className="h-5 w-5" />
+        <ChevronRight className="h-4 w-4" />
       </Button>
     </div>
   )
