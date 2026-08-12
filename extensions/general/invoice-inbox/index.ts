@@ -44,6 +44,7 @@ import {
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -1754,6 +1755,28 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'Supplier not found' }, { status: 404 })
         }
 
+        // Särskild löneskatt (SLP): same guards as /api/supplier-invoices.
+        // The 7533/2514 pair is only lawful on 741x pension premiums and
+        // cannot be combined with periodisering on the same row.
+        if (
+          body.items.some(
+            (bodyItem) => bodyItem.apply_slp && !isSlpPensionAccount(bodyItem.account_number),
+          )
+        ) {
+          return errorResponseFromCode('SI_CREATE_SLP_INVALID_ACCOUNT', ctx.log)
+        }
+        if (
+          body.items.some(
+            (bodyItem) =>
+              bodyItem.apply_slp &&
+              (bodyItem.accrual_period_start ||
+                bodyItem.accrual_period_end ||
+                bodyItem.accrual_balance_account),
+          )
+        ) {
+          return errorResponseFromCode('SI_CREATE_SLP_ACCRUAL', ctx.log)
+        }
+
         // Periodisering requires faktureringsmetoden: mirror the main
         // /api/supplier-invoices guard so kontantmetod companies never store
         // accrual fields the booking would silently ignore.
@@ -1840,6 +1863,9 @@ export const invoiceInboxExtension: Extension = {
                 ? (bodyItem.accrual_balance_account ??
                   suggestBalanceAccount('expense', bodyItem.account_number))
                 : null,
+            // Särskild löneskatt (SLP): booking injects the self-balancing
+            // 7533/2514 pair for this line. Guarded above (741x, no accrual).
+            apply_slp: bodyItem.apply_slp === true,
           }
         })
 

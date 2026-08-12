@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, Fragment, createContext, useContext } from 'react'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,9 +28,12 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
+import { ToastAction } from '@/components/ui/toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import {
   ClipboardCheck,
   Bot,
@@ -819,6 +823,7 @@ type ViewTab = 'pending' | 'history'
 
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
+  const router = useRouter()
   const accountNames = useAccountNamesSource()
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -844,6 +849,30 @@ export default function PendingOperationsPage() {
   const [rejectReason, setRejectReason] = useState('')
   const [isRejecting, setIsRejecting] = useState(false)
   const { toast } = useToast()
+  const company = useCompanyOptional()?.company ?? null
+  // Whether the "Bokför utkasten" toast CTA leads anywhere: bulk Bokför on
+  // /invoices only selects drafts when the company books at issue. Under
+  // kontantmetoden or deferred booking (#967) the CTA would be a dead end,
+  // so it stays suppressed (false until settings load: suppressing is the
+  // safe direction, the neutral hint sentence still shows).
+  const [invoiceDraftsCtaUseful, setInvoiceDraftsCtaUseful] = useState(false)
+
+  useEffect(() => {
+    if (!company) return
+    let cancelled = false
+    const supabase = createClient()
+    supabase
+      .from('company_settings')
+      .select('accounting_method, defer_invoice_booking')
+      .eq('company_id', company.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled) setInvoiceDraftsCtaUseful(booksInvoicesOnIssue(data))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [company])
 
   // Read ?conversation= once on mount so deep-links from the agent context
   // strip filter the list automatically.
@@ -979,6 +1008,28 @@ export default function PendingOperationsPage() {
         | { committed: number; failed: number; skipped: number; rejected: number }
         | undefined
 
+      // Committed create_invoice ops land as unnumbered DRAFTS: point the
+      // user at the draft view where bulk Bokför finishes the job.
+      const results = (json.data?.results ?? []) as Array<{ id: string; status: string }>
+      const committedIds = new Set(
+        results.filter((r) => r.status === 'committed').map((r) => r.id),
+      )
+      const committedInvoiceDrafts = operations.some(
+        (op) => committedIds.has(op.id) && op.operation_type === 'create_invoice',
+      )
+      const draftsCta = committedInvoiceDrafts && invoiceDraftsCtaUseful
+        ? {
+            action: (
+              <ToastAction
+                altText={t('bulk_invoice_drafts_cta')}
+                onClick={() => router.push('/invoices?status=draft')}
+              >
+                {t('bulk_invoice_drafts_cta')}
+              </ToastAction>
+            ),
+          }
+        : {}
+
       if (summary) {
         const parts: string[] = []
         if (summary.committed > 0) parts.push(`${summary.committed} godkända`)
@@ -988,11 +1039,14 @@ export default function PendingOperationsPage() {
 
         toast({
           title: summary.failed > 0 ? 'Klart med fel' : 'Godkänt',
-          description: parts.join(', '),
+          description: committedInvoiceDrafts
+            ? `${parts.join(', ')}. ${t('bulk_invoice_drafts_hint')}`
+            : parts.join(', '),
           variant: summary.failed > 0 ? 'destructive' : 'default',
+          ...draftsCta,
         })
       } else {
-        toast({ title: 'Godkänt' })
+        toast({ title: 'Godkänt', ...draftsCta })
       }
 
       setShowBulkDialog(false)

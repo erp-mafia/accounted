@@ -27,6 +27,9 @@ import { useCompanySettings } from '@/components/settings/useSettings'
 import { formatAmount, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
+import { DetailPager } from '@/components/common/DetailPager'
+import { listContextKey } from '@/lib/navigation/list-context'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment, BASAccount } from '@/types'
 
 interface EditableLine {
@@ -82,8 +85,10 @@ export default function SupplierInvoiceDetailPage() {
   const { settings: companySettings } = useCompanySettings()
   const params = useParams()
   const router = useRouter()
+  const company = useCompanyOptional()?.company ?? null
   const { toast } = useToast()
   const t = useTranslations('supplier_invoice_detail')
+  const tCommon = useTranslations('common')
   const [invoice, setInvoice] = useState<SupplierInvoice | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isPayDialogOpen, setIsPayDialogOpen] = useState(false)
@@ -472,12 +477,29 @@ export default function SupplierInvoiceDetailPage() {
 
   return (
     <div className="space-y-8 max-w-4xl">
+      {/* Back link + prev/next record pager on their own quiet row, so the
+          title below keeps a stable position while stepping between records */}
+      <div className="flex items-center justify-between gap-4">
+        <button
+          type="button"
+          onClick={() => router.push('/supplier-invoices')}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          aria-label={t('back_aria')}
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {tCommon('back')}
+        </button>
+        <DetailPager
+          contextKey={listContextKey('supplier-invoices', company?.id)}
+          basePath="/supplier-invoices"
+          currentId={String(params.id)}
+          className="shrink-0"
+        />
+      </div>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-          <Button variant="ghost" size="icon" className="shrink-0" onClick={() => router.push('/supplier-invoices')} aria-label={t('back_aria')}>
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <h1 className="font-display text-2xl leading-8 tracking-tight">

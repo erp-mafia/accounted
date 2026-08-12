@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server'
 import {
   startAuthorization,
   getASPSPs,
-  getPreferredAuthMethod,
+  getPreferredAuthMethodDetails,
   deleteSession,
   isSandboxMode,
   SessionExpiredError,
@@ -366,15 +366,18 @@ export const enableBankingExtension: Extension = {
 
           // Resolve the bank's preferred auth method. Handelsbanken (and some
           // other Swedish banks) expose Mobile BankID only as a hidden DECOUPLED
-          // method; without this, Enable Banking defaults to the REDIRECT method,
-          // which for Handelsbanken *corporate* PSUs cannot complete with Mobile
-          // BankID: the user approves in the app and then hits an error. Returns
-          // undefined for banks with no decoupled method, leaving them untouched.
-          const authMethod = await getPreferredAuthMethod(
+          // method; without pinning it, Enable Banking defaults to the REDIRECT
+          // method, which for Handelsbanken *corporate* PSUs cannot complete
+          // with Mobile BankID: the user approves in the app and then hits an
+          // error. Only hidden methods applicable to this psu_type are pinned;
+          // banks whose decoupled method is visible (e.g. Lunar) get undefined
+          // so their own working default flow runs untouched.
+          const preferredMethod = await getPreferredAuthMethodDetails(
             resolvedAspspName,
             resolvedAspspCountry,
             psuType
           )
+          const authMethod = preferredMethod?.name
 
           log.info('[enable-banking] Starting bank connection', {
             user_id: user.id,
@@ -382,6 +385,17 @@ export const enableBankingExtension: Extension = {
             country: resolvedAspspCountry,
             psu_type: psuType,
             auth_method: authMethod ?? '(aspsp default)',
+            // Chosen method's metadata, so prod logs can verify per-bank pinning
+            // behavior after deploy (hidden-only + psu_types selection). A
+            // pinned method with no psu_types (the documented Handelsbanken
+            // shape) applies to all PSU types and logs '(all)': the
+            // '(aspsp default)' sentinel is reserved for the unpinned case,
+            // where it would otherwise contradict auth_method on the same line.
+            auth_method_approach: preferredMethod?.approach ?? '(aspsp default)',
+            auth_method_hidden: preferredMethod?.hidden_method ?? '(aspsp default)',
+            auth_method_psu_types: preferredMethod
+              ? (preferredMethod.psu_types ?? '(all)')
+              : '(aspsp default)',
             reconnect: isReconnect,
           })
 

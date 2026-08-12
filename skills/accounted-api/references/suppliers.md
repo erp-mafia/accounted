@@ -63,6 +63,7 @@ Creates a supplier invoice in `registered` status and posts the registration jou
 - Foreign currency: omit exchange_rate and the server fetches Riksbanken's rate for invoice_date (ML 8 kap 21-23 §). If no rate can be resolved the create is refused with 400 SI_FX_RATE_MISSING rather than stored unconverted: pass exchange_rate explicitly to proceed. A SEK invoice needs no rate and gets total_sek = total.
 - exchange_rate is SEK per 1 unit of the invoice currency and must satisfy 0 < rate < 100000, the same bounds the supplier_invoices CHECK enforces. Out-of-range values return 400 VALIDATION_ERROR; passing an invoice total where a rate belongs is the usual cause.
 - Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). The registration JE lines are tagged accordingly. When the company has the dimension registry enabled, unknown or archived codes are rejected with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.
+- Tjänstepension invoices (Avanza etc.): set items[].apply_slp=true on the 741x premium line and the registration JE also books särskild löneskatt (debit 7533 / credit 2514 at 24.26% of the line amount) beyond the payable: 2440 stays at the invoice total. apply_slp on a non-741x account returns 400 SI_CREATE_SLP_INVALID_ACCOUNT.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -87,7 +88,7 @@ Request body:
   paid_with_private_funds?: boolean,
   payment_date?: string,
   default_dimensions?: Record<string, string>,
-  items: { description: string, amount?: number, account_number: string, vat_rate?: 0 | 0.06 | 0.12 | 0.25, vat_amount?: number, reverse_charge_rate?: number, vat_code?: string, quantity?: number, unit?: string, unit_price?: number, accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[]
+  items: { description: string, amount?: number, account_number: string, vat_rate?: 0 | 0.06 | 0.12 | 0.25, vat_amount?: number, reverse_charge_rate?: number, apply_slp?: boolean, vat_code?: string, quantity?: number, unit?: string, unit_price?: number, accrual_period_start?: string, accrual_period_end?: string, accrual_balance_account?: string, dimensions?: Record<string, string> }[]
 }
 ```
 

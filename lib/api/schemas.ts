@@ -802,6 +802,13 @@ export const MarkInvoiceSentSchema = z.object({
   })).min(2).optional(),
 })
 
+// Bulk Bokför: drafts are issued (F-number + mark-sent semantics, no email)
+// and booked when the company books at issue; sent/overdue unbooked invoices
+// get the deferred /book semantics. 200 caps one request at two list pages.
+export const InvoicesBulkBookSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(200),
+})
+
 export const SendInvoiceSchema = MarkInvoiceSentSchema.extend({
   additional_cc: invoiceEmailAddressList.optional(),
   additional_bcc: invoiceEmailAddressList.optional(),
@@ -977,6 +984,12 @@ export const CreateSupplierInvoiceItemSchema = z.object({
       message: 'reverse_charge_rate must be 0.06, 0.12, or 0.25',
     })
     .optional(),
+  // Särskild löneskatt på pensionskostnader (SLP): when true the booking
+  // engine injects a self-balancing 7533 D / 2514 K pair at 24.26 % of the
+  // line total (lib/bookkeeping/slp-lines.ts). The pair never changes the
+  // payable. Routes reject the flag on non-741x accounts and in combination
+  // with the periodisering fields below.
+  apply_slp: z.boolean().optional(),
   vat_code: z.string().optional(),
   quantity: z.number().optional(),
   unit: z.string().optional(),
