@@ -805,7 +805,6 @@ export default function JournalEntryList() {
   const rememberListContext = () => {
     writeListContext(listContextKey('bookkeeping', company?.id), {
       ids: filteredEntries.map((e) => e.id),
-      listPath: '/bookkeeping',
     })
   }
 
@@ -1644,7 +1643,11 @@ export default function JournalEntryList() {
                                     {t('post')}
                                   </Button>
                                 )}
-                                <Link href={`/bookkeeping/${entry.id}`} className={QUIET_LINK_CLASS}>
+                                <Link
+                                  href={`/bookkeeping/${entry.id}`}
+                                  className={QUIET_LINK_CLASS}
+                                  onClick={rememberListContext}
+                                >
                                   {t('show_details')}
                                 </Link>
                                 {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (

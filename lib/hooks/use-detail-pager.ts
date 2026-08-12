@@ -7,6 +7,7 @@ import {
   readListContext,
   type ListContext,
 } from '@/lib/navigation/list-context'
+import { resolveArrowKeyAction } from '@/lib/hooks/detail-pager-guards'
 
 export interface DetailPager {
   prevId: string | null
@@ -18,25 +19,31 @@ export interface DetailPager {
   goNext: () => void
 }
 
-/** True for targets that own arrow keys: text fields, selects, contentEditable. */
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  const tag = target.tagName
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable
+export interface DetailPagerOptions {
+  /**
+   * Set false to suspend the ArrowLeft/ArrowRight bindings entirely, e.g.
+   * while an inline editor with unsaved state is open (paging unmounts the
+   * page and would destroy the draft). Buttons stay active.
+   */
+  keyboard?: boolean
 }
 
 /**
  * Prev/next record navigation for detail pages, backed by the list context
  * the originating list page wrote to sessionStorage (lib/navigation/
  * list-context.ts). Also binds ArrowLeft/ArrowRight while no text field or
- * dialog is active. When no context exists everything is null and the pager
- * UI hides; the detail page degrades gracefully.
+ * open overlay (dialog, menu, listbox) owns the keys; see
+ * lib/hooks/detail-pager-guards.ts for the exact rules. When no context
+ * exists everything is null and the pager UI hides; the detail page degrades
+ * gracefully.
  */
 export function useDetailPager(
   contextKey: string,
   basePath: string,
   currentId: string,
+  options?: DetailPagerOptions,
 ): DetailPager {
+  const keyboard = options?.keyboard ?? true
   const router = useRouter()
   const [context, setContext] = useState<ListContext | null>(null)
 
@@ -65,23 +72,15 @@ export function useDetailPager(
   }, [basePath, nextId, router])
 
   useEffect(() => {
-    if (!neighbors) return
+    if (!neighbors || !keyboard) return
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-      if (e.defaultPrevented || e.isComposing) return
-      // Plain arrows only: modified arrows are browser/OS shortcuts
-      // (cmd+arrow is history navigation on macOS).
-      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
-      // Never steal arrows from text editing (e.g. the notes textarea on the
-      // verifikat page) or from an open dialog's focus handling.
-      if (isEditableTarget(e.target)) return
-      if (document.querySelector('[role="dialog"]')) return
-      if (e.key === 'ArrowLeft') goPrev()
-      else goNext()
+      const action = resolveArrowKeyAction(e, document)
+      if (action === 'prev') goPrev()
+      else if (action === 'next') goNext()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [neighbors, goPrev, goNext])
+  }, [neighbors, keyboard, goPrev, goNext])
 
   return {
     prevId,

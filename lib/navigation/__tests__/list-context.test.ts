@@ -31,7 +31,7 @@ describe('listContextKey', () => {
 describe('writeListContext / readListContext', () => {
   it('round-trips a context', () => {
     const storage = makeStorage()
-    const context: ListContext = { ids: ['a', 'b', 'c'], listPath: '/invoices' }
+    const context: ListContext = { ids: ['a', 'b', 'c'] }
     writeListContext('key', context, storage)
     expect(readListContext('key', storage)).toEqual(context)
   })
@@ -48,28 +48,22 @@ describe('writeListContext / readListContext', () => {
   it('returns null on valid JSON with the wrong shape', () => {
     expect(readListContext('key', makeStorage({ key: '"a string"' }))).toBeNull()
     expect(readListContext('key', makeStorage({ key: 'null' }))).toBeNull()
-    expect(readListContext('key', makeStorage({ key: '{"ids":"nope","listPath":"/x"}' }))).toBeNull()
-    expect(readListContext('key', makeStorage({ key: '{"ids":["a",1],"listPath":"/x"}' }))).toBeNull()
-    expect(readListContext('key', makeStorage({ key: '{"ids":["a"]}' }))).toBeNull()
+    expect(readListContext('key', makeStorage({ key: '{"ids":"nope"}' }))).toBeNull()
+    expect(readListContext('key', makeStorage({ key: '{"ids":["a",1]}' }))).toBeNull()
+    expect(readListContext('key', makeStorage({ key: '{"other":["a"]}' }))).toBeNull()
+  })
+
+  it('tolerates extra properties, so contexts stored by older builds still parse', () => {
+    // Older builds wrote a listPath field alongside ids.
+    const stored = makeStorage({ key: '{"ids":["a","b"],"listPath":"/invoices"}' })
+    expect(readListContext('key', stored)).toEqual({ ids: ['a', 'b'] })
   })
 
   it('keeps keys isolated from each other', () => {
     const storage = makeStorage()
-    writeListContext(
-      listContextKey('invoices', 'c-1'),
-      { ids: ['inv-1'], listPath: '/invoices' },
-      storage,
-    )
-    writeListContext(
-      listContextKey('supplier-invoices', 'c-1'),
-      { ids: ['sup-1'], listPath: '/supplier-invoices' },
-      storage,
-    )
-    writeListContext(
-      listContextKey('invoices', 'c-2'),
-      { ids: ['inv-9'], listPath: '/invoices' },
-      storage,
-    )
+    writeListContext(listContextKey('invoices', 'c-1'), { ids: ['inv-1'] }, storage)
+    writeListContext(listContextKey('supplier-invoices', 'c-1'), { ids: ['sup-1'] }, storage)
+    writeListContext(listContextKey('invoices', 'c-2'), { ids: ['inv-9'] }, storage)
     expect(readListContext(listContextKey('invoices', 'c-1'), storage)?.ids).toEqual(['inv-1'])
     expect(readListContext(listContextKey('supplier-invoices', 'c-1'), storage)?.ids).toEqual([
       'sup-1',
@@ -78,9 +72,7 @@ describe('writeListContext / readListContext', () => {
   })
 
   it('does not throw when storage is unavailable', () => {
-    expect(() =>
-      writeListContext('key', { ids: [], listPath: '/x' }, null),
-    ).not.toThrow()
+    expect(() => writeListContext('key', { ids: [] }, null)).not.toThrow()
     expect(readListContext('key', null)).toBeNull()
   })
 
@@ -91,9 +83,7 @@ describe('writeListContext / readListContext', () => {
         throw new Error('QuotaExceededError')
       },
     }
-    expect(() =>
-      writeListContext('key', { ids: ['a'], listPath: '/x' }, storage),
-    ).not.toThrow()
+    expect(() => writeListContext('key', { ids: ['a'] }, storage)).not.toThrow()
   })
 })
 

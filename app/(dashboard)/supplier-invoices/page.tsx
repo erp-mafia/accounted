@@ -193,7 +193,6 @@ export default function SupplierInvoicesPage() {
   const rememberListContext = () => {
     writeListContext(listContextKey('supplier-invoices', company?.id), {
       ids: filteredInvoices.map((inv) => inv.id),
-      listPath: '/supplier-invoices',
     })
   }
 

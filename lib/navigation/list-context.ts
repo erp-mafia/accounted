@@ -15,8 +15,6 @@
 export interface ListContext {
   /** Ordered record ids exactly as the list presented them. */
   ids: string[]
-  /** The list page the context was written from, e.g. '/invoices'. */
-  listPath: string
 }
 
 export interface ListNeighbors {
@@ -69,11 +67,13 @@ export function readListContext(
     if (!raw) return null
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== 'object' || parsed === null) return null
-    const candidate = parsed as { ids?: unknown; listPath?: unknown }
+    const candidate = parsed as { ids?: unknown }
     if (!Array.isArray(candidate.ids)) return null
     if (candidate.ids.some((id) => typeof id !== 'string')) return null
-    if (typeof candidate.listPath !== 'string') return null
-    return { ids: candidate.ids as string[], listPath: candidate.listPath }
+    // Deliberately tolerant of extra properties (e.g. the listPath field
+    // older builds wrote): only ids is consumed, and previously stored
+    // contexts must keep parsing.
+    return { ids: candidate.ids as string[] }
   } catch {
     // Garbage in storage (manual edits, older shapes): behave as no context.
     return null

@@ -318,7 +318,6 @@ export default function InvoicesPage() {
   const rememberListContext = () => {
     writeListContext(listContextKey('invoices', company?.id), {
       ids: sortedInvoices.map((invoice) => invoice.id),
-      listPath: '/invoices',
     })
   }
 

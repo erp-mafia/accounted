@@ -426,6 +426,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           contextKey={listContextKey('bookkeeping', company?.id)}
           basePath="/bookkeeping"
           currentId={id}
+          // Arrow paging unmounts the page and would destroy an unsaved notes
+          // draft; the textarea only guards arrows while it has focus, so gate
+          // the keyboard bindings on the editing state itself.
+          keyboard={!editingNotes}
         />
       </div>
 
