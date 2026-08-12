@@ -1890,6 +1890,13 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte importera underlag från leverantören.',
     message_en: 'Failed to import documents from provider.',
   },
+  PROVIDER_DOCUMENT_SCOPES_REQUIRED: {
+    httpStatus: 403,
+    message_sv:
+      'Fortnox-anslutningen saknar behörighet till Arkiv och Koppla fil. Koppla om Fortnox och godkänn behörigheterna för att importera underlag.',
+    message_en:
+      'The Fortnox connection lacks Archive and Connect file access. Reconnect Fortnox and approve those permissions to import documents.',
+  },
   PROVIDER_DISCONNECT_FAILED: {
     httpStatus: 500,
     message_sv: 'Frånkoppling från leverantören misslyckades.',

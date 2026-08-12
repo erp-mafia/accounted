@@ -13,6 +13,8 @@ const DEFAULT_SCOPES = [
   'customer',
   'supplier',
   'bookkeeping',
+  'archive',
+  'connectfile',
 ];
 
 export function buildFortnoxAuthUrl(
