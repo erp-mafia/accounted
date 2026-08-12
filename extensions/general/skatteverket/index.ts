@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse, after } from 'next/server'
@@ -45,7 +46,12 @@ import {
 } from './lib/agi-client'
 import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
-import { bokforSkattekontoTransaction, SkattekontoBookingError } from './lib/skattekonto-booking'
+import {
+  attachBookingSuggestions,
+  bokforSkattekontoTransaction,
+  bokforSkattekontoTransactionsBatch,
+  SkattekontoBookingError,
+} from './lib/skattekonto-booking'
 import { handleSkattekontoDriftDetected } from './lib/skattekonto-drift-email'
 import { handleSkattekontoConnectionExpired } from './lib/connection-expired-notification'
 import {
@@ -60,6 +66,13 @@ import type { VatPeriodType } from '@/types'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('skatteverket')
+
+// Body for POST /skattekonto/transaktioner/bokfor-batch. Capped at 200 ids:
+// a full year of skattekonto events fits comfortably, and the sequential
+// draft+commit loop stays well inside the dispatcher's time budget.
+const SkattekontoBokforBatchSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(200),
+})
 
 /**
  * Skatteverket integration extension.
@@ -2097,7 +2110,16 @@ export const skatteverketExtension: Extension = {
           })),
         )
 
-        const bookedEnriched = booked.map(r => ({
+        // Deterministic booking suggestion per unbooked row (one hoisted
+        // rules fetch): the UI shows what "Bokför" will do and uses it to
+        // decide bulk-booking eligibility.
+        const withBookingSuggestions = await attachBookingSuggestions(
+          ctx.supabase,
+          ctx.companyId,
+          booked,
+        )
+
+        const bookedEnriched = withBookingSuggestions.map(r => ({
           ...r,
           match_suggestion: suggestions.get(r.id) ?? null,
         }))
@@ -2125,6 +2147,52 @@ export const skatteverketExtension: Extension = {
         if (blocked) return blocked
         try {
           const result = await syncSkattekonto(ctx)
+          return NextResponse.json({ data: result })
+        } catch (err) {
+          return handleSkvError(err)
+        }
+      },
+    },
+
+    // ── Bokför several rows → committed verifikat per row ─────────
+    // Draft + commit per id, server-side, so a successful row lands as a
+    // posted verifikat with no orphan drafts. Row failures never abort the
+    // loop: the response carries per-row results plus a summary for one
+    // aggregate toast. Also serves the inline single-row flow (ids: [id]).
+    {
+      method: 'POST',
+      path: '/skattekonto/transaktioner/bokfor-batch',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        if (!ctx) {
+          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+        }
+
+        let parsedBody: unknown
+        try {
+          parsedBody = await request.json()
+        } catch {
+          return NextResponse.json({ error: 'Ogiltig JSON i förfrågan.' }, { status: 400 })
+        }
+
+        const parsed = SkattekontoBokforBatchSchema.safeParse(parsedBody)
+        if (!parsed.success) {
+          return NextResponse.json(
+            { error: 'Ogiltiga parametrar: ids måste vara en lista med 1-200 transaktions-id.' },
+            { status: 400 },
+          )
+        }
+
+        // Dedupe: a repeated id would just burn an ALREADY_BOOKED failure
+        // on its second pass.
+        const ids = [...new Set(parsed.data.ids)]
+
+        try {
+          const result = await bokforSkattekontoTransactionsBatch(
+            ctx.supabase,
+            ctx.companyId,
+            ctx.userId,
+            ids,
+          )
           return NextResponse.json({ data: result })
         } catch (err) {
           return handleSkvError(err)

@@ -1,11 +1,17 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { commitEntry, createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { getPrimary as getPrimaryCashAccount } from '@/lib/cash-accounts/service'
 import type {
   CreateJournalEntryInput,
   CreateJournalEntryLineInput,
   JournalEntry,
 } from '@/types'
+import type {
+  SkattekontoBatchResult,
+  SkattekontoBatchRowResult,
+  SkattekontoBookingSuggestion,
+} from '@/types/skatteverket'
 
 /**
  * Per-row "Bokför" helper.
@@ -107,37 +113,22 @@ const SAFE_ID_PATTERN = /^[a-zA-Z0-9_-]+$/
 const SKATTEKONTO_RULE_COLUMNS =
   'id, priority, pattern, amount_min, amount_max, company_type, counter_account, counter_account_ef, label, active'
 
-export async function guessCounterAccount(
-  supabase: SupabaseClient,
-  companyId: string,
+/**
+ * Pure core matcher shared by every suggestion/booking path: walk the
+ * priority-ordered rules and return the first match. The returned account may
+ * still be the __PRIMARY_SEK__ sentinel; callers resolve it against
+ * cash_accounts (so the DB round trip stays out of the pure matcher).
+ */
+function matchSkattekontoRule(
+  rules: SkattekontoRuleRow[],
   transaktionstext: string,
   entityType: EntityType,
   belopp?: number,
-): Promise<CounterAccountMatch | null> {
-  if (!SAFE_ID_PATTERN.test(companyId)) {
-    // The caller is supposed to pass a validated company id (from
-    // requireCompanyId). Refuse rather than interpolate an unknown string
-    // into the PostgREST filter: the .or() string parser is forgiving and
-    // we don't want to depend on it for safety.
-    return null
-  }
-
+): CounterAccountMatch | null {
   const normalized = transaktionstext.toLowerCase()
   const absBelopp = belopp === undefined ? null : Math.abs(belopp)
 
-  const { data: rules, error } = await supabase
-    .from('skattekonto_rules')
-    .select(SKATTEKONTO_RULE_COLUMNS)
-    .eq('active', true)
-    .or(`company_id.eq.${companyId},company_id.is.null`)
-    .order('priority', { ascending: true })
-    .order('id', { ascending: true })
-
-  if (error || !rules || rules.length === 0) {
-    return null
-  }
-
-  for (const rule of rules as SkattekontoRuleRow[]) {
+  for (const rule of rules) {
     if (rule.company_type !== 'all' && rule.company_type !== entityType) {
       continue
     }
@@ -154,14 +145,10 @@ export async function guessCounterAccount(
 
     if (!patterns.some(p => normalized.includes(p))) continue
 
-    let account =
+    const account =
       entityType === 'enskild_firma' && rule.counter_account_ef
         ? rule.counter_account_ef
         : rule.counter_account
-
-    if (account === PRIMARY_SEK_SENTINEL) {
-      account = await resolvePrimarySekAccount(supabase, companyId)
-    }
 
     return {
       account,
@@ -170,6 +157,169 @@ export async function guessCounterAccount(
   }
 
   return null
+}
+
+/** The active rules for a company (system seeds + overrides), priority order. */
+async function fetchSkattekontoRules(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<SkattekontoRuleRow[]> {
+  const { data: rules, error } = await supabase
+    .from('skattekonto_rules')
+    .select(SKATTEKONTO_RULE_COLUMNS)
+    .eq('active', true)
+    .or(`company_id.eq.${companyId},company_id.is.null`)
+    .order('priority', { ascending: true })
+    .order('id', { ascending: true })
+
+  if (error || !rules) return []
+  return rules as SkattekontoRuleRow[]
+}
+
+export async function guessCounterAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  transaktionstext: string,
+  entityType: EntityType,
+  belopp?: number,
+): Promise<CounterAccountMatch | null> {
+  if (!SAFE_ID_PATTERN.test(companyId)) {
+    // The caller is supposed to pass a validated company id (from
+    // requireCompanyId). Refuse rather than interpolate an unknown string
+    // into the PostgREST filter: the .or() string parser is forgiving and
+    // we don't want to depend on it for safety.
+    return null
+  }
+
+  const rules = await fetchSkattekontoRules(supabase, companyId)
+  if (rules.length === 0) return null
+
+  const match = matchSkattekontoRule(rules, transaktionstext, entityType, belopp)
+  if (!match) return null
+
+  return {
+    ...match,
+    account:
+      match.account === PRIMARY_SEK_SENTINEL
+        ? await resolvePrimarySekAccount(supabase, companyId)
+        : match.account,
+  }
+}
+
+/**
+ * One-shot context for enrichment/batch paths: hoists the rules and
+ * entity_type fetches out of per-row work. The primary SEK account is
+ * resolved lazily and memoized: most batches never contain an
+ * in-/utbetalning row, so the cash_accounts query only runs when a
+ * __PRIMARY_SEK__ rule actually matches.
+ */
+export interface SkattekontoRuleContext {
+  rules: SkattekontoRuleRow[]
+  entityType: EntityType
+  resolvePrimarySek: () => Promise<string>
+}
+
+export async function loadRuleContext(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<SkattekontoRuleContext> {
+  if (!SAFE_ID_PATTERN.test(companyId)) {
+    // Same defence-in-depth refusal as guessCounterAccount: never interpolate
+    // an unvalidated id into the PostgREST .or() filter string.
+    return {
+      rules: [],
+      entityType: 'aktiebolag',
+      resolvePrimarySek: async () => PRIMARY_SEK_FALLBACK,
+    }
+  }
+
+  const [rules, settingsResult] = await Promise.all([
+    fetchSkattekontoRules(supabase, companyId),
+    supabase
+      .from('company_settings')
+      .select('entity_type')
+      .eq('company_id', companyId)
+      .single(),
+  ])
+
+  let primary: string | null = null
+  return {
+    rules,
+    entityType: (settingsResult.data?.entity_type as EntityType) ?? 'aktiebolag',
+    resolvePrimarySek: async () => {
+      if (primary === null) {
+        primary = await resolvePrimarySekAccount(supabase, companyId)
+      }
+      return primary
+    },
+  }
+}
+
+/**
+ * Enrich skattekonto rows with the deterministic booking suggestion the
+ * per-row "Bokför" would use, so the list can show what a booking will do
+ * before the user commits to it. One rules/entity_type fetch for the whole
+ * page of rows.
+ *
+ * Only unbooked, genomförda rows get a computed suggestion; already-booked
+ * rows and kommande rows get `booking_suggestion: null` without any matching
+ * work (and a page of only such rows skips the fetches entirely).
+ */
+export async function attachBookingSuggestions<
+  T extends {
+    transaktionstext: string
+    belopp_skatteverket: number | string
+    journal_entry_id: string | null
+    status: string
+  },
+>(
+  supabase: SupabaseClient,
+  companyId: string,
+  rows: T[],
+): Promise<(T & { booking_suggestion: SkattekontoBookingSuggestion | null })[]> {
+  const needsSuggestion = (row: T) =>
+    !row.journal_entry_id && row.status !== 'upcoming'
+
+  if (!rows.some(needsSuggestion)) {
+    return rows.map(row => ({ ...row, booking_suggestion: null }))
+  }
+
+  const ctx = await loadRuleContext(supabase, companyId)
+  const enriched: (T & { booking_suggestion: SkattekontoBookingSuggestion | null })[] = []
+
+  for (const row of rows) {
+    if (!needsSuggestion(row)) {
+      enriched.push({ ...row, booking_suggestion: null })
+      continue
+    }
+
+    const match = matchSkattekontoRule(
+      ctx.rules,
+      row.transaktionstext,
+      ctx.entityType,
+      Number(row.belopp_skatteverket),
+    )
+    if (!match) {
+      enriched.push({ ...row, booking_suggestion: null })
+      continue
+    }
+
+    const account =
+      match.account === PRIMARY_SEK_SENTINEL
+        ? await ctx.resolvePrimarySek()
+        : match.account
+
+    enriched.push({
+      ...row,
+      booking_suggestion: {
+        account,
+        account_name: getBASReference(account)?.account_name ?? null,
+        label: match.label,
+      },
+    })
+  }
+
+  return enriched
 }
 
 /**
@@ -188,6 +338,10 @@ export async function bokforSkattekontoTransaction(
   companyId: string,
   userId: string,
   transactionId: string,
+  // Batch callers pass a preloaded context so rules/entity_type are fetched
+  // once per batch instead of once per row. Omitted → per-call fetches,
+  // identical to the original single-row behaviour.
+  ruleContext?: SkattekontoRuleContext,
 ): Promise<JournalEntry> {
   // 1. Load the transaction
   const { data: tx, error: txError } = await supabase
@@ -211,24 +365,43 @@ export async function bokforSkattekontoTransaction(
     )
   }
 
-  // 2. Get entity_type for AB/EF-specific accounts
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('entity_type')
-    .eq('company_id', companyId)
-    .single()
+  // 2+3. Resolve counter-account via skattekonto_rules (entity_type decides
+  // AB/EF-specific accounts).
+  let guess: CounterAccountMatch | null
+  if (ruleContext) {
+    const match = matchSkattekontoRule(
+      ruleContext.rules,
+      tx.transaktionstext,
+      ruleContext.entityType,
+      Number(tx.belopp_skatteverket),
+    )
+    guess = match
+      ? {
+          ...match,
+          account:
+            match.account === PRIMARY_SEK_SENTINEL
+              ? await ruleContext.resolvePrimarySek()
+              : match.account,
+        }
+      : null
+  } else {
+    const { data: settings } = await supabase
+      .from('company_settings')
+      .select('entity_type')
+      .eq('company_id', companyId)
+      .single()
 
-  const entityType: EntityType =
-    (settings?.entity_type as EntityType) ?? 'aktiebolag'
+    const entityType: EntityType =
+      (settings?.entity_type as EntityType) ?? 'aktiebolag'
 
-  // 3. Resolve counter-account via skattekonto_rules
-  const guess = await guessCounterAccount(
-    supabase,
-    companyId,
-    tx.transaktionstext,
-    entityType,
-    Number(tx.belopp_skatteverket),
-  )
+    guess = await guessCounterAccount(
+      supabase,
+      companyId,
+      tx.transaktionstext,
+      entityType,
+      Number(tx.belopp_skatteverket),
+    )
+  }
   if (!guess) {
     throw new SkattekontoBookingError(
       `Vi kunde inte gissa motkontot för "${tx.transaktionstext}". Skapa verifikatet manuellt.`,
@@ -304,4 +477,92 @@ export async function bokforSkattekontoTransaction(
     .eq('company_id', companyId)
 
   return entry
+}
+
+export type { SkattekontoBatchResult, SkattekontoBatchRowResult }
+
+/**
+ * Book several skattekonto rows in one server-side pass: draft + commit per
+ * row so a successful row lands as a posted verifikat immediately (no orphan
+ * drafts for the user to chase). Rules/entity_type are fetched once for the
+ * whole batch.
+ *
+ * A row failure never aborts the loop: the caller gets a per-row result list
+ * plus a summary and reports the aggregate. If the draft was created but the
+ * commit failed (e.g. a mandatory-dimension policy), the draft is kept and
+ * stays linked to the row: that degrades to the pre-existing
+ * draft-then-review flow instead of deleting bookkeeping material.
+ */
+export async function bokforSkattekontoTransactionsBatch(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  ids: string[],
+): Promise<SkattekontoBatchResult> {
+  const ruleContext = await loadRuleContext(supabase, companyId)
+  // A one-row batch is the inline single-row flow: attribute it as a normal
+  // user acceptance; real bulk runs are attributed as bulk_accept.
+  const commitMethod = ids.length === 1 ? 'user_accept' : 'bulk_accept'
+  const results: SkattekontoBatchRowResult[] = []
+
+  for (const id of ids) {
+    let entry: JournalEntry
+    try {
+      entry = await bokforSkattekontoTransaction(
+        supabase,
+        companyId,
+        userId,
+        id,
+        ruleContext,
+      )
+    } catch (err) {
+      results.push({
+        id,
+        ok: false,
+        error_code:
+          err instanceof SkattekontoBookingError ? err.code : 'UNKNOWN',
+        error_message:
+          err instanceof Error ? err.message : 'Transaktionen kunde inte bokföras.',
+      })
+      continue
+    }
+
+    try {
+      const committed = await commitEntry(
+        supabase,
+        companyId,
+        userId,
+        entry.id,
+        commitMethod,
+      )
+      results.push({
+        id,
+        ok: true,
+        journal_entry_id: committed.id,
+        voucher_number: committed.voucher_number ?? null,
+        voucher_series: committed.voucher_series ?? null,
+      })
+    } catch (err) {
+      results.push({
+        id,
+        ok: false,
+        journal_entry_id: entry.id,
+        error_code: 'COMMIT_FAILED',
+        error_message:
+          err instanceof Error
+            ? err.message
+            : 'Utkastet skapades men kunde inte bokföras.',
+      })
+    }
+  }
+
+  const succeeded = results.filter(r => r.ok).length
+  return {
+    results,
+    summary: {
+      total: results.length,
+      succeeded,
+      failed: results.length - succeeded,
+    },
+  }
 }
