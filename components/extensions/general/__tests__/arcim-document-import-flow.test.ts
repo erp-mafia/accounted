@@ -114,6 +114,34 @@ describe('Fortnox document follow-up state', () => {
     })
   })
 
+  it('keeps the dry-run result offered until the user explicitly starts import', () => {
+    const offered = arcimDocumentImportReducer(
+      { phase: 'discovering', found: 0, result: null, problem: null },
+      { type: 'discovery-succeeded', result: result({ dryRun: true }) },
+    )
+
+    expect(offered).toMatchObject({ phase: 'offered', result: { dryRun: true } })
+    expect(
+      arcimDocumentImportReducer(offered, { type: 'import-started' }),
+    ).toMatchObject({ phase: 'importing' })
+  })
+
+  it('allows OAuth success to replace an earlier popup-close failure', () => {
+    const problem = { code: null, requestId: null, reconnectRequired: true }
+    const failed = arcimDocumentImportReducer(
+      { phase: 'reconnecting', found: 7, result: result(), problem },
+      { type: 'import-failed', problem },
+    )
+    const importing = arcimDocumentImportReducer(failed, { type: 'import-started' })
+    const complete = arcimDocumentImportReducer(importing, {
+      type: 'import-succeeded',
+      result: result({ dryRun: false, linked: 7, unmatched: 0 }),
+    })
+
+    expect(failed.phase).toBe('import-error')
+    expect(complete).toMatchObject({ phase: 'complete', result: { linked: 7 } })
+  })
+
   it('marks the archive/connectfile scope error as reconnect-required', async () => {
     const fetcher = vi.fn().mockResolvedValue(
       new Response(
