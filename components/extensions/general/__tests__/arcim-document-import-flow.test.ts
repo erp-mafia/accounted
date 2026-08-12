@@ -5,6 +5,7 @@ import {
   PROVIDER_DOCUMENT_SCOPES_REQUIRED,
   ArcimDocumentImportRequestError,
   arcimDocumentImportReducer,
+  documentOAuthProblemFromReason,
   parseArcimDocumentOAuthResume,
   requestArcimDocumentImport,
   resolveArcimDocumentFollowUpProvider,
@@ -161,6 +162,21 @@ describe('document import endpoint request', () => {
       }),
     )
   })
+
+  it('rejects a success payload without unmatched samples', async () => {
+    const invalid = result()
+    const { unmatchedSamples: _unmatchedSamples, ...withoutSamples } = invalid
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, result: withoutSamples }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await expect(
+      requestArcimDocumentImport('consent-1', true, fetcher),
+    ).rejects.toBeInstanceOf(ArcimDocumentImportRequestError)
+  })
 })
 
 describe('document scope OAuth recovery', () => {
@@ -168,14 +184,31 @@ describe('document scope OAuth recovery', () => {
     expect(ARCIM_DOCUMENT_OAUTH_RESUME_KEY).toBe('arcim-document-oauth-resume')
     const serialized = serializeArcimDocumentOAuthResume({
       action: 'import',
-      consentId: 'consent-1',
     })
 
     expect(parseArcimDocumentOAuthResume(serialized)).toEqual({
       action: 'import',
-      consentId: 'consent-1',
     })
     expect(parseArcimDocumentOAuthResume('{"action":"unknown"}')).toBeNull()
+  })
+
+  it('only treats scope and consent failures as reconnectable', () => {
+    expect(
+      documentOAuthProblemFromReason('Tredjepartsappen saknar rätt behörigheter'),
+    ).toMatchObject({
+      code: PROVIDER_DOCUMENT_SCOPES_REQUIRED,
+      reconnectRequired: true,
+    })
+    expect(documentOAuthProblemFromReason('Du avbröt anslutningen')).toMatchObject({
+      code: null,
+      reconnectRequired: true,
+    })
+    expect(documentOAuthProblemFromReason('Leverantören är tillfälligt nere')).toEqual({
+      code: null,
+      requestId: null,
+      reconnectRequired: false,
+      message: 'Leverantören är tillfälligt nere',
+    })
   })
 
   it('restores retry controls when the OAuth popup is closed', () => {

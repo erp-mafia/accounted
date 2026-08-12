@@ -690,7 +690,7 @@ export async function uploadDocument(
   const { data, error } = await supabase
     .from('document_attachments')
     .insert({
-      ...(reservedDocumentId ? { id: reservedDocumentId } : {}),
+      id: reservedDocumentId ?? crypto.randomUUID(),
       user_id: userId,
       company_id: companyId,
       storage_path: storagePath,
@@ -710,29 +710,26 @@ export async function uploadDocument(
     .single()
 
   if (error) {
-    if (reservedDocumentId) {
+    if (reservedDocumentId && error.code === '23505') {
       const { data: concurrent, error: concurrentError } = await supabase
         .from('document_attachments')
-        .select('*')
+        .select('id, user_id, company_id, storage_path, file_name, file_size_bytes, mime_type, sha256_hash, version, original_id, superseded_by_id, is_current_version, uploaded_by, upload_source, digitization_date, journal_entry_id, journal_entry_line_id, prev_version_hash, last_integrity_check_at, created_at, updated_at')
         .eq('id', reservedDocumentId)
         .eq('company_id', companyId)
         .maybeSingle()
 
       if (!concurrentError && concurrent) {
         const existing = concurrent as DocumentAttachment
+        await createServiceClientNoCookies()
+          .storage.from(DOCUMENTS_BUCKET)
+          .remove([storagePath])
         if (
           existing.sha256_hash !== sha256Hash ||
           existing.journal_entry_id !== (metadata.journal_entry_id || null)
         ) {
-          await createServiceClientNoCookies()
-            .storage.from(DOCUMENTS_BUCKET)
-            .remove([storagePath])
           throw new Error('Idempotency key was already used for different document metadata')
         }
 
-        await createServiceClientNoCookies()
-          .storage.from(DOCUMENTS_BUCKET)
-          .remove([storagePath])
         return existing
       }
     }

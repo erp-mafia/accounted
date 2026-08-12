@@ -11,7 +11,6 @@ export type ArcimDocumentOAuthResumeAction = 'discover' | 'import'
 
 export interface ArcimDocumentOAuthResume {
   action: ArcimDocumentOAuthResumeAction
-  consentId: string
 }
 
 export function serializeArcimDocumentOAuthResume(
@@ -26,14 +25,10 @@ export function parseArcimDocumentOAuthResume(
   if (!value) return null
   try {
     const parsed = JSON.parse(value) as Partial<ArcimDocumentOAuthResume>
-    if (
-      (parsed.action !== 'discover' && parsed.action !== 'import') ||
-      typeof parsed.consentId !== 'string' ||
-      parsed.consentId.length === 0
-    ) {
+    if (parsed.action !== 'discover' && parsed.action !== 'import') {
       return null
     }
-    return { action: parsed.action, consentId: parsed.consentId }
+    return { action: parsed.action }
   } catch {
     return null
   }
@@ -81,6 +76,29 @@ export interface ArcimDocumentImportProblem {
   code: string | null
   requestId: string | null
   reconnectRequired: boolean
+  message?: string
+}
+
+export function documentOAuthProblemFromReason(
+  reason: string,
+): ArcimDocumentImportProblem {
+  const normalized = reason.toLowerCase()
+  const scopeFailure =
+    normalized.includes('invalid_scope') ||
+    normalized.includes('scope') ||
+    normalized.includes('behörighet')
+  const consentDenied =
+    normalized.includes('access_denied') ||
+    normalized.includes('denied') ||
+    normalized.includes('nekad') ||
+    normalized.includes('avbröt')
+
+  return {
+    code: scopeFailure ? PROVIDER_DOCUMENT_SCOPES_REQUIRED : null,
+    requestId: null,
+    reconnectRequired: scopeFailure || consentDenied,
+    message: reason,
+  }
 }
 
 export type ArcimDocumentImportPhase =
@@ -230,7 +248,8 @@ function isDocumentImportResult(value: unknown): value is ArcimDocumentImportRes
     typeof result.skipped === 'number' &&
     typeof result.unmatched === 'number' &&
     typeof result.failed === 'number' &&
-    typeof result.dryRun === 'boolean'
+    typeof result.dryRun === 'boolean' &&
+    Array.isArray(result.unmatchedSamples)
   )
 }
 

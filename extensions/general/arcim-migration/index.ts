@@ -513,10 +513,11 @@ export const arcimMigrationExtension: Extension = {
         const jsLiteral = (value: unknown) =>
           JSON.stringify(value ?? '').replace(/</g, '\\u003c')
 
-        const respondWithError = (reason: string) => {
+        const respondWithError = (reason: string, consentId?: string) => {
           const fallbackUrl = new URL(`${appUrl}/import`)
           fallbackUrl.searchParams.set('migration', 'error')
           fallbackUrl.searchParams.set('reason', reason)
+          if (consentId) fallbackUrl.searchParams.set('consentId', consentId)
 
           const escapedReason = reason
             .replace(/&/g, '&amp;')
@@ -553,7 +554,18 @@ export const arcimMigrationExtension: Extension = {
             hasCode: !!code,
             hasState: !!stateRaw,
           })
-          return respondWithError(translateOAuthError(oauthError, oauthErrorDescription))
+          let consentId: string | undefined
+          if (stateRaw) {
+            try {
+              consentId = (await consumeOAuthState(stateRaw))?.consentId
+            } catch (error) {
+              log.error('OAuth callback could not resolve failed consent', error)
+            }
+          }
+          return respondWithError(
+            translateOAuthError(oauthError, oauthErrorDescription),
+            consentId,
+          )
         }
 
         if (!code || !stateRaw) {
@@ -565,6 +577,7 @@ export const arcimMigrationExtension: Extension = {
           return respondWithError('Återanropet saknade code eller state. Försök igen.')
         }
 
+        let callbackConsentId: string | undefined
         try {
           // Single source of truth for who this callback belongs to: the
           // server-written provider_otc row, consumed atomically here. The row
@@ -587,6 +600,7 @@ export const arcimMigrationExtension: Extension = {
           }
 
           const { consentId, provider } = resolvedState
+          callbackConsentId = consentId
 
           // Must match the redirect_uri the authorization request was built
           // with, so both come from resolveArcimCallbackUrl.
@@ -613,7 +627,7 @@ export const arcimMigrationExtension: Extension = {
         } catch (error) {
           log.error('OAuth callback exchange failed', error)
           const reason = error instanceof Error ? error.message : 'Okänt fel vid tokenutbyte.'
-          return respondWithError(reason)
+          return respondWithError(reason, callbackConsentId)
         }
       },
     },

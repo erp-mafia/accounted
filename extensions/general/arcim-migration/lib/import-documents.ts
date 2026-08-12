@@ -96,6 +96,7 @@ interface FiscalPeriodRow {
 interface VoucherRow {
   id: string
   fiscal_period_id: string
+  entry_date: string
   source_voucher_series: string | null
   source_voucher_number: number | null
 }
@@ -105,7 +106,7 @@ interface ProviderAttachment {
   fileName: string | null
   fileNameIsBaseName: boolean
   declaredContentType: string | null
-  ref: { series: string; number: number; date: string } | null
+  ref: { series: string; number: number; date: string; dateTo?: string } | null
 }
 
 interface ProviderAttachmentSource {
@@ -228,6 +229,7 @@ function fortnoxSource(
                   series: connection.series,
                   number: connection.number,
                   date: financialYear.fromDate,
+                  dateTo: financialYear.toDate,
                 }
               : null,
           }
@@ -297,7 +299,7 @@ export async function importProviderDocuments(
     fetchAllRows<VoucherRow>(({ from, to }) =>
       supabase
         .from('journal_entries')
-        .select('id, fiscal_period_id, source_voucher_series, source_voucher_number')
+        .select('id, fiscal_period_id, entry_date, source_voucher_series, source_voucher_number')
         .eq('company_id', companyId)
         .not('source_voucher_number', 'is', null)
         .order('id', { ascending: true })
@@ -315,9 +317,15 @@ export async function importProviderDocuments(
 
   // Index gnubok verifikat by (period, series, number) for in-memory resolution.
   const journalEntryByKey = new Map<string, string>()
+  const journalEntriesBySourceRef = new Map<string, VoucherRow[]>()
   const ambiguousVoucherKeys = new Set<string>()
   for (const v of vouchers) {
     if (v.source_voucher_series == null || v.source_voucher_number == null) continue
+    const sourceRef = `${v.source_voucher_series}|${v.source_voucher_number}`
+    journalEntriesBySourceRef.set(sourceRef, [
+      ...(journalEntriesBySourceRef.get(sourceRef) ?? []),
+      v,
+    ])
     const key = voucherKey(v.fiscal_period_id, v.source_voucher_series, v.source_voucher_number)
     if (journalEntryByKey.has(key)) {
       journalEntryByKey.delete(key)
@@ -355,10 +363,17 @@ export async function importProviderDocuments(
       continue
     }
 
-    const periodId = periodIdForDate(periods, ref.date)
-    const journalEntryId = periodId
-      ? journalEntryByKey.get(voucherKey(periodId, ref.series, ref.number))
-      : undefined
+    let journalEntryId: string | undefined
+    if (ref.dateTo) {
+      const candidates = (journalEntriesBySourceRef.get(`${ref.series}|${ref.number}`) ?? [])
+        .filter((voucher) => ref.date <= voucher.entry_date && voucher.entry_date <= ref.dateTo!)
+      journalEntryId = candidates.length === 1 ? candidates[0].id : undefined
+    } else {
+      const periodId = periodIdForDate(periods, ref.date)
+      journalEntryId = periodId
+        ? journalEntryByKey.get(voucherKey(periodId, ref.series, ref.number))
+        : undefined
+    }
 
     if (!journalEntryId) {
       recordUnmatched(attachment.id, `${ref.series}${ref.number}`, ref.date)

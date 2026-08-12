@@ -44,9 +44,9 @@ import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registr
 import {
   ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
   INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
-  PROVIDER_DOCUMENT_SCOPES_REQUIRED,
   ArcimDocumentImportRequestError,
   arcimDocumentImportReducer,
+  documentOAuthProblemFromReason,
   parseArcimDocumentOAuthResume,
   requestArcimDocumentImport,
   resolveArcimDocumentFollowUpProvider,
@@ -124,12 +124,11 @@ function documentImportProblem(error: unknown): ArcimDocumentImportProblem {
 
 function storeDocumentOAuthResume(
   action: 'discover' | 'import',
-  consentId: string,
 ): void {
   try {
     window.sessionStorage.setItem(
       ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
-      serializeArcimDocumentOAuthResume({ action, consentId }),
+      serializeArcimDocumentOAuthResume({ action }),
     )
   } catch {
     // Full-page recovery is best-effort when browser storage is unavailable.
@@ -1713,7 +1712,18 @@ function DocumentImportFollowUp({
     )
   }
 
-  if (state.phase === 'complete' && state.result) {
+  if (state.phase === 'complete') {
+    if (!state.result) {
+      return (
+        <Card aria-live="polite">
+          <CardHeader>
+            {title}
+            <CardDescription>{t('ext_arcim_documents_result_description')}</CardDescription>
+          </CardHeader>
+        </Card>
+      )
+    }
+
     const { linked, skipped, unmatched, failed } = state.result
     const outcomes = [
       {
@@ -1783,7 +1793,9 @@ function DocumentImportFollowUp({
       <CardHeader>
         {title}
         <CardDescription className="text-foreground">
-          {reconnectRequired
+          {state.problem?.message
+            ? state.problem.message
+            : reconnectRequired
             ? t('ext_arcim_documents_scope_error')
             : discoveryFailed
               ? t('ext_arcim_documents_discovery_error')
@@ -2240,6 +2252,7 @@ export default function ArcimMigrationWorkspace({
     INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
   )
   const documentReconnectActionRef = useRef<'discover' | 'import' | null>(null)
+  const documentReconnectFailureCleanupRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const stopOAuthPopupWatchRef = useRef<(() => void) | null>(null)
   // Knowledge-graph theater for the migrating step, built from the already
   // client-held parsed SIE. Null falls back to the plain progress card.
@@ -2386,7 +2399,17 @@ export default function ArcimMigrationWorkspace({
     stopOAuthPopupWatchRef.current = null
   }, [])
 
-  useEffect(() => clearOAuthPopupWatch, [clearOAuthPopupWatch])
+  const clearDocumentReconnectFailureCleanup = useCallback(() => {
+    if (documentReconnectFailureCleanupRef.current) {
+      window.clearTimeout(documentReconnectFailureCleanupRef.current)
+      documentReconnectFailureCleanupRef.current = null
+    }
+  }, [])
+
+  useEffect(() => () => {
+    clearOAuthPopupWatch()
+    clearDocumentReconnectFailureCleanup()
+  }, [clearDocumentReconnectFailureCleanup, clearOAuthPopupWatch])
 
   // Re-authorize a dead connection in place. Re-runs provider auth against the
   // SAME consent so fresh tokens overwrite the expired pair: no disconnect.
@@ -2520,6 +2543,7 @@ export default function ArcimMigrationWorkspace({
 
   const handleDocumentReconnect = useCallback(() => {
     if (!consentId) return
+    clearDocumentReconnectFailureCleanup()
     const reconnectAction =
       documentImportState.phase === 'discovery-error' ? 'discover' : 'import'
     const priorProblem = documentImportState.problem ?? {
@@ -2529,20 +2553,32 @@ export default function ArcimMigrationWorkspace({
     }
 
     documentReconnectActionRef.current = reconnectAction
-    storeDocumentOAuthResume(reconnectAction, consentId)
+    storeDocumentOAuthResume(reconnectAction)
     dispatchDocumentImport({ type: 'reconnect-started' })
     void handleReconnect('fortnox', consentId, {
       onFailure: () => {
-        documentReconnectActionRef.current = null
-        clearDocumentOAuthResume()
         dispatchDocumentImport(
           reconnectAction === 'discover'
             ? { type: 'discovery-failed', problem: priorProblem }
             : { type: 'import-failed', problem: priorProblem },
         )
+        // Keep the action briefly after the popup-close grace period. Some
+        // browsers deliver the successful postMessage after reporting the
+        // popup as closed; that success must remain authoritative.
+        documentReconnectFailureCleanupRef.current = window.setTimeout(() => {
+          documentReconnectActionRef.current = null
+          clearDocumentOAuthResume()
+          documentReconnectFailureCleanupRef.current = null
+        }, 30_000)
       },
     })
-  }, [consentId, documentImportState.phase, documentImportState.problem, handleReconnect])
+  }, [
+    clearDocumentReconnectFailureCleanup,
+    consentId,
+    documentImportState.phase,
+    documentImportState.problem,
+    handleReconnect,
+  ])
 
   // Disconnect an existing consent
   const handleDisconnect = useCallback(async (consentIdToDelete: string) => {
@@ -2611,7 +2647,8 @@ export default function ArcimMigrationWorkspace({
       window.history.replaceState({}, '', url.pathname)
 
       clearDocumentOAuthResume()
-      if (documentResume?.consentId === callbackConsentId) {
+      if (documentResume) {
+        clearDocumentReconnectFailureCleanup()
         documentReconnectActionRef.current = null
         setConsentId(callbackConsentId)
         setSelectedProvider('fortnox')
@@ -2630,17 +2667,15 @@ export default function ArcimMigrationWorkspace({
       url.searchParams.delete('migration')
       url.searchParams.delete('provider')
       url.searchParams.delete('reason')
+      url.searchParams.delete('consentId')
       window.history.replaceState({}, '', url.pathname)
       clearDocumentOAuthResume()
-      if (documentResume) {
-        setConsentId(documentResume.consentId)
+      if (documentResume && callbackConsentId) {
+        clearDocumentReconnectFailureCleanup()
+        setConsentId(callbackConsentId)
         setSelectedProvider('fortnox')
         setStep('result')
-        const problem = {
-          code: PROVIDER_DOCUMENT_SCOPES_REQUIRED,
-          requestId: null,
-          reconnectRequired: true,
-        }
+        const problem = documentOAuthProblemFromReason(reason)
         dispatchDocumentImport(
           documentResume.action === 'discover'
             ? { type: 'discovery-failed', problem }
@@ -2657,7 +2692,13 @@ export default function ArcimMigrationWorkspace({
         setStep('provider')
       }
     }
-  }, [loadPreview, runDocumentDiscovery, runDocumentImport, toast])
+  }, [
+    clearDocumentReconnectFailureCleanup,
+    loadPreview,
+    runDocumentDiscovery,
+    runDocumentImport,
+    toast,
+  ])
 
   // Check for OAuth callback on mount (fallback for non-popup flow)
   useEffect(() => {
@@ -2687,6 +2728,7 @@ export default function ArcimMigrationWorkspace({
       if (event.origin !== window.location.origin) return
       if (event.data?.type === 'arcim-oauth-success' && event.data.consentId) {
         clearOAuthPopupWatch()
+        clearDocumentReconnectFailureCleanup()
         const reconnectAction = documentReconnectActionRef.current
         if (reconnectAction) {
           documentReconnectActionRef.current = null
@@ -2704,6 +2746,7 @@ export default function ArcimMigrationWorkspace({
         loadPreview(event.data.consentId)
       } else if (event.data?.type === 'arcim-oauth-error') {
         clearOAuthPopupWatch()
+        clearDocumentReconnectFailureCleanup()
         const reason = typeof event.data.reason === 'string' && event.data.reason
           ? event.data.reason
           : 'OAuth-anslutningen misslyckades. Försök igen.'
@@ -2731,6 +2774,7 @@ export default function ArcimMigrationWorkspace({
     return () => window.removeEventListener('message', handleMessage)
   }, [
     clearOAuthPopupWatch,
+    clearDocumentReconnectFailureCleanup,
     documentImportState.problem,
     loadPreview,
     runDocumentDiscovery,
@@ -2991,12 +3035,13 @@ export default function ArcimMigrationWorkspace({
     setMigrationResults(null)
     setSieImportResults([])
     dispatchDocumentImport({ type: 'reset' })
+    clearDocumentReconnectFailureCleanup()
     documentReconnectActionRef.current = null
     setTheaterModel(null)
     setError(null)
     // Refresh status so provider step shows updated import history
     fetchStatus()
-  }, [fetchStatus])
+  }, [clearDocumentReconnectFailureCleanup, fetchStatus])
 
   // ── Render ─────────────────────────────────────────────────────
 

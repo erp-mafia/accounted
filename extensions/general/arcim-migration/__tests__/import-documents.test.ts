@@ -96,7 +96,7 @@ beforeEach(() => {
 const VOUCHER_REF: BokioVoucherRef = { series: 'V', number: 33, date: '2021-03-01' }
 const PERIODS = [{ id: 'fp-2021', period_start: '2021-02-04', period_end: '2021-12-31' }]
 const GNUBOK_VOUCHERS = [
-  { id: 'je-1', fiscal_period_id: 'fp-2021', source_voucher_series: 'V', source_voucher_number: 33 },
+  { id: 'je-1', fiscal_period_id: 'fp-2021', entry_date: '2021-03-01', source_voucher_series: 'V', source_voucher_number: 33 },
 ]
 const UPLOAD = { id: 'up-1', description: 'Kvitto', contentType: 'application/pdf', journalEntryId: 'bokio-je-1' }
 const FORTNOX_YEAR: FortnoxFinancialYear = {
@@ -155,6 +155,7 @@ function wireFortnox(
         {
           id: 'je-1',
           fiscal_period_id: 'fp-2021',
+          entry_date: '2021-03-01',
           source_voucher_series: 'A',
           source_voucher_number: 12,
         },
@@ -337,6 +338,34 @@ describe('importProviderDocuments', () => {
     expect(mockUpload).not.toHaveBeenCalled()
   })
 
+  it('matches a Fortnox voucher by its booking date across split local periods', async () => {
+    const supabase = wireFortnox({
+      periods: [
+        { id: 'fp-2021-h1', period_start: '2021-02-04', period_end: '2021-06-30' },
+        { id: 'fp-2021-h2', period_start: '2021-07-01', period_end: '2021-12-31' },
+      ],
+      vouchers: [
+        {
+          id: 'je-h2',
+          fiscal_period_id: 'fp-2021-h2',
+          entry_date: '2021-09-15',
+          source_voucher_series: 'A',
+          source_voucher_number: 12,
+        },
+      ],
+    })
+
+    const result = await importProviderDocuments({
+      supabase,
+      companyId: COMPANY,
+      userId: USER,
+      consentId: 'c1',
+      dryRun: true,
+    })
+
+    expect(result).toMatchObject({ scanned: 1, linked: 1, unmatched: 0 })
+  })
+
   it('keeps a dotted Bokio description as a basename and appends the effective extension', async () => {
     const supabase = wireBokio()
     mockFetchUploads.mockResolvedValue([{ ...UPLOAD, description: 'Kvitto 1.2' }] as never)
@@ -471,12 +500,14 @@ describe('importProviderDocuments', () => {
         {
           id: 'je-1',
           fiscal_period_id: 'fp-2021',
+          entry_date: '2021-03-01',
           source_voucher_series: 'A',
           source_voucher_number: 12,
         },
         {
           id: 'je-duplicate',
           fiscal_period_id: 'fp-2021',
+          entry_date: '2021-03-01',
           source_voucher_series: 'A',
           source_voucher_number: 12,
         },

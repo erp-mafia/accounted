@@ -495,6 +495,32 @@ describe('uploadDocument', () => {
     expect(serviceRemove).toHaveBeenCalledTimes(1)
     expect(handler).toHaveBeenCalledTimes(1)
   })
+
+  it('does not treat a non-unique insert error as an idempotent winner', async () => {
+    results = [
+      { data: null, error: { code: '42501', message: 'row-level security denied' } },
+    ]
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+    const supabase = makeClient()
+
+    await expect(
+      uploadDocument(
+        supabase as never,
+        'user-1',
+        'company-1',
+        {
+          name: 'kvitto.pdf',
+          buffer: pdfBuffer('retained receipt'),
+          type: 'application/pdf',
+        },
+        { journal_entry_id: 'je-1', idempotency_key: 'je-1' },
+      ),
+    ).rejects.toThrow('Failed to create document record: row-level security denied')
+
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+    expect(serviceRemove).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('model-free signed document uploads', () => {
