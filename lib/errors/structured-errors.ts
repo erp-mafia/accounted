@@ -919,6 +919,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Vid kontantmetoden bokförs fakturan när den betalas.',
     message_en: 'Under the cash method the invoice is booked when it is paid.',
   },
+  // Bulk Bokför on a DRAFT when the company defers invoice booking (#967):
+  // issuing the draft would consume an F-number and mark it sent without
+  // booking anything, so the item is rejected before any side effect.
+  INVOICE_BOOK_DEFERRED_DRAFT: {
+    httpStatus: 400,
+    message_sv:
+      'Företaget bokför fakturor i ett separat steg. Skicka eller markera utkastet som skickat först, bokför sedan.',
+    message_en:
+      'This company books invoices in a separate step. Send or mark the draft as sent first, then book it.',
+  },
   INVOICE_BOOK_NO_FISCAL_PERIOD: {
     httpStatus: 400,
     message_sv: 'Inget öppet räkenskapsår täcker fakturadatumet. Skapa räkenskapsåret först.',
@@ -2145,6 +2155,20 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_en:
       'Periodisering cannot be combined with reverse charge. The expense line carries the VAT base for the VAT declaration (boxes 20-32), so the net amount cannot be deferred to an interim account.',
   },
+  SI_CREATE_SLP_INVALID_ACCOUNT: {
+    httpStatus: 400,
+    message_sv:
+      'Särskild löneskatt kan bara läggas till på rader med pensionskonto 7410-7419 (t.ex. 7412 Premier för tjänstepensioner). Byt konto på raden eller ta bort löneskatten.',
+    message_en:
+      'Särskild löneskatt (payroll tax on pension costs) can only be added on lines booked to a pension account 7410-7419 (e.g. 7412 occupational pension premiums). Change the line account or remove the flag.',
+  },
+  SI_CREATE_SLP_ACCRUAL: {
+    httpStatus: 400,
+    message_sv:
+      'Särskild löneskatt kan inte kombineras med periodisering på samma rad. Löneskatten (7533/2514) beräknas på hela radbeloppet vid registrering och kan inte skjutas upp.',
+    message_en:
+      'Särskild löneskatt cannot be combined with periodisering on the same line. The payroll tax (7533/2514) is computed on the full line amount at registration and cannot be deferred.',
+  },
   SI_DELETE_HAS_BOOKING: {
     httpStatus: 400,
     message_sv:
@@ -3350,6 +3374,80 @@ const NETWORK_TRANSIENT_ENTRY: StructuredErrorEntry = {
   retryable: true,
 }
 
+const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
+  WEBSHOP_ORDER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Ordern hittades inte.',
+    message_en: 'The order was not found.',
+  },
+  WEBSHOP_ORDER_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Ordern är redan bokförd.',
+    message_en: 'The order is already booked.',
+  },
+  WEBSHOP_ORDER_ALREADY_INVOICED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är kopplad till en kundfaktura. Bokföringen sker via fakturaflödet, inte direkt från ordern.',
+    message_en:
+      'The order is linked to a customer invoice. Bookkeeping happens through the invoice flow, not directly from the order.',
+  },
+  WEBSHOP_ORDER_NOT_PAID: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är inte betald ännu. Obetalda ordrar bokförs när betalningen kommer, eller faktureras via Skapa faktura.',
+    message_en:
+      'The order is not paid yet. Unpaid orders are booked when payment arrives, or invoiced via Create invoice.',
+  },
+  WEBSHOP_ORDER_LEGACY_TRANSACTION_OPEN: {
+    httpStatus: 409,
+    message_sv:
+      'Samma order ligger redan som en obokförd transaktion under Transaktioner (importerad av det tidigare orderflödet). Bokför eller ignorera den transaktionen först, så att samma affärshändelse inte bokförs två gånger.',
+    message_en:
+      'The same order already exists as an unbooked transaction under Transactions (imported by the previous order feed). Book or ignore that transaction first so the same business event is not booked twice.',
+  },
+  WEBSHOP_ORDER_LEGACY_TRANSACTION_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är redan bokförd via en transaktion under Transaktioner (importerad av det tidigare orderflödet).',
+    message_en:
+      'The order is already booked via a transaction under Transactions (imported by the previous order feed).',
+  },
+  WEBSHOP_ORDER_FX_UNRESOLVED: {
+    httpStatus: 422,
+    message_sv:
+      'Växelkursen för orderns valuta kunde inte hämtas ännu. Försök igen om en stund; ordern kan inte bokföras i SEK utan kurs.',
+    message_en:
+      'The exchange rate for the order currency could not be fetched yet. Try again shortly; the order cannot be booked in SEK without a rate.',
+  },
+  WEBSHOP_ORDER_REFUND_NOT_CONVERTIBLE: {
+    httpStatus: 409,
+    message_sv:
+      'Återbetalningar kan inte omvandlas till fakturor. Hantera återbetalningen med en kreditfaktura från kundfakturan, eller bokför återbetalningsraden direkt.',
+    message_en:
+      'Refunds cannot be converted to invoices. Handle the refund with a credit note from the customer invoice, or book the refund row directly.',
+  },
+  WEBSHOP_ORDER_REFUND_PARENT_INVOICED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern fakturerades via en kundfaktura. Återbetalningen hanteras med en kreditfaktura, inte genom att bokföra återbetalningsraden direkt.',
+    message_en:
+      'The order was invoiced through a customer invoice. Handle the refund with a credit note instead of booking the refund row directly.',
+  },
+  WEBSHOP_ORDER_CREATE_INVOICE_CUSTOMER_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunden kunde inte skapas från orderns uppgifter.',
+    message_en: 'The customer could not be created from the order data.',
+  },
+  WEBSHOP_ORDER_CREATE_INVOICE_MISSING_CUSTOMER: {
+    httpStatus: 422,
+    message_sv:
+      'Ordern saknar kunduppgifter. Välj en befintlig kund att fakturera.',
+    message_en:
+      'The order has no customer data. Choose an existing customer to invoice.',
+  },
+}
+
 const NODE_SYSTEM: Record<string, StructuredErrorEntry> = {
   ECONNREFUSED: NETWORK_TRANSIENT_ENTRY,
   ECONNRESET: NETWORK_TRANSIENT_ENTRY,
@@ -3403,6 +3501,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...BOLAGSVERKET,
   ...ASSETS,
   ...DIMENSION,
+  ...WEBSHOP_ORDERS,
   ...NODE_SYSTEM,
 }
 

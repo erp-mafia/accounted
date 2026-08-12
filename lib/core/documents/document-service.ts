@@ -612,8 +612,18 @@ export async function uploadDocument(
     journal_entry_id?: string
     journal_entry_line_id?: string
     idempotency_key?: string
+    /**
+     * Content dedupe for intake channels: before storing, look for a
+     * current-version document in the same company with the same SHA-256 and
+     * return it (marked `deduplicated`) instead of archiving a copy. Opt-in,
+     * because archival callers (sent invoices, filings, bank exports) must
+     * store what they produced even when the bytes repeat. SELECT-then-insert
+     * leaves a small concurrent-upload race, accepted exactly as in the
+     * WhatsApp intake precedent: the loser stores a copy, nothing corrupts.
+     */
+    dedupeByContent?: boolean
   } = {}
-): Promise<DocumentAttachment> {
+): Promise<DocumentAttachment & { deduplicated?: boolean }> {
   await ensureDocumentsBucket()
 
   // Reject corrupt uploads at the boundary: see validateDocumentMagicBytes.
@@ -624,6 +634,28 @@ export async function uploadDocument(
 
   // Compute SHA-256 hash
   const sha256Hash = await computeSHA256(file.buffer)
+
+  if (metadata.dedupeByContent) {
+    // Oldest current-version match wins so repeated deliveries keep
+    // converging on the same archived original. Pre-dedupe data can hold
+    // several identical documents, hence limit(1) rather than maybeSingle.
+    const { data: existing, error: dedupeError } = await supabase
+      .from('document_attachments')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('sha256_hash', sha256Hash)
+      .eq('is_current_version', true)
+      .order('created_at', { ascending: true })
+      .limit(1)
+    if (dedupeError) {
+      // Fail closed: treating a broken lookup as "no match" would archive
+      // the duplicate this flag exists to prevent, silently, on every
+      // transient DB error. Intake callers (webhooks, sweeps) retry.
+      throw new Error(`Content dedupe lookup failed: ${dedupeError.message}`)
+    }
+    const hit = (existing as DocumentAttachment[] | null)?.[0]
+    if (hit) return { ...hit, deduplicated: true }
+  }
 
   // Callers importing immutable third-party records can provide a stable
   // scope. The resulting row UUID makes the database primary key the atomic

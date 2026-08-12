@@ -704,3 +704,23 @@ input[type="number"] {
     opacity: 1;
   }
 }
+
+/* Indeterminate sweep for the receipt hunt.
+   A pass runs for over two minutes and reports nothing until it lands, so
+   there is no honest percentage to show inside one. This says "still working"
+   without inventing progress. Reduced motion holds it still and dims it
+   rather than removing it: the band still has to read as active. */
+@keyframes hunt-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.hunt-sweep {
+  animation: hunt-sweep 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hunt-sweep {
+    animation: none;
+    width: 100%;
+    opacity: 0.35;
+  }
+}

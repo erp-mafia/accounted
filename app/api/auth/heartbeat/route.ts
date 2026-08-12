@@ -5,8 +5,10 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import {
   createSessionTimeoutState,
   evaluateSessionTimeout,
+  fetchAutoLogoutPreference,
   getSessionTimeoutConfig,
   sessionStateMatchesUser,
+  sessionStateNeedsRemint,
   sessionTimeoutCookieOptions,
   signSessionTimeoutState,
   toSessionTimeoutClientState,
@@ -71,28 +73,40 @@ async function heartbeat(updateActivity: boolean): Promise<NextResponse> {
   const state = await verifySessionTimeoutState(encodedState)
   const sessionId = await getSessionId(auth.supabase)
 
-  if (!state || !sessionStateMatchesUser(state, auth.user.id, sessionId)) {
-    // Mirror middleware initialization: a missing or session-mismatched
-    // cookie means the timeout state has not been established for this
-    // session yet, not that the session expired.
+  const stateMatches =
+    state !== null && sessionStateMatchesUser(state, auth.user.id, sessionId)
+
+  if (!state || !stateMatches || sessionStateNeedsRemint(state)) {
+    // Mirror middleware initialization: a missing, session-mismatched, or
+    // pre-toggle cookie means the timeout state has not been established
+    // for this session yet, not that the session expired.
     const hintedMethod = cookieStore.get(SESSION_AUTH_METHOD_HINT_COOKIE)?.value
-    const freshState = createSessionTimeoutState({
-      userId: auth.user.id,
-      sessionId,
-      method: isSessionAuthMethod(hintedMethod) ? hintedMethod : 'password',
-      now,
-    })
+    const autoLogout = await fetchAutoLogoutPreference(auth.supabase, auth.user.id)
+    const freshState = state && stateMatches
+      ? { ...state, autoLogout: autoLogout ?? false }
+      : createSessionTimeoutState({
+          userId: auth.user.id,
+          sessionId,
+          method: isSessionAuthMethod(hintedMethod) ? hintedMethod : 'password',
+          autoLogout: autoLogout ?? false,
+          now,
+        })
     const response = NextResponse.json({
       data: toSessionTimeoutClientState(freshState, config, now),
     })
     response.headers.set('Cache-Control', 'no-store')
-    const signedFresh = await signSessionTimeoutState(freshState)
-    if (signedFresh) {
-      response.cookies.set(
-        SESSION_TIMEOUT_COOKIE,
-        signedFresh,
-        sessionTimeoutCookieOptions(),
-      )
+    // Unknown preference (failed read): answer this poll without persisting
+    // a fail-open snapshot; the next resync retries the read (mirrors the
+    // middleware).
+    if (autoLogout !== null) {
+      const signedFresh = await signSessionTimeoutState(freshState)
+      if (signedFresh) {
+        response.cookies.set(
+          SESSION_TIMEOUT_COOKIE,
+          signedFresh,
+          sessionTimeoutCookieOptions(),
+        )
+      }
     }
     return response
   }

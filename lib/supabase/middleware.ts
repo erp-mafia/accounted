@@ -9,8 +9,10 @@ import {
   apiRequestSkipsSessionTimeout,
   createSessionTimeoutState,
   evaluateSessionTimeout,
+  fetchAutoLogoutPreference,
   getSessionTimeoutConfig,
   sessionStateMatchesUser,
+  sessionStateNeedsRemint,
   sessionTimeoutClearCookieOptions,
   sessionTimeoutCookieOptions,
   signSessionTimeoutState,
@@ -103,9 +105,14 @@ export async function updateSession(request: NextRequest) {
       )
     }
 
+    const stateMatches =
+      verifiedState !== null &&
+      sessionStateMatchesUser(verifiedState, user.id, sessionId)
+
     if (
       !verifiedState ||
-      !sessionStateMatchesUser(verifiedState, user.id, sessionId)
+      !stateMatches ||
+      sessionStateNeedsRemint(verifiedState)
     ) {
       const hintedMethod = request.cookies.get(
         SESSION_AUTH_METHOD_HINT_COOKIE,
@@ -113,21 +120,32 @@ export async function updateSession(request: NextRequest) {
       const method = isSessionAuthMethod(hintedMethod)
         ? hintedMethod
         : 'password'
-      const state = createSessionTimeoutState({
-        userId: user.id,
-        sessionId,
-        method,
-      })
-      const signedState = await signSessionTimeoutState(state)
+      const autoLogout = await fetchAutoLogoutPreference(supabase, user.id)
 
-      if (signedState) {
-        request.cookies.set(SESSION_TIMEOUT_COOKIE, signedState)
-        supabaseResponse.cookies.set(
-          SESSION_TIMEOUT_COOKIE,
-          signedState,
-          sessionTimeoutCookieOptions(),
-        )
-        clearAuthMethodHint(request, supabaseResponse)
+      // Unknown preference (failed read): mint nothing, so no fail-open
+      // snapshot gets persisted; the next request retries the read.
+      if (autoLogout !== null) {
+        // A matching pre-toggle cookie keeps its timers: upgrading the shape
+        // must not restart the absolute window.
+        const state = verifiedState && stateMatches
+          ? { ...verifiedState, autoLogout }
+          : createSessionTimeoutState({
+              userId: user.id,
+              sessionId,
+              method,
+              autoLogout,
+            })
+        const signedState = await signSessionTimeoutState(state)
+
+        if (signedState) {
+          request.cookies.set(SESSION_TIMEOUT_COOKIE, signedState)
+          supabaseResponse.cookies.set(
+            SESSION_TIMEOUT_COOKIE,
+            signedState,
+            sessionTimeoutCookieOptions(),
+          )
+          clearAuthMethodHint(request, supabaseResponse)
+        }
       }
     } else {
       const timeoutReason = evaluateSessionTimeout(

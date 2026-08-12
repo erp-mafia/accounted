@@ -129,7 +129,7 @@ export function MailConnectionsPanel() {
                 </span>
               }
             >
-              <span className="truncate">{connection.emailAddress}</span>
+              <span className="min-w-0 flex-1 truncate">{connection.emailAddress}</span>
               {connection.status === 'needs_reconsent' ? (
                 <Badge variant="warning">{t('needs_reconsent')}</Badge>
               ) : null}

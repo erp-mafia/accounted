@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
+import { useState, useEffect, useCallback, useMemo, Fragment, createContext, useContext } from 'react'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,9 +28,12 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
+import { ToastAction } from '@/components/ui/toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import {
   ClipboardCheck,
   Bot,
@@ -304,7 +308,52 @@ function formatRelativeTime(dateStr: string): string {
   return `${diffDays} dagar sedan`
 }
 
+/**
+ * Account number -> account name, for the proposal previews.
+ *
+ * A preview line showed the account number next to the line's own description,
+ * so "5890 Utlägg Norwegian" hid the fact that 5890 is Övriga resekostnader.
+ * The number alone is not readable and the description is not the account, so
+ * approving meant trusting a label that never named what was being debited.
+ *
+ * Owned by the page rather than a module-level cache: the map is per company,
+ * and a cache that outlives the page would keep serving one company's account
+ * names after a switch. A failed fetch leaves the map empty, which shows the
+ * bare number rather than a wrong name, and retries on the next mount.
+ */
+const AccountNamesContext = createContext<Record<string, string>>({})
+
+function useAccountNamesSource(): Record<string, string> {
+  const [names, setNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    let alive = true
+    void fetch('/api/bookkeeping/accounts')
+      .then((r) => r.json())
+      .then(({ data }) => {
+        if (!alive) return
+        setNames(
+          Object.fromEntries(
+            ((data ?? []) as Array<{ account_number: string; account_name: string }>).map((a) => [
+              a.account_number,
+              a.account_name,
+            ]),
+          ),
+        )
+      })
+      .catch(() => {
+        // Display-only: the number still shows, so a failure is not worth
+        // surfacing as an error the user cannot act on.
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+  return names
+}
+
+
 function CategorizePreview({ data }: { data: Record<string, unknown> }) {
+  const accountNames = useContext(AccountNamesContext)
   // The exact journal lines the approval will post (net cost line, VAT line,
   // gross bank line, SEK) — staged by the server since the preview-lines fix.
   const lines = (data.lines as Array<{ account_number?: string; debit_amount?: number; credit_amount?: number; description?: string }>) || []
@@ -319,7 +368,21 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
           const creditAmt = typeof line.credit_amount === 'number' ? line.credit_amount : 0
           return (
             <div key={i} className="flex justify-between gap-4 font-mono text-xs">
-              <span className="truncate">{line.account_number ?? '?'}{line.description ? ` ${line.description}` : ''}</span>
+              <span className="truncate">
+                {line.account_number ?? '?'}{' '}
+                {/* The account's own name first: it is what the posting means.
+                    The line text follows only when it adds something the name
+                    does not already say. */}
+                <span className="text-foreground">
+                  {(line.account_number && accountNames[line.account_number]) || line.description || ''}
+                </span>
+                {line.description &&
+                line.account_number &&
+                accountNames[line.account_number] &&
+                line.description !== accountNames[line.account_number] ? (
+                  <span className="text-muted-foreground"> · {line.description}</span>
+                ) : null}
+              </span>
               <span className="tabular-nums shrink-0">
                 {debitAmt > 0 ? `D ${formatCurrency(debitAmt)}` : `K ${formatCurrency(creditAmt)}`}
               </span>
@@ -369,7 +432,14 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
           <p className="text-xs text-muted-foreground mb-1">Momsrader</p>
           {vatLines.map((line, i) => (
             <div key={i} className="flex justify-between font-mono text-xs">
-              <span>{line.account_number} {line.description}</span>
+              <span>
+                {line.account_number}{' '}
+                {accountNames[line.account_number] || line.description}
+                {accountNames[line.account_number] &&
+                line.description !== accountNames[line.account_number] ? (
+                  <span className="text-muted-foreground"> · {line.description}</span>
+                ) : null}
+              </span>
               <span className="tabular-nums">
                 {line.debit_amount > 0 ? `D ${formatCurrency(line.debit_amount)}` : `K ${formatCurrency(line.credit_amount)}`}
               </span>
@@ -753,6 +823,8 @@ type ViewTab = 'pending' | 'history'
 
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
+  const router = useRouter()
+  const accountNames = useAccountNamesSource()
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ViewTab>('pending')
@@ -777,6 +849,30 @@ export default function PendingOperationsPage() {
   const [rejectReason, setRejectReason] = useState('')
   const [isRejecting, setIsRejecting] = useState(false)
   const { toast } = useToast()
+  const company = useCompanyOptional()?.company ?? null
+  // Whether the "Bokför utkasten" toast CTA leads anywhere: bulk Bokför on
+  // /invoices only selects drafts when the company books at issue. Under
+  // kontantmetoden or deferred booking (#967) the CTA would be a dead end,
+  // so it stays suppressed (false until settings load: suppressing is the
+  // safe direction, the neutral hint sentence still shows).
+  const [invoiceDraftsCtaUseful, setInvoiceDraftsCtaUseful] = useState(false)
+
+  useEffect(() => {
+    if (!company) return
+    let cancelled = false
+    const supabase = createClient()
+    supabase
+      .from('company_settings')
+      .select('accounting_method, defer_invoice_booking')
+      .eq('company_id', company.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled) setInvoiceDraftsCtaUseful(booksInvoicesOnIssue(data))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [company])
 
   // Read ?conversation= once on mount so deep-links from the agent context
   // strip filter the list automatically.
@@ -912,6 +1008,28 @@ export default function PendingOperationsPage() {
         | { committed: number; failed: number; skipped: number; rejected: number }
         | undefined
 
+      // Committed create_invoice ops land as unnumbered DRAFTS: point the
+      // user at the draft view where bulk Bokför finishes the job.
+      const results = (json.data?.results ?? []) as Array<{ id: string; status: string }>
+      const committedIds = new Set(
+        results.filter((r) => r.status === 'committed').map((r) => r.id),
+      )
+      const committedInvoiceDrafts = operations.some(
+        (op) => committedIds.has(op.id) && op.operation_type === 'create_invoice',
+      )
+      const draftsCta = committedInvoiceDrafts && invoiceDraftsCtaUseful
+        ? {
+            action: (
+              <ToastAction
+                altText={t('bulk_invoice_drafts_cta')}
+                onClick={() => router.push('/invoices?status=draft')}
+              >
+                {t('bulk_invoice_drafts_cta')}
+              </ToastAction>
+            ),
+          }
+        : {}
+
       if (summary) {
         const parts: string[] = []
         if (summary.committed > 0) parts.push(`${summary.committed} godkända`)
@@ -921,11 +1039,14 @@ export default function PendingOperationsPage() {
 
         toast({
           title: summary.failed > 0 ? 'Klart med fel' : 'Godkänt',
-          description: parts.join(', '),
+          description: committedInvoiceDrafts
+            ? `${parts.join(', ')}. ${t('bulk_invoice_drafts_hint')}`
+            : parts.join(', '),
           variant: summary.failed > 0 ? 'destructive' : 'default',
+          ...draftsCta,
         })
       } else {
-        toast({ title: 'Godkänt' })
+        toast({ title: 'Godkänt', ...draftsCta })
       }
 
       setShowBulkDialog(false)
@@ -1124,6 +1245,7 @@ export default function PendingOperationsPage() {
   ]
 
   return (
+    <AccountNamesContext.Provider value={accountNames}>
     <div className="space-y-8">
       {/* Page header (concept scene 11): title + Godkänn alla */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1704,5 +1826,6 @@ export default function PendingOperationsPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </AccountNamesContext.Provider>
   )
 }

@@ -56,6 +56,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import type { FiscalPeriod, JournalEntry, JournalEntryLine } from '@/types'
 
 const NEEDS_ATTACHMENT = new Set([
@@ -799,6 +800,14 @@ export default function JournalEntryList() {
       )
     : entries
 
+  // Detail-pager context: the loaded page as rendered, written when the user
+  // opens a verifikat. Server-paginated, so prev/next spans this page only.
+  const rememberListContext = () => {
+    writeListContext(listContextKey('bookkeeping', company?.id), {
+      ids: filteredEntries.map((e) => e.id),
+    })
+  }
+
   // Count of active dialog filters, shown as a badge on the Filtrera button so
   // the user can tell the list is scoped without opening the dialog. Sort order
   // is a view preference (always set), not a filter, so it is excluded.
@@ -1399,7 +1408,10 @@ export default function JournalEntryList() {
                               'font-mono text-[13px] tabular-nums hover:underline',
                               struckCell,
                             )}
-                            onClick={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              rememberListContext()
+                            }}
                             // The row's Enter/Space handler calls
                             // preventDefault(), so without this the voucher
                             // link expands the row instead of opening it.
@@ -1631,7 +1643,11 @@ export default function JournalEntryList() {
                                     {t('post')}
                                   </Button>
                                 )}
-                                <Link href={`/bookkeeping/${entry.id}`} className={QUIET_LINK_CLASS}>
+                                <Link
+                                  href={`/bookkeeping/${entry.id}`}
+                                  className={QUIET_LINK_CLASS}
+                                  onClick={rememberListContext}
+                                >
                                   {t('show_details')}
                                 </Link>
                                 {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (

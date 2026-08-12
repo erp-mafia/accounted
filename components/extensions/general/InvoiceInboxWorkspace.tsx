@@ -49,6 +49,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
@@ -567,10 +568,23 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     hunting,
     progress: huntProgress,
     result: huntResult,
+    setResult: setHuntResult,
   } = useReceiptHunt(() => {
     void fetchItems()
     void fetchPurchases()
   })
+
+  // A run that found nothing leaves nothing to act on, so the line has no
+  // reason to outlive the glance that reads it. A run that found something,
+  // or failed, stays: both name a next step (press again, or a mailbox to
+  // check) and both are worth still being on screen a minute later.
+  useEffect(() => {
+    if (hunting || !huntResult) return
+    if (huntResult.failed || huntResult.fetched > 0) return
+    const timer = setTimeout(() => setHuntResult(null), 6000)
+    return () => clearTimeout(timer)
+  }, [hunting, huntResult, setHuntResult])
+
 
   const selectedPurchase = useMemo(
     () => purchases.find((p) => p.id === selectedPurchaseId) ?? null,
@@ -1136,9 +1150,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               {hunting ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                  {huntProgress
-                    ? `Letar… ${huntProgress.fetched} hittade`
-                    : 'Letar…'}
+                  {t('hunt_stop')}
                 </>
               ) : (
                 <>
@@ -1168,7 +1180,46 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         </div>
       </header>
 
-      {huntResult && (
+      {/* A pass takes over two minutes and reports nothing until it lands, so
+          a spinner alone leaves somebody watching a button. This says which
+          mailboxes are being read, what has been found so far, and keeps
+          moving while the pass is silent. The bar is deliberately
+          indeterminate: there is no honest percentage inside a pass, and a
+          fake one is worse than none. */}
+      {hunting && (
+        <div className="border-b bg-secondary/30">
+          <div className="h-0.5 overflow-hidden bg-border/40">
+            <div className="hunt-sweep h-full w-1/3 bg-foreground/40" />
+          </div>
+          <div className="px-4 py-2.5 flex items-center gap-3 flex-wrap text-xs">
+            <span className="flex items-center gap-2 min-w-0">
+              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0 text-muted-foreground" />
+              <span className="truncate">
+                {t('hunt_reading', {
+                  mailboxes: mailConnections
+                    .filter((c) => c.status === 'active')
+                    .map((c) => c.emailAddress)
+                    .join(', '),
+                })}
+              </span>
+            </span>
+            <span className="flex-1" />
+            {huntProgress && (
+              <span className="text-muted-foreground tabular-nums">
+                {t('hunt_progress', {
+                  pass: huntProgress.passes,
+                  found: huntProgress.fetched,
+                })}
+              </span>
+            )}
+            <button type="button" onClick={stopHunt} className={QUIET_LINK_CLASS}>
+              {t('hunt_stop')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!hunting && huntResult && (
         <div className="border-b px-4 py-2 text-xs flex items-center gap-2">
           {huntResult.failed ? (
             <span className="text-warning">
@@ -2100,21 +2151,26 @@ function OnboardingCard({
   isActivating,
   compact = false,
 }: OnboardingCardProps) {
+  // The card described the page as it was before the underlag rebuild: three
+  // steps ending at "matcha eller bokför", with no mention that the page now
+  // searches the mailboxes itself, lists the purchases that are missing a
+  // receipt, or proposes the kontering. It also carried a Beta badge it had
+  // outgrown.
   const steps = [
     {
       done: hasInboxAddress,
       title: 'Aktivera din inkorgsadress',
-      hint: 'Få en unik e-postadress som leverantörer kan skicka fakturor och kvitton till.',
+      hint: 'En egen adress som leverantörer kan fakturera direkt, och som du kan vidarebefordra kvitton till.',
     },
     {
       done: hasAnyItem,
-      title: 'Ladda upp eller maila in ett underlag',
-      hint: 'Accounted tolkar fakturan eller kvittot åt dig och fyller i fält automatiskt.',
+      title: 'Koppla en brevlåda, maila in, eller ladda upp',
+      hint: 'Med en kopplad brevlåda letar Kvittojakten själv upp kvitton till köp som saknar underlag. Utan den fyller du på för hand.',
     },
     {
       done: hasResolvedItem,
-      title: 'Matcha mot en transaktion eller bokför',
-      hint: 'Eller skapa en manuell transaktion om underlaget saknar bankhändelse.',
+      title: 'Godkänn konteringen',
+      hint: 'Matchade underlag får ett förslag på hur de bokförs, utifrån hur du bokfört samma leverantör förut. Du granskar och bokför.',
     },
   ]
   // First incomplete step drives the active CTA. Falls back to -1 if all done
@@ -2145,16 +2201,15 @@ function OnboardingCard({
               compact ? 'text-sm' : 'text-lg'
             )}
           >
-            Så funkar dokumentinkorgen
+            Så funkar Underlag
           </h2>
-          <Badge variant="secondary" className="text-[10px] uppercase tracking-wider">
-            Beta
-          </Badge>
         </div>
         <p className={cn('text-muted-foreground', compact ? 'text-[11px]' : 'text-xs')}>
-          Underlagen samlas här (från mail eller filuppladdning) och kan
-          matchas mot bankhändelser eller bokföras direkt. Inkorgen är alltid
-          gratis; AI-tolkning av underlag ingår i abonnemanget.
+          Här samlas underlagen, och här syns köpen som saknar ett. Kvittojakten
+          söker igenom kopplade brevlådor efter kvitton du inte fått in, och
+          matchade underlag får ett förslag på kontering att godkänna. Att samla
+          underlag är alltid gratis; AI-tolkning och kvittojakt ingår i
+          abonnemanget.
         </p>
       </div>
 
@@ -2464,8 +2519,7 @@ const SUGGESTION_SOURCE_LABEL: Record<string, string> = {
 
 /** Why there is no proposal, said plainly rather than shown as an empty table. */
 const SUGGESTION_EMPTY_REASON: Record<string, string> = {
-  no_mapping:
-    'Vi har inget förslag: leverantören är obekant och ingen regel matchar. Bokför manuellt en gång, så känns den igen nästa gång.',
+  no_mapping: 'Okänd leverantör. Bokför en gång, så känns den igen.',
   currency_unsupported:
     'Köpet är i utländsk valuta och matchades av en konteringsregel. Momsen skulle bli fel, så vi visar inget förslag.',
 }
@@ -2865,9 +2919,8 @@ function FieldsRail({
       {/* Hint only: creation happens on the leverantörsfaktura form via "Skapa & välj" */}
       {showNoMatchHint && (
         <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
-          Ingen leverantör matchade{' '}
           <span className="text-foreground font-medium">{extractedSupplierName}</span>
-          {': leverantören skapas när du klickar Skapa leverantörsfaktura.'}
+          {' finns inte upplagd än. Den skapas när du gör leverantörsfakturan.'}
         </div>
       )}
 
@@ -2997,19 +3050,6 @@ function FieldsRail({
             {/* Matched-to-tx state: show the bridge to booking. The user
                 picks one of two actions: book themselves with the
                 deterministic dialog, or hand off to the assistant. */}
-            <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-xs">
-              <div className="flex items-center gap-1.5 text-success font-medium mb-1">
-                <Link2 className="h-3 w-3" />
-                Matchad mot transaktion
-              </div>
-              <Link
-                href={`/transactions?highlight=${item.matched_transaction_id}`}
-                className="text-muted-foreground hover:text-foreground hover:underline"
-              >
-                Öppna transaktionen →
-              </Link>
-            </div>
-
             {onAskAssistant && (
               <Button
                 variant="default"
@@ -3134,12 +3174,26 @@ function FieldsRail({
             Bokförd
           </Badge>
         )}
-        {isLinkedToTransaction && (
-          <Badge variant="secondary" className="w-full justify-center text-[10px]">
-            <Link2 className="h-2.5 w-2.5 mr-1" />
-            Kopplad till transaktion
-          </Badge>
-        )}
+        {isLinkedToTransaction &&
+          (item.matched_transaction_id ? (
+            <Link
+              href={`/transactions?highlight=${item.matched_transaction_id}`}
+              className="w-full"
+            >
+              <Badge
+                variant="secondary"
+                className="w-full justify-center text-[10px] hover:bg-secondary/80"
+              >
+                <Link2 className="h-2.5 w-2.5 mr-1" />
+                Kopplad till transaktion
+              </Badge>
+            </Link>
+          ) : (
+            <Badge variant="secondary" className="w-full justify-center text-[10px]">
+              <Link2 className="h-2.5 w-2.5 mr-1" />
+              Kopplad till transaktion
+            </Badge>
+          ))}
       </div>
       )}
 

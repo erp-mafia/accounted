@@ -58,6 +58,8 @@ import {
   type InvoiceDeliveryView,
 } from '@/components/invoices/InvoiceDeliveryHistory'
 import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
+import { DetailPager } from '@/components/common/DetailPager'
+import { listContextKey } from '@/lib/navigation/list-context'
 import {
   Dialog,
   DialogContent,
@@ -855,12 +857,27 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   )
   return (
     <div className="space-y-8">
+      {/* Back link + prev/next record pager on their own quiet row, so the
+          title below keeps a stable position while stepping between records */}
+      <div className="flex items-center justify-between gap-4">
+        <button
+          type="button"
+          onClick={() => router.back()}
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t('back')}
+        </button>
+        <DetailPager
+          contextKey={listContextKey('invoices', company?.id)}
+          basePath="/invoices"
+          currentId={id}
+        />
+      </div>
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label={t('back')}>
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
           <div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <h1 className={cn('font-display text-2xl leading-8 tracking-tight', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : (invoice.invoice_number ?? '-')}</h1>
