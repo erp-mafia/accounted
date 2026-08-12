@@ -107,12 +107,13 @@ export interface WooSyncPayload {
   transactions?: {
     fetched?: number
     refundsFetched?: number
-    imported?: number
-    duplicates?: number
+    inserted?: number
+    updated?: number
+    unchanged?: number
     errors?: number
     revoked?: boolean
     deadlineReached?: boolean
-  }
+  } | null
 }
 
 type SyncCounts = {
@@ -148,7 +149,8 @@ export function syncSummary(payload: WooSyncPayload | null): WooSyncSummary {
   if (typeof summary.fetched !== 'number') return { reason: 'unknown' }
 
   const fetched = summary.fetched
-  const imported = typeof summary.imported === 'number' ? summary.imported : 0
+  // "imported" in the user-facing sentence = new rows this run (inserts).
+  const imported = typeof summary.inserted === 'number' ? summary.inserted : 0
   const errors = typeof summary.errors === 'number' ? summary.errors : 0
 
   if (summary.deadlineReached === true) {

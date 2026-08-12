@@ -12,28 +12,22 @@ vi.mock('../lib/api-client', () => ({
   WC_PAGE_SIZE: 100,
 }))
 
-vi.mock('@/lib/transactions/ingest', () => ({
-  ingestTransactions: vi.fn(),
+vi.mock('@/lib/webshop-orders/ingest', () => ({
+  upsertWebshopOrders: vi.fn(),
 }))
 
-vi.mock('@/lib/cash-accounts/service', () => ({
-  ensureManualCashAccount: vi.fn().mockResolvedValue('cash-account-1'),
-}))
-
-vi.mock('@/lib/import/account-sync', () => ({
-  syncMappedAccounts: vi.fn().mockResolvedValue({ error: null }),
-}))
-
-import { ingestTransactions } from '@/lib/transactions/ingest'
-import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
+import { upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
+import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { encryptCredential } from '../lib/credentials'
 import {
   WOOCOMMERCE_IMPORT_SOURCE,
-  WOOCOMMERCE_LEDGER_ACCOUNT,
-  mapOrder,
-  mapRefund,
-  orderQualifies,
-  rowBehindLock,
+  buildRefundVatBreakdown,
+  buildVatBreakdown,
+  extractOrgnr,
+  mapOrderToWebshopRow,
+  mapRefundToWebshopRow,
+  orderImports,
+  orderIsPaid,
   syncWooCommerceOrders,
   wooOrderExternalId,
   wooRefundExternalId,
@@ -42,6 +36,15 @@ import {
 import type { WooCommerceConnection, WooOrder, WooRefund } from '../types'
 
 process.env.WOOCOMMERCE_CREDENTIALS_ENCRYPTION_KEY = 'test-key'
+
+const emptyUpsertResult = {
+  inserted: 0,
+  updated: 0,
+  unchanged: 0,
+  frozenFlagged: 0,
+  crossMarked: 0,
+  errors: 0,
+}
 
 function makeConnection(overrides: Partial<WooCommerceConnection> = {}): WooCommerceConnection {
   return {
@@ -85,25 +88,40 @@ function makeOrder(overrides: Partial<WooOrder> = {}): WooOrder {
     payment_method_title: 'Kortbetalning',
     transaction_id: 'pi_abc123',
     refunds: [],
+    billing: {
+      first_name: 'Test',
+      last_name: 'Person',
+      company: 'Testbolaget AB',
+      email: 'kund@example.se',
+    },
+    line_items: [
+      {
+        id: 1,
+        name: 'Produkt A',
+        quantity: 2,
+        total: '1000.00',
+        total_tax: '250.00',
+        taxes: [{ id: 3, total: '250.00' }],
+      },
+    ],
+    tax_lines: [
+      { rate_id: 3, rate_percent: 25, label: 'Moms 25%', tax_total: '250.00', shipping_tax_total: '0.00' },
+    ],
+    shipping_lines: [],
+    meta_data: [],
     ...overrides,
   }
 }
 
 /** Minimal chainable supabase mock covering the sync's query patterns. */
-function makeSupabaseMock(options: { lockThrough?: string | null } = {}) {
+function makeSupabaseMock() {
   const updates: Array<{ table: string; values: Record<string, unknown> }> = []
   const client = {
     from(table: string) {
       const builder = {
         select: () => builder,
         eq: () => builder,
-        maybeSingle: async () => ({
-          data:
-            table === 'company_settings'
-              ? { bookkeeping_locked_through: options.lockThrough ?? null }
-              : null,
-          error: null,
-        }),
+        maybeSingle: async () => ({ data: null, error: null }),
         update: (values: Record<string, unknown>) => {
           updates.push({ table, values })
           return builder
@@ -127,17 +145,15 @@ beforeEach(() => {
   // enqueues its pages with mockResolvedValueOnce.
   listOrdersPage.mockResolvedValue([])
   listOrderRefunds.mockResolvedValue([])
-  vi.mocked(ingestTransactions).mockResolvedValue({
-    imported: 0,
-    duplicates: 0,
-    errors: 0,
-  } as Awaited<ReturnType<typeof ingestTransactions>>)
+  vi.mocked(upsertWebshopOrders).mockResolvedValue({ ...emptyUpsertResult })
 })
 
 describe('frozen external_id formats', () => {
-  // ⚠️ These assert the exact persisted formats. If this test fails, you are
-  // about to orphan every previously imported WooCommerce row: do not update
-  // the expectation without a coordinated backfill (see order-sync.ts).
+  // ⚠️ These assert the exact persisted formats, now shared between
+  // webshop_orders.external_id and the legacy transactions rows the
+  // cross-mark joins against. If this test fails, you are about to orphan
+  // every previously imported WooCommerce row AND break the legacy overlap
+  // join: do not update the expectation without a coordinated backfill.
   it('order id format is frozen', () => {
     expect(wooOrderExternalId('shop.example.se', 1042)).toBe(
       'woo_shop.example.se_order_1042',
@@ -155,51 +171,123 @@ describe('frozen external_id formats', () => {
     expect(wooStoreScope('https://example.se/butik')).toBe('example.se/butik')
   })
 
-  it('import source and ledger account are frozen', () => {
+  it('legacy import source constant is frozen', () => {
     expect(WOOCOMMERCE_IMPORT_SOURCE).toBe('woocommerce')
-    expect(WOOCOMMERCE_LEDGER_ACCOUNT).toBe('1680')
   })
 })
 
-describe('orderQualifies', () => {
-  it('requires date_paid and excludes trashed orders', () => {
-    expect(orderQualifies(makeOrder())).toBe(true)
-    expect(orderQualifies(makeOrder({ status: 'refunded' }))).toBe(true)
-    expect(orderQualifies(makeOrder({ date_paid_gmt: null }))).toBe(false)
-    expect(orderQualifies(makeOrder({ status: 'trash' }))).toBe(false)
+describe('orderImports / orderIsPaid', () => {
+  it('every non-trash status imports, paid or not', () => {
+    expect(orderImports(makeOrder())).toBe(true)
+    expect(orderImports(makeOrder({ status: 'pending', date_paid_gmt: null }))).toBe(true)
+    expect(orderImports(makeOrder({ status: 'refunded' }))).toBe(true)
+    expect(orderImports(makeOrder({ status: 'trash' }))).toBe(false)
+  })
+
+  it('is_paid follows date_paid', () => {
+    expect(orderIsPaid(makeOrder())).toBe(true)
+    expect(orderIsPaid(makeOrder({ date_paid_gmt: null }))).toBe(false)
   })
 })
 
-describe('mapOrder', () => {
-  it('maps a paid order to one gross row dated by date_paid', () => {
-    const rows = mapOrder('shop.example.se', makeOrder())
-    expect(rows).toEqual([
-      {
-        date: '2026-08-01',
-        description: 'WooCommerce-order #1042',
-        amount: 1250,
-        currency: 'SEK',
-        external_id: 'woo_shop.example.se_order_1042',
-        import_source: 'woocommerce',
-        reference: 'pi_abc123',
-      },
+describe('mapOrderToWebshopRow', () => {
+  const connection = { id: 'conn-1', store_name: 'Testbutiken' }
+
+  it('maps the full booking underlag', () => {
+    const rows = mapOrderToWebshopRow(connection, 'shop.example.se', makeOrder())
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      platform: 'woocommerce',
+      store_scope: 'shop.example.se',
+      store_label: 'Testbutiken',
+      connection_id: 'conn-1',
+      row_type: 'order',
+      external_id: 'woo_shop.example.se_order_1042',
+      platform_order_id: '1042',
+      order_number: '1042',
+      status: 'processing',
+      is_paid: true,
+      order_date: '2026-08-01',
+      paid_date: '2026-08-01',
+      currency: 'SEK',
+      total: 1250,
+      total_tax: 250,
+      customer_name: 'Test Person',
+      customer_company: 'Testbolaget AB',
+      customer_email: 'kund@example.se',
+      payment_method: 'stripe',
+      payment_method_title: 'Kortbetalning',
+      gateway_reference: 'pi_abc123',
+    })
+    expect(rows[0].vat_breakdown).toEqual([{ rate: 25, net: 1000, tax: 250 }])
+    expect(rows[0].line_items).toEqual([
+      { name: 'Produkt A', quantity: 2, total: 1000, total_tax: 250, vat_rate: 25 },
     ])
   })
 
-  it('rounds string money to two decimals', () => {
-    const rows = mapOrder('s', makeOrder({ total: '99.995' }))
-    expect(rows[0].amount).toBe(100)
+  it('imports unpaid orders with is_paid false and no paid_date', () => {
+    const rows = mapOrderToWebshopRow(
+      connection,
+      's',
+      makeOrder({ status: 'pending', date_paid_gmt: null }),
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ is_paid: false, paid_date: null, order_date: '2026-08-01' })
   })
 
-  it('skips unpaid, trashed, zero-total and unparseable orders', () => {
-    expect(mapOrder('s', makeOrder({ date_paid_gmt: null }))).toEqual([])
-    expect(mapOrder('s', makeOrder({ status: 'trash' }))).toEqual([])
-    expect(mapOrder('s', makeOrder({ total: '0.00' }))).toEqual([])
-    expect(mapOrder('s', makeOrder({ total: 'not-a-number' }))).toEqual([])
+  it('skips trashed, unparseable-total and zero-total orders', () => {
+    expect(mapOrderToWebshopRow(connection, 's', makeOrder({ status: 'trash' }))).toEqual([])
+    expect(
+      mapOrderToWebshopRow(connection, 's', makeOrder({ total: 'not-a-number' })),
+    ).toEqual([])
+    // 100% coupon order: paid but zero money; importing it would strand an
+    // unbookable row (the engine refuses zero-sum entries).
+    expect(mapOrderToWebshopRow(connection, 's', makeOrder({ total: '0.00' }))).toEqual([])
+  })
+
+  it('captures the billing country uppercased', () => {
+    const rows = mapOrderToWebshopRow(
+      connection,
+      's',
+      makeOrder({ billing: { first_name: 'A', last_name: 'B', country: 'dk' } }),
+    )
+    expect(rows[0].customer_country).toBe('DK')
+  })
+
+  it('snapshots shipping and fee lines so the invoice conversion covers order.total', () => {
+    const rows = mapOrderToWebshopRow(
+      connection,
+      's',
+      makeOrder({
+        shipping_lines: [
+          { method_title: 'Postnord', total: '80.00', total_tax: '20.00', taxes: [{ id: 3, total: '20.00' }] },
+        ],
+        fee_lines: [
+          { name: 'Fakturaavgift', total: '25.00', total_tax: '6.25', taxes: [{ id: 3, total: '6.25' }] },
+        ],
+      }),
+    )
+    expect(rows[0].line_items.map((i) => i.name)).toEqual([
+      'Produkt A',
+      'Postnord',
+      'Fakturaavgift',
+    ])
+    expect(rows[0].line_items[1]).toMatchObject({ total: 80, total_tax: 20, vat_rate: 25 })
+    expect(rows[0].line_items[2]).toMatchObject({ total: 25, total_tax: 6.25, vat_rate: 25 })
+  })
+
+  it('sums inline refund totals into refunded_total', () => {
+    const rows = mapOrderToWebshopRow(
+      connection,
+      's',
+      makeOrder({ refunds: [{ id: 77, reason: '', total: '-250.00' }] }),
+    )
+    expect(rows[0].refunded_total).toBe(250)
   })
 })
 
-describe('mapRefund', () => {
+describe('mapRefundToWebshopRow', () => {
+  const connection = { id: 'conn-1', store_name: 'Testbutiken' }
   const refund: WooRefund = {
     id: 77,
     amount: '250.00',
@@ -207,37 +295,220 @@ describe('mapRefund', () => {
     date_created_gmt: '2026-08-03T10:00:00',
   }
 
-  it('maps a refund to one negative row dated by the refund date', () => {
-    const rows = mapRefund('shop.example.se', makeOrder(), refund)
-    expect(rows).toEqual([
-      {
-        date: '2026-08-03',
-        description: 'WooCommerce-återbetalning order #1042',
-        amount: -250,
-        currency: 'SEK',
-        external_id: 'woo_shop.example.se_refund_77',
-        import_source: 'woocommerce',
-        reference: null,
-      },
-    ])
+  it('maps a refund to a negative row parented by external id, with PRORATED VAT', () => {
+    const rows = mapRefundToWebshopRow(connection, 'shop.example.se', makeOrder(), refund)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      row_type: 'refund',
+      parent_external_id: 'woo_shop.example.se_order_1042',
+      external_id: 'woo_shop.example.se_refund_77',
+      order_number: '1042',
+      order_date: '2026-08-03',
+      total: -250,
+      // 250 of a 1250 order (net 1000 + moms 250): the reversal carries the
+      // sale's mix. A zero here would leave ruta 10 over-declared (the
+      // skeptic's counterexample ledger).
+      total_tax: -50,
+      is_paid: true,
+    })
+    expect(rows[0].vat_breakdown).toEqual([{ rate: 25, net: 200, tax: 50 }])
   })
 
   it('skips zero-amount refunds', () => {
-    expect(mapRefund('s', makeOrder(), { ...refund, amount: '0' })).toEqual([])
+    expect(
+      mapRefundToWebshopRow(connection, 's', makeOrder(), { ...refund, amount: '0' }),
+    ).toEqual([])
   })
 })
 
-describe('rowBehindLock', () => {
-  it('drops dates on/before the lock and keeps later ones', () => {
-    expect(rowBehindLock('2026-06-30', '2026-06-30')).toBe(true)
-    expect(rowBehindLock('2026-06-15', '2026-06-30')).toBe(true)
-    expect(rowBehindLock('2026-07-01', '2026-06-30')).toBe(false)
-    expect(rowBehindLock('2026-06-15', null)).toBe(false)
+describe('buildRefundVatBreakdown', () => {
+  it('prefers the refund\'s own line allocation over proration', () => {
+    const refundWithLines: WooRefund = {
+      id: 78,
+      amount: '125.00',
+      reason: '',
+      date_created_gmt: '2026-08-03T10:00:00',
+      line_items: [
+        { id: 9, total: '-100.00', total_tax: '-25.00', taxes: [{ id: 3, total: '-25.00' }] },
+      ],
+    }
+    expect(buildRefundVatBreakdown(makeOrder(), refundWithLines)).toEqual({
+      breakdown: [{ rate: 25, net: 100, tax: 25 }],
+      totalTax: 25,
+    })
+  })
+
+  it('prorates a mixed-rate order for amount-only refunds', () => {
+    const order = makeOrder({
+      total: '1000.00',
+      total_tax: '160.00',
+      line_items: [
+        { id: 1, name: 'A', quantity: 1, total: '500.00', total_tax: '125.00', taxes: [{ id: 3, total: '125.00' }] },
+        { id: 2, name: 'B', quantity: 1, total: '340.00', total_tax: '35.00', taxes: [{ id: 4, total: '35.00' }] },
+      ],
+      tax_lines: [
+        { rate_id: 3, rate_percent: 25, tax_total: '125.00', shipping_tax_total: '0.00' },
+        { rate_id: 4, rate_percent: 12, tax_total: '35.00', shipping_tax_total: '0.00' },
+      ],
+    })
+    const halfRefund: WooRefund = {
+      id: 79,
+      amount: '500.00',
+      reason: '',
+      date_created_gmt: '2026-08-03T10:00:00',
+    }
+    const { breakdown, totalTax } = buildRefundVatBreakdown(order, halfRefund)
+    expect(breakdown).toEqual([
+      { rate: 25, net: 250, tax: 62.5 },
+      { rate: 12, net: 170, tax: 17.5 },
+    ])
+    expect(totalTax).toBe(80)
+  })
+
+  it('returns empty when the order itself has no breakdown', () => {
+    const order = makeOrder({ line_items: [], shipping_lines: [], tax_lines: [] })
+    const amountOnly: WooRefund = {
+      id: 80,
+      amount: '100.00',
+      reason: '',
+      date_created_gmt: '2026-08-03T10:00:00',
+    }
+    expect(buildRefundVatBreakdown(order, amountOnly)).toEqual({
+      breakdown: [],
+      totalTax: 0,
+    })
+  })
+})
+
+describe('buildVatBreakdown', () => {
+  it('groups line and shipping taxes per rate', () => {
+    const order = makeOrder({
+      line_items: [
+        {
+          id: 1,
+          name: 'A',
+          quantity: 1,
+          total: '400.00',
+          total_tax: '100.00',
+          taxes: [{ id: 3, total: '100.00' }],
+        },
+        {
+          id: 2,
+          name: 'B',
+          quantity: 1,
+          total: '100.00',
+          total_tax: '12.00',
+          taxes: [{ id: 4, total: '12.00' }],
+        },
+      ],
+      shipping_lines: [
+        { total: '49.00', total_tax: '12.25', taxes: [{ id: 3, total: '12.25' }] },
+      ],
+      tax_lines: [
+        { rate_id: 3, rate_percent: 25, tax_total: '112.25', shipping_tax_total: '12.25' },
+        { rate_id: 4, rate_percent: 12, tax_total: '12.00', shipping_tax_total: '0.00' },
+      ],
+    })
+    expect(buildVatBreakdown(order)).toEqual([
+      { rate: 25, net: 449, tax: 112.25 },
+      { rate: 12, net: 100, tax: 12 },
+    ])
+  })
+
+  it('lands untaxed lines in the 0% bucket', () => {
+    const order = makeOrder({
+      line_items: [
+        { id: 1, name: 'A', quantity: 1, total: '300.00', total_tax: '0.00', taxes: [] },
+      ],
+      tax_lines: [],
+      total_tax: '0.00',
+    })
+    expect(buildVatBreakdown(order)).toEqual([{ rate: 0, net: 300, tax: 0 }])
+  })
+
+  it('infers the rate from the ratio when tax_lines are missing', () => {
+    const order = makeOrder({
+      line_items: [
+        { id: 1, name: 'A', quantity: 1, total: '400.00', total_tax: '100.00' },
+      ],
+      tax_lines: [],
+    })
+    expect(buildVatBreakdown(order)).toEqual([{ rate: 25, net: 400, tax: 100 }])
+  })
+
+  it('returns [] when the payload has no line data (dialog falls back)', () => {
+    const order = makeOrder({ line_items: [], shipping_lines: [], tax_lines: [] })
+    expect(buildVatBreakdown(order)).toEqual([])
+  })
+
+  it('returns [] for tax-stripped stores: empty taxes arrays are NOT tax data', () => {
+    // Hardened hosts serialize `taxes: []` on every line while hiding the
+    // amounts; treating that as tax data booked the whole VAT into 3740.
+    const order = makeOrder({
+      total: '500.00',
+      total_tax: '100.00',
+      line_items: [
+        { id: 1, name: 'A', quantity: 1, total: '400.00', total_tax: '', taxes: [] },
+      ],
+      tax_lines: [],
+      shipping_lines: [],
+    })
+    expect(buildVatBreakdown(order)).toEqual([])
+  })
+
+  it('includes fee lines so their VAT reaches 2611 instead of the 3740 residual', () => {
+    const order = makeOrder({
+      total: '562.50',
+      total_tax: '112.50',
+      fee_lines: [
+        { name: 'Fakturaavgift', total: '50.00', total_tax: '12.50', taxes: [{ id: 3, total: '12.50' }] },
+      ],
+    })
+    expect(buildVatBreakdown(order)).toEqual([{ rate: 25, net: 1050, tax: 262.5 }])
+  })
+
+  it('keeps discount lines SIGNED (negative net stays negative)', () => {
+    const order = makeOrder({
+      total: '525.00',
+      total_tax: '125.00',
+      line_items: [
+        { id: 1, name: 'Produkt', quantity: 1, total: '500.00', total_tax: '125.00', taxes: [{ id: 3, total: '125.00' }] },
+        { id: 2, name: 'Presentkort', quantity: 1, total: '-100.00', total_tax: '0.00', taxes: [] },
+      ],
+    })
+    expect(buildVatBreakdown(order)).toEqual([
+      { rate: 25, net: 500, tax: 125 },
+      { rate: 0, net: -100, tax: 0 },
+    ])
+  })
+})
+
+describe('extractOrgnr', () => {
+  it('reads an orgnr embedded in the billing company field', () => {
+    expect(
+      extractOrgnr(makeOrder({ billing: { company: 'Testbolaget AB 556677-8899' } })),
+    ).toBe('556677-8899')
+  })
+
+  it('scans meta_data for orgnr-ish keys', () => {
+    expect(
+      extractOrgnr(
+        makeOrder({
+          billing: { company: 'Testbolaget AB' },
+          meta_data: [{ key: '_billing_org_nr', value: '5566778899' }],
+        }),
+      ),
+    ).toBe('556677-8899')
+  })
+
+  it('returns null when nothing matches', () => {
+    expect(extractOrgnr(makeOrder())).toBeNull()
+    expect(extractOrgnr(makeOrder({ billing: undefined, meta_data: undefined }))).toBeNull()
   })
 })
 
 describe('syncWooCommerceOrders', () => {
-  it('ingests order and refund rows against the 1680 cash account and advances the cursor', async () => {
+  it('upserts order and refund rows and advances the cursor', async () => {
     const { client, updates } = makeSupabaseMock()
     const order = makeOrder({
       refunds: [{ id: 77, reason: 'Retur', total: '-250.00' }],
@@ -246,32 +517,22 @@ describe('syncWooCommerceOrders', () => {
     listOrderRefunds.mockResolvedValueOnce([
       { id: 77, amount: '250.00', reason: 'Retur', date_created_gmt: '2026-08-03T10:00:00' },
     ])
-    vi.mocked(ingestTransactions).mockResolvedValueOnce({
-      imported: 2,
-      duplicates: 0,
-      errors: 0,
-    } as Awaited<ReturnType<typeof ingestTransactions>>)
+    vi.mocked(upsertWebshopOrders).mockResolvedValueOnce({
+      ...emptyUpsertResult,
+      inserted: 2,
+    })
 
     const summary = await syncWooCommerceOrders(client, makeConnection())
 
-    expect(summary).toMatchObject({ fetched: 1, refundsFetched: 1, imported: 2, duplicates: 0 })
-    expect(ensureManualCashAccount).toHaveBeenCalledWith(
-      client,
-      'company-1',
-      '1680',
-      'SEK',
-      'WooCommerce-saldo',
-    )
-    expect(ingestTransactions).toHaveBeenCalledTimes(1)
-    const [, companyId, userId, rows, ingestOptions] =
-      vi.mocked(ingestTransactions).mock.calls[0]
+    expect(summary).toMatchObject({ fetched: 1, refundsFetched: 1, inserted: 2, errors: 0 })
+    expect(upsertWebshopOrders).toHaveBeenCalledTimes(1)
+    const [, companyId, userId, rows] = vi.mocked(upsertWebshopOrders).mock.calls[0]
     expect(companyId).toBe('company-1')
     expect(userId).toBe('user-1')
-    expect((rows as Array<{ external_id: string }>).map((r) => r.external_id)).toEqual([
+    expect((rows as WebshopOrderUpsert[]).map((r) => r.external_id)).toEqual([
       'woo_shop.example.se_order_1042',
       'woo_shop.example.se_refund_77',
     ])
-    expect(ingestOptions).toEqual({ settlementAccount: '1680', skipAutoCategorization: true })
 
     // Cursor persisted from the page's max date_modified_gmt, branded UTC,
     // and any stale error_message is cleared on progress.
@@ -289,24 +550,17 @@ describe('syncWooCommerceOrders', () => {
     })
   })
 
-  it('drops rows dated on/before the bookkeeping lock on every run', async () => {
-    const { client, updates } = makeSupabaseMock({ lockThrough: '2026-08-02' })
-    // Order paid 2026-08-01 (behind lock), refund created 2026-08-03 (after).
-    const order = makeOrder({ refunds: [{ id: 77, reason: '', total: '-250.00' }] })
-    listOrdersPage.mockResolvedValueOnce([order])
-    listOrderRefunds.mockResolvedValueOnce([
-      { id: 77, amount: '250.00', reason: '', date_created_gmt: '2026-08-03T10:00:00' },
+  it('imports unpaid orders without fetching refunds for them', async () => {
+    const { client } = makeSupabaseMock()
+    listOrdersPage.mockResolvedValueOnce([
+      makeOrder({ status: 'pending', date_paid_gmt: null, refunds: [] }),
     ])
 
-    const summary = await syncWooCommerceOrders(client, makeConnection())
+    await syncWooCommerceOrders(client, makeConnection())
 
-    expect(summary.skippedLocked).toBe(1)
-    const [, , , rows] = vi.mocked(ingestTransactions).mock.calls[0]
-    expect((rows as Array<{ external_id: string }>).map((r) => r.external_id)).toEqual([
-      'woo_shop.example.se_refund_77',
-    ])
-    // The cursor still advances: the drop is by design, not a failure.
-    expect(cursorUpdates(updates)).toHaveLength(1)
+    expect(listOrderRefunds).not.toHaveBeenCalled()
+    const [, , , rows] = vi.mocked(upsertWebshopOrders).mock.calls[0]
+    expect((rows as WebshopOrderUpsert[])[0]).toMatchObject({ is_paid: false })
   })
 
   it('holds the cursor below an order whose refund fetch failed', async () => {
@@ -319,6 +573,22 @@ describe('syncWooCommerceOrders', () => {
 
     expect(summary.errors).toBe(1)
     // date_modified 09:05:00 minus 1s: the next run re-lists this order.
+    const cursors = cursorUpdates(updates)
+    expect(cursors).toHaveLength(1)
+    expect(cursors[0].values.last_order_synced_at).toBe('2026-08-01T09:04:59.000Z')
+  })
+
+  it('holds the cursor below a page whose upsert reported errors', async () => {
+    const { client, updates } = makeSupabaseMock()
+    listOrdersPage.mockResolvedValueOnce([makeOrder()])
+    vi.mocked(upsertWebshopOrders).mockResolvedValueOnce({
+      ...emptyUpsertResult,
+      errors: 1,
+    })
+
+    const summary = await syncWooCommerceOrders(client, makeConnection())
+
+    expect(summary.errors).toBe(1)
     const cursors = cursorUpdates(updates)
     expect(cursors).toHaveLength(1)
     expect(cursors[0].values.last_order_synced_at).toBe('2026-08-01T09:04:59.000Z')
@@ -347,37 +617,6 @@ describe('syncWooCommerceOrders', () => {
     expect(thirdArgs).toEqual({ modifiedAfter: '2026-08-01T10:00:00.000Z', page: 1 })
   })
 
-  it('falls back to the first order currency when store settings were unreadable', async () => {
-    const { client } = makeSupabaseMock()
-    listOrdersPage.mockResolvedValueOnce([makeOrder({ currency: 'eur' })])
-
-    await syncWooCommerceOrders(client, makeConnection({ currency: null }))
-
-    expect(ensureManualCashAccount).toHaveBeenCalledWith(
-      client,
-      'company-1',
-      '1680',
-      'EUR',
-      'WooCommerce-saldo',
-    )
-  })
-
-  it('surfaces a cash-account failure on the connection instead of failing silently', async () => {
-    const { client, updates } = makeSupabaseMock()
-    listOrdersPage.mockResolvedValueOnce([makeOrder()])
-    vi.mocked(ensureManualCashAccount).mockRejectedValueOnce(
-      new Error('cash account 1680 exists with currency EUR'),
-    )
-
-    await expect(syncWooCommerceOrders(client, makeConnection())).rejects.toThrow(
-      /currency EUR/,
-    )
-    const errorUpdate = updates.find(
-      (u) => u.table === 'woocommerce_connections' && 'error_message' in u.values,
-    )
-    expect(errorUpdate?.values.error_message).toMatch(/1680/)
-  })
-
   it('counts an unparseable order total as an error without stalling the cursor', async () => {
     const { client, updates } = makeSupabaseMock()
     listOrdersPage.mockResolvedValueOnce([makeOrder({ total: 'not-a-number' })])
@@ -385,7 +624,7 @@ describe('syncWooCommerceOrders', () => {
     const summary = await syncWooCommerceOrders(client, makeConnection())
 
     expect(summary.errors).toBe(1)
-    expect(ingestTransactions).not.toHaveBeenCalled()
+    expect(upsertWebshopOrders).not.toHaveBeenCalled()
     // Deliberate: a permanently corrupt total must not stall the feed.
     expect(cursorUpdates(updates)).toHaveLength(1)
   })

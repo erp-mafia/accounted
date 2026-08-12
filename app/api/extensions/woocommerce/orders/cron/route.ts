@@ -15,13 +15,13 @@ export const maxDuration = 300
 /**
  * GET /api/extensions/woocommerce/orders/cron
  * Nightly order sync for connections that opted in (transaction_sync_enabled):
- * imports each connected store's paid orders and refunds into the
- * transactions inbox as a bank-style feed on the 1680 cash account.
+ * upserts each connected store's orders and refunds into webshop_orders
+ * (the Orders page), replacing the earlier transactions-inbox feed.
  *
  * Read-only against the stores, and it never posts to the journal: rows land
- * unbooked; booking stays a human decision. Idempotent via the
- * (company_id, external_id) unique index, so overlapping windows and re-runs
- * are no-ops. Emits no events, so no ensureInitialized() is needed.
+ * unbooked; booking stays a human decision on the Orders page. Idempotent via
+ * the (company_id, external_id) unique index; overlap re-polls become status
+ * updates. Emits no events, so no ensureInitialized() is needed.
  */
 export const GET = withCronContext('cron.woocommerce_order_sync', async (_request, ctx) => {
   // Physical routes under app/api/extensions/<id>/ compile into EVERY build,
@@ -84,8 +84,8 @@ export const GET = withCronContext('cron.woocommerce_order_sync', async (_reques
 
   const results: Array<{
     connectionId: string
-    imported: number
-    duplicates: number
+    inserted: number
+    updated: number
     status: 'synced' | 'revoked' | 'error'
   }> = []
 
@@ -109,8 +109,8 @@ export const GET = withCronContext('cron.woocommerce_order_sync', async (_reques
       }
       results.push({
         connectionId: connection.id,
-        imported: summary.imported,
-        duplicates: summary.duplicates,
+        inserted: summary.inserted,
+        updated: summary.updated,
         status: summary.revoked ? 'revoked' : 'synced',
       })
     } catch (error) {
@@ -120,19 +120,19 @@ export const GET = withCronContext('cron.woocommerce_order_sync', async (_reques
       })
       results.push({
         connectionId: connection.id,
-        imported: 0,
-        duplicates: 0,
+        inserted: 0,
+        updated: 0,
         status: 'error',
       })
     }
   }
 
-  const totalImported = results.reduce((acc, r) => acc + r.imported, 0)
+  const totalInserted = results.reduce((acc, r) => acc + r.inserted, 0)
   ctx.log.info('woocommerce order sync summary', {
     processed: results.length,
-    totalImported,
+    totalInserted,
     failed: results.filter((r) => r.status === 'error').length,
   })
 
-  return NextResponse.json({ processed: results.length, imported: totalImported, results })
+  return NextResponse.json({ processed: results.length, inserted: totalInserted, results })
 })
