@@ -471,6 +471,18 @@ describe('POST /items/:id/book-direct', () => {
     const res = await route.handler(request, ctx)
     expect(res.status).toBe(200)
 
+    // The preserved match must also be BOOKED. Keeping the link while leaving
+    // the bank line open is the worse half of the bug: the item looks resolved
+    // and the transaction stays outstanding forever.
+    const txUpdate = calls.find(
+      (c: { method: string; args?: unknown[] }) =>
+        c.method === 'update' &&
+        typeof c.args?.[0] === 'object' &&
+        c.args?.[0] !== null &&
+        'journal_entry_id' in (c.args[0] as Record<string, unknown>),
+    )
+    expect(txUpdate, 'the preserved transaction was never booked').toBeTruthy()
+
     const update = calls.find(
       (c: { method: string; args?: unknown[] }) =>
         c.method === 'update' &&

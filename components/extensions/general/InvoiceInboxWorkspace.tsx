@@ -1284,7 +1284,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               <dl className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-0.5">
                 <div className="flex gap-2">
                   <dt className="w-24 shrink-0">{t('source_whatsapp_number')}</dt>
-                  <dd className="tabular-nums">{whatsapp.phoneMasked ?? '–'}</dd>
+                  <dd className="tabular-nums">{whatsapp.phoneMasked ?? '-'}</dd>
                 </div>
                 <div className="flex gap-2">
                   <dt className="w-24 shrink-0">Status</dt>
@@ -3152,7 +3152,16 @@ function FieldsRail({
         documentUrl={null}
         fileName={item.fileName ?? null}
         transactionId={item.matched_transaction_id ?? null}
-        entryDate={proposal?.entry_date ?? new Date().toISOString().slice(0, 10)}
+        // BFL 5 kap 6-7 § wants datum för affärshändelsen. The proposal's date
+        // is the bank's, which is the event for a matched purchase. Without one
+        // the document's own date is the next best truth; today is the day
+        // somebody opened a dialog and is nobody's business event. The field is
+        // editable either way, but a silent wrong default is not checked.
+        entryDate={
+          proposal?.entry_date ??
+          data?.invoice?.invoiceDate ??
+          new Date().toISOString().slice(0, 10)
+        }
         description={data?.supplier?.name ?? item.email_subject ?? 'Underlag'}
         lines={proposal?.lines ?? []}
         onBooked={() => {
