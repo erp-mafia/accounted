@@ -27,6 +27,9 @@ import { useCompanySettings } from '@/components/settings/useSettings'
 import { formatAmount, formatCurrency } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
+import { DetailPager } from '@/components/common/DetailPager'
+import { listContextKey } from '@/lib/navigation/list-context'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment, BASAccount } from '@/types'
 
 interface EditableLine {
@@ -82,6 +85,7 @@ export default function SupplierInvoiceDetailPage() {
   const { settings: companySettings } = useCompanySettings()
   const params = useParams()
   const router = useRouter()
+  const company = useCompanyOptional()?.company ?? null
   const { toast } = useToast()
   const t = useTranslations('supplier_invoice_detail')
   const [invoice, setInvoice] = useState<SupplierInvoice | null>(null)
@@ -478,6 +482,12 @@ export default function SupplierInvoiceDetailPage() {
           <Button variant="ghost" size="icon" className="shrink-0" onClick={() => router.push('/supplier-invoices')} aria-label={t('back_aria')}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
+          <DetailPager
+            contextKey={listContextKey('supplier-invoices', company?.id)}
+            basePath="/supplier-invoices"
+            currentId={String(params.id)}
+            className="shrink-0"
+          />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <h1 className="font-display text-2xl leading-8 tracking-tight">

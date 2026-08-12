@@ -30,6 +30,7 @@ import {
   type InvoiceListSort,
   type InvoiceListSortColumn,
 } from '@/lib/invoices/invoice-list-sort'
+import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import {
   ArrowDown,
   ArrowUp,
@@ -312,6 +313,15 @@ export default function InvoicesPage() {
   )
   const visibleInvoices = sortedInvoices.slice(0, visibleCount)
 
+  // Detail-pager context: the FULL sorted list (not the visible slice), so
+  // prev/next on the detail page can walk past the paging boundary.
+  const rememberListContext = () => {
+    writeListContext(listContextKey('invoices', company?.id), {
+      ids: sortedInvoices.map((invoice) => invoice.id),
+      listPath: '/invoices',
+    })
+  }
+
   const overdueCount = invoices.filter(
     (i) => i.status === 'overdue' && !i.credited_invoice_id,
   ).length
@@ -572,13 +582,19 @@ export default function InvoicesPage() {
                   <tr
                     key={invoice.id}
                     className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
-                    onClick={() => router.push(`/invoices/${invoice.id}`)}
+                    onClick={() => {
+                      rememberListContext()
+                      router.push(`/invoices/${invoice.id}`)
+                    }}
                   >
                     <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
                       <Link
                         href={`/invoices/${invoice.id}`}
                         className="hover:underline"
-                        onClick={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          rememberListContext()
+                        }}
                       >
                         {number ?? '·'}
                       </Link>

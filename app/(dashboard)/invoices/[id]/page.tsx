@@ -58,6 +58,8 @@ import {
   type InvoiceDeliveryView,
 } from '@/components/invoices/InvoiceDeliveryHistory'
 import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
+import { DetailPager } from '@/components/common/DetailPager'
+import { listContextKey } from '@/lib/navigation/list-context'
 import {
   Dialog,
   DialogContent,
@@ -861,6 +863,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           <Button variant="ghost" size="icon" onClick={() => router.back()} aria-label={t('back')}>
             <ArrowLeft className="h-5 w-5" />
           </Button>
+          <DetailPager
+            contextKey={listContextKey('invoices', company?.id)}
+            basePath="/invoices"
+            currentId={id}
+          />
           <div>
             <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <h1 className={cn('font-display text-2xl leading-8 tracking-tight', !invoice.invoice_number && !isSelfBilled && 'italic text-muted-foreground')}>{isSelfBilled ? invoiceDisplayNumber(invoice as Invoice) : (invoice.invoice_number ?? '-')}</h1>
