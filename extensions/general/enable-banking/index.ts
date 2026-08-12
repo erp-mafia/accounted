@@ -386,10 +386,16 @@ export const enableBankingExtension: Extension = {
             psu_type: psuType,
             auth_method: authMethod ?? '(aspsp default)',
             // Chosen method's metadata, so prod logs can verify per-bank pinning
-            // behavior after deploy (hidden-only + psu_types selection).
+            // behavior after deploy (hidden-only + psu_types selection). A
+            // pinned method with no psu_types (the documented Handelsbanken
+            // shape) applies to all PSU types and logs '(all)': the
+            // '(aspsp default)' sentinel is reserved for the unpinned case,
+            // where it would otherwise contradict auth_method on the same line.
             auth_method_approach: preferredMethod?.approach ?? '(aspsp default)',
             auth_method_hidden: preferredMethod?.hidden_method ?? '(aspsp default)',
-            auth_method_psu_types: preferredMethod?.psu_types ?? '(aspsp default)',
+            auth_method_psu_types: preferredMethod
+              ? (preferredMethod.psu_types ?? '(all)')
+              : '(aspsp default)',
             reconnect: isReconnect,
           })
 
