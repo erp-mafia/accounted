@@ -2605,6 +2605,12 @@
     "link_button": "Koppla BankID"
   },
   "settings_security": {
+    "auto_logout_label": "Automatisk utloggning",
+    "auto_logout_description": "Loggar ut dig automatiskt efter en period av inaktivitet, och senast efter en maxtid per session. Avstängd förblir du inloggad i den här webbläsaren tills du loggar ut själv.",
+    "auto_logout_switch_label": "Logga ut mig automatiskt vid inaktivitet",
+    "auto_logout_enabled_toast": "Automatisk utloggning aktiverad",
+    "auto_logout_disabled_toast": "Automatisk utloggning avstängd",
+    "auto_logout_save_failed": "Kunde inte spara inställningen",
     "set_password_title": "Sätt ett lösenord",
     "set_password_description": "Du loggade in med BankID och har inget lösenord ännu. Sätt ett lösenord för att kunna aktivera 2FA eller logga in när BankID inte är tillgängligt.",
     "set_password_button": "Sätt lösenord",
