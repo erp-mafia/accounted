@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
+import { useState, useEffect, useCallback, useMemo, Fragment, createContext, useContext } from 'react'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -312,29 +312,34 @@ function formatRelativeTime(dateStr: string): string {
  * The number alone is not readable and the description is not the account, so
  * approving meant trusting a label that never named what was being debited.
  *
- * Fetched once per page and shared: every preview on screen wants the same map.
+ * Owned by the page rather than a module-level cache: the map is per company,
+ * and a cache that outlives the page would keep serving one company's account
+ * names after a switch. A failed fetch leaves the map empty, which shows the
+ * bare number rather than a wrong name, and retries on the next mount.
  */
-let accountNamesPromise: Promise<Record<string, string>> | null = null
+const AccountNamesContext = createContext<Record<string, string>>({})
 
-function useAccountNames(): Record<string, string> {
+function useAccountNamesSource(): Record<string, string> {
   const [names, setNames] = useState<Record<string, string>>({})
   useEffect(() => {
     let alive = true
-    accountNamesPromise ??= fetch('/api/bookkeeping/accounts')
+    void fetch('/api/bookkeeping/accounts')
       .then((r) => r.json())
-      .then(({ data }) =>
-        Object.fromEntries(
-          ((data ?? []) as Array<{ account_number: string; account_name: string }>).map((a) => [
-            a.account_number,
-            a.account_name,
-          ]),
-        ),
-      )
-      // A failed lookup must not blank the preview: the number still shows.
-      .catch(() => ({}))
-    void accountNamesPromise.then((m) => {
-      if (alive) setNames(m)
-    })
+      .then(({ data }) => {
+        if (!alive) return
+        setNames(
+          Object.fromEntries(
+            ((data ?? []) as Array<{ account_number: string; account_name: string }>).map((a) => [
+              a.account_number,
+              a.account_name,
+            ]),
+          ),
+        )
+      })
+      .catch(() => {
+        // Display-only: the number still shows, so a failure is not worth
+        // surfacing as an error the user cannot act on.
+      })
     return () => {
       alive = false
     }
@@ -344,7 +349,7 @@ function useAccountNames(): Record<string, string> {
 
 
 function CategorizePreview({ data }: { data: Record<string, unknown> }) {
-  const accountNames = useAccountNames()
+  const accountNames = useContext(AccountNamesContext)
   // The exact journal lines the approval will post (net cost line, VAT line,
   // gross bank line, SEK) — staged by the server since the preview-lines fix.
   const lines = (data.lines as Array<{ account_number?: string; debit_amount?: number; credit_amount?: number; description?: string }>) || []
@@ -814,6 +819,7 @@ type ViewTab = 'pending' | 'history'
 
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
+  const accountNames = useAccountNamesSource()
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ViewTab>('pending')
@@ -1185,6 +1191,7 @@ export default function PendingOperationsPage() {
   ]
 
   return (
+    <AccountNamesContext.Provider value={accountNames}>
     <div className="space-y-8">
       {/* Page header (concept scene 11): title + Godkänn alla */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1765,5 +1772,6 @@ export default function PendingOperationsPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </AccountNamesContext.Provider>
   )
 }
