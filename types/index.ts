@@ -2867,7 +2867,18 @@ export interface InvoiceInboxItem {
 // Chat-sourced context attached to an inbox item. `raw_answer` + timestamps
 // double as the Skatteverket representation documentation trail.
 export interface InboxChannelContext {
-  channel: 'whatsapp'
+  /**
+   * Which intake wrote this. 'mail_hunt' rows carry the mail_* fields below;
+   * everything else on this type belongs to the WhatsApp branch and is absent
+   * on them.
+   */
+  channel: 'whatsapp' | 'mail_hunt'
+  /** Set by lib/receipt-hunt/ingest.ts: which mailbox the receipt came out of. */
+  mail_mailbox?: string | null
+  mail_provider?: 'gmail' | 'microsoft' | null
+  mail_subject?: string | null
+  mail_from?: string | null
+  mail_received_at?: string | null
   caption?: string | null
   company_selected_via?: 'button' | 'list' | 'numbered' | 'pin' | 'default' | 'single'
   representation?: {

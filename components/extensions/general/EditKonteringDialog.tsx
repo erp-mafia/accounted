@@ -67,7 +67,7 @@ export default function EditKonteringDialog({
   lines: ProposedLine[]
   onBooked: (entryId: string) => void
 }) {
-  const t = useTranslations('journal_form')
+  const t = useTranslations('inbox_workspace')
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -120,7 +120,7 @@ export default function EditKonteringDialog({
               />
             ) : (
               <div className="h-[60vh] grid place-items-center rounded-lg border text-xs text-muted-foreground">
-                {t('no_document') ?? 'Ingen handling'}
+                {t('dialog_no_document')}
               </div>
             )}
           </aside>

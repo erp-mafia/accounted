@@ -599,10 +599,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     // going there; one with nothing known needs somebody to be asked. Mixing
     // them buries the twelve you can act on among the hundred you cannot.
     if (portalPurchases.length > 0 || filter === 'portal') {
-      list.push({ key: 'portal', label: 'Hämta från portal', count: portalPurchases.length })
+      list.push({ key: 'portal', label: t('filter_portal'), count: portalPurchases.length })
     }
     if (otherPurchases.length > 0 || filter === 'missing') {
-      list.push({ key: 'missing', label: 'Saknar underlag', count: otherPurchases.length })
+      list.push({ key: 'missing', label: t('filter_missing'), count: otherPurchases.length })
     }
     if (statusCounts.error > 0 || filter === 'error') {
       list.push({ key: 'error', label: 'Fel', count: statusCounts.error })
@@ -1245,17 +1245,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   way past. */}
               <dl className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-0.5">
                 <div className="flex gap-2">
-                  <dt className="w-24 shrink-0">Söktes senast</dt>
+                  <dt className="w-24 shrink-0">{t('source_last_searched')}</dt>
                   <dd className="tabular-nums">
-                    {c.lastSearchedAt ? formatDateLong(c.lastSearchedAt) : 'Aldrig'}
+                    {c.lastSearchedAt ? formatDateLong(c.lastSearchedAt) : t('source_never_searched')}
                   </dd>
                 </div>
                 <div className="flex gap-2">
                   <dt className="w-24 shrink-0">Status</dt>
                   <dd>
                     {c.status === 'active'
-                      ? 'Söks igenom när du letar'
-                      : 'Söks inte igenom förrän den återanslutits'}
+                      ? t('source_searched_when_hunting')
+                      : t('source_not_searched')}
                   </dd>
                 </div>
               </dl>
@@ -1271,12 +1271,12 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               </summary>
               <dl className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-0.5">
                 <div className="flex gap-2">
-                  <dt className="w-24 shrink-0">Nummer</dt>
+                  <dt className="w-24 shrink-0">{t('source_whatsapp_number')}</dt>
                   <dd className="tabular-nums">{whatsapp.phoneMasked ?? '–'}</dd>
                 </div>
                 <div className="flex gap-2">
                   <dt className="w-24 shrink-0">Status</dt>
-                  <dd>{whatsapp.verifiedAt ? 'Verifierat' : 'Inte verifierat än'}</dd>
+                  <dd>{whatsapp.verifiedAt ? t('source_verified') : t('source_unverified')}</dd>
                 </div>
               </dl>
             </details>
@@ -1526,7 +1526,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             <div className="h-full flex items-center justify-center p-8">
               <div className="text-center max-w-sm w-full">
                 <FileQuestion className="h-6 w-6 mx-auto mb-3 text-muted-foreground opacity-60" />
-                <p className="text-sm">Inget underlag hittat</p>
+                <p className="text-sm">{t('purchase_no_document')}</p>
                 <p className="text-xs text-muted-foreground mt-1.5">
                   {selectedPurchase.portal
                     ? `${selectedPurchase.portal.vendor} skickar ingen fil. Hämta fakturan och släpp den här.`
@@ -1914,10 +1914,14 @@ function InboxRow({
           ) : item.source === 'email' ? (
             <Mail className="h-3 w-3 text-muted-foreground shrink-0" />
           ) : item.source === 'whatsapp' ? (
-            // The one channel we can name for certain. An emailed document
-            // carries no record of which mailbox fetched it, so those keep the
-            // generic mark rather than claiming a provider.
             <WhatsAppMark className="h-3 w-3 shrink-0" />
+          ) : item.channel_context?.mail_provider === 'gmail' ? (
+            // The hunt records which mailbox it pulled a receipt from, so the
+            // brand is known rather than guessed. Mail that arrived by
+            // forwarding has no connection behind it and keeps the envelope.
+            <GoogleMark className="h-3 w-3 shrink-0" />
+          ) : item.channel_context?.mail_provider === 'microsoft' ? (
+            <MicrosoftMark className="h-3 w-3 shrink-0" />
           ) : (
             <Upload className="h-3 w-3 text-muted-foreground shrink-0" />
           )}
@@ -2305,6 +2309,7 @@ function PurchaseRow({
   selected: boolean
   onClick: () => void
 }) {
+  const t = useTranslations('inbox_workspace')
   return (
     <li>
       <button
@@ -2317,7 +2322,7 @@ function PurchaseRow({
       >
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-[13px] truncate">
-            {purchase.merchant_name || purchase.description || 'Okänt köp'}
+            {purchase.merchant_name || purchase.description || t('purchase_unknown')}
           </span>
           <span className="text-xs tabular-nums shrink-0">
             {formatCurrency(Math.abs(purchase.amount), purchase.currency ?? undefined)}
@@ -2339,13 +2344,14 @@ function PurchaseRow({
 }
 
 function PurchaseRail({ purchase }: { purchase: PurchaseWithoutUnderlag }) {
+  const t = useTranslations('inbox_workspace')
   return (
     <div className="p-4 space-y-4">
       <div>
         <h3 className="text-sm font-medium">
-          {purchase.merchant_name || purchase.description || 'Okänt köp'}
+          {purchase.merchant_name || purchase.description || t('purchase_unknown')}
         </h3>
-        <p className="text-xs text-muted-foreground mt-0.5">Köp utan underlag</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{t('purchase_kind')}</p>
       </div>
 
       <dl className="space-y-1.5 text-xs">
@@ -2361,7 +2367,7 @@ function PurchaseRail({ purchase }: { purchase: PurchaseWithoutUnderlag }) {
         </div>
         {purchase.description && (
           <div className="flex justify-between gap-3">
-            <dt className="text-muted-foreground shrink-0">Kontotext</dt>
+            <dt className="text-muted-foreground shrink-0">{t('purchase_bank_text')}</dt>
             <dd className="text-muted-foreground text-right break-words">{purchase.description}</dd>
           </div>
         )}
@@ -2447,6 +2453,7 @@ function ProposedBooking({
   /** Hands the loaded proposal up so the editor can open pre-filled with it. */
   onLoaded?: (data: SuggestedBooking | null) => void
 }) {
+  const t = useTranslations('inbox_workspace')
   const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
   const [data, setData] = useState<SuggestedBooking | null>(null)
 
@@ -2505,7 +2512,7 @@ function ProposedBooking({
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-xs font-medium">Föreslagen kontering</h3>
+        <h3 className="text-xs font-medium">{t('proposal_title')}</h3>
         {data.entry_date && (
           <span className="text-[11px] text-muted-foreground tabular-nums">
             Bokförs {formatDate(data.entry_date)}
@@ -2552,7 +2559,7 @@ function ProposedBooking({
 
       {(SUGGESTION_SOURCE_LABEL[data.source] || data.requires_review || data.direction_mismatch) && (
         <details className="text-[11px] text-muted-foreground">
-          <summary className="cursor-pointer hover:text-foreground">Varför så här?</summary>
+          <summary className="cursor-pointer hover:text-foreground">{t('proposal_why')}</summary>
           <div className="pt-1.5 space-y-1">
             {SUGGESTION_SOURCE_LABEL[data.source] && <p>{SUGGESTION_SOURCE_LABEL[data.source]}</p>}
             {data.rule_name && <p>Regel: {data.rule_name}</p>}
@@ -2864,7 +2871,7 @@ function FieldsRail({
         <details className="group" open={!isLinkedToTransaction}>
           <summary className="flex items-center gap-1.5 cursor-pointer list-none text-xs uppercase tracking-wide text-muted-foreground font-medium hover:text-foreground">
             <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
-            <span className="flex-1">Extraherade fält</span>
+            <span className="flex-1">{t('fields_summary')}</span>
             {/* How much the extraction actually got, so a thin one is visible
                 without opening it. */}
             {/* A count, not a score. "5 av 12" read as a bad extraction even
@@ -2974,7 +2981,7 @@ function FieldsRail({
               className="w-full"
               onClick={() => setEditOpen(true)}
             >
-              {proposal?.lines.length ? 'Granska och bokför' : 'Bokför manuellt'}
+              {proposal?.lines.length ? t('review_and_book') : t('book_manually')}
             </Button>
             <button
               type="button"
