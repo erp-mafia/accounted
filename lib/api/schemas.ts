@@ -802,6 +802,13 @@ export const MarkInvoiceSentSchema = z.object({
   })).min(2).optional(),
 })
 
+// Bulk Bokför: drafts are issued (F-number + mark-sent semantics, no email)
+// and booked when the company books at issue; sent/overdue unbooked invoices
+// get the deferred /book semantics. 200 caps one request at two list pages.
+export const InvoicesBulkBookSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(200),
+})
+
 export const SendInvoiceSchema = MarkInvoiceSentSchema.extend({
   additional_cc: invoiceEmailAddressList.optional(),
   additional_bcc: invoiceEmailAddressList.optional(),

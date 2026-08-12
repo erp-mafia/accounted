@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react'
+import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,6 +28,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
+import { ToastAction } from '@/components/ui/toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
@@ -753,6 +755,7 @@ type ViewTab = 'pending' | 'history'
 
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
+  const router = useRouter()
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ViewTab>('pending')
@@ -912,6 +915,28 @@ export default function PendingOperationsPage() {
         | { committed: number; failed: number; skipped: number; rejected: number }
         | undefined
 
+      // Committed create_invoice ops land as unnumbered DRAFTS: point the
+      // user at the draft view where bulk Bokför finishes the job.
+      const results = (json.data?.results ?? []) as Array<{ id: string; status: string }>
+      const committedIds = new Set(
+        results.filter((r) => r.status === 'committed').map((r) => r.id),
+      )
+      const committedInvoiceDrafts = operations.some(
+        (op) => committedIds.has(op.id) && op.operation_type === 'create_invoice',
+      )
+      const draftsCta = committedInvoiceDrafts
+        ? {
+            action: (
+              <ToastAction
+                altText={t('bulk_invoice_drafts_cta')}
+                onClick={() => router.push('/invoices?status=draft')}
+              >
+                {t('bulk_invoice_drafts_cta')}
+              </ToastAction>
+            ),
+          }
+        : {}
+
       if (summary) {
         const parts: string[] = []
         if (summary.committed > 0) parts.push(`${summary.committed} godkända`)
@@ -921,11 +946,14 @@ export default function PendingOperationsPage() {
 
         toast({
           title: summary.failed > 0 ? 'Klart med fel' : 'Godkänt',
-          description: parts.join(', '),
+          description: committedInvoiceDrafts
+            ? `${parts.join(', ')}. ${t('bulk_invoice_drafts_hint')}`
+            : parts.join(', '),
           variant: summary.failed > 0 ? 'destructive' : 'default',
+          ...draftsCta,
         })
       } else {
-        toast({ title: 'Godkänt' })
+        toast({ title: 'Godkänt', ...draftsCta })
       }
 
       setShowBulkDialog(false)
