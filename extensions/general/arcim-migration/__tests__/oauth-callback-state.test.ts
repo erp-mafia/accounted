@@ -251,6 +251,26 @@ describe('GET /callback: full-page fallback when there is no opener', () => {
     expect(target.searchParams.get('migration')).toBe('error')
     expect(target.searchParams.get('reason')).toContain(GENERIC_REJECTION)
   })
+
+  it('includes the consent id when a full-page provider error can be resumed', async () => {
+    ;(consumeOAuthState as Mock).mockResolvedValue({
+      consentId: 'consent-1',
+      provider: 'fortnox',
+    })
+
+    const res = await callbackHandler(
+      callbackRequest({
+        error: 'access_denied',
+        error_description: 'User denied consent',
+        state: 'one-time-token',
+      }),
+    )
+    const target = fallbackNavigation(await res.text())
+
+    expect(target.searchParams.get('migration')).toBe('error')
+    expect(target.searchParams.get('consentId')).toBe('consent-1')
+    expect(exchangeAuthToken).not.toHaveBeenCalled()
+  })
 })
 
 /**
