@@ -169,7 +169,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
 
   it('creates an unnumbered draft from a matched customer and links back', async () => {
     enqueue({ data: makeOrderRow() }) // order fetch
-    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', customer_type: 'business' } }) // email match
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', customer_type: 'swedish_business' } }) // email match
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
     enqueue({ data: null }) // invoice_items insert
     enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
@@ -194,7 +194,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
   it('creates a customer from the order billing data when none matches', async () => {
     enqueue({ data: makeOrderRow() }) // order fetch
     enqueue({ data: null }) // email match: none
-    enqueue({ data: { id: 'cust-new', name: 'Testbolaget AB', customer_type: 'business' } }) // customer insert
+    enqueue({ data: { id: 'cust-new', name: 'Testbolaget AB', customer_type: 'swedish_business' } }) // customer insert
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
     enqueue({ data: null }) // items
     enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
@@ -205,12 +205,36 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
     expect(customerInsert).toBeDefined()
     expect(customerInsert![0]).toMatchObject({
       name: 'Testbolaget AB',
-      customer_type: 'business',
+      // Must be a value customers_customer_type_check accepts; 'business' is
+      // not one and made every business-order conversion 500 in production.
+      // No customer_country on the order defaults to domestic.
+      customer_type: 'swedish_business',
       contact_person: 'Test Person',
     })
     // Scraped orgnr must NOT auto-land on the customer's legal field
     // (Swedish compliance review): the dialog shows it for manual review.
     expect(customerInsert![0]).not.toHaveProperty('org_number')
+  })
+
+  // Reverse charge (EU) and export (non-EU) treatment key off customer_type,
+  // so the billing country must classify the created customer up front
+  // instead of stamping every business order as domestic.
+  it.each([
+    ['SE', 'swedish_business'],
+    ['DE', 'eu_business'],
+    ['no', 'non_eu_business'],
+  ])('classifies a business order with country %s as %s', async (country, expected) => {
+    enqueue({ data: makeOrderRow({ customer_country: country }) }) // order fetch
+    enqueue({ data: null }) // email match: none
+    enqueue({ data: { id: 'cust-new', name: 'Testbolaget AB', customer_type: expected } })
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null }) // items
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
+
+    const { status } = await parseJsonResponse(await postCreate())
+    expect(status).toBe(200)
+    const customerInsert = findCall('customers', 'insert')
+    expect(customerInsert![0]).toMatchObject({ customer_type: expected })
   })
 
   it('rolls back the draft when the order link-back fails', async () => {

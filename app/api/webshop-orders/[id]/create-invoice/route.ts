@@ -7,7 +7,24 @@ import { CreateInvoiceFromWebshopOrderSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
 import { roundOre } from '@/lib/money'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import type { Currency, Customer, Invoice, WebshopOrder } from '@/types'
+import { EU_COUNTRIES } from '@/lib/vat/eu-countries'
+import type { Currency, Customer, CustomerType, Invoice, WebshopOrder } from '@/types'
+
+const EU_COUNTRY_CODES = new Set(EU_COUNTRIES.map((c) => c.code))
+
+/**
+ * Business orders classify by the order's billing country so downstream VAT
+ * treatment (reverse charge for EU, export for non-EU) keys off the right
+ * customer_type from the start (Swedish compliance review, PR #1538). A
+ * missing country defaults to domestic; the draft review and the customer
+ * card remain the gate where the user corrects the classification.
+ */
+function customerTypeFromOrder(order: WebshopOrder): CustomerType {
+  if (!order.customer_company) return 'individual'
+  const country = order.customer_country?.toUpperCase()
+  if (!country || country === 'SE') return 'swedish_business'
+  return EU_COUNTRY_CODES.has(country) ? 'eu_business' : 'non_eu_business'
+}
 
 ensureInitialized()
 
@@ -132,7 +149,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             company_id: companyId,
             user_id: user.id,
             name,
-            customer_type: order.customer_company ? 'business' : 'individual',
+            customer_type: customerTypeFromOrder(order),
             contact_person: order.customer_company ? order.customer_name : null,
             email: order.customer_email,
           })
