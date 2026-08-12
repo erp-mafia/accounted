@@ -119,6 +119,17 @@ describe('ingestMailCandidate', () => {
     await expect(ingestMailCandidate(client, 'co-1', 'user-1', candidate())).resolves.toBeNull()
   })
 
+  it('skips filing when the same content is already archived for the company', async () => {
+    // The provenance key catches a re-hunted message; this catches the same
+    // receipt arriving through ANOTHER inbox: uploadDocument answers with the
+    // existing document instead of a copy, and no second item is filed.
+    mockUploadDocument.mockResolvedValue({ id: 'doc-orig', deduplicated: true })
+    const { client, inserted } = mockSupabase(null)
+    const result = await ingestMailCandidate(client, 'co-1', 'user-1', candidate())
+    expect(result).toBeNull()
+    expect(inserted).toHaveLength(0)
+  })
+
   it('ignores a body-only receipt, which has nothing to download', async () => {
     const { client } = mockSupabase(null)
     const result = await ingestMailCandidate(

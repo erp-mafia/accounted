@@ -164,8 +164,21 @@ export async function ingestMailCandidate(
           ) as ArrayBuffer,
           type: sniffMimeType(fetched.bytes, fetched.mimeType, fileName),
         },
-        { upload_source: 'mail_hunt' },
+        { upload_source: 'mail_hunt', dedupeByContent: true },
       )
+
+      // Content already archived for this company: the provenance key above
+      // only catches the SAME message re-hunted, while this catches the same
+      // receipt arriving through another inbox or channel (forwards are
+      // common). The underlag exists and is matchable; filing a second inbox
+      // item would only duplicate work in Underlag.
+      if (document.deduplicated) {
+        log.info('skipped duplicate attachment content', {
+          messageId: candidate.messageId,
+          documentId: document.id,
+        })
+        continue
+      }
 
       // uploadDocument emits document.uploaded and awaits its handlers, so the
       // extraction extension has already read the amount, date and vendor out
