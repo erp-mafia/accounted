@@ -43,6 +43,7 @@ import {
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
+import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
@@ -3383,6 +3384,21 @@ async function commitCreateSupplierInvoiceFromInbox(
     return { error: 'exchange_rate must be a finite number when provided', status: 400 }
   }
 
+  // Särskild löneskatt (SLP): staged params must respect the same rule the
+  // create routes enforce; the 7533/2514 pair is only lawful on 741x pension
+  // premiums, so a flag on any other account is tampered or mis-staged.
+  const slpInvalid = rawItems.some(
+    (item) => item.apply_slp === true && !isSlpPensionAccount(String(item.account_number ?? '')),
+  )
+  if (slpInvalid) {
+    return {
+      error:
+        getErrorEntry('SI_CREATE_SLP_INVALID_ACCOUNT')?.message_sv ??
+        'Särskild löneskatt kan bara läggas till på rader med pensionskonto 7410-7419.',
+      status: 400,
+    }
+  }
+
   // Idempotency: a re-fired commit (e.g. retry, double-click on the approval
   // UI, racy MCP call) must not create a second leverantörsfaktura for the
   // same inbox row. The DB FK on invoice_inbox_items.created_supplier_invoice_id
@@ -3566,6 +3582,9 @@ async function commitCreateSupplierInvoiceFromInbox(
       reverse_charge_rate: reverseCharge
         ? ([0.06, 0.12, 0.25].includes(Number(item.reverse_charge_rate)) ? Number(item.reverse_charge_rate) : null)
         : null,
+      // Särskild löneskatt (SLP): booking injects the self-balancing
+      // 7533/2514 pair for this line. Validated above (741x accounts only).
+      apply_slp: item.apply_slp === true,
       dimensions: coerceDimensionsBag(item.dimensions) ?? {},
     }
   })

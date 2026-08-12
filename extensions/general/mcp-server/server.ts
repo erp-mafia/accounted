@@ -18,6 +18,8 @@ import { createLogger } from '@/lib/logger'
 import { roundOre, sumOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
+import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
@@ -9714,13 +9716,17 @@ export const tools: McpTool[] = [
         due_date_override: { type: 'string', description: 'Override extracted due date (YYYY-MM-DD)' },
         line_overrides: {
           type: 'array',
-          description: 'Per-line overrides (1-based line_number): account_number wins over accountSuggestion and supplier default; dimensions tags that line.',
+          description: 'Per-line overrides (1-based line_number): account_number wins over accountSuggestion and supplier default; dimensions tags that line; apply_slp books särskild löneskatt on a 741x pension line.',
           items: {
             type: 'object',
             additionalProperties: false,
             properties: {
               line_number: { type: 'number', description: '1-based index matching items_preview' },
               account_number: { type: 'string', description: 'BAS account number for this line (e.g. "6420")' },
+              apply_slp: {
+                type: 'boolean',
+                description: 'Book särskild löneskatt (24.26%, 7533 D / 2514 K) for this line at commit. Only valid when the line resolves to a 741x pension-premium account (tjänstepension); any other account is rejected at staging.',
+              },
               dimensions: {
                 type: 'object',
                 additionalProperties: { type: 'string' },
@@ -9927,9 +9933,12 @@ export const tools: McpTool[] = [
       }
 
       // Build lookups for per-line overrides keyed by 1-based line number.
-      const rawLineOverrides = (args.line_overrides as Array<{ line_number: number; account_number?: string; dimensions?: unknown }> | undefined) ?? []
+      const rawLineOverrides = (args.line_overrides as Array<{ line_number: number; account_number?: string; apply_slp?: boolean; dimensions?: unknown }> | undefined) ?? []
       const lineOverrideMap = new Map(
         rawLineOverrides.filter((o) => o.account_number).map((o) => [o.line_number, o.account_number as string]),
+      )
+      const lineSlpMap = new Map(
+        rawLineOverrides.filter((o) => o.apply_slp !== undefined).map((o) => [o.line_number, o.apply_slp === true]),
       )
       const lineDimensionsMap = new Map(
         rawLineOverrides.map((o, i) => [o.line_number, parseDimensionsArg(o.dimensions, `line_overrides[${i}].dimensions`)]),
@@ -9969,6 +9978,22 @@ export const tools: McpTool[] = [
         const vatAmount = rawVatAmount == null
           ? roundOre(lineTotal * vatRate)
           : Number(rawVatAmount) || 0
+        const accountNumber = lineOverrideMap.get(lineNumber) ?? (li.accountSuggestion as string | null) ?? supplierDefaultExpenseAccount ?? '4000'
+        // Särskild löneskatt: same guard the create routes and the executor
+        // enforce (SI_CREATE_SLP_INVALID_ACCOUNT). Reject at staging time on
+        // the RESOLVED account so the agent learns immediately, instead of a
+        // human approving an operation the executor is guaranteed to refuse.
+        const applySlp = lineSlpMap.get(lineNumber) === true
+        if (applySlp && !isSlpPensionAccount(accountNumber)) {
+          const slpEntry = getErrorEntry('SI_CREATE_SLP_INVALID_ACCOUNT')
+          const slpErr = new Error(
+            `line_overrides[line_number=${lineNumber}]: apply_slp on account ${accountNumber}. `
+            + `${slpEntry?.message_sv ?? 'Särskild löneskatt kan bara läggas till på rader med pensionskonto 7410-7419.'} / `
+            + `${slpEntry?.message_en ?? 'Särskild löneskatt can only be added on lines booked to a pension account 7410-7419.'}`,
+          )
+          ;(slpErr as Error & { code?: string }).code = 'SI_CREATE_SLP_INVALID_ACCOUNT'
+          throw slpErr
+        }
         return {
           line_number: lineNumber,
           description: (li.description as string) ?? `Position ${lineNumber}`,
@@ -9976,9 +10001,10 @@ export const tools: McpTool[] = [
           unit: (li.unit as string) ?? 'st',
           unit_price: Number(li.unit_price ?? li.unitPrice ?? li.amount) || 0,
           line_total: lineTotal,
-          account_number: lineOverrideMap.get(lineNumber) ?? (li.accountSuggestion as string | null) ?? supplierDefaultExpenseAccount ?? '4000',
+          account_number: accountNumber,
           vat_rate: vatRate,
           vat_amount: vatAmount,
+          ...(applySlp ? { apply_slp: true } : {}),
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
         }
       })

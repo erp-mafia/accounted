@@ -61,6 +61,12 @@ const SI_RESPONSE_COLUMNS =
 // decide whether a kontantmetoden credit note must reverse an entry the
 // payment already posted. `status` alone is too weak, it misses a
 // part-paid-but-booked original (rows predating the #1413 guard).
+//
+// Items keep `apply_slp` in the projection for the same reason as
+// default_dimensions above: createSupplierCreditNoteEntry reads the flag off
+// the ORIGINAL items to reverse the 7533/2514 SLP pair the registration
+// booked. Dropping it would leave the pension cost and the 2514 liability
+// standing forever after the credit.
 const SI_FULL_COLUMNS = `
   id, supplier_id, supplier_invoice_number, invoice_date, status,
   currency, exchange_rate,
@@ -69,7 +75,7 @@ const SI_FULL_COLUMNS = `
   registration_journal_entry_id, payment_journal_entry_id, paid_at, paid_amount,
   is_credit_note, credited_invoice_id, arrival_number, default_dimensions,
   supplier:suppliers(id, name, supplier_type),
-  items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, dimensions)
+  items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, apply_slp, dimensions)
 `
 
 const SupplierInvoiceCredited = z.object({
@@ -184,6 +190,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         vat_rate: number
         vat_amount: number
         reverse_charge_rate: number | null
+        apply_slp: boolean | null
         dimensions: Record<string, string> | null
       }>
     } & Record<string, unknown>
@@ -332,6 +339,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       // Preserve the self-assessed RC rate so the credit note reverses fiktiv
       // moms at the same rate the original was booked at.
       reverse_charge_rate: item.reverse_charge_rate,
+      // Preserve the SLP flag for display parity with the web credit route;
+      // the journal reversal reads the ORIGINAL items, so the 7533/2514 swap
+      // is correct either way.
+      apply_slp: item.apply_slp ?? false,
       // Same reasoning: the reversal must carry the exact per-item bag the
       // original booked with (dimensions PR7).
       dimensions: item.dimensions ?? {},
