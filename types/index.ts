@@ -1000,6 +1000,12 @@ export interface SupplierInvoiceItem {
   // the expense line this item books to (dimensions PR7). jsonb DEFAULT '{}'.
   dimensions?: Record<string, string>
 
+  // Särskild löneskatt på pensionskostnader: when true the booking engine
+  // injects a self-balancing 7533 D / 2514 K pair at 24.26 % of line_total
+  // (lib/bookkeeping/slp-lines.ts). Only valid on 741x pension-premium
+  // accounts. Optional in TS for pre-migration fixtures.
+  apply_slp?: boolean
+
   created_at: string
 }
 
@@ -1510,6 +1516,9 @@ export interface CreateSupplierInvoiceItemInput {
   // Self-assessed VAT rate for omvänd skattskyldighet (0.06/0.12/0.25). When
   // set, the engine books fiktiv moms at this rate while vat_rate stays 0.
   reverse_charge_rate?: number
+  // Särskild löneskatt på pensionskostnader: injects 7533 D / 2514 K at
+  // 24.26 % of the line amount. Only valid on 741x pension accounts.
+  apply_slp?: boolean
   vat_code?: string
   // Legacy fields (backward compat, ignored when amount is set)
   quantity?: number

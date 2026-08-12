@@ -610,6 +610,69 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     expect(params.vat_amount).toBe(120)
   })
 
+  it('rejects apply_slp when the line resolves to a non-741x account (staging-time guard)', async () => {
+    // The executor (commitCreateSupplierInvoiceFromInbox) refuses the same
+    // combination at commit time; rejecting at staging means the agent learns
+    // immediately instead of a human approving a doomed operation.
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-slp-1',
+        status: 'received',
+        extracted_data: baseExtracted, // line resolves to supplier default / 4000
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-slp-1',
+      },
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    await expect(
+      tool.execute(
+        {
+          inbox_item_id: 'inbox-slp-1',
+          line_overrides: [{ line_number: 1, apply_slp: true }],
+        },
+        'company-1', 'user-1', supabase,
+      ),
+    ).rejects.toThrow(/7410-7419/)
+  })
+
+  it('stages apply_slp into the operation items when the line resolves to a 741x account', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-slp-2',
+        status: 'received',
+        extracted_data: {
+          ...baseExtracted,
+          lineItems: [
+            { description: 'Tjänstepension', quantity: 1, unit_price: 10000, line_total: 10000, vat_rate: 0, vat_amount: 0 },
+          ],
+        },
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-slp-2',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      {
+        inbox_item_id: 'inbox-slp-2',
+        line_overrides: [{ line_number: 1, account_number: '7412', apply_slp: true }],
+      },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const params = inserts[0].params as {
+      items: Array<{ account_number: string; apply_slp?: boolean }>
+    }
+    // The executor reads item.apply_slp === true to book the 7533/2514 pair:
+    // without this plumbing the flag was unreachable from MCP.
+    expect(params.items[0].account_number).toBe('7412')
+    expect(params.items[0].apply_slp).toBe(true)
+  })
+
   it('invoice_date_override rescues an inbox item with no extracted invoiceDate', async () => {
     const extractedNoDate = {
       ...baseExtracted,
