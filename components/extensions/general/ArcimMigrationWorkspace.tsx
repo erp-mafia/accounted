@@ -50,7 +50,6 @@ import {
   parseArcimDocumentOAuthResume,
   requestArcimDocumentImport,
   resolveArcimDocumentFollowUpProvider,
-  serializeArcimDocumentOAuthResume,
   watchArcimOAuthPopup,
   type ArcimDocumentImportProblem,
   type ArcimDocumentImportState,
@@ -128,7 +127,7 @@ function storeDocumentOAuthResume(
   try {
     window.sessionStorage.setItem(
       ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
-      serializeArcimDocumentOAuthResume({ action }),
+      action,
     )
   } catch {
     // Full-page recovery is best-effort when browser storage is unavailable.

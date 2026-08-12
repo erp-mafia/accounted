@@ -9,7 +9,6 @@ import {
   parseArcimDocumentOAuthResume,
   requestArcimDocumentImport,
   resolveArcimDocumentFollowUpProvider,
-  serializeArcimDocumentOAuthResume,
   watchArcimOAuthPopup,
   type ArcimDocumentImportResult,
 } from '../arcim-document-import-flow'
@@ -210,14 +209,10 @@ describe('document import endpoint request', () => {
 describe('document scope OAuth recovery', () => {
   it('round-trips the full-page redirect resume action and rejects malformed state', () => {
     expect(ARCIM_DOCUMENT_OAUTH_RESUME_KEY).toBe('arcim-document-oauth-resume')
-    const serialized = serializeArcimDocumentOAuthResume({
+    expect(parseArcimDocumentOAuthResume('import')).toEqual({
       action: 'import',
     })
-
-    expect(parseArcimDocumentOAuthResume(serialized)).toEqual({
-      action: 'import',
-    })
-    expect(parseArcimDocumentOAuthResume('{"action":"unknown"}')).toBeNull()
+    expect(parseArcimDocumentOAuthResume('unknown')).toBeNull()
   })
 
   it('only treats scope and consent failures as reconnectable', () => {

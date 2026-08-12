@@ -13,25 +13,11 @@ export interface ArcimDocumentOAuthResume {
   action: ArcimDocumentOAuthResumeAction
 }
 
-export function serializeArcimDocumentOAuthResume(
-  resume: ArcimDocumentOAuthResume,
-): string {
-  return JSON.stringify(resume)
-}
-
 export function parseArcimDocumentOAuthResume(
   value: string | null,
 ): ArcimDocumentOAuthResume | null {
-  if (!value) return null
-  try {
-    const parsed = JSON.parse(value) as Partial<ArcimDocumentOAuthResume>
-    if (parsed.action !== 'discover' && parsed.action !== 'import') {
-      return null
-    }
-    return { action: parsed.action }
-  } catch {
-    return null
-  }
+  if (value !== 'discover' && value !== 'import') return null
+  return { action: value }
 }
 
 /** Poll a provider popup so closing it cannot leave the UI reconnecting forever. */
