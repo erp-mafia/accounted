@@ -17,7 +17,10 @@ vi.mock('../lib/api-client', async (importOriginal) => {
   return {
     ...actual,
     startAuthorization: (...args: unknown[]) => mockStartAuthorization(...args),
+    // index.ts resolves the pinned auth method (with metadata for logging)
+    // through the details variant; both point at one mock for simplicity.
     getPreferredAuthMethod: (...args: unknown[]) => mockGetPreferredAuthMethod(...args),
+    getPreferredAuthMethodDetails: (...args: unknown[]) => mockGetPreferredAuthMethod(...args),
   }
 })
 
