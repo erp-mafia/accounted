@@ -92,6 +92,9 @@ export const POST = withRouteContext(
       // Preserve the self-assessed RC rate so the credit-note verifikat
       // reverses fiktiv moms at the same rate the original was booked at.
       reverse_charge_rate: item.reverse_charge_rate,
+      // Preserve the SLP flag for display parity; the journal reversal reads
+      // the ORIGINAL items, so the 7533/2514 swap is correct either way.
+      apply_slp: item.apply_slp ?? false,
       // Dims copied for display parity; the journal reversal reads the
       // ORIGINAL items below (dimensions PR7).
       dimensions: item.dimensions ?? {},

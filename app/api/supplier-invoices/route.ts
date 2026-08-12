@@ -6,6 +6,7 @@ import {
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { ensureInitialized } from '@/lib/init'
@@ -120,6 +121,23 @@ export const POST = withRouteContext(
         requestId,
         details: { reason: 'paid_with_private_funds is not supported with reverse_charge' },
       })
+    }
+
+    // Särskild löneskatt (SLP): the 7533/2514 pair is only lawful on pension
+    // premiums, so the flag is rejected on any non-741x account, and rejected
+    // together with periodisering on the same row (the pair is computed on
+    // the full line amount at registration and cannot be deferred).
+    if (body.items.some((item) => item.apply_slp && !isSlpPensionAccount(item.account_number))) {
+      return errorResponseFromCode('SI_CREATE_SLP_INVALID_ACCOUNT', log, { requestId })
+    }
+    if (
+      body.items.some(
+        (item) =>
+          item.apply_slp &&
+          (item.accrual_period_start || item.accrual_period_end || item.accrual_balance_account),
+      )
+    ) {
+      return errorResponseFromCode('SI_CREATE_SLP_ACCRUAL', log, { requestId })
     }
 
     const hasAccrualItems = body.items.some(
@@ -256,6 +274,9 @@ export const POST = withRouteContext(
         // Dimensions PR7: per-item bag, merged over default_dimensions on the
         // expense line at booking (supplier-invoice-entries.ts).
         dimensions: item.dimensions ?? {},
+        // Särskild löneskatt (SLP): booking injects the self-balancing
+        // 7533/2514 pair for this line. Guarded above (741x only, no accrual).
+        apply_slp: item.apply_slp === true,
       }
     })
 

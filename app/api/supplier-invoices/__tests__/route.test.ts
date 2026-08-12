@@ -7,7 +7,7 @@ import {
   makeSupplier,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -1140,5 +1140,125 @@ describe('POST /api/supplier-invoices: exchange rate + SEK amounts', () => {
 
     expect(status).toBe(200)
     expect(supplierInvoiceInsert()!.exchange_rate).toBe(99999.99)
+  })
+})
+
+// ── Särskild löneskatt (SLP, apply_slp) ─────────────────────────────────────
+
+describe('POST /api/supplier-invoices: särskild löneskatt (apply_slp)', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+
+  function slpBody(items: Record<string, unknown>[]) {
+    return {
+      supplier_id: VALID_UUID,
+      supplier_invoice_number: 'LF-SLP',
+      invoice_date: '2024-06-01',
+      due_date: '2024-07-01',
+      items,
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+  })
+
+  it('rejects apply_slp on a non-741x account with SI_CREATE_SLP_INVALID_ACCOUNT', async () => {
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: slpBody([
+          { description: 'Konsult', amount: 10000, account_number: '6200', vat_rate: 0.25, apply_slp: true },
+        ]),
+      }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CREATE_SLP_INVALID_ACCOUNT')
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects apply_slp combined with periodisering on the same item', async () => {
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: slpBody([
+          {
+            description: 'Tjänstepension',
+            amount: 10000,
+            account_number: '7412',
+            vat_rate: 0,
+            apply_slp: true,
+            accrual_period_start: '2024-06-01',
+            accrual_period_end: '2024-12-31',
+          },
+        ]),
+      }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_CREATE_SLP_ACCRUAL')
+    expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
+  })
+
+  it('happy path: apply_slp on a 7412 line is stored on the item and reaches the generator', async () => {
+    enqueue({ data: makeSupplier({ id: VALID_UUID }), error: null }) // supplier lookup
+    enqueue({ data: 9 }) // get_next_arrival_number
+    enqueue({ data: makeSupplierInvoice({ id: 'si-slp' }), error: null }) // insert invoice
+    enqueue({ data: [], error: null }) // insert items
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // settings
+    mockCreateSupplierInvoiceRegistrationEntry.mockResolvedValue({ id: 'je-slp' })
+    enqueue({ data: null, error: null }) // update registration_journal_entry_id
+
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: slpBody([
+          { description: 'Avanza tjänstepension', amount: 10000, account_number: '7412', vat_rate: 0, apply_slp: true },
+        ]),
+      }),
+    )
+    const { status } = await parseJsonResponse(response)
+    expect(status).toBe(200)
+
+    // The DB insert carries the flag...
+    const itemsInsert = findCall('supplier_invoice_items', 'insert')
+    expect(itemsInsert).toBeDefined()
+    const rows = itemsInsert![0] as Array<Record<string, unknown>>
+    expect(rows[0].apply_slp).toBe(true)
+    expect(rows[0].account_number).toBe('7412')
+
+    // ...and the same items array reaches the registration generator, which
+    // injects the 7533/2514 pair from it.
+    const generatorItems = mockCreateSupplierInvoiceRegistrationEntry.mock
+      .calls[0][4] as Array<Record<string, unknown>>
+    expect(generatorItems[0].apply_slp).toBe(true)
+  })
+
+  it('defaults apply_slp to false when omitted', async () => {
+    enqueue({ data: makeSupplier({ id: VALID_UUID }), error: null })
+    enqueue({ data: 10 })
+    enqueue({ data: makeSupplierInvoice({ id: 'si-noslp' }), error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { accounting_method: 'cash' }, error: null })
+
+    const response = await POST(
+      createMockRequest('/api/supplier-invoices', {
+        method: 'POST',
+        body: slpBody([
+          { description: 'Pensionspremie utan SLP-flagga', amount: 5000, account_number: '7412', vat_rate: 0 },
+        ]),
+      }),
+    )
+    const { status } = await parseJsonResponse(response)
+    expect(status).toBe(200)
+
+    const itemsInsert = findCall('supplier_invoice_items', 'insert')
+    const rows = itemsInsert![0] as Array<Record<string, unknown>>
+    expect(rows[0].apply_slp).toBe(false)
   })
 })
