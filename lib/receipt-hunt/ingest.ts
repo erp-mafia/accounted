@@ -197,12 +197,15 @@ export async function ingestMailCandidate(
               aggregateType: 'Document',
               aggregateId: document.id,
               eventType: 'DocumentDuplicateSkipped',
+              // No mailbox address here: the processing-history payload
+              // contract is pseudonymous IDs only (never emails). Which
+              // mailbox first delivered the receipt is on the existing
+              // item's channel_context.
               payload: {
                 channel: 'mail_hunt',
                 document_id: document.id,
                 inbox_item_id: (dupItem as { id: string }).id,
                 mail_message_id: candidate.messageId,
-                mailbox: candidate.mailbox,
                 reason: 'duplicate_content',
               },
               actor: { type: 'system', id: 'receipt-hunt' },

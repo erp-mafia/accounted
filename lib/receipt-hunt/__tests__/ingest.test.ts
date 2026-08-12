@@ -11,8 +11,9 @@ vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: (...args: unknown[]) => mockUploadDocument(...args),
 }))
 
+const mockAppendHistory = vi.fn()
 vi.mock('@/lib/processing-history/append', () => ({
-  appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
+  appendProcessingHistory: (...args: unknown[]) => mockAppendHistory(...args),
 }))
 
 const mockFetchAttachment = vi.fn()
@@ -146,6 +147,34 @@ describe('ingestMailCandidate', () => {
       expect.anything(),
       { upload_source: 'mail_hunt', dedupeByContent: true },
     )
+    // The skip is behandlingshistorik, not just an app log; and the payload
+    // stays pseudonymous (never a mailbox address).
+    expect(mockAppendHistory).toHaveBeenCalledTimes(1)
+    const event = mockAppendHistory.mock.calls[0]![0] as {
+      eventType: string
+      aggregateId: string
+      payload: Record<string, unknown>
+    }
+    expect(event.eventType).toBe('DocumentDuplicateSkipped')
+    expect(event.aggregateId).toBe('doc-orig')
+    expect(event.payload).toMatchObject({
+      channel: 'mail_hunt',
+      document_id: 'doc-orig',
+      inbox_item_id: 'item-existing',
+      reason: 'duplicate_content',
+    })
+    expect(JSON.stringify(event.payload)).not.toContain('@')
+  })
+
+  it('still skips the duplicate when the history append fails', async () => {
+    // The audit write is best-effort by design: a history outage must not
+    // turn a correct skip into a duplicate filing.
+    mockUploadDocument.mockResolvedValue({ id: 'doc-orig', deduplicated: true })
+    mockAppendHistory.mockRejectedValueOnce(new Error('history down'))
+    const { client, inserted } = mockSupabase(null, {}, [{ id: 'item-existing' }])
+    const result = await ingestMailCandidate(client, 'co-1', 'user-1', candidate())
+    expect(result).toBeNull()
+    expect(inserted).toHaveLength(0)
   })
 
   it('files an item against the existing document when the duplicate never passed the inbox', async () => {
