@@ -818,9 +818,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
    * keeps the promise the copy makes.
    */
   const uploadForPurchase = useCallback(async (files: File[], transactionId: string) => {
-    const file = files[0]
+    const [file, ...rest] = files
     if (!file) return
     const itemId = await uploadFile(file, { autoSelect: false })
+    // A receipt scanned as two images, or an invoice with its specification,
+    // arrives as one drop. Taking the first and discarding the rest in silence
+    // left the purchase looking resolved with half its paperwork gone. They
+    // cannot all be the underlag for one purchase, so the extras are filed in
+    // the inbox rather than dropped on the floor.
+    for (const extra of rest) await uploadFile(extra, { autoSelect: false })
     if (!itemId) return
     try {
       const res = await fetch(
@@ -832,7 +838,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         },
       )
       if (!res.ok) throw new Error(String(res.status))
-      toast({ title: 'Underlag kopplat', description: file.name })
+      toast({
+        title: 'Underlag kopplat',
+        description: rest.length ? `${file.name}. ${rest.length} till lades i inkorgen.` : file.name,
+      })
       setSelectedPurchaseId(null)
       await Promise.all([fetchItems(), fetchPurchases()])
     } catch {
@@ -1054,15 +1063,18 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               variant="ghost"
               size="sm"
               onClick={() => setSourcesOpen((v) => !v)}
-              className={cn('h-7 px-2 text-xs font-normal shrink-0', ailingMailbox && 'text-warning')}
+              className={cn(
+                'h-7 px-2 text-xs font-normal shrink-0',
+                ailingMailbox ? 'text-warning' : 'text-muted-foreground',
+              )}
               aria-expanded={sourcesOpen}
             >
-              <span
-                className={cn(
-                  'h-1.5 w-1.5 rounded-full mr-1.5',
-                  ailingMailbox ? 'bg-warning' : 'bg-success',
-                )}
-              />
+              {/* No marker on the healthy state. Convention 5: a normal state
+                  is muted text, and a chip every company sees always is a chip
+                  that says nothing. Convention 12 rules out the sage anyway,
+                  semantic colour being data rather than chrome. What remains is
+                  the exception, which is the one thing worth an ochre word. */}
+              {ailingMailbox && <AlertTriangle className="h-3 w-3 mr-1.5" />}
               {ailingMailbox
                 ? `${ailingMailbox.emailAddress} behöver återanslutas`
                 : `${sourceCount} ${sourceCount === 1 ? 'källa' : 'källor'}`}
@@ -1439,13 +1451,19 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             )
           ) : (filter === 'missing' || filter === 'portal' ? filteredPurchases.length : filteredItems.length) === 0 ? (
             <div className="p-6 text-center text-xs text-muted-foreground">
-              {filter === 'todo'
-                ? 'Inget att åtgärda; allt är bearbetat.'
-                : filter === 'portal'
-                  ? 'Inga köp väntar på en faktura från en portal.'
-                  : filter === 'missing'
-                    ? 'Varje köp har sitt underlag.'
-                  : 'Inga poster matchar filtret.'}
+              {/* A leftover search term makes every one of these false: the
+                  trigger above still shows the unsearched count, so the page
+                  would claim every purchase has its underlag while the button
+                  beside it reads 50. */}
+              {searchTerm.trim() !== ''
+                ? `Inga träffar på ”${searchTerm.trim()}”.`
+                : filter === 'todo'
+                  ? 'Inget att åtgärda; allt är bearbetat.'
+                  : filter === 'portal'
+                    ? 'Inga köp väntar på en faktura från en portal.'
+                    : filter === 'missing'
+                      ? 'Varje köp har sitt underlag.'
+                      : 'Inga poster matchar filtret.'}
             </div>
           ) : (
             <ul>
