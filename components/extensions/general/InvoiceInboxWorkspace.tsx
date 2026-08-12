@@ -158,6 +158,10 @@ function pickSupplierName(item: InboxItem): string | null {
   return item.extracted_data?.supplier?.name ?? null
 }
 
+function pickInvoiceDate(item: InboxItem): string | null {
+  return item.extracted_data?.invoice?.invoiceDate ?? null
+}
+
 // True when extraction produced at least one usable field. Distinguishes a
 // deterministically-parsed underlag (fields present: render the editable
 // list) from an item whose extracted_data is null/empty (AI never ran, or ran
@@ -1926,6 +1930,7 @@ function InboxRow({
   const t = useTranslations('inbox_workspace')
   const amount = pickAmount(item)
   const supplierName = pickSupplierName(item)
+  const invoiceDate = pickInvoiceDate(item)
   const isPlaceholder = !!item.isPlaceholder
   const status = deriveInboxStatus(item)
   const isErrored = status === 'error'
@@ -1936,6 +1941,15 @@ function InboxRow({
   // item still books normally. Booked items drop the reminder.
   const hasUnansweredQuestion =
     !isBooked && item.channel_context?.pending_question?.status === 'moved_to_app'
+
+  const receivedMeta = (
+    <span className="truncate">
+      {timeAgo(item.email_received_at ?? item.created_at)}
+      {invoiceDate && (
+        <> · <span className="tabular-nums">{formatDate(invoiceDate)}</span></>
+      )}
+    </span>
+  )
 
   return (
     <li
@@ -2016,10 +2030,10 @@ function InboxRow({
                   {t('wa_question_badge')}
                 </Badge>
               )}
-              <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
+              {receivedMeta}
             </span>
           ) : (
-            <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
+            receivedMeta
           )}
           {!isPlaceholder && amount != null && (
             <span className="tabular-nums shrink-0">

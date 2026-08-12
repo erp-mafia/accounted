@@ -417,6 +417,110 @@ describe('uploadDocument', () => {
     expect(serviceRemove).toHaveBeenCalledWith([uploadedKey])
     expect(callerRemove).not.toHaveBeenCalled()
   })
+
+  it('coalesces concurrent idempotent uploads on one immutable document row', async () => {
+    const rows = new Map<string, ReturnType<typeof makeDocumentAttachment>>()
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+
+    let arrivals = 0
+    let releaseInserts = () => {}
+    const insertBarrier = new Promise<void>((resolve) => {
+      releaseInserts = resolve
+    })
+
+    const client = {
+      from: vi.fn(() => {
+        let insertPayload: Record<string, unknown> | null = null
+        let queriedId = ''
+        const builder: Record<string, unknown> = {}
+        builder.insert = vi.fn((payload: Record<string, unknown>) => {
+          insertPayload = payload
+          return builder
+        })
+        builder.select = vi.fn(() => builder)
+        builder.eq = vi.fn((column: string, value: string) => {
+          if (column === 'id') queriedId = value
+          return builder
+        })
+        builder.single = vi.fn(async () => {
+          arrivals++
+          if (arrivals === 2) releaseInserts()
+          await insertBarrier
+          const payload = insertPayload as Record<string, unknown>
+          const id = payload.id as string
+          if (rows.has(id)) {
+            return { data: null, error: { code: '23505', message: 'duplicate key' } }
+          }
+          const row = makeDocumentAttachment(payload)
+          rows.set(id, row)
+          return { data: row, error: null }
+        })
+        builder.maybeSingle = vi.fn(async () => ({
+          data: rows.get(queriedId) ?? null,
+          error: null,
+        }))
+        return builder
+      }),
+      storage: {
+        getBucket: vi.fn().mockResolvedValue({ data: { id: 'documents' }, error: null }),
+        createBucket: vi.fn().mockResolvedValue({ data: { name: 'documents' }, error: null }),
+        from: vi.fn().mockReturnValue({ upload }),
+      },
+    }
+
+    const handler = vi.fn()
+    eventBus.on('document.uploaded', handler)
+    const file = {
+      name: 'kvitto.pdf',
+      buffer: pdfBuffer('same retained receipt'),
+      type: 'application/pdf',
+    }
+    const metadata = {
+      upload_source: 'api' as const,
+      journal_entry_id: 'je-1',
+      idempotency_key: 'je-1',
+    }
+
+    const documents = await Promise.all([
+      uploadDocument(client as never, 'user-1', 'company-1', file, metadata),
+      uploadDocument(client as never, 'user-1', 'company-1', file, metadata),
+    ])
+
+    expect(documents[0].id).toBe(documents[1].id)
+    expect(rows.size).toBe(1)
+    expect(upload).toHaveBeenCalledTimes(2)
+    expect(upload.mock.calls[0]![0]).not.toBe(upload.mock.calls[1]![0])
+    expect(serviceRemove).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not treat a non-unique insert error as an idempotent winner', async () => {
+    results = [
+      { data: null, error: { code: '42501', message: 'row-level security denied' } },
+    ]
+    const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
+    serviceClientOverride = makeClient({ remove: serviceRemove })
+    const supabase = makeClient()
+
+    await expect(
+      uploadDocument(
+        supabase as never,
+        'user-1',
+        'company-1',
+        {
+          name: 'kvitto.pdf',
+          buffer: pdfBuffer('retained receipt'),
+          type: 'application/pdf',
+        },
+        { journal_entry_id: 'je-1', idempotency_key: 'je-1' },
+      ),
+    ).rejects.toThrow('Failed to create document record: row-level security denied')
+
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+    expect(serviceRemove).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('model-free signed document uploads', () => {

@@ -585,6 +585,20 @@ export async function computeSHA256(buffer: ArrayBuffer): Promise<string> {
   return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+async function deterministicDocumentId(
+  companyId: string,
+  idempotencyKey: string,
+  sha256Hash: string,
+): Promise<string> {
+  const input = new TextEncoder().encode(`${companyId}\u0000${idempotencyKey}\u0000${sha256Hash}`)
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input))
+  const bytes = digest.slice(0, 16)
+  bytes[6] = (bytes[6] & 0x0f) | 0x50
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
 /**
  * Upload a document and create a record with SHA-256 integrity hash
  */
@@ -597,6 +611,7 @@ export async function uploadDocument(
     upload_source?: DocumentUploadSource
     journal_entry_id?: string
     journal_entry_line_id?: string
+    idempotency_key?: string
     /**
      * Content dedupe for intake channels: before storing, look for a
      * current-version document in the same company with the same SHA-256 and
@@ -642,9 +657,22 @@ export async function uploadDocument(
     if (hit) return { ...hit, deduplicated: true }
   }
 
+  // Callers importing immutable third-party records can provide a stable
+  // scope. The resulting row UUID makes the database primary key the atomic
+  // claim for (company, scope, content), so concurrent serverless requests
+  // converge without requiring a process-local lock.
+  const reservedDocumentId = metadata.idempotency_key
+    ? await deterministicDocumentId(companyId, metadata.idempotency_key, sha256Hash)
+    : null
+
   // Company-scoped storage key: the tenant id must be IN the key so the
   // storage RLS policy can revoke access when a membership is removed.
-  const storagePath = buildDocumentStoragePath(companyId, userId, file.name)
+  // Idempotent calls use a unique object key per attempt. Their deterministic
+  // document row, not Storage, arbitrates the race; the losing object is then
+  // removed with the service role before this function returns.
+  const storagePath = reservedDocumentId
+    ? buildReservedDocumentStoragePath(companyId, userId, crypto.randomUUID(), file.name)
+    : buildDocumentStoragePath(companyId, userId, file.name)
 
   // Upload to Supabase Storage
   const { error: uploadError } = await supabase.storage
@@ -662,6 +690,7 @@ export async function uploadDocument(
   const { data, error } = await supabase
     .from('document_attachments')
     .insert({
+      id: reservedDocumentId ?? crypto.randomUUID(),
       user_id: userId,
       company_id: companyId,
       storage_path: storagePath,
@@ -681,6 +710,30 @@ export async function uploadDocument(
     .single()
 
   if (error) {
+    if (reservedDocumentId && error.code === '23505') {
+      const { data: concurrent, error: concurrentError } = await supabase
+        .from('document_attachments')
+        .select('id, user_id, company_id, storage_path, file_name, file_size_bytes, mime_type, sha256_hash, version, original_id, superseded_by_id, is_current_version, uploaded_by, upload_source, digitization_date, journal_entry_id, journal_entry_line_id, prev_version_hash, last_integrity_check_at, created_at, updated_at')
+        .eq('id', reservedDocumentId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (!concurrentError && concurrent) {
+        const existing = concurrent as DocumentAttachment
+        await createServiceClientNoCookies()
+          .storage.from(DOCUMENTS_BUCKET)
+          .remove([storagePath])
+        if (
+          existing.sha256_hash !== sha256Hash ||
+          existing.journal_entry_id !== (metadata.journal_entry_id || null)
+        ) {
+          throw new Error('Idempotency key was already used for different document metadata')
+        }
+
+        return existing
+      }
+    }
+
     // Clean up the just-uploaded object on record creation failure. The
     // documents bucket is WORM by design: storage.objects has NO DELETE
     // policy, so remove() on the caller's cookie-bound client is silently
