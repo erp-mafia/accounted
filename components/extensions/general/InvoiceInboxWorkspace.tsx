@@ -1165,6 +1165,12 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           ) : huntResult.fetched > 0 ? (
             <span>
               <b className="font-medium tabular-nums">{huntResult.fetched}</b> nya underlag hämtade.{' '}
+              {huntResult.remaining > 0 && (
+                <>
+                  <b className="font-medium tabular-nums">{huntResult.remaining}</b> köp kvar att söka
+                  för: tryck igen.{' '}
+                </>
+              )}
               {/* "proposed" counts pending_operations rows, not links. The hunt
                   stages attach_document_to_transaction for a human to approve
                   and books nothing, so calling them kopplade would send the
@@ -1178,7 +1184,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   .
                 </>
               ) : (
-                'Inget matchade något köp.'
+                // A press fetches a bounded number of receipts, so an empty
+                // result usually means "not yet", not "nothing there". Saying
+                // only the first sends people away from a mailbox that still
+                // has their receipts in it.
+                <>Inget matchade något köp än. Tryck igen för att leta vidare.</>
               )}
             </span>
           ) : (
