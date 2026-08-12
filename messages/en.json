@@ -2608,6 +2608,12 @@
     "link_button": "Link BankID"
   },
   "settings_security": {
+    "auto_logout_label": "Automatic logout",
+    "auto_logout_description": "Signs you out automatically after a period of inactivity, and at the latest after a per-session maximum. When off, you stay signed in on this browser until you sign out yourself.",
+    "auto_logout_switch_label": "Log me out automatically when inactive",
+    "auto_logout_enabled_toast": "Automatic logout enabled",
+    "auto_logout_disabled_toast": "Automatic logout disabled",
+    "auto_logout_save_failed": "Could not save the setting",
     "set_password_title": "Set a password",
     "set_password_description": "You signed in with BankID and have no password yet. Set one to enable 2FA or to sign in when BankID is unavailable.",
     "set_password_button": "Set password",
@@ -4162,6 +4168,10 @@
     "illegal_vat_rate_description": "Line {row} has VAT rate {rate} %. The legal Swedish VAT rates are 25, 12, 6 or 0 %.",
     "rc_account_warning": "Reverse charge: {count, plural, =1 {line {rows} uses an account starting with 1 or 6} other {lines {rows} use accounts starting with 1 or 6}}. Reverse charge purchases are normally booked on cost accounts (4xxx/5xxx). Double-check the account choice.",
     "foreign_zero_vat_warning": "Foreign supplier with no Swedish VAT: {count, plural, =1 {line {rows} has} other {lines {rows} have}} 0 % VAT while reverse charge is switched off. For a service bought from abroad, reverse charge should be on; otherwise boxes 20-24, 30-32 and 48 stay empty in the VAT return. If the supplier charged its own local VAT instead, or this is a goods import handled by customs, 0 % is correct and you can ignore this.",
+    "slp_hint": "Pension insurance: add särskild löneskatt (24.26 %), {amount} kr. The tax is booked as its own line pair (7533/2514) and does not change the invoice total.",
+    "slp_add_action": "Add payroll tax",
+    "slp_applied_line": "7533 Särskild löneskatt D {amount} / 2514 C {amount}, does not affect the invoice total",
+    "slp_remove_action": "Remove",
     "expense_registered_title": "Expense registered",
     "invoice_registered_title": "Invoice registered",
     "arrival_number_label": "Arrival number: {number}",

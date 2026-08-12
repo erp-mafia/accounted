@@ -38,6 +38,8 @@ import {
   findReverseChargeAccountWarningRows,
   findUnflaggedForeignZeroVatRows,
 } from '@/lib/vat/supplier-invoice-line-checks'
+import { SLP_RATE, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
+import { roundOre } from '@/lib/money'
 import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, Link2, CalendarClock, Tags, Paperclip } from 'lucide-react'
 import type { Supplier, BASAccount, VatTreatment, EntityType, InvoiceExtractionResult, FiscalPeriod } from '@/types'
 
@@ -58,6 +60,10 @@ interface LineItem {
   // (possibly empty) while the row's dimensions panel is open; the server
   // merges it over the invoice's default_dimensions at booking time.
   dimensions?: Record<string, string>
+  // Särskild löneskatt på pensionskostnader: booking injects a self-balancing
+  // 7533 D / 2514 K pair at 24.26 % of the line amount. Only offered on 741x
+  // pension-premium accounts; never changes the invoice total.
+  apply_slp?: boolean
 }
 
 // The existing invoice surfaced on a duplicate-number conflict, used to drive
@@ -842,6 +848,11 @@ export default function NewSupplierInvoiceForm({
     if (!watchedReverseCharge && defaultRate != null && Number.isFinite(defaultRate)) {
       setValue(`items.${index}.vat_rate`, defaultRate, { shouldDirty: true })
     }
+    // Särskild löneskatt only applies to 741x pension premiums: leaving the
+    // range clears the flag so a stale opt-in can never reach the API.
+    if (watch(`items.${index}.apply_slp`) && !isSlpPensionAccount(accountNumber)) {
+      setValue(`items.${index}.apply_slp`, undefined, { shouldDirty: true })
+    }
   }
 
   // Periodisering per rad: kräver faktureringsmetoden; eget utlägg bokar
@@ -889,7 +900,69 @@ export default function NewSupplierInvoiceForm({
         suggestBalanceAccount('expense', account),
         { shouldDirty: true },
       )
+      // Periodisering + särskild löneskatt on the same row is rejected by the
+      // API (SI_CREATE_SLP_ACCRUAL): opening the accrual panel wins and the
+      // SLP opt-in is cleared (its confirmation row disappears with it).
+      if (watch(`items.${index}.apply_slp`)) {
+        setValue(`items.${index}.apply_slp`, undefined, { shouldDirty: true })
+      }
     }
+  }
+
+  // --- Särskild löneskatt på pensionskostnader (SLP, 24,26 %) ---
+  // A 741x pension-premium row gets an advisory hint (add the 7533/2514
+  // pair) or, once opted in, a quiet confirmation line. The pair nets to
+  // zero, so the totals box below is untouched: the invoice total IS the
+  // payable. Hidden while the row's periodisering panel is open (the API
+  // rejects the combination).
+  function slpRowVisible(index: number): boolean {
+    const item = watchedItems?.[index]
+    if (!item) return false
+    if (!isSlpPensionAccount(item.account_number || '')) return false
+    if (canUseAccrual && isAccrualOpen(index)) return false
+    return true
+  }
+
+  function setSlp(index: number, value: boolean) {
+    setValue(`items.${index}.apply_slp`, value ? true : undefined, { shouldDirty: true })
+  }
+
+  function renderSlpPanel(index: number) {
+    const item = watchedItems?.[index]
+    if (!item) return null
+    const slpAmount = roundOre((item.amount || 0) * SLP_RATE)
+    if (item.apply_slp) {
+      return (
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs text-muted-foreground tabular-nums">
+            {t('slp_applied_line', { amount: formatAmount(slpAmount) })}
+          </p>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setSlp(index, false)}>
+            {t('slp_remove_action')}
+          </Button>
+        </div>
+      )
+    }
+    return (
+      <div
+        role="status"
+        className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3"
+      >
+        <AlertTriangle className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
+        <p className="flex-1 text-sm text-warning-foreground">
+          {t('slp_hint', { amount: formatAmount(slpAmount) })}
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          onClick={() => setSlp(index, true)}
+        >
+          {t('slp_add_action')}
+        </Button>
+      </div>
+    )
   }
 
   // --- Dimension tagging (kostnadsställe/projekt, dimensions PR7) ---
@@ -1119,6 +1192,14 @@ export default function NewSupplierInvoiceForm({
         // (an open-but-empty panel means "inherit the invoice default").
         ...(item.dimensions && Object.keys(item.dimensions).length > 0
           ? { dimensions: item.dimensions }
+          : {}),
+        // Särskild löneskatt (SLP): only sent when the opt-in is valid for
+        // the row (741x account, no periodisering): a stale flag must never
+        // 400 the submit.
+        ...(item.apply_slp &&
+        isSlpPensionAccount(item.account_number) &&
+        !(canUseAccrual && item.accrual_period_start && item.accrual_period_end)
+          ? { apply_slp: true }
           : {}),
       })),
     }
@@ -1947,7 +2028,7 @@ export default function NewSupplierInvoiceForm({
                 <tbody>
                   {fields.map((field, index) => (
                     <Fragment key={field.id}>
-                    <tr className={cn('align-top', (canUseAccrual && isAccrualOpen(index)) || (dimensionsEnabled && isDimOpen(index)) ? 'border-0' : 'border-b last:border-0')}>
+                    <tr className={cn('align-top', (canUseAccrual && isAccrualOpen(index)) || (dimensionsEnabled && isDimOpen(index)) || slpRowVisible(index) ? 'border-0' : 'border-b last:border-0')}>
                       <td className="py-2 pr-2">
                         <Controller
                           name={`items.${index}.account_number`}
@@ -2069,9 +2150,16 @@ export default function NewSupplierInvoiceForm({
                       </tr>
                     )}
                     {dimensionsEnabled && isDimOpen(index) && (
-                      <tr className="border-b last:border-0">
+                      <tr className={cn(slpRowVisible(index) ? 'border-0' : 'border-b last:border-0')}>
                         <td colSpan={6} className="pb-3">
                           {renderDimensionsPanel(index)}
+                        </td>
+                      </tr>
+                    )}
+                    {slpRowVisible(index) && (
+                      <tr className="border-b last:border-0">
+                        <td colSpan={6} className="pb-3">
+                          {renderSlpPanel(index)}
                         </td>
                       </tr>
                     )}
@@ -2206,6 +2294,7 @@ export default function NewSupplierInvoiceForm({
                   {canUseAccrual && isAccrualOpen(index) &&
                     renderAccrualPanel(index, `accrual-mobile-${index}`)}
                   {dimensionsEnabled && isDimOpen(index) && renderDimensionsPanel(index)}
+                  {slpRowVisible(index) && renderSlpPanel(index)}
                 </div>
               ))}
             </div>

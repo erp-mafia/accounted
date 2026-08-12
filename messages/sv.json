@@ -329,7 +329,7 @@
   "mail": {
     "hunt_stop": "Stoppa",
     "hunt_progress": "{fetched} hämtade…",
-    "hunt_title": "Leta efter underlag",
+    "hunt_title": "Kvittojakten",
     "hunt_help": "Vi söker i de kopplade brevlådorna efter kvitton och fakturor till köp som saknar underlag, läser beloppet ur filen och lägger fram förslagen i Granskning. Inget bokförs.",
     "hunt_row": "Sök igenom brevlådorna",
     "hunt_action": "Leta nu",
@@ -2608,6 +2608,12 @@
     "link_button": "Koppla BankID"
   },
   "settings_security": {
+    "auto_logout_label": "Automatisk utloggning",
+    "auto_logout_description": "Loggar ut dig automatiskt efter en period av inaktivitet, och senast efter en maxtid per session. Avstängd förblir du inloggad i den här webbläsaren tills du loggar ut själv.",
+    "auto_logout_switch_label": "Logga ut mig automatiskt vid inaktivitet",
+    "auto_logout_enabled_toast": "Automatisk utloggning aktiverad",
+    "auto_logout_disabled_toast": "Automatisk utloggning avstängd",
+    "auto_logout_save_failed": "Kunde inte spara inställningen",
     "set_password_title": "Sätt ett lösenord",
     "set_password_description": "Du loggade in med BankID och har inget lösenord ännu. Sätt ett lösenord för att kunna aktivera 2FA eller logga in när BankID inte är tillgängligt.",
     "set_password_button": "Sätt lösenord",
@@ -4162,6 +4168,10 @@
     "illegal_vat_rate_description": "Rad {row} har momssats {rate} %. Tillåtna momssatser är 25, 12, 6 eller 0 %.",
     "rc_account_warning": "Omvänd skattskyldighet: {count, plural, =1 {rad {rows} använder ett konto som börjar på 1 eller 6} other {raderna {rows} använder konton som börjar på 1 eller 6}}. Inköp med omvänd skattskyldighet bokförs normalt på kostnadskonton (4xxx/5xxx). Kontrollera kontovalet.",
     "foreign_zero_vat_warning": "Utländsk leverantör utan svensk moms: {count, plural, =1 {rad {rows} har} other {raderna {rows} har}} 0 % moms medan omvänd skattskyldighet är avstängd. Är det ett tjänsteköp från utlandet ska omvänd skattskyldighet vara på, annars blir ruta 20-24, 30-32 och 48 tomma i momsdeklarationen. Har leverantören i stället debiterat sin egen utländska moms, eller är det en varuimport som tullen hanterar, är 0 % rätt och du kan bortse från detta.",
+    "slp_hint": "Pensionsförsäkring: lägg till särskild löneskatt (24,26 %), {amount} kr. Skatten bokförs som ett eget radpar (7533/2514) och påverkar inte fakturabeloppet.",
+    "slp_add_action": "Lägg till löneskatt",
+    "slp_applied_line": "7533 Särskild löneskatt D {amount} / 2514 K {amount}, påverkar inte fakturabeloppet",
+    "slp_remove_action": "Ta bort",
     "expense_registered_title": "Utlägg registrerat",
     "invoice_registered_title": "Faktura registrerad",
     "arrival_number_label": "Ankomstnummer: {number}",

@@ -209,7 +209,74 @@ export async function uploadAndExtract(
     type: file.type,
   }, {
     upload_source: source === 'email' ? 'email' : source === 'whatsapp' ? 'whatsapp' : 'file_upload',
+    // Every inbox channel dedupes on content: the same receipt forwarded to
+    // two inboxes, re-hunted by a sweep, or uploaded twice must not become a
+    // second archived document.
+    dedupeByContent: true,
   })
+
+  if (doc.deduplicated) {
+    // The company already archived this exact content. If an inbox item
+    // exists for it, adopt that item so the caller always gets a real
+    // inbox_item_id; only when the document entered outside the inbox do we
+    // fall through and file an item for the EXISTING document (no copy).
+    const { data: existingItem, error: itemLookupError } = await supabase
+      .from('invoice_inbox_items')
+      .select('id, status, extracted_data, matched_supplier_id, matched_transaction_id')
+      .eq('company_id', companyId)
+      .eq('document_id', doc.id)
+      .order('created_at', { ascending: true })
+      .limit(1)
+    if (itemLookupError) {
+      // Fail closed: falling through would file a second item for a document
+      // that may already carry one. The delivering channel retries.
+      throw new Error(`Duplicate-item lookup failed: ${itemLookupError.message}`)
+    }
+    const adopted = (existingItem as Array<{
+      id: string
+      status: string
+      extracted_data: unknown
+      matched_supplier_id: string | null
+      matched_transaction_id: string | null
+    }> | null)?.[0]
+    if (adopted) {
+      try {
+        await appendProcessingHistory({
+          companyId,
+          correlationId,
+          aggregateType: 'Document',
+          aggregateId: doc.id,
+          eventType: 'DocumentDuplicateSkipped',
+          payload: {
+            channel: source,
+            document_id: doc.id,
+            inbox_item_id: adopted.id,
+            reason: 'duplicate_content',
+          },
+          actor: opts.actorId
+            ? { type: 'system', id: opts.actorId }
+            : source === 'email'
+              ? { type: 'system', id: 'resend-inbound' }
+              : { type: 'user', id: userId },
+          occurredAt: new Date(),
+        })
+      } catch (err) {
+        console.error('[invoice-inbox] Failed to append DocumentDuplicateSkipped:', err)
+      }
+      return {
+        document_id: doc.id,
+        inbox_item_id: adopted.id,
+        status: adopted.status,
+        extracted_data: adopted.extracted_data,
+        matched_supplier_id: adopted.matched_supplier_id,
+        matched_transaction_id: adopted.matched_transaction_id,
+        extraction_skipped: true,
+        skip_reason: 'duplicate_content' as const,
+        page_count: null,
+        duplicate: true as const,
+      }
+    }
+  }
 
   try {
     await appendProcessingHistory({

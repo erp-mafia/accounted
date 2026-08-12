@@ -93,9 +93,12 @@ CRON_SECRET=<generate with: openssl rand -hex 32>
 
 `NEXT_PUBLIC_APP_URL` must match your public-facing URL. It is used in invoice reminder emails, calendar feed links, and PSD2 callbacks. If left as a placeholder, links will be broken.
 
-Hosted Accounted sessions default to a 30-minute idle limit, a 12-hour absolute
-limit, and a warning 2 minutes before expiry. Self-hosted installations leave
-both limits disabled unless you opt in (values are milliseconds):
+Automatic logout is opt-in per user: sessions only expire for users who have
+enabled "Automatic logout" in Settings > Security (stored on
+`user_preferences.auto_logout`, default off). For opted-in users, hosted
+Accounted defaults to a 30-minute idle limit, a 12-hour absolute limit, and a
+warning 2 minutes before expiry. Self-hosted installations leave both limits
+disabled unless you opt in (values are milliseconds):
 
 ```bash
 NEXT_PUBLIC_SESSION_IDLE_TIMEOUT_MS=1800000
@@ -103,7 +106,15 @@ NEXT_PUBLIC_SESSION_ABSOLUTE_TIMEOUT_MS=43200000
 NEXT_PUBLIC_SESSION_WARNING_MS=120000
 ```
 
-Set either timeout to `0` to disable only that limit. Timeout state is signed
+Set either timeout to `0` to disable only that limit. To enforce the timeouts
+for every user regardless of their per-user preference (the pre-2026-08
+behavior), also set:
+
+```bash
+NEXT_PUBLIC_SESSION_TIMEOUT_FORCE_ALL=true
+```
+
+Timeout state is signed
 with `SUPABASE_SERVICE_ROLE_KEY` by default; set `SESSION_TIMEOUT_SECRET` to a
 separate random value if you want to rotate it independently. Changing either
 signing secret invalidates existing timeout cookies and requires users to sign

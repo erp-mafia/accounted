@@ -11,6 +11,11 @@ vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: (...args: unknown[]) => mockUploadDocument(...args),
 }))
 
+const mockAppendHistory = vi.fn()
+vi.mock('@/lib/processing-history/append', () => ({
+  appendProcessingHistory: (...args: unknown[]) => mockAppendHistory(...args),
+}))
+
 const mockFetchAttachment = vi.fn()
 vi.mock('@/lib/mail-search/service', () => ({
   getMailSearchService: () => ({
@@ -38,7 +43,12 @@ function candidate(overrides: Partial<MailCandidate> = {}): MailCandidate {
 }
 
 /** Table-dispatching Supabase stand-in with a settable existing-row answer. */
-function mockSupabase(existing: { id: string } | null, insertResult: { data?: unknown; error?: unknown } = {}) {
+function mockSupabase(
+  existing: { id: string } | null,
+  insertResult: { data?: unknown; error?: unknown } = {},
+  laterInboxAnswers: Array<{ id: string } | null> = [],
+) {
+  const inboxQueue: Array<{ id: string } | null> = [existing, ...laterInboxAnswers]
   const inserted: Array<Record<string, unknown>> = []
   const client = {
     from(table: string) {
@@ -48,7 +58,7 @@ function mockSupabase(existing: { id: string } | null, insertResult: { data?: un
         Promise.resolve(
           table === 'document_attachments'
             ? { data: { extracted_data: { total_amount: 425 } }, error: null }
-            : { data: existing, error: null },
+            : { data: inboxQueue.length ? inboxQueue.shift() ?? null : null, error: null },
         ),
       )
       chain.insert = vi.fn((row: Record<string, unknown>) => {
@@ -117,6 +127,66 @@ describe('ingestMailCandidate', () => {
     // Another run won the race; the receipt is filed either way.
     const { client } = mockSupabase(null, { error: { code: '23505', message: 'duplicate key' } })
     await expect(ingestMailCandidate(client, 'co-1', 'user-1', candidate())).resolves.toBeNull()
+  })
+
+  it('skips filing when the archived duplicate already has an inbox item', async () => {
+    // The provenance key catches a re-hunted message; this catches the same
+    // receipt arriving through ANOTHER inbox: the receipt is already in the
+    // Underlag flow, so no second item is filed.
+    mockUploadDocument.mockResolvedValue({ id: 'doc-orig', deduplicated: true })
+    const { client, inserted } = mockSupabase(null, {}, [{ id: 'item-existing' }])
+    const result = await ingestMailCandidate(client, 'co-1', 'user-1', candidate())
+    expect(result).toBeNull()
+    expect(inserted).toHaveLength(0)
+    // Locks the flag itself: without dedupeByContent the mock still answers
+    // deduplicated, but production would silently archive copies again.
+    expect(mockUploadDocument).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-1',
+      'co-1',
+      expect.anything(),
+      { upload_source: 'mail_hunt', dedupeByContent: true },
+    )
+    // The skip is behandlingshistorik, not just an app log; and the payload
+    // stays pseudonymous (never a mailbox address).
+    expect(mockAppendHistory).toHaveBeenCalledTimes(1)
+    const event = mockAppendHistory.mock.calls[0]![0] as {
+      eventType: string
+      aggregateId: string
+      payload: Record<string, unknown>
+    }
+    expect(event.eventType).toBe('DocumentDuplicateSkipped')
+    expect(event.aggregateId).toBe('doc-orig')
+    expect(event.payload).toMatchObject({
+      channel: 'mail_hunt',
+      document_id: 'doc-orig',
+      inbox_item_id: 'item-existing',
+      reason: 'duplicate_content',
+    })
+    expect(JSON.stringify(event.payload)).not.toContain('@')
+  })
+
+  it('still skips the duplicate when the history append fails', async () => {
+    // The audit write is best-effort by design: a history outage must not
+    // turn a correct skip into a duplicate filing.
+    mockUploadDocument.mockResolvedValue({ id: 'doc-orig', deduplicated: true })
+    mockAppendHistory.mockRejectedValueOnce(new Error('history down'))
+    const { client, inserted } = mockSupabase(null, {}, [{ id: 'item-existing' }])
+    const result = await ingestMailCandidate(client, 'co-1', 'user-1', candidate())
+    expect(result).toBeNull()
+    expect(inserted).toHaveLength(0)
+  })
+
+  it('files an item against the existing document when the duplicate never passed the inbox', async () => {
+    // A content match against a document with no inbox item (a manually
+    // attached copy) must not swallow the receipt: the affärshändelse still
+    // needs routing to matching (BFL 5 kap), just without a second archive copy.
+    mockUploadDocument.mockResolvedValue({ id: 'doc-orig', deduplicated: true })
+    const { client, inserted } = mockSupabase(null, {}, [null])
+    const result = await ingestMailCandidate(client, 'co-1', 'user-1', candidate())
+    expect(result).toMatchObject({ documentId: 'doc-orig', inboxItemId: 'item-1' })
+    expect(inserted).toHaveLength(1)
+    expect(inserted[0].document_id).toBe('doc-orig')
   })
 
   it('ignores a body-only receipt, which has nothing to download', async () => {
