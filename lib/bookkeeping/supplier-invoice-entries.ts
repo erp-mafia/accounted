@@ -792,7 +792,14 @@ export async function createSupplierCreditNoteEntry(
   // note books 7533 K / 2514 D (same debit/credit swap as basbeloppsraderna
   // above). Items are the ORIGINAL invoice's, so apply_slp reverses against
   // the same base. Nets to zero: the 2440 debit guarantee is untouched.
-  const slpBase = slpBaseSek(items, creditNote.currency, creditNote.exchange_rate, true)
+  //
+  // The base is abs of the SIGNED sum, not the per-item abs the expense
+  // buckets use: registration computed its SLP base as the signed sum, so a
+  // mixed-sign flagged original (+10000 premium and -2000 rebate) booked SLP
+  // on 8000. Per-item abs here would reverse SLP on 12000, striking more
+  // 7533/2514 than was ever posted. The buckets keep per-item abs because
+  // each reversal line must land positive on its own side per account.
+  const slpBase = Math.abs(slpBaseSek(items, creditNote.currency, creditNote.exchange_rate))
   if (slpBase > 0) {
     for (const line of generateSlpLines(slpBase)) {
       lines.push({

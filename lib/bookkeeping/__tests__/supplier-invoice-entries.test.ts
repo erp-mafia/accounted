@@ -2388,6 +2388,33 @@ describe('SLP pair injection (apply_slp)', () => {
     assertBalanced(input)
   })
 
+  it('mixed-sign flagged original: credit note reverses SLP on the signed sum, not per-item abs', async () => {
+    // Registration computed its SLP base as the SIGNED sum of flagged
+    // line_totals: +10000 premium and -2000 rebate booked SLP on 8000
+    // (1 940,80). Per-item abs on the credit note would reverse SLP on
+    // 12000 (2 911,20), striking more 7533/2514 than was ever posted.
+    const creditNote = makeSupplierInvoice({
+      is_credit_note: true,
+      subtotal: -8000,
+      vat_amount: 0,
+      total: -8000,
+    })
+    const items = [
+      makeItem({ id: 'i1', line_total: 10000, account_number: '7412', vat_rate: 0, apply_slp: true }),
+      makeItem({ id: 'i2', line_total: -2000, account_number: '7412', vat_rate: 0, apply_slp: true }),
+    ]
+
+    await createSupplierCreditNoteEntry(
+      null as never, 'company-1', 'user-1', creditNote, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    // 8 000 × 0.2426 = 1 940,80: exactly what registration booked.
+    expect(findByAccount(input.lines, '7533')[0].credit_amount).toBe(1940.8)
+    expect(findByAccount(input.lines, '2514')[0].debit_amount).toBe(1940.8)
+    assertBalanced(input)
+  })
+
   it('foreign-currency invoice books the pair in SEK at the invoice rate', async () => {
     const invoice = makeSupplierInvoice({
       subtotal: 1000, vat_amount: 0, total: 1000,
