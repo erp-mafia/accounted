@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Plus, Trash2, Search, Check, BookmarkPlus } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
@@ -531,7 +532,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       const others = lines.filter((_, i) => i !== excludeIndex)
       const d = others.reduce((sum, l) => sum + (parseFloat(l.debit_amount) || 0), 0)
       const c = others.reduce((sum, l) => sum + (parseFloat(l.credit_amount) || 0), 0)
-      return Math.round((c - d) * 100) / 100
+      return roundOre(c - d)
     },
     [lines]
   )
