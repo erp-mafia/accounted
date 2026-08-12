@@ -442,6 +442,10 @@ export interface CompanySettings {
   // load-bearing for correctness. Free tier (founder decision 2026-07-02).
   dimensions_enabled: boolean
 
+  // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
+  // for correctness. The nav row also shows when mileage_trips rows exist.
+  mileage_enabled: boolean
+
   // Salary payments (migration 20260508120000 + 20260703190000).
   // preferred_payment_format defaults to 'pain001' — Bankgirot Lön is
   // retired by the banks during 2026.

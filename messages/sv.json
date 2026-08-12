@@ -6965,6 +6965,11 @@
     "booking": "Bokför...",
     "book_error": "Milersättningen kunde inte bokföras",
     "booked_title": "Verifikat {voucher} bokfört",
-    "booked_description": "{count} resor, totalt {amount}"
+    "booked_description": "{count} resor, totalt {amount}",
+    "settings_heading": "Körjournal",
+    "settings_toggle_label": "Aktivera körjournal",
+    "settings_toggle_help": "Visar körjournalen i menyn. Där loggar du tjänsteresor och bokför milersättning skattefritt enligt schablon.",
+    "settings_save_failed_title": "Kunde inte spara inställningen",
+    "settings_open_page": "Öppna körjournalen"
   }
 }

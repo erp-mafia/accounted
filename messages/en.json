@@ -6965,6 +6965,11 @@
     "booking": "Booking...",
     "book_error": "The mileage allowance could not be booked",
     "booked_title": "Voucher {voucher} booked",
-    "booked_description": "{count} trips, total {amount}"
+    "booked_description": "{count} trips, total {amount}",
+    "settings_heading": "Driving log",
+    "settings_toggle_label": "Enable the driving log",
+    "settings_toggle_help": "Shows the driving log in the menu. There you log business trips and book tax-free mileage allowance at the statutory rate.",
+    "settings_save_failed_title": "Could not save the setting",
+    "settings_open_page": "Open the driving log"
   }
 }
