@@ -3065,6 +3065,7 @@
     "hunt_reading": "Reading {mailboxes}",
     "hunt_progress": "pass {pass} · {found} fetched",
     "dialog_no_document": "No document",
+    "dialog_matched_transaction": "Matched transaction",
     "sources_one": "{count} source",
     "sources_many": "{count} sources",
     "source_needs_reconnect": "{address} needs reconnecting",

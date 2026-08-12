@@ -2509,6 +2509,13 @@ type SuggestedBooking = {
   description?: string
   rule_name?: string | null
   entry_date?: string
+  /** Skeleton rows seeded from the matched bank transaction when `lines` is
+      empty: the amount in SEK against the settlement account, cost side left
+      blank. Editor prefill only; never rendered as a proposal. */
+  fallback_lines?: { account_number: string; debit_amount: number; credit_amount: number; description: string }[]
+  /** The matched bank row's SEK amount and date, present on empty proposals
+      so the dialog can still show the kronor figure. */
+  transaction?: { amount_sek: number; date: string } | null
 }
 
 const SUGGESTION_SOURCE_LABEL: Record<string, string> = {
@@ -3217,7 +3224,12 @@ function FieldsRail({
           new Date().toISOString().slice(0, 10)
         }
         description={data?.supplier?.name ?? item.email_subject ?? 'Underlag'}
-        lines={proposal?.lines ?? []}
+        // No proposal is not the same as no amount: the matched bank row still
+        // knows what left the account and where. The fallback skeleton keeps
+        // the kronor figure in the form (regression report 2026-08-12: match,
+        // "Bokför manuellt", and the amount no longer followed along).
+        lines={proposal?.lines.length ? proposal.lines : (proposal?.fallback_lines ?? [])}
+        matchedTransaction={proposal?.transaction ?? null}
         onBooked={() => {
           setEditOpen(false)
           // Realtime refreshes the list, but this rail renders from the
