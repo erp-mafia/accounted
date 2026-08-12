@@ -20,7 +20,7 @@ curl https://app.gnubok.se/api/v1/companies \\
 Create keys in the accounted dashboard at **/settings/api**. Two key prefixes are available:
 
 - \`gnubok_sk_live_*\`: hits real customer data. Use in production.
-- \`gnubok_sk_test_*\`: bound to deterministic sandbox companies. Safe for evals, demos, and agent learning. Same surface, different blast radius.
+- \`gnubok_sk_test_*\`: reads real company data, but every write is forced into dry-run and nothing persists (responses carry \`X-Gnubok-Mode: test\`). Safe for evals, demos, and agent learning. Same surface, different blast radius.
 
 Each key carries one or more **scopes** (\`invoices:read\`, \`invoices:write\`, \`payroll:write\`, \`webhooks:manage\`, ...) that gate which endpoints it can call. Scopes are listed on every endpoint reference page.
 
@@ -102,6 +102,7 @@ Every error code is documented in the [error reference](/docs/api/errors).
 - **[Changelog](/docs/api/changelog)**: what shipped when.
 
 For LLM-based agents:
+- **Agent skill for integrators**: \`npx skills add erp-mafia/accounted --skill accounted-api\` teaches your coding agent (Claude Code, Cursor, Codex, ...) this entire API: auth, conventions, and every endpoint with request/response schemas. Generated from the same registry that serves this spec, so it cannot drift.
 - **[\`/llms.txt\`](/llms.txt)**: concise agent-discovery index.
 - **[\`/llms-full.txt\`](/llms-full.txt)**: full docs concatenated for ingestion.
 - **[\`/api/v1/openapi.json\`](/api/v1/openapi.json)**: machine-readable OpenAPI 3.1 spec.

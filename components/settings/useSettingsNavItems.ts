@@ -42,6 +42,7 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMcpExtension = ENABLED_EXTENSION_IDS.has('mcp-server')
   const hasWhatsAppExtension = ENABLED_EXTENSION_IDS.has('whatsapp-inbox')
+  const hasMailExtension = ENABLED_EXTENSION_IDS.has('mail')
 
   // Företagsprofil (TIC-snapshot) lives under Företag; Skatteverket under Skatt;
   // assistentens minne + kunskap under Assistenten; säkerhetsbackup under
@@ -60,6 +61,7 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
     { id: 'templates', href: '/settings/templates', label: t('templates'), group: 'sales', show: hasCompany },
     { id: 'banking', href: '/settings/banking', label: t('banking'), group: 'tools', show: hasCompany && !isSandbox && hasBankingExtension },
     { id: 'whatsapp', href: '/settings/whatsapp', label: t('whatsapp'), group: 'tools', show: hasCompany && !isSandbox && hasWhatsAppExtension },
+    { id: 'mail', href: '/settings/mail', label: t('mail'), group: 'tools', show: hasCompany && !isSandbox && hasMailExtension },
     { id: 'assistant', href: '/settings/assistant', label: t('assistant'), group: 'tools', show: hasCompany && identity.isVerified },
     { id: 'api', href: '/settings/api', label: t('api'), group: 'tools', show: hasCompany && hasMcpExtension },
   ]

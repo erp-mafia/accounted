@@ -8,7 +8,7 @@ import {
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -548,6 +548,81 @@ describe('POST /api/invoices (create credit note)', () => {
     expect(body.data.status).toBe('draft')
     expect(emitSpy).not.toHaveBeenCalled()
     expect(mockSupabase.from).toHaveBeenCalledTimes(6)
+  })
+
+  // Regression: crediting a ROT/RUT invoice used to negate deduction_total and
+  // deduction_amount like the other amounts, which the DB refuses (both columns
+  // carry CHECK >= 0), so no deduction-carrying invoice could be credited. The
+  // stored deduction fields are positive magnitudes on credit notes too.
+  it('keeps deduction fields positive when crediting a ROT invoice', async () => {
+    const original = makeInvoice({
+      id: VALID_UUID,
+      status: 'sent',
+      subtotal: 60000,
+      vat_amount: 15000,
+      total: 75000,
+      deduction_total: 22500,
+      items: [
+        {
+          id: 'item-1',
+          invoice_id: VALID_UUID,
+          sort_order: 0,
+          description: 'Snickeri',
+          quantity: 30,
+          unit: 'tim',
+          unit_price: 2000,
+          line_total: 60000,
+          vat_rate: 25,
+          vat_amount: 15000,
+          deduction_type: 'rot',
+          deduction_amount: 22500,
+          created_at: '2026-08-01T00:00:00Z',
+        },
+      ],
+    })
+    const creditNote = makeInvoice({
+      id: 'cn-rot',
+      credited_invoice_id: VALID_UUID,
+      status: 'draft',
+    })
+
+    // Fetch original invoice
+    enqueue({ data: original, error: null })
+    // No existing credit-note draft
+    enqueue({ data: null, error: null })
+    // Insert credit note
+    enqueue({ data: creditNote, error: null })
+    // Insert credit note items
+    enqueue({ data: null, error: null })
+    // Mark creation complete
+    enqueue({ data: null, error: null })
+    // Fetch complete credit note
+    enqueue({ data: { ...creditNote, items: [] }, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: { credited_invoice_id: VALID_UUID },
+    })
+    const response = await POST(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const [invoiceInsert] = findCall('invoices', 'insert') ?? []
+    expect(invoiceInsert).toMatchObject({
+      total: -75000,
+      subtotal: -60000,
+      vat_amount: -15000,
+      deduction_total: 22500,
+    })
+    const [itemsInsert] = findCall('invoice_items', 'insert') ?? []
+    expect(itemsInsert).toMatchObject([
+      {
+        line_total: -60000,
+        vat_amount: -15000,
+        deduction_type: 'rot',
+        deduction_amount: 22500,
+      },
+    ])
   })
 
   it('returns an existing credit-note draft instead of creating a duplicate', async () => {

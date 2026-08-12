@@ -379,7 +379,7 @@ Complete mapping for SKV 4700.
 | Account | Name | Purpose | Ruta |
 |------|------|------|------|
 | 2630 | Utgående moms, 6% | Summary account | 12 |
-| 2631 | Utgående moms försäljning inom Sverige, 6% | Books, transport, culture | 12 |
+| 2631 | Utgående moms försäljning inom Sverige, 6% | Books, transport, culture (incl. danstillställningar from 2026-07-01) | 12 |
 | 2632 | Utgående moms egna uttag, 6% | Owner withdrawals | 12 |
 | 2633 | Utgående moms uthyrning, 6% | Rental | 12 |
 | 2634 | Utgående moms omvänd betalningsskyldighet, 6% | Reverse charge | **32** |
@@ -417,6 +417,8 @@ Complete mapping for SKV 4700.
 ### Rate misclassification
 
 Wrong VAT rate is the most common SME error. Confusion points: restaurant vs. takeaway food (both 12% but alcohol triggers 25% splitting), digital products (e-books 6% vs. SaaS 25%), mixed hotel packages, repair services (reduced rates only for specific categories: bicycles, shoes, leather goods, clothing, household linen).
+
+**July 2026 change: danstillställningar.** From 2026-07-01, tillträde till danstillställningar (dance events: dansband evenings, club nights with dance character, dance courses with tillställning character) drops from 25% to 6%, aligning dance admission with other cultural events (riksdagen 2025/26:SkU25; Skatteverket "Nya lagar från halvårsskiftet 2026"). Tickets sold and paid before 2026-07-01 keep 25% even if the event is later: the prepayment follows the rate at payment. Watch the split at mixed venues: admission is 6%, but alcohol sales stay 25% and food/serving follows its own rate, so the entrance fee must be separated from serving revenue, same pattern as concert venues.
 
 ### EU trade errors
 

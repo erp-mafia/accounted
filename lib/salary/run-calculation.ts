@@ -717,14 +717,7 @@ export async function runSalaryCalculation(
         employmentEnd: emp.employment_end,
       },
       config,
-      taxRates.map((r) => ({
-        tableYear: r.tableYear,
-        tableNumber: r.tableNumber,
-        columnNumber: r.columnNumber,
-        incomeFrom: r.incomeFrom,
-        incomeTo: r.incomeTo,
-        taxAmount: r.taxAmount,
-      })),
+      taxRates.map((r) => ({ ...r })),
     )
 
     // Aggregated absence counts derived from per-day records.

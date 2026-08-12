@@ -2191,6 +2191,68 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte kreditera leverantörsfakturan.',
     message_en: 'Failed to credit supplier invoice.',
   },
+  SI_BATCH_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Betalfilen kunde inte hittas.',
+    message_en: 'Payment batch not found.',
+  },
+  SI_BATCH_INELIGIBLE_INVOICE: {
+    httpStatus: 400,
+    message_sv:
+      'En eller flera fakturor kan inte ingå i betalfilen. Se detaljerna för orsak per faktura.',
+    message_en:
+      'One or more invoices cannot be included in the payment batch. See details for the per-invoice reason.',
+  },
+  SI_BATCH_INVALID_AMOUNT: {
+    httpStatus: 400,
+    message_sv: 'Betalbeloppet måste vara större än noll.',
+    message_en: 'The payment amount must be greater than zero.',
+  },
+  SI_BATCH_AMOUNT_EXCEEDS_REMAINING: {
+    httpStatus: 400,
+    message_sv: 'Betalbeloppet är större än kvar att betala på fakturan.',
+    message_en: "The payment amount exceeds the invoice's remaining amount.",
+  },
+  SI_BATCH_DUPLICATE_INVOICE: {
+    httpStatus: 409,
+    message_sv:
+      'En eller flera fakturor ingår redan i en aktiv betalfil. Bekräfta att du vill skapa en ny betalning ändå.',
+    message_en:
+      'One or more invoices are already part of an active payment batch. Confirm to create another payment anyway.',
+    remediation: {
+      description:
+        'Resend with confirm_already_batched: true to include the invoices anyway, or cancel the existing batch first via POST /api/supplier-invoices/payment-batches/{id}/cancel.',
+    },
+  },
+  SI_BATCH_DEBTOR_INCOMPLETE: {
+    httpStatus: 400,
+    message_sv:
+      'Företagets bankuppgifter är ofullständiga. Fyll i IBAN (och BIC om det inte kan härledas) under Inställningar → Fakturering.',
+    message_en:
+      'The company bank details are incomplete. Enter the IBAN (and BIC if it cannot be derived) under Settings → Invoicing.',
+  },
+  SI_BATCH_CANCELLED: {
+    httpStatus: 409,
+    message_sv: 'Betalfilen är makulerad och kan inte laddas ner.',
+    message_en: 'The payment batch is cancelled and cannot be downloaded.',
+  },
+  SI_BATCH_ALREADY_CANCELLED: {
+    httpStatus: 409,
+    message_sv: 'Betalfilen är redan makulerad.',
+    message_en: 'The payment batch is already cancelled.',
+  },
+  SI_BATCH_CREATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte skapa betalfilen.',
+    message_en: 'Failed to create the payment batch.',
+  },
+  SI_DELETE_IN_PAYMENT_BATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Leverantörsfakturan ingår i en betalfil och kan inte tas bort: betalfilens rader är underlag för betalningsinstruktionen, även om filen makulerats.',
+    message_en:
+      'The supplier invoice is part of a payment batch and cannot be deleted: the batch rows document the payment instruction, even if the batch was cancelled.',
+  },
 }
 
 const SALARY: Record<string, StructuredErrorEntry> = {

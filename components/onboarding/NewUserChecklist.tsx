@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -8,6 +8,7 @@ import { Check } from 'lucide-react'
 import posthog from 'posthog-js'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import JourneyOrb from '@/components/onboarding/journey/JourneyOrb'
 import { cn } from '@/lib/utils'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
 import { useFormat } from '@/lib/hooks/use-format'
@@ -76,6 +77,12 @@ export default function NewUserChecklist({
   const hasAi = useCapability(CAPABILITY.ai)
   const [state, setState] = useState(initialState)
   const [saving, setSaving] = useState<InitialSetupPath | 'dismiss' | 'complete' | null>(null)
+  // The completion signature: 'verdict' shows the orb check-morph and the
+  // verdict line, 'closing' fades the block, 'done' keeps it retired for the
+  // rest of the session. Plays only in the session that finishes the last
+  // step (companies whose completedAt arrives from the server never see it).
+  const [retiring, setRetiring] = useState<'verdict' | 'closing' | 'done' | null>(null)
+  const retireStartedRef = useRef(false)
 
   const hasMigration = ENABLED_EXTENSION_IDS.has('arcim-migration')
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking')
@@ -118,12 +125,17 @@ export default function NewUserChecklist({
 
   useEffect(() => {
     // The block retires itself once every step is done; Dölj remains the
-    // manual way out.
+    // manual way out. The signature beat latches via retireStartedRef so a
+    // failed persist can retry the PATCH without replaying the beat.
     if (
       !state.completedAt &&
       step1Done && step2Done && step3Done && step4Done && step5Done &&
       saving === null
     ) {
+      if (!retireStartedRef.current) {
+        retireStartedRef.current = true
+        setRetiring('verdict')
+      }
       void persist({ completed: true }, 'complete').then((updated) => {
         if (updated) captureSetup('onboarding_setup_completed', { path: updated.path })
       })
@@ -133,7 +145,48 @@ export default function NewUserChecklist({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step1Done, step2Done, step3Done, step4Done, step5Done, saving, state.completedAt])
 
-  if (state.dismissedAt || state.completedAt) return null
+  // Beat timing: hold the verdict, then fade, then stay retired.
+  useEffect(() => {
+    if (retiring !== 'verdict') return
+    const toClosing = window.setTimeout(() => setRetiring('closing'), 2600)
+    const toGone = window.setTimeout(() => setRetiring('done'), 3200)
+    return () => {
+      window.clearTimeout(toClosing)
+      window.clearTimeout(toGone)
+    }
+  }, [retiring])
+
+  const numbers = checklistNumbers({ hasSkatteverket, hasInbox })
+  const stepCount = numbers.count
+
+  if (state.dismissedAt) return null
+  // After the beat, stay retired even while the completion PATCH is still in
+  // flight or retrying: falling through to the full checklist here would
+  // flash it after the verdict already played. A failed PATCH keeps retrying
+  // invisibly; the next visit renders from server truth either way.
+  if (retiring === 'done') return null
+  if (state.completedAt && !retiring) return null
+
+  if (retiring) {
+    return (
+      <section className={className} aria-label={t('title', { count: stepCount })}>
+        <div
+          role="status"
+          className={cn(
+            'flex flex-col items-center py-4 text-center transition-opacity duration-500',
+            retiring === 'closing' ? 'opacity-0' : 'opacity-100',
+          )}
+        >
+          {/* The orb draws at the top quarter of its canvas (CY = height/4),
+              so a 100px canvas clipped to 52px shows exactly the check. */}
+          <div className="relative h-[52px] w-28 overflow-hidden" aria-hidden="true">
+            <JourneyOrb state="check" targetX={0.5} height={100} />
+          </div>
+          <p className="mt-2 text-sm font-medium">{t('completed_verdict')}</p>
+        </div>
+      </section>
+    )
+  }
 
   const goMigration = async () => {
     const updated = await persist({ path: 'migration' }, 'migration')
@@ -167,8 +220,6 @@ export default function NewUserChecklist({
     })
 
   const activeStep = !step1Done ? 1 : !step2Done ? 2 : !step3Done ? 3 : !step4Done ? 4 : 5
-  const numbers = checklistNumbers({ hasSkatteverket, hasInbox })
-  const stepCount = numbers.count
 
   return (
     <section className={className} aria-label={t('title', { count: stepCount })}>

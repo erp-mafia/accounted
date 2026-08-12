@@ -37,6 +37,7 @@ export function InvoicingSettingsContent() {
         Number.parseInt(formData.get('reminder_days_level_2') as string) || 30,
       reminder_days_level_3:
         Number.parseInt(formData.get('reminder_days_level_3') as string) || 45,
+      send_invoice_reminders: formData.get('send_invoice_reminders') === 'true',
     }
     return {
       updates,

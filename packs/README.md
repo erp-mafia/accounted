@@ -45,7 +45,7 @@ derived from it (`applyTemplate()` in `lib/bookkeeping/template-library.ts`):
 
 | Type | Amount | Carries |
 |---|---|---|
-| `vat` | `total * vat_rate / (1 + vat_rate)` | `vat_rate`, never `ratio` |
+| `vat` | `total * vat_rate / (1 + vat_rate)`; on fiktiv-moms accounts (reverse charge/import, e.g. 2614/2645) `total * vat_rate` on top of the base | `vat_rate`, never `ratio` |
 | `business` | `total * ratio` | `ratio`, never `vat_rate` |
 | `settlement` | `total * ratio` | `ratio`, never `vat_rate` |
 

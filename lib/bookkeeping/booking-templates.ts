@@ -1281,14 +1281,20 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     vat_rate: 0.06,
     deductibility: 'full',
     mcc_codes: [],
-    keywords: ['bok', 'böcker', 'tidning', 'tidskrift', 'e-bok', 'persontransport', 'taxi', 'buss', 'tåg', 'kultur', 'konsert', 'teater', 'museum', 'bio', 'idrott', 'books', 'culture', 'transport'],
+    // Dance keywords: tillträde till danstillställningar dropped from 25% to
+    // 6% on 2026-07-01 (2025/26:SkU25, aligned with other cultural events).
+    // Admission sold and paid before that stays 25%; the descriptor reflects
+    // current law only. Deliberately admission-specific terms only: bare
+    // 'dans' or 'entré' would also match dance courses, artist fees and
+    // generic entrance charges, which are not all reduced-rate. (#1483)
+    keywords: ['bok', 'böcker', 'tidning', 'tidskrift', 'e-bok', 'persontransport', 'taxi', 'buss', 'tåg', 'kultur', 'konsert', 'teater', 'museum', 'bio', 'idrott', 'danstillställning', 'dansband', 'danskväll', 'books', 'culture', 'transport'],
     risk_level: 'NONE',
     requires_review: false,
     impact_score: 5,
     auto_match_confidence: 0.75,
     default_private: false,
     fallback_category: 'income_services',
-    description_sv: 'Intäkter med 6% moms (böcker, persontransport, kultur, idrott)',
+    description_sv: 'Intäkter med 6% moms (böcker, persontransport, kultur, idrott, danstillställningar fr.o.m. 2026-07-01)',
     common: true,
   },
   {

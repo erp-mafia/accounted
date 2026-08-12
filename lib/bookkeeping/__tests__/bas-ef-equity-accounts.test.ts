@@ -2,37 +2,40 @@ import { describe, it, expect } from 'vitest'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 
 /**
- * The enskild firma equity block must be complete.
+ * The enskild firma equity block must match the official BAS kontoplan.
  *
- * 2012 was missing from the reference, which is not cosmetic:
- * `lib/bookkeeping/account-backfill.ts` only seeds accounts that appear in
- * BAS_REFERENCE, so an account absent from it can never be added to a company's
- * chart on demand. Any entry touching 2012 failed with AccountsNotInChartError,
- * which is exactly what the "Preliminär F-skatt (EF)" template did.
- *
- * The gap was found by the pack validator asserting that every account a
- * template references exists in BAS 2026.
+ * 2012 "Avräkning för skatter och avgifter" was added in #1388 on the strength
+ * of the swedish-year-end-closing skill alone. The primary-source check
+ * (#1409, bas.se BAS 2026 v2) shows the official chart has no 2012: the block
+ * runs 2010, 2011, 2013, 2017, 2018, 2019, and the official "Avräkning för
+ * skatter och avgifter (skattekonto)" accounts are 1630/1640 (asset) and 2850
+ * (liability). 2012 is a program convention (Visma, Bokio, Björn Lundén), not
+ * standard BAS. A non-standard account in BAS_REFERENCE leaks into every chart
+ * the backfill seeds, and from there into SIE export and SRU filing, so the
+ * reference must not carry it. Owner taxes paid by the firm are an eget uttag
+ * on 2013, which is what the "Preliminär F-skatt (EF)" template books since
+ * migration 20260810120000.
  */
 describe('enskild firma equity accounts (20xx)', () => {
-  it('has no hole in the 2010-2013 run', () => {
-    for (const account of ['2010', '2011', '2012', '2013']) {
+  it('carries exactly the official BAS block for delägare 1', () => {
+    for (const account of ['2010', '2011', '2013', '2017', '2018', '2019']) {
       expect(getBASReference(account), `${account} missing from BAS reference`).toBeDefined()
     }
   })
 
-  it('2012 is the owner-tax equity account, distinct from the 1630 skattekonto asset', () => {
-    const equity = getBASReference('2012')
-    const skattekonto = getBASReference('1630')
-
-    expect(equity?.account_type).toBe('equity')
-    expect(equity?.normal_balance).toBe('debit')
-    // Both are called "avräkning", which is precisely why they get confused.
-    expect(skattekonto?.account_type).toBe('asset')
-    expect(equity?.account_number).not.toBe(skattekonto?.account_number)
+  it('does not carry 2012: not in official BAS, verified against bas.se in #1409', () => {
+    // Pinned like 2113 below: prevents a well-meaning "fix" that re-adds the
+    // program-convention account instead of keeping the reference official.
+    expect(getBASReference('2012')).toBeUndefined()
   })
 
-  it('shares the equity SRU code with its siblings, since they all net into 2010', () => {
-    const siblings = ['2011', '2012', '2013', '2018'].map((a) => getBASReference(a)?.sru_code)
+  it('keeps the skattekonto asset account the template settles against', () => {
+    const skattekonto = getBASReference('1630')
+    expect(skattekonto?.account_type).toBe('asset')
+  })
+
+  it('shares the equity SRU code across the sub-accounts, since they all net into 2010', () => {
+    const siblings = ['2011', '2013', '2018'].map((a) => getBASReference(a)?.sru_code)
     expect(new Set(siblings).size).toBe(1)
     expect(siblings[0]).toBe(getBASReference('2010')?.sru_code)
   })

@@ -923,9 +923,10 @@ describe('hardening: invariants', () => {
 
 describe('hardening: tax table lookup (not just flat fallback)', () => {
   const taxRates: TaxTableRate[] = [
-    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 0, incomeTo: 20000, taxAmount: 3000 },
-    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 20001, incomeTo: 30000, taxAmount: 5500 },
-    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 30001, incomeTo: 50000, taxAmount: 10000 },
+    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 0, incomeTo: 20000, kind: 'amount', taxAmount: 3000 },
+    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 20001, incomeTo: 30000, kind: 'amount', taxAmount: 5500 },
+    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 30001, incomeTo: 80000, kind: 'amount', taxAmount: 10000 },
+    { tableYear: 2026, tableNumber: 32, columnNumber: 1, incomeFrom: 80001, incomeTo: 9999999, kind: 'percent', taxPercent: 35 },
   ]
 
   it('uses table lookup when taxTableNumber is set', () => {
@@ -934,6 +935,14 @@ describe('hardening: tax table lookup (not just flat fallback)', () => {
       config2026, taxRates
     )
     expect(r.taxWithheld).toBe(5500)
+  })
+
+  it('applies percent-of-income brackets for salaries above the krona section (over 80 000 kr)', () => {
+    const r = calculateSalary(
+      makeBasicInput({ taxTableNumber: 32, taxColumn: 1, monthlySalary: 100000, lineItems: [baseLineItem(100000)] }),
+      config2026, taxRates
+    )
+    expect(r.taxWithheld).toBe(35000)
   })
 
   it('semesterersättning pushes brutto into a higher tax bracket', () => {

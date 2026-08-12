@@ -54,6 +54,15 @@ const INTENTIONAL_DIVERGENCES: Record<string, Divergence> = {
     seededName: 'Periodiseringsfond återföring (AB)',
     reason: 'Same 2113 fix as periodiseringsfond-avsattning-ab.',
   },
+  'preliminar-f-skatt-ef': {
+    seededName: 'Preliminär F-skatt (EF)',
+    reason:
+      'Seeded version debited 2012 "Avräkning för skatter och avgifter". The primary-source ' +
+    'check in #1409 (bas.se BAS 2026 v2) shows official BAS has no 2012: the EF equity block ' +
+    'is 2010/2011/2013/2017/2018/2019, and 2012 is a Visma/Bokio/BL program convention. Owner ' +
+    'taxes paid by the firm are an eget uttag, so the template now debits 2013 Övriga egna ' +
+    'uttag; migration 20260810120000 retargets the seeded rows the same way.',
+  },
   'representation-avdragsgill-25-moms': {
     seededName: 'Representation (avdragsgill, 25% moms)',
     reason:

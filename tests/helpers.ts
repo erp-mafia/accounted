@@ -453,6 +453,8 @@ export function makeSupplier(overrides: Partial<Supplier> = {}): Supplier {
     bank_account: null,
     iban: null,
     bic: null,
+    clearing_number: null,
+    account_number: null,
     default_expense_account: '6200',
     default_payment_terms: 30,
     default_currency: 'SEK',

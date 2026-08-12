@@ -94,6 +94,8 @@ export const PUT = withRouteContext(
         bank_account: body.bank_account,
         iban: body.iban,
         bic: body.bic,
+        clearing_number: body.clearing_number,
+        account_number: body.account_number,
         default_expense_account: body.default_expense_account,
         default_payment_terms: body.default_payment_terms,
         default_currency: body.default_currency,
