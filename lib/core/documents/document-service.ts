@@ -299,6 +299,13 @@ export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType
     if (looksLikeXhtml(new Uint8Array(buffer))) return null
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XHTML/XML-dokument.`
   }
+  // HTML mail underlag from the invoice-inbox inbound pipeline. Same
+  // doctype/root-element check as XHTML: the pipeline wraps fragment-shaped
+  // mail bodies in a full document shell before upload.
+  if (declaredMimeType === 'text/html') {
+    if (looksLikeXhtml(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett HTML-dokument.`
+  }
   if (declaredMimeType === 'application/json') {
     if (looksLikeJson(new Uint8Array(buffer))) return null
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett giltigt JSON-dokument.`

@@ -37,6 +37,7 @@ import { isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
 import type {
   TransactionWithInvoice,
   ViewMode,
+  SourceFilter,
   CategorizeHandler,
 } from '@/components/transactions/transaction-types'
 import type {
@@ -101,12 +102,6 @@ const TemplatePicker = dynamic(() => import('@/components/transactions/TemplateP
 
 type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
-
-// Source filter for the merged inbox (concept scene 10 account chooser):
-// everything, one cash account ('acct:<id>'), bank rows not yet tied to a
-// registered cash account ('bank:other'), all bank rows ('bank': the fallback
-// split when no cash accounts are registered), or the skattekonto side.
-type SourceFilter = 'all' | 'bank' | 'bank:other' | 'skatteverket' | `acct:${string}`
 
 const SOURCE_FILTER_STORAGE_KEY = 'Accounted:transaction-source-filter:v1'
 
@@ -525,9 +520,14 @@ export default function TransactionsPage() {
     return sekBalances.reduce((sum, a) => sum + (a.balance ?? 0), 0)
   }, [cashAccounts])
 
+  // The picker is shared by both view modes (convention 8), so 'bank:other'
+  // must surface when EITHER dataset holds unassigned rows: history can hold
+  // older null-account rows after every pending row got assigned.
   const hasUnassignedBankRows = useMemo(
-    () => uncategorizedTransactions.some((tx) => tx.cash_account_id == null),
-    [uncategorizedTransactions],
+    () =>
+      uncategorizedTransactions.some((tx) => tx.cash_account_id == null) ||
+      historyTransactions.some((tx) => tx.cash_account_id == null),
+    [uncategorizedTransactions, historyTransactions],
   )
 
   const sourceItems = useMemo<ContextPickerItem[]>(() => {
@@ -2553,10 +2553,11 @@ export default function TransactionsPage() {
             className="h-9 pl-10"
           />
         </div>
-        {/* Account chooser (convention 8): the one context chip, far right.
-            Per-cash-account rows with balances (concept scene 10); hidden
-            only when there is nothing beyond "Alla källor" to choose. */}
-        {mode === 'inbox' && sourceItems.length > 1 && (
+        {/* Account chooser (convention 8): the one context chip, far right,
+            shared by both view modes. Per-cash-account rows with balances
+            (concept scene 10); hidden only when there is nothing beyond
+            "Alla källor" to choose. */}
+        {sourceItems.length > 1 && (
           <div className="ml-auto">
             <ContextPicker
               value={sourceFilter}
@@ -2721,10 +2722,7 @@ export default function TransactionsPage() {
           transactions={historyTransactions}
           skvRows={skvRows}
           searchTerm={searchTerm}
-          sourceFilter={
-            sourceFilter === 'all' || sourceFilter === 'skatteverket' ? sourceFilter : 'bank'
-          }
-          onSourceFilterChange={handleSourceFilterChange}
+          sourceFilter={sourceFilter}
           jeUnderlagStatus={jeUnderlagStatus}
           onOpenMatchDialog={openMatchDialog}
           onOpenCategoryDialog={openCategoryDialog}

@@ -19,6 +19,16 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(),
 }))
 
+// uploadAndExtract does real storage + Bedrock work; these tests only assert
+// what the webhook hands it. Constants and the pure HTML helpers stay real so
+// MIME gating and body-document building run genuine code.
+vi.mock('@/extensions/general/invoice-inbox/lib/upload-and-extract', async () => {
+  const actual = await vi.importActual<typeof import('@/extensions/general/invoice-inbox/lib/upload-and-extract')>(
+    '@/extensions/general/invoice-inbox/lib/upload-and-extract'
+  )
+  return { ...actual, uploadAndExtract: vi.fn() }
+})
+
 // applyDomainStatusFromWebhook confirms the receiving capability with Resend
 // before flipping a row to verified: keep that lookup off the network.
 const { domainsMock } = vi.hoisted(() => ({
@@ -39,6 +49,7 @@ vi.mock('@/lib/rate-limits/inbox', () => ({
 }))
 
 import { verifyInboundWebhook, fetchReceivingEmail, fetchInboundAttachment } from '@/extensions/general/invoice-inbox/lib/resend-inbound'
+import { uploadAndExtract } from '@/extensions/general/invoice-inbox/lib/upload-and-extract'
 import { createClient } from '@supabase/supabase-js'
 
 function findRoute(method: string, path: string) {
@@ -136,8 +147,9 @@ describe('POST /inbound', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [{ company_id: 'company-9', domain: 'hansbolag.example' }] }) // verified domain
     enqueue({ data: { created_by: 'user-owner-9' } }) // company owner
-    enqueue({ data: null }) // no-attachments error-row insert
+    enqueue({ data: null }) // body-document dedupe check finds nothing
     vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-9' } as never)
     vi.mocked(fetchReceivingEmail).mockResolvedValue({
       object: 'email',
       id: 'em_123',
@@ -160,7 +172,10 @@ describe('POST /inbound', () => {
     const res = await webhookRoute.handler(request)
     const body = await res.json()
     expect(res.status).toBe(200)
-    expect(body.data.reason).toBe('no_attachments')
+    // A body-only mail now becomes a text/html document for company-9:
+    // proves the custom-domain routing reached the processing stage.
+    expect(body.data.reason).toBe('email_body')
+    expect(vi.mocked(uploadAndExtract).mock.calls[0][2]).toBe('company-9')
   })
 
   it('does not route mail for an unverified custom domain', async () => {
@@ -190,8 +205,9 @@ describe('POST /inbound', () => {
     // would resolve to null (500). A 200 proves the shared path won.
     enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
     enqueue({ data: { created_by: 'user-owner-1' } })
-    enqueue({ data: null }) // no-attachments error-row insert
+    enqueue({ data: null }) // body-document dedupe check finds nothing
     vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-1' } as never)
     vi.mocked(fetchReceivingEmail).mockResolvedValue({
       object: 'email',
       id: 'em_123',
@@ -214,7 +230,7 @@ describe('POST /inbound', () => {
     const res = await webhookRoute.handler(request)
     const body = await res.json()
     expect(res.status).toBe(200)
-    expect(body.data.reason).toBe('no_attachments')
+    expect(body.data.reason).toBe('email_body')
   })
 
   it('applies domain.updated events to custom-domain rows', async () => {
@@ -322,14 +338,61 @@ describe('POST /inbound', () => {
     expect(res.status).toBe(500)
   })
 
-  it('logs an error inbox item when email has no attachments', async () => {
+  it('stores the mail body as a text/html document when the mail has no attachments', async () => {
     vi.mocked(verifyInboundWebhook).mockReturnValue(
       mockReceivedEvent({ attachments: [] }) as never
     )
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
     enqueue({ data: { created_by: 'user-owner-1' } })
-    enqueue({ data: null }) // insert succeeds
+    enqueue({ data: null }) // body-document dedupe check finds nothing
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-body-1' } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2@arcim.io'],
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Kvitto på ditt köp',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: '<div>Att betala: <b>1 234,56 kr</b></div>',
+      text: 'Att betala: 1 234,56 kr',
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [],
+    } as never)
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.reason).toBe('email_body')
+    expect(body.data.processed).toBe(1)
+    expect(body.data.inbox_item_id).toBe('item-body-1')
+    expect(fetchInboundAttachment).not.toHaveBeenCalled()
+
+    const [, , companyId, file, source] = vi.mocked(uploadAndExtract).mock.calls[0]
+    expect(companyId).toBe('company-1')
+    expect(source).toBe('email')
+    expect(file.type).toBe('text/html')
+    expect(file.name).toMatch(/^mail-.*\.html$/)
+    const stored = new TextDecoder().decode(new Uint8Array(file.buffer))
+    expect(stored.toLowerCase().startsWith('<!doctype html')).toBe(true)
+    expect(stored).toContain('<div>Att betala: <b>1 234,56 kr</b></div>')
+  })
+
+  it('keeps the error row for a no-attachment mail with an empty body', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({ attachments: [] }) as never
+    )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // error-row insert
     vi.mocked(createClient).mockReturnValue(supabase as never)
     vi.mocked(fetchReceivingEmail).mockResolvedValue({
       object: 'email',
@@ -337,12 +400,12 @@ describe('POST /inbound', () => {
       to: ['acme-ab-x7f2@arcim.io'],
       from: 'billing@supplier.com',
       created_at: '2026-04-20T10:00:00Z',
-      subject: 'No attachments here',
+      subject: 'Tomt mejl',
       bcc: null,
       cc: null,
       reply_to: null,
       html: null,
-      text: 'Body only',
+      text: '  ',
       headers: {},
       message_id: '<msg@x>',
       raw: null,
@@ -354,6 +417,167 @@ describe('POST /inbound', () => {
     const body = await res.json()
     expect(res.status).toBe(200)
     expect(body.data.reason).toBe('no_attachments')
-    expect(fetchInboundAttachment).not.toHaveBeenCalled()
+    expect(uploadAndExtract).not.toHaveBeenCalled()
+  })
+
+  it('does not duplicate the body document when Resend retries the webhook', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({ attachments: [] }) as never
+    )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: { id: 'existing-body-item' } }) // dedupe check finds the first delivery's row
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2@arcim.io'],
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Kvitto',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: '<div>Kvitto</div>',
+      text: null,
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [],
+    } as never)
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.reason).toBe('email_body_duplicate')
+    expect(body.data.inbox_item_id).toBe('existing-body-item')
+    expect(uploadAndExtract).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the error row when the body document upload fails', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({ attachments: [] }) as never
+    )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // dedupe check finds nothing
+    enqueue({ data: null }) // fallback error-row insert
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockRejectedValue(new Error('storage down'))
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2@arcim.io'],
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Kvitto',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: '<div>Kvitto</div>',
+      text: null,
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [],
+    } as never)
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.reason).toBe('no_attachments')
+  })
+
+  it('accepts a text/html attachment and wraps it into a full document', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // per-attachment dup check finds nothing
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-html-1' } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2@arcim.io'],
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Faktura',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: null,
+      text: 'Se bifogad faktura',
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [
+        { id: 'att_html', filename: 'faktura.html', size: 100, content_type: 'text/html', content_id: 'cid', content_disposition: 'attachment' },
+      ],
+    } as never)
+    vi.mocked(fetchInboundAttachment).mockResolvedValue({
+      id: 'att_html',
+      filename: 'faktura.html',
+      contentType: 'text/html',
+      buffer: new TextEncoder().encode('<div>Faktura 123: 500 kr</div>').buffer as ArrayBuffer,
+    })
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.results[0].inbox_item_id).toBe('item-html-1')
+
+    const [, , , file] = vi.mocked(uploadAndExtract).mock.calls[0]
+    expect(file.type).toBe('text/html')
+    const stored = new TextDecoder().decode(new Uint8Array(file.buffer))
+    expect(stored.toLowerCase().startsWith('<!doctype html')).toBe(true)
+    expect(stored).toContain('<div>Faktura 123: 500 kr</div>')
+  })
+
+  it('still rejects attachment types outside the email allowlist', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // per-attachment dup check finds nothing
+    enqueue({ data: null }) // rejection-row insert
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2@arcim.io'],
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Zip',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: null,
+      text: 'Body',
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [
+        { id: 'att_zip', filename: 'faktura.zip', size: 100, content_type: 'application/zip', content_id: 'cid', content_disposition: 'attachment' },
+      ],
+    } as never)
+    vi.mocked(fetchInboundAttachment).mockResolvedValue({
+      id: 'att_zip',
+      filename: 'faktura.zip',
+      contentType: 'application/zip',
+      buffer: new ArrayBuffer(8),
+    })
+
+    const request = createMockRequest('/inbound', { method: 'POST', body: {} })
+    const res = await webhookRoute.handler(request)
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.results[0].error).toBe('Unsupported type application/zip')
+    expect(uploadAndExtract).not.toHaveBeenCalled()
   })
 })

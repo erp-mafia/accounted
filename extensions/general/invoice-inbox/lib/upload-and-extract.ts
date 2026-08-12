@@ -99,6 +99,58 @@ export const UPLOAD_ALLOWED_MIME_TYPES = new Set([
   'image/webp',
 ])
 
+// The email pipeline additionally accepts HTML: many suppliers send the
+// invoice as the mail body or an attached .html file, and for those the mail
+// IS the underlag (BFL: the received form must be preserved). Deliberately
+// NOT added to UPLOAD_ALLOWED_MIME_TYPES: HTML only enters through the
+// inbound webhook, where the preview surfaces render it fully sandboxed.
+export const EMAIL_ALLOWED_MIME_TYPES = new Set([...UPLOAD_ALLOWED_MIME_TYPES, 'text/html'])
+
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+/**
+ * Wrap HTML in a minimal document shell unless it already is a full document.
+ * Mail bodies are usually fragments (a bare <div>/<table>); the document
+ * archive should hold self-contained files, and the document-service
+ * magic-byte check requires HTML content to start with a doctype/root element.
+ */
+export function ensureHtmlDocument(html: string): ArrayBuffer {
+  const head = html.replace(/^[﻿\s]+/, '').slice(0, 256).toLowerCase()
+  const isFullDocument =
+    head.startsWith('<!doctype html') || head.startsWith('<html') || head.startsWith('<?xml')
+  const full = isFullDocument
+    ? html
+    : `<!doctype html>\n<html>\n<head><meta charset="utf-8"></head>\n<body>\n${html}\n</body>\n</html>\n`
+  const bytes = new TextEncoder().encode(full)
+  // Copy into a fresh ArrayBuffer: Uint8Array.buffer is ArrayBufferLike
+  // (possibly SharedArrayBuffer-backed) and may span more than the view.
+  const out = new ArrayBuffer(bytes.byteLength)
+  new Uint8Array(out).set(bytes)
+  return out
+}
+
+/**
+ * Build a text/html document from a mail's body parts, preferring the HTML
+ * part. A plain-text-only mail is escaped into a <pre> so whitespace, amounts
+ * and OCR numbers survive verbatim. Returns null when the mail has no body
+ * worth storing.
+ */
+export function buildEmailBodyHtmlDocument(
+  html: string | null,
+  text: string | null
+): ArrayBuffer | null {
+  if (html?.trim()) return ensureHtmlDocument(html)
+  if (text?.trim()) return ensureHtmlDocument(`<pre>${escapeHtml(text)}</pre>`)
+  return null
+}
+
 export interface EmailMeta {
   from?: string | null
   subject?: string | null

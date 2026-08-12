@@ -110,5 +110,31 @@ describe('GET /api/documents/[id]/inline', () => {
     expect(disposition).toContain('filename="kvitto f_rvaring.pdf"')
     expect(res.headers.get('Content-Type')).toBe('application/pdf')
     expect(res.headers.get('Cache-Control')).toBe('private, no-store')
+    // The mail-body CSP is HTML-only: it must not restrict PDF rendering.
+    expect(res.headers.get('Content-Security-Policy')).toBeNull()
+  })
+
+  it('serves HTML documents with a sandboxing CSP that blocks outbound requests', async () => {
+    enqueue({
+      data: makeDoc({ file_name: 'faktura.html', mime_type: 'text/html' }),
+      error: null,
+    })
+    downloadMock.mockResolvedValue({
+      data: new Blob(['<img src="https://tracker.example/pixel.gif">']),
+      error: null,
+    })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('text/html')
+    // sandbox alone neutralizes scripts but still loads remote resources: a
+    // tracking pixel in a mail body would notify the sender on preview. The
+    // source policy confines the document to inline styles and embedded
+    // data:/blob: images.
+    expect(res.headers.get('Content-Security-Policy')).toBe(
+      "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:",
+    )
+    expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff')
   })
 })

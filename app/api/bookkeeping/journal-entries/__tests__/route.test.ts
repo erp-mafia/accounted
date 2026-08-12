@@ -7,7 +7,7 @@ import {
 } from '@/tests/helpers'
 
 // Mock dependencies
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -154,6 +154,130 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     // the route must fall through to the direct PostgREST query.
     expect(mockSupabase.from).toHaveBeenCalledWith('journal_entries')
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('orders by the total_amount computed column on amount sort, bypassing the RPC', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', sort_by: 'total_desc' },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    // Amount sort orders by a PostgREST computed column (migration
+    // 20260811100000) that the include_related RPC can't express, so the
+    // route must fall through to the direct query (strict period view),
+    // exactly like voucher sort.
+    expect(mockSupabase.from).toHaveBeenCalledWith('journal_entries')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(findCalls('journal_entries', 'order')[0]).toEqual([
+      'total_amount',
+      { ascending: false },
+    ])
+  })
+
+  it('orders by description on description sort, bypassing the RPC', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', sort_by: 'description_asc' },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(findCalls('journal_entries', 'order')[0]).toEqual([
+      'description',
+      { ascending: true },
+    ])
+  })
+
+  it('chains stacked sort keys in priority order and bypasses the RPC', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', sort_by: 'total_desc,description_asc' },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    // Priority order preserved, then the voucher tiebreak in the LAST key's
+    // direction (ascending here), then the globally unique id tiebreak:
+    // series+number repeat across fiscal years, so equal keys need a total
+    // order for stable pagination.
+    expect(findCalls('journal_entries', 'order')).toEqual([
+      ['total_amount', { ascending: false }],
+      ['description', { ascending: true }],
+      ['voucher_series', { ascending: true }],
+      ['voucher_number', { ascending: true }],
+      ['id', { ascending: true }],
+    ])
+  })
+
+  it('dedupes repeated sort columns and caps the stack at three keys', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: {
+        include_related: 'false',
+        sort_by: 'date_desc,date_asc,nonsense,voucher_desc,total_asc,description_asc',
+      },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    // date deduped (first token wins), the unknown token is ignored, and the
+    // stack caps at three keys (date, voucher, total): description never
+    // makes it in. Voucher is in the stack, so no series+number tiebreak is
+    // appended; the id tiebreak always is (duplicate series+number across
+    // fiscal years on the all-years scope).
+    expect(findCalls('journal_entries', 'order')).toEqual([
+      ['entry_date', { ascending: false }],
+      ['voucher_series', { ascending: false }],
+      ['voucher_number', { ascending: false }],
+      ['total_amount', { ascending: true }],
+      ['id', { ascending: true }],
+    ])
+  })
+
+  it('appends the id tiebreak on the all-years scope where voucher identifiers repeat', async () => {
+    enqueue({ data: [], error: null, count: 0 })
+
+    // No period_id: the "Alla räkenskapsår" scope, where A-1 exists once per
+    // fiscal year. Without a globally unique final key, rows with equal
+    // (entry_date, series, number) can swap between page requests and be
+    // duplicated or dropped at page boundaries.
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { include_related: 'false', sort_by: 'date_desc' },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const orderCalls = findCalls('journal_entries', 'order')
+    expect(orderCalls[orderCalls.length - 1]).toEqual(['id', { ascending: false }])
+  })
+
+  it('still serves a single date sort key through the include_related RPC', async () => {
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { period_id: 'period-1', sort_by: 'date_asc' },
+    })
+    const response = await GET(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'list_fiscal_period_entries_with_related',
+      expect.objectContaining({ p_sort_date: 'asc' }),
+    )
   })
 
   it('accepts a large limit (the "Alla" page size) and a negative offset without erroring', async () => {

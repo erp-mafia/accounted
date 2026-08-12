@@ -9,7 +9,11 @@ export interface TransactionWithInvoice extends Transaction {
 // Page view modes
 export type ViewMode = 'inbox' | 'history'
 export type HistoryFilter = 'all' | 'business' | 'private'
-export type SourceFilter = 'all' | 'bank' | 'skatteverket'
+// Source filter (concept scene 10 account chooser), shared by both view modes:
+// everything, one cash account ('acct:<id>'), bank rows not yet tied to a
+// registered cash account ('bank:other'), all bank rows ('bank': the fallback
+// split when no cash accounts are registered), or the skattekonto side.
+export type SourceFilter = 'all' | 'bank' | 'bank:other' | 'skatteverket' | `acct:${string}`
 
 // Handler types
 // Returns the journal_entry_id on success, null on failure

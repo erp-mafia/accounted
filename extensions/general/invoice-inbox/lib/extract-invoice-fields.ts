@@ -34,12 +34,15 @@ const MAX_TOKENS = (() => {
 // Bedrock supports these document/image media types directly. HEIC/HEIF
 // are not on the list, so we skip AI for those: the inbox row still
 // lands and the user can edit fields manually or replace the file.
+// text/html (mail-body invoices from the inbound pipeline) is not sent as
+// a document block: it is converted to plain text via htmlToText() first.
 const SUPPORTED_MEDIA_TYPES = new Set([
   'application/pdf',
   'image/jpeg',
   'image/png',
   'image/webp',
   'image/gif',
+  'text/html',
 ])
 
 export interface ExtractionInput {
@@ -378,7 +381,62 @@ async function normalizeImageForExtraction(
   }
 }
 
+// Cap the text handed to the model. HTML mails can carry hundreds of KB of
+// framework markup; the invoice fields sit in the first fraction of the
+// visible text, and MAX_TOKENS bounds the output side anyway.
+const MAX_EXTRACTION_TEXT_LENGTH = 50_000
+
+/**
+ * Best-effort HTML-to-text for mail-body invoices. Not a sanitiser (the
+ * output is only ever sent to the model as plain text, never rendered):
+ * drops script/style/head blocks and comments, keeps block boundaries as
+ * newlines so amounts and labels stay line-separated, decodes the entities
+ * that occur in practice, and collapses whitespace.
+ */
+export function htmlToText(html: string): string {
+  const withoutBlocks = html
+    .replace(/<(script|style|head|title)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+  const withBreaks = withoutBlocks
+    .replace(/<\/(p|div|tr|li|h[1-6]|table|thead|tbody|section|article|blockquote|pre)\s*>/gi, '\n')
+    .replace(/<(br|hr)\b[^>]*\/?>/gi, '\n')
+  const stripped = withBreaks.replace(/<[^>]+>/g, ' ')
+  const decoded = stripped
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, n: string) => {
+      const code = Number(n)
+      return code > 31 && code <= 0x10ffff ? String.fromCodePoint(code) : ' '
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => {
+      const code = parseInt(n, 16)
+      return code > 31 && code <= 0x10ffff ? String.fromCodePoint(code) : ' '
+    })
+    // &amp; strictly last: decoding it earlier would double-decode
+    // "&amp;lt;" into "<" instead of the literal "&lt;".
+    .replace(/&amp;/gi, '&')
+  return decoded
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\s*\n\s*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, MAX_EXTRACTION_TEXT_LENGTH)
+}
+
 function buildContent(input: ExtractionInput) {
+  if (input.mimeType === 'text/html') {
+    const text = htmlToText(input.buffer.toString('utf8'))
+    return [
+      {
+        type: 'text' as const,
+        text: `The document is an HTML email invoice, converted to plain text:\n\n${text}`,
+      },
+      { type: 'text' as const, text: 'Extract the fields per the schema. JSON only.' },
+    ]
+  }
   const base64 = input.buffer.toString('base64')
   if (input.mimeType === 'application/pdf') {
     return [
