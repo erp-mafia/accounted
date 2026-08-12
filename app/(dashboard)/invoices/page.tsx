@@ -232,11 +232,38 @@ export default function InvoicesPage() {
   const showNewInvoice = searchParams.has('new') || copyFromId !== null
   const openSelfBilled = searchParams.has('self')
   const showRotRutPayout = searchParams.has('rot-rut')
-  const closeNewInvoice = () => router.replace('/invoices', { scroll: false })
-  const openNewInvoice = () => router.push('/invoices?new=1', { scroll: false })
-  const openNewSelfBilled = () => router.push('/invoices?new=1&self=1', { scroll: false })
-  const closeRotRutPayout = () => router.replace('/invoices', { scroll: false })
-  const openRotRutPayout = () => router.push('/invoices?rot-rut=1', { scroll: false })
+  // Open/close handlers rewrite only their own keys: a hardcoded '/invoices'
+  // would destroy the ?status= view write-back (and any other params) every
+  // time a dialog opens or closes.
+  const invoicesUrl = (mutate: (params: URLSearchParams) => void) => {
+    const params = new URLSearchParams(searchParams.toString())
+    mutate(params)
+    const qs = params.toString()
+    return qs ? `/invoices?${qs}` : '/invoices'
+  }
+  const closeNewInvoice = () =>
+    router.replace(
+      invoicesUrl((p) => {
+        p.delete('new')
+        p.delete('self')
+        p.delete('copy')
+      }),
+      { scroll: false },
+    )
+  const openNewInvoice = () =>
+    router.push(invoicesUrl((p) => p.set('new', '1')), { scroll: false })
+  const openNewSelfBilled = () =>
+    router.push(
+      invoicesUrl((p) => {
+        p.set('new', '1')
+        p.set('self', '1')
+      }),
+      { scroll: false },
+    )
+  const closeRotRutPayout = () =>
+    router.replace(invoicesUrl((p) => p.delete('rot-rut')), { scroll: false })
+  const openRotRutPayout = () =>
+    router.push(invoicesUrl((p) => p.set('rot-rut', '1')), { scroll: false })
 
   // Begäran om utbetalning (Lag 2009:194 8 §) only concerns companies selling
   // ROT/RUT-eligible work to consumers, so the action stays out of the header
@@ -618,7 +645,9 @@ export default function InvoicesPage() {
               ? t('bulk_book_and_send_action', { count: selectedIds.size })
               : t('bulk_book_action', { count: selectedIds.size })}
           </Button>
-          {!allSelectableSelected && (
+          {/* Hidden when the current view has no selectable rows: a
+              "Markera alla (0)" link would only wipe the selection. */}
+          {selectableInvoices.length > 0 && !allSelectableSelected && (
             <button
               type="button"
               className={QUIET_LINK_CLASS}

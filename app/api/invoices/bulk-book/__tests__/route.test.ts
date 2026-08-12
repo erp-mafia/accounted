@@ -159,6 +159,67 @@ describe('POST /api/invoices/bulk-book', () => {
     expect(body.data.summary).toEqual({ total: 1, booked: 1, failed: 0 })
   })
 
+  it('rejects drafts per item under deferred booking without issuing them', async () => {
+    // accrual + defer_invoice_booking: issuing the draft would consume an
+    // F-number and mark it sent WITHOUT booking anything. The sent invoice in
+    // the same batch must still book: deferred is exactly the /book case.
+    enqueue({ data: { ...accrualSettings, defer_invoice_booking: true }, error: null })
+    enqueue({
+      data: [makeDraft(UUID_1), { ...makeDraft(UUID_2), status: 'sent' }],
+      error: null,
+    })
+    mockBookDeferred.mockResolvedValue({
+      ok: true,
+      invoice: { id: UUID_2 },
+      journalEntryId: 'je-3',
+      warnings: [],
+    })
+
+    const { status, body } = await parseJsonResponse<{
+      data: {
+        results: Array<{ id: string; status: string; error_code?: string; error?: string }>
+        summary: { total: number; booked: number; failed: number }
+      }
+    }>(await bulkRequest([UUID_1, UUID_2]))
+
+    expect(status).toBe(200)
+    // The draft is never touched: no issuance side effects at all.
+    expect(mockIssueAndBook).not.toHaveBeenCalled()
+    expect(body.data.results).toEqual([
+      expect.objectContaining({
+        id: UUID_1,
+        status: 'failed',
+        error_code: 'INVOICE_BOOK_DEFERRED_DRAFT',
+        error: expect.stringContaining('separat steg'),
+      }),
+      { id: UUID_2, status: 'booked', journal_entry_id: 'je-3' },
+    ])
+    expect(body.data.summary).toEqual({ total: 2, booked: 1, failed: 1 })
+  })
+
+  it('processes duplicated ids exactly once (no second voucher)', async () => {
+    enqueue({ data: accrualSettings, error: null })
+    enqueue({ data: [makeDraft(UUID_1)], error: null })
+    mockIssueAndBook.mockResolvedValue({ ok: true, journalEntryId: 'je-1', partialFailures: [] })
+
+    const { status, body } = await parseJsonResponse<{
+      data: {
+        results: Array<{ id: string; status: string; journal_entry_id?: string | null }>
+        summary: { total: number; booked: number; failed: number }
+      }
+    }>(await bulkRequest([UUID_1, UUID_1]))
+
+    expect(status).toBe(200)
+    // Without dedupe the second iteration reads the stale pre-loop snapshot,
+    // passes the already-booked check, and mints a voucher the CAS claim then
+    // cancels: one cancelled verifikat + gap explanation per duplicate.
+    expect(mockIssueAndBook).toHaveBeenCalledTimes(1)
+    expect(body.data.results).toEqual([
+      { id: UUID_1, status: 'booked', journal_entry_id: 'je-1' },
+    ])
+    expect(body.data.summary).toEqual({ total: 1, booked: 1, failed: 0 })
+  })
+
   it('books sent unbooked invoices via bookInvoiceDeferred', async () => {
     enqueue({ data: accrualSettings, error: null })
     enqueue({

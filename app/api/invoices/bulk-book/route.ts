@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { InvoicesBulkBookSchema } from '@/lib/api/schemas'
 import { issueAndBookInvoice, type IssuableInvoice } from '@/lib/invoices/issue-and-book-invoice'
+import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import {
   bookInvoiceDeferred,
   INVOICE_BOOKABLE_STATUSES,
@@ -39,8 +40,10 @@ function failItem(id: string, errorCode: string): BulkBookItemResult {
  * One "Bokför" click for many customer invoices (MCP-created invoices land as
  * drafts that used to need individual issuance). Per invoice:
  *   - draft            → issueAndBookInvoice(): F-number + mark sent (NO
- *                        email) + revenue verifikat when the company books at
- *                        issue. Exactly the mark-sent semantics.
+ *                        email) + revenue verifikat. Exactly the mark-sent
+ *                        semantics; only when the company books at issue,
+ *                        deferred-booking companies get a per-item error
+ *                        instead of a silent issuance.
  *   - sent/overdue,
  *     unbooked         → bookInvoiceDeferred(): the /book semantics
  *                        (CAS-guarded claim).
@@ -90,7 +93,13 @@ export const POST = withRouteContext(
     )
     const results: BulkBookItemResult[] = []
 
-    for (const id of ids) {
+    // Dedupe: the loop's already-booked checks read the pre-loop snapshot, so
+    // a repeated id would pass them twice and commit a second voucher that the
+    // CAS claim then cancels (a cancelled verifikat + gap explanation per
+    // duplicate). Each unique id is processed exactly once.
+    const uniqueIds = [...new Set(ids)]
+
+    for (const id of uniqueIds) {
       const invoice = invoicesById.get(id)
       if (!invoice) {
         results.push(failItem(id, 'INVOICE_NOT_FOUND'))
@@ -104,6 +113,15 @@ export const POST = withRouteContext(
       }
 
       if (invoice.status === 'draft') {
+        // Deferred-booking companies (#967) issue via mark-sent and book via
+        // the explicit /book step. issueAndBookInvoice would consume an
+        // F-number and flip the draft to sent WITHOUT booking anything, an
+        // irreversible side effect nobody asked for, so the item fails
+        // before the invoice is touched.
+        if (!booksInvoicesOnIssue(settings)) {
+          results.push(failItem(id, 'INVOICE_BOOK_DEFERRED_DRAFT'))
+          continue
+        }
         const result = await issueAndBookInvoice({
           supabase,
           companyId,
