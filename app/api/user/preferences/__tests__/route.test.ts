@@ -105,6 +105,19 @@ describe('PATCH /api/user/preferences', () => {
     )
   })
 
+  it('writes a multi-field request as one atomic upsert', async () => {
+    const { upsert } = authedForPatch()
+    const res = await PATCH(
+      patchRequest({ hide_assistant_fab: true, auto_logout: false })
+    )
+    expect(res.status).toBe(200)
+    expect(upsert).toHaveBeenCalledTimes(1)
+    expect(upsert).toHaveBeenCalledWith(
+      { user_id: 'user-1', hide_assistant_fab: true, auto_logout: false },
+      { onConflict: 'user_id' }
+    )
+  })
+
   it('rejects an empty body with 400', async () => {
     authedForPatch()
     const res = await PATCH(patchRequest({}))

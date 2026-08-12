@@ -55,20 +55,28 @@ export async function PATCH(request: Request) {
 
   const { hide_assistant_fab, auto_logout } = parsed.data
 
-  // One literal upsert per field: the phantom-column schema guard cannot
-  // resolve spread payloads, and the settings UI only ever sends one field.
+  // One literal upsert per accepted field combination: the phantom-column
+  // schema guard cannot resolve spread payloads, and a single write keeps a
+  // multi-field request atomic.
   let upsertError: unknown = null
-  if (hide_assistant_fab !== undefined) {
-    const { error: fabError } = await supabase
+  if (hide_assistant_fab !== undefined && auto_logout !== undefined) {
+    const { error } = await supabase
+      .from('user_preferences')
+      .upsert(
+        { user_id: user.id, hide_assistant_fab, auto_logout },
+        { onConflict: 'user_id' },
+      )
+    upsertError = error
+  } else if (hide_assistant_fab !== undefined) {
+    const { error } = await supabase
       .from('user_preferences')
       .upsert({ user_id: user.id, hide_assistant_fab }, { onConflict: 'user_id' })
-    upsertError = fabError
-  }
-  if (auto_logout !== undefined && !upsertError) {
-    const { error: logoutError } = await supabase
+    upsertError = error
+  } else if (auto_logout !== undefined) {
+    const { error } = await supabase
       .from('user_preferences')
       .upsert({ user_id: user.id, auto_logout }, { onConflict: 'user_id' })
-    upsertError = logoutError
+    upsertError = error
   }
 
   if (upsertError) {
