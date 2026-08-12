@@ -33,8 +33,16 @@ vi.mock('@/lib/bookkeeping/template-library', () => ({
   applyTemplate: vi.fn(),
 }))
 
+// Stubbed so the queued supabase mock stays aligned with the route's own
+// queries; the helper's behaviour is covered in
+// lib/transactions/__tests__/inbox-underlag.test.ts.
+vi.mock('@/lib/transactions/inbox-underlag', () => ({
+  propagateUnderlagForBookedTransaction: vi.fn().mockResolvedValue(undefined),
+}))
+
 import { POST } from '../route'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 
 const TX1 = '11111111-1111-4111-8111-111111111111'
 const TX2 = '22222222-2222-4222-8222-222222222222'
@@ -114,6 +122,20 @@ describe('POST /api/transactions/bulk-book', () => {
     expect(body.data.mode).toBe('link_existing')
     expect(body.data.journal_entry_id).toBe(JE)
     expect(body.data.linked_tx_count).toBe(2)
+    // Every booked tx gets its matched inbox items completed against the
+    // samlingsverifikat (underlag link + consumed stamp).
+    expect(propagateUnderlagForBookedTransaction).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      TX1,
+      JE,
+    )
+    expect(propagateUnderlagForBookedTransaction).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      TX2,
+      JE,
+    )
   })
 
   it('create-new path fetches template, expands per mode, and calls RPC', async () => {

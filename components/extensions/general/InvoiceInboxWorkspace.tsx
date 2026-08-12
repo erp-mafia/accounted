@@ -95,6 +95,12 @@ interface InboxItem {
   matched_transaction_id: string | null
   created_supplier_invoice_id: string | null
   created_journal_entry_id: string | null
+  // The verifikat that anchors the matched transaction when it is already
+  // booked (directly or via a bulk-book samlingsverifikat). Server-derived by
+  // GET /items: created_journal_entry_id is UNIQUE per verifikat, so on a
+  // samlingsverifikat only one of N items can carry the stamp; this field is
+  // what lets the rest read as booked. Absent on client-side placeholders.
+  matched_transaction_journal_entry_id?: string | null
   error_message: string | null
   // True when AI extraction was skipped: either because the upload caller
   // passed skip_extraction=true (MCP/agent path) or because the server's
@@ -210,16 +216,18 @@ function countExtractedFields(data: InvoiceExtractionResult | null): number {
 // Lifecycle stage of an inbox item. Single source of truth shared by the list
 // filter, the count pills, and the row icons so they never drift apart.
 //
-// Precedence mirrors the FieldsRail: a booked item (supplier invoice OR a
-// direct journal entry) is done and drops out of the active inbox. A
-// matched-but-unbooked item is "linked": it STAYS in the inbox as its own
-// category because the bank payment still needs booking (a document attached
-// to a transaction is not the same as a booked one). An extraction failure is
-// "error"; everything else needs a first action.
+// Precedence mirrors the FieldsRail: a booked item (supplier invoice, a
+// direct journal entry, OR a matched transaction that is itself booked) is
+// done and drops out of the active inbox. A matched-but-unbooked item is
+// "linked": it STAYS in the inbox as its own category because the bank
+// payment still needs booking (a document attached to a transaction is not
+// the same as a booked one). An extraction failure is "error"; everything
+// else needs a first action.
 type InboxStatus = 'needs_action' | 'linked' | 'booked' | 'error'
 
 function deriveInboxStatus(item: InboxItem): InboxStatus {
   if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
+  if (item.matched_transaction_journal_entry_id) return 'booked'
   if (item.matched_transaction_id) return 'linked'
   if (item.status === 'error') return 'error'
   return 'needs_action'
@@ -972,7 +980,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const bookableSelectedCount = useMemo(
     () =>
       selectedItems.filter(
-        (it) => it.matched_transaction_id && !it.created_journal_entry_id && !it.created_supplier_invoice_id,
+        (it) =>
+          it.matched_transaction_id &&
+          !it.created_journal_entry_id &&
+          !it.created_supplier_invoice_id &&
+          // A matched transaction that is already booked has nothing left to
+          // bulk-book: the server would only skip it with a 409.
+          !it.matched_transaction_journal_entry_id,
       ).length,
     [selectedItems],
   )
@@ -2703,7 +2717,11 @@ function FieldsRail({
   }, [item.id])
 
   const isProcessed = !!item.created_supplier_invoice_id
-  const isBookedDirectly = !isProcessed && !!item.created_journal_entry_id
+  // The verifikat this item resolved into: its own stamp, or the entry that
+  // anchors its matched (and already booked) transaction. See InboxItem.
+  const bookedEntryId =
+    item.created_journal_entry_id ?? item.matched_transaction_journal_entry_id ?? null
+  const isBookedDirectly = !isProcessed && !!bookedEntryId
   // "Resolved" now means a journal entry exists: matched_transaction_id alone
   // is not resolved, it's the prerequisite for booking against that tx.
   const isLinkedToTransaction = !isProcessed && !isBookedDirectly && !!item.matched_transaction_id
@@ -3038,8 +3056,8 @@ function FieldsRail({
               Öppna leverantörsfaktura
             </Button>
           </Link>
-        ) : isBookedDirectly && item.created_journal_entry_id ? (
-          <Link href={`/bookkeeping/${item.created_journal_entry_id}`} className="block">
+        ) : isBookedDirectly && bookedEntryId ? (
+          <Link href={`/bookkeeping/${bookedEntryId}`} className="block">
             <Button variant="default" size="sm" className="w-full">
               <ArrowRight className="h-3.5 w-3.5 mr-1.5" />
               Öppna verifikation

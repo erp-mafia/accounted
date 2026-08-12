@@ -57,6 +57,10 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
 import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
+import {
+  completeInboxItemsForBookedTransaction,
+  resolveBookedJournalEntryIds,
+} from '@/lib/transactions/inbox-underlag'
 import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
@@ -298,7 +302,44 @@ export const invoiceInboxExtension: Extension = {
         const { data, error } = await query
         if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-        return NextResponse.json({ data: { items: data, count: data?.length ?? 0 } })
+        // Enrich matched-but-unstamped items with the verifikat that anchors
+        // their transaction, when it is already booked. The stamp
+        // (created_journal_entry_id) is UNIQUE per verifikat, so on a
+        // samlingsverifikat only one of N items can carry it: deriving
+        // "booked" from the transaction's own state is what lets the rest
+        // leave the active inbox (2026-08-12 report: booked items stuck in
+        // "Att göra" pointing at a transaction no longer in the work list).
+        type ItemRow = {
+          matched_transaction_id: string | null
+          created_journal_entry_id: string | null
+          created_supplier_invoice_id: string | null
+        }
+        const rows = (data ?? []) as ItemRow[]
+        const unresolvedTxIds = Array.from(
+          new Set(
+            rows
+              .filter(
+                (r) =>
+                  r.matched_transaction_id &&
+                  !r.created_journal_entry_id &&
+                  !r.created_supplier_invoice_id,
+              )
+              .map((r) => r.matched_transaction_id as string),
+          ),
+        )
+        const bookedByTx = await resolveBookedJournalEntryIds(
+          ctx.supabase,
+          ctx.companyId,
+          unresolvedTxIds,
+        )
+        const items = rows.map((r) => ({
+          ...r,
+          matched_transaction_journal_entry_id: r.matched_transaction_id
+            ? bookedByTx.get(r.matched_transaction_id) ?? null
+            : null,
+        }))
+
+        return NextResponse.json({ data: { items, count: items.length } })
       },
     },
 
@@ -359,7 +400,28 @@ export const invoiceInboxExtension: Extension = {
         if (error) return NextResponse.json({ error: error.message }, { status: 500 })
         if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-        return NextResponse.json({ data })
+        // Same enrichment as the list: the detail rail must not offer to
+        // book a matched transaction that is already booked.
+        const row = data as {
+          matched_transaction_id: string | null
+          created_journal_entry_id: string | null
+          created_supplier_invoice_id: string | null
+        }
+        let matchedTransactionJournalEntryId: string | null = null
+        if (
+          row.matched_transaction_id &&
+          !row.created_journal_entry_id &&
+          !row.created_supplier_invoice_id
+        ) {
+          const bookedByTx = await resolveBookedJournalEntryIds(ctx.supabase, ctx.companyId, [
+            row.matched_transaction_id,
+          ])
+          matchedTransactionJournalEntryId = bookedByTx.get(row.matched_transaction_id) ?? null
+        }
+
+        return NextResponse.json({
+          data: { ...row, matched_transaction_journal_entry_id: matchedTransactionJournalEntryId },
+        })
       },
     },
 
@@ -843,6 +905,17 @@ export const invoiceInboxExtension: Extension = {
             console.error('[invoice-inbox/match-transaction] tx.document_id backfill failed:', txUpdateError)
           }
         }
+
+        // The matched transaction may already be booked (directly or via a
+        // bulk-book samlingsverifikat): complete the item against the
+        // anchoring verifikat (underlag link + consumed stamp) so matching
+        // to a settled purchase resolves the item instead of stranding it
+        // as "linked". Best-effort, logged inside.
+        await completeInboxItemsForBookedTransaction(
+          ctx.supabase,
+          ctx.companyId,
+          body.transaction_id,
+        )
 
         return NextResponse.json({ data: updated })
       },
