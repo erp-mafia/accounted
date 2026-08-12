@@ -66,6 +66,7 @@ export class SkattekontoBookingError extends Error {
       | 'NO_FISCAL_PERIOD'
       | 'PERIOD_LOCKED'
       | 'ALREADY_BOOKED'
+      | 'NOT_SETTLED'
       | 'TRANSACTION_NOT_FOUND',
   ) {
     super(message)
@@ -342,6 +343,11 @@ export async function bokforSkattekontoTransaction(
   // once per batch instead of once per row. Omitted → per-call fetches,
   // identical to the original single-row behaviour.
   ruleContext?: SkattekontoRuleContext,
+  // requireSettled: reject rows that Skatteverket has not settled yet
+  // (status !== 'booked'). The batch commit path sets this: a kommande row
+  // must never land in an immutable posted verifikat. The single-row draft
+  // endpoint keeps its historical behaviour (draft for user review).
+  options?: { requireSettled?: boolean },
 ): Promise<JournalEntry> {
   // 1. Load the transaction
   const { data: tx, error: txError } = await supabase
@@ -362,6 +368,13 @@ export async function bokforSkattekontoTransaction(
     throw new SkattekontoBookingError(
       'Transaktionen är redan bokförd.',
       'ALREADY_BOOKED',
+    )
+  }
+
+  if (options?.requireSettled && tx.status !== 'booked') {
+    throw new SkattekontoBookingError(
+      'Händelsen är inte genomförd hos Skatteverket ännu och kan inte bokföras.',
+      'NOT_SETTLED',
     )
   }
 
@@ -469,17 +482,50 @@ export async function bokforSkattekontoTransaction(
 
   const entry = await createDraftEntry(supabase, companyId, userId, input)
 
-  // Link the row back so the dashboard can show "Bokförd" status.
-  await supabase
+  // Link the row back so the dashboard can show "Bokförd" status. The
+  // backlink is a conditional CLAIM, not a blind write: `.is('journal_entry_id',
+  // null)` makes concurrent submissions race on the same row and lets exactly
+  // one win. Zero affected rows means another request already booked the row
+  // between our precheck and now: surface ALREADY_BOOKED instead of
+  // double-posting. The just-created draft is left behind unlinked: the
+  // engine has no sanctioned draft-discard function and journal tables must
+  // never be raw-deleted, so an orphan draft (legally deletable by the user
+  // in /bookkeeping) is the safe leftover.
+  const { data: claimed, error: claimError } = await supabase
     .from('skattekonto_transactions')
     .update({ journal_entry_id: entry.id })
     .eq('id', tx.id)
     .eq('company_id', companyId)
+    .is('journal_entry_id', null)
+    .select('id')
+
+  if (claimError || !claimed || claimed.length === 0) {
+    throw new SkattekontoBookingError(
+      'Transaktionen är redan bokförd.',
+      'ALREADY_BOOKED',
+    )
+  }
 
   return entry
 }
 
 export type { SkattekontoBatchResult, SkattekontoBatchRowResult }
+
+/**
+ * The period-lock enforcement trigger (migration 20240101000017) raises
+ * 'Cannot write to locked/closed fiscal period "..." (is_closed=..., locked_at=...)'.
+ * findFiscalPeriod's precheck only filters is_closed=false, so a period that
+ * is locked (locked_at set) but not closed passes the precheck and the draft
+ * INSERT throws this instead. Detect the signature (also when wrapped by
+ * BookkeepingDatabaseError, which appends the DB message) so the batch can
+ * report PERIOD_LOCKED rather than UNKNOWN with raw English trigger text.
+ */
+function isPeriodLockTriggerError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.message.includes('locked/closed fiscal period')
+  )
+}
 
 /**
  * Book several skattekonto rows in one server-side pass: draft + commit per
@@ -514,16 +560,35 @@ export async function bokforSkattekontoTransactionsBatch(
         userId,
         id,
         ruleContext,
+        // Batch rows commit immediately: never post an unsettled (kommande)
+        // Skatteverket row into an immutable verifikat.
+        { requireSettled: true },
       )
     } catch (err) {
-      results.push({
-        id,
-        ok: false,
-        error_code:
-          err instanceof SkattekontoBookingError ? err.code : 'UNKNOWN',
-        error_message:
-          err instanceof Error ? err.message : 'Transaktionen kunde inte bokföras.',
-      })
+      if (err instanceof SkattekontoBookingError) {
+        results.push({
+          id,
+          ok: false,
+          error_code: err.code,
+          error_message: err.message,
+        })
+      } else if (isPeriodLockTriggerError(err)) {
+        results.push({
+          id,
+          ok: false,
+          error_code: 'PERIOD_LOCKED',
+          error_message:
+            'Raden ligger i en låst räkenskapsperiod. Lås upp perioden eller hoppa över raden.',
+        })
+      } else {
+        results.push({
+          id,
+          ok: false,
+          error_code: 'UNKNOWN',
+          error_message:
+            err instanceof Error ? err.message : 'Transaktionen kunde inte bokföras.',
+        })
+      }
       continue
     }
 

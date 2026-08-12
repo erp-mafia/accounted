@@ -2216,9 +2216,11 @@ export default function TransactionsPage() {
             ? t('skv_err_no_counter_account')
             : code === 'ALREADY_BOOKED'
               ? t('skv_err_already_booked')
-              : code === 'COMMIT_FAILED'
-                ? t('skv_err_commit_failed')
-                : t('skv_err_other')
+              : code === 'NOT_SETTLED'
+                ? t('skv_err_not_settled')
+                : code === 'COMMIT_FAILED'
+                  ? t('skv_err_commit_failed')
+                  : t('skv_err_other')
       const parts = [t('skv_bulk_partial_ok', { count: succeeded })]
       for (const [code, n] of codeCounts) parts.push(`${n} ${codeLabel(code)}`)
       toast({
@@ -3256,6 +3258,10 @@ export default function TransactionsPage() {
             if (!o) setSkvBookTarget(null)
           }}
           onBooked={handleSkvBooked}
+          onMatch={() => {
+            setSkvMatchTarget(skvBookTarget)
+            setSkvBookTarget(null)
+          }}
         />
       )}
 

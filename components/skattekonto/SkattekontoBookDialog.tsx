@@ -25,7 +25,9 @@ import type {
  *
  * Suggestion states drive the layout:
  * - object: rule matched → direct booking is the primary action
- * - null: computed, no rule matched → only the draft path remains
+ * - null: computed, no rule matched → the draft endpoint re-derives the same
+ *   null rule and rejects with NO_COUNTER_ACCOUNT, so no draft CTA here;
+ *   route to the match flow (onMatch) or manual creation in /bookkeeping
  * - undefined: not computed (kommande rows) → plain draft confirm
  */
 export default function SkattekontoBookDialog({
@@ -33,11 +35,16 @@ export default function SkattekontoBookDialog({
   open,
   onOpenChange,
   onBooked,
+  onMatch,
 }: {
   row: SkattekontoTransactionWithSuggestion | null
   open: boolean
   onOpenChange: (open: boolean) => void
   onBooked: (rowId: string, result: SkattekontoBatchRowResult) => void
+  // Opens the existing "Matcha mot verifikat" flow for this row; the dialog
+  // closes itself first. Optional: callers without a match flow fall back to
+  // manual verifikat creation only.
+  onMatch?: () => void
 }) {
   const t = useTranslations('skv_book_dialog')
   const { toast } = useToast()
@@ -50,6 +57,9 @@ export default function SkattekontoBookDialog({
   const amount = Number(row.belopp_skatteverket)
   const suggestion = row.booking_suggestion
   const canBookDirectly = suggestion != null
+  // null (not undefined) means the rules were evaluated and none matched:
+  // the draft endpoint would be a guaranteed 422 (NO_COUNTER_ACCOUNT).
+  const noRuleMatched = suggestion === null
 
   async function handleBook() {
     if (!row) return
@@ -143,17 +153,45 @@ export default function SkattekontoBookDialog({
     }
   }
 
+  function handleMatchInstead() {
+    onOpenChange(false)
+    onMatch?.()
+  }
+
+  function handleManualCreate() {
+    // /bookkeeping owns manual verifikat creation ("Nytt verifikat" in the
+    // page header); there is no dedicated create route to deep-link.
+    onOpenChange(false)
+    router.push('/bookkeeping')
+  }
+
   return (
     <ConfirmationDialog
       open={open}
       onOpenChange={onOpenChange}
       title={t('title')}
       isSubmitting={isBooking || isOpeningDraft}
-      confirmLabel={canBookDirectly ? t('confirm_book') : t('open_draft')}
+      confirmLabel={
+        canBookDirectly
+          ? t('confirm_book')
+          : noRuleMatched
+            ? onMatch
+              ? t('match_cta')
+              : t('manual_create_cta')
+            : t('open_draft')
+      }
       // A draft is still editable: the immutable-verifikat warning only
       // applies when the confirm commits directly.
-      warningText={canBookDirectly ? undefined : ''}
-      onConfirm={canBookDirectly ? handleBook : handleOpenDraft}
+      warningText={canBookDirectly ? t('commit_warning') : ''}
+      onConfirm={
+        canBookDirectly
+          ? handleBook
+          : noRuleMatched
+            ? onMatch
+              ? handleMatchInstead
+              : handleManualCreate
+            : handleOpenDraft
+      }
       extraActions={
         canBookDirectly ? (
           <Button
@@ -164,6 +202,15 @@ export default function SkattekontoBookDialog({
           >
             {isOpeningDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {t('open_draft')}
+          </Button>
+        ) : noRuleMatched && onMatch ? (
+          <Button
+            variant="ghost"
+            onClick={handleManualCreate}
+            disabled={isBooking || isOpeningDraft}
+            className="min-h-11 w-full sm:w-auto text-muted-foreground"
+          >
+            {t('manual_create_cta')}
           </Button>
         ) : undefined
       }

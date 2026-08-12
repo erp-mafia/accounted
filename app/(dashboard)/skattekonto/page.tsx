@@ -568,6 +568,11 @@ export default function SkattekontoPage() {
             if (!o) setBookTarget(null)
           }}
           onBooked={handleBooked}
+          onMatch={() => {
+            const target = bookTarget
+            setBookTarget(null)
+            void openMatch(target)
+          }}
         />
       )}
 

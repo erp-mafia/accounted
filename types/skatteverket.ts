@@ -84,6 +84,7 @@ export interface SkattekontoBatchRowResult {
     | 'NO_FISCAL_PERIOD'
     | 'PERIOD_LOCKED'
     | 'ALREADY_BOOKED'
+    | 'NOT_SETTLED'
     | 'TRANSACTION_NOT_FOUND'
     | 'COMMIT_FAILED'
     | 'UNKNOWN'

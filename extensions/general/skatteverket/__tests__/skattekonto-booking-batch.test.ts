@@ -219,10 +219,10 @@ describe('bokforSkattekontoTransactionsBatch', () => {
     enqueue({ data: SEED_RULES }) // hoisted rules
     enqueue({ data: { entity_type: 'aktiebolag' } }) // hoisted entity_type
     enqueue({ data: row1 }) // tx fetch row1
-    enqueue({ data: null }) // journal_entry_id writeback row1
-    enqueue({ data: row2 }) // tx fetch row2 (fails matching, no writeback)
+    enqueue({ data: [{ id: row1.id }] }) // journal_entry_id claim row1
+    enqueue({ data: row2 }) // tx fetch row2 (fails matching, no claim)
     enqueue({ data: row3 }) // tx fetch row3
-    enqueue({ data: null }) // writeback row3
+    enqueue({ data: [{ id: row3.id }] }) // claim row3
 
     const result = await bokforSkattekontoTransactionsBatch(
       supabase as unknown as SupabaseClient,
@@ -267,9 +267,9 @@ describe('bokforSkattekontoTransactionsBatch', () => {
     enqueue({ data: SEED_RULES })
     enqueue({ data: { entity_type: 'aktiebolag' } })
     enqueue({ data: row1 })
-    enqueue({ data: null })
+    enqueue({ data: [{ id: row1.id }] })
     enqueue({ data: row2 })
-    enqueue({ data: null })
+    enqueue({ data: [{ id: row2.id }] })
 
     await bokforSkattekontoTransactionsBatch(
       supabase as unknown as SupabaseClient,
@@ -288,7 +288,7 @@ describe('bokforSkattekontoTransactionsBatch', () => {
     enqueue({ data: SEED_RULES })
     enqueue({ data: { entity_type: 'aktiebolag' } })
     enqueue({ data: row })
-    enqueue({ data: null })
+    enqueue({ data: [{ id: row.id }] })
 
     await bokforSkattekontoTransactionsBatch(
       supabase as unknown as SupabaseClient,
@@ -312,7 +312,7 @@ describe('bokforSkattekontoTransactionsBatch', () => {
     enqueue({ data: SEED_RULES })
     enqueue({ data: { entity_type: 'aktiebolag' } })
     enqueue({ data: row })
-    enqueue({ data: null })
+    enqueue({ data: [{ id: row.id }] })
 
     vi.mocked(commitEntry).mockRejectedValueOnce(new Error('Bokföringen är låst'))
 
@@ -353,6 +353,89 @@ describe('bokforSkattekontoTransactionsBatch', () => {
       error_code: 'ALREADY_BOOKED',
     })
     expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+    expect(vi.mocked(commitEntry)).not.toHaveBeenCalled()
+  })
+
+  it('rejects unsettled (kommande) rows with NOT_SETTLED before any draft exists', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    // Rule WOULD match: only status must stop the row from being posted.
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta', status: 'upcoming' })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: row })
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [row.id],
+    )
+
+    expect(result.results[0]).toMatchObject({
+      id: row.id,
+      ok: false,
+      error_code: 'NOT_SETTLED',
+    })
+    expect(result.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
+    expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+    expect(vi.mocked(commitEntry)).not.toHaveBeenCalled()
+  })
+
+  it('reports ALREADY_BOOKED and never commits when the backlink claim affects 0 rows', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: row }) // tx fetch: still unbooked at precheck time
+    enqueue({ data: [] }) // claim: a concurrent submission won the race
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [row.id],
+    )
+
+    expect(result.results[0]).toMatchObject({
+      id: row.id,
+      ok: false,
+      error_code: 'ALREADY_BOOKED',
+    })
+    // The draft was created before the claim, but the losing request must
+    // never post it: no voucher may be committed for a row someone else owns.
+    expect(vi.mocked(createDraftEntry)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(commitEntry)).not.toHaveBeenCalled()
+  })
+
+  it('maps the period-lock trigger error to PERIOD_LOCKED with Swedish text', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: row })
+
+    // A locked-but-not-closed period passes findFiscalPeriod's is_closed
+    // precheck; the enforcement trigger then rejects the draft INSERT with
+    // this signature (wrapped by the engine's BookkeepingDatabaseError).
+    vi.mocked(createDraftEntry).mockRejectedValueOnce(
+      new Error(
+        'Database operation "create_draft_entry" failed: Cannot write to locked/closed fiscal period "2026" (is_closed=f, locked_at=2026-02-01 00:00:00+00)',
+      ),
+    )
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [row.id],
+    )
+
+    expect(result.results[0]).toMatchObject({
+      id: row.id,
+      ok: false,
+      error_code: 'PERIOD_LOCKED',
+    })
+    expect(result.results[0].error_message).not.toContain('locked/closed fiscal period')
     expect(vi.mocked(commitEntry)).not.toHaveBeenCalled()
   })
 })
