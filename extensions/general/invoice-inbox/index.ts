@@ -2256,8 +2256,14 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
-        // If transaction-linked, mark the transaction as booked.
-        if (transaction) {
+        // The transaction this verifikat settles: the one the caller named, or
+        // the one the item was already matched to. Preserving the match without
+        // booking it was half a fix, and the worse half: the item then looked
+        // resolved while the bank line stayed open forever. The fallback needs
+        // no ownership check because it was read off a company-scoped item.
+        const bookedTransactionId = transaction?.id ?? item.matched_transaction_id ?? null
+
+        if (bookedTransactionId) {
           const { error: txUpdateError } = await ctx.supabase
             .from('transactions')
             .update({
@@ -2265,7 +2271,7 @@ export const invoiceInboxExtension: Extension = {
               is_business: true,
               category: 'uncategorized',
             })
-            .eq('id', transaction.id)
+            .eq('id', bookedTransactionId)
             .eq('company_id', ctx.companyId)
           if (txUpdateError) {
             console.error('[invoice-inbox/book-direct] Transaction link failed:', txUpdateError)
@@ -2280,7 +2286,11 @@ export const invoiceInboxExtension: Extension = {
           .from('invoice_inbox_items')
           .update({
             created_journal_entry_id: journalEntry.id,
-            matched_transaction_id: transaction?.id ?? null,
+            // Keep the existing match when the caller sent no transaction_id.
+            // Overwriting with null let a caller that merely forgot the field
+            // silently unpick a match somebody had already made, and left the
+            // bank line unbooked with nothing on screen saying so.
+            matched_transaction_id: bookedTransactionId,
           })
           .eq('id', id)
           .eq('company_id', ctx.companyId)

@@ -42,12 +42,16 @@ import {
   Circle,
   X,
   ChevronDown,
+  ChevronRight,
   Sparkles,
   MessageCircle,
   Maximize2,
 } from 'lucide-react'
 import Link from 'next/link'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
+import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
+import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
+import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt'
 import { createClient } from '@/lib/supabase/client'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
@@ -171,6 +175,37 @@ function hasAnyExtractedField(data: InvoiceExtractionResult | null): boolean {
   )
 }
 
+/**
+ * The fields the extraction is scored against, in the order a person reads
+ * them. Deliberately the same list hasAnyExtractedField checks, so the summary
+ * cannot claim a field the "is anything here at all" test does not count.
+ */
+const EXTRACTED_FIELD_ACCESSORS: ((d: InvoiceExtractionResult) => unknown)[] = [
+  (d) => d.supplier?.name,
+  (d) => d.supplier?.orgNumber,
+  (d) => d.supplier?.vatNumber,
+  (d) => d.supplier?.bankgiro,
+  (d) => d.supplier?.plusgiro,
+  (d) => d.invoice?.invoiceNumber,
+  (d) => d.invoice?.invoiceDate,
+  (d) => d.invoice?.dueDate,
+  (d) => d.invoice?.paymentReference,
+  (d) => d.totals?.subtotal,
+  (d) => d.totals?.vatAmount,
+  (d) => d.totals?.total,
+]
+
+export const EXTRACTED_FIELD_COUNT = EXTRACTED_FIELD_ACCESSORS.length
+
+/** How many of them the extraction actually filled in. */
+function countExtractedFields(data: InvoiceExtractionResult | null): number {
+  if (!data) return 0
+  return EXTRACTED_FIELD_ACCESSORS.reduce(
+    (n, get) => n + (get(data) != null && get(data) !== '' ? 1 : 0),
+    0,
+  )
+}
+
 // Lifecycle stage of an inbox item. Single source of truth shared by the list
 // filter, the count pills, and the row icons so they never drift apart.
 //
@@ -246,6 +281,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const { toast } = useToast()
   const t = useTranslations('inbox_workspace')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  // Its own input: sharing the header's would upload without the purchase.
+  const purchaseFileInputRef = useRef<HTMLInputElement | null>(null)
   const { openAgentSheet, identity } = useAgentSheet()
 
   const [items, setItems] = useState<InboxItem[]>([])
@@ -261,7 +298,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // ones stay visible.
   // 'missing' is the odd one out: it lists bank purchases, not inbox items, so
   // the list and both panes branch on it.
-  const [filter, setFilter] = useState<'todo' | 'linked' | 'booked' | 'error' | 'all' | 'missing'>('todo')
+  const [filter, setFilter] = useState<
+    'todo' | 'linked' | 'booked' | 'error' | 'all' | 'missing' | 'portal'
+  >('todo')
   const [searchTerm, setSearchTerm] = useState('')
   // Bulk selection. Items linked to a supplier invoice are skipped at delete
   // time (server returns 409); we still allow them to be selected so the
@@ -456,26 +495,54 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [purchases, setPurchases] = useState<PurchaseWithoutUnderlag[]>([])
   const [selectedPurchaseId, setSelectedPurchaseId] = useState<string | null>(null)
 
-  // Whether any mailbox can actually be searched. Counting rows would not
-  // answer that: a revoked or expired connection is still a row, and the hunt
-  // skips it, so the button would promise a search that returns nothing every
-  // pass. A dead mailbox looking healthy is the exact failure this feature
-  // exists to surface, so it must not start by doing it in its own header.
-  const [mailConnected, setMailConnected] = useState(false)
+  // Where underlag come from. Three routes in, and the page should say so:
+  // the mailboxes we search, WhatsApp for photographed receipts, and the
+  // forwarding address that works with nothing connected at all.
+  const [mailConnections, setMailConnections] = useState<InboxMailConnection[]>([])
+  const [whatsapp, setWhatsapp] = useState<{ linked: boolean; phoneMasked?: string; verifiedAt?: string | null } | null>(null)
+  const [sourcesOpen, setSourcesOpen] = useState(false)
+
   useEffect(() => {
     void (async () => {
       try {
         const res = await fetch('/api/extensions/ext/mail/connections')
         if (!res.ok) return
-        const json = (await res.json()) as {
-          data?: { connections?: { status?: string }[] }
-        }
-        setMailConnected((json.data?.connections ?? []).some((c) => c.status === 'active'))
+        const json = (await res.json()) as { data?: { connections?: InboxMailConnection[] } }
+        setMailConnections(json.data?.connections ?? [])
       } catch {
         // The extension may not be enabled at all; stay quiet.
       }
     })()
+    void (async () => {
+      try {
+        const res = await fetch('/api/extensions/ext/whatsapp-inbox/link')
+        if (!res.ok) return
+        // The route answers in camelCase (phoneMasked / verifiedAt); reading
+        // snake_case here silently rendered a linked number as "–".
+        const json = (await res.json()) as {
+          data?: { linked: boolean; phoneMasked?: string; verifiedAt?: string | null }
+        }
+        if (json.data) setWhatsapp(json.data)
+      } catch {
+        // Same: not every company has it.
+      }
+    })()
   }, [])
+
+  // Counting rows would not answer whether anything is searchable: a revoked
+  // or expired connection is still a row, and the hunt skips it, so the button
+  // would promise a search that returns nothing every pass. A dead mailbox
+  // looking healthy is the exact failure this feature exists to surface, so it
+  // must not start by doing it in its own header.
+  const mailConnected = useMemo(
+    () => mailConnections.some((c) => c.status === 'active'),
+    [mailConnections],
+  )
+  const ailingMailbox = useMemo(
+    () => mailConnections.find((c) => c.status !== 'active') ?? null,
+    [mailConnections],
+  )
+  const sourceCount = mailConnections.length + (whatsapp?.linked ? 1 : 0) + (inboxAddress ? 1 : 0)
 
   const fetchPurchases = useCallback(async () => {
     try {
@@ -499,6 +566,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     stop: stopHunt,
     hunting,
     progress: huntProgress,
+    result: huntResult,
   } = useReceiptHunt(() => {
     void fetchItems()
     void fetchPurchases()
@@ -508,6 +576,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     () => purchases.find((p) => p.id === selectedPurchaseId) ?? null,
     [purchases, selectedPurchaseId],
   )
+
+  const portalPurchases = useMemo(() => purchases.filter((p) => p.portal), [purchases])
+  const otherPurchases = useMemo(() => purchases.filter((p) => !p.portal), [purchases])
 
   // Per-status counts for the filter pills. Computed once over the full list.
   const statusCounts = useMemo(() => {
@@ -530,29 +601,37 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       { key: 'linked', label: 'Kopplade', count: statusCounts.linked },
       { key: 'booked', label: 'Bokförda', count: statusCounts.booked },
     ]
-    // Only worth a pill when there is something behind it: a company that
-    // keeps every receipt should not be shown a permanent empty accusation.
-    if (purchases.length > 0 || filter === 'missing') {
-      list.push({ key: 'missing', label: 'Saknar underlag', count: purchases.length })
+    // Two lists, because they are two different jobs. A purchase whose
+    // supplier keeps invoices behind a login is one you can settle now by
+    // going there; one with nothing known needs somebody to be asked. Mixing
+    // them buries the twelve you can act on among the hundred you cannot.
+    if (portalPurchases.length > 0 || filter === 'portal') {
+      list.push({ key: 'portal', label: t('filter_portal'), count: portalPurchases.length })
+    }
+    if (otherPurchases.length > 0 || filter === 'missing') {
+      list.push({ key: 'missing', label: t('filter_missing'), count: otherPurchases.length })
     }
     if (statusCounts.error > 0 || filter === 'error') {
       list.push({ key: 'error', label: 'Fel', count: statusCounts.error })
     }
     list.push({ key: 'all', label: 'Alla', count: statusCounts.all })
     return list
-  }, [statusCounts, filter, purchases.length])
+  }, [statusCounts, filter, portalPurchases.length, otherPurchases.length])
+
+  const activePill = useMemo(() => pills.find((p) => p.key === filter), [pills, filter])
 
   const filteredPurchases = useMemo(() => {
+    const base = filter === 'portal' ? portalPurchases : otherPurchases
     const term = searchTerm.trim().toLowerCase()
-    if (term === '') return purchases
-    return purchases.filter((p) =>
+    if (term === '') return base
+    return base.filter((p) =>
       [p.merchant_name, p.description].some((v) => v?.toLowerCase().includes(term)),
     )
-  }, [purchases, searchTerm])
+  }, [portalPurchases, otherPurchases, filter, searchTerm])
 
   const filteredItems = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
-    if (filter === 'missing') return []
+    if (filter === 'missing' || filter === 'portal') return []
     return items.filter((item) => {
       // Status filter. "todo" is the active inbox: everything except booked.
       const status = deriveInboxStatus(item)
@@ -721,6 +800,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       if (options.autoSelect && json.data?.inbox_item_id) {
         await handleSelect(json.data.inbox_item_id)
       }
+      return json.data?.inbox_item_id as string | undefined
     } catch (err) {
       setItems((prev) => prev.filter((it) => it.id !== tempId))
       if (options.autoSelect) {
@@ -740,6 +820,54 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // Sequential queue: running multiple extractions concurrently would
   // hammer pdfjs on slow boxes. Per-file placeholder rows + the queue
   // counter on the upload button surface progress.
+  /**
+   * Upload a file and make it the underlag for one specific purchase.
+   *
+   * The generic upload only carries the file, so a document dropped while a
+   * purchase was selected landed in the inbox unmatched: the pane showed that
+   * purchase's amount and date under the drop zone and then quietly did not
+   * use either. Matching afterwards through the endpoint that already exists
+   * keeps the promise the copy makes.
+   */
+  const uploadForPurchase = useCallback(async (files: File[], transactionId: string) => {
+    const [file, ...rest] = files
+    if (!file) return
+    const itemId = await uploadFile(file, { autoSelect: false })
+    // A receipt scanned as two images, or an invoice with its specification,
+    // arrives as one drop. Taking the first and discarding the rest in silence
+    // left the purchase looking resolved with half its paperwork gone. They
+    // cannot all be the underlag for one purchase, so the extras are filed in
+    // the inbox rather than dropped on the floor.
+    for (const extra of rest) await uploadFile(extra, { autoSelect: false })
+    if (!itemId) return
+    try {
+      const res = await fetch(
+        `/api/extensions/ext/invoice-inbox/items/${itemId}/match-transaction`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ transaction_id: transactionId }),
+        },
+      )
+      if (!res.ok) throw new Error(String(res.status))
+      toast({
+        title: 'Underlag kopplat',
+        description: rest.length ? `${file.name}. ${rest.length} till lades i inkorgen.` : file.name,
+      })
+      setSelectedPurchaseId(null)
+      await Promise.all([fetchItems(), fetchPurchases()])
+    } catch {
+      // The document is safely filed either way; only the link failed, and
+      // the user can still make it by hand from the inbox.
+      toast({
+        title: 'Uppladdat, men inte kopplat',
+        description: 'Dokumentet ligger i inkorgen. Koppla det till köpet därifrån.',
+        variant: 'destructive',
+      })
+      await fetchItems()
+    }
+  }, [uploadFile, toast, fetchItems, fetchPurchases])
+
   const uploadFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return
     if (files.length === 1) {
@@ -769,8 +897,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     e.preventDefault()
     setIsDragging(false)
     const files = Array.from(e.dataTransfer.files ?? [])
-    if (files.length > 0) await uploadFiles(files)
-  }, [uploadFiles])
+    if (files.length === 0) return
+    // Dropping while a purchase is selected means "this is that purchase's
+    // receipt", wherever on the page it landed. Ignoring the selection would
+    // file it loose and leave the user to match by hand what they had already
+    // told us.
+    if (selectedPurchaseId) {
+      await uploadForPurchase(files, selectedPurchaseId)
+      return
+    }
+    await uploadFiles(files)
+  }, [uploadFiles, uploadForPurchase, selectedPurchaseId])
 
   // ── Delete ─────────────────────────────────────────────────
 
@@ -928,12 +1065,33 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         <div className="flex items-center gap-2 min-w-0">
           <Inbox className="h-4 w-4 text-muted-foreground shrink-0" />
           <h1 className="font-medium text-sm shrink-0">Dokumentinkorg</h1>
-          {inboxAddress ? (
-            <InboxAddressBar
-              address={inboxAddress.address}
-              onRotate={handleRotateAddress}
-              isRotating={isRotating}
-            />
+          {/* Where the page's contents come from, behind one chip. The detail
+              (which mailbox, when it was last read) is a thing people look up
+              when something seems wrong, not something they read every visit.
+              A mailbox that has stopped working is the exception, so that
+              surfaces on the chip itself. */}
+          {sourceCount > 0 ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSourcesOpen((v) => !v)}
+              className={cn(
+                'h-7 px-2 text-xs font-normal shrink-0',
+                ailingMailbox ? 'text-warning' : 'text-muted-foreground',
+              )}
+              aria-expanded={sourcesOpen}
+            >
+              {/* No marker on the healthy state. Convention 5: a normal state
+                  is muted text, and a chip every company sees always is a chip
+                  that says nothing. Convention 12 rules out the sage anyway,
+                  semantic colour being data rather than chrome. What remains is
+                  the exception, which is the one thing worth an ochre word. */}
+              {ailingMailbox && <AlertTriangle className="h-3 w-3 mr-1.5" />}
+              {ailingMailbox
+                ? `${ailingMailbox.emailAddress} behöver återanslutas`
+                : `${sourceCount} ${sourceCount === 1 ? 'källa' : 'källor'}`}
+              <ChevronDown className="h-3 w-3 ml-1 opacity-60" />
+            </Button>
           ) : addressLoadFailed ? (
             // We do not know whether an address exists, so we offer a retry
             // rather than an activate button that would rotate a live address.
@@ -1010,6 +1168,136 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         </div>
       </header>
 
+      {huntResult && (
+        <div className="border-b px-4 py-2 text-xs flex items-center gap-2">
+          {huntResult.failed ? (
+            <span className="text-warning">
+              {/* searchFailures counts mailboxes that refused; without it the
+                  failure was ours, and telling somebody to go check a healthy
+                  Gmail sends them after the wrong thing. */}
+              {(huntResult.searchFailures ?? 0) > 0
+                ? 'En brevlåda svarade inte. Försök igen om en stund.'
+                : 'Sökningen kunde inte slutföras. Försök igen.'}
+            </span>
+          ) : huntResult.fetched > 0 ? (
+            <span>
+              <b className="font-medium tabular-nums">{huntResult.fetched}</b> nya underlag hämtade.{' '}
+              {huntResult.remaining > 0 && (
+                <>
+                  <b className="font-medium tabular-nums">{huntResult.remaining}</b> köp kvar att söka
+                  för: tryck igen.{' '}
+                </>
+              )}
+              {/* "proposed" counts pending_operations rows, not links. The hunt
+                  stages attach_document_to_transaction for a human to approve
+                  and books nothing, so calling them kopplade would send the
+                  user away believing purchases were done. */}
+              {huntResult.proposed > 0 ? (
+                <>
+                  <b className="font-medium tabular-nums">{huntResult.proposed}</b> förslag väntar på{' '}
+                  <Link href="/pending" className="underline hover:text-foreground">
+                    granskning
+                  </Link>
+                  .
+                </>
+              ) : (
+                // A press fetches a bounded number of receipts, so an empty
+                // result usually means "not yet", not "nothing there". Saying
+                // only the first sends people away from a mailbox that still
+                // has their receipts in it.
+                <>Inget matchade något köp än. Tryck igen för att leta vidare.</>
+              )}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">
+              Inga nya underlag i brevlådorna för de köp som saknar ett.
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Opened from the chip. Three ways in, each with the one fact that
+          matters about it: an address you can forward to, mailboxes we search,
+          and the number receipts arrive from. Nothing here is configuration;
+          that still lives in Inställningar. */}
+      {sourcesOpen && (
+        <div className="border-b bg-muted/20 text-xs">
+          {inboxAddress && (
+            <div className="flex items-center gap-3 px-4 py-2 border-b border-border">
+              <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <div className="min-w-0 flex-1">
+                <span className="tabular-nums">{inboxAddress.address}</span>
+              </div>
+              <InboxAddressBar
+                address={inboxAddress.address}
+                onRotate={handleRotateAddress}
+                isRotating={isRotating}
+              />
+            </div>
+          )}
+
+          {mailConnections.map((c) => (
+            <details key={c.id} className="group border-b border-border">
+              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
+                {c.provider === 'gmail' ? (
+                  <GoogleMark className="h-3.5 w-3.5 shrink-0" />
+                ) : (
+                  <MicrosoftMark className="h-3.5 w-3.5 shrink-0" />
+                )}
+                <span className="truncate flex-1">{c.emailAddress}</span>
+                {c.status !== 'active' && (
+                  <Badge variant="warning" className="text-[10px] font-normal shrink-0">
+                    Behöver återanslutas
+                  </Badge>
+                )}
+                <ChevronRight className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
+              </summary>
+              {/* One level down, because this is what you look up when a
+                  mailbox seems to have gone quiet, not what you read on the
+                  way past. */}
+              <dl className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-0.5">
+                <div className="flex gap-2">
+                  <dt className="w-24 shrink-0">{t('source_last_searched')}</dt>
+                  <dd className="tabular-nums">
+                    {c.lastSearchedAt ? formatDateLong(c.lastSearchedAt) : t('source_never_searched')}
+                  </dd>
+                </div>
+                <div className="flex gap-2">
+                  <dt className="w-24 shrink-0">Status</dt>
+                  <dd>
+                    {c.status === 'active'
+                      ? t('source_searched_when_hunting')
+                      : t('source_not_searched')}
+                  </dd>
+                </div>
+              </dl>
+            </details>
+          ))}
+
+          {whatsapp?.linked && (
+            <details className="group border-b border-border">
+              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
+                <WhatsAppMark className="h-3.5 w-3.5 shrink-0" />
+                <span className="flex-1 truncate">WhatsApp</span>
+                <ChevronRight className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
+              </summary>
+              <dl className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-0.5">
+                <div className="flex gap-2">
+                  <dt className="w-24 shrink-0">{t('source_whatsapp_number')}</dt>
+                  <dd className="tabular-nums">{whatsapp.phoneMasked ?? '-'}</dd>
+                </div>
+                <div className="flex gap-2">
+                  <dt className="w-24 shrink-0">Status</dt>
+                  <dd>{whatsapp.verifiedAt ? t('source_verified') : t('source_unverified')}</dd>
+                </div>
+              </dl>
+            </details>
+          )}
+
+        </div>
+      )}
+
+
       {/* Three-section body. Below xl (iPad portrait/landscape + phone) the
           sections stack vertically as a single scrollable feed. With the app
           sidebar eating ~256px, even iPad landscape (1024-1180px viewport)
@@ -1029,39 +1317,53 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   className="pl-8 h-8 text-xs"
                 />
               </div>
-              <div className="flex flex-wrap gap-1">
-                {pills.map((pill) => (
-                  <button
-                    key={pill.key}
-                    type="button"
-                    onClick={() => {
-                      setFilter(pill.key)
-                      // The panes show one kind of row at a time; a stale
-                      // selection from the other kind would outlive its list.
-                      if (pill.key === 'missing') setSelectedId(null)
-                      else setSelectedPurchaseId(null)
-                    }}
-                    className={cn(
-                      'text-[11px] px-2 py-0.5 rounded-full border transition-colors',
-                      filter === pill.key
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-background text-muted-foreground border-border hover:text-foreground'
-                    )}
+              {/* One row instead of three. Five filters wrapped to three lines
+                  in a 280px column, and the counts are what people actually
+                  read, so they stay visible on the trigger and inside the menu
+                  rather than being traded away for the space. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-between h-8 px-2.5 text-xs font-normal"
                   >
-                    {pill.label}
-                    {pill.count > 0 && (
-                      <span
-                        className={cn(
-                          'ml-1 tabular-nums',
-                          filter === pill.key ? 'opacity-80' : 'opacity-50'
-                        )}
-                      >
-                        {pill.count}
+                    <span className="flex items-center gap-1.5 min-w-0">
+                      <span className="truncate">{activePill?.label ?? 'Att göra'}</span>
+                      <span className="tabular-nums text-muted-foreground">
+                        {activePill?.count ?? 0}
                       </span>
-                    )}
-                  </button>
-                ))}
-              </div>
+                    </span>
+                    <ChevronDown className="h-3.5 w-3.5 opacity-60 shrink-0" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-[--radix-dropdown-menu-trigger-width]">
+                  {pills.map((pill) => (
+                    <DropdownMenuItem
+                      key={pill.key}
+                      onSelect={() => {
+                        setFilter(pill.key)
+                        // The panes show one kind of row at a time; a stale
+                        // selection from the other kind would outlive its list.
+                        if (pill.key === 'missing' || pill.key === 'portal') setSelectedId(null)
+                        else setSelectedPurchaseId(null)
+                      }}
+                      className="justify-between text-xs"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Check
+                          className={cn(
+                            'h-3.5 w-3.5',
+                            filter === pill.key ? 'opacity-100' : 'opacity-0',
+                          )}
+                        />
+                        {pill.label}
+                      </span>
+                      <span className="tabular-nums text-muted-foreground">{pill.count}</span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           )}
           {selectedIds.size > 0 && (
@@ -1174,17 +1476,25 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 Inkorgen är tom.
               </div>
             )
-          ) : (filter === 'missing' ? filteredPurchases.length : filteredItems.length) === 0 ? (
+          ) : (filter === 'missing' || filter === 'portal' ? filteredPurchases.length : filteredItems.length) === 0 ? (
             <div className="p-6 text-center text-xs text-muted-foreground">
-              {filter === 'todo'
-                ? 'Inget att åtgärda; allt är bearbetat.'
-                : filter === 'missing'
-                  ? 'Varje köp har sitt underlag.'
-                  : 'Inga poster matchar filtret.'}
+              {/* A leftover search term makes every one of these false: the
+                  trigger above still shows the unsearched count, so the page
+                  would claim every purchase has its underlag while the button
+                  beside it reads 50. */}
+              {searchTerm.trim() !== ''
+                ? `Inga träffar på ”${searchTerm.trim()}”.`
+                : filter === 'todo'
+                  ? 'Inget att åtgärda; allt är bearbetat.'
+                  : filter === 'portal'
+                    ? 'Inga köp väntar på en faktura från en portal.'
+                    : filter === 'missing'
+                      ? 'Varje köp har sitt underlag.'
+                      : 'Inga poster matchar filtret.'}
             </div>
           ) : (
             <ul>
-              {filter === 'missing'
+              {filter === 'missing' || filter === 'portal'
                 ? filteredPurchases.map((p) => (
                     <PurchaseRow
                       key={p.id}
@@ -1222,17 +1532,65 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           )}
         >
           {selectedPurchase ? (
-            // There is no file to show, so the pane says why instead of
-            // rendering an empty frame.
+            // There is no file to show, so the pane says why and then offers
+            // the one thing that resolves it. Telling somebody a document is
+            // missing without a place to put it is half an answer.
             <div className="h-full flex items-center justify-center p-8">
-              <div className="text-center max-w-sm">
+              <div className="text-center max-w-sm w-full">
                 <FileQuestion className="h-6 w-6 mx-auto mb-3 text-muted-foreground opacity-60" />
-                <p className="text-sm">Inget underlag hittat</p>
+                <p className="text-sm">{t('purchase_no_document')}</p>
                 <p className="text-xs text-muted-foreground mt-1.5">
                   {selectedPurchase.portal
-                    ? `${selectedPurchase.portal.vendor} skickar ingen fil. Hämta fakturan och ladda upp den här, så kopplas den till köpet.`
-                    : 'Vi har sökt i brevlådorna och i portalkatalogen. Ladda upp kvittot här, eller vidarebefordra det till inkorgsadressen.'}
+                    ? `${selectedPurchase.portal.vendor} skickar ingen fil. Hämta fakturan och släpp den här.`
+                    : 'Vi har sökt i brevlådorna. Släpp kvittot här, eller vidarebefordra det till inkorgsadressen.'}
                 </p>
+
+                {selectedPurchase.portal && (
+                  <Button size="sm" variant="outline" className="mt-4" asChild>
+                    <a href={selectedPurchase.portal.url} target="_blank" rel="noopener noreferrer">
+                      Öppna {selectedPurchase.portal.vendor}
+                      <ExternalLink className="h-3.5 w-3.5 ml-1.5" />
+                    </a>
+                  </Button>
+                )}
+
+                <input
+                  ref={purchaseFileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept="application/pdf,image/jpeg,image/png,image/heic,image/heif,image/webp"
+                  onChange={async (e) => {
+                    const files = Array.from(e.target.files ?? [])
+                    if (files.length > 0) await uploadForPurchase(files, selectedPurchase.id)
+                    if (purchaseFileInputRef.current) purchaseFileInputRef.current.value = ''
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => purchaseFileInputRef.current?.click()}
+                  disabled={isUploading}
+                  className={cn(
+                    'mt-4 w-full rounded-lg border border-dashed px-4 py-6 text-xs transition-colors',
+                    'text-muted-foreground hover:border-foreground hover:text-foreground',
+                    isDragging && 'border-foreground text-foreground bg-secondary/40',
+                  )}
+                >
+                  {isUploading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Laddar upp…
+                    </span>
+                  ) : (
+                    <>
+                      Släpp filen här, eller klicka för att välja
+                      <span className="block mt-1 opacity-70">
+                        {formatCurrency(Math.abs(selectedPurchase.amount), selectedPurchase.currency ?? undefined)}
+                        {' · '}
+                        {formatDate(selectedPurchase.date)}
+                      </span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           ) : selected ? (
@@ -1324,6 +1682,12 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               isDeleting={isDeleting}
               onRetryRequested={async () => {
                 await Promise.all([fetchItems(), handleSelect(selected.id)])
+              }}
+              onBookedLocally={async () => {
+                // Re-read the item so the rail sees created_journal_entry_id
+                // and switches to the booked state; without it the same
+                // underlag can be posted twice.
+                await Promise.all([fetchItems(), fetchPurchases(), handleSelect(selected.id)])
               }}
               onFieldsUpdated={(nextData) => {
                 // Guard against stale closure: if the user navigated to a
@@ -1562,7 +1926,14 @@ function InboxRow({
           ) : item.source === 'email' ? (
             <Mail className="h-3 w-3 text-muted-foreground shrink-0" />
           ) : item.source === 'whatsapp' ? (
-            <MessageCircle className="h-3 w-3 text-muted-foreground shrink-0" />
+            <WhatsAppMark className="h-3 w-3 shrink-0" />
+          ) : item.channel_context?.mail_provider === 'gmail' ? (
+            // The hunt records which mailbox it pulled a receipt from, so the
+            // brand is known rather than guessed. Mail that arrived by
+            // forwarding has no connection behind it and keeps the envelope.
+            <GoogleMark className="h-3 w-3 shrink-0" />
+          ) : item.channel_context?.mail_provider === 'microsoft' ? (
+            <MicrosoftMark className="h-3 w-3 shrink-0" />
           ) : (
             <Upload className="h-3 w-3 text-muted-foreground shrink-0" />
           )}
@@ -1925,6 +2296,14 @@ function EmptyPreview({
   )
 }
 
+interface InboxMailConnection {
+  id: string
+  provider: 'gmail' | 'microsoft'
+  emailAddress: string
+  status: 'active' | 'needs_reconsent' | 'revoked'
+  lastSearchedAt: string | null
+}
+
 // ── Purchases with no underlag ───────────────────────────────
 
 /**
@@ -1955,6 +2334,7 @@ function PurchaseRow({
   selected: boolean
   onClick: () => void
 }) {
+  const t = useTranslations('inbox_workspace')
   return (
     <li>
       <button
@@ -1967,7 +2347,7 @@ function PurchaseRow({
       >
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-[13px] truncate">
-            {purchase.merchant_name || purchase.description || 'Okänt köp'}
+            {purchase.merchant_name || purchase.description || t('purchase_unknown')}
           </span>
           <span className="text-xs tabular-nums shrink-0">
             {formatCurrency(Math.abs(purchase.amount), purchase.currency ?? undefined)}
@@ -1989,13 +2369,14 @@ function PurchaseRow({
 }
 
 function PurchaseRail({ purchase }: { purchase: PurchaseWithoutUnderlag }) {
+  const t = useTranslations('inbox_workspace')
   return (
     <div className="p-4 space-y-4">
       <div>
         <h3 className="text-sm font-medium">
-          {purchase.merchant_name || purchase.description || 'Okänt köp'}
+          {purchase.merchant_name || purchase.description || t('purchase_unknown')}
         </h3>
-        <p className="text-xs text-muted-foreground mt-0.5">Köp utan underlag</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{t('purchase_kind')}</p>
       </div>
 
       <dl className="space-y-1.5 text-xs">
@@ -2011,7 +2392,7 @@ function PurchaseRail({ purchase }: { purchase: PurchaseWithoutUnderlag }) {
         </div>
         {purchase.description && (
           <div className="flex justify-between gap-3">
-            <dt className="text-muted-foreground shrink-0">Kontotext</dt>
+            <dt className="text-muted-foreground shrink-0">{t('purchase_bank_text')}</dt>
             <dd className="text-muted-foreground text-right break-words">{purchase.description}</dd>
           </div>
         )}
@@ -2089,7 +2470,15 @@ const SUGGESTION_EMPTY_REASON: Record<string, string> = {
     'Köpet är i utländsk valuta och matchades av en konteringsregel. Momsen skulle bli fel, så vi visar inget förslag.',
 }
 
-function ProposedBooking({ itemId }: { itemId: string }) {
+function ProposedBooking({
+  itemId,
+  onLoaded,
+}: {
+  itemId: string
+  /** Hands the loaded proposal up so the editor can open pre-filled with it. */
+  onLoaded?: (data: SuggestedBooking | null) => void
+}) {
+  const t = useTranslations('inbox_workspace')
   const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
   const [data, setData] = useState<SuggestedBooking | null>(null)
 
@@ -2112,17 +2501,24 @@ function ProposedBooking({ itemId }: { itemId: string }) {
       .then((json) => {
         if (cancelled) return
         setData(json.data)
+        onLoaded?.(json.data)
         setState('ready')
       })
       .catch(() => {
         // A suggestion that cannot be fetched is not something the user did:
         // stay quiet rather than showing an error beside their document.
-        if (!cancelled) setState('failed')
+        if (!cancelled) {
+          onLoaded?.(null)
+          setState('failed')
+        }
       })
     return () => {
       cancelled = true
       controller.abort()
     }
+    // onLoaded is intentionally excluded: a new identity each render
+    // would refetch on every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemId])
 
   if (state === 'loading') return <Skeleton className="h-24 w-full" />
@@ -2141,7 +2537,7 @@ function ProposedBooking({ itemId }: { itemId: string }) {
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-xs font-medium">Föreslagen kontering</h3>
+        <h3 className="text-xs font-medium">{t('proposal_title')}</h3>
         {data.entry_date && (
           <span className="text-[11px] text-muted-foreground tabular-nums">
             Bokförs {formatDate(data.entry_date)}
@@ -2188,7 +2584,7 @@ function ProposedBooking({ itemId }: { itemId: string }) {
 
       {(SUGGESTION_SOURCE_LABEL[data.source] || data.requires_review || data.direction_mismatch) && (
         <details className="text-[11px] text-muted-foreground">
-          <summary className="cursor-pointer hover:text-foreground">Varför så här?</summary>
+          <summary className="cursor-pointer hover:text-foreground">{t('proposal_why')}</summary>
           <div className="pt-1.5 space-y-1">
             {SUGGESTION_SOURCE_LABEL[data.source] && <p>{SUGGESTION_SOURCE_LABEL[data.source]}</p>}
             {data.rule_name && <p>Regel: {data.rule_name}</p>}
@@ -2223,6 +2619,7 @@ function FieldsRail({
   isDeleting,
   onFieldsUpdated,
   onRetryRequested,
+  onBookedLocally,
 }: {
   item: InboxItem
   docMime: string | null
@@ -2235,11 +2632,22 @@ function FieldsRail({
   onAskAssistant?: (transactionId: string) => void
   isDeleting: boolean
   onFieldsUpdated: (data: InvoiceExtractionResult) => void
+  /** Re-read the item after this rail posted a verifikat for it. */
+  onBookedLocally?: () => void
   onRetryRequested: () => Promise<void>
 }) {
   const { toast } = useToast()
   const hasAi = useCapability(CAPABILITY.ai)
   const data = item.extracted_data
+  const [proposal, setProposal] = useState<SuggestedBooking | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
+  // A proposal belongs to one item; carrying it to the next would offer the
+  // previous underlag's accounts for this one's money.
+  useEffect(() => {
+    setProposal(null)
+    setEditOpen(false)
+  }, [item.id])
+
   const isProcessed = !!item.created_supplier_invoice_id
   const isBookedDirectly = !isProcessed && !!item.created_journal_entry_id
   // "Resolved" now means a journal entry exists: matched_transaction_id alone
@@ -2486,25 +2894,47 @@ function FieldsRail({
           </div>
         )}
 
-      {/* Extracted fields */}
-      <div className="flex-1 overflow-y-auto px-4 py-3">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-xs uppercase tracking-wide text-muted-foreground font-medium">
-            Extraherade fält
-          </h3>
-          {!item.isPlaceholder && (hasAnyExtractedField(data) || hasAi) && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 -my-2 text-muted-foreground hover:text-foreground"
-              onClick={() => setFieldsExpanded(true)}
-              aria-label={t('expand_fields')}
-              title={t('expand_fields')}
-            >
-              <Maximize2 className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </div>
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        {/* The proposed kontering comes first: it is the decision. The fields
+            are the evidence you check when the decision looks wrong, so they
+            fold. Reading order used to be the other way round, which meant
+            scrolling past nine values to reach the one thing to approve. */}
+        {isLinkedToTransaction && <ProposedBooking itemId={item.id} onLoaded={setProposal} />}
+
+        <details className="group" open={!isLinkedToTransaction}>
+          <summary className="flex items-center gap-1.5 cursor-pointer list-none text-xs uppercase tracking-wide text-muted-foreground font-medium hover:text-foreground">
+            <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
+            <span className="flex-1">{t('fields_summary')}</span>
+            {/* A count, not a score. "5 av 12" read as a bad extraction even
+                when a kvitto had given up everything a kvitto has: half those
+                twelve fields only exist on an invoice. */}
+            {!item.isPlaceholder && countExtractedFields(data) > 0 && (
+              <span className="tabular-nums normal-case tracking-normal">
+                {t('fields_filled', { count: countExtractedFields(data) })}
+              </span>
+            )}
+            {/* Kept from main: the fields are readable at rail width but not
+                comfortable, so the expand still earns its place inside the
+                fold. stopPropagation, or the summary would toggle under it. */}
+            {!item.isPlaceholder && (hasAnyExtractedField(data) || hasAi) && (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setFieldsExpanded(true) }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault(); e.stopPropagation(); setFieldsExpanded(true)
+                  }
+                }}
+                aria-label={t('expand_fields')}
+                title={t('expand_fields')}
+                className="p-1 -m-1 hover:text-foreground"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </span>
+            )}
+          </summary>
+          <div className="pt-3">
         {item.isPlaceholder ? (
           <div className="space-y-2">
             <div className="text-xs text-muted-foreground italic flex items-center gap-2 mb-2">
@@ -2541,6 +2971,8 @@ function FieldsRail({
             onUpdated={onFieldsUpdated}
           />
         )}
+          </div>
+        </details>
       </div>
 
       {/* Actions: hidden while AI extraction is in flight */}
@@ -2578,9 +3010,6 @@ function FieldsRail({
               </Link>
             </div>
 
-            {/* The answer the rail never gave: what this would be booked as.
-                Read-only; booking still goes through the dialog below. */}
-            <ProposedBooking itemId={item.id} />
             {onAskAssistant && (
               <Button
                 variant="default"
@@ -2591,13 +3020,18 @@ function FieldsRail({
                 Fråga assistenten
               </Button>
             )}
+            {/* One control, and its scope is the whole verifikat. It opens
+                pre-filled with the proposal when there is one and empty when
+                there is not, so there is no separate "book manually" path to
+                choose between. Nothing posts from here without the form's own
+                review step (convention 14). */}
             <Button
               variant="outline"
               size="sm"
               className="w-full"
-              onClick={onBookDirect}
+              onClick={() => setEditOpen(true)}
             >
-              Bokför manuellt
+              {proposal?.lines.length ? t('review_and_book') : t('book_manually')}
             </Button>
             <button
               type="button"
@@ -2709,12 +3143,43 @@ function FieldsRail({
       </div>
       )}
 
+      <EditKonteringDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        itemId={item.id}
+        documentId={item.document_id ?? null}
+        documentMime={docMime}
+        documentUrl={null}
+        fileName={item.fileName ?? null}
+        transactionId={item.matched_transaction_id ?? null}
+        // BFL 5 kap 6-7 § wants datum för affärshändelsen. The proposal's date
+        // is the bank's, which is the event for a matched purchase. Without one
+        // the document's own date is the next best truth; today is the day
+        // somebody opened a dialog and is nobody's business event. The field is
+        // editable either way, but a silent wrong default is not checked.
+        entryDate={
+          proposal?.entry_date ??
+          data?.invoice?.invoiceDate ??
+          new Date().toISOString().slice(0, 10)
+        }
+        description={data?.supplier?.name ?? item.email_subject ?? 'Underlag'}
+        lines={proposal?.lines ?? []}
+        onBooked={() => {
+          setEditOpen(false)
+          // Realtime refreshes the list, but this rail renders from the
+          // `selected` object the parent already fetched, so it would keep
+          // offering "Granska och bokför" for an underlag that now has a
+          // verifikat, and a second press would post a duplicate.
+          onBookedLocally?.()
+        }}
+      />
+
       {/* Expanded fields editor: same autosaving list as the rail, at a
           readable size. Convention 13: centered modal. */}
       <Dialog open={fieldsExpanded} onOpenChange={setFieldsExpanded}>
         <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Extraherade fält</DialogTitle>
+            <DialogTitle>{t('fields_summary')}</DialogTitle>
           </DialogHeader>
           <EditableFieldsList
             itemId={item.id}

@@ -450,4 +450,46 @@ describe('POST /items/:id/book-direct', () => {
       }),
     )
   })
+
+  it('keeps an existing match when the caller omits transaction_id', async () => {
+    // A caller that merely forgets the field used to unpick a match somebody
+    // had already made: the verifikat posted standalone, the bank line stayed
+    // unbooked, and nothing on screen said so. Forgetting a field must not
+    // undo work.
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({
+      data: makeInvoiceInboxItem({ document_id: 'doc-1', matched_transaction_id: TX_UUID }),
+    })
+    enqueue({ data: null }) // inbox item update
+
+    const ctx = buildCtx(supabase)
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY, // no transaction_id
+      searchParams: { _id: 'item-1' },
+    })
+    const res = await route.handler(request, ctx)
+    expect(res.status).toBe(200)
+
+    // The preserved match must also be BOOKED. Keeping the link while leaving
+    // the bank line open is the worse half of the bug: the item looks resolved
+    // and the transaction stays outstanding forever.
+    const txUpdate = calls.find(
+      (c: { method: string; args?: unknown[] }) =>
+        c.method === 'update' &&
+        typeof c.args?.[0] === 'object' &&
+        c.args?.[0] !== null &&
+        'journal_entry_id' in (c.args[0] as Record<string, unknown>),
+    )
+    expect(txUpdate, 'the preserved transaction was never booked').toBeTruthy()
+
+    const update = calls.find(
+      (c: { method: string; args?: unknown[] }) =>
+        c.method === 'update' &&
+        typeof c.args?.[0] === 'object' &&
+        c.args?.[0] !== null &&
+        'created_journal_entry_id' in (c.args[0] as Record<string, unknown>),
+    )
+    expect((update?.args?.[0] as Record<string, unknown>).matched_transaction_id).toBe(TX_UUID)
+  })
 })

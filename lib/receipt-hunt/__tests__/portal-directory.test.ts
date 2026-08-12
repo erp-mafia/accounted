@@ -9,7 +9,6 @@ import { PORTAL_DIRECTORY, lookupPortal } from '../portal-directory'
 describe('lookupPortal', () => {
   it('reads a card descriptor the bank has mangled', () => {
     // Real strings from a production ledger.
-    expect(lookupPortal('ANTHROPIC* CLAUDE SUB SAN FRANCISCO Kortköp/uttag')?.vendor).toBe('Anthropic')
     expect(lookupPortal('OPENAI  CHATGPT SUBSCR')?.vendor).toBe('OpenAI')
     expect(lookupPortal('Kortköp 260228 HETZNER ONLINE GMBH')?.vendor).toBe('Hetzner')
   })
@@ -25,6 +24,15 @@ describe('lookupPortal', () => {
     expect(lookupPortal('Lön Juli Jakob Överföring via internet')).toBeNull()
     expect(lookupPortal('Inbetalning skat BG 0000050501055')).toBeNull()
     expect(lookupPortal('Skatt lön Juni BG 0000050501055')).toBeNull()
+  })
+
+  it('says nothing about a supplier that emails its invoices', () => {
+    // The bar is "does not send the invoice", not "also has a portal".
+    // Anthropic, Vercel and Supabase all mail theirs to European customers, so
+    // pointing somebody at a login sends them away from the document.
+    expect(lookupPortal('ANTHROPIC* CLAUDE SUB SAN FRANCISCO')).toBeNull()
+    expect(lookupPortal('Vercel Jul Överföring via internet')).toBeNull()
+    expect(lookupPortal('SUPABASE PRO SUBSCRIPTION')).toBeNull()
   })
 
   it('says nothing about a supplier it does not know', () => {
