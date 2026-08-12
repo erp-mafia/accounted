@@ -1855,9 +1855,6 @@ export default function JournalEntryForm({
             {t('save_as_template')}
           </Button>
         </div>
-        <p className="mt-1.5 text-xs text-muted-foreground">
-          {t('fill_balance_hint')} {t('keyboard_hint')}
-        </p>
       </div>
 
       {/* Document attachments: hidden when editing a draft; underlag is
