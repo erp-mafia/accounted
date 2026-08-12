@@ -145,9 +145,13 @@ interface StagedOperation {
   operation_id?: string
   risk_level: 'low' | 'medium' | 'high'
   message: string
-  // The originating tool name (e.g. 'gnubok_categorize_transaction'). Lets
-  // ApprovalCard pick the right structured-preview renderer.
+  // The originating tool name (e.g. 'gnubok_categorize_transaction'), as
+  // carried by live staged_operation stream events.
   tool_name?: string
+  // The stored pending_operations.operation_type (e.g.
+  // 'categorize_transaction'), set on hydrated cards. ApprovalCard prefers
+  // this for preview dispatch and derives it from tool_name otherwise.
+  operation_type?: string
   // The structured operation preview from the staged envelope. Shape varies
   // by tool; ApprovalCard's renderers do the type-narrowing.
   preview?: unknown
@@ -999,6 +1003,7 @@ function MessageBubble({
                 riskLevel={s.risk_level}
                 message={s.message}
                 toolName={s.tool_name}
+                operationType={s.operation_type}
                 preview={s.preview}
                 periodStatus={s.period_status}
                 onRequestCorrection={onCorrection}
@@ -1288,18 +1293,6 @@ function prettyToolName(name: string): string {
  * on the last assistant message so they read as that turn's proposal, which is
  * where they were when the turn streamed.
  */
-/**
- * `pending_operations.operation_type` stores the bare action name
- * ('categorize_transaction'), while the live streamed card carries the MCP tool
- * name ('gnubok_categorize_transaction') and ApprovalCard's PreviewBlock
- * dispatches on that. Without this, every hydrated card fell through to the
- * flat generic preview instead of the journal-line one, so a resumed proposal
- * looked materially worse than the same proposal did live.
- */
-export function toolNameFor(operationType: string): string {
-  return operationType.startsWith('gnubok_') ? operationType : `gnubok_${operationType}`
-}
-
 export function attachStagedOperations(
   messages: ChatMessage[],
   staged: StoredStagedOperation[],
@@ -1314,7 +1307,11 @@ export function attachStagedOperations(
     risk_level:
       op.risk_level === 'high' || op.risk_level === 'medium' ? op.risk_level : 'low',
     message: op.title ?? 'Förslag väntar på granskning.',
-    tool_name: toolNameFor(op.operation_type),
+    // The stored bare operation_type drives the preview dispatch directly.
+    // Its predecessor mapped it onto an MCP tool name here ('gnubok_' +
+    // type) for ApprovalCard's old 4-case tool-name switch, so every other
+    // hydrated type silently lost its specialized preview.
+    operation_type: op.operation_type,
     preview: op.preview_data,
   }))
 
