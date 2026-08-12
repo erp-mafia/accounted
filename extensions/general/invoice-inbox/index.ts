@@ -15,6 +15,9 @@ import {
   MAX_FILE_SIZE,
   MAX_PAGES_FOR_AUTO_EXTRACT,
   UPLOAD_ALLOWED_MIME_TYPES,
+  EMAIL_ALLOWED_MIME_TYPES,
+  ensureHtmlDocument,
+  buildEmailBodyHtmlDocument,
 } from './lib/upload-and-extract'
 import {
   verifyInboundWebhook,
@@ -1411,6 +1414,55 @@ export const invoiceInboxExtension: Extension = {
         }
 
         if (attachments.length === 0) {
+          // Body-only mail: for many suppliers the HTML body IS the invoice
+          // (SaaS receipts, e-mail invoices), and often the only underlag the
+          // user has. Store the body as a text/html document and run the
+          // normal extract pipeline instead of dead-ending in an error row.
+          // Mails with an empty body keep the old error row.
+          const bodyDoc = buildEmailBodyHtmlDocument(fullEmail.html ?? null, bodyText)
+          if (bodyDoc && bodyDoc.byteLength <= MAX_FILE_SIZE) {
+            // Resend retries the webhook on failure: a retry after success
+            // must not duplicate the body document. Body items carry the
+            // email_id with a NULL attachment id.
+            const { data: existingBody } = await serviceSupabase
+              .from('invoice_inbox_items')
+              .select('id')
+              .eq('resend_email_id', email_id)
+              .is('resend_attachment_id', null)
+              .maybeSingle()
+            if (existingBody) {
+              return NextResponse.json(
+                { data: { processed: 0, reason: 'email_body_duplicate', inbox_item_id: existingBody.id } }
+              )
+            }
+            try {
+              const result = await uploadAndExtract(
+                serviceSupabase,
+                userId,
+                companyId,
+                {
+                  name: `mail-${sanitiseFilename(subject, 'meddelande')}.html`,
+                  buffer: bodyDoc,
+                  type: 'text/html',
+                },
+                'email',
+                {
+                  from,
+                  subject,
+                  receivedAt: created_at,
+                  messageId: message_id,
+                  bodyText,
+                  resendEmailId: email_id,
+                }
+              )
+              return NextResponse.json(
+                { data: { processed: 1, reason: 'email_body', inbox_item_id: result.inbox_item_id } }
+              )
+            } catch (err) {
+              // Fall through to the error row so the mail never vanishes.
+              console.error('[invoice-inbox/inbound] Email-body document failed:', err)
+            }
+          }
           await serviceSupabase.from('invoice_inbox_items').insert({
             company_id: companyId,
             user_id: userId,
@@ -1488,13 +1540,44 @@ export const invoiceInboxExtension: Extension = {
             if (download.contentType === 'message/rfc822') {
               const parsed = await simpleParser(Buffer.from(download.buffer))
               const innerAttachments = parsed.attachments || []
+              const innerFrom = parsed.from?.text || from
+              const innerSubject = parsed.subject || subject
               if (innerAttachments.length === 0) {
+                // Gmail "Forward as attachment" of a body-only HTML invoice:
+                // the forwarded mail's body is the underlag. Same treatment
+                // as a direct body-only mail; empty bodies keep the rejection.
+                const innerBodyDoc = buildEmailBodyHtmlDocument(
+                  typeof parsed.html === 'string' ? parsed.html : null,
+                  parsed.text ?? null
+                )
+                if (innerBodyDoc && innerBodyDoc.byteLength <= MAX_FILE_SIZE) {
+                  const innerBodyResult = await uploadAndExtract(
+                    serviceSupabase,
+                    userId,
+                    companyId,
+                    {
+                      name: `mail-${sanitiseFilename(innerSubject, 'meddelande')}.html`,
+                      buffer: innerBodyDoc,
+                      type: 'text/html',
+                    },
+                    'email',
+                    {
+                      from: innerFrom,
+                      subject: innerSubject,
+                      receivedAt: created_at,
+                      messageId: message_id,
+                      bodyText,
+                      resendEmailId: email_id,
+                      resendAttachmentId: att.id,
+                    }
+                  )
+                  results.push({ attachment_id: att.id, inbox_item_id: innerBodyResult.inbox_item_id })
+                  continue
+                }
                 await logRejection(att.id, download.filename, download.contentType, 'Det vidarebefordrade meddelandet innehöll inga bilagor')
                 results.push({ attachment_id: att.id, error: 'eml_no_inner_attachments' })
                 continue
               }
-              const innerFrom = parsed.from?.text || from
-              const innerSubject = parsed.subject || subject
               for (let i = 0; i < innerAttachments.length; i++) {
                 const inner = innerAttachments[i]
                 const innerType = sanitiseMime(inner.contentType)
@@ -1502,7 +1585,7 @@ export const invoiceInboxExtension: Extension = {
                 const innerBuffer = inner.content
                 if (!innerBuffer) continue
                 const innerId = `${att.id}#${i}`
-                if (!UPLOAD_ALLOWED_MIME_TYPES.has(innerType)) {
+                if (!EMAIL_ALLOWED_MIME_TYPES.has(innerType)) {
                   await logRejection(innerId, innerName, innerType, `Avvisad bilaga från vidarebefordrat mejl: filtypen ${innerType} stöds inte`)
                   results.push({ attachment_id: innerId, error: `Unsupported type ${innerType}` })
                   continue
@@ -1512,7 +1595,10 @@ export const invoiceInboxExtension: Extension = {
                   results.push({ attachment_id: innerId, error: 'Inner attachment too large' })
                   continue
                 }
-                const innerArrayBuffer = new Uint8Array(innerBuffer).buffer
+                const innerArrayBuffer =
+                  innerType === 'text/html'
+                    ? ensureHtmlDocument(innerBuffer.toString('utf8'))
+                    : new Uint8Array(innerBuffer).buffer
                 const innerResult = await uploadAndExtract(
                   serviceSupabase,
                   userId,
@@ -1534,7 +1620,7 @@ export const invoiceInboxExtension: Extension = {
               continue
             }
 
-            if (!UPLOAD_ALLOWED_MIME_TYPES.has(download.contentType)) {
+            if (!EMAIL_ALLOWED_MIME_TYPES.has(download.contentType)) {
               await logRejection(att.id, download.filename, download.contentType, `Avvisad: filtypen ${download.contentType} stöds inte`)
               results.push({ attachment_id: att.id, error: `Unsupported type ${download.contentType}` })
               continue
@@ -1545,11 +1631,18 @@ export const invoiceInboxExtension: Extension = {
               continue
             }
 
+            // Attached .html invoices are often fragments; wrap them into a
+            // self-contained document so the archive holds a renderable file.
+            const attachmentBuffer =
+              download.contentType === 'text/html'
+                ? ensureHtmlDocument(Buffer.from(download.buffer).toString('utf8'))
+                : download.buffer
+
             const result = await uploadAndExtract(
               serviceSupabase,
               userId,
               companyId,
-              { name: download.filename, buffer: download.buffer, type: download.contentType },
+              { name: download.filename, buffer: attachmentBuffer, type: download.contentType },
               'email',
               {
                 from,

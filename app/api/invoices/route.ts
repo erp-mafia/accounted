@@ -381,8 +381,11 @@ async function createCreditNote(
       reverse_charge_text: originalInvoice.reverse_charge_text,
       your_reference: originalInvoice.your_reference,
       our_reference: originalInvoice.our_reference,
+      // Positive magnitude, unlike the negated amounts above: the DB has
+      // CHECK (deduction_total >= 0), and every reader either recomputes the
+      // ROT/RUT amount from the items or skips credit notes entirely.
       deduction_total: originalInvoice.deduction_total
-        ? -Math.abs(originalInvoice.deduction_total)
+        ? Math.abs(originalInvoice.deduction_total)
         : 0,
       deduction_personnummer_encrypted: originalInvoice.deduction_personnummer_encrypted ?? null,
       deduction_personnummer_last4: originalInvoice.deduction_personnummer_last4 ?? null,

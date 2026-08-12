@@ -51,6 +51,7 @@ import type {
 
 import type { ImportExecuteOptions } from '@/components/import/ImportReviewStep'
 import { applyMappingOverride } from '@/lib/import/account-mapper'
+import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileParseResult, BankFileFormatId, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
 import type { IngestResult } from '@/lib/transactions/ingest'
 import type {
@@ -220,8 +221,11 @@ function BankFileImportWizard() {
       setFileHash(data.data.file_hash)
       setFilename(data.data.filename)
 
-      // Read raw file content for CSV preview
-      const text = await file.text()
+      // Read raw file content for CSV preview. Decode from bytes, not
+      // file.text(): that is UTF-8-only and turns Windows-1252 åäö into
+      // U+FFFD (Handelsbanken exports Windows-1252), corrupting both the
+      // column-mapping preview and the re-parse on confirm.
+      const text = decodeFileContent(await file.arrayBuffer())
       setRawFileContent(text)
 
       const txCount = data.data.parse_result.transactions.length

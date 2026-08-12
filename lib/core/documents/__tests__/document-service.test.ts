@@ -144,6 +144,33 @@ describe('validateDocumentMagicBytes: application/xhtml+xml', () => {
   })
 })
 
+describe('validateDocumentMagicBytes: text/html', () => {
+  const toBuffer = (text: string): ArrayBuffer => {
+    const bytes = new TextEncoder().encode(text)
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  }
+
+  it('accepts a full HTML document (mail-body underlag from the invoice inbox)', () => {
+    expect(
+      validateDocumentMagicBytes(toBuffer('<!doctype html>\n<html><body>Faktura 123</body></html>'), 'text/html'),
+    ).toBeNull()
+    expect(
+      validateDocumentMagicBytes(toBuffer('<html><body>x</body></html>'), 'text/html'),
+    ).toBeNull()
+  })
+
+  it('rejects fragment-shaped or plain-text content', () => {
+    // The inbound pipeline wraps fragments before upload: an unwrapped
+    // fragment reaching the document service is a caller bug.
+    expect(validateDocumentMagicBytes(toBuffer('<div>Faktura 123</div>'), 'text/html')).toMatch(
+      /kunde inte verifieras/,
+    )
+    expect(validateDocumentMagicBytes(toBuffer('just some text'), 'text/html')).toMatch(
+      /kunde inte verifieras/,
+    )
+  })
+})
+
 describe('validateDocumentMagicBytes: application/json', () => {
   const toBuffer = (text: string, bom = false): ArrayBuffer => {
     const bytes = new TextEncoder().encode(bom ? `﻿${text}` : text)

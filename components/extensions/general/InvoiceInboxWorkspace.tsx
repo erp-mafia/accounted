@@ -15,6 +15,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import {
   Inbox,
@@ -39,6 +45,7 @@ import {
   ChevronRight,
   Sparkles,
   MessageCircle,
+  Maximize2,
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
@@ -679,13 +686,18 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       const { data } = await res.json()
       if (docRequestRef.current !== itemId) return
       const url: string | null = data?.download_url ?? null
+      // HTML mail underlag renders via the same-origin inline proxy: it
+      // serves text/html with a CSP sandbox header and guaranteed inline
+      // disposition. Other types keep the signed storage URL.
+      const effectiveUrl =
+        data?.mime_type === 'text/html' ? `/api/documents/${documentId}/inline` : url
       if (!url) {
         // The document row exists but no signed URL came back: still a load
         // failure, not an absent underlag.
         setDocState('error')
         return
       }
-      setDocUrl(url)
+      setDocUrl(effectiveUrl)
       setDocMime(data?.mime_type ?? null)
       setDocState('ready')
     } catch {
@@ -2040,6 +2052,19 @@ export function DocumentPreview({
             className="block max-h-[calc(100vh-9rem)] max-w-full w-auto h-auto object-contain"
           />
         </div>
+      ) : docMime === 'text/html' ? (
+        // HTML mail underlag: arbitrary sender-controlled markup. sandbox
+        // with no tokens = opaque origin, no scripts, no forms, no popups.
+        // bg-white because mail HTML assumes a white canvas and would render
+        // transparent (unreadable in dark mode) otherwise.
+        <div className="h-full w-full max-w-3xl bg-background rounded-md border overflow-hidden">
+          <iframe
+            src={docUrl}
+            sandbox=""
+            className="w-full h-full border-0 bg-white"
+            title="Underlag"
+          />
+        </div>
       ) : (
         // PDF: iframe needs explicit height, frame fills the available pane.
         <div className="h-full w-full max-w-3xl bg-background rounded-md border overflow-hidden">
@@ -2631,6 +2656,14 @@ function FieldsRail({
   const isResolved = isProcessed || isBookedDirectly
   const [isUnmatchingTx, setIsUnmatchingTx] = useState(false)
   const [isRetrying, setIsRetrying] = useState(false)
+  // Larger edit surface for the extracted fields (the rail is deliberately
+  // compact and users found it hard to read/fill: dialog reuses the same
+  // autosaving list at a comfortable size). Closes on item switch so it never
+  // shows fields for a row other than the selected one.
+  const [fieldsExpanded, setFieldsExpanded] = useState(false)
+  useEffect(() => {
+    setFieldsExpanded(false)
+  }, [item.id])
   const t = useTranslations('inbox_workspace')
 
   // WhatsApp chat context: verified human answers captured by the intake bot
@@ -2872,15 +2905,32 @@ function FieldsRail({
           <summary className="flex items-center gap-1.5 cursor-pointer list-none text-xs uppercase tracking-wide text-muted-foreground font-medium hover:text-foreground">
             <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
             <span className="flex-1">{t('fields_summary')}</span>
-            {/* How much the extraction actually got, so a thin one is visible
-                without opening it. */}
             {/* A count, not a score. "5 av 12" read as a bad extraction even
                 when a kvitto had given up everything a kvitto has: half those
-                twelve fields only exist on an invoice. The denominator was
-                measuring the document kind, not the reading of it. */}
+                twelve fields only exist on an invoice. */}
             {!item.isPlaceholder && countExtractedFields(data) > 0 && (
               <span className="tabular-nums normal-case tracking-normal">
-                {countExtractedFields(data)} ifyllda
+                {t('fields_filled', { count: countExtractedFields(data) })}
+              </span>
+            )}
+            {/* Kept from main: the fields are readable at rail width but not
+                comfortable, so the expand still earns its place inside the
+                fold. stopPropagation, or the summary would toggle under it. */}
+            {!item.isPlaceholder && (hasAnyExtractedField(data) || hasAi) && (
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => { e.preventDefault(); e.stopPropagation(); setFieldsExpanded(true) }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault(); e.stopPropagation(); setFieldsExpanded(true)
+                  }
+                }}
+                aria-label={t('expand_fields')}
+                title={t('expand_fields')}
+                className="p-1 -m-1 hover:text-foreground"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
               </span>
             )}
           </summary>
@@ -3114,6 +3164,23 @@ function FieldsRail({
           onBookedLocally?.()
         }}
       />
+
+      {/* Expanded fields editor: same autosaving list as the rail, at a
+          readable size. Convention 13: centered modal. */}
+      <Dialog open={fieldsExpanded} onOpenChange={setFieldsExpanded}>
+        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{t('fields_summary')}</DialogTitle>
+          </DialogHeader>
+          <EditableFieldsList
+            itemId={item.id}
+            data={data ?? emptyExtraction()}
+            disabled={isResolved}
+            onUpdated={onFieldsUpdated}
+            variant="expanded"
+          />
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -3201,11 +3268,16 @@ export function EditableFieldsList({
   data,
   disabled,
   onUpdated,
+  variant = 'rail',
 }: {
   itemId: string
   data: InvoiceExtractionResult
   disabled: boolean
   onUpdated: (data: InvoiceExtractionResult) => void
+  /** 'rail' = the compact inline list in the side rail; 'expanded' = the
+   *  larger two-column layout inside the fields dialog. Same behavior,
+   *  different density. */
+  variant?: 'rail' | 'expanded'
 }) {
   const { toast } = useToast()
   const [drafts, setDrafts] = useState<Record<FieldKey, string>>(() =>
@@ -3364,13 +3436,24 @@ export function EditableFieldsList({
   )
 
   return (
-    <div className="space-y-2">
+    <div
+      className={
+        variant === 'expanded'
+          ? 'grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3'
+          : 'space-y-2'
+      }
+    >
       {shownFields.map((f) => (
         <div key={f.key} className="flex flex-col gap-0.5">
           <div className="flex items-center justify-between gap-2">
             <label
-              htmlFor={`field-${f.key}`}
-              className="text-[10px] uppercase tracking-wide text-muted-foreground/80"
+              // The rail and the expanded dialog can be mounted at the same
+              // time: the variant keeps the input ids unique between them.
+              htmlFor={`field-${variant}-${f.key}`}
+              className={cn(
+                'uppercase tracking-wide text-muted-foreground/80',
+                variant === 'expanded' ? 'text-xs' : 'text-[10px]'
+              )}
             >
               {f.label}
             </label>
@@ -3380,7 +3463,7 @@ export function EditableFieldsList({
             />
           </div>
           <Input
-            id={`field-${f.key}`}
+            id={`field-${variant}-${f.key}`}
             type={f.type}
             inputMode={f.inputMode}
             value={drafts[f.key]}
@@ -3389,7 +3472,9 @@ export function EditableFieldsList({
             disabled={disabled}
             placeholder="-"
             className={cn(
-              'h-8 text-sm border-transparent bg-transparent px-2 -mx-2 hover:border-border focus-visible:border-ring',
+              variant === 'expanded'
+                ? 'h-9 text-sm border-border bg-transparent px-3 focus-visible:border-ring'
+                : 'h-8 text-sm border-transparent bg-transparent px-2 -mx-2 hover:border-border focus-visible:border-ring',
               drafts[f.key] === '' && 'text-muted-foreground/50 italic'
             )}
           />
@@ -3399,13 +3484,16 @@ export function EditableFieldsList({
         <button
           type="button"
           onClick={() => setShowAllFields(true)}
-          className="text-[11px] text-muted-foreground hover:text-foreground hover:underline pt-1"
+          className={cn(
+            'text-[11px] text-muted-foreground hover:text-foreground hover:underline pt-1 text-left',
+            variant === 'expanded' && 'sm:col-span-2'
+          )}
         >
           Visa fakturafält ({hiddenCount})
         </button>
       )}
       {vatRows.length > 0 && (
-        <div className="pt-2 border-t mt-3">
+        <div className={cn('pt-2 border-t mt-3', variant === 'expanded' && 'sm:col-span-2 mt-1')}>
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">
             Momsfördelning
           </p>
@@ -3423,7 +3511,12 @@ export function EditableFieldsList({
         </div>
       )}
       {disabled && (
-        <p className="text-[10px] text-muted-foreground/70 pt-2">
+        <p
+          className={cn(
+            'text-[10px] text-muted-foreground/70 pt-2',
+            variant === 'expanded' && 'sm:col-span-2 text-xs'
+          )}
+        >
           Posten är kopplad till en leverantörsfaktura: fälten kan inte ändras.
         </p>
       )}
