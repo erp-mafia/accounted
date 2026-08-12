@@ -46,7 +46,7 @@ import type {
   PendingOperation,
   PendingOperationRejectionCategory,
 } from '@/types'
-import { OperationPreview } from '@/components/pending-operations/OperationPreview'
+import { OperationPreview, AccountNamesContext } from '@/components/pending-operations/OperationPreview'
 import {
   operationLabel,
   singleActionWarning,
@@ -174,6 +174,48 @@ function formatRelativeTime(dateStr: string): string {
 }
 
 /**
+ * Account number -> account name, for the proposal previews.
+ *
+ * A preview line showed the account number next to the line's own description,
+ * so "5890 Utlägg Norwegian" hid the fact that 5890 is Övriga resekostnader.
+ * The number alone is not readable and the description is not the account, so
+ * approving meant trusting a label that never named what was being debited.
+ *
+ * Owned by the page rather than a module-level cache: the map is per company,
+ * and a cache that outlives the page would keep serving one company's account
+ * names after a switch. A failed fetch leaves the map empty, which shows the
+ * bare number rather than a wrong name, and retries on the next mount.
+ */
+function useAccountNamesSource(): Record<string, string> {
+  const [names, setNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    let alive = true
+    void fetch('/api/bookkeeping/accounts')
+      .then((r) => r.json())
+      .then(({ data }) => {
+        if (!alive) return
+        setNames(
+          Object.fromEntries(
+            ((data ?? []) as Array<{ account_number: string; account_name: string }>).map((a) => [
+              a.account_number,
+              a.account_name,
+            ]),
+          ),
+        )
+      })
+      .catch(() => {
+        // Display-only: the number still shows, so a failure is not worth
+        // surfacing as an error the user cannot act on.
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+  return names
+}
+
+
+/**
  * Inline period-lock banner. Renders when the staged operation touches a
  * period that's already locked or closed: the server's commit-time trigger
  * will reject it, so we tell the approver up front rather than letting them
@@ -217,6 +259,7 @@ type ViewTab = 'pending' | 'history'
 
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
+  const accountNames = useAccountNamesSource()
   const [operations, setOperations] = useState<PendingOperation[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ViewTab>('pending')
@@ -588,6 +631,7 @@ export default function PendingOperationsPage() {
   ]
 
   return (
+    <AccountNamesContext.Provider value={accountNames}>
     <div className="space-y-8">
       {/* Page header (concept scene 11): title + Godkänn alla */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -1168,5 +1212,6 @@ export default function PendingOperationsPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </AccountNamesContext.Provider>
   )
 }

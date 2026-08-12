@@ -7,7 +7,7 @@
 // keep markup and classNames in lockstep with the design system, not with any
 // one consumer.
 
-import { Fragment } from 'react'
+import { Fragment, createContext, useContext } from 'react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
 import type { PendingOperation } from '@/types'
@@ -25,7 +25,16 @@ export interface OperationPreviewInput {
   params?: PendingOperation['params']
 }
 
+/**
+ * Account number -> account name, for the proposal previews. The value is
+ * provided by whichever page owns the fetch lifecycle (/pending provides a
+ * per-mount, per-company map; a consumer that provides nothing gets the
+ * default {} and previews show the bare number, never a wrong name).
+ */
+export const AccountNamesContext = createContext<Record<string, string>>({})
+
 function CategorizePreview({ data }: { data: Record<string, unknown> }) {
+  const accountNames = useContext(AccountNamesContext)
   // The exact journal lines the approval will post (net cost line, VAT line,
   // gross bank line, SEK): staged by the server since the preview-lines fix.
   const lines = (data.lines as Array<{ account_number?: string; debit_amount?: number; credit_amount?: number; description?: string }>) || []
@@ -40,7 +49,21 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
           const creditAmt = typeof line.credit_amount === 'number' ? line.credit_amount : 0
           return (
             <div key={i} className="flex justify-between gap-4 font-mono text-xs">
-              <span className="truncate">{line.account_number ?? '?'}{line.description ? ` ${line.description}` : ''}</span>
+              <span className="truncate">
+                {line.account_number ?? '?'}{' '}
+                {/* The account's own name first: it is what the posting means.
+                    The line text follows only when it adds something the name
+                    does not already say. */}
+                <span className="text-foreground">
+                  {(line.account_number && accountNames[line.account_number]) || line.description || ''}
+                </span>
+                {line.description &&
+                line.account_number &&
+                accountNames[line.account_number] &&
+                line.description !== accountNames[line.account_number] ? (
+                  <span className="text-muted-foreground"> · {line.description}</span>
+                ) : null}
+              </span>
               <span className="tabular-nums shrink-0">
                 {debitAmt > 0 ? `D ${formatCurrency(debitAmt)}` : `K ${formatCurrency(creditAmt)}`}
               </span>
@@ -90,7 +113,14 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
           <p className="text-xs text-muted-foreground mb-1">Momsrader</p>
           {vatLines.map((line, i) => (
             <div key={i} className="flex justify-between font-mono text-xs">
-              <span>{line.account_number} {line.description}</span>
+              <span>
+                {line.account_number}{' '}
+                {accountNames[line.account_number] || line.description}
+                {accountNames[line.account_number] &&
+                line.description !== accountNames[line.account_number] ? (
+                  <span className="text-muted-foreground"> · {line.description}</span>
+                ) : null}
+              </span>
               <span className="tabular-nums">
                 {line.debit_amount > 0 ? `D ${formatCurrency(line.debit_amount)}` : `K ${formatCurrency(line.credit_amount)}`}
               </span>
