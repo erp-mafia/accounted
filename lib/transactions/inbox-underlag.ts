@@ -179,9 +179,12 @@ export async function propagateUnderlagForBookedTransaction(
             })
           }
         } else if (currentDocEntryId !== journalEntryId) {
-          // Anchored to another verifikat: preserved, never stolen. That
-          // anchoring still satisfies the underlag reference, so the item
-          // may be stamped consumed.
+          // Anchored to another verifikat: preserved, never stolen. But the
+          // verifikat that booked THIS transaction then has no underlag
+          // reference from this item, so it must NOT be stamped consumed:
+          // stamping would hide the very signal that the mismatch needs a
+          // human (BFL 5 kap 6-7 §).
+          underlagSettled = false
           log.warn('Inbox document already anchored to another verifikat; leaving it', {
             inbox_item_id: inbox.id,
             document_id: inbox.document_id,

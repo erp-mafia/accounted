@@ -24,6 +24,12 @@
  * DRY-RUN IS THE DEFAULT. Point NEXT_PUBLIC_SUPABASE_URL /
  * SUPABASE_SERVICE_ROLE_KEY (.env.local) at staging first; prod only after
  * explicit confirmation.
+ *
+ * Period locks: the document link goes through linkToJournalEntry, whose
+ * document_attachments.journal_entry_id UPDATE is guarded by the
+ * enforce_period_lock DB trigger. Table triggers fire for service-role
+ * writes too (service role bypasses RLS, never triggers), so a locked
+ * period fails that item with a logged error instead of writing into it.
  */
 
 import { config } from 'dotenv'

@@ -100,11 +100,14 @@ describe('propagateUnderlagForBookedTransaction', () => {
     ])
   })
 
-  it('never steals a document anchored to another verifikat, but still stamps', async () => {
+  it('never steals a document anchored to another verifikat, and does not stamp', async () => {
+    // The doc stays on its verifikat, but THIS transaction's verifikat then
+    // has no underlag from the item: stamping it consumed would hide the
+    // mismatch from every future run and from manual reconciliation
+    // (BFL 5 kap 6-7 §).
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] })
     enqueue({ data: { journal_entry_id: 'je-other' } })
-    enqueue({ data: null }) // stamp update
 
     await propagateUnderlagForBookedTransaction(
       supabase as unknown as SupabaseClient,
@@ -114,9 +117,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
     )
 
     expect(linkToJournalEntry).not.toHaveBeenCalled()
-    expect(findCalls('invoice_inbox_items', 'update')).toContainEqual([
-      { created_journal_entry_id: JE1 },
-    ])
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
   })
 
   it('stamps an item without a document (no document read)', async () => {
