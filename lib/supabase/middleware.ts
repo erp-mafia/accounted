@@ -9,8 +9,10 @@ import {
   apiRequestSkipsSessionTimeout,
   createSessionTimeoutState,
   evaluateSessionTimeout,
+  fetchAutoLogoutPreference,
   getSessionTimeoutConfig,
   sessionStateMatchesUser,
+  sessionStateNeedsRemint,
   sessionTimeoutClearCookieOptions,
   sessionTimeoutCookieOptions,
   signSessionTimeoutState,
@@ -103,9 +105,14 @@ export async function updateSession(request: NextRequest) {
       )
     }
 
+    const stateMatches =
+      verifiedState !== null &&
+      sessionStateMatchesUser(verifiedState, user.id, sessionId)
+
     if (
       !verifiedState ||
-      !sessionStateMatchesUser(verifiedState, user.id, sessionId)
+      !stateMatches ||
+      sessionStateNeedsRemint(verifiedState)
     ) {
       const hintedMethod = request.cookies.get(
         SESSION_AUTH_METHOD_HINT_COOKIE,
@@ -113,11 +120,17 @@ export async function updateSession(request: NextRequest) {
       const method = isSessionAuthMethod(hintedMethod)
         ? hintedMethod
         : 'password'
-      const state = createSessionTimeoutState({
-        userId: user.id,
-        sessionId,
-        method,
-      })
+      const autoLogout = await fetchAutoLogoutPreference(supabase, user.id)
+      // A matching pre-toggle cookie keeps its timers: upgrading the shape
+      // must not restart the absolute window.
+      const state = verifiedState && stateMatches
+        ? { ...verifiedState, autoLogout }
+        : createSessionTimeoutState({
+            userId: user.id,
+            sessionId,
+            method,
+            autoLogout,
+          })
       const signedState = await signSessionTimeoutState(state)
 
       if (signedState) {

@@ -26,12 +26,24 @@ vi.mock('next/headers', () => ({
 
 import { GET, POST } from '../route'
 
+const preference = { autoLogout: false }
+
 const supabase = {
   auth: {
     getClaims: vi.fn(async () => ({
       data: { claims: { session_id: 'session-1' } },
     })),
   },
+  from: vi.fn(() => ({
+    select: vi.fn(() => ({
+      eq: vi.fn(() => ({
+        maybeSingle: vi.fn(async () => ({
+          data: { auto_logout: preference.autoLogout },
+          error: null,
+        })),
+      })),
+    })),
+  })),
 }
 
 describe('session heartbeat route', () => {
@@ -47,18 +59,22 @@ describe('session heartbeat route', () => {
       error: null,
     })
     mocks.cookieValue = undefined
+    preference.autoLogout = false
   })
 
   async function setState(args?: {
     startedAt?: number
     lastActivityAt?: number
     sessionId?: string
+    autoLogout?: boolean
   }) {
     const state = {
       ...createSessionTimeoutState({
         userId: 'user-1',
         sessionId: args?.sessionId ?? 'session-1',
         method: 'password',
+        // Default the opt-in to true: most cases here exercise enforcement.
+        autoLogout: args?.autoLogout ?? true,
         now: args?.startedAt ?? Date.now(),
       }),
       ...(args?.lastActivityAt === undefined
@@ -124,6 +140,52 @@ describe('session heartbeat route', () => {
     expect(reminted).toBeTruthy()
     await expect(verifySessionTimeoutState(reminted)).resolves.toMatchObject({
       sessionId: 'session-1',
+    })
+  })
+
+  it('reports enabled: false and never expires an opted-out session', async () => {
+    const now = Date.now()
+    // Times that would be long expired if enforcement applied.
+    await setState({
+      startedAt: now - 120_000,
+      lastActivityAt: now - 120_000,
+      autoLogout: false,
+    })
+
+    const response = await GET()
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      data: { enabled: false },
+    })
+  })
+
+  it('upgrades a pre-toggle cookie in place, keeping its timers', async () => {
+    preference.autoLogout = true
+    const startedAt = Date.now() - 5_000
+    const legacy: Record<string, unknown> = {
+      ...createSessionTimeoutState({
+        userId: 'user-1',
+        sessionId: 'session-1',
+        method: 'password',
+        autoLogout: true,
+        now: startedAt,
+      }),
+    }
+    delete legacy.autoLogout
+    mocks.cookieValue =
+      (await signSessionTimeoutState(
+        legacy as Parameters<typeof signSessionTimeoutState>[0],
+      )) ?? undefined
+
+    const response = await GET()
+
+    expect(response.status).toBe(200)
+    const upgraded = response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
+    expect(upgraded).toBeTruthy()
+    await expect(verifySessionTimeoutState(upgraded)).resolves.toMatchObject({
+      startedAt,
+      autoLogout: true,
     })
   })
 
