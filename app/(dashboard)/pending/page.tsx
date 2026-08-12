@@ -304,7 +304,47 @@ function formatRelativeTime(dateStr: string): string {
   return `${diffDays} dagar sedan`
 }
 
+/**
+ * Account number -> account name, for the proposal previews.
+ *
+ * A preview line showed the account number next to the line's own description,
+ * so "5890 Utlägg Norwegian" hid the fact that 5890 is Övriga resekostnader.
+ * The number alone is not readable and the description is not the account, so
+ * approving meant trusting a label that never named what was being debited.
+ *
+ * Fetched once per page and shared: every preview on screen wants the same map.
+ */
+let accountNamesPromise: Promise<Record<string, string>> | null = null
+
+function useAccountNames(): Record<string, string> {
+  const [names, setNames] = useState<Record<string, string>>({})
+  useEffect(() => {
+    let alive = true
+    accountNamesPromise ??= fetch('/api/bookkeeping/accounts')
+      .then((r) => r.json())
+      .then(({ data }) =>
+        Object.fromEntries(
+          ((data ?? []) as Array<{ account_number: string; account_name: string }>).map((a) => [
+            a.account_number,
+            a.account_name,
+          ]),
+        ),
+      )
+      // A failed lookup must not blank the preview: the number still shows.
+      .catch(() => ({}))
+    void accountNamesPromise.then((m) => {
+      if (alive) setNames(m)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+  return names
+}
+
+
 function CategorizePreview({ data }: { data: Record<string, unknown> }) {
+  const accountNames = useAccountNames()
   // The exact journal lines the approval will post (net cost line, VAT line,
   // gross bank line, SEK) — staged by the server since the preview-lines fix.
   const lines = (data.lines as Array<{ account_number?: string; debit_amount?: number; credit_amount?: number; description?: string }>) || []
@@ -319,7 +359,21 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
           const creditAmt = typeof line.credit_amount === 'number' ? line.credit_amount : 0
           return (
             <div key={i} className="flex justify-between gap-4 font-mono text-xs">
-              <span className="truncate">{line.account_number ?? '?'}{line.description ? ` ${line.description}` : ''}</span>
+              <span className="truncate">
+                {line.account_number ?? '?'}{' '}
+                {/* The account's own name first: it is what the posting means.
+                    The line text follows only when it adds something the name
+                    does not already say. */}
+                <span className="text-foreground">
+                  {(line.account_number && accountNames[line.account_number]) || line.description || ''}
+                </span>
+                {line.description &&
+                line.account_number &&
+                accountNames[line.account_number] &&
+                line.description !== accountNames[line.account_number] ? (
+                  <span className="text-muted-foreground"> · {line.description}</span>
+                ) : null}
+              </span>
               <span className="tabular-nums shrink-0">
                 {debitAmt > 0 ? `D ${formatCurrency(debitAmt)}` : `K ${formatCurrency(creditAmt)}`}
               </span>
@@ -369,7 +423,14 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
           <p className="text-xs text-muted-foreground mb-1">Momsrader</p>
           {vatLines.map((line, i) => (
             <div key={i} className="flex justify-between font-mono text-xs">
-              <span>{line.account_number} {line.description}</span>
+              <span>
+                {line.account_number}{' '}
+                {accountNames[line.account_number] || line.description}
+                {accountNames[line.account_number] &&
+                line.description !== accountNames[line.account_number] ? (
+                  <span className="text-muted-foreground"> · {line.description}</span>
+                ) : null}
+              </span>
               <span className="tabular-nums">
                 {line.debit_amount > 0 ? `D ${formatCurrency(line.debit_amount)}` : `K ${formatCurrency(line.credit_amount)}`}
               </span>
