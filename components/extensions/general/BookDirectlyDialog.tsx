@@ -17,6 +17,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Plus, Trash2, AlertTriangle, Search, Check, BookmarkPlus } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import BookingTemplatePicker from '@/components/bookkeeping/BookingTemplatePicker'
 import { TemplateForm } from '@/components/settings/TemplateForm'
@@ -188,6 +189,12 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
 
   const [periods, setPeriods] = useState<FiscalPeriod[]>([])
   const [accounts, setAccounts] = useState<BASAccount[]>([])
+  // Full BAS catalogue (static reference data, fetched once per session). Lets
+  // the account picker surface standard accounts the company hasn't activated
+  // yet; picking one activates it at commit via the existing
+  // ActivateAccountsDialog rail. Without it the picker only knows the active
+  // chart, which reads as "the account doesn't exist".
+  const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [entryDate, setEntryDate] = useState<string>(
     item.extracted_data?.invoice?.invoiceDate || new Date().toISOString().slice(0, 10)
   )
@@ -414,6 +421,9 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
         console.error('[book-direct] fetch reference data failed:', err)
       }
     })()
+    loadBasCatalog().then((data) => {
+      if (!cancelled) setCatalog(data)
+    }).catch(() => {/* search degrades to the active chart */})
     return () => { cancelled = true }
   }, [open])
 
@@ -858,6 +868,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                         <AccountCombobox
                           value={line.account_number}
                           accounts={accounts}
+                          catalog={catalog}
                           onChange={(v) => updateLine(idx, { account_number: v })}
                         />
                       </td>
