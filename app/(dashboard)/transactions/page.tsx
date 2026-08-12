@@ -21,6 +21,7 @@ import { Loader2, Search } from 'lucide-react'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
+import { FyPicker } from '@/components/common/FyPicker'
 import { AttnLine } from '@/components/ui/attn-line'
 import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
 import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
@@ -63,6 +64,14 @@ import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, Su
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
+import {
+  QUARTERS,
+  isWithinBounds,
+  quarterBounds,
+  resolvePeriodBounds,
+  type Quarter,
+} from '@/lib/transactions/period-filter'
+import type { FiscalPeriod } from '@/types'
 
 function InlineDialogContentLoading() {
   return (
@@ -113,6 +122,11 @@ type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
 
 const SOURCE_FILTER_STORAGE_KEY = 'Accounted:transaction-source-filter:v1'
+
+// Page-local fiscal-year scope (FyPicker appends the company id). Deliberately
+// NOT the shared report scope (Accounted:fiscal-year:): a year picked on a
+// report page must never silently hide pending inbox rows here, and vice versa.
+const PERIOD_FILTER_STORAGE_PREFIX = 'Accounted:transactions-fy-scope:v1:'
 
 // Journal-entry ids get interpolated into the supplier-invoice .or() filter
 // string in the underlag-badge effect below. They come from journal_entries.id
@@ -429,6 +443,34 @@ export default function TransactionsPage() {
       // localStorage may be unavailable. The in-memory filter still works.
     }
   }, [])
+
+  // Period filter (rakenskapsar + optional quarter within it). Quarters
+  // follow the fiscal year, so a brutet rakenskapsar (July-June) gets
+  // Q1 = Jul-Sep. FyPicker owns the persistence under the page-local key;
+  // the quarter is session-only.
+  const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
+  const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
+  const [fyQuarter, setFyQuarter] = useState<Quarter | null>(null)
+  const periodBounds = useMemo(
+    () => resolvePeriodBounds(fyPeriod, fyQuarter),
+    [fyPeriod, fyQuarter],
+  )
+
+  const handlePeriodChange = useCallback((periodId: string | null, period?: FiscalPeriod | null) => {
+    setFyPeriodId(periodId)
+    setFyPeriod(period ?? null)
+    setFyQuarter(null)
+    // Batch selections may reference rows the new scope hides; every batch
+    // action operates on "what you see", so drop them.
+    setSelectedIds(new Set())
+    setSkvSelectedIds(new Set())
+  }, [])
+
+  const handleQuarterChange = useCallback((quarter: Quarter | null) => {
+    setFyQuarter(quarter)
+    setSelectedIds(new Set())
+    setSkvSelectedIds(new Set())
+  }, [])
   // Registered cash accounts (cash_accounts): the account chooser's rows,
   // with PSD2 balances when the bank reports them.
   const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
@@ -489,6 +531,9 @@ export default function TransactionsPage() {
     const query = searchTerm.trim().toLowerCase()
     if (sourceFilter !== 'skatteverket') {
       for (const tx of uncategorizedTransactions) {
+        // The refetch already narrows state server-side; this check makes the
+        // filter correct immediately on change, before the refetch lands.
+        if (!isWithinBounds(tx.date, periodBounds)) continue
         if (
           sourceFilter.startsWith('acct:') &&
           tx.cash_account_id !== sourceFilter.slice('acct:'.length)
@@ -512,6 +557,8 @@ export default function TransactionsPage() {
       for (const r of skvRows) {
         if (r.journal_entry_id) continue
         if (exitingIds.has(r.id)) continue
+        // SKV rows live client-side only, so the period filter applies here.
+        if (!isWithinBounds(r.transaktionsdatum, periodBounds)) continue
         if (
           query &&
           !r.transaktionstext?.toLowerCase().includes(query) &&
@@ -529,7 +576,7 @@ export default function TransactionsPage() {
       if (a.source !== b.source) return a.source === 'bank' ? -1 : 1
       return 0
     })
-  }, [exitingIds, searchTerm, skvRows, sourceFilter, uncategorizedTransactions])
+  }, [exitingIds, periodBounds, searchTerm, skvRows, sourceFilter, uncategorizedTransactions])
 
   // History shows only the contiguous newest-first window: the older pending
   // rows merged in for the inbox would otherwise render as sparse, gap-ridden
@@ -537,10 +584,22 @@ export default function TransactionsPage() {
   // the boundary may slip in; they are real rows of that date, so harmless.
   const historyTransactions = useMemo(
     () =>
-      pagedThroughDate
-        ? transactions.filter((t) => t.date >= pagedThroughDate)
-        : transactions,
-    [transactions, pagedThroughDate],
+      transactions.filter(
+        (t) =>
+          (!pagedThroughDate || t.date >= pagedThroughDate) &&
+          // Server-side scope catches up on refetch; this keeps the view
+          // correct in the transition frame after a filter change.
+          isWithinBounds(t.date, periodBounds),
+      ),
+    [transactions, pagedThroughDate, periodBounds],
+  )
+
+  // SKV rows shown in the history view, narrowed to the active period. The
+  // list component filters by search/source itself but knows nothing about
+  // period bounds.
+  const skvRowsInScope = useMemo(
+    () => skvRows.filter((r) => isWithinBounds(r.transaktionsdatum, periodBounds)),
+    [skvRows, periodBounds],
   )
 
   // Account chooser (concept scene 10): the source picker doubles as a
@@ -726,41 +785,59 @@ export default function TransactionsPage() {
     if (showLoading) setIsLoading(true)
     if (includeSkvRows) void loadSkvRows()
     try {
+      // The active period filter narrows every fetch server-side: the history
+      // window pages within the period, and the badge count matches the list
+      // (a count ignoring the filter would disagree with what is visible).
+      let windowQuery = supabase
+        .from('transactions')
+        .select('*')
+        .eq('company_id', companyId)
+      if (periodBounds) {
+        windowQuery = windowQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
+      }
+      let countQuery = supabase
+        .from('transactions')
+        .select('*', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .is('is_business', null)
+        // Same predicate as lib/worklist countUnbookedTransactions: ignored
+        // rows are handled, not pending.
+        .eq('is_ignored', false)
+      if (periodBounds) {
+        countQuery = countQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
+      }
+
       const [{ data: txData, error: txError }, { count: uncatCount }, pendingRows] = await Promise.all([
-        supabase
-          .from('transactions')
-          .select('*')
-          .eq('company_id', companyId)
-          // The id tie-breaker keeps offset paging deterministic when many
-          // rows share a date; without it .range() pages can skip or repeat
-          // same-date rows.
+        // The id tie-breaker keeps offset paging deterministic when many
+        // rows share a date; without it .range() pages can skip or repeat
+        // same-date rows.
+        windowQuery
           .order('date', { ascending: false })
           .order('id', { ascending: true })
           .limit(PAGE_SIZE),
-        supabase
-          .from('transactions')
-          .select('*', { count: 'exact', head: true })
-          .eq('company_id', companyId)
-          .is('is_business', null)
-          // Same predicate as lib/worklist countUnbookedTransactions: ignored
-          // rows are handled, not pending.
-          .eq('is_ignored', false),
+        countQuery,
         // The inbox is a worklist: it must contain every pending row, even ones
         // older than the newest-first window above. Falls back to null so the
         // page still renders the windowed rows if this fetch dies; the failure
         // is surfaced below, never silently absorbed (an inbox that renders as
         // complete while missing older pending rows would be a lie).
-        fetchAllRows<TransactionWithInvoice>(({ from, to }) =>
-          supabase
+        fetchAllRows<TransactionWithInvoice>(({ from, to }) => {
+          let pendingQuery = supabase
             .from('transactions')
             .select('*')
             .eq('company_id', companyId)
             .is('is_business', null)
             .eq('is_ignored', false)
+          if (periodBounds) {
+            pendingQuery = pendingQuery
+              .gte('date', periodBounds.start)
+              .lte('date', periodBounds.end)
+          }
+          return pendingQuery
             .order('date', { ascending: false })
             .order('id', { ascending: true })
-            .range(from, to),
-        ).catch((error: unknown) => {
+            .range(from, to)
+        }).catch((error: unknown) => {
           console.error('[transactions] pending backlog fetch failed; inbox may be missing older rows', error)
           return null
         }),
@@ -800,7 +877,7 @@ export default function TransactionsPage() {
     } finally {
       if (showLoading) setIsLoading(false)
     }
-  }, [companyId, loadSkvRows, supabase, t, toast])
+  }, [companyId, loadSkvRows, periodBounds, supabase, t, toast])
 
   const refreshTransactions = useCallback(async () => {
     if (!companyId) return
@@ -827,10 +904,16 @@ export default function TransactionsPage() {
     // Offset counts only the contiguous newest-first window, not the older
     // pending rows merged into state for the inbox.
     const offset = pagedCountRef.current
-    const { data: txData, error: txError } = await supabase
+    let pageQuery = supabase
       .from('transactions')
       .select('*')
       .eq('company_id', companyId)
+    // Same period scope as the initial window fetch: mixed-scope pages would
+    // corrupt the offset bookkeeping.
+    if (periodBounds) {
+      pageQuery = pageQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
+    }
+    const { data: txData, error: txError } = await pageQuery
       // Same stable order as the initial window fetch: offset paging over a
       // date-only order can skip or repeat same-date rows between pages.
       .order('date', { ascending: false })
@@ -2779,12 +2862,47 @@ export default function TransactionsPage() {
             className="h-9 pl-10"
           />
         </div>
-        {/* Account chooser (convention 8): the one context chip, far right,
-            shared by both view modes. Per-cash-account rows with balances
-            (concept scene 10); hidden only when there is nothing beyond
-            "Alla källor" to choose. */}
-        {sourceItems.length > 1 && (
-          <div className="ml-auto">
+        {/* Far-right context group, shared by both view modes: period scope
+            (rakenskapsar chip + quarter chips once a year is chosen) and the
+            account chooser (concept scene 10). Approved deviation from
+            convention 8's single chip: booking is period work, so the period
+            scope earns the second chip (user request 2026-08-12). */}
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          <FyPicker
+            value={fyPeriodId}
+            onChange={handlePeriodChange}
+            storageKeyPrefix={PERIOD_FILTER_STORAGE_PREFIX}
+          />
+          {fyPeriod && (
+            <div
+              className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]"
+              role="group"
+              aria-label={t('period_quarter_group')}
+            >
+              {QUARTERS.map((quarter) => {
+                const bounds = quarterBounds(fyPeriod, quarter)
+                const active = fyQuarter === quarter
+                return (
+                  <button
+                    key={quarter}
+                    type="button"
+                    disabled={!bounds}
+                    aria-pressed={active}
+                    // Clicking the active quarter widens back to the full year.
+                    onClick={() => handleQuarterChange(active ? null : quarter)}
+                    className={`rounded-md px-3 py-[5px] text-[12.5px] tabular-nums transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40 ${
+                      active
+                        ? 'border border-border bg-card font-medium text-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {`Q${quarter}`}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          {sourceItems.length > 1 && (
             <ContextPicker
               value={sourceFilter}
               onChange={(id) => handleSourceFilterChange(id as SourceFilter)}
@@ -2795,8 +2913,8 @@ export default function TransactionsPage() {
               })()}
               items={sourceItems}
             />
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Content based on mode */}
@@ -2815,10 +2933,16 @@ export default function TransactionsPage() {
         </DataList>
       ) : mode === 'inbox' ? (
         inboxItems.length === 0 ? (
-          searchTerm || sourceFilter !== 'all' ? (
+          searchTerm || sourceFilter !== 'all' || periodBounds ? (
             <DataListEmpty
               title="Inga träffar"
-              description={searchTerm ? t('no_search_results') : t('source_empty')}
+              description={
+                searchTerm
+                  ? t('no_search_results')
+                  : sourceFilter !== 'all'
+                    ? t('source_empty')
+                    : t('period_empty')
+              }
             />
           ) : (
             <InboxZeroState
@@ -2969,7 +3093,7 @@ export default function TransactionsPage() {
       ) : (
         <TransactionHistoryList
           transactions={historyTransactions}
-          skvRows={skvRows}
+          skvRows={skvRowsInScope}
           searchTerm={searchTerm}
           sourceFilter={sourceFilter}
           jeUnderlagStatus={jeUnderlagStatus}
