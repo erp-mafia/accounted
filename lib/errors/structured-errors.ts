@@ -919,6 +919,16 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Vid kontantmetoden bokförs fakturan när den betalas.',
     message_en: 'Under the cash method the invoice is booked when it is paid.',
   },
+  // Bulk Bokför on a DRAFT when the company defers invoice booking (#967):
+  // issuing the draft would consume an F-number and mark it sent without
+  // booking anything, so the item is rejected before any side effect.
+  INVOICE_BOOK_DEFERRED_DRAFT: {
+    httpStatus: 400,
+    message_sv:
+      'Företaget bokför fakturor i ett separat steg. Skicka eller markera utkastet som skickat först, bokför sedan.',
+    message_en:
+      'This company books invoices in a separate step. Send or mark the draft as sent first, then book it.',
+  },
   INVOICE_BOOK_NO_FISCAL_PERIOD: {
     httpStatus: 400,
     message_sv: 'Inget öppet räkenskapsår täcker fakturadatumet. Skapa räkenskapsåret först.',

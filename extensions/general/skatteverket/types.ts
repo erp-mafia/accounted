@@ -324,6 +324,7 @@ export interface SkatteverketFel {
 export type {
   StoredSkattekontoTransaction,
   SkattekontoMatchSuggestion,
+  SkattekontoBookingSuggestion,
   SkattekontoTransactionWithSuggestion,
 } from '@/types/skatteverket'
 
