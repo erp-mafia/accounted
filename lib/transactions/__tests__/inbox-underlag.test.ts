@@ -156,12 +156,15 @@ describe('propagateUnderlagForBookedTransaction', () => {
     ).resolves.toBeUndefined()
   })
 
-  it('survives a failing document link and still stamps', async () => {
+  it('does NOT stamp when the document link fails, so a re-run can still repair it', async () => {
+    // Stamping over a failed link would hide the item from the
+    // `.is('created_journal_entry_id', null)` query forever, leaving a
+    // posted verifikation without its underlag reference (BFL 5 kap 6-7 §)
+    // and nothing left to surface or repair it.
     vi.mocked(linkToJournalEntry).mockRejectedValueOnce(new Error('period locked'))
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [{ id: 'i1', document_id: 'doc-1' }] })
     enqueue({ data: { journal_entry_id: null } })
-    enqueue({ data: null }) // stamp update
 
     await expect(
       propagateUnderlagForBookedTransaction(
@@ -171,9 +174,7 @@ describe('propagateUnderlagForBookedTransaction', () => {
         JE1,
       ),
     ).resolves.toBeUndefined()
-    expect(findCalls('invoice_inbox_items', 'update')).toContainEqual([
-      { created_journal_entry_id: JE1 },
-    ])
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
   })
 })
 

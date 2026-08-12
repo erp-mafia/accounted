@@ -150,6 +150,14 @@ export async function propagateUnderlagForBookedTransaction(
       id: string
       document_id: string | null
     }>) {
+      // Whether this item's underlag actually references a verifikat. The
+      // stamp below is conditional on it: stamping after a FAILED document
+      // link would hide the item from every future run of this same query
+      // (.is('created_journal_entry_id', null)), making the promised
+      // "repaired by re-running" impossible and leaving a posted
+      // verifikation with no underlag reference (BFL 5 kap 6-7 §) that
+      // nothing surfaces anymore.
+      let underlagSettled = true
       if (inbox.document_id) {
         const { data: doc } = await supabase
           .from('document_attachments')
@@ -162,6 +170,7 @@ export async function propagateUnderlagForBookedTransaction(
           try {
             await linkToJournalEntry(supabase, companyId, inbox.document_id, journalEntryId)
           } catch (err) {
+            underlagSettled = false
             log.error('Failed to link inbox document to journal entry', {
               inbox_item_id: inbox.id,
               document_id: inbox.document_id,
@@ -170,6 +179,9 @@ export async function propagateUnderlagForBookedTransaction(
             })
           }
         } else if (currentDocEntryId !== journalEntryId) {
+          // Anchored to another verifikat: preserved, never stolen. That
+          // anchoring still satisfies the underlag reference, so the item
+          // may be stamped consumed.
           log.warn('Inbox document already anchored to another verifikat; leaving it', {
             inbox_item_id: inbox.id,
             document_id: inbox.document_id,
@@ -178,6 +190,7 @@ export async function propagateUnderlagForBookedTransaction(
           })
         }
       }
+      if (!underlagSettled) continue
       // CAS on the null predicate so a concurrent stamp stays a no-op, and
       // unique_violation tolerated: on a samlingsverifikat only one item can
       // hold the UNIQUE created_journal_entry_id, and the inbox list derives

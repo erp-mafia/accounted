@@ -95,6 +95,40 @@ async function main() {
       const journalEntryId = bookedByTx.get(txId)
       if (!journalEntryId) continue
       await propagateUnderlagForBookedTransaction(supabase, companyId, txId, journalEntryId)
+
+      // Behandlingshistorik (BFNAR 2013:2 kap 8): a mass repair touching
+      // underlag-to-verifikat linkage must leave a changelog trail
+      // distinguishing it from the original booking action. Direct insert
+      // mirroring lib/processing-history/append.ts (whose helper builds a
+      // Next-bound service client this script cannot use); payload is
+      // pseudonymous IDs only.
+      const itemIds = stranded
+        .filter((i) => i.matched_transaction_id === txId)
+        .map((i) => i.id)
+      const { error: historyError } = await supabase.from('processing_history').insert({
+        event_id: crypto.randomUUID(),
+        company_id: companyId,
+        correlation_id: txId,
+        causation_id: null,
+        aggregate_type: 'BankTransaction',
+        aggregate_id: txId,
+        event_type: 'InboxUnderlagBackfilled',
+        payload: {
+          transaction_id: txId,
+          journal_entry_id: journalEntryId,
+          inbox_item_ids: itemIds,
+          script: 'backfill-inbox-booked-underlag',
+        },
+        payload_schema_version: 1,
+        actor: { type: 'system', id: 'backfill-inbox-booked-underlag' },
+        rubric_version: null,
+        occurred_at: new Date().toISOString(),
+      })
+      if (historyError) {
+        console.error(
+          `processing_history append failed for tx ${txId}: ${historyError.message}`,
+        )
+      }
     }
   }
 
