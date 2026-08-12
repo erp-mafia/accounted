@@ -20,7 +20,10 @@ import {
 import { providerSupportsSie, fetchProviderSieFiles, getAllowedFiscalYears } from './lib/sie-fetcher'
 import { mapCompanyInfo } from './lib/entity-mapper'
 import { executeMigration } from './lib/migration-orchestrator'
-import { importProviderDocuments } from './lib/import-documents'
+import {
+  FortnoxDocumentScopesRequiredError,
+  importProviderDocuments,
+} from './lib/import-documents'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
@@ -1252,13 +1255,12 @@ export const arcimMigrationExtension: Extension = {
     },
 
     // ── Import provider underlag (receipts) and link to verifikat ──
-    // Best-effort, re-runnable. Kept off the migration's critical path: the
-    // Bokio document API is rate-limited (200 req/60s) and a full receipt
-    // sweep issues hundreds of download calls, which would blow the 300s
-    // migration window. Pages /uploads, resolves each receipt's verifikat via
-    // the SIE-preserved Bokio voucher number, and archives it idempotently
-    // (skips content already stored for the company). Pass { dryRun: true } to
-    // preview the match plan without downloading or writing.
+    // Best-effort, re-runnable. Kept off the migration's critical path because
+    // the Bokio and Fortnox APIs are rate-limited and a full receipt sweep can
+    // issue hundreds of download calls. Resolves each receipt's verifikat via
+    // the SIE-preserved provider voucher number and archives it idempotently.
+    // Fortnox consents need archive and connectfile scopes. Pass
+    // { dryRun: true } to preview the match plan without downloading or writing.
     {
       method: 'POST',
       path: '/import-documents',
@@ -1307,6 +1309,13 @@ export const arcimMigrationExtension: Extension = {
           return NextResponse.json({ success: true, dryRun, result })
         } catch (error) {
           log.error('arcim import-documents failed', error as Error)
+          if (error instanceof FortnoxDocumentScopesRequiredError) {
+            return errorResponseFromCode(
+              'PROVIDER_DOCUMENT_SCOPES_REQUIRED',
+              moduleLog,
+              { status: 403 },
+            )
+          }
           return errorResponseFromCode('PROVIDER_IMPORT_DOCUMENTS_FAILED', moduleLog, {
             details: { reason: error instanceof Error ? error.message : 'unknown' },
           })
