@@ -568,10 +568,23 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     hunting,
     progress: huntProgress,
     result: huntResult,
+    setResult: setHuntResult,
   } = useReceiptHunt(() => {
     void fetchItems()
     void fetchPurchases()
   })
+
+  // A run that found nothing leaves nothing to act on, so the line has no
+  // reason to outlive the glance that reads it. A run that found something,
+  // or failed, stays: both name a next step (press again, or a mailbox to
+  // check) and both are worth still being on screen a minute later.
+  useEffect(() => {
+    if (hunting || !huntResult) return
+    if (huntResult.failed || huntResult.fetched > 0) return
+    const timer = setTimeout(() => setHuntResult(null), 6000)
+    return () => clearTimeout(timer)
+  }, [hunting, huntResult, setHuntResult])
+
 
   const selectedPurchase = useMemo(
     () => purchases.find((p) => p.id === selectedPurchaseId) ?? null,
@@ -2506,8 +2519,7 @@ const SUGGESTION_SOURCE_LABEL: Record<string, string> = {
 
 /** Why there is no proposal, said plainly rather than shown as an empty table. */
 const SUGGESTION_EMPTY_REASON: Record<string, string> = {
-  no_mapping:
-    'Vi har inget förslag: leverantören är obekant och ingen regel matchar. Bokför manuellt en gång, så känns den igen nästa gång.',
+  no_mapping: 'Okänd leverantör. Bokför en gång, så känns den igen.',
   currency_unsupported:
     'Köpet är i utländsk valuta och matchades av en konteringsregel. Momsen skulle bli fel, så vi visar inget förslag.',
 }
@@ -2907,9 +2919,8 @@ function FieldsRail({
       {/* Hint only: creation happens on the leverantörsfaktura form via "Skapa & välj" */}
       {showNoMatchHint && (
         <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
-          Ingen leverantör matchade{' '}
           <span className="text-foreground font-medium">{extractedSupplierName}</span>
-          {': leverantören skapas när du klickar Skapa leverantörsfaktura.'}
+          {' finns inte upplagd än. Den skapas när du gör leverantörsfakturan.'}
         </div>
       )}
 
@@ -3039,19 +3050,6 @@ function FieldsRail({
             {/* Matched-to-tx state: show the bridge to booking. The user
                 picks one of two actions: book themselves with the
                 deterministic dialog, or hand off to the assistant. */}
-            <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-xs">
-              <div className="flex items-center gap-1.5 text-success font-medium mb-1">
-                <Link2 className="h-3 w-3" />
-                Matchad mot transaktion
-              </div>
-              <Link
-                href={`/transactions?highlight=${item.matched_transaction_id}`}
-                className="text-muted-foreground hover:text-foreground hover:underline"
-              >
-                Öppna transaktionen →
-              </Link>
-            </div>
-
             {onAskAssistant && (
               <Button
                 variant="default"
@@ -3176,12 +3174,26 @@ function FieldsRail({
             Bokförd
           </Badge>
         )}
-        {isLinkedToTransaction && (
-          <Badge variant="secondary" className="w-full justify-center text-[10px]">
-            <Link2 className="h-2.5 w-2.5 mr-1" />
-            Kopplad till transaktion
-          </Badge>
-        )}
+        {isLinkedToTransaction &&
+          (item.matched_transaction_id ? (
+            <Link
+              href={`/transactions?highlight=${item.matched_transaction_id}`}
+              className="w-full"
+            >
+              <Badge
+                variant="secondary"
+                className="w-full justify-center text-[10px] hover:bg-secondary/80"
+              >
+                <Link2 className="h-2.5 w-2.5 mr-1" />
+                Kopplad till transaktion
+              </Badge>
+            </Link>
+          ) : (
+            <Badge variant="secondary" className="w-full justify-center text-[10px]">
+              <Link2 className="h-2.5 w-2.5 mr-1" />
+              Kopplad till transaktion
+            </Badge>
+          ))}
       </div>
       )}
 
