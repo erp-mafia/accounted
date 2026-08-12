@@ -103,6 +103,13 @@ interface Props {
   /** The bank transaction being booked (set by TransactionBookingDialog).
    *  Enables the duplicate guard's "Matcha mot verifikatet" action for
    *  ledger-only voucher candidates. */
+  /**
+   * Extra keys for the submit body, for endpoints that need something this
+   * form does not model. The invoice-inbox book-direct route needs
+   * transaction_id to book the underlag against its bank line; without it the
+   * entry posts standalone and the match is cleared.
+   */
+  extraBody?: Record<string, unknown>
   duplicateMatchTransaction?: DuplicateMatchTransaction
   /** Fired after the duplicate guard's match action links the transaction to
    *  the existing voucher (no new entry was created). */
@@ -129,6 +136,7 @@ export default function JournalEntryForm({
   initialExchangeRate,
   initialForeignAmount,
   onUpdated,
+  extraBody,
   duplicateMatchTransaction,
   onDuplicateMatched,
 }: Props) {
@@ -974,10 +982,14 @@ export default function JournalEntryForm({
         // handleBookAnyway). Stripped by schemas that don't declare it, so a
         // stray value never reaches the manual journal-entry endpoint.
         ...(forceDuplicateRef.current ?? {}),
+        // Fields only the caller's endpoint knows about. Same safety as above:
+        // a schema that does not declare a key strips it, so this cannot leak
+        // into the manual journal-entry route.
+        ...(extraBody ?? {}),
       }),
     })
     return (await throwOnStructuredError(res)) as { data?: { id?: string; voucher_series?: string; voucher_number?: number }; journal_entry_id?: string }
-  }, [lines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, notes])
+  }, [lines, rate, entryCurrency, computedForeignAmount, t, submitUrl, editEntryId, selectedPeriod, entryDate, description, effectiveSourceType, sourceId, voucherSeries, notes, extraBody])
 
   const { runSubmit, dialog: activationDialog, confirm: confirmActivation, cancel: cancelActivation } =
     useSubmitWithAccountActivation(postJournalEntry)

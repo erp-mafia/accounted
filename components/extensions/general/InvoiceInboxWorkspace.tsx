@@ -1152,10 +1152,22 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             </span>
           ) : huntResult.fetched > 0 ? (
             <span>
-              <b className="font-medium tabular-nums">{huntResult.fetched}</b> nya underlag hämtade.
-              {huntResult.proposed > 0
-                ? ` ${huntResult.proposed} kopplades till ett köp.`
-                : ' Inget kunde kopplas till ett köp automatiskt.'}
+              <b className="font-medium tabular-nums">{huntResult.fetched}</b> nya underlag hämtade.{' '}
+              {/* "proposed" counts pending_operations rows, not links. The hunt
+                  stages attach_document_to_transaction for a human to approve
+                  and books nothing, so calling them kopplade would send the
+                  user away believing purchases were done. */}
+              {huntResult.proposed > 0 ? (
+                <>
+                  <b className="font-medium tabular-nums">{huntResult.proposed}</b> förslag väntar på{' '}
+                  <Link href="/pending" className="underline hover:text-foreground">
+                    granskning
+                  </Link>
+                  .
+                </>
+              ) : (
+                'Inget matchade något köp.'
+              )}
             </span>
           ) : (
             <span className="text-muted-foreground">
@@ -1625,6 +1637,12 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               isDeleting={isDeleting}
               onRetryRequested={async () => {
                 await Promise.all([fetchItems(), handleSelect(selected.id)])
+              }}
+              onBookedLocally={async () => {
+                // Re-read the item so the rail sees created_journal_entry_id
+                // and switches to the booked state; without it the same
+                // underlag can be posted twice.
+                await Promise.all([fetchItems(), fetchPurchases(), handleSelect(selected.id)])
               }}
               onFieldsUpdated={(nextData) => {
                 // Guard against stale closure: if the user navigated to a
@@ -2536,6 +2554,7 @@ function FieldsRail({
   isDeleting,
   onFieldsUpdated,
   onRetryRequested,
+  onBookedLocally,
 }: {
   item: InboxItem
   docMime: string | null
@@ -2548,6 +2567,8 @@ function FieldsRail({
   onAskAssistant?: (transactionId: string) => void
   isDeleting: boolean
   onFieldsUpdated: (data: InvoiceExtractionResult) => void
+  /** Re-read the item after this rail posted a verifikat for it. */
+  onBookedLocally?: () => void
   onRetryRequested: () => Promise<void>
 }) {
   const { toast } = useToast()
@@ -3041,10 +3062,12 @@ function FieldsRail({
         description={data?.supplier?.name ?? item.email_subject ?? 'Underlag'}
         lines={proposal?.lines ?? []}
         onBooked={() => {
-          // The row's refresh comes from the realtime subscription on
-          // invoice_inbox_items, which book-direct trips: the same path that
-          // keeps a booking made in another tab from stranding this one.
           setEditOpen(false)
+          // Realtime refreshes the list, but this rail renders from the
+          // `selected` object the parent already fetched, so it would keep
+          // offering "Granska och bokför" for an underlag that now has a
+          // verifikat, and a second press would post a duplicate.
+          onBookedLocally?.()
         }}
       />
     </div>

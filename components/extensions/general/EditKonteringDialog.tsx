@@ -98,6 +98,11 @@ export default function EditKonteringDialog({
               submitUrl={`/api/extensions/ext/invoice-inbox/items/${itemId}/book-direct`}
               sourceType={transactionId ? 'bank_transaction' : 'manual'}
               sourceId={transactionId ?? undefined}
+              // source_id is metadata the schema strips. The route needs
+              // transaction_id to book the underlag against its bank line;
+              // without it the verifikat posts standalone, the transaction
+              // stays unbooked and the match is cleared.
+              extraBody={transactionId ? { transaction_id: transactionId } : undefined}
               onEntryCreated={onBooked}
             />
           </div>

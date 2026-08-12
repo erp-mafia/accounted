@@ -2187,7 +2187,11 @@ export const invoiceInboxExtension: Extension = {
           .from('invoice_inbox_items')
           .update({
             created_journal_entry_id: journalEntry.id,
-            matched_transaction_id: transaction?.id ?? null,
+            // Keep the existing match when the caller sent no transaction_id.
+            // Overwriting with null let a caller that merely forgot the field
+            // silently unpick a match somebody had already made, and left the
+            // bank line unbooked with nothing on screen saying so.
+            matched_transaction_id: transaction?.id ?? item.matched_transaction_id ?? null,
           })
           .eq('id', id)
           .eq('company_id', ctx.companyId)
