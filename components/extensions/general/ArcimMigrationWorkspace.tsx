@@ -2252,7 +2252,7 @@ export default function ArcimMigrationWorkspace({
     INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
   )
   const documentReconnectActionRef = useRef<'discover' | 'import' | null>(null)
-  const documentReconnectFailureCleanupRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const documentReconnectFailureCleanupRef = useRef<number | null>(null)
   const stopOAuthPopupWatchRef = useRef<(() => void) | null>(null)
   // Knowledge-graph theater for the migrating step, built from the already
   // client-held parsed SIE. Null falls back to the plain progress card.
