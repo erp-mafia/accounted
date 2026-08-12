@@ -7,6 +7,7 @@ import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
 import { BookTransactionSchema } from '@/lib/api/schemas'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
@@ -180,6 +181,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         { status: 500 }
       )
     }
+
+    // A hunt- or hand-matched inbox item is consumed by this booking even
+    // though the dialog never saw it: link its underlag to the verifikat and
+    // stamp it so it leaves the active inbox (best-effort, logged inside).
+    await propagateUnderlagForBookedTransaction(supabase, companyId, id, journalEntry.id)
 
     // Emit event (non-blocking)
     try {

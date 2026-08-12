@@ -18,8 +18,16 @@ import type {
   ProcessingHistoryAggregateType,
   ProcessingHistoryActor,
 } from '@/types'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/server'
 import { z } from 'zod'
+
+/**
+ * Any service-role client with the query surface the append needs. Structural
+ * so both the Next-bound createServiceClient() and a script's own
+ * createClient(url, serviceRoleKey) satisfy it.
+ */
+type SupabaseClientLike = Pick<SupabaseClient, 'from'>
 
 // ── PII validator ───────────────────────────────────────────────
 // Rejects payloads containing Swedish personal identity numbers.
@@ -102,12 +110,26 @@ export interface AppendEventInput {
 export async function appendProcessingHistory(
   input: AppendEventInput
 ): Promise<string> {
+  return appendProcessingHistoryWithClient(createServiceClient(), input)
+}
+
+/**
+ * Same append, on a caller-supplied service-role client. For standalone
+ * scripts (e.g. scripts/backfill-inbox-booked-underlag.ts) that cannot build
+ * the Next-bound service client but must still write behandlingshistorik
+ * through the one shared row shape and PII validation (BFNAR 2013:2 kap 8:
+ * the change log has to reconcile across writers, so scripts never hand-roll
+ * the insert).
+ */
+export async function appendProcessingHistoryWithClient(
+  supabase: SupabaseClientLike,
+  input: AppendEventInput
+): Promise<string> {
   // Validate payload + actor.label contain no PII
   piiSafePayload.parse(input.payload)
   assertActorPiiSafe(input.actor)
 
   const eventId = crypto.randomUUID()
-  const supabase = createServiceClient()
 
   const { error } = await supabase
     .from('processing_history')

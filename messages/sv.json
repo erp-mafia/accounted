@@ -3065,6 +3065,7 @@
     "hunt_reading": "Läser {mailboxes}",
     "hunt_progress": "omgång {pass} · {found} hämtade",
     "dialog_no_document": "Ingen handling",
+    "dialog_matched_transaction": "Matchad transaktion",
     "sources_one": "{count} källa",
     "sources_many": "{count} källor",
     "source_needs_reconnect": "{address} behöver återanslutas",

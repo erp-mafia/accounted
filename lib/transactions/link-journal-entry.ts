@@ -18,6 +18,7 @@ import { eventBus } from '@/lib/events/bus'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { logMatchEvent } from '@/lib/invoices/match-log'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { createLogger } from '@/lib/logger'
 import type { Invoice, Transaction } from '@/types'
 
@@ -414,6 +415,11 @@ export async function linkTransactionToJournalEntry(
       await clearSettledInvoiceSuggestions(supabase, companyId, 'invoice', invoiceId)
     }
   }
+
+  // The transaction is now anchored to an existing verifikat: complete any
+  // matched inbox items against it (underlag link + consumed stamp) so they
+  // leave the active inbox. Best-effort, logged inside.
+  await propagateUnderlagForBookedTransaction(supabase, companyId, transactionId, journalEntryId)
 
   logMatchEvent(supabase, userId, transactionId, 'linked_to_existing_voucher', {
     invoiceId,
