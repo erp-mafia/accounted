@@ -30,6 +30,7 @@ import { config } from 'dotenv'
 config({ path: '.env.local' })
 import { createClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { appendProcessingHistoryWithClient } from '@/lib/processing-history/append'
 import {
   propagateUnderlagForBookedTransaction,
   resolveBookedJournalEntryIds,
@@ -98,35 +99,33 @@ async function main() {
 
       // Behandlingshistorik (BFNAR 2013:2 kap 8): a mass repair touching
       // underlag-to-verifikat linkage must leave a changelog trail
-      // distinguishing it from the original booking action. Direct insert
-      // mirroring lib/processing-history/append.ts (whose helper builds a
-      // Next-bound service client this script cannot use); payload is
-      // pseudonymous IDs only.
+      // distinguishing it from the original booking action. Written through
+      // the shared appender (row shape + PII validation) on this script's
+      // own service-role client; payload is pseudonymous IDs only.
       const itemIds = stranded
         .filter((i) => i.matched_transaction_id === txId)
         .map((i) => i.id)
-      const { error: historyError } = await supabase.from('processing_history').insert({
-        event_id: crypto.randomUUID(),
-        company_id: companyId,
-        correlation_id: txId,
-        causation_id: null,
-        aggregate_type: 'BankTransaction',
-        aggregate_id: txId,
-        event_type: 'InboxUnderlagBackfilled',
-        payload: {
-          transaction_id: txId,
-          journal_entry_id: journalEntryId,
-          inbox_item_ids: itemIds,
-          script: 'backfill-inbox-booked-underlag',
-        },
-        payload_schema_version: 1,
-        actor: { type: 'system', id: 'backfill-inbox-booked-underlag' },
-        rubric_version: null,
-        occurred_at: new Date().toISOString(),
-      })
-      if (historyError) {
+      try {
+        await appendProcessingHistoryWithClient(supabase, {
+          companyId,
+          correlationId: txId,
+          aggregateType: 'BankTransaction',
+          aggregateId: txId,
+          eventType: 'InboxUnderlagBackfilled',
+          payload: {
+            transaction_id: txId,
+            journal_entry_id: journalEntryId,
+            inbox_item_ids: itemIds,
+            script: 'backfill-inbox-booked-underlag',
+          },
+          actor: { type: 'system', id: 'backfill-inbox-booked-underlag' },
+          occurredAt: new Date(),
+        })
+      } catch (historyError) {
         console.error(
-          `processing_history append failed for tx ${txId}: ${historyError.message}`,
+          `processing_history append failed for tx ${txId}: ${
+            historyError instanceof Error ? historyError.message : String(historyError)
+          }`,
         )
       }
     }
