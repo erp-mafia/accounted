@@ -132,7 +132,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             company_id: companyId,
             user_id: user.id,
             name,
-            customer_type: order.customer_company ? 'business' : 'individual',
+            // 'swedish_business', not 'eu_business'/'non_eu_business': scraped
+            // store data carries no reliable country, and the draft review is
+            // the gate where the user corrects the customer card if needed.
+            customer_type: order.customer_company ? 'swedish_business' : 'individual',
             contact_person: order.customer_company ? order.customer_name : null,
             email: order.customer_email,
           })

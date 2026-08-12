@@ -169,7 +169,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
 
   it('creates an unnumbered draft from a matched customer and links back', async () => {
     enqueue({ data: makeOrderRow() }) // order fetch
-    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', customer_type: 'business' } }) // email match
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', customer_type: 'swedish_business' } }) // email match
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
     enqueue({ data: null }) // invoice_items insert
     enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
@@ -194,7 +194,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
   it('creates a customer from the order billing data when none matches', async () => {
     enqueue({ data: makeOrderRow() }) // order fetch
     enqueue({ data: null }) // email match: none
-    enqueue({ data: { id: 'cust-new', name: 'Testbolaget AB', customer_type: 'business' } }) // customer insert
+    enqueue({ data: { id: 'cust-new', name: 'Testbolaget AB', customer_type: 'swedish_business' } }) // customer insert
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
     enqueue({ data: null }) // items
     enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
@@ -205,7 +205,9 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
     expect(customerInsert).toBeDefined()
     expect(customerInsert![0]).toMatchObject({
       name: 'Testbolaget AB',
-      customer_type: 'business',
+      // Must be a value customers_customer_type_check accepts; 'business' is
+      // not one and made every business-order conversion 500 in production.
+      customer_type: 'swedish_business',
       contact_person: 'Test Person',
     })
     // Scraped orgnr must NOT auto-land on the customer's legal field
