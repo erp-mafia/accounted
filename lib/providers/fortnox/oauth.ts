@@ -13,8 +13,14 @@ const DEFAULT_SCOPES = [
   'customer',
   'supplier',
   'bookkeeping',
-  'archive',
-  'connectfile',
+  // 'archive' and 'connectfile' (voucher attachment import) must NOT be
+  // requested until the registered Fortnox app has them approved in the
+  // Fortnox Developer Portal: requesting a scope the app lacks makes the
+  // authorize endpoint reject with invalid_scope BEFORE login, which kills
+  // every Fortnox connect (prod incident 2026-08-13). The document import
+  // detects the missing scopes at runtime (403 becomes
+  // PROVIDER_DOCUMENT_SCOPES_REQUIRED) and surfaces a reconnect follow-up
+  // instead of failing the migration.
 ];
 
 export function buildFortnoxAuthUrl(

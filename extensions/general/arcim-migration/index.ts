@@ -541,7 +541,9 @@ export const arcimMigrationExtension: Extension = {
 
           return new Response(html, {
             status: 200,
-            headers: { 'Content-Type': 'text/html' },
+            // charset is required: without it browsers default to Latin-1 and
+            // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
           })
         }
 
@@ -622,7 +624,9 @@ export const arcimMigrationExtension: Extension = {
 
           return new Response(html, {
             status: 200,
-            headers: { 'Content-Type': 'text/html' },
+            // charset is required: without it browsers default to Latin-1 and
+            // render the Swedish text as mojibake (the "rÃ¤tt behÃ¶righeter" bug).
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
           })
         } catch (error) {
           log.error('OAuth callback exchange failed', error)
