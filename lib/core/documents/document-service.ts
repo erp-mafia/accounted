@@ -624,7 +624,7 @@ export async function uploadDocument(
     // Oldest current-version match wins so repeated deliveries keep
     // converging on the same archived original. Pre-dedupe data can hold
     // several identical documents, hence limit(1) rather than maybeSingle.
-    const { data: existing } = await supabase
+    const { data: existing, error: dedupeError } = await supabase
       .from('document_attachments')
       .select('*')
       .eq('company_id', companyId)
@@ -632,6 +632,12 @@ export async function uploadDocument(
       .eq('is_current_version', true)
       .order('created_at', { ascending: true })
       .limit(1)
+    if (dedupeError) {
+      // Fail closed: treating a broken lookup as "no match" would archive
+      // the duplicate this flag exists to prevent, silently, on every
+      // transient DB error. Intake callers (webhooks, sweeps) retry.
+      throw new Error(`Content dedupe lookup failed: ${dedupeError.message}`)
+    }
     const hit = (existing as DocumentAttachment[] | null)?.[0]
     if (hit) return { ...hit, deduplicated: true }
   }

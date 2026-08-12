@@ -220,13 +220,18 @@ export async function uploadAndExtract(
     // exists for it, adopt that item so the caller always gets a real
     // inbox_item_id; only when the document entered outside the inbox do we
     // fall through and file an item for the EXISTING document (no copy).
-    const { data: existingItem } = await supabase
+    const { data: existingItem, error: itemLookupError } = await supabase
       .from('invoice_inbox_items')
       .select('id, status, extracted_data, matched_supplier_id, matched_transaction_id')
       .eq('company_id', companyId)
       .eq('document_id', doc.id)
       .order('created_at', { ascending: true })
       .limit(1)
+    if (itemLookupError) {
+      // Fail closed: falling through would file a second item for a document
+      // that may already carry one. The delivering channel retries.
+      throw new Error(`Duplicate-item lookup failed: ${itemLookupError.message}`)
+    }
     const adopted = (existingItem as Array<{
       id: string
       status: string

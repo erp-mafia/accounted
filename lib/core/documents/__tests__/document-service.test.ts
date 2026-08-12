@@ -332,6 +332,28 @@ describe('uploadDocument', () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
+  it('rejects when the dedupe lookup itself fails, touching nothing', async () => {
+    // Fail closed: treating a broken lookup as "no match" would archive the
+    // duplicate the flag exists to prevent, silently, on transient DB errors.
+    results = [{ data: null, error: { message: 'connection reset' } }]
+
+    const handler = vi.fn()
+    eventBus.on('document.uploaded', handler)
+
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload })
+
+    await expect(
+      uploadDocument(supabase as never, 'user-1', 'company-1', {
+        name: 'kvitto.pdf',
+        buffer: pdfBuffer(),
+        type: 'application/pdf',
+      }, { dedupeByContent: true }),
+    ).rejects.toThrow(/dedupe lookup failed/i)
+    expect(upload).not.toHaveBeenCalled()
+    expect(handler).not.toHaveBeenCalled()
+  })
+
   it('stores normally when dedupeByContent finds no match', async () => {
     results = [
       { data: [], error: null }, // dedupe lookup: miss
