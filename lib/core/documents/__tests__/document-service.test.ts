@@ -307,6 +307,72 @@ describe('uploadDocument', () => {
     )
   })
 
+  it('returns the existing document instead of storing a copy when dedupeByContent hits', async () => {
+    const existing = makeDocumentAttachment({ id: 'doc-orig', sha256_hash: 'same' })
+    results = [
+      { data: [existing], error: null }, // dedupe lookup
+    ]
+
+    const handler = vi.fn()
+    eventBus.on('document.uploaded', handler)
+
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload })
+    const result = await uploadDocument(supabase as never, 'user-1', 'company-1', {
+      name: 'kvitto.pdf',
+      buffer: pdfBuffer(),
+      type: 'application/pdf',
+    }, { dedupeByContent: true })
+
+    expect(result.id).toBe('doc-orig')
+    expect(result.deduplicated).toBe(true)
+    // Nothing reaches storage and no document.uploaded fires: the archive
+    // already holds this content, so re-extraction must not run either.
+    expect(upload).not.toHaveBeenCalled()
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('rejects when the dedupe lookup itself fails, touching nothing', async () => {
+    // Fail closed: treating a broken lookup as "no match" would archive the
+    // duplicate the flag exists to prevent, silently, on transient DB errors.
+    results = [{ data: null, error: { message: 'connection reset' } }]
+
+    const handler = vi.fn()
+    eventBus.on('document.uploaded', handler)
+
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload })
+
+    await expect(
+      uploadDocument(supabase as never, 'user-1', 'company-1', {
+        name: 'kvitto.pdf',
+        buffer: pdfBuffer(),
+        type: 'application/pdf',
+      }, { dedupeByContent: true }),
+    ).rejects.toThrow(/dedupe lookup failed/i)
+    expect(upload).not.toHaveBeenCalled()
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('stores normally when dedupeByContent finds no match', async () => {
+    results = [
+      { data: [], error: null }, // dedupe lookup: miss
+      { data: makeDocumentAttachment({ id: 'doc-new' }), error: null }, // insert
+    ]
+
+    const upload = vi.fn().mockResolvedValue({ data: {}, error: null })
+    const supabase = makeClient({ upload })
+    const result = await uploadDocument(supabase as never, 'user-1', 'company-1', {
+      name: 'kvitto.pdf',
+      buffer: pdfBuffer(),
+      type: 'application/pdf',
+    }, { dedupeByContent: true })
+
+    expect(result.id).toBe('doc-new')
+    expect(result.deduplicated).toBeUndefined()
+    expect(upload).toHaveBeenCalledOnce()
+  })
+
   it('writes to the company-scoped key, not the legacy uploader-scoped key', async () => {
     results = [{ data: makeDocumentAttachment({ id: 'doc-1' }), error: null }]
 
