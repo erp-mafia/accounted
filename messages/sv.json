@@ -5031,6 +5031,7 @@
     "ext_arcim_documents_title": "Underlag från Fortnox",
     "ext_arcim_documents_discovering": "Kontrollerar om det finns underlag i Fortnox...",
     "ext_arcim_documents_prompt": "{count, plural, one {Vi hittade # underlag i Fortnox. Vill du importera och koppla det till verifikatet?} other {Vi hittade # underlag i Fortnox. Vill du importera och koppla dem till verifikaten?}}",
+    "ext_arcim_documents_empty": "Inga underlag kopplade till verifikat hittades i Fortnox.",
     "ext_arcim_documents_import_action": "Importera underlag",
     "ext_arcim_documents_not_now": "Inte nu",
     "ext_arcim_documents_importing": "Importerar och kopplar underlagen till verifikaten...",

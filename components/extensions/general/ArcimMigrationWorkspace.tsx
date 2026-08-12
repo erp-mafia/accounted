@@ -49,6 +49,7 @@ import {
   arcimDocumentImportReducer,
   parseArcimDocumentOAuthResume,
   requestArcimDocumentImport,
+  resolveArcimDocumentFollowUpProvider,
   serializeArcimDocumentOAuthResume,
   watchArcimOAuthPopup,
   type ArcimDocumentImportProblem,
@@ -1695,6 +1696,23 @@ function DocumentImportFollowUp({
     )
   }
 
+  if (state.phase === 'empty') {
+    return (
+      <Card aria-live="polite">
+        <CardHeader>
+          {title}
+          <CardDescription>{t('ext_arcim_documents_empty')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button variant="outline" className="min-h-11" onClick={onDiscover}>
+            <RotateCcw className="mr-2 h-4 w-4" />
+            {t('ext_arcim_documents_retry_discovery')}
+          </Button>
+        </CardContent>
+      </Card>
+    )
+  }
+
   if (state.phase === 'complete' && state.result) {
     const { linked, skipped, unmatched, failed } = state.result
     const outcomes = [
@@ -2934,8 +2952,12 @@ export default function ArcimMigrationWorkspace({
       setMigrationProgress(100)
       setStep('result')
 
-      if (selectedProvider === 'fortnox' && !hadStepErrors) {
-        void runDocumentDiscovery(consentId, selectedProvider, true)
+      const documentProvider = resolveArcimDocumentFollowUpProvider(
+        preview?.consent.provider,
+        selectedProvider,
+      )
+      if (documentProvider) {
+        void runDocumentDiscovery(consentId, documentProvider, true)
       }
 
       if (hadStepErrors) {
@@ -2954,7 +2976,7 @@ export default function ArcimMigrationWorkspace({
       setError(displayError(err))
       setStep('result')
     }
-  }, [consentId, migrationOptions, runDocumentDiscovery, selectedProvider, sieData, toast])
+  }, [consentId, migrationOptions, preview, runDocumentDiscovery, selectedProvider, sieData, toast])
 
   const handleDone = useCallback(() => {
     // Reset wizard

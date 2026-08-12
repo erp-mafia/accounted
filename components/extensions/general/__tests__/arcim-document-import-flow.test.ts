@@ -7,6 +7,7 @@ import {
   arcimDocumentImportReducer,
   parseArcimDocumentOAuthResume,
   requestArcimDocumentImport,
+  resolveArcimDocumentFollowUpProvider,
   serializeArcimDocumentOAuthResume,
   watchArcimOAuthPopup,
   type ArcimDocumentImportResult,
@@ -53,17 +54,25 @@ describe('Fortnox document follow-up state', () => {
     ).toEqual(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE)
   })
 
-  it('does not interrupt the completed migration when Fortnox has no attachments', () => {
+  it('keeps the document step visible when Fortnox has no attachments', () => {
     const discovering = arcimDocumentImportReducer(
       INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
       { type: 'discovery-started', provider: 'fortnox', migrationSucceeded: true },
     )
-    expect(
-      arcimDocumentImportReducer(discovering, {
-        type: 'discovery-succeeded',
-        result: result({ scanned: 0, linked: 0, unmatched: 0 }),
-      }),
-    ).toEqual(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE)
+    const empty = arcimDocumentImportReducer(discovering, {
+      type: 'discovery-succeeded',
+      result: result({ scanned: 0, linked: 0, unmatched: 0 }),
+    })
+
+    expect(empty.phase).toBe('empty')
+    expect(empty.result?.scanned).toBe(0)
+  })
+
+  it('uses the completed preview provider before transient selection state', () => {
+    expect(resolveArcimDocumentFollowUpProvider('fortnox', null)).toBe('fortnox')
+    expect(resolveArcimDocumentFollowUpProvider('fortnox', 'bokio')).toBe('fortnox')
+    expect(resolveArcimDocumentFollowUpProvider(undefined, 'fortnox')).toBe('fortnox')
+    expect(resolveArcimDocumentFollowUpProvider('bokio', 'fortnox')).toBeNull()
   })
 
   it('keeps a dry-run failure in a retryable document state, separate from migration success', () => {

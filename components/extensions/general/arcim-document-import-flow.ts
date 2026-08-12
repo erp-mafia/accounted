@@ -87,6 +87,7 @@ export type ArcimDocumentImportPhase =
   | 'hidden'
   | 'discovering'
   | 'offered'
+  | 'empty'
   | 'dismissed'
   | 'discovery-error'
   | 'importing'
@@ -124,6 +125,18 @@ export type ArcimDocumentImportAction =
   | { type: 'reconnect-started' }
 
 /**
+ * The completed preview is the authoritative provider source. The selected
+ * provider is only a fallback for older flows that do not retain preview data.
+ */
+export function resolveArcimDocumentFollowUpProvider(
+  previewProvider: string | null | undefined,
+  selectedProvider: string | null | undefined,
+): 'fortnox' | null {
+  const provider = previewProvider ?? selectedProvider
+  return provider === 'fortnox' ? provider : null
+}
+
+/**
  * Keeps the optional document step separate from the completed migration.
  * A discovery or import failure can therefore never replace the migration's
  * own success result with a failure state.
@@ -141,8 +154,16 @@ export function arcimDocumentImportReducer(
       }
       return { phase: 'discovering', found: 0, result: null, problem: null }
     case 'discovery-succeeded':
-      if (action.result.provider !== 'fortnox' || action.result.scanned <= 0) {
+      if (action.result.provider !== 'fortnox') {
         return INITIAL_ARCIM_DOCUMENT_IMPORT_STATE
+      }
+      if (action.result.scanned <= 0) {
+        return {
+          phase: 'empty',
+          found: 0,
+          result: action.result,
+          problem: null,
+        }
       }
       return {
         phase: 'offered',

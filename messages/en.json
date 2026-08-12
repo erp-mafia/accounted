@@ -5031,6 +5031,7 @@
     "ext_arcim_documents_title": "Documents from Fortnox",
     "ext_arcim_documents_discovering": "Checking for supporting documents in Fortnox...",
     "ext_arcim_documents_prompt": "{count, plural, one {We found # supporting document in Fortnox. Do you want to import and link it to the voucher?} other {We found # supporting documents in Fortnox. Do you want to import and link them to the vouchers?}}",
+    "ext_arcim_documents_empty": "No supporting documents linked to vouchers were found in Fortnox.",
     "ext_arcim_documents_import_action": "Import documents",
     "ext_arcim_documents_not_now": "Not now",
     "ext_arcim_documents_importing": "Importing and linking the documents to the vouchers...",
