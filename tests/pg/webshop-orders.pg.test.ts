@@ -48,7 +48,7 @@ async function insertOrderRow(params: {
 }
 
 describe('webshop_orders RLS', () => {
-  it('a member reads and updates own-company rows but cannot insert or delete', async () => {
+  it('a member reads and updates own-company rows but cannot delete', async () => {
     const { userId, companyId } = await seedCompany()
     const rowId = await insertOrderRow({ companyId, userId })
 
@@ -66,7 +66,20 @@ describe('webshop_orders RLS', () => {
       )
       expect(updated.rowCount).toBe(1)
 
-      // No member INSERT policy: the sync path is service-role only.
+      // No DELETE policy: order rows are accounting underlag.
+      const del = await client.query(
+        `DELETE FROM public.webshop_orders WHERE id = $1`,
+        [rowId],
+      )
+      expect(del.rowCount).toBe(0)
+    })
+  })
+
+  it('a member cannot INSERT (the sync path is service-role only)', async () => {
+    // Own withUserContext block: an RLS rejection aborts the transaction, so
+    // the failing statement must be the block's last.
+    const { userId, companyId } = await seedCompany()
+    await withUserContext(userId, async (client) => {
       await expect(
         client.query(
           `INSERT INTO public.webshop_orders
@@ -77,13 +90,6 @@ describe('webshop_orders RLS', () => {
           [companyId, userId, uniqueExternalId('member-insert')],
         ),
       ).rejects.toThrow(/row-level security/i)
-
-      // No DELETE policy: order rows are accounting underlag.
-      const del = await client.query(
-        `DELETE FROM public.webshop_orders WHERE id = $1`,
-        [rowId],
-      )
-      expect(del.rowCount).toBe(0)
     })
   })
 
@@ -168,6 +174,41 @@ describe('webshop_orders financial freeze', () => {
     )
     expect(ok.rowCount).toBe(1)
   })
+
+  it('allows unlinking while the entry is still a draft (booking rollback path)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const draftId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      sourceType: 'webshop_order',
+    })
+    const rowId = await insertOrderRow({ companyId, userId, journalEntryId: draftId })
+    const ok = await getPool().query(
+      `UPDATE public.webshop_orders SET journal_entry_id = NULL WHERE id = $1`,
+      [rowId],
+    )
+    expect(ok.rowCount).toBe(1)
+  })
+
+  it('rejects clearing the journal link once the entry is posted', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const postedId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      sourceType: 'webshop_order',
+      status: 'posted',
+      voucherNumber: 4711,
+    })
+    const rowId = await insertOrderRow({ companyId, userId, journalEntryId: postedId })
+    await expect(
+      getPool().query(
+        `UPDATE public.webshop_orders SET journal_entry_id = NULL WHERE id = $1`,
+        [rowId],
+      ),
+    ).rejects.toThrow(/journal link is immutable/i)
+  })
 })
 
 describe('journal_entries source_type webshop_order', () => {
@@ -192,13 +233,23 @@ describe('webshop_store_settings', () => {
     const { userId, companyId } = await seedCompany()
     const storeScope = `butik-${randomUUID()}.example.se`
 
+    // withUserContext ROLLS BACK, so the duplicate-key assertion below needs
+    // a persistent seed row inserted via the pool.
+    await getPool().query(
+      `INSERT INTO public.webshop_store_settings
+         (company_id, user_id, platform, store_scope, payment_method_account_map)
+       VALUES ($1, $2, 'woocommerce', $3, '{"swish":{"mode":"book","account":"1930"}}'::jsonb)`,
+      [companyId, userId, storeScope],
+    )
+
     await withUserContext(userId, async (client) => {
+      const memberScope = `butik-member-${randomUUID()}.example.se`
       const inserted = await client.query(
         `INSERT INTO public.webshop_store_settings
            (company_id, user_id, platform, store_scope, payment_method_account_map)
          VALUES ($1, $2, 'woocommerce', $3, '{"swish":{"mode":"book","account":"1930"}}'::jsonb)
          RETURNING id`,
-        [companyId, userId, storeScope],
+        [companyId, userId, memberScope],
       )
       expect(inserted.rows).toHaveLength(1)
 

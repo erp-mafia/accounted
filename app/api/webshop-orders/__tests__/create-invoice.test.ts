@@ -172,7 +172,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
     enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', customer_type: 'business' } }) // email match
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
     enqueue({ data: null }) // invoice_items insert
-    enqueue({ data: null }) // order link-back
+    enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
 
     const { status, body } = await parseJsonResponse<{ invoice_id: string }>(
       await postCreate(),
@@ -197,7 +197,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
     enqueue({ data: { id: 'cust-new', name: 'Testbolaget AB', customer_type: 'business' } }) // customer insert
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
     enqueue({ data: null }) // items
-    enqueue({ data: null }) // link-back
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
 
     const { status } = await parseJsonResponse(await postCreate())
     expect(status).toBe(200)
@@ -207,8 +207,10 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
       name: 'Testbolaget AB',
       customer_type: 'business',
       contact_person: 'Test Person',
-      org_number: '556677-8899',
     })
+    // Scraped orgnr must NOT auto-land on the customer's legal field
+    // (Swedish compliance review): the dialog shows it for manual review.
+    expect(customerInsert![0]).not.toHaveProperty('org_number')
   })
 
   it('rolls back the draft when the order link-back fails', async () => {
@@ -216,7 +218,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
     enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB' } })
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
     enqueue({ data: null }) // items insert ok
-    enqueue({ data: null, error: { message: 'link failed' } }) // link-back fails
+    enqueue({ data: null, error: { message: 'link failed' } }) // link-back DB error
     enqueue({ data: null }) // items delete
     enqueue({ data: null }) // invoice delete
 
@@ -249,12 +251,38 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
     enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB' } }) // email match
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
     enqueue({ data: null }) // items
-    enqueue({ data: null }) // link-back
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
     const { status } = await parseJsonResponse(await postCreate())
     expect(status).toBe(200)
   })
 
-  it('collapses non-divisible lines to quantity 1 and applies the dominant rate', async () => {
+  it('returns 409 and rolls back when the link-back matches zero rows (raced)', async () => {
+    enqueue({ data: makeOrderRow() })
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB' } })
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null }) // items insert ok
+    enqueue({ data: [] }) // link-back matched ZERO rows
+    enqueue({ data: null }) // items delete
+    enqueue({ data: null }) // invoice delete
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await postCreate(),
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('WEBSHOP_ORDER_ALREADY_INVOICED')
+    expect(findCall('invoices', 'delete')).toBeDefined()
+  })
+
+  it('returns 403 when the caller is a viewer (requireWrite)', async () => {
+    requireWriteMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    })
+    const { status } = await parseJsonResponse(await postCreate())
+    expect(status).toBe(403)
+    expect(mockBuildInvoiceWriteData).not.toHaveBeenCalled()
+  })
+
+  it('collapses non-divisible lines to quantity 1 and applies the single-bucket rate', async () => {
     enqueue({
       data: makeOrderRow({
         line_items: [
@@ -266,7 +294,7 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
     enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB' } })
     enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
     enqueue({ data: null })
-    enqueue({ data: null })
+    enqueue({ data: [{ id: 'order-1' }] })
     const { status } = await parseJsonResponse(await postCreate())
     expect(status).toBe(200)
     const input = mockBuildInvoiceWriteData.mock.calls[0][0] as {

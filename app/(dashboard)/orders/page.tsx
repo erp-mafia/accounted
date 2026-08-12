@@ -58,6 +58,9 @@ export default function OrdersPage() {
   const [settings, setSettings] = useState<WebshopStoreSettings[]>([])
   const [count, setCount] = useState(0)
   const [loading, setLoading] = useState(true)
+  // A transient fetch failure must not render as "no orders" with a connect
+  // CTA (review finding): failure gets its own retry state.
+  const [loadFailed, setLoadFailed] = useState(false)
   const [tab, setTab] = useState<StatusTab>('all')
   const [storeScope, setStoreScope] = useState<string | null>(null)
   const [page, setPage] = useState(0)
@@ -80,9 +83,11 @@ export default function OrdersPage() {
       setRows(json.data)
       setCount(json.count ?? json.data.length)
       setStores(json.stores)
+      setLoadFailed(false)
     } catch {
       setRows([])
       setCount(0)
+      setLoadFailed(true)
     } finally {
       setLoading(false)
     }
@@ -170,6 +175,13 @@ export default function OrdersPage() {
           <Skeleton className="h-9 w-full" />
           <Skeleton className="h-9 w-full" />
           <Skeleton className="h-9 w-full" />
+        </div>
+      ) : loadFailed ? (
+        <div className="space-y-4 py-8 text-center">
+          <p className="text-sm text-muted-foreground">{t('load_failed')}</p>
+          <Button variant="outline" size="sm" onClick={() => void load()}>
+            {t('retry')}
+          </Button>
         </div>
       ) : visibleRows.length === 0 ? (
         <EmptyState

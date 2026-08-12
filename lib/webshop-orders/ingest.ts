@@ -64,10 +64,17 @@ type ExistingRow = Pick<
   | 'paid_date'
   | 'is_paid'
   | 'payment_method'
+  | 'payment_method_title'
+  | 'gateway_reference'
+  | 'order_number'
   | 'status'
   | 'refunded_total'
   | 'store_label'
   | 'connection_id'
+  | 'customer_name'
+  | 'customer_company'
+  | 'customer_email'
+  | 'customer_orgnr'
   | 'customer_country'
   | 'vat_breakdown'
   | 'line_items'
@@ -224,7 +231,7 @@ export async function upsertWebshopOrders(
     const { data: existingData, error: existingError } = await supabase
       .from('webshop_orders')
       .select(
-        'id, external_id, journal_entry_id, invoice_id, legacy_transaction_id, remote_changed_after_freeze, total, total_tax, total_sek, exchange_rate, currency, order_date, paid_date, is_paid, payment_method, status, refunded_total, store_label, connection_id, customer_country, vat_breakdown, line_items',
+        'id, external_id, journal_entry_id, invoice_id, legacy_transaction_id, remote_changed_after_freeze, total, total_tax, total_sek, exchange_rate, currency, order_date, paid_date, is_paid, payment_method, payment_method_title, gateway_reference, order_number, status, refunded_total, store_label, connection_id, customer_name, customer_company, customer_email, customer_orgnr, customer_country, vat_breakdown, line_items',
       )
       .eq('company_id', companyId)
       .in('external_id', lookupIds)
@@ -373,6 +380,9 @@ export async function upsertWebshopOrders(
         result.crossMarked += 1
       }
 
+      // Every field the update payload writes must be compared here: a field
+      // written but not compared makes its corrections silently drop as
+      // "unchanged" (review finding: billing corrections).
       const unchanged =
         !moneyMoved &&
         !needsFx &&
@@ -381,6 +391,13 @@ export async function upsertWebshopOrders(
         existing.refunded_total === incoming.refunded_total &&
         existing.store_label === incoming.store_label &&
         existing.connection_id === incoming.connection_id &&
+        existing.order_number === incoming.order_number &&
+        (existing.payment_method_title ?? null) === (incoming.payment_method_title ?? null) &&
+        (existing.gateway_reference ?? null) === (incoming.gateway_reference ?? null) &&
+        (existing.customer_name ?? null) === (incoming.customer_name ?? null) &&
+        (existing.customer_company ?? null) === (incoming.customer_company ?? null) &&
+        (existing.customer_email ?? null) === (incoming.customer_email ?? null) &&
+        (existing.customer_orgnr ?? null) === (incoming.customer_orgnr ?? null) &&
         (existing.customer_country ?? null) === (incoming.customer_country ?? null) &&
         sameLineItems(existing.line_items, incoming.line_items)
       if (unchanged) {

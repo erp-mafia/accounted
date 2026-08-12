@@ -117,6 +117,16 @@ describe('POST /api/webshop-orders/[id]/book', () => {
     expect(mockCreateDraftEntry).not.toHaveBeenCalled()
   })
 
+  it('returns 403 when the caller is a viewer (requireWrite)', async () => {
+    requireWriteMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    })
+    const { status } = await parseJsonResponse(await postBook())
+    expect(status).toBe(403)
+    expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+  })
+
   it('returns 400 on invalid body', async () => {
     const { status } = await parseJsonResponse(
       await postBook({ fiscal_period_id: PERIOD_UUID }),

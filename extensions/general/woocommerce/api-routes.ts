@@ -396,17 +396,40 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         // cursor persisted; with one it stops cleanly, reports a partial sync
         // and resumes where it stopped on the next press.
         const deadlineMs = Date.now() + 240_000
-        let last: Awaited<ReturnType<typeof syncWooCommerceOrders>> | null = null
+        // One entry per processed store, plus an explicit skipped count:
+        // returning only the last summary hid per-store failures and reported
+        // success for zero work when the deadline expired early.
+        const results: Array<{
+          connection_id: string
+          store_url: string
+          summary: Awaited<ReturnType<typeof syncWooCommerceOrders>>
+        }> = []
+        let skipped = 0
         for (const connection of connections as WooCommerceConnection[]) {
-          if (Date.now() >= deadlineMs) break
-          last = await syncWooCommerceOrders(
+          if (Date.now() >= deadlineMs) {
+            skipped += 1
+            continue
+          }
+          const summary = await syncWooCommerceOrders(
             serviceClient,
             connection,
             undefined,
             deadlineMs,
           )
+          results.push({
+            connection_id: connection.id,
+            store_url: connection.store_url,
+            summary,
+          })
         }
-        return NextResponse.json({ success: true, transactions: last })
+        return NextResponse.json({
+          success: true,
+          results,
+          skipped,
+          // Single-store shape kept for the panel's toast summary: the panel
+          // always syncs one connection_id, so this IS that store's summary.
+          transactions: results[results.length - 1]?.summary ?? null,
+        })
       } catch (error) {
         log.error('[woocommerce] Manual sync failed', {
           message: error instanceof Error ? error.message : String(error),

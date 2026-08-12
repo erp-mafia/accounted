@@ -131,18 +131,22 @@ export default function OrderBookingDialog({
           <p className="text-sm text-muted-foreground">{t('fx_unresolved')}</p>
         ) : (
           <div className="space-y-4">
-            {resolved.invoiceMode && !isRefund && (
-              <p className="attn text-[12.5px]">{t('invoice_mode_hint')}</p>
-            )}
-            {/* Advisory compliance hints (never blocking): shown at most one
-                at a time to respect the one-attn-per-page convention. */}
-            {resolveBookingWarnings(order)
-              .slice(0, resolved.invoiceMode && !isRefund ? 0 : 1)
-              .map((warning) => (
-                <p key={warning} className="attn text-[12.5px]">
-                  {t(`warning_${warning}`)}
-                </p>
-              ))}
+            {/* One attn line (convention 6), priority order: a VAT compliance
+                warning always outranks the invoice-mode convenience hint
+                (Swedish review: the hint must never suppress a real
+                cross-border VAT advisory). */}
+            {(() => {
+              const warnings = resolveBookingWarnings(order)
+              if (warnings.length > 0) {
+                return (
+                  <p className="attn text-[12.5px]">{t(`warning_${warnings[0]}`)}</p>
+                )
+              }
+              if (resolved.invoiceMode && !isRefund) {
+                return <p className="attn text-[12.5px]">{t('invoice_mode_hint')}</p>
+              }
+              return null
+            })()}
             <div className="flex flex-wrap items-end gap-4">
               <div className="space-y-1">
                 <Label htmlFor="order-payment-account" className="text-xs">
@@ -156,7 +160,17 @@ export default function OrderBookingDialog({
                   maxLength={4}
                   className="w-28 tabular-nums"
                   aria-invalid={!accountValid}
+                  aria-describedby={!accountValid ? 'order-payment-account-error' : undefined}
                 />
+                {!accountValid && (
+                  <p
+                    id="order-payment-account-error"
+                    className="text-xs text-destructive"
+                    role="alert"
+                  >
+                    {t('invalid_account')}
+                  </p>
+                )}
               </div>
               {order.payment_method && (
                 <label className="flex items-center gap-2 pb-2 text-[12.5px] text-muted-foreground">

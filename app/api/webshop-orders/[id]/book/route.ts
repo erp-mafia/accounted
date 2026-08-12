@@ -175,12 +175,16 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
     }
 
+    // The claim guards BOTH links: a concurrent create-invoice between our
+    // read and this update must lose too (mutual exclusivity, not just
+    // no-double-booking).
     const { data: claimed, error: claimError } = await supabase
       .from('webshop_orders')
       .update({ journal_entry_id: draft.id })
       .eq('id', id)
       .eq('company_id', companyId)
       .is('journal_entry_id', null)
+      .is('invoice_id', null)
       .select('id')
     if (claimError || !claimed || claimed.length === 0) {
       await cancelDraft()
@@ -224,7 +228,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     return NextResponse.json({
       data: journalEntry,
-      journal_entry_id: journalEntry.id,
+      // commitEntry's post-commit fetch can theoretically return no row;
+      // the entry still exists under draft.id.
+      journal_entry_id: journalEntry?.id ?? draft.id,
       success: true,
     })
   },

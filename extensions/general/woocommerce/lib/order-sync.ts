@@ -503,7 +503,7 @@ async function buildPageRows(
     outcome.rows.push(...mapOrderToWebshopRow(connection, storeScope, order))
     // Refunds only exist for paid orders; a refund row without its parent
     // would be an unexplainable negative.
-    if (!orderIsPaid(order) || order.refunds.length === 0) continue
+    if (!orderIsPaid(order) || (order.refunds?.length ?? 0) === 0) continue
 
     // Refund fetches are one request per refunded order against a slow host;
     // without this check a single mass-refund page could blow through the

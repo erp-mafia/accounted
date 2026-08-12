@@ -5,6 +5,7 @@ import {
   parseJsonResponse,
   createQueuedMockSupabase,
 } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
 
 const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
@@ -36,6 +37,7 @@ describe('GET /api/webshop-orders', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    eventBus.clear()
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase })
     requireWriteMock.mockResolvedValue({ ok: true })
   })
@@ -87,8 +89,48 @@ describe('GET|PUT /api/webshop-orders/settings', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    eventBus.clear()
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase })
     requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('returns 401 when not authenticated (GET and PUT)', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase: mockSupabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const getRes = await getSettings(createMockRequest('/api/webshop-orders/settings'))
+    expect(getRes.status).toBe(401)
+    const putRes = await putSettings(
+      createMockRequest('/api/webshop-orders/settings', {
+        method: 'PUT',
+        body: {
+          platform: 'woocommerce',
+          store_scope: 'a.se',
+          payment_method_account_map: {},
+        },
+      }),
+    )
+    expect(putRes.status).toBe(401)
+  })
+
+  it('PUT returns 403 for viewers (requireWrite)', async () => {
+    requireWriteMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    })
+    const res = await putSettings(
+      createMockRequest('/api/webshop-orders/settings', {
+        method: 'PUT',
+        body: {
+          platform: 'woocommerce',
+          store_scope: 'a.se',
+          payment_method_account_map: {},
+        },
+      }),
+    )
+    expect(res.status).toBe(403)
   })
 
   it('GET returns the stored mappings', async () => {

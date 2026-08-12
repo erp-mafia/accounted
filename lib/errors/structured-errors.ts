@@ -3389,6 +3389,13 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The exchange rate for the order currency could not be fetched yet. Try again shortly; the order cannot be booked in SEK without a rate.',
   },
+  WEBSHOP_ORDER_REFUND_NOT_CONVERTIBLE: {
+    httpStatus: 409,
+    message_sv:
+      'Återbetalningar kan inte omvandlas till fakturor. Hantera återbetalningen med en kreditfaktura från kundfakturan, eller bokför återbetalningsraden direkt.',
+    message_en:
+      'Refunds cannot be converted to invoices. Handle the refund with a credit note from the customer invoice, or book the refund row directly.',
+  },
   WEBSHOP_ORDER_REFUND_PARENT_INVOICED: {
     httpStatus: 409,
     message_sv:

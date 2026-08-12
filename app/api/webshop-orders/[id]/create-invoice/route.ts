@@ -56,7 +56,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
     // Refund rows never convert (kreditfaktura is created from the invoice).
     if (order.row_type === 'refund') {
-      return errorResponseFromCode('WEBSHOP_ORDER_REFUND_PARENT_INVOICED', log, { requestId })
+      return errorResponseFromCode('WEBSHOP_ORDER_REFUND_NOT_CONVERTIBLE', log, { requestId })
     }
     // Same legacy double-booking lock as the book route: an invoice created
     // for a sale whose feed row is later booked in the transactions inbox
@@ -87,7 +87,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Resolve the customer: explicit id, else match by email within the
     // company, else create from the order's billing snapshot. The orgnr is
     // best-effort scraped data and is deliberately NOT written to a customer
-    // the user did not review; it rides along in notes for the review step.
+    // the user did not review; the dialog shows it as a review hint.
     let customer: Customer | null = null
     if (customer_id) {
       const { data } = await supabase
@@ -121,6 +121,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             requestId,
           })
         }
+        // The scraped orgnr is deliberately NOT written to the customer's
+        // legal org_number field: it is best-effort store data and must be
+        // user-confirmed on the customer card before it lands anywhere legal
+        // (Swedish compliance review, PR #1525). The dialog shows it as a
+        // review hint.
         const { data: created, error: createError } = await supabase
           .from('customers')
           .insert({
@@ -130,7 +135,6 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             customer_type: order.customer_company ? 'business' : 'individual',
             contact_person: order.customer_company ? order.customer_name : null,
             email: order.customer_email,
-            org_number: order.customer_orgnr,
           })
           .select('*')
           .single<Customer>()
@@ -155,19 +159,17 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
 
     // Items from the order's line snapshot (products + shipping + fees; the
-    // sync stores everything inside order.total). vat_rate null maps to the
-    // order's DOMINANT rate bucket so a tax-detail-stripped store does not
-    // silently fall through to the customer-type default rate. Where the net
-    // does not divide evenly by the quantity, the line collapses to quantity
-    // 1 at its exact total: buildInvoiceWriteData recomputes
+    // sync stores everything inside order.total). Where the net does not
+    // divide evenly by the quantity, the line collapses to quantity 1 at its
+    // exact total: buildInvoiceWriteData recomputes
     // line_total = quantity * unit_price, and an öre of division drift would
     // make the invoice total diverge from what the customer actually paid.
-    const dominantRate =
-      order.vat_breakdown.length > 0
-        ? [...order.vat_breakdown].sort(
-            (a, b) => Math.abs(b.net) - Math.abs(a.net),
-          )[0].rate
-        : undefined
+    // Rate fallback only when the order is UNAMBIGUOUS (a single VAT bucket):
+    // on mixed-rate orders a "dominant" guess could stamp the wrong
+    // tillämpad skattesats on a line (ML 17 kap 24 §); those lines fall back
+    // to the customer-type default and the draft review is the gate.
+    const singleRate =
+      order.vat_breakdown.length === 1 ? order.vat_breakdown[0].rate : undefined
     const items: InvoiceWriteInput['items'] =
       order.line_items.length > 0
         ? order.line_items.map((item) => {
@@ -181,7 +183,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
                   quantity: item.quantity,
                   unit: 'st',
                   unit_price: unitPrice,
-                  vat_rate: item.vat_rate ?? dominantRate,
+                  vat_rate: item.vat_rate ?? singleRate,
                 }
               : {
                   description:
@@ -189,7 +191,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
                   quantity: 1,
                   unit: 'st',
                   unit_price: item.total,
-                  vat_rate: item.vat_rate ?? dominantRate,
+                  vat_rate: item.vat_rate ?? singleRate,
                 }
           })
         : [
@@ -198,7 +200,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
               quantity: 1,
               unit: 'st',
               unit_price: roundOre(order.total - order.total_tax),
-              vat_rate: dominantRate,
+              vat_rate: singleRate,
             },
           ]
 
@@ -267,20 +269,27 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     // Link back; roll back the draft on failure so no orphan invoice exists
     // without its order marked (unnumbered draft: hard delete leaves no gap).
-    const { error: linkError } = await supabase
+    // Guards BOTH links (mutual exclusivity with a concurrent booking) and
+    // treats zero matched rows as the conflict it is: another request linked
+    // first, and answering success would leave a duplicate sendable draft.
+    const { data: linked, error: linkError } = await supabase
       .from('webshop_orders')
       .update({ invoice_id: invoice.id })
       .eq('id', id)
       .eq('company_id', companyId)
       .is('invoice_id', null)
-    if (linkError) {
+      .is('journal_entry_id', null)
+      .select('id')
+    if (linkError || !linked || linked.length === 0) {
       await supabase.from('invoice_items').delete().eq('invoice_id', invoice.id)
       await supabase.from('invoices').delete().eq('id', invoice.id)
-      log.error('order link-back failed; rolled back draft invoice', linkError, {
+      log.error('order link-back failed; rolled back draft invoice', linkError ?? undefined, {
         orderId: id,
         invoiceId: invoice.id,
       })
-      return errorResponse(linkError, log, { requestId })
+      if (linkError) return errorResponse(linkError, log, { requestId })
+      // Zero rows matched: the order was invoiced or booked concurrently.
+      return errorResponseFromCode('WEBSHOP_ORDER_ALREADY_INVOICED', log, { requestId })
     }
 
     try {

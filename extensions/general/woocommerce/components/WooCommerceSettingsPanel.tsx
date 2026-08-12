@@ -325,6 +325,9 @@ export default function WooCommerceSettingsPanel() {
         {connections.map((connection) => {
           const isActive = connection.status === 'active'
           const busy = busyId === connection.id
+          // Handlers early-return while ANY request runs (shared busyId), so
+          // every card's controls disable; the spinner stays on the busy one.
+          const blocked = busyId !== null
           return (
             <div key={connection.id} className="space-y-4 rounded-lg border border-border p-4">
               <div className="flex flex-wrap items-center justify-between gap-4">
@@ -364,7 +367,7 @@ export default function WooCommerceSettingsPanel() {
                         variant="destructive"
                         size="sm"
                         onClick={() => handleDisconnect(connection.id)}
-                        disabled={busy}
+                        disabled={blocked}
                       >
                         {t('disconnect_confirm')}
                       </Button>
@@ -372,7 +375,7 @@ export default function WooCommerceSettingsPanel() {
                         variant="outline"
                         size="sm"
                         onClick={() => setConfirmDisconnectId(null)}
-                        disabled={busy}
+                        disabled={blocked}
                       >
                         {t('cancel')}
                       </Button>
@@ -383,7 +386,7 @@ export default function WooCommerceSettingsPanel() {
                         variant="outline"
                         size="sm"
                         onClick={() => handleSyncNow(connection.id)}
-                        disabled={busy}
+                        disabled={blocked}
                       >
                         {busy ? (
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -396,6 +399,7 @@ export default function WooCommerceSettingsPanel() {
                         variant="outline"
                         size="sm"
                         onClick={() => setConfirmDisconnectId(connection.id)}
+                        disabled={blocked}
                       >
                         <Unlink className="mr-2 h-4 w-4" />
                         {t('disconnect')}
@@ -431,7 +435,7 @@ export default function WooCommerceSettingsPanel() {
                     onCheckedChange={(enabled) =>
                       handleToggleTransactionSync(connection.id, enabled)
                     }
-                    disabled={busy}
+                    disabled={blocked}
                     aria-label={t('transaction_sync_title')}
                   />
                 </div>
