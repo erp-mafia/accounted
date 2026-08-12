@@ -2138,21 +2138,26 @@ function OnboardingCard({
   isActivating,
   compact = false,
 }: OnboardingCardProps) {
+  // The card described the page as it was before the underlag rebuild: three
+  // steps ending at "matcha eller bokför", with no mention that the page now
+  // searches the mailboxes itself, lists the purchases that are missing a
+  // receipt, or proposes the kontering. It also carried a Beta badge it had
+  // outgrown.
   const steps = [
     {
       done: hasInboxAddress,
       title: 'Aktivera din inkorgsadress',
-      hint: 'Få en unik e-postadress som leverantörer kan skicka fakturor och kvitton till.',
+      hint: 'En egen adress som leverantörer kan fakturera direkt, och som du kan vidarebefordra kvitton till.',
     },
     {
       done: hasAnyItem,
-      title: 'Ladda upp eller maila in ett underlag',
-      hint: 'Accounted tolkar fakturan eller kvittot åt dig och fyller i fält automatiskt.',
+      title: 'Koppla en brevlåda, maila in, eller ladda upp',
+      hint: 'Med en kopplad brevlåda letar Kvittojakten själv upp kvitton till köp som saknar underlag. Utan den fyller du på för hand.',
     },
     {
       done: hasResolvedItem,
-      title: 'Matcha mot en transaktion eller bokför',
-      hint: 'Eller skapa en manuell transaktion om underlaget saknar bankhändelse.',
+      title: 'Godkänn konteringen',
+      hint: 'Matchade underlag får ett förslag på hur de bokförs, utifrån hur du bokfört samma leverantör förut. Du granskar och bokför.',
     },
   ]
   // First incomplete step drives the active CTA. Falls back to -1 if all done
@@ -2183,16 +2188,15 @@ function OnboardingCard({
               compact ? 'text-sm' : 'text-lg'
             )}
           >
-            Så funkar dokumentinkorgen
+            Så funkar Underlag
           </h2>
-          <Badge variant="secondary" className="text-[10px] uppercase tracking-wider">
-            Beta
-          </Badge>
         </div>
         <p className={cn('text-muted-foreground', compact ? 'text-[11px]' : 'text-xs')}>
-          Underlagen samlas här (från mail eller filuppladdning) och kan
-          matchas mot bankhändelser eller bokföras direkt. Inkorgen är alltid
-          gratis; AI-tolkning av underlag ingår i abonnemanget.
+          Här samlas underlagen, och här syns köpen som saknar ett. Kvittojakten
+          söker igenom kopplade brevlådor efter kvitton du inte fått in, och
+          matchade underlag får ett förslag på kontering att godkänna. Att samla
+          underlag är alltid gratis; AI-tolkning och kvittojakt ingår i
+          abonnemanget.
         </p>
       </div>
 
