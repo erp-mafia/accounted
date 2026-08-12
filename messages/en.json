@@ -5261,6 +5261,8 @@
     "source_empty": "The selected source has no transactions. Choose All to show the other sources.",
     "period_empty": "The selected period has no transactions. Choose All fiscal years to show everything.",
     "period_quarter_group": "Quarter",
+    "period_pending_outside": "{count, plural, one {# transaction to record outside the selected period.} other {# transactions to record outside the selected period.}}",
+    "period_show_all": "Show all",
     "skv_reconnect_title": "The Skatteverket connection needs to be renewed",
     "skv_reconnect_body": "Tax account transactions are not fetched until you reconnect with BankID and approve all permissions.",
     "skv_reconnect_cta": "Reconnect",

@@ -22,6 +22,7 @@ import TransactionStatusBar from '@/components/transactions/TransactionStatusBar
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
 import { FyPicker } from '@/components/common/FyPicker'
+import { ALL_YEARS_VALUE } from '@/components/common/FiscalYearSelector'
 import { AttnLine } from '@/components/ui/attn-line'
 import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
 import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
@@ -471,6 +472,23 @@ export default function TransactionsPage() {
     setSelectedIds(new Set())
     setSkvSelectedIds(new Set())
   }, [])
+
+  // Footer "Visa alla" escape hatch: clears the period scope AND its
+  // persisted value (FyPicker only writes storage from its own dropdown).
+  const clearPeriodFilter = useCallback(() => {
+    setFyPeriodId(null)
+    setFyPeriod(null)
+    setFyQuarter(null)
+    setSelectedIds(new Set())
+    setSkvSelectedIds(new Set())
+    if (companyId) {
+      try {
+        window.localStorage.setItem(PERIOD_FILTER_STORAGE_PREFIX + companyId, ALL_YEARS_VALUE)
+      } catch {
+        // localStorage may be unavailable; the in-memory state is cleared.
+      }
+    }
+  }, [companyId])
   // Registered cash accounts (cash_accounts): the account chooser's rows,
   // with PSD2 balances when the bank reports them.
   const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
@@ -601,6 +619,28 @@ export default function TransactionsPage() {
     () => skvRows.filter((r) => isWithinBounds(r.transaktionsdatum, periodBounds)),
     [skvRows, periodBounds],
   )
+
+  // Tab badge: DB-true pending count normally; with a period filter active,
+  // the pending rows inside the scope (complete, since the pending backlog
+  // fetch is unscoped and fully in state).
+  const inboxBadgeCount = useMemo(() => {
+    if (!periodBounds) return totalUncategorizedCount ?? uncategorizedTransactions.length
+    return uncategorizedTransactions.filter((tx) => isWithinBounds(tx.date, periodBounds)).length
+  }, [periodBounds, totalUncategorizedCount, uncategorizedTransactions])
+
+  // Pending work the active period filter hides (bank + skattekonto). BFL
+  // 5 kap: pending affarshandelser must never disappear silently, so the
+  // footer names this count and offers a one-click way back to everything.
+  const pendingOutsideCount = useMemo(() => {
+    if (!periodBounds) return 0
+    const bankOutside = uncategorizedTransactions.filter(
+      (tx) => !isWithinBounds(tx.date, periodBounds),
+    ).length
+    const skvOutside = skvRows.filter(
+      (r) => !r.journal_entry_id && !isWithinBounds(r.transaktionsdatum, periodBounds),
+    ).length
+    return bankOutside + skvOutside
+  }, [periodBounds, skvRows, uncategorizedTransactions])
 
   // Account chooser (concept scene 10): the source picker doubles as a
   // balance readout. The total sums only SEK ledgers (mixing currencies into
@@ -785,26 +825,18 @@ export default function TransactionsPage() {
     if (showLoading) setIsLoading(true)
     if (includeSkvRows) void loadSkvRows()
     try {
-      // The active period filter narrows every fetch server-side: the history
-      // window pages within the period, and the badge count matches the list
-      // (a count ignoring the filter would disagree with what is visible).
+      // Only the history window is narrowed server-side by the period filter.
+      // The pending-backlog fetch and the pending count below stay UNSCOPED on
+      // purpose (Swedish accounting review, PR #1545): BFL 5 kap requires
+      // pending affarshandelser to be booked promptly, so every pending row
+      // must stay in state regardless of the filter. The inbox applies the
+      // period client-side and the footer surfaces what falls outside it.
       let windowQuery = supabase
         .from('transactions')
         .select('*')
         .eq('company_id', companyId)
       if (periodBounds) {
         windowQuery = windowQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
-      }
-      let countQuery = supabase
-        .from('transactions')
-        .select('*', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .is('is_business', null)
-        // Same predicate as lib/worklist countUnbookedTransactions: ignored
-        // rows are handled, not pending.
-        .eq('is_ignored', false)
-      if (periodBounds) {
-        countQuery = countQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
       }
 
       const [{ data: txData, error: txError }, { count: uncatCount }, pendingRows] = await Promise.all([
@@ -815,29 +847,30 @@ export default function TransactionsPage() {
           .order('date', { ascending: false })
           .order('id', { ascending: true })
           .limit(PAGE_SIZE),
-        countQuery,
+        supabase
+          .from('transactions')
+          .select('*', { count: 'exact', head: true })
+          .eq('company_id', companyId)
+          .is('is_business', null)
+          // Same predicate as lib/worklist countUnbookedTransactions: ignored
+          // rows are handled, not pending.
+          .eq('is_ignored', false),
         // The inbox is a worklist: it must contain every pending row, even ones
         // older than the newest-first window above. Falls back to null so the
         // page still renders the windowed rows if this fetch dies; the failure
         // is surfaced below, never silently absorbed (an inbox that renders as
         // complete while missing older pending rows would be a lie).
-        fetchAllRows<TransactionWithInvoice>(({ from, to }) => {
-          let pendingQuery = supabase
+        fetchAllRows<TransactionWithInvoice>(({ from, to }) =>
+          supabase
             .from('transactions')
             .select('*')
             .eq('company_id', companyId)
             .is('is_business', null)
             .eq('is_ignored', false)
-          if (periodBounds) {
-            pendingQuery = pendingQuery
-              .gte('date', periodBounds.start)
-              .lte('date', periodBounds.end)
-          }
-          return pendingQuery
             .order('date', { ascending: false })
             .order('id', { ascending: true })
-            .range(from, to)
-        }).catch((error: unknown) => {
+            .range(from, to),
+        ).catch((error: unknown) => {
           console.error('[transactions] pending backlog fetch failed; inbox may be missing older rows', error)
           return null
         }),
@@ -2833,9 +2866,9 @@ export default function TransactionsPage() {
             }`}
           >
             {t('mode_inbox')}
-            {(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 && (
+            {inboxBadgeCount > 0 && (
               <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                {totalUncategorizedCount ?? uncategorizedTransactions.length}
+                {inboxBadgeCount}
               </span>
             )}
           </button>
@@ -3116,6 +3149,14 @@ export default function TransactionsPage() {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 text-xs text-muted-foreground">
         {mode === 'inbox' && (
           <span className="tabular-nums">{t('footer_to_handle', { count: inboxItems.length })}</span>
+        )}
+        {mode === 'inbox' && pendingOutsideCount > 0 && (
+          <span className="tabular-nums">
+            {t('period_pending_outside', { count: pendingOutsideCount })}{' '}
+            <button type="button" className={QUIET_LINK_CLASS} onClick={clearPeriodFilter}>
+              {t('period_show_all')}
+            </button>
+          </span>
         )}
         <BankSyncStatusChip />
         <BankSyncNowButton />
