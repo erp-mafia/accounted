@@ -121,26 +121,31 @@ export async function updateSession(request: NextRequest) {
         ? hintedMethod
         : 'password'
       const autoLogout = await fetchAutoLogoutPreference(supabase, user.id)
-      // A matching pre-toggle cookie keeps its timers: upgrading the shape
-      // must not restart the absolute window.
-      const state = verifiedState && stateMatches
-        ? { ...verifiedState, autoLogout }
-        : createSessionTimeoutState({
-            userId: user.id,
-            sessionId,
-            method,
-            autoLogout,
-          })
-      const signedState = await signSessionTimeoutState(state)
 
-      if (signedState) {
-        request.cookies.set(SESSION_TIMEOUT_COOKIE, signedState)
-        supabaseResponse.cookies.set(
-          SESSION_TIMEOUT_COOKIE,
-          signedState,
-          sessionTimeoutCookieOptions(),
-        )
-        clearAuthMethodHint(request, supabaseResponse)
+      // Unknown preference (failed read): mint nothing, so no fail-open
+      // snapshot gets persisted; the next request retries the read.
+      if (autoLogout !== null) {
+        // A matching pre-toggle cookie keeps its timers: upgrading the shape
+        // must not restart the absolute window.
+        const state = verifiedState && stateMatches
+          ? { ...verifiedState, autoLogout }
+          : createSessionTimeoutState({
+              userId: user.id,
+              sessionId,
+              method,
+              autoLogout,
+            })
+        const signedState = await signSessionTimeoutState(state)
+
+        if (signedState) {
+          request.cookies.set(SESSION_TIMEOUT_COOKIE, signedState)
+          supabaseResponse.cookies.set(
+            SESSION_TIMEOUT_COOKIE,
+            signedState,
+            sessionTimeoutCookieOptions(),
+          )
+          clearAuthMethodHint(request, supabaseResponse)
+        }
       }
     } else {
       const timeoutReason = evaluateSessionTimeout(

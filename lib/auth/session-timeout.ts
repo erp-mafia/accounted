@@ -109,14 +109,18 @@ export function sessionTimeoutEnforced(
 }
 
 /**
- * Read the user's auto_logout opt-in. Fails open to false (no forced
- * logout, which is also the default) so a transient preference-read failure
- * can never lock a user out.
+ * Read the user's auto_logout opt-in. A missing row is a definitive false
+ * (never opted in); a FAILED read returns null, deliberately distinct from
+ * the opt-out path: callers must not persist a snapshot for an unknown
+ * preference (which would silently disable the control for an opted-in
+ * user for the cookie's lifetime) and instead skip minting so the next
+ * request retries the read. Sessions that already carry a snapshot are
+ * unaffected: enforcement keeps running off the signed cookie.
  */
 export async function fetchAutoLogoutPreference(
   supabase: SupabaseClient,
   userId: string,
-): Promise<boolean> {
+): Promise<boolean | null> {
   try {
     const { data, error } = await supabase
       .from('user_preferences')
@@ -124,13 +128,19 @@ export async function fetchAutoLogoutPreference(
       .eq('user_id', userId)
       .maybeSingle()
     if (error) {
-      console.warn('[session-timeout] auto_logout preference read failed', error)
-      return false
+      console.error(
+        '[session-timeout] auto_logout preference read FAILED; enforcement undetermined for this request',
+        error,
+      )
+      return null
     }
     return data?.auto_logout === true
   } catch (error) {
-    console.warn('[session-timeout] auto_logout preference read failed', error)
-    return false
+    console.error(
+      '[session-timeout] auto_logout preference read FAILED; enforcement undetermined for this request',
+      error,
+    )
+    return null
   }
 }
 

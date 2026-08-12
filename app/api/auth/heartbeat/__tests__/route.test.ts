@@ -26,7 +26,7 @@ vi.mock('next/headers', () => ({
 
 import { GET, POST } from '../route'
 
-const preference = { autoLogout: false }
+const preference = { autoLogout: false, error: null as unknown }
 
 const supabase = {
   auth: {
@@ -38,8 +38,8 @@ const supabase = {
     select: vi.fn(() => ({
       eq: vi.fn(() => ({
         maybeSingle: vi.fn(async () => ({
-          data: { auto_logout: preference.autoLogout },
-          error: null,
+          data: preference.error ? null : { auto_logout: preference.autoLogout },
+          error: preference.error,
         })),
       })),
     })),
@@ -60,6 +60,7 @@ describe('session heartbeat route', () => {
     })
     mocks.cookieValue = undefined
     preference.autoLogout = false
+    preference.error = null
   })
 
   async function setState(args?: {
@@ -187,6 +188,21 @@ describe('session heartbeat route', () => {
       startedAt,
       autoLogout: true,
     })
+  })
+
+  it('answers without persisting a snapshot when the preference read fails', async () => {
+    preference.error = { message: 'connection reset' }
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const response = await GET()
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      data: { enabled: false },
+    })
+    // No cookie: the unknown preference must not be baked into a snapshot.
+    expect(response.cookies.get(SESSION_TIMEOUT_COOKIE)).toBeUndefined()
+    errorSpy.mockRestore()
   })
 
   it('passes through the existing authentication error', async () => {

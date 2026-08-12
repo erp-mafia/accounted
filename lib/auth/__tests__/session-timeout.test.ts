@@ -3,6 +3,7 @@ import {
   apiRequestSkipsSessionTimeout,
   createSessionTimeoutState,
   evaluateSessionTimeout,
+  fetchAutoLogoutPreference,
   getSessionTimeoutConfig,
   sessionStateMatchesUser,
   sessionStateNeedsRemint,
@@ -273,6 +274,48 @@ describe('per-user opt-in gating', () => {
         2000,
       ).enabled,
     ).toBe(false)
+  })
+})
+
+describe('fetchAutoLogoutPreference', () => {
+  function client(result: { data: unknown; error: unknown } | 'throw') {
+    return {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => {
+              if (result === 'throw') throw new Error('network down')
+              return result
+            },
+          }),
+        }),
+      }),
+    } as unknown as Parameters<typeof fetchAutoLogoutPreference>[0]
+  }
+
+  it('returns the stored opt-in', async () => {
+    await expect(
+      fetchAutoLogoutPreference(client({ data: { auto_logout: true }, error: null }), 'u1'),
+    ).resolves.toBe(true)
+    await expect(
+      fetchAutoLogoutPreference(client({ data: { auto_logout: false }, error: null }), 'u1'),
+    ).resolves.toBe(false)
+  })
+
+  it('treats a missing row as a definitive opt-out', async () => {
+    await expect(
+      fetchAutoLogoutPreference(client({ data: null, error: null }), 'u1'),
+    ).resolves.toBe(false)
+  })
+
+  it('returns null (unknown) on a failed read, never a fail-open false', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await expect(
+      fetchAutoLogoutPreference(client({ data: null, error: { message: 'boom' } }), 'u1'),
+    ).resolves.toBeNull()
+    await expect(fetchAutoLogoutPreference(client('throw'), 'u1')).resolves.toBeNull()
+    expect(errorSpy).toHaveBeenCalled()
+    errorSpy.mockRestore()
   })
 })
 

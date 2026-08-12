@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { sessionTimeoutClearCookieOptions } from '@/lib/auth/session-timeout'
 import { SESSION_TIMEOUT_COOKIE } from '@/lib/auth/session-timeout-shared'
 
@@ -52,12 +53,34 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: 'Invalid preferences' }, { status: 400 })
   }
 
-  const { error: upsertError } = await supabase
-    .from('user_preferences')
-    .upsert({ user_id: user.id, ...parsed.data }, { onConflict: 'user_id' })
+  const { hide_assistant_fab, auto_logout } = parsed.data
+
+  // One literal upsert per field: the phantom-column schema guard cannot
+  // resolve spread payloads, and the settings UI only ever sends one field.
+  let upsertError: unknown = null
+  if (hide_assistant_fab !== undefined) {
+    const { error: fabError } = await supabase
+      .from('user_preferences')
+      .upsert({ user_id: user.id, hide_assistant_fab }, { onConflict: 'user_id' })
+    upsertError = fabError
+  }
+  if (auto_logout !== undefined && !upsertError) {
+    const { error: logoutError } = await supabase
+      .from('user_preferences')
+      .upsert({ user_id: user.id, auto_logout }, { onConflict: 'user_id' })
+    upsertError = logoutError
+  }
 
   if (upsertError) {
-    return NextResponse.json({ error: 'Could not save preference' }, { status: 500 })
+    return NextResponse.json(
+      {
+        error: getErrorMessage(upsertError, {
+          context: 'settings',
+          statusCode: 500,
+        }),
+      },
+      { status: 500 },
+    )
   }
 
   const response = NextResponse.json({ data: parsed.data })

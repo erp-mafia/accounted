@@ -29,6 +29,7 @@ const state = vi.hoisted(() => ({
   signOut: vi.fn(async () => ({ error: null })),
   // Row returned for user_preferences reads (the auto_logout mint lookup).
   userPreferences: null as null | { auto_logout: boolean },
+  userPreferencesError: null as unknown,
 }))
 
 vi.mock('@supabase/ssr', () => ({
@@ -55,8 +56,12 @@ vi.mock('@supabase/ssr', () => ({
           if (prop === 'then') return undefined
           if (prop === 'maybeSingle' || prop === 'single') {
             return async () => ({
-              data: table === 'user_preferences' ? state.userPreferences : null,
-              error: null,
+              data:
+                table === 'user_preferences' && !state.userPreferencesError
+                  ? state.userPreferences
+                  : null,
+              error:
+                table === 'user_preferences' ? state.userPreferencesError : null,
             })
           }
           return () => self
@@ -108,6 +113,7 @@ describe('updateSession redirect destinations', () => {
       error: null,
     }
     state.userPreferences = null
+    state.userPreferencesError = null
     delete process.env.NEXT_PUBLIC_REQUIRE_MFA
     delete process.env.NEXT_PUBLIC_SELF_HOSTED
     process.env.SESSION_TIMEOUT_SECRET = 'middleware-test-secret'
@@ -266,6 +272,20 @@ describe('updateSession redirect destinations', () => {
       await expect(verifySessionTimeoutState(encoded)).resolves.toMatchObject({
         autoLogout: true,
       })
+    })
+
+    it('persists no snapshot when the preference read fails', async () => {
+      state.userPreferencesError = { message: 'connection reset' }
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      const response = await run('/settings/tax')
+
+      // Unknown preference: nothing minted, nobody logged out; the next
+      // request retries the read.
+      expect(response.status).toBe(200)
+      expect(response.cookies.get(SESSION_TIMEOUT_COOKIE)).toBeUndefined()
+      expect(state.signOut).not.toHaveBeenCalled()
+      errorSpy.mockRestore()
     })
 
     it('never logs out a session that has not opted in', async () => {

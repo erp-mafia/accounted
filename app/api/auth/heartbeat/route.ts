@@ -83,25 +83,30 @@ async function heartbeat(updateActivity: boolean): Promise<NextResponse> {
     const hintedMethod = cookieStore.get(SESSION_AUTH_METHOD_HINT_COOKIE)?.value
     const autoLogout = await fetchAutoLogoutPreference(auth.supabase, auth.user.id)
     const freshState = state && stateMatches
-      ? { ...state, autoLogout }
+      ? { ...state, autoLogout: autoLogout ?? false }
       : createSessionTimeoutState({
           userId: auth.user.id,
           sessionId,
           method: isSessionAuthMethod(hintedMethod) ? hintedMethod : 'password',
-          autoLogout,
+          autoLogout: autoLogout ?? false,
           now,
         })
     const response = NextResponse.json({
       data: toSessionTimeoutClientState(freshState, config, now),
     })
     response.headers.set('Cache-Control', 'no-store')
-    const signedFresh = await signSessionTimeoutState(freshState)
-    if (signedFresh) {
-      response.cookies.set(
-        SESSION_TIMEOUT_COOKIE,
-        signedFresh,
-        sessionTimeoutCookieOptions(),
-      )
+    // Unknown preference (failed read): answer this poll without persisting
+    // a fail-open snapshot; the next resync retries the read (mirrors the
+    // middleware).
+    if (autoLogout !== null) {
+      const signedFresh = await signSessionTimeoutState(freshState)
+      if (signedFresh) {
+        response.cookies.set(
+          SESSION_TIMEOUT_COOKIE,
+          signedFresh,
+          sessionTimeoutCookieOptions(),
+        )
+      }
     }
     return response
   }
