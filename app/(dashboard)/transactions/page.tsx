@@ -392,6 +392,12 @@ export default function TransactionsPage() {
   const pagedCountRef = useRef(0)
   const [pagedThroughDate, setPagedThroughDate] = useState<string | null>(null)
 
+  // Monotonic token for list fetches: a response applies only if no newer
+  // fetch (scope change, realtime refresh, load-more) started after it.
+  // Without it, a slow pre-filter request resolving late would overwrite the
+  // active period scope's window and paging state with stale rows.
+  const fetchGenerationRef = useRef(0)
+
   // True uncategorized count from DB (not limited by pagination)
   const [totalUncategorizedCount, setTotalUncategorizedCount] = useState<number | null>(null)
 
@@ -822,6 +828,7 @@ export default function TransactionsPage() {
 
   const fetchTransactions = useCallback(async (showLoading = false, includeSkvRows = false) => {
     if (!companyId) return
+    const generation = ++fetchGenerationRef.current
     if (showLoading) setIsLoading(true)
     if (includeSkvRows) void loadSkvRows()
     try {
@@ -876,6 +883,11 @@ export default function TransactionsPage() {
         }),
       ])
 
+      // A newer fetch (scope change, refresh) started while this one was in
+      // flight: its results own the state now, so this response must not
+      // apply. Toasts are skipped too; the newer request reports its own fate.
+      if (fetchGenerationRef.current !== generation) return
+
       if (txError) {
         toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
         return
@@ -893,6 +905,10 @@ export default function TransactionsPage() {
       const allRows = [...rows, ...olderPending].sort((a, b) => b.date.localeCompare(a.date))
       const { invoiceMap, supplierInvoiceMap } = await fetchPotentialMatches(supabase, allRows)
 
+      // Re-check after the second await: a scope change during the match
+      // enrichment must also discard this response.
+      if (fetchGenerationRef.current !== generation) return
+
       const transactionsWithInvoices: TransactionWithInvoice[] = allRows.map((t) => ({
         ...t,
         potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
@@ -908,7 +924,11 @@ export default function TransactionsPage() {
       setHasMore(rows.length >= PAGE_SIZE)
 
     } finally {
-      if (showLoading) setIsLoading(false)
+      // Only the newest request may touch the skeleton: a stale one must not
+      // clear what a newer showLoading request just put up. The newest always
+      // clears it (even non-showLoading refreshes, whose superseded
+      // predecessor may have left it up).
+      if (fetchGenerationRef.current === generation) setIsLoading(false)
     }
   }, [companyId, loadSkvRows, periodBounds, supabase, t, toast])
 
@@ -933,6 +953,9 @@ export default function TransactionsPage() {
 
   async function loadMoreTransactions() {
     if (!companyId) return
+    // Claims the generation: a scope change mid-request discards this page
+    // instead of appending old-scope rows and corrupting the paging offsets.
+    const generation = ++fetchGenerationRef.current
     setIsLoadingMore(true)
     // Offset counts only the contiguous newest-first window, not the older
     // pending rows merged into state for the inbox.
@@ -953,7 +976,7 @@ export default function TransactionsPage() {
       .order('id', { ascending: true })
       .range(offset, offset + PAGE_SIZE - 1)
 
-    if (txError || !txData) {
+    if (fetchGenerationRef.current !== generation || txError || !txData) {
       setIsLoadingMore(false)
       return
     }
@@ -963,6 +986,13 @@ export default function TransactionsPage() {
     setHasMore(txData.length >= PAGE_SIZE)
 
     const { invoiceMap, supplierInvoiceMap } = await fetchPotentialMatches(supabase, txData)
+
+    // Same staleness rule after the enrichment await: the offsets above were
+    // written under this generation, but a newer fetch has already reset them.
+    if (fetchGenerationRef.current !== generation) {
+      setIsLoadingMore(false)
+      return
+    }
 
     const newTransactions: TransactionWithInvoice[] = txData.map((t) => ({
       ...t,

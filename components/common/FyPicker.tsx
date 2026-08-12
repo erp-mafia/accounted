@@ -136,7 +136,7 @@ export function FyPicker({
   // onReady is a lifecycle callback: fire once per load, not on parent
   // re-renders that re-create it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company?.id, hideFuturePeriods, includeAllOption, preferLatestEnded, initialCompanyId, initialPeriods])
+  }, [company?.id, hideFuturePeriods, includeAllOption, preferLatestEnded, initialCompanyId, initialPeriods, storageKeyPrefix])
 
   const handleChange = (id: string) => {
     const nextId = id === ALL_YEARS_VALUE ? null : id
