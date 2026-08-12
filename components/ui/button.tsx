@@ -11,20 +11,23 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
+        // active: mirrors hover: on every variant. Tailwind 4 gates hover:
+        // behind (hover: hover), so on touch devices these are the only
+        // pointer-down feedback a button gives.
         default:
-          "bg-primary text-primary-foreground hover:bg-primary/90",
+          "bg-primary text-primary-foreground hover:bg-primary/90 active:bg-primary/90",
         destructive:
-          "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+          "bg-destructive text-destructive-foreground hover:bg-destructive/90 active:bg-destructive/90",
         outline:
-          "border border-input bg-transparent hover:bg-secondary",
+          "border border-input bg-transparent hover:bg-secondary active:bg-secondary",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/70",
+          "bg-secondary text-secondary-foreground hover:bg-secondary/70 active:bg-secondary/70",
         ghost:
-          "hover:bg-secondary hover:text-secondary-foreground",
+          "hover:bg-secondary hover:text-secondary-foreground active:bg-secondary active:text-secondary-foreground",
         link:
-          "text-primary underline-offset-4 hover:underline",
+          "text-primary underline-offset-4 hover:underline active:underline",
         success:
-          "bg-success text-success-foreground hover:bg-success/90",
+          "bg-success text-success-foreground hover:bg-success/90 active:bg-success/90",
       },
       size: {
         default: "px-4 py-[7px] text-[13px]",

@@ -102,7 +102,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white flex items-center justify-center">
+      <div className="min-h-dvh bg-gradient-to-b from-slate-50 to-white flex items-center justify-center">
         <div className="text-center">
           <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
           <p className="text-muted-foreground">Laddar...</p>
@@ -113,7 +113,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
 
   if (error && !invoice) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white flex items-center justify-center p-4">
+      <div className="min-h-dvh bg-gradient-to-b from-slate-50 to-white flex items-center justify-center p-4">
         <Card className="max-w-md w-full">
           <CardContent className="pt-6 text-center">
             <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
@@ -132,7 +132,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
   // Already responded view
   if (invoice.alreadyResponded || successMessage) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white flex items-center justify-center p-4">
+      <div className="min-h-dvh bg-gradient-to-b from-slate-50 to-white flex items-center justify-center p-4">
         <Card className="max-w-md w-full">
           <CardContent className="pt-6 text-center">
             <CheckCircle className="h-12 w-12 text-success mx-auto mb-4" />
@@ -166,7 +166,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
   const feeDueSeparately = invoice.feeDueSeparately ?? 0
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white py-12 px-4">
+    <div className="min-h-dvh bg-gradient-to-b from-slate-50 to-white py-12 px-4">
       <div className="max-w-lg mx-auto">
         {/* Header */}
         <div className="text-center mb-8">

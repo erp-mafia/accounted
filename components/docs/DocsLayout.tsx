@@ -27,7 +27,7 @@ interface DocsLayoutProps {
 
 export function DocsLayout({ currentPath, children }: DocsLayoutProps) {
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-dvh bg-background">
       <header className="sticky top-0 z-40 bg-background/95 backdrop-blur border-b border-border">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <Link href="/docs/api" className="font-display text-xl tracking-tight" style={{ fontWeight: 700 }}>

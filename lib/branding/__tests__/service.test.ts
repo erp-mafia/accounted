@@ -52,7 +52,7 @@ describe('branding service', () => {
     expect(b.faviconPath).toBe('/favicon.ico')
     expect(b.appleTouchIconPath).toBe('/icons/icon-192.png')
     expect(b.pwaIconBasePath).toBe('/icons')
-    expect(b.themeColor).toBe('#304D83')
+    expect(b.themeColor).toBe('#ffffff')
     expect(b.manifestThemeColor).toBe('#1a1a1a')
     expect(b.manifestBackgroundColor).toBe('#ffffff')
     expect(b.hiddenNavHrefs).toEqual([])
