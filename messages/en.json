@@ -2605,6 +2605,12 @@
     "link_button": "Link BankID"
   },
   "settings_security": {
+    "auto_logout_label": "Automatic logout",
+    "auto_logout_description": "Signs you out automatically after a period of inactivity, and at the latest after a per-session maximum. When off, you stay signed in on this browser until you sign out yourself.",
+    "auto_logout_switch_label": "Log me out automatically when inactive",
+    "auto_logout_enabled_toast": "Automatic logout enabled",
+    "auto_logout_disabled_toast": "Automatic logout disabled",
+    "auto_logout_save_failed": "Could not save the setting",
     "set_password_title": "Set a password",
     "set_password_description": "You signed in with BankID and have no password yet. Set one to enable 2FA or to sign in when BankID is unavailable.",
     "set_password_button": "Set password",
