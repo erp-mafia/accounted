@@ -152,6 +152,9 @@ interface StagedOperation {
   // 'categorize_transaction'), set on hydrated cards. ApprovalCard prefers
   // this for preview dispatch and derives it from tool_name otherwise.
   operation_type?: string
+  // pending_operations.params (the staging tool's input): some previews
+  // read it (attach_document's DocumentViewButton needs params.document_id).
+  params?: Record<string, unknown>
   // The structured operation preview from the staged envelope. Shape varies
   // by tool; ApprovalCard's renderers do the type-narrowing.
   preview?: unknown
@@ -690,6 +693,7 @@ export default function AgentChat({
               {
                 tool_use_id: ev.tool_use_id as string,
                 tool_name: (ev.tool_name as string | undefined) ?? undefined,
+                params: (ev.params as Record<string, unknown> | undefined) ?? undefined,
                 operation_id: stagedRaw.operation_id,
                 risk_level: stagedRaw.risk_level,
                 message: stagedRaw.message,
@@ -1004,6 +1008,7 @@ function MessageBubble({
                 message={s.message}
                 toolName={s.tool_name}
                 operationType={s.operation_type}
+                params={s.params}
                 preview={s.preview}
                 periodStatus={s.period_status}
                 onRequestCorrection={onCorrection}
@@ -1312,6 +1317,7 @@ export function attachStagedOperations(
     // type) for ApprovalCard's old 4-case tool-name switch, so every other
     // hydrated type silently lost its specialized preview.
     operation_type: op.operation_type,
+    params: (op.params ?? undefined) as Record<string, unknown> | undefined,
     preview: op.preview_data,
   }))
 

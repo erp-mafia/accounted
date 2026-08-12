@@ -77,6 +77,10 @@ export type StreamEvent =
       kind: 'staged_operation'
       tool_use_id: string
       tool_name: string
+      // The tool-use input: the same values the staging tool stored as
+      // pending_operations.params. Carried so chat previews that need
+      // params (e.g. attach_document's DocumentViewButton) work live.
+      params: Record<string, unknown>
       staged: StagedOperationResult
     }
   | {
@@ -450,6 +454,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
             kind: 'staged_operation',
             tool_use_id: tu.id,
             tool_name: tu.name,
+            params: tu.input as Record<string, unknown>,
             staged: result,
           })
         }

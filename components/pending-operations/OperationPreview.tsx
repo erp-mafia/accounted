@@ -33,6 +33,11 @@ export interface OperationPreviewInput {
  */
 export const AccountNamesContext = createContext<Record<string, string>>({})
 
+/** Render '-' instead of "NaN kr" when a preview payload omits an amount. */
+function money(v: unknown, currency: string): string {
+  return typeof v === 'number' && Number.isFinite(v) ? formatCurrency(v, currency) : '-'
+}
+
 function CategorizePreview({ data }: { data: Record<string, unknown> }) {
   const accountNames = useContext(AccountNamesContext)
   // The exact journal lines the approval will post (net cost line, VAT line,
@@ -182,18 +187,17 @@ function InvoicePreview({ data }: { data: Record<string, unknown> }) {
       )}
       <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Netto</span>
-        <span className="tabular-nums text-right">{formatCurrency(data.subtotal as number, (data.currency as string) || 'SEK')}</span>
+        <span className="tabular-nums text-right">{money(data.subtotal, (data.currency as string) || 'SEK')}</span>
         <span className="text-muted-foreground">Moms</span>
-        <span className="tabular-nums text-right">{formatCurrency(data.vat_amount as number, (data.currency as string) || 'SEK')}</span>
+        <span className="tabular-nums text-right">{money(data.vat_amount, (data.currency as string) || 'SEK')}</span>
         <span className="font-medium">Totalt</span>
-        <span className="tabular-nums font-medium text-right">{formatCurrency(data.total as number, (data.currency as string) || 'SEK')}</span>
+        <span className="tabular-nums font-medium text-right">{money(data.total, (data.currency as string) || 'SEK')}</span>
       </div>
     </div>
   )
 }
 
 function CreateTransactionPreview({ data }: { data: Record<string, unknown> }) {
-  const amount = data.amount as number
   const currency = (data.currency as string) || 'SEK'
 
   return (
@@ -204,7 +208,7 @@ function CreateTransactionPreview({ data }: { data: Record<string, unknown> }) {
       <span className="truncate">{String(data.description ?? '')}</span>
       <span className="text-muted-foreground">Belopp</span>
       <span className="font-mono tabular-nums">
-        {formatCurrency(amount, currency)}
+        {money(data.amount, currency)}
       </span>
       {data.external_id ? (
         <>

@@ -4438,6 +4438,7 @@ export interface StoredStagedOperation {
   title?: string | null
   risk_level?: string | null
   preview_data?: unknown
+  params?: Record<string, unknown> | null
 }
 
 // ============================================================

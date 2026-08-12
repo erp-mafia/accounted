@@ -52,6 +52,9 @@ interface Props {
   // from toolName: hydrated cards pass it straight from the DB row, so every
   // operation type keeps its specialized preview on resume.
   operationType?: string
+  // pending_operations.params (the staging tool's input). Some previews read
+  // it: attach_document's DocumentViewButton needs params.document_id.
+  params?: Record<string, unknown>
   preview?: unknown
   periodStatus?: PeriodStatus
   // Fired after a reject that carries a reason: the chat feeds this synthetic
@@ -84,6 +87,7 @@ export default function ApprovalCard({
   message,
   toolName,
   operationType,
+  params,
   preview,
   periodStatus,
   onRequestCorrection,
@@ -353,6 +357,7 @@ export default function ApprovalCard({
             op={{
               operation_type: previewOperationType,
               preview_data: preview as Record<string, unknown>,
+              params,
             }}
           />
         </div>
