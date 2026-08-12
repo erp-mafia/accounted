@@ -11,6 +11,7 @@ import {
   fetchActiveDimensionRules,
 } from '@/lib/bookkeeping/dimension-rules'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { BookingTemplateLibraryLine, Transaction } from '@/types'
@@ -322,6 +323,20 @@ export const POST = withRouteContext(
       const code = (result as RpcErr | null)?.code ?? 'BULK_BOOK_RPC_FAILED'
       const details = (result as RpcErr | null)?.details
       return errorResponseFromCode(code, opLog, { requestId, details })
+    }
+
+    // Complete any matched inbox items against the samlingsverifikat: link
+    // their underlag and stamp them consumed so they leave the active inbox.
+    // Best-effort, logged inside; created_journal_entry_id is UNIQUE so at
+    // most one item can carry the stamp; the inbox list derives "booked"
+    // from the voucher links for the rest.
+    for (const txId of body.tx_ids) {
+      await propagateUnderlagForBookedTransaction(
+        supabase,
+        companyId!,
+        txId,
+        result.journal_entry_id,
+      )
     }
 
     // Emit one transaction.reconciled event per tx so existing subscribers

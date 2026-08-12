@@ -107,6 +107,7 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // transactions update (RETURNING)
     enqueue({ data: null, error: null }) // inbox-link best-effort update
+    enqueue({ data: [], error: null }) // completion: voucher-link resolution (not bulk-booked)
     const res = await POST(
       makeReq({ document_id: '11111111-1111-4111-8111-111111111111' }),
       createMockRouteParams({ id: 'tx-1' }),
@@ -128,6 +129,7 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     enqueue({ data: { journal_entry_id: 'je-1' }, error: null }) // transactions update (RETURNING)
     enqueue({ data: null, error: null }) // inbox-link best-effort update
     enqueue({ data: null, error: null }) // document_attachments propagation
+    enqueue({ data: [], error: null }) // completion: matched inbox items (none)
     const res = await POST(
       makeReq({ document_id: '11111111-1111-4111-8111-111111111111' }),
       createMockRouteParams({ id: 'tx-1' }),
@@ -145,6 +147,7 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1' }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: 'je-1' }, error: null }) // transactions update (RETURNING)
     enqueue({ data: null, error: null }) // inbox-link best-effort update
+    enqueue({ data: [], error: null }) // completion: matched inbox items (none)
     const res = await POST(
       makeReq({ document_id: '11111111-1111-4111-8111-111111111111' }),
       createMockRouteParams({ id: 'tx-1' }),
@@ -159,6 +162,7 @@ describe('POST /api/transactions/[id]/attach-document', () => {
   it('returns 409 when the document already belongs to a different verifikation', async () => {
     enqueue({ data: { id: 'tx-1', journal_entry_id: 'je-1' }, error: null }) // tx fetch
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-OTHER' }, error: null }) // doc fetch
+    enqueue({ data: [], error: null }) // voucher-link check: je-OTHER anchors nothing here
     const res = await POST(
       makeReq({ document_id: '11111111-1111-4111-8111-111111111111' }),
       createMockRouteParams({ id: 'tx-1' }),
@@ -166,6 +170,30 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
     expect(status).toBe(409)
     expect(body.error).toContain('annan verifikation')
+  })
+
+  it('completes the matched inbox item when the tx is anchored via a bulk-book samlingsverifikat', async () => {
+    // A bulk-booked tx keeps transactions.journal_entry_id null: the
+    // verifikat hangs off transaction_voucher_links. Attaching a receipt to
+    // it must link the underlag to that verifikat and stamp the matched
+    // inbox item, or the item strands as "linked" (the 2026-08-12 report).
+    const DOC = '11111111-1111-4111-8111-111111111111'
+    enqueue({ data: { id: 'tx-1', journal_entry_id: null }, error: null }) // tx fetch
+    enqueue({ data: { id: DOC, journal_entry_id: null }, error: null }) // doc fetch
+    enqueue({ data: { journal_entry_id: null }, error: null }) // transactions update (RETURNING)
+    enqueue({ data: null, error: null }) // inbox-link best-effort update
+    enqueue({ data: [{ transaction_id: 'tx-1', journal_entry_id: 'je-9' }], error: null }) // voucher links
+    enqueue({ data: [{ id: 'inbox-1', document_id: DOC }], error: null }) // matched inbox items
+    enqueue({ data: { journal_entry_id: null }, error: null }) // doc anchor check: free
+    enqueue({ data: { id: 'je-9' }, error: null }) // linkToJournalEntry: JE ownership check
+    enqueue({ data: { id: DOC, journal_entry_id: 'je-9' }, error: null }) // linkToJournalEntry: doc update
+    enqueue({ data: null, error: null }) // created_journal_entry_id stamp
+
+    const res = await POST(makeReq({ document_id: DOC }), createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ data: { journal_entry_id: string } }>(res)
+    expect(status).toBe(200)
+    // The response reports the samlingsverifikat the attach completed against.
+    expect(body.data.journal_entry_id).toBe('je-9')
   })
 
   it('returns 409 when the verifikation period is locked during propagation', async () => {
@@ -219,6 +247,7 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // transactions update (RETURNING)
     enqueue({ data: null, error: null }) // inbox-link update
+    enqueue({ data: [], error: null }) // completion: voucher-link resolution (not bulk-booked)
 
     await POST(
       makeReq({ document_id: '11111111-1111-4111-8111-111111111111' }),
@@ -234,6 +263,7 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // transactions update (RETURNING)
     enqueue({ data: null, error: { message: 'rls denied' } }) // inbox-link fails
+    enqueue({ data: [], error: null }) // completion: voucher-link resolution (not bulk-booked)
 
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const res = await POST(

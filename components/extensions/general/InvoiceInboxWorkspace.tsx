@@ -95,6 +95,12 @@ interface InboxItem {
   matched_transaction_id: string | null
   created_supplier_invoice_id: string | null
   created_journal_entry_id: string | null
+  // The verifikat that anchors the matched transaction when it is already
+  // booked (directly or via a bulk-book samlingsverifikat). Server-derived by
+  // GET /items: created_journal_entry_id is UNIQUE per verifikat, so on a
+  // samlingsverifikat only one of N items can carry the stamp; this field is
+  // what lets the rest read as booked. Absent on client-side placeholders.
+  matched_transaction_journal_entry_id?: string | null
   error_message: string | null
   // True when AI extraction was skipped: either because the upload caller
   // passed skip_extraction=true (MCP/agent path) or because the server's
@@ -158,6 +164,10 @@ function pickSupplierName(item: InboxItem): string | null {
   return item.extracted_data?.supplier?.name ?? null
 }
 
+function pickInvoiceDate(item: InboxItem): string | null {
+  return item.extracted_data?.invoice?.invoiceDate ?? null
+}
+
 // True when extraction produced at least one usable field. Distinguishes a
 // deterministically-parsed underlag (fields present: render the editable
 // list) from an item whose extracted_data is null/empty (AI never ran, or ran
@@ -210,16 +220,18 @@ function countExtractedFields(data: InvoiceExtractionResult | null): number {
 // Lifecycle stage of an inbox item. Single source of truth shared by the list
 // filter, the count pills, and the row icons so they never drift apart.
 //
-// Precedence mirrors the FieldsRail: a booked item (supplier invoice OR a
-// direct journal entry) is done and drops out of the active inbox. A
-// matched-but-unbooked item is "linked": it STAYS in the inbox as its own
-// category because the bank payment still needs booking (a document attached
-// to a transaction is not the same as a booked one). An extraction failure is
-// "error"; everything else needs a first action.
+// Precedence mirrors the FieldsRail: a booked item (supplier invoice, a
+// direct journal entry, OR a matched transaction that is itself booked) is
+// done and drops out of the active inbox. A matched-but-unbooked item is
+// "linked": it STAYS in the inbox as its own category because the bank
+// payment still needs booking (a document attached to a transaction is not
+// the same as a booked one). An extraction failure is "error"; everything
+// else needs a first action.
 type InboxStatus = 'needs_action' | 'linked' | 'booked' | 'error'
 
 function deriveInboxStatus(item: InboxItem): InboxStatus {
   if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
+  if (item.matched_transaction_journal_entry_id) return 'booked'
   if (item.matched_transaction_id) return 'linked'
   if (item.status === 'error') return 'error'
   return 'needs_action'
@@ -972,7 +984,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const bookableSelectedCount = useMemo(
     () =>
       selectedItems.filter(
-        (it) => it.matched_transaction_id && !it.created_journal_entry_id && !it.created_supplier_invoice_id,
+        (it) =>
+          it.matched_transaction_id &&
+          !it.created_journal_entry_id &&
+          !it.created_supplier_invoice_id &&
+          // A matched transaction that is already booked has nothing left to
+          // bulk-book: the server would only skip it with a 409.
+          !it.matched_transaction_journal_entry_id,
       ).length,
     [selectedItems],
   )
@@ -1926,6 +1944,7 @@ function InboxRow({
   const t = useTranslations('inbox_workspace')
   const amount = pickAmount(item)
   const supplierName = pickSupplierName(item)
+  const invoiceDate = pickInvoiceDate(item)
   const isPlaceholder = !!item.isPlaceholder
   const status = deriveInboxStatus(item)
   const isErrored = status === 'error'
@@ -1936,6 +1955,15 @@ function InboxRow({
   // item still books normally. Booked items drop the reminder.
   const hasUnansweredQuestion =
     !isBooked && item.channel_context?.pending_question?.status === 'moved_to_app'
+
+  const receivedMeta = (
+    <span className="truncate">
+      {timeAgo(item.email_received_at ?? item.created_at)}
+      {invoiceDate && (
+        <> · <span className="tabular-nums">{formatDate(invoiceDate)}</span></>
+      )}
+    </span>
+  )
 
   return (
     <li
@@ -2016,10 +2044,10 @@ function InboxRow({
                   {t('wa_question_badge')}
                 </Badge>
               )}
-              <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
+              {receivedMeta}
             </span>
           ) : (
-            <span className="truncate">{timeAgo(item.email_received_at ?? item.created_at)}</span>
+            receivedMeta
           )}
           {!isPlaceholder && amount != null && (
             <span className="tabular-nums shrink-0">
@@ -2509,6 +2537,13 @@ type SuggestedBooking = {
   description?: string
   rule_name?: string | null
   entry_date?: string
+  /** Skeleton rows seeded from the matched bank transaction when `lines` is
+      empty: the amount in SEK against the settlement account, cost side left
+      blank. Editor prefill only; never rendered as a proposal. */
+  fallback_lines?: { account_number: string; debit_amount: number; credit_amount: number; description: string }[]
+  /** The matched bank row's SEK amount and date, present on empty proposals
+      so the dialog can still show the kronor figure. */
+  transaction?: { amount_sek: number; date: string } | null
 }
 
 const SUGGESTION_SOURCE_LABEL: Record<string, string> = {
@@ -2703,7 +2738,11 @@ function FieldsRail({
   }, [item.id])
 
   const isProcessed = !!item.created_supplier_invoice_id
-  const isBookedDirectly = !isProcessed && !!item.created_journal_entry_id
+  // The verifikat this item resolved into: its own stamp, or the entry that
+  // anchors its matched (and already booked) transaction. See InboxItem.
+  const bookedEntryId =
+    item.created_journal_entry_id ?? item.matched_transaction_journal_entry_id ?? null
+  const isBookedDirectly = !isProcessed && !!bookedEntryId
   // "Resolved" now means a journal entry exists: matched_transaction_id alone
   // is not resolved, it's the prerequisite for booking against that tx.
   const isLinkedToTransaction = !isProcessed && !isBookedDirectly && !!item.matched_transaction_id
@@ -3038,8 +3077,8 @@ function FieldsRail({
               Öppna leverantörsfaktura
             </Button>
           </Link>
-        ) : isBookedDirectly && item.created_journal_entry_id ? (
-          <Link href={`/bookkeeping/${item.created_journal_entry_id}`} className="block">
+        ) : isBookedDirectly && bookedEntryId ? (
+          <Link href={`/bookkeeping/${bookedEntryId}`} className="block">
             <Button variant="default" size="sm" className="w-full">
               <ArrowRight className="h-3.5 w-3.5 mr-1.5" />
               Öppna verifikation
@@ -3217,7 +3256,12 @@ function FieldsRail({
           new Date().toISOString().slice(0, 10)
         }
         description={data?.supplier?.name ?? item.email_subject ?? 'Underlag'}
-        lines={proposal?.lines ?? []}
+        // No proposal is not the same as no amount: the matched bank row still
+        // knows what left the account and where. The fallback skeleton keeps
+        // the kronor figure in the form (regression report 2026-08-12: match,
+        // "Bokför manuellt", and the amount no longer followed along).
+        lines={proposal?.lines.length ? proposal.lines : (proposal?.fallback_lines ?? [])}
+        matchedTransaction={proposal?.transaction ?? null}
         onBooked={() => {
           setEditOpen(false)
           // Realtime refreshes the list, but this rail renders from the
