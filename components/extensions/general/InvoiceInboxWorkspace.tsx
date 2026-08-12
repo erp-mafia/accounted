@@ -1942,6 +1942,15 @@ function InboxRow({
   const hasUnansweredQuestion =
     !isBooked && item.channel_context?.pending_question?.status === 'moved_to_app'
 
+  const receivedMeta = (
+    <span className="truncate">
+      {timeAgo(item.email_received_at ?? item.created_at)}
+      {invoiceDate && (
+        <> · <span className="tabular-nums">{formatDate(invoiceDate)}</span></>
+      )}
+    </span>
+  )
+
   return (
     <li
       className={cn(
@@ -2021,20 +2030,10 @@ function InboxRow({
                   {t('wa_question_badge')}
                 </Badge>
               )}
-              <span className="truncate">
-                {timeAgo(item.email_received_at ?? item.created_at)}
-                {invoiceDate && (
-                  <> · <span className="tabular-nums">{formatDate(invoiceDate)}</span></>
-                )}
-              </span>
+              {receivedMeta}
             </span>
           ) : (
-            <span className="truncate">
-              {timeAgo(item.email_received_at ?? item.created_at)}
-              {invoiceDate && (
-                <> · <span className="tabular-nums">{formatDate(invoiceDate)}</span></>
-              )}
-            </span>
+            receivedMeta
           )}
           {!isPlaceholder && amount != null && (
             <span className="tabular-nums shrink-0">
