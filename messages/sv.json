@@ -3049,6 +3049,9 @@
     "mixed_currency_note": "Underlag i olika valutor kan inte summeras till ett belopp. Varje underlag bokförs ändå var för sig, mot sin matchade banktransaktion och det belopp banken faktiskt drog i SEK."
   },
   "inbox_workspace": {
+    "hunt_stop": "Avbryt",
+    "hunt_reading": "Läser {mailboxes}",
+    "hunt_progress": "omgång {pass} · {found} hämtade",
     "dialog_no_document": "Ingen handling",
     "sources_one": "{count} källa",
     "sources_many": "{count} källor",

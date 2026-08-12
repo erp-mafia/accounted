@@ -3049,6 +3049,9 @@
     "mixed_currency_note": "Documents in different currencies cannot be summed into a single amount. Each document is still booked separately, against its matched bank transaction and the amount the bank actually settled in SEK."
   },
   "inbox_workspace": {
+    "hunt_stop": "Stop",
+    "hunt_reading": "Reading {mailboxes}",
+    "hunt_progress": "pass {pass} · {found} fetched",
     "dialog_no_document": "No document",
     "sources_one": "{count} source",
     "sources_many": "{count} sources",

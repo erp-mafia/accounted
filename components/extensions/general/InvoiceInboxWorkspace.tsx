@@ -49,6 +49,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateLong } from '@/lib/utils'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
@@ -1136,9 +1137,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               {hunting ? (
                 <>
                   <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                  {huntProgress
-                    ? `Letar… ${huntProgress.fetched} hittade`
-                    : 'Letar…'}
+                  {t('hunt_stop')}
                 </>
               ) : (
                 <>
@@ -1168,7 +1167,46 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         </div>
       </header>
 
-      {huntResult && (
+      {/* A pass takes over two minutes and reports nothing until it lands, so
+          a spinner alone leaves somebody watching a button. This says which
+          mailboxes are being read, what has been found so far, and keeps
+          moving while the pass is silent. The bar is deliberately
+          indeterminate: there is no honest percentage inside a pass, and a
+          fake one is worse than none. */}
+      {hunting && (
+        <div className="border-b bg-secondary/30">
+          <div className="h-0.5 overflow-hidden bg-border/40">
+            <div className="hunt-sweep h-full w-1/3 bg-foreground/40" />
+          </div>
+          <div className="px-4 py-2.5 flex items-center gap-3 flex-wrap text-xs">
+            <span className="flex items-center gap-2 min-w-0">
+              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0 text-muted-foreground" />
+              <span className="truncate">
+                {t('hunt_reading', {
+                  mailboxes: mailConnections
+                    .filter((c) => c.status === 'active')
+                    .map((c) => c.emailAddress)
+                    .join(', '),
+                })}
+              </span>
+            </span>
+            <span className="flex-1" />
+            {huntProgress && (
+              <span className="text-muted-foreground tabular-nums">
+                {t('hunt_progress', {
+                  pass: huntProgress.passes,
+                  found: huntProgress.fetched,
+                })}
+              </span>
+            )}
+            <button type="button" onClick={stopHunt} className={QUIET_LINK_CLASS}>
+              {t('hunt_stop')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!hunting && huntResult && (
         <div className="border-b px-4 py-2 text-xs flex items-center gap-2">
           {huntResult.failed ? (
             <span className="text-warning">
