@@ -2940,7 +2940,11 @@ export default function TransactionsPage() {
             <div
               className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]"
               role="group"
+              // Quarters follow the rakenskapsar, NOT the calendar: on a
+              // brutet rakenskapsar these are not momsdeklaration quarters.
+              // The label says so to keep VAT reconciliation off this chip.
               aria-label={t('period_quarter_group')}
+              title={t('period_quarter_group')}
             >
               {QUARTERS.map((quarter) => {
                 const bounds = quarterBounds(fyPeriod, quarter)
