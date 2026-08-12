@@ -1160,7 +1160,12 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         <div className="border-b px-4 py-2 text-xs flex items-center gap-2">
           {huntResult.failed ? (
             <span className="text-warning">
-              Sökningen kunde inte slutföras. Brevlådan svarade inte, försök igen.
+              {/* searchFailures counts mailboxes that refused; without it the
+                  failure was ours, and telling somebody to go check a healthy
+                  Gmail sends them after the wrong thing. */}
+              {(huntResult.searchFailures ?? 0) > 0
+                ? 'En brevlåda svarade inte. Försök igen om en stund.'
+                : 'Sökningen kunde inte slutföras. Försök igen.'}
             </span>
           ) : huntResult.fetched > 0 ? (
             <span>
@@ -1206,7 +1211,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       {sourcesOpen && (
         <div className="border-b bg-muted/20 text-xs">
           {inboxAddress && (
-            <div className="flex items-center gap-3 px-4 py-2 border-b border-border/50">
+            <div className="flex items-center gap-3 px-4 py-2 border-b border-border">
               <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <div className="min-w-0 flex-1">
                 <span className="tabular-nums">{inboxAddress.address}</span>
@@ -1220,7 +1225,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           )}
 
           {mailConnections.map((c) => (
-            <details key={c.id} className="group border-b border-border/50">
+            <details key={c.id} className="group border-b border-border">
               <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
                 {c.provider === 'gmail' ? (
                   <GoogleMark className="h-3.5 w-3.5 shrink-0" />
@@ -1258,7 +1263,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           ))}
 
           {whatsapp?.linked && (
-            <details className="group border-b border-border/50">
+            <details className="group border-b border-border">
               <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
                 <WhatsAppMark className="h-3.5 w-3.5 shrink-0" />
                 <span className="flex-1 truncate">WhatsApp</span>
@@ -2862,9 +2867,13 @@ function FieldsRail({
             <span className="flex-1">Extraherade fält</span>
             {/* How much the extraction actually got, so a thin one is visible
                 without opening it. */}
-            {!item.isPlaceholder && (
+            {/* A count, not a score. "5 av 12" read as a bad extraction even
+                when a kvitto had given up everything a kvitto has: half those
+                twelve fields only exist on an invoice. The denominator was
+                measuring the document kind, not the reading of it. */}
+            {!item.isPlaceholder && countExtractedFields(data) > 0 && (
               <span className="tabular-nums normal-case tracking-normal">
-                {countExtractedFields(data)} av {EXTRACTED_FIELD_COUNT}
+                {countExtractedFields(data)} ifyllda
               </span>
             )}
           </summary>
