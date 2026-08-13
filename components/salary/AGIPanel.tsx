@@ -165,6 +165,32 @@ export function AGIPanel(props: AGIPanelProps) {
   // /authorize call overwrites the stored oauth_state + PKCE verifier, so a
   // parallel flow guarantees a CSRF failure for whichever tab finishes last.
   const [connecting, setConnecting] = useState(false)
+  // Dismissal for the kvittens-scope notice, keyed by the exact granted scope
+  // string: a reconnect that comes back with the same grant (the scope not yet
+  // registered on Skatteverket's application) keeps the dismissal, so the
+  // notice cannot become an un-clearable reconnect loop (#1010), while a new
+  // grant re-evaluates from scratch.
+  const [kvittensNoticeDismissed, setKvittensNoticeDismissed] = useState(false)
+  const grantedScopeString = typeof status?.scope === 'string' ? status.scope : null
+  useEffect(() => {
+    if (!grantedScopeString) return
+    try {
+      setKvittensNoticeDismissed(
+        localStorage.getItem(`agi-kvittens-scope-notice:${grantedScopeString}`) === 'dismissed'
+      )
+    } catch {
+      setKvittensNoticeDismissed(false)
+    }
+  }, [grantedScopeString])
+  const dismissKvittensNotice = useCallback(() => {
+    setKvittensNoticeDismissed(true)
+    if (!grantedScopeString) return
+    try {
+      localStorage.setItem(`agi-kvittens-scope-notice:${grantedScopeString}`, 'dismissed')
+    } catch {
+      // Best effort: the state update alone hides it for this mount.
+    }
+  }, [grantedScopeString])
 
   // "2026-06" for user-facing copy; the period prop is compact YYYYMM.
   const prettyPeriod = `${period.slice(0, 4)}-${period.slice(4)}`
@@ -886,16 +912,19 @@ export function AGIPanel(props: AGIPanelProps) {
 
   // Tokens issued before an AGI scope was added to DEFAULT_SCOPES will 403 at
   // submission time: surface that proactively so the user reconnects before
-  // hitting the deadline rather than at it. Both scopes are checked because
-  // they back different steps: `agd` fails at submit, while a token missing
-  // `agdredovisningperiod` sails through submit and signing and only dies on
-  // "Hämta kvittens", the worst possible moment to discover it.
-  const missingAgdScope =
-    typeof status?.scope === 'string' &&
-    (() => {
-      const granted = status.scope.split(/\s+/).filter(Boolean)
-      return !granted.includes('agd') || !granted.includes('agdredovisningperiod')
-    })()
+  // hitting the deadline rather than at it. The two scopes back different
+  // steps and get different treatments: `agd` (inlämning) fails already at
+  // submit, is proven grantable, and keeps the hard reconnect nudge. A token
+  // missing only `agdredovisningperiod` (hantera) sails through submit and
+  // signing and dies on "Hämta kvittens", but until Skatteverket's application
+  // registration carries that scope a reconnect mints the same grant again
+  // (SKV silently drops unregistered scope names), so its notice must be
+  // dismissible rather than a demand no reconnect can clear (#1010).
+  const grantedScopes =
+    typeof status?.scope === 'string' ? status.scope.split(/\s+/).filter(Boolean) : null
+  const missingAgdScope = grantedScopes !== null && !grantedScopes.includes('agd')
+  const missingKvittensScope =
+    grantedScopes !== null && !missingAgdScope && !grantedScopes.includes('agdredovisningperiod')
 
   // Recovery states expose the advanced actions on their own: the stale-draft
   // and error-report guidance below reference them by name.
@@ -997,10 +1026,12 @@ export function AGIPanel(props: AGIPanelProps) {
           </div>
         )}
 
-        {/* Missing-scope banner: proactive nudge before the user hits a
-            403 invalid_scope at submission time. The agd scope was added
-            after some users had already connected, so their stored token
-            grants moms/skattekonto but not AGI. */}
+        {/* Missing-scope nudges: proactive, before the user hits a 403
+            invalid_scope. The agd scope was added after some users had
+            already connected, so their stored token grants moms/skattekonto
+            but not AGI: that one stays a hard nudge. The kvittens scope only
+            breaks the final receipt fetch and may not be grantable yet, so
+            its notice is softer and dismissible. */}
         {missingAgdScope && !readOnly && (
           <div className="rounded-md border border-border bg-muted/30 p-3">
             <p className="text-sm font-medium">
@@ -1015,6 +1046,31 @@ export function AGIPanel(props: AGIPanelProps) {
             >
               {t('open_settings')} <ExternalLink className="h-3.5 w-3.5" />
             </a>
+          </div>
+        )}
+        {missingKvittensScope && !kvittensNoticeDismissed && !readOnly && (
+          <div className="rounded-md border border-border bg-muted/30 p-3">
+            <p className="text-sm font-medium">
+              {t('kvittens_scope_title')}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t('kvittens_scope_description')}
+            </p>
+            <div className="mt-2 flex items-center gap-4">
+              <a
+                href="/settings/tax"
+                className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
+              >
+                {t('open_settings')} <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+              <button
+                type="button"
+                onClick={dismissKvittensNotice}
+                className="text-sm text-muted-foreground hover:underline"
+              >
+                {t('kvittens_scope_dismiss')}
+              </button>
+            </div>
           </div>
         )}
 

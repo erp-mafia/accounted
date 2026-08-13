@@ -183,10 +183,19 @@ describe('skvRequest: error mapping', () => {
       'WWW-Authenticate': 'Bearer error="invalid_scope"',
     })
     try {
-      await skvRequest(fakeSupabase, 'user-1', 'GET', '/x')
+      await skvRequest(
+        fakeSupabase, 'user-1', 'GET', '/x', undefined,
+        { baseUrl: 'https://api.skatteverket.se/arbetsgivardeklaration/inlamning/v1' },
+      )
       expect.fail('expected throw')
     } catch (e) {
-      expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
+      const { code, message } = e as SkatteverketAuthError
+      expect(code).toBe('ACCESS_DENIED')
+      // Same shared message as the 403 contract path: both causes named plus
+      // the refused service, so the 401 shape cannot drift into vaguer text.
+      expect(message).toMatch(/prenumeration/)
+      expect(message).toMatch(/scope/)
+      expect(message).toContain('arbetsgivardeklaration/inlamning/v1')
     }
   })
 
