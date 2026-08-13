@@ -28,6 +28,7 @@
 
 import { readFileSync, writeFileSync } from 'fs'
 import { resolve } from 'path'
+import { fileURLToPath } from 'url'
 
 type TaxRow = readonly [number, number, number, number, number, number, number, number, number]
 
@@ -49,7 +50,7 @@ function parseArgs(): { year: number } {
   return { year }
 }
 
-function parseLine(line: string): { table: number; row: TaxRow } | null {
+export function parseLine(line: string): { table: number; row: TaxRow } | null {
   // Strip BOM if present on the first line
   const clean = line.replace(/^\uFEFF/, '')
   if (clean.length < 49) return null
@@ -58,6 +59,17 @@ function parseLine(line: string): { table: number; row: TaxRow } | null {
   // B-rows carry absolute SEK amounts, %-rows carry percentages for incomes
   // above the highest B-row bracket. Both are needed for correct withholding.
   if (prefix[2] !== 'B' && prefix[2] !== '%') return null
+  // The day-count prefix must be "30" (monthly). Skatteverket also publishes
+  // two-week tables whose rows differ only in this prefix ("14B29" vs "30B29"):
+  // a two-week row must fail the import loudly, never merge silently into the
+  // monthly fallback data.
+  const dayCount = prefix.slice(0, 2)
+  if (dayCount === '14') {
+    throw new Error(
+      `Two-week table row (prefix "${prefix}") in monthly import: wrong source file? Line: ${clean}`
+    )
+  }
+  if (dayCount !== '30') return null
   const isPercent = prefix[2] === '%'
 
   const tableStr = prefix.slice(3, 5)
@@ -216,4 +228,8 @@ function main() {
   console.log(`Wrote ${outputPath} (${moduleSource.length.toLocaleString()} bytes)`)
 }
 
-main()
+// Run only when executed directly (npx tsx scripts/import-tax-tables.ts), not
+// when parseLine is imported by tests. Same pattern as generate-crontabs.ts.
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main()
+}

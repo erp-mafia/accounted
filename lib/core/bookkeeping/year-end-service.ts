@@ -26,6 +26,7 @@ import {
   executeCurrencyRevaluation,
 } from '@/lib/bookkeeping/currency-revaluation'
 import { validateBalanceContinuity } from '@/lib/reports/continuity-check'
+import { assessKontantmetodCutoff } from './kontantmetod-cutoff'
 import type {
   YearEndValidation,
   YearEndBlocker,
@@ -339,6 +340,66 @@ export async function validateYearEndReadiness(
     } else {
       warnings.push('Nästa räkenskapsperiod finns redan: ingående balanser bokförs i den')
     }
+  }
+
+  // Kontantmetoden is a legal hard gate, not an advisory: BFL 5 kap 2 §
+  // requires every unpaid receivable and liability to be booked at the fiscal
+  // year end. Gate before executeYearEndClosing posts its closing entry. A
+  // later lock-time check would leave a partial close behind on failure.
+  try {
+    const { data: settings, error: settingsError } = await supabase
+      .from('company_settings')
+      .select('accounting_method, entity_type')
+      .eq('company_id', companyId)
+      .maybeSingle()
+
+    if (settingsError) throw settingsError
+
+    if (settings?.accounting_method === 'cash') {
+      if (!nextPeriod) {
+        blockers.push({
+          code: 'KONTANTMETOD_CUTOFF_REQUIRED',
+          message:
+            'Kontantmetodens bokslutsavgränsning kan inte bokföras förrän nästa räkenskapsår är upplagt. Skapa nästa period, förhandsgranska och bokför avgränsningen innan bokslut.',
+        })
+      } else {
+        const assessment = await assessKontantmetodCutoff(
+          supabase,
+          companyId,
+          period,
+          nextPeriod.id,
+          settings.entity_type ?? 'aktiebolag',
+        )
+        const invalidCount =
+          assessment.collection.unknownVatTreatment.length +
+          assessment.collection.strayVatOnZeroRate.length
+        const outstandingCount =
+          assessment.collection.receivables.length + assessment.collection.payables.length
+
+        if (invalidCount > 0) {
+          blockers.push({
+            code: 'KONTANTMETOD_CUTOFF_REQUIRED',
+            message:
+              `${invalidCount} fakturor kan inte tas med i kontantmetodens bokslutsavgränsning på grund av saknad eller oförenlig momsinställning. Rätta fakturorna och bokför avgränsningen innan bokslut.`,
+          })
+        } else if (!assessment.postings.complete) {
+          blockers.push({
+            code: 'KONTANTMETOD_CUTOFF_REQUIRED',
+            message:
+              outstandingCount > 0
+                ? `${outstandingCount} obetalda fakturor var utestående vid periodens slut. Förhandsgranska och bokför kontantmetodens bokslutsavgränsning med vändningar innan bokslut (BFL 5 kap 2 §).`
+                : 'En tidigare kontantmetodavgränsning stämmer inte längre med reskontran. Kontrollera och rätta verifikaten innan bokslut.',
+          })
+        }
+      }
+    }
+  } catch (err) {
+    log.warn('kontantmetoden cut-off readiness check failed', err as Error)
+    blockers.push({
+      code: 'KONTANTMETOD_CUTOFF_CHECK_FAILED',
+      message:
+        'Kontrollen av kontantmetodens bokslutsavgränsning kunde inte genomföras: försök igen innan bokslut',
+    })
   }
 
   // Check: unbooked bank transactions in the period. lockPeriod enforces this

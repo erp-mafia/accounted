@@ -31,6 +31,7 @@ import { recordVoucherGapExplanation } from '@/lib/bookkeeping/cancel-orphaned-e
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
@@ -429,6 +430,15 @@ async function categorizeOne(
       transaction_id: transactionId,
       error: { code: 'TX_CATEGORIZE_RACE', message: 'Concurrent state change.' },
     }
+  }
+
+  // Propagate the underlag onto the new verifikat: anchor the transaction's
+  // pinned document and stamp matched inbox items. Same shared step as the
+  // single :categorize route and every dashboard booking path; best-effort
+  // by contract (logged inside), never fails the item. Runs only when THIS
+  // item won the CAS write.
+  if (journalEntryId) {
+    await propagateUnderlagForBookedTransaction(supabase, companyId, transactionId, journalEntryId)
   }
 
   try {

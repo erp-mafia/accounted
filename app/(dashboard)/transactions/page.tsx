@@ -67,13 +67,7 @@ import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, Su
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
-import {
-  QUARTERS,
-  isWithinBounds,
-  quarterBounds,
-  resolvePeriodBounds,
-  type Quarter,
-} from '@/lib/transactions/period-filter'
+import { isWithinBounds, resolvePeriodBounds } from '@/lib/transactions/period-filter'
 import type { FiscalPeriod } from '@/types'
 
 function InlineDialogContentLoading() {
@@ -105,6 +99,10 @@ const TransactionAttachDocumentDialog = dynamic(
 const QuickReviewDialog = dynamic(() => import('@/components/transactions/QuickReviewDialog'), { loading: DialogLoadingSkeleton })
 const EditTransactionTitleDialog = dynamic(
   () => import('@/components/transactions/EditTransactionTitleDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+const MoveTransactionCashAccountDialog = dynamic(
+  () => import('@/components/transactions/MoveTransactionCashAccountDialog'),
   { loading: DialogLoadingSkeleton },
 )
 const SkattekontoMatchDialog = dynamic(
@@ -494,30 +492,19 @@ export default function TransactionsPage() {
     }
   }, [])
 
-  // Period filter (rakenskapsar + optional quarter within it). Quarters
-  // follow the fiscal year, so a brutet rakenskapsar (July-June) gets
-  // Q1 = Jul-Sep. FyPicker owns the persistence under the page-local key;
-  // the quarter is session-only.
+  // Period filter (rakenskapsar). FyPicker owns the persistence under the
+  // page-local key. Quarter chips existed briefly (#1545) but were dropped:
+  // they crowded the filter row, and on a brutet rakenskapsar they were not
+  // momsdeklaration quarters, which made them misleading rather than useful.
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
   const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
-  const [fyQuarter, setFyQuarter] = useState<Quarter | null>(null)
-  const periodBounds = useMemo(
-    () => resolvePeriodBounds(fyPeriod, fyQuarter),
-    [fyPeriod, fyQuarter],
-  )
+  const periodBounds = useMemo(() => resolvePeriodBounds(fyPeriod, null), [fyPeriod])
 
   const handlePeriodChange = useCallback((periodId: string | null, period?: FiscalPeriod | null) => {
     setFyPeriodId(periodId)
     setFyPeriod(period ?? null)
-    setFyQuarter(null)
     // Batch selections may reference rows the new scope hides; every batch
     // action operates on "what you see", so drop them.
-    setSelectedIds(new Set())
-    setSkvSelectedIds(new Set())
-  }, [])
-
-  const handleQuarterChange = useCallback((quarter: Quarter | null) => {
-    setFyQuarter(quarter)
     setSelectedIds(new Set())
     setSkvSelectedIds(new Set())
   }, [])
@@ -527,7 +514,6 @@ export default function TransactionsPage() {
   const clearPeriodFilter = useCallback(() => {
     setFyPeriodId(null)
     setFyPeriod(null)
-    setFyQuarter(null)
     setSelectedIds(new Set())
     setSkvSelectedIds(new Set())
     if (companyId) {
@@ -546,6 +532,8 @@ export default function TransactionsPage() {
   const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
   // Bank transaction whose title is being edited (null = dialog closed).
   const [editTitleTarget, setEditTitleTarget] = useState<TransactionWithInvoice | null>(null)
+  // Bank transaction being moved to another cash account (null = dialog closed).
+  const [moveAccountTarget, setMoveAccountTarget] = useState<TransactionWithInvoice | null>(null)
   const supabase = useRealtimeSupabase()
   const searchParams = useSearchParams()
   const highlightId = searchParams.get('highlight')
@@ -2381,6 +2369,46 @@ export default function TransactionsPage() {
     setEditTitleTarget(transaction)
   }
 
+  function openMoveAccountDialog(transaction: TransactionWithInvoice) {
+    setMoveAccountTarget(transaction)
+  }
+
+  // Persist a cash-account move via PATCH. Returns true on success so the
+  // dialog can close; refetches the list because the account chooser and the
+  // per-account scoping key off cash_account_id.
+  async function handleMoveCashAccount(accountNumber: string): Promise<boolean> {
+    const target = moveAccountTarget
+    if (!target) return false
+    try {
+      const response = await fetch(`/api/transactions/${target.id}/cash-account`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_number: accountNumber }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: t('move_account_failed'),
+          description: getErrorMessage(result, { context: 'transaction' }),
+          variant: 'destructive',
+        })
+        return false
+      }
+      const moved = result.data as { cash_account_id: string }
+      setTransactions((prev) =>
+        prev.map((tx) =>
+          tx.id === target.id ? { ...tx, cash_account_id: moved.cash_account_id } : tx,
+        ),
+      )
+      toast({ title: t('move_account_saved') })
+      void refreshTransactions()
+      return true
+    } catch {
+      toast({ title: t('move_account_failed'), variant: 'destructive' })
+      return false
+    }
+  }
+
   // Persist a new title via PATCH. Returns true on success so the dialog can
   // close; updates the local list optimistically (description + edited tag).
   async function handleSaveTitle(description: string): Promise<boolean> {
@@ -2973,7 +3001,11 @@ export default function TransactionsPage() {
     let journalEntryId: string | null
     if (!templateId && quickReview?.template?.id && isCounterpartyTemplateId(quickReview.template.id)) {
       const cpTemplateId = extractCounterpartyId(quickReview.template.id)
-      const cpCategorize = async (): Promise<{ ok: boolean; journalEntryId: string | null; result: { error?: { code?: string; account_numbers?: string[]; details?: { account_numbers?: string[] } }; journal_entry_id?: string | null; journal_entry_created?: boolean; journal_entry_error?: string | null; category?: TransactionCategory }; status: number }> => {
+      const cpCategorize = async (
+        // Set after the user confirmed the duplicate warning: force is bound
+        // to the reviewed candidate's voucher, same contract as runCategorize.
+        forceOpts?: { expectedDuplicateJournalEntryId: string },
+      ): Promise<{ ok: boolean; journalEntryId: string | null; result: { error?: { code?: string; account_numbers?: string[]; details?: { account_numbers?: string[]; candidate?: BookedDuplicateCandidate } }; journal_entry_id?: string | null; journal_entry_created?: boolean; journal_entry_error?: string | null; category?: TransactionCategory }; status: number }> => {
         const r = await fetch(`/api/transactions/${id}/categorize`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2981,6 +3013,9 @@ export default function TransactionsPage() {
             is_business: true,
             counterparty_template_id: cpTemplateId,
             ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
+            ...(forceOpts
+              ? { force: true, expected_duplicate_journal_entry_id: forceOpts.expectedDuplicateJournalEntryId }
+              : {}),
           }),
         })
         const b = await r.json()
@@ -3049,11 +3084,42 @@ export default function TransactionsPage() {
               </ToastAction>
             ) : undefined,
           })
+        } else if (
+          result?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' &&
+          result.error.details?.candidate
+        ) {
+          // Booking-feedback parity with runCategorize: route the duplicate
+          // guard into the dialog (match / ignore / book anyway) instead of
+          // dead-ending it in a destructive toast that offers no way forward.
+          const candidate = result.error.details.candidate
+          setDuplicateWarning({
+            transactionId: id,
+            retry: async () => {
+              const retry = await cpCategorize({
+                expectedDuplicateJournalEntryId: candidate.journal_entry_id,
+              })
+              if (retry.ok) {
+                finishBooking({
+                  id,
+                  isBusiness: true,
+                  category: retry.result?.category,
+                  journalEntryId: retry.journalEntryId,
+                  journalEntryCreated: retry.result?.journal_entry_created,
+                  journalEntryError: retry.result?.journal_entry_error,
+                })
+                return retry.journalEntryId
+              }
+              toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(retry.result, { context: 'transaction', statusCode: retry.status }), variant: 'destructive' })
+              return null
+            },
+            candidate,
+          })
         } else {
           toast({ title: 'Kategorisering misslyckades', description: getErrorMessage(result, { context: 'transaction', statusCode: cpStatus }), variant: 'destructive' })
         }
         // Close the review dialog on hard errors: the toast (with action if
         // ACCOUNTS_NOT_IN_CHART) carries the message and the recovery path.
+        // The duplicate branch closes it too: the duplicate dialog takes over.
         setQuickReviewOpen(false)
         setQuickReview(null)
         return null
@@ -3177,49 +3243,19 @@ export default function TransactionsPage() {
           />
         </div>
         {/* Far-right context group, shared by both view modes: period scope
-            (rakenskapsar chip + quarter chips once a year is chosen) and the
-            account chooser (concept scene 10). Approved deviation from
-            convention 8's single chip: booking is period work, so the period
-            scope earns the second chip (user request 2026-08-12). */}
+            (rakenskapsar chip) and the account chooser (concept scene 10).
+            Approved deviation from convention 8's single chip: booking is
+            period work, so the period scope earns the second chip (user
+            request 2026-08-12). The Q1-Q4 chips that briefly rendered here
+            (#1545) were removed: they crowded the row into a second line,
+            and on a brutet rakenskapsar they were not momsdeklaration
+            quarters, so they misled more than they scoped. */}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <FyPicker
             value={fyPeriodId}
             onChange={handlePeriodChange}
             storageKeyPrefix={PERIOD_FILTER_STORAGE_PREFIX}
           />
-          {fyPeriod && (
-            <div
-              className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]"
-              role="group"
-              // Quarters follow the rakenskapsar, NOT the calendar: on a
-              // brutet rakenskapsar these are not momsdeklaration quarters.
-              // The label says so to keep VAT reconciliation off this chip.
-              aria-label={t('period_quarter_group')}
-              title={t('period_quarter_group')}
-            >
-              {QUARTERS.map((quarter) => {
-                const bounds = quarterBounds(fyPeriod, quarter)
-                const active = fyQuarter === quarter
-                return (
-                  <button
-                    key={quarter}
-                    type="button"
-                    disabled={!bounds}
-                    aria-pressed={active}
-                    // Clicking the active quarter widens back to the full year.
-                    onClick={() => handleQuarterChange(active ? null : quarter)}
-                    className={`rounded-md px-3 py-[5px] text-[12.5px] tabular-nums transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40 ${
-                      active
-                        ? 'border border-border bg-card font-medium text-foreground'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    {`Q${quarter}`}
-                  </button>
-                )
-              })}
-            </div>
-          )}
           {sourceItems.length > 1 && (
             <ContextPicker
               value={sourceFilter}
@@ -3279,6 +3315,26 @@ export default function TransactionsPage() {
           )
         ) : (
           <div>
+            {/* Bridge to the bulk-match flow: a backlog of unbooked bank rows
+                is usually a migration/import whose counterpart vouchers
+                already exist, and the only match affordance here is per-row.
+                Static text + count (no probe): the reconciliation preview is
+                the honest source of how many actually match.
+                Yields to the review-suggestions attn at the top of the page
+                (max one ochre sentence per page): when the sweep has already
+                persisted suggestions, "Granska förslagen" is the more precise
+                destination for the same backlog. */}
+            {selectableInboxIds.length >= 5 && suggestionItems.length === 0 && (
+              <AttnLine
+                className="px-1 pb-3"
+                action={{
+                  label: t('recon_attn_action'),
+                  href: '/reports/bank-reconciliation?autorun=1',
+                }}
+              >
+                {t('recon_attn', { count: selectableInboxIds.length })}
+              </AttnLine>
+            )}
             {/* Bulkbar (concept): hidden until at least one transaction is
                 selected via the hover checkboxes, then it pops in with the
                 count and the batch actions. */}
@@ -3395,6 +3451,8 @@ export default function TransactionsPage() {
                         onDelete={handleDeleteTransaction}
                         onIgnore={handleIgnoreTransaction}
                         onEditTitle={openEditTitleDialog}
+                        onMoveCashAccount={openMoveAccountDialog}
+                        cashAccounts={cashAccounts}
                         onToggleSelect={toggleBatchSelect}
                         preMigrationCutoff={sieCoverageEnd}
                       />
@@ -3701,6 +3759,19 @@ export default function TransactionsPage() {
         />
       )}
 
+      {moveAccountTarget && (
+        <MoveTransactionCashAccountDialog
+          open
+          onOpenChange={(v) => {
+            if (!v) setMoveAccountTarget(null)
+          }}
+          cashAccounts={cashAccounts}
+          currentCashAccountId={moveAccountTarget.cash_account_id}
+          currency={moveAccountTarget.currency}
+          onMove={handleMoveCashAccount}
+        />
+      )}
+
       {skvMatchTarget && (
         <SkattekontoMatchDialog
           row={skvMatchTarget}
@@ -3905,6 +3976,37 @@ export default function TransactionsPage() {
         onMatched={(transactionId, journalEntryId, voucherLabel) => {
           setDuplicateWarning(null)
           handleVoucherLinked(transactionId, journalEntryId, voucherLabel)
+        }}
+        // Sibling candidate resolved as a duplicate import: the dialog already
+        // ran POST /ignore; this is the same success tail as
+        // handleIgnoreTransaction (which additionally owns a pre-confirm the
+        // dialog context replaces).
+        onIgnored={(transactionId) => {
+          setDuplicateWarning(null)
+          const ignoredTx = transactions.find((t) => t.id === transactionId)
+          setExitingIds((prev) => new Set(prev).add(transactionId))
+          setTotalUncategorizedCount((prev) => Math.max(0, (prev ?? 1) - 1))
+          setTimeout(() => {
+            setTransactions((prev) =>
+              prev.map((t) => (t.id === transactionId ? { ...t, is_ignored: true } : t))
+            )
+            setExitingIds((prev) => {
+              const next = new Set(prev)
+              next.delete(transactionId)
+              return next
+            })
+          }, 350)
+          toast({
+            title: 'Transaktionen ignorerad',
+            description: ignoredTx
+              ? `${ignoredTx.description}, ${formatCurrency(ignoredTx.amount, ignoredTx.currency)}`
+              : undefined,
+            action: (
+              <ToastAction altText="Ångra ignorera" onClick={() => void handleUnignoreTransaction(transactionId)}>
+                Ångra
+              </ToastAction>
+            ),
+          })
         }}
         onBookAnyway={async () => {
           const retry = duplicateWarning?.retry

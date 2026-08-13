@@ -184,6 +184,49 @@ describe('commitPendingOperation: register_absence', () => {
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
   })
+
+  it('logs the PG details and persists a sanitized error_code when the upsert fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: { id: 'emp-1' } }) // assertEmployee
+      enqueue({
+        data: null,
+        error: {
+          code: '42501',
+          message:
+            'new row violates row-level security policy for table "salary_absence_franvaro_audit"',
+        },
+      }) // upsert denied (the franvaro audit-trigger bug)
+      enqueue({ data: null, error: null }) // finalize (failed)
+
+      const op = makePendingOp({
+        operation_type: 'register_absence',
+        params: { employee_id: 'emp-1', from: '2026-03-02', to: '2026-03-02', absence_type: 'parental' },
+      })
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+      expect(result.status).toBe('failed')
+      expect(result.http_status).toBe(500)
+      expect(result.code).toBe('DB_PERMISSION_DENIED')
+      // The op row keeps the structured code so the failure mode is
+      // diagnosable later, but never the raw PG text.
+      const updates = findCalls('pending_operations', 'update')
+      const finalize = updates[updates.length - 1]![0] as { result_data?: Record<string, unknown> }
+      expect(finalize.result_data).toMatchObject({
+        error_code: 'DB_PERMISSION_DENIED',
+        http_status: 500,
+      })
+      expect(JSON.stringify(finalize.result_data)).not.toContain('row-level security')
+      // The raw PG message goes to the log: it is persisted nowhere else.
+      const logged = consoleError.mock.calls.map((c) => c.join(' ')).join('\n')
+      expect(logged).toContain('register_absence commit failed')
+      expect(logged).toContain('row-level security')
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
 })
 
 describe('commitPendingOperation: book_salary_run', () => {
@@ -278,6 +321,34 @@ describe('commitPendingOperation: delete_absence', () => {
 
     expect(result.status).not.toBe('committed')
     expect(result.error).toBeDefined()
+  })
+
+  it('logs the PG details and persists a sanitized error_code when the delete fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: { id: 'emp-1' } }) // assertEmployee
+      enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }) // delete fails
+      enqueue({ data: null, error: null }) // finalize (failed)
+
+      const op = makePendingOp({
+        operation_type: 'delete_absence',
+        params: { employee_id: 'emp-1', from: '2026-03-02', to: '2026-03-06' },
+      })
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+      expect(result.status).toBe('failed')
+      expect(result.code).toBe('INTERNAL_ERROR')
+      const updates = findCalls('pending_operations', 'update')
+      const finalize = updates[updates.length - 1]![0] as { result_data?: Record<string, unknown> }
+      expect(finalize.result_data).toMatchObject({ error_code: 'INTERNAL_ERROR' })
+      const logged = consoleError.mock.calls.map((c) => c.join(' ')).join('\n')
+      expect(logged).toContain('delete_absence commit failed')
+      expect(logged).toContain('statement timeout')
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 })
 

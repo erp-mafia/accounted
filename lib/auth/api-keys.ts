@@ -271,6 +271,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_lock_period:                     'bookkeeping:write',
   gnubok_unlock_period:                   'bookkeeping:write',
   gnubok_run_year_end:                    'bookkeeping:write',
+  gnubok_post_kontantmetod_cutoff:        'bookkeeping:write',
   gnubok_year_end_readiness:              'reports:read',
   gnubok_set_opening_balances:            'bookkeeping:write',
   gnubok_run_currency_revaluation:        'bookkeeping:write',

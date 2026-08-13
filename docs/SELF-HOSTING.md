@@ -199,22 +199,56 @@ Additionally, migration 048 schedules a `pg_cron` job inside the database that m
 
 ### AI Features
 
-All AI features (automatic interpretation of uploaded receipts and invoices via the `document-extraction` and `invoice-inbox` extensions, and the in-app AI assistant) run Claude via AWS Bedrock. To enable them, add AWS credentials for an account with Bedrock model access to Claude:
+All AI features (automatic interpretation of uploaded receipts and invoices via the `document-extraction` and `invoice-inbox` extensions, and the in-app AI assistant) run Claude. There are two ways to provide credentials; pick one.
+
+The stock self-hosted image includes both extraction extensions, so these credentials cover emailed invoices and documents uploaded in the app.
+
+**Option 1: the direct Anthropic API.** The simplest option for self-hosting, since it needs nothing but a key from [console.anthropic.com](https://console.anthropic.com). Billing is your own, separate from any Claude subscription.
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**Option 2: AWS Bedrock.** Requires an AWS account with Bedrock model access to Claude. This is what the hosted service runs, because it keeps inference inside eu-north-1: choose it if you need the AI calls to stay in the EU, which the direct API does not guarantee.
 
 ```bash
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
-AWS_REGION=eu-north-1                          # default; keeps inference in the EU
-BEDROCK_MODEL_ID=eu.anthropic.claude-sonnet-5  # optional: document extraction model
-BEDROCK_OPUS_MODEL_ID=...                      # optional: assistant model, heavy intents
-BEDROCK_SONNET_MODEL_ID=...                    # optional: assistant model, standard intents
+AWS_REGION=eu-north-1   # default
 ```
 
-Set the two static keys explicitly. The AI assistant's client can fall back to the standard AWS credential provider chain (instance profile, IRSA) when they are absent, but document extraction requires `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` and silently returns empty results without them.
+Set both static AWS keys explicitly. The AI assistant's client can fall back to the standard AWS credential provider chain (instance profile, IRSA) when they are absent, but document extraction requires `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` and silently returns empty results without them.
+
+Optional model overrides, in either setup:
+
+```bash
+BEDROCK_MODEL_ID=claude-sonnet-5         # document extraction model
+BEDROCK_OPUS_MODEL_ID=...                # assistant model, heavy intents
+BEDROCK_SONNET_MODEL_ID=...              # assistant model, standard intents
+AI_PROVIDER=bedrock|anthropic            # force the backend (see below)
+```
+
+When both credential sets are present, Bedrock wins, so that adding an Anthropic key for an experiment cannot silently move production inference out of eu-north-1. Set `AI_PROVIDER` to say which you mean. A model id written without a provider prefix is adapted to whichever backend is active; an id that already carries one (`eu.anthropic.…`) is used as-is.
 
 Without working credentials the rest of the app runs normally: uploads are stored but not auto-interpreted, and the AI assistant cannot answer.
 
-> **Note:** `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` from earlier versions are no longer read by any code path. Support for a plain Anthropic API key (and pluggable providers) is tracked in [#1406](https://github.com/erp-mafia/accounted/issues/1406).
+#### Verifying the setup
+
+`scripts/smoke-ai.ts` sends real traffic to whichever backend your environment resolves to, so a wrong key, an unavailable model or a rejected parameter surfaces here rather than in front of a user:
+
+```bash
+npx tsx scripts/smoke-ai.ts                  # credentials, models, chat loop
+# Note: this check only detects static credentials (ANTHROPIC_API_KEY or
+# AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY). Bedrock deployments using an
+# instance profile or IRSA won't be picked up automatically: set
+# AI_PROVIDER=bedrock to run the probes against the AWS credential chain
+# anyway.
+npx tsx scripts/smoke-ai.ts ./receipt.pdf    # also runs document extraction
+```
+
+It prints the resolved provider and model ids first, then exercises a plain request, a streamed turn carrying the assistant's full parameter set (adaptive thinking, effort, prompt caching and a tool), and finally extraction of the file you pass. It exits non-zero if any step fails, so it works as a post-deploy check.
+
+> **Note:** `OPENAI_API_KEY` from earlier versions is not read by any code path; there is no OpenAI route in the app. Pluggable providers beyond Claude are tracked in [#1406](https://github.com/erp-mafia/accounted/issues/1406).
 
 ### Email (Invoice Sending and Reminders)
 

@@ -28,6 +28,7 @@ import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-
 import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
+import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
 import { suggestMappings, getMappingStats, isSystemAccount } from '@/lib/import/account-mapper'
 import { loadMappings, generateImportPreview, executeSIEImport } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-reference'
@@ -995,6 +996,20 @@ export const arcimMigrationExtension: Extension = {
         try {
           const parsed = parseSIEFile(rawContent)
 
+          // Mojibake tripwire (warn, never block). This handler receives SIE
+          // as an ALREADY-DECODED string, so an upstream that decoded CP437
+          // bytes as windows-1252 has baked the corruption in before we ever
+          // see it (the retired Arcim Sync gateway did exactly that on
+          // 2026-03-17). Flag the signature so it can never again land
+          // silently in posted entries; the import itself proceeds untouched.
+          const artifactScan = scanSieForCp1252Artifacts(parsed)
+          if (artifactScan.flagged) {
+            log.warn('import-sie: CP1252 mojibake artifacts in SIE text', {
+              artifactCount: artifactScan.artifactCount,
+              samples: artifactScan.samples,
+            })
+          }
+
           // Validate all accounts are mapped (same as manual upload)
           const unmapped = mappings.filter((m: import('@/lib/import/types').AccountMapping) => !m.targetAccount)
           if (unmapped.length > 0) {
@@ -1034,6 +1049,12 @@ export const arcimMigrationExtension: Extension = {
             // 'block' behavior.
             onExistingPeriod: 'replace',
           })
+
+          // Surface the tripwire on the result the workspace UI already
+          // renders (its "Remaining warnings" card shows result.warnings).
+          if (artifactScan.flagged) {
+            result.warnings.push(formatSieArtifactWarning(artifactScan))
+          }
 
           log.info('SIE import completed:', {
             success: result.success,

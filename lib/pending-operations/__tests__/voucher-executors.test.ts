@@ -774,7 +774,8 @@ describe('commitPendingOperation: correct_entry', () => {
       expect.arrayContaining([
         expect.objectContaining({ account_number: '2645' }),
         expect.objectContaining({ account_number: '2614' }),
-      ])
+      ]),
+      { allowDeepChain: false }
     )
   })
 
@@ -930,7 +931,8 @@ describe('commitPendingOperation: reverse_entry', () => {
       'company-1',
       'user-1',
       'je-original',
-      undefined
+      undefined,
+      { allowDeepChain: false }
     )
   })
 
@@ -964,7 +966,8 @@ describe('commitPendingOperation: reverse_entry', () => {
       'company-1',
       'user-1',
       'je-original',
-      '2026-05-20'
+      '2026-05-20',
+      { allowDeepChain: false }
     )
   })
 

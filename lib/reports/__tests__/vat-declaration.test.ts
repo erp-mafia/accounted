@@ -16,7 +16,9 @@ let results: Array<{ data?: unknown; error?: unknown }>
 let chartAccounts: Array<{
   account_number: string
   account_name?: string
+  account_class?: number
   default_vat_rate: number | null
+  default_vat_treatment?: string | null
 }>
 
 function makeBuilder() {
@@ -37,12 +39,17 @@ function makeBuilder() {
  */
 function makeChartBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'not', 'order', 'range']) {
+  for (const m of ['select', 'eq', 'gte', 'lte', 'in', 'not', 'order', 'range']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   b.then = (resolve: (v: unknown) => void) =>
     resolve({
-      data: chartAccounts.map((account) => ({ account_name: '', ...account })),
+      data: chartAccounts.map((account) => ({
+        account_name: '',
+        account_class: 3,
+        default_vat_treatment: null,
+        ...account,
+      })),
       error: null,
     })
   return b
@@ -116,6 +123,36 @@ beforeEach(() => {
 // ============================================================
 // Pure function tests: no mocks needed
 // ============================================================
+
+describe('rutorFromTotals: explicit account VAT treatments', () => {
+  it('puts a custom sales account in ruta 05', () => {
+    const totals = new Map([['3041', { debit: 0, credit: 1000 }]])
+    const rutor = rutorFromTotals(totals, {
+      mappingByAccount: new Map([['3041', { box: 'ruta05', side: 'credit' }]]),
+      explicitAccounts: new Set(['3041']),
+    })
+    expect(rutor.ruta05).toBe(1000)
+  })
+
+  it('puts a custom EU purchase account in ruta 20', () => {
+    const totals = new Map([['4056', { debit: 1000, credit: 0 }]])
+    const rutor = rutorFromTotals(totals, {
+      mappingByAccount: new Map([['4056', { box: 'ruta20', side: 'debit' }]]),
+      explicitAccounts: new Set(['4056']),
+    })
+    expect(rutor.ruta20).toBe(1000)
+  })
+
+  it('keeps a static BAS mapping authoritative over an explicit treatment', () => {
+    const totals = new Map([['3001', { debit: 0, credit: 1000 }]])
+    const rutor = rutorFromTotals(totals, {
+      mappingByAccount: new Map([['3001', { box: 'ruta42', side: 'credit' }]]),
+      explicitAccounts: new Set(['3001']),
+    })
+    expect(rutor.ruta05).toBe(1000)
+    expect(rutor.ruta42).toBe(0)
+  })
+})
 
 describe('rutorFromTotals: ruta 41 (omvänd skattskyldighet, sales side)', () => {
   it('projects 3231/3232/3233 credit balances into ruta 41', () => {
@@ -930,6 +967,14 @@ describe('calculateVatDeclaration: parent/summary accounts', () => {
 
     expect(result.rutor.ruta48).toBe(200)
     expect(result.rutor.ruta49).toBe(-200) // refund
+  })
+
+  it('maps year-end input VAT on 2648 to ruta48', async () => {
+    seedLedger([{ account_number: '2648', debit_amount: 250, credit_amount: 0 }])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.rutor.ruta48).toBe(250)
   })
 
   it('reproduces the user-reported bug: 2610 balance now reaches ruta10', async () => {

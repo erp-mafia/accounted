@@ -40,6 +40,29 @@ export interface KU10CompanyData {
   contactEmail: string
 }
 
+const KU_ORG_NUMBER_PATTERN = /^16\d{2}[2-9]\d{7}$/
+
+/**
+ * Normalize the employer identity to the 12-digit format required by the KU
+ * schema. Skatteverket's KU 12.0 XSD defines OrganisationsnummerTYPE with the
+ * `16` prefix and does not validate the check digit.
+ *
+ * Source: https://www.skatteverket.se/foretag/skatterochavdrag/kontrolluppgifter/testtjanstochtekniskbeskrivning.4.233f91f71260075abe8800073614.html
+ */
+function normalizeKUOrgNumber(raw: string): string {
+  const cleaned = stripOrgNumberFormatting(raw)
+  const normalized = /^\d{10}$/.test(cleaned) ? `16${cleaned}` : cleaned
+
+  if (!KU_ORG_NUMBER_PATTERN.test(normalized)) {
+    throw new Error(
+      'KU10 kan inte genereras: organisationsnumret måste innehålla 10 siffror ' +
+        'eller 12 siffror med prefixet 16.'
+    )
+  }
+
+  return normalized
+}
+
 /**
  * Generate KU10 XML for all employees for a calendar year.
  *
@@ -50,10 +73,7 @@ export function generateKU10Xml(
   employees: KU10EmployeeData[]
 ): string {
   const lines: string[] = []
-  // Shared rule (lib/invariants/org-number.ts). The previous
-  // `replace('-', '')` removed only the FIRST hyphen and left spaces intact, so
-  // an org number entered as "556012 5790" reached Skatteverket with a space in it.
-  const orgNr = stripOrgNumberFormatting(company.orgNumber)
+  const orgNr = normalizeKUOrgNumber(company.orgNumber)
 
   lines.push('<?xml version="1.0" encoding="UTF-8"?>')
   lines.push('<Skatteverket xmlns="http://xmls.skatteverket.se/se/skatteverket/ai/instans/infoForBeskworksgivku/1.0"')
@@ -73,7 +93,7 @@ export function generateKU10Xml(
   // Blankettgemensamt
   lines.push('  <Blankettgemensamt>')
   lines.push(`    <Uppgiftslamnare>`)
-  lines.push(`      <UppgijftslamnareId>${orgNr}</UppgijftslamnareId>`)
+  lines.push(`      <UppgiftslamnarId>${orgNr}</UppgiftslamnarId>`)
   lines.push(`      <NamnUppgiftslamnare>${escapeXml(company.companyName)}</NamnUppgiftslamnare>`)
   lines.push(`    </Uppgiftslamnare>`)
   lines.push('  </Blankettgemensamt>')

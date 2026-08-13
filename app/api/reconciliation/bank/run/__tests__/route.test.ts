@@ -83,6 +83,87 @@ describe('POST /api/reconciliation/bank/run', () => {
     expect(response.status).toBe(403)
   })
 
+  it('rejects an out-of-range confidence_threshold with 400', async () => {
+    const request = createMockRequest('/api/reconciliation/bank/run', {
+      method: 'POST',
+      body: { dry_run: false, confidence_threshold: 1.5 },
+    })
+
+    const response = await POST(request, emptyParams)
+    expect(response.status).toBe(400)
+    expect(runReconciliationMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a negative confidence_threshold with 400', async () => {
+    const request = createMockRequest('/api/reconciliation/bank/run', {
+      method: 'POST',
+      body: { dry_run: false, confidence_threshold: -0.1 },
+    })
+
+    const response = await POST(request, emptyParams)
+    expect(response.status).toBe(400)
+    expect(runReconciliationMock).not.toHaveBeenCalled()
+  })
+
+  it('passes confidence_threshold and selected_matches through to runReconciliation', async () => {
+    // cash_accounts lookup: no row, '1930' default is exempt.
+    enqueue({ data: null })
+
+    const request = createMockRequest('/api/reconciliation/bank/run', {
+      method: 'POST',
+      body: {
+        dry_run: false,
+        confidence_threshold: 0.85,
+        selected_matches: [
+          {
+            transaction_id: '11111111-1111-4111-8111-111111111111',
+            journal_entry_id: '22222222-2222-4222-8222-222222222222',
+          },
+        ],
+      },
+    })
+
+    const response = await POST(request, emptyParams)
+    expect(response.status).toBe(200)
+    expect(runReconciliationMock).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        confidenceThreshold: 0.85,
+        applyOnly: [
+          {
+            transactionId: '11111111-1111-4111-8111-111111111111',
+            journalEntryId: '22222222-2222-4222-8222-222222222222',
+          },
+        ],
+      }),
+    )
+  })
+
+  it('defaults a no-selection apply to the 0.9 unattended floor when the client sends no threshold', async () => {
+    // Merged semantics (#1571 x bank-and-sie-match): an explicit
+    // confidence_threshold always wins; WITHOUT one, an apply with no
+    // selected_matches is effectively unattended, so it floors at 0.9 and
+    // persists the review band instead of auto-committing fuzzy matches.
+    // cash_accounts lookup: no row, '1930' default is exempt.
+    enqueue({ data: null })
+
+    const request = createMockRequest('/api/reconciliation/bank/run', {
+      method: 'POST',
+      body: { dry_run: false },
+    })
+
+    const response = await POST(request, emptyParams)
+    expect(response.status).toBe(200)
+    expect(runReconciliationMock).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({ confidenceThreshold: 0.9, persistSuggestions: true }),
+    )
+  })
+
   it('rejects a non-default account with no cash_accounts row', async () => {
     // cash_accounts lookup finds nothing for 1932.
     enqueue({ data: null })
@@ -236,6 +317,7 @@ describe('POST /api/reconciliation/bank/run', () => {
   it('rejects all_accounts combined with account_number or selected_matches', async () => {
     for (const body of [
       { all_accounts: true, account_number: '1930' },
+      { all_accounts: true, confidence_threshold: 0.85 },
       {
         all_accounts: true,
         selected_matches: [

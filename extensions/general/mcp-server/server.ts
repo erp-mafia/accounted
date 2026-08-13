@@ -155,12 +155,21 @@ import {
   findMatchingVouchersForSupplierInvoice,
   validateVoucherForSupplierInvoiceLink,
 } from '@/lib/invoices/supplier-voucher-matching'
-import { findFiscalPeriod, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
-import { closePeriod, countUnbookedInPeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { closePeriod, countUnbookedInPeriod, findNextPeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
+import {
+  assessKontantmetodCutoff,
+  cutoffPreviewFingerprint,
+  hasIncompleteKontantmetodCutoffPair,
+  KONTANTMETOD_CUTOFF_DESCRIPTIONS,
+  nextDay,
+  reverseLines,
+} from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
-import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
+import { bookkeepingErrorResponse, CorrectionChainTooDeepError } from '@/lib/bookkeeping/errors'
+import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { buildDuplicateBookingClaim } from '@/lib/transactions/categorize-core'
@@ -1144,6 +1153,7 @@ const STAGED_OPERATION_SCHEMA = {
  */
 const TOOL_PREFLIGHT_MAP: Record<string, string> = {
   gnubok_run_year_end: 'gnubok_year_end_readiness',
+  gnubok_post_kontantmetod_cutoff: 'gnubok_year_end_readiness',
   gnubok_vat_declaration_submit: 'gnubok_vat_declaration_validate',
   gnubok_post_annual_depreciation: 'gnubok_propose_annual_depreciation',
   gnubok_book_salary_run: 'gnubok_get_salary_run',
@@ -1761,6 +1771,8 @@ export const YEAR_END_BLOCKER_KIND: Record<YearEndBlockerCode, string> = {
   TRIAL_BALANCE_UNBALANCED: 'trial_balance_unbalanced',
   CONTINUITY_MISMATCH: 'opening_balance_continuity',
   NEXT_PERIOD_HAS_IB: 'next_period_ib_posted',
+  KONTANTMETOD_CUTOFF_REQUIRED: 'kontantmetod_cutoff_required',
+  KONTANTMETOD_CUTOFF_CHECK_FAILED: 'kontantmetod_cutoff_required',
   UNBOOKED_TRANSACTIONS: 'unbooked_transactions',
   UNBOOKED_CHECK_FAILED: 'unbooked_transactions',
 }
@@ -4400,15 +4412,24 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     },
     async execute(_args, companyId, userId, supabase) {
-      const { data, error } = await supabase
-        .from('customers')
-        .select('id, name, customer_type, email, org_number, vat_number, default_payment_terms, city, country')
-        .eq('company_id', companyId)
-        .order('name')
+      // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
+      // 1000 rows. Page on the unique id, then re-sort by name for display.
+      let customers: { id: string; name: string }[]
+      try {
+        customers = await fetchAllRows<{ id: string; name: string }>(({ from, to }) =>
+          supabase
+            .from('customers')
+            .select('id, name, customer_type, email, org_number, vat_number, default_payment_terms, city, country')
+            .eq('company_id', companyId)
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      } catch (error) {
+        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
+      customers.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
-      if (error) throw new Error(`Database error: ${error.message}`)
-
-      return { customers: data, count: data?.length ?? 0 }
+      return { customers, count: customers.length }
     },
   },
 
@@ -4645,24 +4666,33 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     },
     async execute(args, companyId, userId, supabase) {
-      let q = supabase
-        .from('articles')
-        .select('id, article_number, name, name_en, type, unit, price_excl_vat, vat_rate, revenue_account, housework_type, active')
-        .eq('company_id', companyId)
-      if (!args.include_inactive) q = q.eq('active', true)
-
       // Strip PostgREST filter metacharacters before interpolating into .or():
       // commas/parens would otherwise let a query inject extra or-conditions, and
       // the ILIKE wildcards % and _ would turn a stray char into a match-all.
       const raw = typeof args.query === 'string' ? args.query : ''
       const safe = raw.replace(/[%_,()\\*]/g, ' ').trim()
-      if (safe) {
-        q = q.or(`name.ilike.%${safe}%,article_number.ilike.%${safe}%`)
-      }
 
-      const { data, error } = await q.order('name')
-      if (error) throw new Error(`Database error: ${error.message}`)
-      return { articles: data, count: data?.length ?? 0 }
+      // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
+      // 1000 rows. Page on the unique id, then re-sort by name for display.
+      let articles: { id: string; name: string }[]
+      try {
+        articles = await fetchAllRows<{ id: string; name: string }>(({ from, to }) => {
+          let q = supabase
+            .from('articles')
+            .select('id, article_number, name, name_en, type, unit, price_excl_vat, vat_rate, revenue_account, housework_type, active')
+            .eq('company_id', companyId)
+          if (!args.include_inactive) q = q.eq('active', true)
+          if (safe) {
+            q = q.or(`name.ilike.%${safe}%,article_number.ilike.%${safe}%`)
+          }
+          return q.order('id', { ascending: true }).range(from, to)
+        })
+      } catch (error) {
+        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
+      articles.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
+
+      return { articles, count: articles.length }
     },
   },
 
@@ -5859,15 +5889,24 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     },
     async execute(_args, companyId, userId, supabase) {
-      const { data, error } = await supabase
-        .from('suppliers')
-        .select('id, name, supplier_type, email, phone, org_number, vat_number, default_expense_account, default_payment_terms, default_currency, city, country')
-        .eq('company_id', companyId)
-        .order('name', { ascending: true })
+      // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
+      // 1000 rows. Page on the unique id, then re-sort by name for display.
+      let suppliers: { id: string; name: string }[]
+      try {
+        suppliers = await fetchAllRows<{ id: string; name: string }>(({ from, to }) =>
+          supabase
+            .from('suppliers')
+            .select('id, name, supplier_type, email, phone, org_number, vat_number, default_expense_account, default_payment_terms, default_currency, city, country')
+            .eq('company_id', companyId)
+            .order('id', { ascending: true })
+            .range(from, to)
+        )
+      } catch (error) {
+        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
+      suppliers.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
-      if (error) throw new Error(`Database error: ${error.message}`)
-
-      return { suppliers: data ?? [], count: data?.length ?? 0 }
+      return { suppliers, count: suppliers.length }
     },
   },
 
@@ -6270,20 +6309,47 @@ export const tools: McpTool[] = [
       const activeOnly = args.active_only !== false
       const accountClass = args.account_class as number | undefined
 
-      let query = supabase
-        .from('chart_of_accounts')
-        .select('account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description')
-        .eq('company_id', companyId)
-        .order('sort_order')
+      // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
+      // 1000 rows and a full BAS 2026 chart holds ~1290 accounts. Paging is on
+      // the unique account_number (fetchAllRows ordering invariant); sort_order
+      // is fetched only to restore the BAS canonical display order afterwards,
+      // then stripped so the row shape stays unchanged.
+      interface ChartAccountRow {
+        account_number: string
+        account_name: string
+        account_class: number
+        account_group: string
+        account_type: string
+        normal_balance: string
+        is_active: boolean
+        description: string | null
+        sort_order: number | null
+      }
+      let rows: ChartAccountRow[]
+      try {
+        rows = await fetchAllRows<ChartAccountRow>(({ from, to }) => {
+          let query = supabase
+            .from('chart_of_accounts')
+            .select('account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description, sort_order')
+            .eq('company_id', companyId)
+          if (activeOnly) query = query.eq('is_active', true)
+          if (accountClass !== undefined) query = query.eq('account_class', accountClass)
+          return query.order('account_number', { ascending: true }).range(from, to)
+        })
+      } catch (error) {
+        throw new Error(`Database error: ${error instanceof Error ? error.message : 'unknown error'}`)
+      }
 
-      if (activeOnly) query = query.eq('is_active', true)
-      if (accountClass !== undefined) query = query.eq('account_class', accountClass)
+      // Postgres ordered by sort_order ascending with nulls last; keep that
+      // visible order, tie-breaking on account_number for determinism.
+      rows.sort(
+        (a, b) =>
+          (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER) ||
+          a.account_number.localeCompare(b.account_number)
+      )
+      const accounts = rows.map(({ sort_order: _sortOrder, ...rest }) => rest)
 
-      const { data, error } = await query
-
-      if (error) throw new Error(`Database error: ${error.message}`)
-
-      return { accounts: data ?? [], count: data?.length ?? 0 }
+      return { accounts, count: accounts.length }
     },
   },
 
@@ -12926,14 +12992,14 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_audit_package',
     title: 'Generate Audit Package',
-    description: "Single-call audit package for a fiscal period: SIE-4 + reports (trial balance, income statement, balance sheet, general ledger, journal, VAT) + receipts + audit log + voucher gaps, zipped. 1-hour signed URL.",
+    description: "Single-call audit package for a fiscal period: SIE-4 + reports (trial balance, income statement, balance sheet, general ledger, journal, VAT) + receipts + audit log + voucher gaps, zipped.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        fiscal_period_id: { type: 'string', description: 'UUID of the fiscal period to package' },
-        include_documents: { type: 'boolean', description: 'Include receipts/document binaries in the zip (default true)' },
-        estimate_only: { type: 'boolean', description: 'Return size estimate without generating (default false)' },
+        fiscal_period_id: { type: 'string', description: 'Fiscal period UUID' },
+        include_documents: { type: 'boolean', description: 'Include receipt/document binaries (default true)' },
+        estimate_only: { type: 'boolean', description: 'Size estimate only, no zip (default false)' },
       },
       required: ['fiscal_period_id'],
     },
@@ -12941,7 +13007,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        download_url: { type: ['string', 'null'], description: 'Signed Supabase Storage URL valid for 1 hour. Null when estimate_only=true.' },
+        download_url: { type: ['string', 'null'], description: 'Signed Supabase Storage URL, valid 1 hour; null when estimate_only=true. Restricted-egress proxies may 403; needs a network with Supabase egress.' },
         storage_path: { type: ['string', 'null'] },
         file_name: { type: 'string' },
         size_bytes: { type: 'number' },
@@ -13078,7 +13144,7 @@ export const tools: McpTool[] = [
     // there, the period either is closable or is not. Open items in foreign
     // currency are warnings, never blockers, because executeYearEndClosing
     // revalues them in step 2 (lib/core/bookkeeping/year-end-service.ts).
-    description: "Pre-flight for irreversible gnubok_run_year_end. Blockers: unbooked_transactions (most common), draft_entries, unexplained_voucher_gap, sequence_mismatch, trial_balance_unbalanced, opening_balance_continuity, next_period_ib_posted, period-state. FX = warning, never blocker.",
+    description: 'Year-end check. Blockers: kontantmetod_cutoff_required, unbooked_transactions (most common), draft_entries, unexplained_voucher_gap, sequence_mismatch, trial_balance_unbalanced, opening_balance_continuity, next_period_ib_posted, period-state. FX = warning, never blocker.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -13179,6 +13245,200 @@ export const tools: McpTool[] = [
         preview,
         summary,
       }
+    },
+  },
+
+  {
+    name: 'gnubok_post_kontantmetod_cutoff',
+    title: 'Post Cash-Method Year-End Cut-Off',
+    description: 'Stage the exact year-end receivable/payable cut-off and next-period reversals required for kontantmetoden. Review all proposed lines, then approve with confirmed=true.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        fiscal_period_id: {
+          type: 'string',
+          description: 'UUID of the cash-method fiscal period being closed',
+        },
+        idempotency_key: {
+          type: 'string',
+          description: 'Optional UUID to dedupe retries of the same preview and staged operation',
+        },
+      },
+      required: ['fiscal_period_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+    // Specialized cash-method year-end step. The year-end readiness blocker
+    // and year-end skill name it exactly, while search-only visibility avoids
+    // charging every MCP session for a schema most companies never need.
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase, actor) {
+      const fiscalPeriodId = args.fiscal_period_id as string
+      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+
+      const [{ data: period }, { data: settings }] = await Promise.all([
+        supabase
+          .from('fiscal_periods')
+          .select('id, name, period_start, period_end, is_closed, locked_at')
+          .eq('id', fiscalPeriodId)
+          .eq('company_id', companyId)
+          .maybeSingle(),
+        supabase
+          .from('company_settings')
+          .select('accounting_method, entity_type')
+          .eq('company_id', companyId)
+          .maybeSingle(),
+      ])
+
+      if (!period) throw new Error('Fiscal period not found')
+      if (period.is_closed || period.locked_at) {
+        throw new Error('Räkenskapsperioden är stängd eller låst')
+      }
+      if (period.period_end >= getSwedishLocalDate()) {
+        throw new Error('Kontantmetodens bokslutsavgränsning kan bokföras först efter periodens slut')
+      }
+      if (settings?.accounting_method !== 'cash') {
+        throw new Error('Företaget använder inte kontantmetoden')
+      }
+
+      const nextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
+      if (!nextPeriod) {
+        throw new Error(
+          'Kontantmetodens bokslutsavgränsning kräver att nästa räkenskapsår är upplagt: vändningarna bokas första dagen på det nya året.',
+        )
+      }
+      if (nextPeriod.is_closed || nextPeriod.locked_at) {
+        throw new Error(
+          'Nästa räkenskapsår är stängt eller låst: vändningarna kan inte bokföras. Lås upp perioden och försök igen.',
+        )
+      }
+
+      const assessment = await assessKontantmetodCutoff(
+        supabase,
+        companyId,
+        period,
+        nextPeriod.id,
+        (settings.entity_type ?? 'aktiebolag') as EntityType,
+      )
+      if (assessment.collection.unknownVatTreatment.length > 0) {
+        throw new Error(
+          `${assessment.collection.unknownVatTreatment.length} fakturor saknar momsinställning: ` +
+            `${assessment.collection.unknownVatTreatment.slice(0, 10).join(', ')}. Komplettera dem och försök igen.`,
+        )
+      }
+      if (assessment.collection.strayVatOnZeroRate.length > 0) {
+        throw new Error(
+          `${assessment.collection.strayVatOnZeroRate.length} fakturor har moms trots en momsfri momsinställning: ` +
+          `${assessment.collection.strayVatOnZeroRate.slice(0, 10).join(', ')}. Rätta dem och försök igen.`,
+        )
+      }
+      if (
+        assessment.lines.receivableLines.length === 0 &&
+        assessment.lines.payableLines.length === 0
+      ) {
+        throw new Error('Inga obetalda kund- eller leverantörsfakturor finns vid periodens slut')
+      }
+      if (
+        assessment.postings.complete ||
+        hasIncompleteKontantmetodCutoffPair(assessment.postings, assessment.lines)
+      ) {
+        throw new Error(
+          'Kontantmetodens bokslutsavgränsning är redan bokförd eller delvis bokförd för perioden. Kontrollera verifikaten innan du försöker igen.',
+        )
+      }
+
+      const reversalDate = nextDay(period.period_end)
+      const entityType = (settings.entity_type ?? 'aktiebolag') as EntityType
+      const entries = [
+        ...(assessment.lines.receivableLines.length > 0 &&
+        !assessment.postings.receivableEntryId &&
+        !assessment.postings.receivableReversalId
+          ? [
+              {
+                kind: 'receivable_cutoff',
+                fiscal_period_id: fiscalPeriodId,
+                entry_date: period.period_end,
+                description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivable,
+                total: assessment.lines.receivableTotal,
+                lines: assessment.lines.receivableLines,
+              },
+              {
+                kind: 'receivable_reversal',
+                fiscal_period_id: nextPeriod.id,
+                entry_date: reversalDate,
+                description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.receivableReversal,
+                total: assessment.lines.receivableTotal,
+                lines: reverseLines(assessment.lines.receivableLines),
+              },
+            ]
+          : []),
+        ...(assessment.lines.payableLines.length > 0 &&
+        !assessment.postings.payableEntryId &&
+        !assessment.postings.payableReversalId
+          ? [
+              {
+                kind: 'payable_cutoff',
+                fiscal_period_id: fiscalPeriodId,
+                entry_date: period.period_end,
+                description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.payable,
+                total: assessment.lines.payableTotal,
+                lines: assessment.lines.payableLines,
+              },
+              {
+                kind: 'payable_reversal',
+                fiscal_period_id: nextPeriod.id,
+                entry_date: reversalDate,
+                description: KONTANTMETOD_CUTOFF_DESCRIPTIONS.payableReversal,
+                total: assessment.lines.payableTotal,
+                lines: reverseLines(assessment.lines.payableLines),
+              },
+            ]
+          : []),
+      ]
+
+      return stagePendingOperation(
+        supabase,
+        companyId,
+        userId,
+        'post_kontantmetod_cutoff',
+        `Kontantmetodens bokslutsavgränsning: ${period.name}`,
+        {
+          fiscal_period_id: fiscalPeriodId,
+          next_fiscal_period_id: nextPeriod.id,
+          period_end: period.period_end,
+          entity_type: entityType,
+          preview_fingerprint: cutoffPreviewFingerprint({
+            collection: assessment.collection,
+            lines: assessment.lines,
+            entityType,
+            periodEnd: period.period_end,
+          }),
+        },
+        {
+          fiscal_period_id: fiscalPeriodId,
+          next_fiscal_period_id: nextPeriod.id,
+          receivable_count: assessment.collection.receivables.length,
+          payable_count: assessment.collection.payables.length,
+          entries,
+        },
+        actor,
+        {
+          description: 'Re-run year-end readiness after the cut-off and all reversals are posted.',
+          tool: 'gnubok_year_end_readiness',
+          args: { fiscal_period_id: fiscalPeriodId },
+        },
+        {
+          idempotencyKey:
+            typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          dateForPeriodCheck: period.period_end,
+        },
+      )
     },
   },
 
@@ -14446,6 +14706,10 @@ export const tools: McpTool[] = [
             required: ['account_number'],
           },
         },
+        allow_deep_chain: {
+          type: 'boolean',
+          description: 'Override the chain-depth guard (refuses at 3+ rättelse levels: book ONE net-effect correction instead). True only when another layer is intended.',
+        },
       },
       required: ['entry_id', 'lines'],
     },
@@ -14454,6 +14718,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const entryRef = args.entry_id as string
       const rawLines = args.lines as Array<Record<string, unknown>> | undefined
+      const allowDeepChain = args.allow_deep_chain === true
 
       if (!entryRef || !Array.isArray(rawLines) || rawLines.length < 2) {
         throw new Error('entry_id and at least two lines are required')
@@ -14508,6 +14773,8 @@ export const tools: McpTool[] = [
         voucher_number: number
         voucher_series: string
         fiscal_period_id: string
+        correction_of_id: string | null
+        reverses_id: string | null
         fiscal_periods: { name?: string; is_closed?: boolean; locked_at?: string | null } | { name?: string; is_closed?: boolean; locked_at?: string | null }[] | null
         lines: Array<{
           account_number: string
@@ -14526,7 +14793,7 @@ export const tools: McpTool[] = [
       const { data, error: origErr } = await supabase
         .from('journal_entries')
         .select(
-          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, ' +
+          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, correction_of_id, reverses_id, ' +
           'fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(name, is_closed, locked_at), ' +
           'lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, exchange_rate, tax_code, dimensions, cost_center, project)'
         )
@@ -14557,6 +14824,15 @@ export const tools: McpTool[] = [
         )
       }
 
+      // Chain-depth guard at staging time so the agent reconsiders NOW, not at
+      // approval. The executor (commitCorrectEntry → correctEntry) re-checks.
+      if (!allowDeepChain) {
+        const chain = await correctionChainDepth(supabase, companyId, original)
+        if (chain.depth >= CORRECTION_CHAIN_GUARD_DEPTH) {
+          throw new CorrectionChainTooDeepError(chain.depth, chain.rootVoucher)
+        }
+      }
+
       const originalLines = original.lines || []
 
       return stagePendingOperation(supabase, companyId, userId, 'correct_entry',
@@ -14564,6 +14840,7 @@ export const tools: McpTool[] = [
         {
           entry_id: entryId,
           lines,
+          ...(allowDeepChain ? { allow_deep_chain: true } : {}),
         },
         {
           original: {
@@ -14628,6 +14905,10 @@ export const tools: McpTool[] = [
         entry_id: { type: 'string', description: 'Journal entry UUID OR voucher ref like "A-113". Prefer voucher refs: UUIDs reused from earlier tool output are frequently hallucinated by LLM callers.' },
         reversal_date: { type: 'string', pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$', description: 'Optional ISO yyyy-MM-dd date for the storno verifikation. Defaults to today (Swedish timezone). Period attribution always follows the original entry, regardless of this date.' },
         reason: { type: 'string', maxLength: 500, description: 'Optional human-readable reason: shown in pending_operations review. Not stored on the storno itself. Max 500 chars.' },
+        allow_deep_chain: {
+          type: 'boolean',
+          description: 'Override the chain-depth guard (refuses at 3+ rättelse levels: book ONE net-effect correction instead). True only when another storno layer is intended.',
+        },
       },
       required: ['entry_id'],
     },
@@ -14637,6 +14918,7 @@ export const tools: McpTool[] = [
       const entryRef = args.entry_id as string
       const reversalDate = typeof args.reversal_date === 'string' ? args.reversal_date : undefined
       const reason = typeof args.reason === 'string' ? args.reason : undefined
+      const allowDeepChain = args.allow_deep_chain === true
 
       if (!entryRef) {
         throw new Error('entry_id is required')
@@ -14667,6 +14949,8 @@ export const tools: McpTool[] = [
         voucher_number: number
         voucher_series: string
         fiscal_period_id: string
+        correction_of_id: string | null
+        reverses_id: string | null
         fiscal_periods: { name?: string; is_closed?: boolean; locked_at?: string | null } | { name?: string; is_closed?: boolean; locked_at?: string | null }[] | null
         lines: Array<{
           account_number: string
@@ -14678,7 +14962,7 @@ export const tools: McpTool[] = [
       const { data, error: origErr } = await supabase
         .from('journal_entries')
         .select(
-          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, ' +
+          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, correction_of_id, reverses_id, ' +
           'fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(name, is_closed, locked_at), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
         )
         .eq('id', entryId)
@@ -14708,6 +14992,16 @@ export const tools: McpTool[] = [
         )
       }
 
+      // Chain-depth guard at staging time (mirrors gnubok_correct_entry): a
+      // storno on an entry already deep in a rättelse chain is almost always
+      // an agent reflexively cancelling its own correction.
+      if (!allowDeepChain) {
+        const chain = await correctionChainDepth(supabase, companyId, original)
+        if (chain.depth >= CORRECTION_CHAIN_GUARD_DEPTH) {
+          throw new CorrectionChainTooDeepError(chain.depth, chain.rootVoucher)
+        }
+      }
+
       const originalLines = original.lines || []
       const reversedPreviewLines = originalLines.map((l) => ({
         account_number: l.account_number,
@@ -14734,6 +15028,7 @@ export const tools: McpTool[] = [
         {
           entry_id: entryId,
           reversal_date: reversalDate,
+          ...(allowDeepChain ? { allow_deep_chain: true } : {}),
         },
         {
           original: {
@@ -16746,7 +17041,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report / _ar_ledger / _supplier_ledger: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
             '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) opens the approval queue where the user approves/rejects with a click. All also return structured data; other clients ignore the UI and use the data.',
-            '• Year-end: gnubok_lock_period → gnubok_run_year_end → gnubok_set_opening_balances → gnubok_close_period. Each stages for human approval; closing is irreversible per BFL.',
+            '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool. Then gnubok_run_year_end → gnubok_set_opening_balances → gnubok_close_period. Each write stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',
             '• Reviewing & approving staged operations: gnubok_list_pending_operations shows the queue. When the user explicitly authorises a specific operation_id in chat, call gnubok_approve_pending_operation to commit. Use gnubok_reject_pending_operation to discard.',
             '',

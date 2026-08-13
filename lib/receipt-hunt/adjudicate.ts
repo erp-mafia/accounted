@@ -23,16 +23,17 @@
  * human approves, carrying the reason so the approval is checking an argument
  * rather than trusting a verdict.
  */
-import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
 import { z } from 'zod'
+import { createAiClient, toProviderModelId, type AiClient } from '@/lib/ai/provider'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('receipt-hunt-adjudicate')
 
-const MODEL =
+const MODEL = toProviderModelId(
   process.env.RECEIPT_HUNT_MODEL_ID ||
-  process.env.BEDROCK_MODEL_ID ||
-  'eu.anthropic.claude-sonnet-5'
+    process.env.BEDROCK_MODEL_ID ||
+    'claude-sonnet-5'
+)
 
 export interface UncertainPair {
   /** Stable handle for this pair, opaque to the model beyond matching it back. */
@@ -134,8 +135,8 @@ kan väga.
 
 reason: en kort mening på svenska om varför paret hör ihop eller inte.`
 
-function client(): AnthropicBedrock {
-  return new AnthropicBedrock({ awsRegion: process.env.AWS_REGION })
+function client(): AiClient {
+  return createAiClient()
 }
 
 /**

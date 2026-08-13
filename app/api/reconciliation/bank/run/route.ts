@@ -16,20 +16,37 @@ export const POST = withRouteContext(
   async (request, { supabase, user, companyId }) => {
     const validation = await validateBody(request, RunReconciliationSchema)
     if (!validation.success) return validation.response
-    const { date_from, date_to, account_number, dry_run, selected_matches, all_accounts } =
-      validation.data
+    const {
+      date_from,
+      date_to,
+      account_number,
+      dry_run,
+      selected_matches,
+      confidence_threshold,
+      all_accounts,
+    } = validation.data
 
     // "Kör matchning igen": the per-account sweep across every enabled cash
     // account, exactly what the unattended post-sync path runs. New >= 0.9
     // matches auto-link; the 0.75-0.89 band persists as suggestions.
     //
-    // The sweep ALWAYS writes: there is no dry-run form of it, and silently
-    // ignoring dry_run here would turn a requested preview into applied links
-    // (the documented dry-run-gotcha P0 class). Enforce the mutual exclusion
-    // instead of just documenting it.
-    if (all_accounts && (dry_run !== undefined || account_number || selected_matches)) {
+    // The sweep ALWAYS writes at its own fixed floor: there is no dry-run form
+    // of it, and silently ignoring dry_run (or a client-sent floor) here would
+    // turn a requested preview into applied links (the documented
+    // dry-run-gotcha P0 class). Enforce the mutual exclusion instead of just
+    // documenting it.
+    if (
+      all_accounts &&
+      (dry_run !== undefined ||
+        account_number ||
+        selected_matches ||
+        confidence_threshold !== undefined)
+    ) {
       return NextResponse.json(
-        { error: 'all_accounts kan inte kombineras med dry_run, account_number eller selected_matches' },
+        {
+          error:
+            'all_accounts kan inte kombineras med dry_run, account_number, selected_matches eller confidence_threshold',
+        },
         { status: 400 },
       )
     }
@@ -91,17 +108,17 @@ export const POST = withRouteContext(
         transactionId: m.transaction_id,
         journalEntryId: m.journal_entry_id,
       })),
-      // "Kör matchning igen": apply runs from this route persist the
-      // 0.75-0.89 band as reviewable suggestions instead of dropping it, so a
-      // migrator who connected their bank before the sweep existed can trigger
-      // matching retroactively. Ignored on dry runs. applyOnly runs keep the
-      // legacy no-threshold behavior (the user already reviewed the pairs).
-      ...(selected_matches
-        ? {}
-        : {
-            confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
-            persistSuggestions: true,
-          }),
+      // Server-side floor on the apply path. A client-sent confidence_threshold
+      // always wins (mirrors the v1 route: pairs the fresh re-run scores below
+      // it are skipped, not applied). Without one: a no-selection apply run is
+      // effectively unattended, so it floors at 0.9 and persists the 0.75-0.89
+      // band as reviewable suggestions instead of auto-committing fuzzy
+      // matches; applyOnly runs keep the legacy no-floor behavior (the user
+      // already reviewed the pairs in the dry-run preview). Ignored on dry runs.
+      confidenceThreshold:
+        confidence_threshold ??
+        (selected_matches ? undefined : DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD),
+      ...(selected_matches ? {} : { persistSuggestions: true }),
     })
 
     return NextResponse.json({

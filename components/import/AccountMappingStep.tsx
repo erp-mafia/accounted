@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -31,16 +32,26 @@ import {
 import type { AccountMapping } from '@/lib/import/types'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
+import {
+  defaultRateForVatTreatment,
+  vatTreatmentsForAccountClass,
+  type AccountVatTreatment,
+} from '@/lib/vat/account-vat-treatment'
 
 interface AccountMappingStepProps {
   mappings: AccountMapping[]
   basAccounts: BASAccount[]
   onMappingChange: (sourceAccount: string, targetAccount: string, targetName: string) => void
+  onVatTreatmentChange?: (
+    sourceAccount: string,
+    treatment: AccountVatTreatment | null,
+    rate: number | null,
+  ) => void
   onContinue: () => void
   onBack: () => void
 }
 
-type FilterType = 'all' | 'unmapped' | 'low_confidence' | 'manual'
+type FilterType = 'all' | 'unmapped' | 'vat_review' | 'low_confidence' | 'manual'
 
 const PAGE_SIZE = 50
 
@@ -48,14 +59,17 @@ export default function AccountMappingStep({
   mappings,
   basAccounts,
   onMappingChange,
+  onVatTreatmentChange,
   onContinue,
   onBack,
 }: AccountMappingStepProps) {
+  const t = useTranslations('chart_of_accounts')
   const [searchTerm, setSearchTerm] = useState('')
   // Default to showing unmapped accounts first (most actionable)
   const [filter, setFilter] = useState<FilterType>(() => {
     const hasUnmapped = mappings.some((m) => !m.targetAccount)
-    return hasUnmapped ? 'unmapped' : 'all'
+    const hasVatReview = mappings.some((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed)
+    return hasUnmapped ? 'unmapped' : hasVatReview ? 'vat_review' : 'all'
   })
   const [currentPage, setCurrentPage] = useState(1)
 
@@ -70,6 +84,9 @@ export default function AccountMappingStep({
         break
       case 'low_confidence':
         result = result.filter((m) => m.targetAccount && m.confidence < 0.7)
+        break
+      case 'vat_review':
+        result = result.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed)
         break
       case 'manual':
         result = result.filter((m) => m.isOverride)
@@ -114,10 +131,11 @@ export default function AccountMappingStep({
     const unmapped = mappings.filter((m) => !m.targetAccount).length
     const lowConfidence = mappings.filter((m) => m.targetAccount && m.confidence < 0.7).length
     const manual = mappings.filter((m) => m.isOverride).length
-    return { unmapped, lowConfidence, manual }
+    const vatReview = mappings.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed).length
+    return { unmapped, lowConfidence, manual, vatReview }
   }, [mappings])
 
-  const canContinue = stats.unmapped === 0
+  const canContinue = stats.unmapped === 0 && stats.vatReview === 0
 
   // Group BAS accounts by class for the dropdown
   const accountsByClass = useMemo(() => {
@@ -145,6 +163,14 @@ export default function AccountMappingStep({
         <CardContent className="space-y-4">
           {/* Stats */}
           <div className="flex gap-4 flex-wrap">
+            <Badge
+              variant={filter === 'vat_review' ? 'default' : stats.vatReview > 0 ? 'secondary' : 'outline'}
+              className="cursor-pointer"
+              onClick={() => handleFilterChange('vat_review')}
+            >
+              <AlertCircle className="h-3 w-3 mr-1" />
+              {t('vat_review_filter', { count: stats.vatReview })}
+            </Badge>
             <Badge
               variant={filter === 'unmapped' ? 'destructive' : stats.unmapped > 0 ? 'destructive' : 'secondary'}
               className="cursor-pointer"
@@ -197,6 +223,7 @@ export default function AccountMappingStep({
               <SelectContent>
                 <SelectItem value="all">Visa alla</SelectItem>
                 <SelectItem value="unmapped">Ej mappade</SelectItem>
+                <SelectItem value="vat_review">{t('vat_review_filter', { count: stats.vatReview })}</SelectItem>
                 <SelectItem value="low_confidence">Osäkra</SelectItem>
                 <SelectItem value="manual">Manuellt satta</SelectItem>
               </SelectContent>
@@ -211,6 +238,7 @@ export default function AccountMappingStep({
                   <TableHead className="w-36">Källkonto</TableHead>
                   <TableHead>Källnamn</TableHead>
                   <TableHead className="w-12"></TableHead>
+                  <TableHead className="min-w-72">{t('vat_treatment_column')}</TableHead>
                   <TableHead className="w-64">Målkonto</TableHead>
                   <TableHead className="w-24">Konfidens</TableHead>
                 </TableRow>
@@ -225,6 +253,78 @@ export default function AccountMappingStep({
                     <TableCell className="text-muted-foreground">{mapping.sourceName}</TableCell>
                     <TableCell>
                       <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                    </TableCell>
+                    <TableCell>
+                      {onVatTreatmentChange &&
+                      mapping.sourceAccount === mapping.targetAccount &&
+                      ['3', '4', '5', '6'].includes(mapping.sourceAccount.charAt(0)) ? (
+                        <div className="flex min-w-72 gap-2">
+                          <Select
+                            value={mapping.defaultVatTreatment ?? 'none'}
+                            onValueChange={(value) => {
+                              const treatment = value === 'none'
+                                ? null
+                                : value as AccountVatTreatment
+                              const accountClass = Number(mapping.sourceAccount.charAt(0))
+                              const rate = treatment
+                                ? defaultRateForVatTreatment(treatment, accountClass)
+                                : null
+                              onVatTreatmentChange(mapping.sourceAccount, treatment, rate)
+                            }}
+                          >
+                            <SelectTrigger className={mapping.requiresVatTreatmentReview ? 'border-warning/60' : ''}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">{t('vat_treatment_none')}</SelectItem>
+                              {vatTreatmentsForAccountClass(
+                                Number(mapping.sourceAccount.charAt(0)),
+                              ).map((treatment) => (
+                                <SelectItem key={treatment} value={treatment}>
+                                  {t(`vat_treatment_${treatment}`)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Select
+                            value={mapping.defaultVatRate === null || mapping.defaultVatRate === undefined
+                              ? 'none'
+                              : String(mapping.defaultVatRate)}
+                            onValueChange={(value) => onVatTreatmentChange(
+                              mapping.sourceAccount,
+                              mapping.defaultVatTreatment ?? null,
+                              value === 'none' ? null : Number(value),
+                            )}
+                          >
+                            <SelectTrigger className="w-24" aria-label={t('vat_rate_label')}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">{t('vat_rate_none')}</SelectItem>
+                              <SelectItem value="0">0 %</SelectItem>
+                              <SelectItem value="0.25">25 %</SelectItem>
+                              <SelectItem value="0.12">12 %</SelectItem>
+                              <SelectItem value="0.06">6 %</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          {mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => onVatTreatmentChange(
+                                mapping.sourceAccount,
+                                mapping.defaultVatTreatment ?? null,
+                                mapping.defaultVatRate ?? null,
+                              )}
+                            >
+                              {t('vat_treatment_confirm')}
+                            </Button>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Select
@@ -275,7 +375,7 @@ export default function AccountMappingStep({
                 ))}
                 {paginatedMappings.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                       Inga konton matchar filtret
                     </TableCell>
                   </TableRow>

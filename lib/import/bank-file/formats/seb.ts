@@ -1,7 +1,8 @@
 /**
  * SEB CSV format parser
  *
- * Format: Semicolon-delimited, comma decimal separator
+ * Format: Semicolon-delimited, comma decimal separator (parse also accepts
+ *   comma-delimited variants via delimiter sniffing; detect stays strict)
  * Columns vary but typically: Bokföringsdag, Valutadag, Verifikationsnummer,
  *   Text/mottagare, Belopp, Saldo
  * Date format: YYYY-MM-DD
@@ -11,6 +12,7 @@
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
+import { parseCSVLine } from './nordea'
 
 function parseCommaDecimal(value: string): number {
   const cleaned = value.replace(/\s/g, '').replace(',', '.')
@@ -43,12 +45,25 @@ export const sebFormat: BankFileFormat = {
     const issues: BankFileParseIssue[] = []
     let skippedRows = 0
 
-    // Parse header to find column indices
+    // Parse header to find column indices. SEB normally exports
+    // semicolon-delimited files, but some export surfaces use commas: sniff
+    // the delimiter from the header line instead of assuming ';'.
     const headerLine = lines[0] || ''
-    const headers = headerLine.split(';').map((h) => h.trim().toLowerCase().replace(/"/g, ''))
+    const semicolons = (headerLine.match(/;/g) || []).length
+    const commas = (headerLine.match(/,/g) || []).length
+    const delimiter = commas > semicolons ? ',' : ';'
+    const headers = parseCSVLine(headerLine, delimiter).map((h) =>
+      h.trim().toLowerCase().replace(/"/g, '')
+    )
 
     // Find column indices dynamically
-    const dateIdx = headers.findIndex((h) => /bokf(ö|o)ringsda(g|tum)/.test(h))
+    let dateIdx = headers.findIndex((h) => /bokf(ö|o)ringsda(g|tum)/.test(h))
+    if (dateIdx === -1) {
+      // Lowest-priority tier: a bare "Datum" column. Only honored here in
+      // parse (an explicit user choice), never in detect, so this profile
+      // cannot steal files from other bank profiles during auto-detection.
+      dateIdx = headers.findIndex((h) => h === 'datum')
+    }
     const descIdx = headers.findIndex(
       (h) => h.includes('text') || h.includes('mottagare') || h.includes('beskrivning')
     )
@@ -58,7 +73,7 @@ export const sebFormat: BankFileFormat = {
     if (dateIdx === -1 || amountIdx === -1) {
       issues.push({
         row: 1,
-        message: 'Could not identify required columns (date, amount)',
+        message: 'Kunde inte identifiera nödvändiga kolumner (datum, belopp)',
         severity: 'error',
       })
       return {
@@ -76,7 +91,7 @@ export const sebFormat: BankFileFormat = {
       const line = lines[i].trim()
       if (!line) continue
 
-      const fields = line.split(';').map((f) => f.trim().replace(/^"|"$/g, ''))
+      const fields = parseCSVLine(line, delimiter).map((f) => f.trim().replace(/^"|"$/g, ''))
 
       const date = fields[dateIdx]
       const description = fields[descIdx >= 0 ? descIdx : dateIdx + 1] || 'Unknown'
@@ -84,21 +99,21 @@ export const sebFormat: BankFileFormat = {
       const balanceStr = balanceIdx >= 0 ? fields[balanceIdx] : undefined
 
       if (!date || !amountStr) {
-        issues.push({ row: i + 1, message: 'Missing required fields', severity: 'warning' })
+        issues.push({ row: i + 1, message: 'Obligatoriska fält saknas', severity: 'warning' })
         skippedRows++
         continue
       }
 
       const amount = parseCommaDecimal(amountStr)
       if (isNaN(amount)) {
-        issues.push({ row: i + 1, message: `Invalid amount: ${amountStr}`, severity: 'warning' })
+        issues.push({ row: i + 1, message: `Ogiltigt belopp: ${amountStr}`, severity: 'warning' })
         skippedRows++
         continue
       }
 
       const normalizedDate = normalizeDate(date)
       if (!normalizedDate) {
-        issues.push({ row: i + 1, message: `Invalid date: ${date}`, severity: 'warning' })
+        issues.push({ row: i + 1, message: `Ogiltigt datum: ${date}`, severity: 'warning' })
         skippedRows++
         continue
       }

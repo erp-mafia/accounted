@@ -5,6 +5,7 @@ import {
   hasEncodingIssues,
   recoverStringWithFFFD,
   recoverWordWithFFFD,
+  stripBOM,
 } from '../encoding'
 
 describe('decodeStringContent', () => {
@@ -77,6 +78,49 @@ describe('decodeFileContent', () => {
     // 0xD6 = Ö in Windows-1252; lone 0xD6 is not valid UTF-8 start byte
     const cp1252 = buf([0x47, 0xd6, 0x54, 0x45, 0x42, 0x4f, 0x52, 0x47])
     expect(decodeFileContent(cp1252)).toBe('GÖTEBORG')
+  })
+
+  it('strips a UTF-8 BOM (EF BB BF) and decodes the remainder as UTF-8', () => {
+    const payload = Array.from(new TextEncoder().encode('Bokföringsdag;Belopp'))
+    const text = decodeFileContent(buf([0xef, 0xbb, 0xbf, ...payload]))
+    expect(text).toBe('Bokföringsdag;Belopp')
+    expect(text.charCodeAt(0)).not.toBe(0xfeff)
+  })
+
+  it('never produces a mojibake BOM prefix when a BOM-ed file needs the Windows-1252 fallback', () => {
+    // 'Datum;' + 0xD6 (Ö in Windows-1252, invalid as a lone UTF-8 byte),
+    // behind a UTF-8 BOM. The BOM bytes must never re-enter the fallback
+    // decode, so the result starts with 'Datum', not the literal mojibake.
+    const bytes = buf([0xef, 0xbb, 0xbf, 0x44, 0x61, 0x74, 0x75, 0x6d, 0x3b, 0xd6])
+    const text = decodeFileContent(bytes)
+    expect(text.startsWith('ï»¿')).toBe(false)
+    expect(text).toBe('Datum;Ö')
+  })
+
+  it('decodes UTF-16LE content behind a FF FE BOM', () => {
+    // 'Öre' in UTF-16LE: d6 00, 72 00, 65 00
+    const bytes = buf([0xff, 0xfe, 0xd6, 0x00, 0x72, 0x00, 0x65, 0x00])
+    expect(decodeFileContent(bytes)).toBe('Öre')
+  })
+
+  it('decodes UTF-16BE content behind a FE FF BOM', () => {
+    const bytes = buf([0xfe, 0xff, 0x00, 0xd6, 0x00, 0x72, 0x00, 0x65])
+    expect(decodeFileContent(bytes)).toBe('Öre')
+  })
+})
+
+describe('stripBOM', () => {
+  it('strips a leading U+FEFF', () => {
+    expect(stripBOM('\uFEFF' + 'Datum;Belopp')).toBe('Datum;Belopp')
+  })
+
+  it('strips a leading literal mojibake BOM (ï»¿)', () => {
+    expect(stripBOM('ï»¿Datum;Belopp')).toBe('Datum;Belopp')
+  })
+
+  it('is a no-op on clean content and never strips mid-string', () => {
+    expect(stripBOM('Datum;Belopp')).toBe('Datum;Belopp')
+    expect(stripBOM('Datum;ï»¿Belopp')).toBe('Datum;ï»¿Belopp')
   })
 })
 

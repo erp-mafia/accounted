@@ -3,6 +3,7 @@ import type {
   VatCheckAccountTotals,
 } from './vat-declaration-checks'
 import type { VatDeclarationRutor } from '@/types'
+import { roundOre } from '@/lib/money'
 
 /**
  * The filing gate for the momsdeklaration: ONE derived value that the
@@ -93,6 +94,12 @@ export const RC_BASIS_ACCOUNTS_BY_RATE = {
   r6: ['4517', '4537', '4533', '4417', '4427'],
 } as const
 
+const STATIC_RC_BASIS_ACCOUNTS = new Set<string>([
+  ...RC_BASIS_ACCOUNTS_BY_RATE.r25,
+  ...RC_BASIS_ACCOUNTS_BY_RATE.r12,
+  ...RC_BASIS_ACCOUNTS_BY_RATE.r6,
+])
+
 /** Net debit balance of the RC basis accounts, one figure per momssats. */
 export interface RcBasisTotalsByRate {
   r25: number
@@ -106,7 +113,10 @@ export interface RcBasisTotalsByRate {
  * Debit minus credit, like every basis box: a credit-heavy rate (a period
  * dominated by credit notes) legitimately comes out negative.
  */
-export function rcBasisTotalsByRate(totals: VatCheckAccountTotals): RcBasisTotalsByRate {
+export function rcBasisTotalsByRate(
+  totals: VatCheckAccountTotals,
+  dynamic?: { explicitAccounts: Set<string>; rcBasisRateByAccount: Map<string, number> },
+): RcBasisTotalsByRate {
   const sumGroup = (accounts: readonly string[]): number => {
     let sum = 0
     for (const account of accounts) {
@@ -115,11 +125,19 @@ export function rcBasisTotalsByRate(totals: VatCheckAccountTotals): RcBasisTotal
     }
     return Math.round(sum * 100) / 100
   }
-  return {
+  const result = {
     r25: sumGroup(RC_BASIS_ACCOUNTS_BY_RATE.r25),
     r12: sumGroup(RC_BASIS_ACCOUNTS_BY_RATE.r12),
     r6: sumGroup(RC_BASIS_ACCOUNTS_BY_RATE.r6),
   }
+  for (const [account, rate] of dynamic?.rcBasisRateByAccount ?? []) {
+    if (STATIC_RC_BASIS_ACCOUNTS.has(account)) continue
+    const total = totals.get(account)
+    if (!total) continue
+    const key = rate === 0.25 ? 'r25' : rate === 0.12 ? 'r12' : 'r6'
+    result[key] = roundOre(result[key] + total.debit - total.credit)
+  }
+  return result
 }
 
 /**

@@ -9,10 +9,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { UncertainPair } from '../adjudicate'
 
 const mockCreate = vi.fn()
-vi.mock('@anthropic-ai/bedrock-sdk', () => ({
-  default: class {
-    messages = { create: (...args: unknown[]) => mockCreate(...args) }
-  },
+vi.mock('@/lib/ai/provider', () => ({
+  createAiClient: () => ({ messages: { create: (...args: unknown[]) => mockCreate(...args) } }),
+  toProviderModelId: (id: string) => id,
 }))
 
 import { adjudicate } from '../adjudicate'

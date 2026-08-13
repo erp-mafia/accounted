@@ -30,7 +30,7 @@ import {
 // Mirrors the TS call site (lib/reports/vat-declaration.ts): a small
 // representative slice of ACCOUNT_RUTA is enough since the full list is a
 // parameter, not baked into the SQL.
-const RUTA_ACCOUNTS = ['2611', '2621', '2641', '2645', '3001']
+const RUTA_ACCOUNTS = ['2611', '2618', '2621', '2641', '2645', '2648', '3001']
 const NET_ACCOUNTS = ['2650', '1650']
 const ALL_ACCOUNTS = [...RUTA_ACCOUNTS, ...NET_ACCOUNTS]
 // This account keeps intentionally narrow VAT fixtures balanced without
@@ -74,6 +74,7 @@ async function insertJournalEntry(params: {
   status?: 'draft' | 'posted' | 'reversed'
   sourceType?: string
   entryDate?: string
+  description?: string
   lines: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
   if ((params.status ?? 'posted') === 'posted') {
@@ -83,7 +84,7 @@ async function insertJournalEntry(params: {
       fiscalPeriodId: params.fiscalPeriodId,
       voucherNumber: params.voucherNumber,
       entryDate: params.entryDate ?? '2026-03-15',
-      description: 'VAT RPC test',
+      description: params.description ?? 'VAT RPC test',
       sourceType: params.sourceType ?? 'manual',
       lines: params.lines.map((line) => ({
         accountNumber: line.account,
@@ -338,6 +339,35 @@ describe('get_vat_declaration_totals RPC', () => {
     expect(totals.get('2611')).toMatchObject({ debit: 0, credit: 100 })
     expect(totals.get('2650')).toMatchObject({ debit: 75, credit: 0 })
     expect(payload.settlement_shaped_entries).toEqual([])
+  })
+
+  it('includes the cash-method cut-off but excludes its day-one reversal', async () => {
+    const ctx = await seedCompany()
+
+    await insertJournalEntry({
+      ...ctx,
+      voucherNumber: 1,
+      sourceType: 'year_end',
+      description: 'Kundfordringar vid bokslut (kontantmetoden)',
+      lines: [
+        { account: '2618', debit: 0, credit: 250 },
+        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 250, credit: 0 },
+      ],
+    })
+    await insertJournalEntry({
+      ...ctx,
+      voucherNumber: 2,
+      sourceType: 'year_end',
+      description: 'Vändning kundfordringar bokslut (kontantmetoden)',
+      lines: [
+        { account: '2618', debit: 250, credit: 0 },
+        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 0, credit: 250 },
+      ],
+    })
+
+    const payload = await callRpc(ctx.companyId)
+    expect(totalsByAccount(payload).get('2618')).toMatchObject({ debit: 0, credit: 250 })
+    expect(payload.source_type_counts).toEqual({ year_end: 2 })
   })
 
   it('scopes everything to the requested company', async () => {

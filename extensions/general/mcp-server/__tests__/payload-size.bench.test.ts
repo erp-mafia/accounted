@@ -162,9 +162,15 @@ describe('tools/list payload size guard', () => {
     //     upload_id/upload_url/expires_at (method, size cap and echo fields
     //     moved to description prose) and mime_type made optional on complete;
     //     the ~360-token remainder is the two tools' wire contract.
+    //   * 59K → 59.5K with the correction-chain depth guard: allow_deep_chain on
+    //     gnubok_correct_entry + gnubok_reverse_journal_entry (the explicit
+    //     bypass agents must discover to override CORRECTION_CHAIN_TOO_DEEP).
+    //     Both property descriptions trimmed to one sentence first; headroom
+    //     before the change was under 20 tokens, so even the trimmed wire
+    //     contract crossed.
     // Long-term answer to growth is leaning harder on gnubok_search_tools: if this
     // fires again, prefer trimming descriptions or making a tool opt-in via search
     // before bumping further.
-    expect(approxTokens).toBeLessThan(59_000)
+    expect(approxTokens).toBeLessThan(59_500)
   })
 })

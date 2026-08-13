@@ -686,6 +686,9 @@ describe('reverseEntry: storno guard', () => {
     let jeCall = 0
     const jeResults = [
       { data: original, error: null },
+      // Chain-depth walker: follows correction_of_id to the chain root
+      // (depth 1, well under the guard threshold).
+      { data: { id: 'entry-0', correction_of_id: null, reverses_id: null, voucher_series: 'A', voucher_number: 1 }, error: null },
       { data: reversal, error: null },
       { data: null, error: null },
       { data: [{ id: 'entry-1' }], error: null },

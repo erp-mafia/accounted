@@ -15,6 +15,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (!validation.success) return validation.response
     const result = await correctEntry(supabase, companyId, user.id, id, validation.data.lines, {
       description: validation.data.description,
+      allowDeepChain: validation.data.allow_deep_chain,
     })
     return NextResponse.json({ data: result })
   },

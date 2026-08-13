@@ -58,6 +58,9 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
   const [lines, setLines] = useState<CorrectionLine[]>([])
   const [description, setDescription] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Non-null when the server refused with CORRECTION_CHAIN_TOO_DEEP: holds the
+  // reported chain depth and opens the bypass confirm ("Rätta ändå").
+  const [deepChainDepth, setDeepChainDepth] = useState<number | null>(null)
   // Index of the line whose combobox opened the create dialog, and the search
   // string it was showing. Null index = the dialog is closed.
   const [creatingAccountForLine, setCreatingAccountForLine] = useState<number | null>(null)
@@ -191,7 +194,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
 
   const hasValidLines = lines.length >= 2 && lines.every((l) => l.account_number.length === 4)
 
-  async function handleSubmit() {
+  async function handleSubmit(allowDeepChain = false) {
     if (!isBalanced || !hasValidLines) return
 
     setIsSubmitting(true)
@@ -211,17 +214,26 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           // Only sent when the user changed the auto prefill: the server
           // fallback ("Rättelse: <original>") stays the source of truth.
           description: correctionDescriptionForSubmit(description, entry.description),
+          ...(allowDeepChain ? { allow_deep_chain: true } : {}),
         }),
       })
 
       const result = await res.json()
 
       if (!res.ok) {
+        // Chain-depth guard: open the bypass confirm instead of a dead-end
+        // toast. "Rätta ändå" resubmits with allow_deep_chain=true.
+        const structured = (result as { error?: { code?: string; details?: { depth?: number } } })?.error
+        if (structured?.code === 'CORRECTION_CHAIN_TOO_DEEP') {
+          setDeepChainDepth(structured.details?.depth ?? 3)
+          return
+        }
         const error = new Error('Failed to create correction') as Error & { body?: unknown; status?: number }
         error.body = result
         error.status = res.status
         throw error
       }
+      setDeepChainDepth(null)
 
       const correctedId = result.data?.corrected?.id
 
@@ -411,12 +423,37 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             Avbryt
           </Button>
           <Button
-            onClick={handleSubmit}
+            onClick={() => handleSubmit()}
             disabled={!isBalanced || !hasValidLines || isSubmitting}
           >
             {isSubmitting ? 'Skapar...' : 'Skapa ändringsverifikation'}
           </Button>
         </DialogFooter>
+
+        {/* Chain-depth guard confirm: the server refused because this entry
+            already sits deep in a rättelse chain. Advisory, never a dead end:
+            "Rätta ändå" resubmits with allow_deep_chain=true. */}
+        <Dialog open={deepChainDepth != null} onOpenChange={(next) => { if (!next) setDeepChainDepth(null) }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{t('deep_chain_title')}</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              {t('deep_chain_body', { depth: deepChainDepth ?? 3 })}
+            </p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDeepChainDepth(null)} disabled={isSubmitting}>
+                {t('deep_chain_cancel')}
+              </Button>
+              <Button
+                onClick={() => { setDeepChainDepth(null); void handleSubmit(true) }}
+                disabled={isSubmitting}
+              >
+                {t('deep_chain_correct_anyway')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </DialogContent>
 
       {/* Nested on purpose: closing this one (Esc, click-outside, Avbryt) must

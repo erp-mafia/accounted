@@ -8,9 +8,9 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   >('@/extensions/general/whatsapp-inbox/lib/graph-api')
   return {
     ...actual,
-    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
-    sendReplyButtons: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
-    sendList: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
+    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
+    sendReplyButtons: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
+    sendList: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
   }
 })
 

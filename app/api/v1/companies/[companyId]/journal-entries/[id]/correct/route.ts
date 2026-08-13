@@ -6,11 +6,12 @@
  * posted with the new lines. All three remain in the verifikationsserie,
  * linked via reverses_id, reversed_by_id, and correction_of_id.
  *
- * Body: `{ lines: [...], description? }`: the new balanced lines. The
- * corrected entry inherits entry_date, fiscal_period_id, and voucher_series
- * from the original. Its description defaults to "Rättelse: <original>";
- * pass `description` to override it (e.g. when the original label named the
- * wrong account).
+ * Body: `{ lines: [...], description?, allow_deep_chain? }`: the new balanced
+ * lines. The corrected entry inherits entry_date, fiscal_period_id, and
+ * voucher_series from the original. Its description defaults to
+ * "Rättelse: <original>"; pass `description` to override it (e.g. when the
+ * original label named the wrong account). `allow_deep_chain` bypasses the
+ * correction-chain depth guard (CORRECTION_CHAIN_TOO_DEEP at 3+ levels).
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable.
  */
@@ -25,7 +26,8 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CorrectJournalEntrySchema } from '@/lib/api/schemas'
 import { validateBalance } from '@/lib/bookkeeping/engine'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
+import { CorrectionChainTooDeepError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 
 const JournalEntryCorrected = z.object({
   reversal_id: z.string().uuid(),
@@ -52,6 +54,7 @@ registerEndpoint({
     'The new lines must balance. JOURNAL_ENTRY_NOT_BALANCED if not.',
     'The original\'s entry_date and fiscal_period_id are inherited. If the original\'s period has been locked since posting, the call returns PERIOD_LOCKED.',
     'Three voucher numbers are advanced in this call: the original (already burned), the reversal, and the corrected. The series stays unbroken.',
+    'A chain 3+ corrections deep returns CORRECTION_CHAIN_TOO_DEEP (409). Compute the net effect of the whole chain and book ONE correction, or pass allow_deep_chain=true to override.',
   ],
   example: {
     request: {
@@ -110,7 +113,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         details: { issues: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })) },
       })
     }
-    const { lines, description } = parsed.data
+    const { lines, description, allow_deep_chain } = parsed.data
 
     const balance = validateBalance(lines)
     if (!balance.valid) {
@@ -124,7 +127,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // CANNOT_CORRECT_NON_POSTED otherwise but we want the structured envelope).
     const { data: original, error: fetchErr } = await ctx.supabase
       .from('journal_entries')
-      .select('id, status, entry_date, voucher_series')
+      .select('id, status, entry_date, voucher_series, correction_of_id, reverses_id')
       .eq('company_id', ctx.companyId!)
       .eq('id', entryId)
       .maybeSingle()
@@ -133,12 +136,34 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!original) {
       return v1ErrorResponseFromCode('JOURNAL_ENTRY_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
-    const typed = original as { id: string; status: string; entry_date: string; voucher_series: string }
+    const typed = original as {
+      id: string
+      status: string
+      entry_date: string
+      voucher_series: string
+      correction_of_id: string | null
+      reverses_id: string | null
+    }
     if (typed.status !== 'posted') {
       return v1ErrorResponseFromCode('CANNOT_CORRECT_NON_POSTED', ctx.log, {
         requestId: ctx.requestId,
         details: { current_status: typed.status },
       })
+    }
+
+    // Chain-depth guard BEFORE the dry-run return: a dry run must give the
+    // same verdict the real execution would, so a depth-3 chain without the
+    // override reports CORRECTION_CHAIN_TOO_DEEP here too. correctEntry
+    // re-checks on the real path.
+    if (!allow_deep_chain) {
+      const chain = await correctionChainDepth(ctx.supabase, ctx.companyId!, typed)
+      if (chain.depth >= CORRECTION_CHAIN_GUARD_DEPTH) {
+        return v1ErrorResponse(
+          new CorrectionChainTooDeepError(chain.depth, chain.rootVoucher),
+          ctx.log,
+          { requestId: ctx.requestId },
+        )
+      }
     }
 
     // Period-lock pre-check on the INHERITED entry_date. /reverse already has
@@ -180,7 +205,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         ctx.userId,
         entryId,
         lines,
-        { description },
+        { description, allowDeepChain: allow_deep_chain },
       )
       return ok(
         {

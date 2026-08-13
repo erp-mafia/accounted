@@ -1,3 +1,4 @@
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { McpResource } from './types'
 
 interface AccountSummary {
@@ -16,17 +17,24 @@ export const chartOfAccountsResource: McpResource = {
   description: 'The active BAS chart of accounts for the current company, grouped by account class (1=assets, 2=liabilities/equity, 3=revenue, 4=COGS, 5-7=expenses, 8=financial). Use to look up account numbers before booking entries.',
   mimeType: 'application/json',
   read: async ({ supabase, companyId }) => {
-    const { data, error } = await supabase
-      .from('chart_of_accounts')
-      .select('account_number, account_name, account_class, account_type, normal_balance, is_active, default_vat_code')
-      .eq('company_id', companyId)
-      .order('account_number', { ascending: true })
-
-    if (error) {
-      throw new Error(`Failed to read chart of accounts: ${error.message}`)
+    // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
+    // 1000 rows and a full BAS 2026 chart holds ~1290 accounts. account_number
+    // is unique per company, so it doubles as the stable paging order.
+    let accounts: AccountSummary[]
+    try {
+      accounts = await fetchAllRows<AccountSummary>(({ from, to }) =>
+        supabase
+          .from('chart_of_accounts')
+          .select('account_number, account_name, account_class, account_type, normal_balance, is_active, default_vat_code')
+          .eq('company_id', companyId)
+          .order('account_number', { ascending: true })
+          .range(from, to)
+      )
+    } catch (error) {
+      throw new Error(
+        `Failed to read chart of accounts: ${error instanceof Error ? error.message : 'unknown error'}`
+      )
     }
-
-    const accounts = (data ?? []) as AccountSummary[]
 
     const byClass: Record<number, AccountSummary[]> = {}
     for (const a of accounts) {

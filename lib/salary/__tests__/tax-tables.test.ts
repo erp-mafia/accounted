@@ -99,8 +99,27 @@ describe('calculateJamkningTax', () => {
     expect(calculateJamkningTax(40000, 20)).toBe(8000)
   })
 
-  it('rounds to 2 decimal places', () => {
-    expect(calculateJamkningTax(33333, 15.5)).toBe(5166.62)
+  it('drops öre so the withheld amount is whole kronor (SFF 22 kap. 1 §)', () => {
+    // 33 333 × 15.5 % = 5 166.615 → 5 166, not 5 166.62
+    expect(calculateJamkningTax(33333, 15.5)).toBe(5166)
+    // 41 999.99 × 25 % = 10 499.9975 → 10 499: öre are dropped, never rounded up
+    expect(calculateJamkningTax(41999.99, 25)).toBe(10499)
+  })
+
+  it('is immune to float noise on exact-krona results', () => {
+    // 1000 × 0.007 === 6.999999999999999 in floats: a naive Math.floor on the
+    // raw product would withhold 6 kr where the exact result is 7 kr
+    expect(calculateJamkningTax(1000, 0.7)).toBe(7)
+    expect(calculateJamkningTax(5000, 0.7)).toBe(35)
+  })
+
+  it('truncates toward zero for negative taxable income (skeptic refutation case)', () => {
+    // Deductions exceeding pay make taxable income negative; dropping öre
+    // truncates toward zero, so Math.floor (which would give -543 and -1
+    // here) must not add an extra negative krona
+    expect(calculateJamkningTax(-3500.25, 15.5)).toBe(-542)
+    expect(calculateSidoinkomstTax(-100.01)).toBe(-30)
+    expect(calculateSidoinkomstTax(-0.01)).toBe(0)
   })
 })
 
@@ -109,8 +128,15 @@ describe('calculateSidoinkomstTax', () => {
     expect(calculateSidoinkomstTax(40000)).toBe(12000)
   })
 
-  it('rounds to 2 decimal places', () => {
-    expect(calculateSidoinkomstTax(33333)).toBe(9999.90)
+  it('drops öre so the withheld amount is whole kronor (SFF 22 kap. 1 §)', () => {
+    // 33 333 × 30 % = 9 999.90 → 9 999, not 9 999.90
+    expect(calculateSidoinkomstTax(33333)).toBe(9999)
+    // 30 123.45 × 30 % = 9 037.035 → 9 037
+    expect(calculateSidoinkomstTax(30123.45)).toBe(9037)
+  })
+
+  it('returns exact whole kronor when the product is a whole-krona amount', () => {
+    expect(calculateSidoinkomstTax(41300)).toBe(12390)
   })
 })
 
@@ -353,6 +379,24 @@ describe('fetchKommunTaxRates', () => {
     // Deduped: Stockholm appears once despite 500 rows.
     expect(result.filter((r) => r.kommun === 'Stockholm')).toHaveLength(1)
     expect(result.find((r) => r.kommun === 'Stockholm')!.tableNumber).toBe(31) // 30.62 → 31
+  })
+
+  it('picks the lower table at exactly ,50 and the higher from ,51 (Skatteverket rule)', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        resultCount: 3,
+        results: [row('LÅGKÖPING', '32.49'), row('MITTKÖPING', '32.50'), row('HÖGKÖPING', '32.51')],
+      }),
+    } as Response)
+    globalThis.fetch = fetchSpy
+
+    const result = await fetchKommunTaxRates(2026)
+
+    expect(result.find((r) => r.kommun === 'Lågköping')!.tableNumber).toBe(32)
+    // Skatteverket's own example: 32,50 belongs to table 32, not 33
+    expect(result.find((r) => r.kommun === 'Mittköping')!.tableNumber).toBe(32)
+    expect(result.find((r) => r.kommun === 'Högköping')!.tableNumber).toBe(33)
   })
 
   it('normalizes Skatteverket uppercase names to title case', async () => {

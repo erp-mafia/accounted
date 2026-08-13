@@ -69,6 +69,27 @@ describe('reverseCp437Mojibake (CP437 read as CP1252)', () => {
     expect(reverseCp437Mojibake('Kassa')).toBeNull()
     expect(reverseCp437Mojibake('Företagskonto')).toBeNull() // ö (0xF6→÷) not a CP437 letter byte
   })
+
+  it('recovers the 2026-03-17 gateway-migration strings (reported prod fixtures)', () => {
+    // The retired Arcim Sync gateway decoded Bokio's CP437 SIE bytes as
+    // windows-1252 before JSON-encoding them: ö 0x94 → U+201D ”, ä 0x84 →
+    // U+201E „, Ä 0x8E → U+017D Ž. These four strings are the ones reported
+    // from the affected company's journal; all reverse losslessly.
+    expect(reverseCp437Mojibake('Ink”p tj„nster inom EU')).toBe('Inköp tjänster inom EU')
+    expect(reverseCp437Mojibake('L”neutbetalning')).toBe('Löneutbetalning')
+    expect(reverseCp437Mojibake('BANKTJŽNSTER')).toBe('BANKTJÄNSTER')
+    expect(reverseCp437Mojibake('UTLŽGG')).toBe('UTLÄGG')
+  })
+
+  it('never routes legitimate space-padded typography into the CP437 reversal (false-positive guard)', () => {
+    // A curly quote or ellipsis that is NOT letter-adjacent is punctuation,
+    // not a mangled diacritic: the artifact detector must stay quiet so
+    // resolveCorrectName leaves the text untouched.
+    expect(hasCp1252Artifact('Betalning enligt avtal ” 2024')).toBe(false)
+    expect(resolveCorrectName('Betalning enligt avtal ” 2024', [])).toBeNull()
+    expect(hasCp1252Artifact('Avvaktar underlag …')).toBe(false)
+    expect(resolveCorrectName('Avvaktar underlag …', [])).toBeNull()
+  })
 })
 
 describe('resolveCorrectName: CP437 branch', () => {

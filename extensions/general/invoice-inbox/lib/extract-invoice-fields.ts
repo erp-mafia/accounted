@@ -11,18 +11,19 @@
 // the user can fill the fields in manually.
 
 import { createHash } from 'node:crypto'
-import AnthropicBedrock from '@anthropic-ai/bedrock-sdk'
 import { z } from 'zod'
 import type { InvoiceExtractionResult } from '@/types'
+import { createAiClient, hasAiCredentials, toProviderModelId } from '@/lib/ai/provider'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('invoice-inbox-extract')
 
 // Both overridable via env vars so ops can swap models / raise token caps
-// without a code deploy. Defaults match what's expected to be set in
-// production (eu.anthropic.claude-sonnet-5 in eu-north-1, 8192 tokens:
-// enough headroom for invoices with 20+ line items).
-const MODEL = process.env.BEDROCK_MODEL_ID || 'eu.anthropic.claude-sonnet-5'
+// without a code deploy. The model id is written bare and adapted to whichever
+// backend is configured (Bedrock in eu-north-1 on hosted, the direct Anthropic
+// API on self-hosted: see lib/ai/provider.ts). 8192 tokens is enough headroom
+// for invoices with 20+ line items.
+const MODEL = toProviderModelId(process.env.BEDROCK_MODEL_ID || 'claude-sonnet-5')
 const MAX_TOKENS = (() => {
   const parsed = Number(process.env.BEDROCK_MAX_TOKENS)
   // Use the env value only if it's a positive number: `||` would also
@@ -476,18 +477,14 @@ export async function extractInvoiceFields(
     return { data: emptyResult(), rawText: null }
   }
 
-  if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-    log.warn('AWS Bedrock credentials missing: returning empty extraction', {
+  if (!hasAiCredentials()) {
+    log.warn('AI credentials missing: returning empty extraction', {
       file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
     })
     return { data: emptyResult(), rawText: null }
   }
 
-  const client = new AnthropicBedrock({
-    awsRegion: process.env.AWS_REGION || 'eu-north-1',
-    awsAccessKey: process.env.AWS_ACCESS_KEY_ID,
-    awsSecretKey: process.env.AWS_SECRET_ACCESS_KEY,
-  })
+  const client = createAiClient()
 
   let rawText: string | null = null
   try {

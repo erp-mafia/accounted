@@ -5,7 +5,7 @@ import { getPool } from '@/tests/pg/setup'
 /**
  * pg-real coverage for the payment_match_log action CHECK
  * (20260323120000_payment_match_log.sql +
- * 20260813120000_payment_match_log_linked_to_existing_voucher.sql).
+ * 20260813210000_payment_match_log_linked_to_existing_voucher.sql).
  *
  * Locks in Gap F: the code has emitted action = 'linked_to_existing_voucher'
  * since the existing-voucher link paths shipped, but the original CHECK never

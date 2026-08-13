@@ -333,4 +333,26 @@ describe('completeInboxItemsForBookedTransaction', () => {
       { created_journal_entry_id: JE2 },
     ])
   })
+
+  it('anchors a pinned document against the samlingsverifikat on attach-after-bulk-book', async () => {
+    // A bulk-booked tx keeps transactions.journal_entry_id null: its verifikat
+    // hangs off transaction_voucher_links. A document attached AFTER that
+    // booking (with no inbox item) must still land on the samlingsverifikat:
+    // voucher-link resolution feeds the pin leg of the propagation.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ transaction_id: TX1, journal_entry_id: JE2 }] }) // voucher links
+    enqueue({ data: { document_id: 'doc-pin' } }) // tx pin lookup
+    enqueue({ data: { journal_entry_id: null } }) // pinned doc unanchored
+    enqueue({ data: [] }) // no matched inbox items
+
+    const result = await completeInboxItemsForBookedTransaction(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      TX1,
+      { directJournalEntryId: null },
+    )
+    expect(result).toBe(JE2)
+    expect(linkToJournalEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, 'doc-pin', JE2)
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+  })
 })
