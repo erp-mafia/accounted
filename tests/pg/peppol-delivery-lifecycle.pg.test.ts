@@ -1,10 +1,10 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { getPool, runAsServiceRole, withUserContext } from './setup'
 import { insertAuthUser, insertCompanyMember, seedCompany } from './fixtures'
 
 const XML = '<Invoice><cbc:ID>F-2026-42</cbc:ID></Invoice>'
-const XML_SHA = 'a'.repeat(64)
+const XML_SHA = createHash('sha256').update(XML).digest('hex')
 
 async function insertInvoice(userId: string, companyId: string): Promise<string> {
   const id = randomUUID()
