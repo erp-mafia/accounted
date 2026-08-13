@@ -241,7 +241,7 @@ export function AccountPickerDialog({
     if (!open || !isInitialSelection || !company?.id || accounts.length === 0) return
     let cancelled = false
     ;(async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('transactions')
         .select('date')
         .eq('company_id', company.id)
@@ -250,6 +250,12 @@ export function AccountPickerDialog({
         .limit(1)
         .maybeSingle()
       if (cancelled) return
+      if (error) {
+        // A failed probe must not read as "first connect": deriving the
+        // fiscal-year default from an unknown state is the flood case itself.
+        console.warn('[enable-banking] latest-import probe failed', error.message)
+        return
+      }
       const date = (data as { date?: string } | null)?.date || null
       setLatestImported({ connectionId, date })
       if (date && !lookbackTouched.current) setLookbackMode('gap-fill')

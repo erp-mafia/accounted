@@ -1443,10 +1443,25 @@ export const enableBankingExtension: Extension = {
             // ASPSPs over-return history, and rows outside the requested window
             // would otherwise be ingested but never swept.
             const sweepDateFrom = returnedMin && returnedMin < fromDate ? returnedMin : fromDate
+            // The sweep writes bank-feed metadata only (transactions.journal_entry_id,
+            // reconciliation_method, is_business): journal tables are never touched,
+            // so BFL immutability and period locks (which guard journal entries) are
+            // not in play. Links to opening-balance verifikat are blocked by the
+            // check_transaction_link_not_opening_balance trigger, and every link is
+            // reversible via unlinkReconciliation without any ledger write.
             let totalAutoMatched = 0
             if (sieOverlap && totalImported > 0 && !isViewer) {
+              // Filter, not `?? undefined`: an undefined accountNumber makes
+              // resolveCashAccountScope fall back to the primary account with
+              // includeUnassigned=true, which is the pooled form this block must
+              // never widen to. The allocator gives every enabled account a
+              // concrete ledger_account, so nothing is skipped in practice.
               const ledgerAccounts = Array.from(
-                new Set(accountsToSync.map(a => a.ledger_account ?? undefined))
+                new Set(
+                  accountsToSync
+                    .map(a => a.ledger_account)
+                    .filter((l): l is string => typeof l === 'string' && l.length > 0)
+                )
               )
               for (const ledgerAccount of ledgerAccounts) {
                 try {

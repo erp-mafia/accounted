@@ -43,6 +43,7 @@ vi.mock('@/lib/reconciliation/cash-account-scope', () => ({
 
 import { enableBankingExtension } from '../index'
 import { syncAccountTransactions } from '../lib/sync'
+import { eventBus } from '@/lib/events/bus'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import type { StoredAccount } from '../types'
 
@@ -203,6 +204,7 @@ const ALLOCATOR_DEFAULTS: Record<string, string> = {
 describe('PATCH /accounts (enable-banking)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventBus.clear()
     mockUpsertFromPsd2.mockResolvedValue(undefined)
     mockRunReconciliation.mockResolvedValue({
       matches: [],

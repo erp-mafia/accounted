@@ -8,6 +8,8 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
     ignore:
       # @anthropic-ai/bedrock-sdk 0.30.0+ broke invoice OCR and the assistant in
       # prod (empty Bedrock streams, 2026-07 outage; see DECISIONS.md). The
