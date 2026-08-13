@@ -13142,7 +13142,7 @@ export const tools: McpTool[] = [
     // there, the period either is closable or is not. Open items in foreign
     // currency are warnings, never blockers, because executeYearEndClosing
     // revalues them in step 2 (lib/core/bookkeeping/year-end-service.ts).
-    description: 'run_year_end preflight. Blockers: kontantmetod_cutoff_required, unbooked_transactions (most common), draft_entries, unexplained_voucher_gap, sequence_mismatch, trial_balance_unbalanced, opening_balance_continuity, next_period_ib_posted, period-state. FX = warning, never blocker.',
+    description: 'Year-end check. Blockers: kontantmetod_cutoff_required, unbooked_transactions (most common), draft_entries, unexplained_voucher_gap, sequence_mismatch, trial_balance_unbalanced, opening_balance_continuity, next_period_ib_posted, period-state. FX = warning, never blocker.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
