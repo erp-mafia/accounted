@@ -2195,3 +2195,244 @@ describe('dimensions propagation (PR7): createSupplierCreditNoteEntry', () => {
     assertBalanced(input)
   })
 })
+
+// ============================================================
+// Särskild löneskatt på pensionskostnader (SLP) pair injection
+// ============================================================
+
+describe('SLP pair injection (apply_slp)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  // The customer case verbatim: Avanza tjänstepension, 10 000 kr premie.
+  //   2440 K 10 000 / 7412 D 10 000 / 7533 D 2 426 / 2514 K 2 426.
+  it('registration books the 4-line Avanza case: 7533/2514 nets to zero, payable untouched', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000,
+      vat_amount: 0,
+      total: 10000,
+    })
+    const items = [
+      makeItem({ line_total: 10000, account_number: '7412', vat_rate: 0, apply_slp: true }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.lines).toHaveLength(4)
+
+    expect(findByAccount(input.lines, '7412')[0].debit_amount).toBe(10000)
+    expect(findByAccount(input.lines, '7533')[0].debit_amount).toBe(2426)
+    expect(findByAccount(input.lines, '2514')[0].credit_amount).toBe(2426)
+    // The pair nets to zero: 2440 stays at exactly the invoice total.
+    expect(findByAccount(input.lines, '2440')[0].credit_amount).toBe(10000)
+
+    assertBalanced(input)
+  })
+
+  it('multiple flagged 741x rows aggregate into ONE 7533/2514 pair', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: 15000, vat_amount: 0, total: 15000 })
+    const items = [
+      makeItem({ id: 'i1', line_total: 10000, account_number: '7412', vat_rate: 0, apply_slp: true }),
+      makeItem({ id: 'i2', line_total: 5000, account_number: '7410', vat_rate: 0, apply_slp: true }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    const slpDebit = findByAccount(input.lines, '7533')
+    expect(slpDebit).toHaveLength(1)
+    // 15 000 × 0.2426 = 3 639
+    expect(slpDebit[0].debit_amount).toBe(3639)
+    expect(findByAccount(input.lines, '2514')[0].credit_amount).toBe(3639)
+    expect(findByAccount(input.lines, '2440')[0].credit_amount).toBe(15000)
+    assertBalanced(input)
+  })
+
+  it('rounds the pair to öre (base 1 000,01 → 242,60)', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: 1000.01, vat_amount: 0, total: 1000.01 })
+    const items = [
+      makeItem({ line_total: 1000.01, account_number: '7412', vat_rate: 0, apply_slp: true }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '7533')[0].debit_amount).toBe(242.6)
+    expect(findByAccount(input.lines, '2514')[0].credit_amount).toBe(242.6)
+    expect(findByAccount(input.lines, '2440')[0].credit_amount).toBe(1000.01)
+    assertBalanced(input)
+  })
+
+  it('ignores apply_slp on a non-741x account (defense in depth behind the route guard)', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: 8000, vat_amount: 2000, total: 10000 })
+    const items = [
+      makeItem({ line_total: 8000, account_number: '6200', vat_rate: 0.25, apply_slp: true }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '7533')).toHaveLength(0)
+    expect(findByAccount(input.lines, '2514')).toHaveLength(0)
+    assertBalanced(input)
+  })
+
+  it('unflagged 741x rows book without the pair (opt-in, never automatic)', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: 10000, vat_amount: 0, total: 10000 })
+    const items = [
+      makeItem({ line_total: 10000, account_number: '7412', vat_rate: 0 }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '7533')).toHaveLength(0)
+    expect(findByAccount(input.lines, '2514')).toHaveLength(0)
+    expect(findByAccount(input.lines, '2440')[0].credit_amount).toBe(10000)
+    assertBalanced(input)
+  })
+
+  it('SLP lines carry the invoice default dimensions like the RC pairs do', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 10000,
+      vat_amount: 0,
+      total: 10000,
+      default_dimensions: { '1': 'KS01' },
+    })
+    const items = [
+      makeItem({ line_total: 10000, account_number: '7412', vat_rate: 0, apply_slp: true }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '7533')[0].dimensions).toEqual({ '1': 'KS01' })
+    expect(findByAccount(input.lines, '2514')[0].dimensions).toEqual({ '1': 'KS01' })
+  })
+
+  it('kontantmetoden: pair injected and the bank credit stays at the invoice total', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: 10000, vat_amount: 0, total: 10000 })
+    const items = [
+      makeItem({ line_total: 10000, account_number: '7412', vat_rate: 0, apply_slp: true }),
+    ]
+
+    await createSupplierInvoiceCashEntry(
+      null as never, 'company-1', 'user-1', invoice, items, '2024-07-01', 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '7533')[0].debit_amount).toBe(2426)
+    expect(findByAccount(input.lines, '2514')[0].credit_amount).toBe(2426)
+    // Payment guarantee: the bank movement equals the invoice total exactly.
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(10000)
+    assertBalanced(input)
+  })
+
+  it('privately paid (eget utlägg): pair injected and the owner account stays at the invoice total', async () => {
+    const invoice = makeSupplierInvoice({ subtotal: 10000, vat_amount: 0, total: 10000 })
+    const items = [
+      makeItem({ line_total: 10000, account_number: '7412', vat_rate: 0, apply_slp: true }),
+    ]
+
+    await createSupplierInvoicePrivatelyPaidEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'aktiebolag'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(findByAccount(input.lines, '7533')[0].debit_amount).toBe(2426)
+    expect(findByAccount(input.lines, '2514')[0].credit_amount).toBe(2426)
+    // The SLP pair must not inflate what the owner is owed.
+    expect(findByAccount(input.lines, '2893')[0].credit_amount).toBe(10000)
+    assertBalanced(input)
+  })
+
+  it('credit note reverses the pair (7533 K / 2514 D) and keeps 2440 at the invoice total', async () => {
+    const creditNote = makeSupplierInvoice({
+      is_credit_note: true,
+      subtotal: -10000,
+      vat_amount: 0,
+      total: -10000,
+    })
+    // The caller passes the ORIGINAL invoice's items (positive line_total).
+    const items = [
+      makeItem({ line_total: 10000, account_number: '7412', vat_rate: 0, apply_slp: true }),
+    ]
+
+    await createSupplierCreditNoteEntry(
+      null as never, 'company-1', 'user-1', creditNote, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    // Swapped sides vs registration.
+    expect(findByAccount(input.lines, '7533')[0].credit_amount).toBe(2426)
+    expect(findByAccount(input.lines, '7533')[0].debit_amount).toBe(0)
+    expect(findByAccount(input.lines, '2514')[0].debit_amount).toBe(2426)
+    expect(findByAccount(input.lines, '2514')[0].credit_amount).toBe(0)
+    // Pair nets to zero: 2440 debit clears exactly the original payable.
+    expect(findByAccount(input.lines, '2440')[0].debit_amount).toBe(10000)
+    assertBalanced(input)
+  })
+
+  it('mixed-sign flagged original: credit note reverses SLP on the signed sum, not per-item abs', async () => {
+    // Registration computed its SLP base as the SIGNED sum of flagged
+    // line_totals: +10000 premium and -2000 rebate booked SLP on 8000
+    // (1 940,80). Per-item abs on the credit note would reverse SLP on
+    // 12000 (2 911,20), striking more 7533/2514 than was ever posted.
+    const creditNote = makeSupplierInvoice({
+      is_credit_note: true,
+      subtotal: -8000,
+      vat_amount: 0,
+      total: -8000,
+    })
+    const items = [
+      makeItem({ id: 'i1', line_total: 10000, account_number: '7412', vat_rate: 0, apply_slp: true }),
+      makeItem({ id: 'i2', line_total: -2000, account_number: '7412', vat_rate: 0, apply_slp: true }),
+    ]
+
+    await createSupplierCreditNoteEntry(
+      null as never, 'company-1', 'user-1', creditNote, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    // 8 000 × 0.2426 = 1 940,80: exactly what registration booked.
+    expect(findByAccount(input.lines, '7533')[0].credit_amount).toBe(1940.8)
+    expect(findByAccount(input.lines, '2514')[0].debit_amount).toBe(1940.8)
+    assertBalanced(input)
+  })
+
+  it('foreign-currency invoice books the pair in SEK at the invoice rate', async () => {
+    const invoice = makeSupplierInvoice({
+      subtotal: 1000, vat_amount: 0, total: 1000,
+      currency: 'EUR', exchange_rate: 11.50,
+    })
+    const items = [
+      makeItem({ line_total: 1000, account_number: '7412', vat_rate: 0, apply_slp: true }),
+    ]
+
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'swedish_business'
+    )
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    // 11 500 SEK × 0.2426 = 2 789.90
+    expect(findByAccount(input.lines, '7533')[0].debit_amount).toBe(2789.9)
+    expect(findByAccount(input.lines, '2514')[0].credit_amount).toBe(2789.9)
+    expect(findByAccount(input.lines, '2440')[0].credit_amount).toBe(11500)
+    assertBalanced(input)
+  })
+})

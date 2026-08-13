@@ -35,6 +35,13 @@ interface FyPickerProps {
   /** Server-loaded periods for the first render, scoped to initialCompanyId. */
   initialPeriods?: FiscalPeriod[]
   initialCompanyId?: string | null
+  /**
+   * localStorage prefix for the persisted selection (companyId is appended).
+   * Defaults to the report-wide shared scope; pass a page-specific prefix
+   * when the page's scope must not follow (or steer) the shared one, e.g.
+   * the transactions inbox, where a narrowed scope hides pending rows.
+   */
+  storageKeyPrefix?: string
   className?: string
 }
 
@@ -61,6 +68,7 @@ export function FyPicker({
   onReady,
   initialPeriods,
   initialCompanyId,
+  storageKeyPrefix = STORAGE_KEY_PREFIX,
   className,
 }: FyPickerProps) {
   const { company } = useCompany()
@@ -108,7 +116,7 @@ export function FyPicker({
           const pick = fetched.find((p) => p.period_end < today) ?? fetched[0]
           if (pick) onChange(pick.id, pick)
         } else {
-          const stored = window.localStorage.getItem(STORAGE_KEY_PREFIX + company.id)
+          const stored = window.localStorage.getItem(storageKeyPrefix + company.id)
           if (stored === ALL_YEARS_VALUE) {
             if (includeAllOption) onChange(null, null)
             else if (fetched.length > 0) onChange(fetched[0].id, fetched[0])
@@ -128,12 +136,12 @@ export function FyPicker({
   // onReady is a lifecycle callback: fire once per load, not on parent
   // re-renders that re-create it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [company?.id, hideFuturePeriods, includeAllOption, preferLatestEnded, initialCompanyId, initialPeriods])
+  }, [company?.id, hideFuturePeriods, includeAllOption, preferLatestEnded, initialCompanyId, initialPeriods, storageKeyPrefix])
 
   const handleChange = (id: string) => {
     const nextId = id === ALL_YEARS_VALUE ? null : id
     if (company?.id && typeof window !== 'undefined') {
-      window.localStorage.setItem(STORAGE_KEY_PREFIX + company.id, nextId ?? ALL_YEARS_VALUE)
+      window.localStorage.setItem(storageKeyPrefix + company.id, nextId ?? ALL_YEARS_VALUE)
     }
     onChange(nextId, nextId ? periods.find((p) => p.id === nextId) ?? null : null)
   }

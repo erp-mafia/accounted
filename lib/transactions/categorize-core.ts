@@ -29,7 +29,6 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import {
   detectBookingDuplicate,
@@ -37,6 +36,7 @@ import {
   type BookingDuplicateExclusions,
 } from '@/lib/transactions/booking-duplicate-detection'
 import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createLogger } from '@/lib/logger'
 import type { InboxChannelContext, Transaction, TransactionCategory, EntityType, VatTreatment } from '@/types'
@@ -375,57 +375,12 @@ export async function categorizeMatchedTransaction(
     return { error: 'Failed to update transaction', status: 500 }
   }
 
-  // Propagate the underlag from a matched invoice-inbox item onto the new
-  // verifikation. Without this, BFL 7 kap is violated: a verifikation exists
-  // with no underlag attached even though the user explicitly linked an inbox
-  // item (with a document) to this transaction. We:
-  //   1. find the inbox item(s) where matched_transaction_id = txId
-  //   2. for each item with a document_id, set
-  //        document_attachments.journal_entry_id = journalEntryId (idempotent)
-  //   3. stamp invoice_inbox_items.created_journal_entry_id so the inbox row
-  //      visibly moves to "Bearbetade" and shows "Öppna verifikation".
-  // Errors are logged but don't fail the commit: the verifikation itself is
-  // already posted, and the link can be repaired by re-running this step.
+  // Propagate the underlag from matched invoice-inbox items onto the new
+  // verifikation and stamp them consumed (BFL 7 kap): shared with the other
+  // booking paths, see lib/transactions/inbox-underlag.ts. Best-effort: the
+  // verifikation is already posted, so a failure is logged, never fatal.
   if (journalEntryId) {
-    try {
-      const { data: matchedInboxItems } = await supabase
-        .from('invoice_inbox_items')
-        .select('id, document_id')
-        .eq('company_id', companyId)
-        .eq('matched_transaction_id', txId)
-        .is('created_journal_entry_id', null)
-      for (const inbox of (matchedInboxItems ?? []) as Array<{
-        id: string
-        document_id: string | null
-      }>) {
-        if (inbox.document_id) {
-          try {
-            await linkToJournalEntry(supabase, companyId, inbox.document_id, journalEntryId)
-          } catch (err) {
-            log.error('Failed to link inbox document to journal entry', {
-              inbox_item_id: inbox.id,
-              document_id: inbox.document_id,
-              journal_entry_id: journalEntryId,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        }
-        const { error: stampError } = await supabase
-          .from('invoice_inbox_items')
-          .update({ created_journal_entry_id: journalEntryId })
-          .eq('id', inbox.id)
-          .eq('company_id', companyId)
-        if (stampError) {
-          log.error('Failed to stamp inbox item created_journal_entry_id', {
-            inbox_item_id: inbox.id,
-            journal_entry_id: journalEntryId,
-            error: stampError.message,
-          })
-        }
-      }
-    } catch (err) {
-      log.error('Failed to propagate underlag from matched inbox items', err)
-    }
+    await propagateUnderlagForBookedTransaction(supabase, companyId, txId, journalEntryId)
   }
 
   try {

@@ -23,6 +23,7 @@
  * room for line text, dimensions or tax codes.
  */
 import { useTranslations } from 'next-intl'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import JournalEntryForm from '@/components/bookkeeping/JournalEntryForm'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import {
@@ -30,7 +31,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from '@/components/ui/dialog'
 
 export interface ProposedLine {
@@ -52,6 +52,7 @@ export default function EditKonteringDialog({
   entryDate,
   description,
   lines,
+  matchedTransaction = null,
   onBooked,
 }: {
   open: boolean
@@ -65,6 +66,11 @@ export default function EditKonteringDialog({
   entryDate: string
   description: string
   lines: ProposedLine[]
+  /** SEK amount and date of the matched bank row, when there is one. Shown
+      beside the title so the kronor figure stays visible even if the user
+      clears the rows: on a foreign-currency invoice this is the only place
+      the SEK amount exists at all. */
+  matchedTransaction?: { amount_sek: number; date: string } | null
   onBooked: (entryId: string) => void
 }) {
   const t = useTranslations('inbox_workspace')
@@ -74,9 +80,12 @@ export default function EditKonteringDialog({
       <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Ändra kontering</DialogTitle>
-          <DialogDescription>
-            Förslaget är en utgångspunkt. Ändra konto, belopp, datum eller serie innan du bokför.
-          </DialogDescription>
+          {matchedTransaction && (
+            <p className="text-xs text-muted-foreground tabular-nums">
+              {t('dialog_matched_transaction')}: {formatCurrency(matchedTransaction.amount_sek)} ·{' '}
+              {formatDate(matchedTransaction.date)}
+            </p>
+          )}
         </DialogHeader>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,480px)]">
@@ -87,12 +96,21 @@ export default function EditKonteringDialog({
               // props once, by design.
               key={itemId}
               embedded
-              initialLines={lines.map((l) => ({
-                account_number: l.account_number,
-                debit_amount: l.debit_amount ? String(l.debit_amount) : '',
-                credit_amount: l.credit_amount ? String(l.credit_amount) : '',
-                line_description: l.description,
-              }))}
+              // An unknown supplier has no proposal, and passing [] here is
+              // not the same as passing nothing: the form seeds two blank rows
+              // only when this is undefined, so an empty array opened the
+              // dialog with no rows at all and a "lägg till rad" between the
+              // user and typing anything.
+              initialLines={
+                lines.length > 0
+                  ? lines.map((l) => ({
+                      account_number: l.account_number,
+                      debit_amount: l.debit_amount ? String(l.debit_amount) : '',
+                      credit_amount: l.credit_amount ? String(l.credit_amount) : '',
+                      line_description: l.description,
+                    }))
+                  : undefined
+              }
               initialDate={entryDate}
               initialDescription={description}
               submitUrl={`/api/extensions/ext/invoice-inbox/items/${itemId}/book-direct`}

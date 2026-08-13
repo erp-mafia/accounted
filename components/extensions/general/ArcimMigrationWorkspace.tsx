@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
@@ -37,8 +38,22 @@ import {
   Calendar,
   XCircle,
   BookOpen,
+  Paperclip,
 } from 'lucide-react'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
+import {
+  ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
+  INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
+  ArcimDocumentImportRequestError,
+  arcimDocumentImportReducer,
+  documentOAuthProblemFromReason,
+  parseArcimDocumentOAuthResume,
+  requestArcimDocumentImport,
+  resolveArcimDocumentFollowUpProvider,
+  watchArcimOAuthPopup,
+  type ArcimDocumentImportProblem,
+  type ArcimDocumentImportState,
+} from './arcim-document-import-flow'
 
 type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden' | 'wint'
 
@@ -99,6 +114,42 @@ function displayError(err: unknown, nonErrorFallback?: string): string {
   if (err instanceof UserFacingError) return err.message
   if (!(err instanceof Error) && nonErrorFallback) return nonErrorFallback
   return getUserErrorMessage(err)
+}
+
+function documentImportProblem(error: unknown): ArcimDocumentImportProblem {
+  if (error instanceof ArcimDocumentImportRequestError) return error.problem
+  return { code: null, requestId: null, reconnectRequired: false }
+}
+
+function storeDocumentOAuthResume(
+  action: 'discover' | 'import',
+): void {
+  try {
+    window.sessionStorage.setItem(
+      ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
+      action,
+    )
+  } catch {
+    // Full-page recovery is best-effort when browser storage is unavailable.
+  }
+}
+
+function readDocumentOAuthResume() {
+  try {
+    return parseArcimDocumentOAuthResume(
+      window.sessionStorage.getItem(ARCIM_DOCUMENT_OAUTH_RESUME_KEY),
+    )
+  } catch {
+    return null
+  }
+}
+
+function clearDocumentOAuthResume(): void {
+  try {
+    window.sessionStorage.removeItem(ARCIM_DOCUMENT_OAUTH_RESUME_KEY)
+  } catch {
+    // Nothing else is required when browser storage is unavailable.
+  }
 }
 
 /**
@@ -1573,18 +1624,233 @@ function FiscalYearResult({ result, index }: { result: ImportResult; index: numb
   )
 }
 
+function DocumentImportFollowUp({
+  state,
+  onDiscover,
+  onImport,
+  onDismiss,
+  onReconnect,
+}: {
+  state: ArcimDocumentImportState
+  onDiscover: () => void
+  onImport: () => void
+  onDismiss: () => void
+  onReconnect: () => void
+}) {
+  const t = useTranslations('extensions')
+
+  if (state.phase === 'hidden' || state.phase === 'dismissed') return null
+
+  const title = (
+    <CardTitle className="flex items-center gap-2 text-base">
+      <Paperclip className="h-4 w-4 text-muted-foreground" />
+      {t('ext_arcim_documents_title')}
+    </CardTitle>
+  )
+
+  if (
+    state.phase === 'discovering' ||
+    state.phase === 'importing' ||
+    state.phase === 'reconnecting'
+  ) {
+    const label =
+      state.phase === 'discovering'
+        ? t('ext_arcim_documents_discovering')
+        : state.phase === 'importing'
+          ? t('ext_arcim_documents_importing')
+          : t('ext_arcim_documents_reconnecting')
+
+    return (
+      <Card aria-live="polite">
+        <CardHeader>{title}</CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            <span>{label}</span>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (state.phase === 'offered') {
+    return (
+      <Card aria-live="polite">
+        <CardHeader>
+          {title}
+          <CardDescription>
+            {t('ext_arcim_documents_prompt', { count: state.found })}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Button className="min-h-11" onClick={onImport}>
+            {t('ext_arcim_documents_import_action')}
+          </Button>
+          <Button variant="ghost" className="min-h-11" onClick={onDismiss}>
+            {t('ext_arcim_documents_not_now')}
+          </Button>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (state.phase === 'empty') {
+    return (
+      <Card aria-live="polite">
+        <CardHeader>
+          {title}
+          <CardDescription>{t('ext_arcim_documents_empty')}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button variant="outline" className="min-h-11" onClick={onDiscover}>
+            <RotateCcw className="mr-2 h-4 w-4" />
+            {t('ext_arcim_documents_retry_discovery')}
+          </Button>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (state.phase === 'complete') {
+    if (!state.result) {
+      return (
+        <Card aria-live="polite">
+          <CardHeader>
+            {title}
+            <CardDescription>{t('ext_arcim_documents_result_description')}</CardDescription>
+          </CardHeader>
+        </Card>
+      )
+    }
+
+    const { linked, skipped, unmatched, failed } = state.result
+    const outcomes = [
+      {
+        label: t('ext_arcim_documents_imported'),
+        value: linked,
+        valueClassName: 'text-foreground',
+      },
+      {
+        label: t('ext_arcim_documents_skipped'),
+        value: skipped,
+        valueClassName: 'text-foreground',
+      },
+      {
+        label: t('ext_arcim_documents_unmatched'),
+        value: unmatched,
+        valueClassName: 'text-foreground',
+      },
+      {
+        label: t('ext_arcim_documents_failed'),
+        value: failed,
+        valueClassName: failed > 0 ? 'text-destructive' : 'text-foreground',
+      },
+    ]
+
+    return (
+      <Card aria-live="polite">
+        <CardHeader>
+          {title}
+          <CardDescription>{t('ext_arcim_documents_result_description')}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            {outcomes.map(({ label, value, valueClassName }) => (
+              <div key={label} className="flex flex-col">
+                <dt className="order-2 text-xs text-muted-foreground">{label}</dt>
+                <dd className={cn('order-1 font-display text-xl tabular-nums', valueClassName)}>
+                  {value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          {unmatched > 0 && (
+            <p className="text-sm text-muted-foreground">
+              {t('ext_arcim_documents_unmatched_help')}
+            </p>
+          )}
+          {failed > 0 && (
+            <div className="space-y-3">
+              <p className="text-sm text-destructive">
+                {t('ext_arcim_documents_partial_failure')}
+              </p>
+              <Button variant="outline" className="min-h-11" onClick={onImport}>
+                <RotateCcw className="mr-2 h-4 w-4" />
+                {t('ext_arcim_documents_retry_import')}
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const reconnectRequired = state.problem?.reconnectRequired === true
+  const discoveryFailed = state.phase === 'discovery-error'
+  return (
+    <Card aria-live="polite">
+      <CardHeader>
+        {title}
+        <CardDescription className="text-foreground">
+          {state.problem?.message
+            ? state.problem.message
+            : reconnectRequired
+            ? t('ext_arcim_documents_scope_error')
+            : discoveryFailed
+              ? t('ext_arcim_documents_discovery_error')
+              : t('ext_arcim_documents_import_error')}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {state.problem?.requestId && (
+          <p className="text-xs text-muted-foreground">
+            {t('ext_arcim_documents_error_reference', {
+              requestId: state.problem.requestId,
+            })}
+          </p>
+        )}
+        <Button
+          className="min-h-11"
+          onClick={reconnectRequired ? onReconnect : discoveryFailed ? onDiscover : onImport}
+        >
+          {reconnectRequired ? (
+            <RefreshCw className="mr-2 h-4 w-4" />
+          ) : (
+            <RotateCcw className="mr-2 h-4 w-4" />
+          )}
+          {reconnectRequired
+            ? t('ext_arcim_documents_reconnect_action')
+            : discoveryFailed
+              ? t('ext_arcim_documents_retry_discovery')
+              : t('ext_arcim_documents_retry_import')}
+        </Button>
+      </CardContent>
+    </Card>
+  )
+}
+
 function ResultStep({
   results,
   sieResults,
   error,
+  documentImportState,
   onDone,
   onRetry,
+  onDiscoverDocuments,
+  onImportDocuments,
+  onDismissDocuments,
+  onReconnectDocuments,
 }: {
   results: MigrationResults | null
   sieResults: ImportResult[]
   error: string | null
+  documentImportState: ArcimDocumentImportState
   onDone: () => void
   onRetry: () => void
+  onDiscoverDocuments: () => void
+  onImportDocuments: () => void
+  onDismissDocuments: () => void
+  onReconnectDocuments: () => void
 }) {
   if (error) {
     return (
@@ -1616,7 +1882,10 @@ function ResultStep({
     )
   }
 
-  const hasResults = results || sieResults.length > 0
+  const hasResults =
+    results ||
+    sieResults.length > 0 ||
+    (documentImportState.phase !== 'hidden' && documentImportState.phase !== 'dismissed')
   if (!hasResults) return null
 
   // Compute combined SIE stats
@@ -1779,6 +2048,14 @@ function ResultStep({
           </div>
         )
       })()}
+
+      <DocumentImportFollowUp
+        state={documentImportState}
+        onDiscover={onDiscoverDocuments}
+        onImport={onImportDocuments}
+        onDismiss={onDismissDocuments}
+        onReconnect={onReconnectDocuments}
+      />
 
       {/* ── Next steps ── */}
       <Card className="bg-muted/50">
@@ -1969,6 +2246,13 @@ export default function ArcimMigrationWorkspace({
   const [migrationProgress, setMigrationProgress] = useState(0)
   const [migrationResults, setMigrationResults] = useState<MigrationResults | null>(null)
   const [sieImportResults, setSieImportResults] = useState<ImportResult[]>([])
+  const [documentImportState, dispatchDocumentImport] = useReducer(
+    arcimDocumentImportReducer,
+    INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
+  )
+  const documentReconnectActionRef = useRef<'discover' | 'import' | null>(null)
+  const documentReconnectFailureCleanupRef = useRef<number | null>(null)
+  const stopOAuthPopupWatchRef = useRef<(() => void) | null>(null)
   // Knowledge-graph theater for the migrating step, built from the already
   // client-held parsed SIE. Null falls back to the plain progress card.
   const [theaterModel, setTheaterModel] = useState<TheaterModel | null>(null)
@@ -2043,6 +2327,10 @@ export default function ArcimMigrationWorkspace({
 
       const data = await res.json()
       setPreview(data)
+      const previewProvider = data?.consent?.provider
+      if (ARCIM_PROVIDERS.some((provider) => provider.id === previewProvider)) {
+        setSelectedProvider(previewProvider as ArcimProvider)
+      }
 
       // If SIE is not available, disable SIE import by default
       if (!data.sieAvailable) {
@@ -2105,13 +2393,34 @@ export default function ArcimMigrationWorkspace({
     await loadPreview(existingConsentId)
   }, [loadPreview])
 
+  const clearOAuthPopupWatch = useCallback(() => {
+    stopOAuthPopupWatchRef.current?.()
+    stopOAuthPopupWatchRef.current = null
+  }, [])
+
+  const clearDocumentReconnectFailureCleanup = useCallback(() => {
+    if (documentReconnectFailureCleanupRef.current) {
+      window.clearTimeout(documentReconnectFailureCleanupRef.current)
+      documentReconnectFailureCleanupRef.current = null
+    }
+  }, [])
+
+  useEffect(() => () => {
+    clearOAuthPopupWatch()
+    clearDocumentReconnectFailureCleanup()
+  }, [clearDocumentReconnectFailureCleanup, clearOAuthPopupWatch])
+
   // Re-authorize a dead connection in place. Re-runs provider auth against the
   // SAME consent so fresh tokens overwrite the expired pair: no disconnect.
   // OAuth providers open the login popup (the existing postMessage listener
   // reloads the preview on success); token providers drop to the credential
   // form. Triggered from the "Återanslut" CTA after a sync hits
   // PROVIDER_AUTH_EXPIRED.
-  const handleReconnect = useCallback(async (provider: ArcimProvider, existingConsentId: string) => {
+  const handleReconnect = useCallback(async (
+    provider: ArcimProvider,
+    existingConsentId: string,
+    options?: { onFailure?: () => void },
+  ) => {
     setError(null)
     setAuthExpired(false)
     setLicenseMissing(false)
@@ -2145,8 +2454,10 @@ export default function ArcimMigrationWorkspace({
       setAuthType(data.authType)
 
       if (data.authType === 'oauth' && data.authUrl) {
+        let activePopup: Window | null = null
         if (popup && !popup.closed) {
           popup.location.href = data.authUrl
+          activePopup = popup
         } else {
           // The pre-opened popup was blocked or closed; retrying here is a
           // long shot (the activation may be gone) but strictly better than
@@ -2156,7 +2467,21 @@ export default function ArcimMigrationWorkspace({
           const retry = window.open(data.authUrl, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
           if (!retry) {
             window.location.href = data.authUrl
+          } else {
+            activePopup = retry
           }
+        }
+        if (activePopup) {
+          clearOAuthPopupWatch()
+          stopOAuthPopupWatchRef.current = watchArcimOAuthPopup(activePopup, () => {
+            stopOAuthPopupWatchRef.current = null
+            if (options?.onFailure) {
+              options.onFailure()
+            } else {
+              setError('Inloggningsfönstret stängdes innan anslutningen var klar. Försök igen.')
+              setAuthExpired(true)
+            }
+          })
         }
         setAuthUrl(data.authUrl)
       } else {
@@ -2168,12 +2493,91 @@ export default function ArcimMigrationWorkspace({
       }
     } catch (err) {
       popup?.close()
-      setError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte återansluta')
-      setAuthExpired(true)
+      if (options?.onFailure) {
+        options.onFailure()
+      } else {
+        setError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte återansluta')
+        setAuthExpired(true)
+      }
     } finally {
       setIsLoading(false)
     }
+  }, [clearOAuthPopupWatch])
+
+  const runDocumentDiscovery = useCallback(async (
+    currentConsentId: string,
+    provider: ArcimProvider | null,
+    migrationSucceeded: boolean,
+  ) => {
+    dispatchDocumentImport({
+      type: 'discovery-started',
+      provider,
+      migrationSucceeded,
+    })
+    if (provider !== 'fortnox' || !migrationSucceeded) return
+
+    try {
+      const result = await requestArcimDocumentImport(currentConsentId, true)
+      dispatchDocumentImport({ type: 'discovery-succeeded', result })
+    } catch (documentError) {
+      dispatchDocumentImport({
+        type: 'discovery-failed',
+        problem: documentImportProblem(documentError),
+      })
+    }
   }, [])
+
+  const runDocumentImport = useCallback(async (currentConsentId: string) => {
+    dispatchDocumentImport({ type: 'import-started' })
+    try {
+      const result = await requestArcimDocumentImport(currentConsentId, false)
+      dispatchDocumentImport({ type: 'import-succeeded', result })
+    } catch (documentError) {
+      dispatchDocumentImport({
+        type: 'import-failed',
+        problem: documentImportProblem(documentError),
+      })
+    }
+  }, [])
+
+  const handleDocumentReconnect = useCallback(() => {
+    if (!consentId) return
+    clearDocumentReconnectFailureCleanup()
+    const reconnectAction =
+      documentImportState.phase === 'discovery-error' ? 'discover' : 'import'
+    const priorProblem = documentImportState.problem ?? {
+      code: null,
+      requestId: null,
+      reconnectRequired: false,
+    }
+
+    documentReconnectActionRef.current = reconnectAction
+    storeDocumentOAuthResume(reconnectAction)
+    dispatchDocumentImport({ type: 'reconnect-started' })
+    void handleReconnect('fortnox', consentId, {
+      onFailure: () => {
+        dispatchDocumentImport(
+          reconnectAction === 'discover'
+            ? { type: 'discovery-failed', problem: priorProblem }
+            : { type: 'import-failed', problem: priorProblem },
+        )
+        // Keep the action briefly after the popup-close grace period. Some
+        // browsers deliver the successful postMessage after reporting the
+        // popup as closed; that success must remain authoritative.
+        documentReconnectFailureCleanupRef.current = window.setTimeout(() => {
+          documentReconnectActionRef.current = null
+          clearDocumentOAuthResume()
+          documentReconnectFailureCleanupRef.current = null
+        }, 30_000)
+      },
+    })
+  }, [
+    clearDocumentReconnectFailureCleanup,
+    consentId,
+    documentImportState.phase,
+    documentImportState.problem,
+    handleReconnect,
+  ])
 
   // Disconnect an existing consent
   const handleDisconnect = useCallback(async (consentIdToDelete: string) => {
@@ -2233,6 +2637,7 @@ export default function ArcimMigrationWorkspace({
     const url = new URL(window.location.href)
     const migrationStatus = url.searchParams.get('migration')
     const callbackConsentId = url.searchParams.get('consentId')
+    const documentResume = readDocumentOAuthResume()
 
     if (migrationStatus === 'connected' && callbackConsentId) {
       // Clean URL
@@ -2240,14 +2645,43 @@ export default function ArcimMigrationWorkspace({
       url.searchParams.delete('consentId')
       window.history.replaceState({}, '', url.pathname)
 
-      await loadPreview(callbackConsentId)
+      clearDocumentOAuthResume()
+      if (documentResume) {
+        clearDocumentReconnectFailureCleanup()
+        documentReconnectActionRef.current = null
+        setConsentId(callbackConsentId)
+        setSelectedProvider('fortnox')
+        setStep('result')
+        if (documentResume.action === 'discover') {
+          await runDocumentDiscovery(callbackConsentId, 'fortnox', true)
+        } else {
+          await runDocumentImport(callbackConsentId)
+        }
+      } else {
+        await loadPreview(callbackConsentId)
+      }
     } else if (migrationStatus === 'error') {
       const callbackProvider = url.searchParams.get('provider') as ArcimProvider | null
       const reason = url.searchParams.get('reason') || 'OAuth-anslutningen misslyckades. Försök igen.'
       url.searchParams.delete('migration')
       url.searchParams.delete('provider')
       url.searchParams.delete('reason')
+      url.searchParams.delete('consentId')
       window.history.replaceState({}, '', url.pathname)
+      clearDocumentOAuthResume()
+      if (documentResume && callbackConsentId) {
+        clearDocumentReconnectFailureCleanup()
+        setConsentId(callbackConsentId)
+        setSelectedProvider('fortnox')
+        setStep('result')
+        const problem = documentOAuthProblemFromReason(reason)
+        dispatchDocumentImport(
+          documentResume.action === 'discover'
+            ? { type: 'discovery-failed', problem }
+            : { type: 'import-failed', problem },
+        )
+        return
+      }
       setError(reason)
       toast({ title: 'Anslutning misslyckades', description: reason, variant: 'destructive' })
       if (callbackProvider) {
@@ -2257,7 +2691,13 @@ export default function ArcimMigrationWorkspace({
         setStep('provider')
       }
     }
-  }, [loadPreview, toast])
+  }, [
+    clearDocumentReconnectFailureCleanup,
+    loadPreview,
+    runDocumentDiscovery,
+    runDocumentImport,
+    toast,
+  ])
 
   // Check for OAuth callback on mount (fallback for non-popup flow)
   useEffect(() => {
@@ -2286,18 +2726,60 @@ export default function ArcimMigrationWorkspace({
     function handleMessage(event: MessageEvent) {
       if (event.origin !== window.location.origin) return
       if (event.data?.type === 'arcim-oauth-success' && event.data.consentId) {
+        clearOAuthPopupWatch()
+        clearDocumentReconnectFailureCleanup()
+        const reconnectAction = documentReconnectActionRef.current
+        if (reconnectAction) {
+          documentReconnectActionRef.current = null
+          clearDocumentOAuthResume()
+          setConsentId(event.data.consentId)
+          setSelectedProvider('fortnox')
+          setStep('result')
+          if (reconnectAction === 'discover') {
+            void runDocumentDiscovery(event.data.consentId, 'fortnox', true)
+          } else {
+            void runDocumentImport(event.data.consentId)
+          }
+          return
+        }
         loadPreview(event.data.consentId)
       } else if (event.data?.type === 'arcim-oauth-error') {
+        clearOAuthPopupWatch()
+        clearDocumentReconnectFailureCleanup()
         const reason = typeof event.data.reason === 'string' && event.data.reason
           ? event.data.reason
           : 'OAuth-anslutningen misslyckades. Försök igen.'
+        const reconnectAction = documentReconnectActionRef.current
+        if (reconnectAction) {
+          documentReconnectActionRef.current = null
+          clearDocumentOAuthResume()
+          const problem = documentImportState.problem ?? {
+            code: null,
+            requestId: null,
+            reconnectRequired: true,
+          }
+          dispatchDocumentImport(
+            reconnectAction === 'discover'
+              ? { type: 'discovery-failed', problem }
+              : { type: 'import-failed', problem },
+          )
+          return
+        }
         setError(reason)
         toast({ title: 'Anslutning misslyckades', description: reason, variant: 'destructive' })
       }
     }
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [loadPreview, toast])
+  }, [
+    clearOAuthPopupWatch,
+    clearDocumentReconnectFailureCleanup,
+    documentImportState.problem,
+    loadPreview,
+    runDocumentDiscovery,
+    runDocumentImport,
+    toast,
+  ])
 
   // Load SIE data when entering mapping step
   const loadSIEData = useCallback(async () => {
@@ -2380,6 +2862,7 @@ export default function ArcimMigrationWorkspace({
     setMigrationStep('Startar migrering...')
     setMigrationProgress(5)
     setError(null)
+    dispatchDocumentImport({ type: 'reset' })
 
     // Build the theater from the parsed SIE the client already holds.
     // Best-effort: any failure just leaves the plain progress card.
@@ -2512,6 +2995,14 @@ export default function ArcimMigrationWorkspace({
       setMigrationProgress(100)
       setStep('result')
 
+      const documentProvider = resolveArcimDocumentFollowUpProvider(
+        preview?.consent.provider,
+        selectedProvider,
+      )
+      if (documentProvider) {
+        void runDocumentDiscovery(consentId, documentProvider, true)
+      }
+
       if (hadStepErrors) {
         toast({
           title: 'Migrering delvis genomförd',
@@ -2528,7 +3019,7 @@ export default function ArcimMigrationWorkspace({
       setError(displayError(err))
       setStep('result')
     }
-  }, [consentId, migrationOptions, sieData, toast])
+  }, [consentId, migrationOptions, preview, runDocumentDiscovery, selectedProvider, sieData, toast])
 
   const handleDone = useCallback(() => {
     // Reset wizard
@@ -2542,11 +3033,14 @@ export default function ArcimMigrationWorkspace({
     setMigrationOptions(DEFAULT_OPTIONS)
     setMigrationResults(null)
     setSieImportResults([])
+    dispatchDocumentImport({ type: 'reset' })
+    clearDocumentReconnectFailureCleanup()
+    documentReconnectActionRef.current = null
     setTheaterModel(null)
     setError(null)
     // Refresh status so provider step shows updated import history
     fetchStatus()
-  }, [fetchStatus])
+  }, [clearDocumentReconnectFailureCleanup, fetchStatus])
 
   // ── Render ─────────────────────────────────────────────────────
 
@@ -2662,11 +3156,20 @@ export default function ArcimMigrationWorkspace({
           results={migrationResults}
           sieResults={sieImportResults}
           error={error}
+          documentImportState={documentImportState}
           onDone={handleDone}
           onRetry={() => {
             setError(null)
             setStep('options')
           }}
+          onDiscoverDocuments={() => {
+            if (consentId) void runDocumentDiscovery(consentId, 'fortnox', true)
+          }}
+          onImportDocuments={() => {
+            if (consentId) void runDocumentImport(consentId)
+          }}
+          onDismissDocuments={() => dispatchDocumentImport({ type: 'dismissed' })}
+          onReconnectDocuments={handleDocumentReconnect}
         />
       )}
     </div>

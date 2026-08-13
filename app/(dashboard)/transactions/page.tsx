@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { DataList, DataListEmpty } from '@/components/ui/data-list'
 import { Input } from '@/components/ui/input'
@@ -20,6 +21,8 @@ import { Loader2, Search } from 'lucide-react'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
 import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 import { ContextPicker, type ContextPickerItem } from '@/components/common/ContextPicker'
+import { FyPicker } from '@/components/common/FyPicker'
+import { ALL_YEARS_VALUE } from '@/components/common/FiscalYearSelector'
 import { AttnLine } from '@/components/ui/attn-line'
 import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
 import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
@@ -41,9 +44,12 @@ import type {
   CategorizeHandler,
 } from '@/components/transactions/transaction-types'
 import type {
+  SkattekontoBatchResult,
+  SkattekontoBatchRowResult,
   SkattekontoTransactionWithSuggestion,
   StoredSkattekontoTransaction,
 } from '@/types/skatteverket'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { findBankSkvCounterparts } from '@/lib/skatteverket/bank-counterpart'
 import {
   MATCHABLE_INVOICE_STATUSES,
@@ -54,10 +60,19 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, LinePatternEntry, BookingTemplateLibrary, CashAccount } from '@/types'
 import type { SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { computeJeUnderlagStatus, type JeUnderlagStatus } from '@/lib/transactions/underlag-status'
+import {
+  QUARTERS,
+  isWithinBounds,
+  quarterBounds,
+  resolvePeriodBounds,
+  type Quarter,
+} from '@/lib/transactions/period-filter'
+import type { FiscalPeriod } from '@/types'
 
 function InlineDialogContentLoading() {
   return (
@@ -94,6 +109,10 @@ const SkattekontoMatchDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoMatchDialog').then((module) => module.SkattekontoMatchDialog),
   { loading: DialogLoadingSkeleton },
 )
+const SkattekontoBookDialog = dynamic(
+  () => import('@/components/skattekonto/SkattekontoBookDialog'),
+  { loading: DialogLoadingSkeleton },
+)
 const DuplicateBookingDialog = dynamic(
   () => import('@/components/transactions/DuplicateBookingDialog'),
   { loading: DialogLoadingSkeleton },
@@ -104,6 +123,11 @@ type InvoiceWithCustomer = Invoice & { customer?: Customer }
 type SupplierInvoiceWithSupplier = SupplierInvoice & { supplier?: Supplier }
 
 const SOURCE_FILTER_STORAGE_KEY = 'Accounted:transaction-source-filter:v1'
+
+// Page-local fiscal-year scope (FyPicker appends the company id). Deliberately
+// NOT the shared report scope (Accounted:fiscal-year:): a year picked on a
+// report page must never silently hide pending inbox rows here, and vice versa.
+const PERIOD_FILTER_STORAGE_PREFIX = 'Accounted:transactions-fy-scope:v1:'
 
 // Journal-entry ids get interpolated into the supplier-invoice .or() filter
 // string in the underlag-badge effect below. They come from journal_entries.id
@@ -120,6 +144,19 @@ function isSourceFilter(value: string | null): value is SourceFilter {
     value === 'bank:other' ||
     value === 'skatteverket' ||
     (value?.startsWith('acct:') ?? false)
+  )
+}
+
+// A skattekonto row qualifies for bulk booking when the outcome is fully
+// deterministic: a rule matched (booking_suggestion), it is not a likely
+// duplicate (match_suggestion), it is unbooked, and it has actually happened
+// (kommande rows have nothing to book yet).
+function isSkvBulkEligible(row: SkattekontoTransactionWithSuggestion): boolean {
+  return (
+    row.booking_suggestion != null &&
+    row.match_suggestion == null &&
+    !row.journal_entry_id &&
+    row.status !== 'upcoming'
   )
 }
 
@@ -355,6 +392,12 @@ export default function TransactionsPage() {
   const pagedCountRef = useRef(0)
   const [pagedThroughDate, setPagedThroughDate] = useState<string | null>(null)
 
+  // Monotonic token for list fetches: a response applies only if no newer
+  // fetch (scope change, realtime refresh, load-more) started after it.
+  // Without it, a slow pre-filter request resolving late would overwrite the
+  // active period scope's window and paging state with stale rows.
+  const fetchGenerationRef = useRef(0)
+
   // True uncategorized count from DB (not limited by pagination)
   const [totalUncategorizedCount, setTotalUncategorizedCount] = useState<number | null>(null)
 
@@ -365,10 +408,20 @@ export default function TransactionsPage() {
   // Skatteverket extension is enabled and connected. 503/401 → silently
   // hidden (extension disabled or user not connected).
   const [skvRows, setSkvRows] = useState<SkattekontoTransactionWithSuggestion[]>([])
-  const [skvProcessingId, setSkvProcessingId] = useState<string | null>(null)
   const [skvMatchTarget, setSkvMatchTarget] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
+  // Inline single-row booking dialog (replaces the old draft-then-navigate
+  // flow that dumped the user in /bookkeeping and lost all list state).
+  const [skvBookTarget, setSkvBookTarget] = useState<SkattekontoTransactionWithSuggestion | null>(
+    null,
+  )
+  // SKV bulk selection: deliberately a SEPARATE set from the bank
+  // `selectedIds`: every bank batch handler POSTs /api/transactions/* and
+  // would 404 on skattekonto ids.
+  const [skvSelectedIds, setSkvSelectedIds] = useState<Set<string>>(new Set())
+  const [skvBulkConfirmOpen, setSkvBulkConfirmOpen] = useState(false)
+  const [skvBulkSubmitting, setSkvBulkSubmitting] = useState(false)
   // True when an SKV connection exists but is dead (needs_reconsent, or
   // expired with no refresh left). Drives the reconnect banner: without it
   // a user whose token died sees an empty skattekonto and has no reason to
@@ -397,6 +450,51 @@ export default function TransactionsPage() {
       // localStorage may be unavailable. The in-memory filter still works.
     }
   }, [])
+
+  // Period filter (rakenskapsar + optional quarter within it). Quarters
+  // follow the fiscal year, so a brutet rakenskapsar (July-June) gets
+  // Q1 = Jul-Sep. FyPicker owns the persistence under the page-local key;
+  // the quarter is session-only.
+  const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
+  const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
+  const [fyQuarter, setFyQuarter] = useState<Quarter | null>(null)
+  const periodBounds = useMemo(
+    () => resolvePeriodBounds(fyPeriod, fyQuarter),
+    [fyPeriod, fyQuarter],
+  )
+
+  const handlePeriodChange = useCallback((periodId: string | null, period?: FiscalPeriod | null) => {
+    setFyPeriodId(periodId)
+    setFyPeriod(period ?? null)
+    setFyQuarter(null)
+    // Batch selections may reference rows the new scope hides; every batch
+    // action operates on "what you see", so drop them.
+    setSelectedIds(new Set())
+    setSkvSelectedIds(new Set())
+  }, [])
+
+  const handleQuarterChange = useCallback((quarter: Quarter | null) => {
+    setFyQuarter(quarter)
+    setSelectedIds(new Set())
+    setSkvSelectedIds(new Set())
+  }, [])
+
+  // Footer "Visa alla" escape hatch: clears the period scope AND its
+  // persisted value (FyPicker only writes storage from its own dropdown).
+  const clearPeriodFilter = useCallback(() => {
+    setFyPeriodId(null)
+    setFyPeriod(null)
+    setFyQuarter(null)
+    setSelectedIds(new Set())
+    setSkvSelectedIds(new Set())
+    if (companyId) {
+      try {
+        window.localStorage.setItem(PERIOD_FILTER_STORAGE_PREFIX + companyId, ALL_YEARS_VALUE)
+      } catch {
+        // localStorage may be unavailable; the in-memory state is cleared.
+      }
+    }
+  }, [companyId])
   // Registered cash accounts (cash_accounts): the account chooser's rows,
   // with PSD2 balances when the bank reports them.
   const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([])
@@ -457,6 +555,9 @@ export default function TransactionsPage() {
     const query = searchTerm.trim().toLowerCase()
     if (sourceFilter !== 'skatteverket') {
       for (const tx of uncategorizedTransactions) {
+        // The refetch already narrows state server-side; this check makes the
+        // filter correct immediately on change, before the refetch lands.
+        if (!isWithinBounds(tx.date, periodBounds)) continue
         if (
           sourceFilter.startsWith('acct:') &&
           tx.cash_account_id !== sourceFilter.slice('acct:'.length)
@@ -480,6 +581,8 @@ export default function TransactionsPage() {
       for (const r of skvRows) {
         if (r.journal_entry_id) continue
         if (exitingIds.has(r.id)) continue
+        // SKV rows live client-side only, so the period filter applies here.
+        if (!isWithinBounds(r.transaktionsdatum, periodBounds)) continue
         if (
           query &&
           !r.transaktionstext?.toLowerCase().includes(query) &&
@@ -497,7 +600,7 @@ export default function TransactionsPage() {
       if (a.source !== b.source) return a.source === 'bank' ? -1 : 1
       return 0
     })
-  }, [exitingIds, searchTerm, skvRows, sourceFilter, uncategorizedTransactions])
+  }, [exitingIds, periodBounds, searchTerm, skvRows, sourceFilter, uncategorizedTransactions])
 
   // History shows only the contiguous newest-first window: the older pending
   // rows merged in for the inbox would otherwise render as sparse, gap-ridden
@@ -505,11 +608,45 @@ export default function TransactionsPage() {
   // the boundary may slip in; they are real rows of that date, so harmless.
   const historyTransactions = useMemo(
     () =>
-      pagedThroughDate
-        ? transactions.filter((t) => t.date >= pagedThroughDate)
-        : transactions,
-    [transactions, pagedThroughDate],
+      transactions.filter(
+        (t) =>
+          (!pagedThroughDate || t.date >= pagedThroughDate) &&
+          // Server-side scope catches up on refetch; this keeps the view
+          // correct in the transition frame after a filter change.
+          isWithinBounds(t.date, periodBounds),
+      ),
+    [transactions, pagedThroughDate, periodBounds],
   )
+
+  // SKV rows shown in the history view, narrowed to the active period. The
+  // list component filters by search/source itself but knows nothing about
+  // period bounds.
+  const skvRowsInScope = useMemo(
+    () => skvRows.filter((r) => isWithinBounds(r.transaktionsdatum, periodBounds)),
+    [skvRows, periodBounds],
+  )
+
+  // Tab badge: DB-true pending count normally; with a period filter active,
+  // the pending rows inside the scope (complete, since the pending backlog
+  // fetch is unscoped and fully in state).
+  const inboxBadgeCount = useMemo(() => {
+    if (!periodBounds) return totalUncategorizedCount ?? uncategorizedTransactions.length
+    return uncategorizedTransactions.filter((tx) => isWithinBounds(tx.date, periodBounds)).length
+  }, [periodBounds, totalUncategorizedCount, uncategorizedTransactions])
+
+  // Pending work the active period filter hides (bank + skattekonto). BFL
+  // 5 kap: pending affarshandelser must never disappear silently, so the
+  // footer names this count and offers a one-click way back to everything.
+  const pendingOutsideCount = useMemo(() => {
+    if (!periodBounds) return 0
+    const bankOutside = uncategorizedTransactions.filter(
+      (tx) => !isWithinBounds(tx.date, periodBounds),
+    ).length
+    const skvOutside = skvRows.filter(
+      (r) => !r.journal_entry_id && !isWithinBounds(r.transaktionsdatum, periodBounds),
+    ).length
+    return bankOutside + skvOutside
+  }, [periodBounds, skvRows, uncategorizedTransactions])
 
   // Account chooser (concept scene 10): the source picker doubles as a
   // balance readout. The total sums only SEK ledgers (mixing currencies into
@@ -568,10 +705,58 @@ export default function TransactionsPage() {
   }, [sourceFilter, sourceItems])
 
   // Rows the bulkbar's "Markera alla" can select: the visible bank rows
-  // (skattekonto rows aren't batch-bookable).
+  // (they feed the /api/transactions/* batch handlers) ...
   const selectableInboxIds = useMemo(
     () => inboxItems.filter((item) => item.source === 'bank').map((item) => item.data.id),
     [inboxItems],
+  )
+
+  // ... plus the visible skattekonto rows whose booking is deterministic
+  // (rule matched, no duplicate hint, unbooked, genomförd). These go through
+  // the skatteverket extension's bokfor-batch endpoint instead.
+  const selectableSkvIds = useMemo(
+    () =>
+      inboxItems
+        .filter((item) => item.source === 'skatteverket' && isSkvBulkEligible(item.data))
+        .map((item) => item.data.id),
+    [inboxItems],
+  )
+
+  const skvSelectedRows = useMemo(
+    () => skvRows.filter((r) => skvSelectedIds.has(r.id)),
+    [skvRows, skvSelectedIds],
+  )
+
+  // Bulk confirmation summary: selected rows grouped by their deterministic
+  // suggestion ("3 × Intäktsränta skattekonto → 8314") with per-group sums.
+  // Count-based on purpose: voucher numbers are assigned atomically at
+  // commit, so predicting them here would lie under concurrency.
+  const skvBulkGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      { label: string; account: string; count: number; sum: number }
+    >()
+    for (const row of skvSelectedRows) {
+      const suggestion = row.booking_suggestion
+      if (!suggestion) continue
+      const label = suggestion.label ?? suggestion.account_name ?? row.transaktionstext
+      const key = `${suggestion.account}|${label}`
+      const group = groups.get(key) ?? {
+        label,
+        account: suggestion.account,
+        count: 0,
+        sum: 0,
+      }
+      group.count += 1
+      group.sum = roundOre(group.sum + Number(row.belopp_skatteverket))
+      groups.set(key, group)
+    }
+    return Array.from(groups.values())
+  }, [skvSelectedRows])
+
+  const skvBulkTotal = useMemo(
+    () => roundOre(skvBulkGroups.reduce((sum, g) => sum + g.sum, 0)),
+    [skvBulkGroups],
   )
 
 
@@ -643,17 +828,29 @@ export default function TransactionsPage() {
 
   const fetchTransactions = useCallback(async (showLoading = false, includeSkvRows = false) => {
     if (!companyId) return
+    const generation = ++fetchGenerationRef.current
     if (showLoading) setIsLoading(true)
     if (includeSkvRows) void loadSkvRows()
     try {
+      // Only the history window is narrowed server-side by the period filter.
+      // The pending-backlog fetch and the pending count below stay UNSCOPED on
+      // purpose (Swedish accounting review, PR #1545): BFL 5 kap requires
+      // pending affarshandelser to be booked promptly, so every pending row
+      // must stay in state regardless of the filter. The inbox applies the
+      // period client-side and the footer surfaces what falls outside it.
+      let windowQuery = supabase
+        .from('transactions')
+        .select('*')
+        .eq('company_id', companyId)
+      if (periodBounds) {
+        windowQuery = windowQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
+      }
+
       const [{ data: txData, error: txError }, { count: uncatCount }, pendingRows] = await Promise.all([
-        supabase
-          .from('transactions')
-          .select('*')
-          .eq('company_id', companyId)
-          // The id tie-breaker keeps offset paging deterministic when many
-          // rows share a date; without it .range() pages can skip or repeat
-          // same-date rows.
+        // The id tie-breaker keeps offset paging deterministic when many
+        // rows share a date; without it .range() pages can skip or repeat
+        // same-date rows.
+        windowQuery
           .order('date', { ascending: false })
           .order('id', { ascending: true })
           .limit(PAGE_SIZE),
@@ -686,6 +883,11 @@ export default function TransactionsPage() {
         }),
       ])
 
+      // A newer fetch (scope change, refresh) started while this one was in
+      // flight: its results own the state now, so this response must not
+      // apply. Toasts are skipped too; the newer request reports its own fate.
+      if (fetchGenerationRef.current !== generation) return
+
       if (txError) {
         toast({ title: t('load_failed_title'), description: t('load_failed_description'), variant: 'destructive' })
         return
@@ -703,6 +905,10 @@ export default function TransactionsPage() {
       const allRows = [...rows, ...olderPending].sort((a, b) => b.date.localeCompare(a.date))
       const { invoiceMap, supplierInvoiceMap } = await fetchPotentialMatches(supabase, allRows)
 
+      // Re-check after the second await: a scope change during the match
+      // enrichment must also discard this response.
+      if (fetchGenerationRef.current !== generation) return
+
       const transactionsWithInvoices: TransactionWithInvoice[] = allRows.map((t) => ({
         ...t,
         potential_invoice: t.potential_invoice_id ? invoiceMap[t.potential_invoice_id] : undefined,
@@ -718,9 +924,13 @@ export default function TransactionsPage() {
       setHasMore(rows.length >= PAGE_SIZE)
 
     } finally {
-      if (showLoading) setIsLoading(false)
+      // Only the newest request may touch the skeleton: a stale one must not
+      // clear what a newer showLoading request just put up. The newest always
+      // clears it (even non-showLoading refreshes, whose superseded
+      // predecessor may have left it up).
+      if (fetchGenerationRef.current === generation) setIsLoading(false)
     }
-  }, [companyId, loadSkvRows, supabase, t, toast])
+  }, [companyId, loadSkvRows, periodBounds, supabase, t, toast])
 
   const refreshTransactions = useCallback(async () => {
     if (!companyId) return
@@ -743,21 +953,30 @@ export default function TransactionsPage() {
 
   async function loadMoreTransactions() {
     if (!companyId) return
+    // Claims the generation: a scope change mid-request discards this page
+    // instead of appending old-scope rows and corrupting the paging offsets.
+    const generation = ++fetchGenerationRef.current
     setIsLoadingMore(true)
     // Offset counts only the contiguous newest-first window, not the older
     // pending rows merged into state for the inbox.
     const offset = pagedCountRef.current
-    const { data: txData, error: txError } = await supabase
+    let pageQuery = supabase
       .from('transactions')
       .select('*')
       .eq('company_id', companyId)
+    // Same period scope as the initial window fetch: mixed-scope pages would
+    // corrupt the offset bookkeeping.
+    if (periodBounds) {
+      pageQuery = pageQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
+    }
+    const { data: txData, error: txError } = await pageQuery
       // Same stable order as the initial window fetch: offset paging over a
       // date-only order can skip or repeat same-date rows between pages.
       .order('date', { ascending: false })
       .order('id', { ascending: true })
       .range(offset, offset + PAGE_SIZE - 1)
 
-    if (txError || !txData) {
+    if (fetchGenerationRef.current !== generation || txError || !txData) {
       setIsLoadingMore(false)
       return
     }
@@ -767,6 +986,13 @@ export default function TransactionsPage() {
     setHasMore(txData.length >= PAGE_SIZE)
 
     const { invoiceMap, supplierInvoiceMap } = await fetchPotentialMatches(supabase, txData)
+
+    // Same staleness rule after the enrichment await: the offsets above were
+    // written under this generation, but a newer fetch has already reset them.
+    if (fetchGenerationRef.current !== generation) {
+      setIsLoadingMore(false)
+      return
+    }
 
     const newTransactions: TransactionWithInvoice[] = txData.map((t) => ({
       ...t,
@@ -1971,38 +2197,183 @@ export default function TransactionsPage() {
     }
   }
 
-  async function handleSkvBokfor(row: StoredSkattekontoTransaction) {
-    setSkvProcessingId(row.id)
-    try {
-      const res = await fetch(
-        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/bokfor`,
-        { method: 'POST' },
+  function handleSkvBokfor(row: StoredSkattekontoTransaction) {
+    // Prefer the enriched row (booking_suggestion) when it's in state:
+    // history-view callers only hold the stored shape.
+    setSkvBookTarget(skvRows.find((r) => r.id === row.id) ?? row)
+  }
+
+  /**
+   * Single-row booking succeeded (inline dialog): exit animation, local
+   * journal_entry_id patch (no refetch), and one toast linking the verifikat.
+   */
+  function handleSkvBooked(rowId: string, result: SkattekontoBatchRowResult) {
+    setSkvBookTarget(null)
+    setSkvSelectedIds((prev) => {
+      if (!prev.has(rowId)) return prev
+      const next = new Set(prev)
+      next.delete(rowId)
+      return next
+    })
+    setExitingIds((prev) => new Set(prev).add(rowId))
+    setTimeout(() => {
+      setSkvRows((prev) =>
+        prev.map((r) =>
+          r.id === rowId && result.journal_entry_id
+            ? { ...r, journal_entry_id: result.journal_entry_id }
+            : r,
+        ),
       )
-      const json = await res.json()
-      if (!res.ok) {
-        // Map the parsed body plus the status, never `new Error(json.error)`:
-        // the Error constructor stringifies a non-string body field, and the
-        // mapper would discard the route's own Swedish reason.
-        toast({
-          title: 'Kunde inte bokföra',
-          description: getErrorMessage(json, { statusCode: res.status }),
-          variant: 'destructive',
-        })
-        return
-      }
-      toast({
-        title: 'Utkast skapat',
-        description: t('review_in_bookkeeping_description'),
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(rowId)
+        return next
       })
-      window.location.href = `/bookkeeping/${json.data.entry.id}`
-    } catch (err) {
+    }, 350)
+
+    const voucherLabel =
+      result.voucher_series && result.voucher_number != null
+        ? formatVoucher({
+            voucher_series: result.voucher_series,
+            voucher_number: result.voucher_number,
+          })
+        : null
+    toast({
+      title: t('skv_booked_title'),
+      description: voucherLabel
+        ? t('skv_booked_description', { voucher: voucherLabel })
+        : undefined,
+      action: result.journal_entry_id ? (
+        <ToastAction altText={t('skv_booked_show')} asChild>
+          <Link href={`/bookkeeping/${result.journal_entry_id}`}>
+            {t('skv_booked_show')}
+          </Link>
+        </ToastAction>
+      ) : undefined,
+    })
+  }
+
+  function toggleSkvSelect(id: string) {
+    setSkvSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  /**
+   * Bulk "Bokför valda": one confirmed summary → server-side draft+commit
+   * per row via bokfor-batch (chunked so batchProgress moves), then ONE
+   * aggregate toast and a local state patch with the exit animation.
+   */
+  async function handleSkvBulkConfirm() {
+    // Re-check eligibility at submit time: a refetch may have attached a
+    // duplicate hint or booked a row while the selection sat idle.
+    const ids = skvSelectedRows.filter(isSkvBulkEligible).map((r) => r.id)
+    if (ids.length === 0) {
+      setSkvBulkConfirmOpen(false)
+      setSkvSelectedIds(new Set())
+      return
+    }
+    setSkvBulkConfirmOpen(false)
+    setSkvBulkSubmitting(true)
+    setBatchProgress({ done: 0, total: ids.length })
+
+    const results: SkattekontoBatchRowResult[] = []
+    const CHUNK = 25
+    try {
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK)
+        try {
+          const res = await fetch(
+            '/api/extensions/ext/skatteverket/skattekonto/transaktioner/bokfor-batch',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ids: chunk }),
+            },
+          )
+          const json = await res.json()
+          if (res.ok) {
+            results.push(...(json.data as SkattekontoBatchResult).results)
+          } else {
+            const message = getErrorMessage(json, { statusCode: res.status })
+            for (const id of chunk) {
+              results.push({ id, ok: false, error_code: 'UNKNOWN', error_message: message })
+            }
+          }
+        } catch {
+          for (const id of chunk) {
+            results.push({ id, ok: false, error_code: 'UNKNOWN' })
+          }
+        }
+        setBatchProgress({ done: Math.min(i + CHUNK, ids.length), total: ids.length })
+      }
+    } finally {
+      setBatchProgress(null)
+      setSkvBulkSubmitting(false)
+    }
+
+    // Rows that got a journal entry (posted, or a kept draft on
+    // COMMIT_FAILED) leave the inbox: patch locally instead of refetching.
+    const patched = new Map<string, string>()
+    for (const r of results) {
+      if (r.journal_entry_id) patched.set(r.id, r.journal_entry_id)
+    }
+    if (patched.size > 0) {
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        for (const id of patched.keys()) next.add(id)
+        return next
+      })
+      setTimeout(() => {
+        setSkvRows((prev) =>
+          prev.map((r) =>
+            patched.has(r.id) ? { ...r, journal_entry_id: patched.get(r.id)! } : r,
+          ),
+        )
+        setExitingIds((prev) => {
+          const next = new Set(prev)
+          for (const id of patched.keys()) next.delete(id)
+          return next
+        })
+      }, 350)
+    }
+    setSkvSelectedIds(new Set())
+
+    const succeeded = results.filter((r) => r.ok).length
+    const failures = results.filter((r) => !r.ok)
+    if (failures.length === 0) {
       toast({
-        title: 'Kunde inte bokföra',
-        description: err instanceof Error ? getErrorMessage(err) : undefined,
+        title: t('skv_bulk_done_title'),
+        description: t('skv_bulk_done_description', { count: succeeded }),
+      })
+    } else {
+      const codeCounts = new Map<string, number>()
+      for (const f of failures) {
+        const code = f.error_code ?? 'UNKNOWN'
+        codeCounts.set(code, (codeCounts.get(code) ?? 0) + 1)
+      }
+      const codeLabel = (code: string) =>
+        code === 'PERIOD_LOCKED'
+          ? t('skv_err_period_locked')
+          : code === 'NO_COUNTER_ACCOUNT'
+            ? t('skv_err_no_counter_account')
+            : code === 'ALREADY_BOOKED'
+              ? t('skv_err_already_booked')
+              : code === 'NOT_SETTLED'
+                ? t('skv_err_not_settled')
+                : code === 'COMMIT_FAILED'
+                  ? t('skv_err_commit_failed')
+                  : t('skv_err_other')
+      const parts = [t('skv_bulk_partial_ok', { count: succeeded })]
+      for (const [code, n] of codeCounts) parts.push(`${n} ${codeLabel(code)}`)
+      toast({
+        title: t('skv_bulk_partial_title'),
+        description: parts.join(', '),
         variant: 'destructive',
       })
-    } finally {
-      setSkvProcessingId(null)
     }
   }
 
@@ -2099,6 +2470,7 @@ export default function TransactionsPage() {
 
   function exitBatchMode() {
     setSelectedIds(new Set())
+    setSkvSelectedIds(new Set())
   }
 
   async function handleBatchDelete() {
@@ -2524,9 +2896,9 @@ export default function TransactionsPage() {
             }`}
           >
             {t('mode_inbox')}
-            {(totalUncategorizedCount ?? uncategorizedTransactions.length) > 0 && (
+            {inboxBadgeCount > 0 && (
               <span className="rounded-full bg-secondary px-1.5 text-[10px] font-medium tabular-nums">
-                {totalUncategorizedCount ?? uncategorizedTransactions.length}
+                {inboxBadgeCount}
               </span>
             )}
           </button>
@@ -2553,12 +2925,51 @@ export default function TransactionsPage() {
             className="h-9 pl-10"
           />
         </div>
-        {/* Account chooser (convention 8): the one context chip, far right,
-            shared by both view modes. Per-cash-account rows with balances
-            (concept scene 10); hidden only when there is nothing beyond
-            "Alla källor" to choose. */}
-        {sourceItems.length > 1 && (
-          <div className="ml-auto">
+        {/* Far-right context group, shared by both view modes: period scope
+            (rakenskapsar chip + quarter chips once a year is chosen) and the
+            account chooser (concept scene 10). Approved deviation from
+            convention 8's single chip: booking is period work, so the period
+            scope earns the second chip (user request 2026-08-12). */}
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          <FyPicker
+            value={fyPeriodId}
+            onChange={handlePeriodChange}
+            storageKeyPrefix={PERIOD_FILTER_STORAGE_PREFIX}
+          />
+          {fyPeriod && (
+            <div
+              className="inline-flex shrink-0 gap-0.5 rounded-lg bg-muted/70 p-[3px]"
+              role="group"
+              // Quarters follow the rakenskapsar, NOT the calendar: on a
+              // brutet rakenskapsar these are not momsdeklaration quarters.
+              // The label says so to keep VAT reconciliation off this chip.
+              aria-label={t('period_quarter_group')}
+              title={t('period_quarter_group')}
+            >
+              {QUARTERS.map((quarter) => {
+                const bounds = quarterBounds(fyPeriod, quarter)
+                const active = fyQuarter === quarter
+                return (
+                  <button
+                    key={quarter}
+                    type="button"
+                    disabled={!bounds}
+                    aria-pressed={active}
+                    // Clicking the active quarter widens back to the full year.
+                    onClick={() => handleQuarterChange(active ? null : quarter)}
+                    className={`rounded-md px-3 py-[5px] text-[12.5px] tabular-nums transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40 ${
+                      active
+                        ? 'border border-border bg-card font-medium text-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {`Q${quarter}`}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          {sourceItems.length > 1 && (
             <ContextPicker
               value={sourceFilter}
               onChange={(id) => handleSourceFilterChange(id as SourceFilter)}
@@ -2569,8 +2980,8 @@ export default function TransactionsPage() {
               })()}
               items={sourceItems}
             />
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Content based on mode */}
@@ -2589,10 +3000,16 @@ export default function TransactionsPage() {
         </DataList>
       ) : mode === 'inbox' ? (
         inboxItems.length === 0 ? (
-          searchTerm || sourceFilter !== 'all' ? (
+          searchTerm || sourceFilter !== 'all' || periodBounds ? (
             <DataListEmpty
               title="Inga träffar"
-              description={searchTerm ? t('no_search_results') : t('source_empty')}
+              description={
+                searchTerm
+                  ? t('no_search_results')
+                  : sourceFilter !== 'all'
+                    ? t('source_empty')
+                    : t('period_empty')
+              }
             />
           ) : (
             <InboxZeroState
@@ -2605,7 +3022,7 @@ export default function TransactionsPage() {
             {/* Bulkbar (concept): hidden until at least one transaction is
                 selected via the hover checkboxes, then it pops in with the
                 count and the batch actions. */}
-            {selectedIds.size > 0 && (
+            {(selectedIds.size > 0 || skvSelectedIds.size > 0) && (
               <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
                 {batchProgress ? (
                   <span className="flex items-center gap-2 text-muted-foreground">
@@ -2615,41 +3032,60 @@ export default function TransactionsPage() {
                 ) : (
                   <>
                     <span className="whitespace-nowrap">
-                      <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
-                      {t('bulkbar_selected', { count: selectedIds.size })}
+                      <strong className="font-semibold tabular-nums">
+                        {selectedIds.size + skvSelectedIds.size}
+                      </strong>{' '}
+                      {t('bulkbar_selected', { count: selectedIds.size + skvSelectedIds.size })}
                     </span>
-                    <Button size="sm" onClick={() => setShowBatchSelector(true)}>
-                      {t('batch_book')}
-                    </Button>
-                    {/* Bulk-book (samlingsverifikation): only when ≥2 selected
-                        on the same date + same direction. Disabled state
-                        explains why via title. */}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setBulkBookOpen(true)}
-                      disabled={!bulkBookEligible}
-                      title={!bulkBookEligible ? t('batch_bulk_book_hint') : undefined}
-                    >
-                      {t('batch_bulk_book')}
-                    </Button>
-                    <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore}>
-                      {t('batch_ignore')}
-                    </button>
-                    <button
-                      type="button"
-                      className={cn(QUIET_LINK_CLASS, 'hover:text-destructive')}
-                      onClick={handleBatchDelete}
-                    >
-                      {t('batch_delete')}
-                    </button>
-                    {selectedIds.size < selectableInboxIds.length && (
+                    {selectedIds.size > 0 && (
+                      <>
+                        <Button size="sm" onClick={() => setShowBatchSelector(true)}>
+                          {t('batch_book')}
+                        </Button>
+                        {/* Bulk-book (samlingsverifikation): only when ≥2 selected
+                            on the same date + same direction. Disabled state
+                            explains why via title. */}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setBulkBookOpen(true)}
+                          disabled={!bulkBookEligible}
+                          title={!bulkBookEligible ? t('batch_bulk_book_hint') : undefined}
+                        >
+                          {t('batch_bulk_book')}
+                        </Button>
+                        <button type="button" className={QUIET_LINK_CLASS} onClick={handleBatchIgnore}>
+                          {t('batch_ignore')}
+                        </button>
+                        <button
+                          type="button"
+                          className={cn(QUIET_LINK_CLASS, 'hover:text-destructive')}
+                          onClick={handleBatchDelete}
+                        >
+                          {t('batch_delete')}
+                        </button>
+                      </>
+                    )}
+                    {/* SKV rows book through the skatteverket extension: one
+                        summary confirmation, then draft+commit per row. */}
+                    {skvSelectedIds.size > 0 && (
+                      <Button size="sm" onClick={() => setSkvBulkConfirmOpen(true)}>
+                        {t('batch_skv_book', { count: skvSelectedIds.size })}
+                      </Button>
+                    )}
+                    {(selectedIds.size < selectableInboxIds.length ||
+                      skvSelectedIds.size < selectableSkvIds.length) && (
                       <button
                         type="button"
                         className={QUIET_LINK_CLASS}
-                        onClick={() => setSelectedIds(new Set(selectableInboxIds))}
+                        onClick={() => {
+                          setSelectedIds(new Set(selectableInboxIds))
+                          setSkvSelectedIds(new Set(selectableSkvIds))
+                        }}
                       >
-                        {t('batch_select_all', { count: selectableInboxIds.length })}
+                        {t('batch_select_all', {
+                          count: selectableInboxIds.length + selectableSkvIds.length,
+                        })}
                       </button>
                     )}
                     <button type="button" className={QUIET_LINK_CLASS} onClick={exitBatchMode}>
@@ -2706,7 +3142,11 @@ export default function TransactionsPage() {
                         key={`skv-${item.data.id}`}
                         row={item.data}
                         matchSuggestion={item.data.match_suggestion}
-                        processing={skvProcessingId === item.data.id}
+                        bookingSuggestion={item.data.booking_suggestion}
+                        processing={skvBulkSubmitting}
+                        selectable={isSkvBulkEligible(item.data)}
+                        isSelected={skvSelectedIds.has(item.data.id)}
+                        onToggleSelect={toggleSkvSelect}
                         onBokfor={handleSkvBokfor}
                         onMatch={r => setSkvMatchTarget(r)}
                       />
@@ -2720,7 +3160,7 @@ export default function TransactionsPage() {
       ) : (
         <TransactionHistoryList
           transactions={historyTransactions}
-          skvRows={skvRows}
+          skvRows={skvRowsInScope}
           searchTerm={searchTerm}
           sourceFilter={sourceFilter}
           jeUnderlagStatus={jeUnderlagStatus}
@@ -2743,6 +3183,14 @@ export default function TransactionsPage() {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1 text-xs text-muted-foreground">
         {mode === 'inbox' && (
           <span className="tabular-nums">{t('footer_to_handle', { count: inboxItems.length })}</span>
+        )}
+        {mode === 'inbox' && pendingOutsideCount > 0 && (
+          <span className="tabular-nums">
+            {t('period_pending_outside', { count: pendingOutsideCount })}{' '}
+            <button type="button" className={QUIET_LINK_CLASS} onClick={clearPeriodFilter}>
+              {t('period_show_all')}
+            </button>
+          </span>
         )}
         <BankSyncStatusChip />
         <BankSyncNowButton />
@@ -2999,6 +3447,64 @@ export default function TransactionsPage() {
           onClose={() => setSkvMatchTarget(null)}
           onMatched={handleSkvMatched}
         />
+      )}
+
+      {skvBookTarget && (
+        <SkattekontoBookDialog
+          row={skvBookTarget}
+          open
+          onOpenChange={(o) => {
+            if (!o) setSkvBookTarget(null)
+          }}
+          onBooked={handleSkvBooked}
+          onMatch={() => {
+            setSkvMatchTarget(skvBookTarget)
+            setSkvBookTarget(null)
+          }}
+        />
+      )}
+
+      {/* SKV bulk booking: one summary confirmation for the whole selection,
+          grouped by deterministic suggestion. Count-based: voucher numbers
+          are assigned atomically at commit. */}
+      {skvBulkConfirmOpen && (
+        <ConfirmationDialog
+          open
+          onOpenChange={setSkvBulkConfirmOpen}
+          title={t('skv_bulk_title', { count: skvSelectedIds.size })}
+          isSubmitting={skvBulkSubmitting}
+          confirmLabel={t('skv_bulk_confirm')}
+          warningText={t('skv_bulk_warning', { count: skvSelectedIds.size })}
+          onConfirm={handleSkvBulkConfirm}
+        >
+          <div className="space-y-2 py-2 text-sm">
+            {skvBulkGroups.map((group) => (
+              <div
+                key={`${group.account}|${group.label}`}
+                className="flex items-baseline justify-between gap-4"
+              >
+                <span className="min-w-0 truncate">
+                  {t('skv_bulk_group', {
+                    count: group.count,
+                    label: group.label,
+                    account: group.account,
+                  })}
+                </span>
+                <span className={cn('shrink-0 tabular-nums', group.sum > 0 && 'text-success')}>
+                  {group.sum > 0 ? '+' : ''}
+                  {formatCurrency(group.sum)}
+                </span>
+              </div>
+            ))}
+            <div className="flex items-baseline justify-between gap-4 border-t border-border pt-2 font-medium">
+              <span>{t('skv_bulk_total', { count: skvSelectedIds.size })}</span>
+              <span className="tabular-nums">
+                {skvBulkTotal > 0 ? '+' : ''}
+                {formatCurrency(skvBulkTotal)}
+              </span>
+            </div>
+          </div>
+        </ConfirmationDialog>
       )}
 
       {/* Prong B: match-against-supplier-invoice suggestion */}

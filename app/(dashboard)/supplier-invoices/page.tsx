@@ -23,6 +23,8 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
+import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { FiscalPeriod, SupplierInvoice } from '@/types'
 
 const NewSupplierInvoiceDialog = dynamic(
@@ -90,6 +92,7 @@ export default function SupplierInvoicesPage() {
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
+  const company = useCompanyOptional()?.company ?? null
   const [invoices, setInvoices] = useState<(SupplierInvoice & { supplier?: { id: string; name: string } })[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<ListTab>('all')
@@ -184,6 +187,14 @@ export default function SupplierInvoicesPage() {
       (inv.invoice_date >= fyPeriod.period_start && inv.invoice_date <= fyPeriod.period_end)
     return matchesTab && matchesSearch && matchesFy
   })
+
+  // Detail-pager context: the filtered list as rendered, written when the
+  // user navigates into a row.
+  const rememberListContext = () => {
+    writeListContext(listContextKey('supplier-invoices', company?.id), {
+      ids: filteredInvoices.map((inv) => inv.id),
+    })
+  }
 
   const registeredCount = invoices.filter((inv) => inv.status === 'registered').length
   const toPayCount = invoices.filter(
@@ -423,7 +434,10 @@ export default function SupplierInvoicesPage() {
                       'group cursor-pointer transition-colors duration-150 hover:bg-secondary/35',
                       selectedIds.has(inv.id) && 'bg-secondary/40',
                     )}
-                    onClick={() => router.push(`/supplier-invoices/${inv.id}`)}
+                    onClick={() => {
+                      rememberListContext()
+                      router.push(`/supplier-invoices/${inv.id}`)
+                    }}
                   >
                     {/* Hover-revealed selection checkbox (JournalEntryList shape). */}
                     {canWrite && (
@@ -453,7 +467,10 @@ export default function SupplierInvoicesPage() {
                       <Link
                         href={`/supplier-invoices/${inv.id}`}
                         className="hover:underline"
-                        onClick={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          rememberListContext()
+                        }}
                       >
                         {inv.supplier_invoice_number}
                       </Link>

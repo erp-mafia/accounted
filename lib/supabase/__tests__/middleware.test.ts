@@ -27,6 +27,9 @@ const state = vi.hoisted(() => ({
     error: unknown
   },
   signOut: vi.fn(async () => ({ error: null })),
+  // Row returned for user_preferences reads (the auto_logout mint lookup).
+  userPreferences: null as null | { auto_logout: boolean },
+  userPreferencesError: null as unknown,
 }))
 
 vi.mock('@supabase/ssr', () => ({
@@ -46,13 +49,20 @@ vi.mock('@supabase/ssr', () => ({
       },
     },
     rpc: vi.fn(async () => state.company),
-    from: vi.fn(() => {
+    from: vi.fn((table: string) => {
       const chain: Record<string, unknown> = {}
       const self = new Proxy(chain, {
         get: (_t, prop) => {
           if (prop === 'then') return undefined
           if (prop === 'maybeSingle' || prop === 'single') {
-            return async () => ({ data: null, error: null })
+            return async () => ({
+              data:
+                table === 'user_preferences' && !state.userPreferencesError
+                  ? state.userPreferences
+                  : null,
+              error:
+                table === 'user_preferences' ? state.userPreferencesError : null,
+            })
           }
           return () => self
         },
@@ -102,6 +112,8 @@ describe('updateSession redirect destinations', () => {
       data: [{ company_id: 'company-1', locale: 'sv', used_fallback: false }],
       error: null,
     }
+    state.userPreferences = null
+    state.userPreferencesError = null
     delete process.env.NEXT_PUBLIC_REQUIRE_MFA
     delete process.env.NEXT_PUBLIC_SELF_HOSTED
     process.env.SESSION_TIMEOUT_SECRET = 'middleware-test-secret'
@@ -139,17 +151,25 @@ describe('updateSession redirect destinations', () => {
       method?: 'password' | 'bankid'
       userId?: string
       sessionId?: string | null
+      autoLogout?: boolean
+      legacy?: boolean
     }) {
       const stateValue = {
         ...createSessionTimeoutState({
           userId: args?.userId ?? 'user-1',
           sessionId: args?.sessionId === undefined ? 'session-1' : args.sessionId,
           method: args?.method ?? 'password',
+          // Default the opt-in to true: these tests exercise enforcement.
+          autoLogout: args?.autoLogout ?? true,
           now: args?.startedAt ?? Date.now(),
         }),
         ...(args?.lastActivityAt === undefined
           ? {}
           : { lastActivityAt: args.lastActivityAt }),
+      }
+      if (args?.legacy) {
+        // Pre-toggle cookies carry no auto_logout snapshot.
+        delete (stateValue as { autoLogout?: boolean }).autoLogout
       }
       const signed = await signSessionTimeoutState(stateValue)
       if (!signed) throw new Error('test signing secret missing')
@@ -231,6 +251,77 @@ describe('updateSession redirect destinations', () => {
 
       expect((await run('/api/invoices', { headers })).status).toBe(401)
       expect((await run('/api/v1/companies/c1/invoices', { headers })).status).toBe(200)
+    })
+
+    it('mints the cookie with the auto_logout opt-out default for new sessions', async () => {
+      const response = await run('/settings/tax')
+
+      expect(response.status).toBe(200)
+      const encoded = response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
+      await expect(verifySessionTimeoutState(encoded)).resolves.toMatchObject({
+        autoLogout: false,
+      })
+    })
+
+    it('snapshots an opted-in preference at mint time', async () => {
+      state.userPreferences = { auto_logout: true }
+
+      const response = await run('/settings/tax')
+
+      const encoded = response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
+      await expect(verifySessionTimeoutState(encoded)).resolves.toMatchObject({
+        autoLogout: true,
+      })
+    })
+
+    it('persists no snapshot when the preference read fails', async () => {
+      state.userPreferencesError = { message: 'connection reset' }
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      const response = await run('/settings/tax')
+
+      // Unknown preference: nothing minted, nobody logged out; the next
+      // request retries the read.
+      expect(response.status).toBe(200)
+      expect(response.cookies.get(SESSION_TIMEOUT_COOKIE)).toBeUndefined()
+      expect(state.signOut).not.toHaveBeenCalled()
+      errorSpy.mockRestore()
+    })
+
+    it('never logs out a session that has not opted in', async () => {
+      const now = Date.now()
+      // Far past both limits: without the opt-in the session must survive.
+      const encoded = await signedCookie({
+        startedAt: now - 600_000,
+        lastActivityAt: now - 600_000,
+        autoLogout: false,
+      })
+
+      const response = await run('/reports/vat', {
+        headers: { cookie: `${SESSION_TIMEOUT_COOKIE}=${encoded}` },
+      })
+
+      expect(response.status).toBe(200)
+      expect(state.signOut).not.toHaveBeenCalled()
+    })
+
+    it('upgrades a pre-toggle cookie in place instead of treating it as forged', async () => {
+      state.userPreferences = { auto_logout: true }
+      const startedAt = Date.now() - 5_000
+      const encoded = await signedCookie({ startedAt, legacy: true })
+
+      const response = await run('/settings/tax', {
+        headers: { cookie: `${SESSION_TIMEOUT_COOKIE}=${encoded}` },
+      })
+
+      expect(response.status).toBe(200)
+      expect(state.signOut).not.toHaveBeenCalled()
+      const upgraded = response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value
+      // Timers survive the upgrade: only the opt-in snapshot is added.
+      await expect(verifySessionTimeoutState(upgraded)).resolves.toMatchObject({
+        startedAt,
+        autoLogout: true,
+      })
     })
 
     it('starts a new timeout window when the Supabase session changes', async () => {

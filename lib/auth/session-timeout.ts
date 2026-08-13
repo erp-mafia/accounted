@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   SESSION_TIMEOUT_COOKIE,
   type SessionAuthMethod,
@@ -16,6 +17,9 @@ export interface SessionTimeoutConfig {
   idleTimeoutMs: number
   absoluteTimeoutMs: number
   warningMs: number
+  // Ignore the per-user auto_logout opt-in and enforce timeouts for every
+  // cookie session (emergency lever / strict self-hosted deployments).
+  enforceForAll: boolean
 }
 
 export interface SessionTimeoutState {
@@ -25,6 +29,10 @@ export interface SessionTimeoutState {
   startedAt: number
   lastActivityAt: number
   method: SessionAuthMethod
+  // Snapshot of user_preferences.auto_logout taken when the state was minted.
+  // Absent on cookies minted before the opt-in toggle existed: those must be
+  // re-minted (reading the preference), never treated as tampered.
+  autoLogout?: boolean
 }
 
 type Environment = Record<string, string | undefined>
@@ -64,6 +72,7 @@ export function getSessionTimeoutConfig(
     idleTimeoutMs,
     absoluteTimeoutMs,
     warningMs,
+    enforceForAll: env.NEXT_PUBLIC_SESSION_TIMEOUT_FORCE_ALL === 'true',
   }
 }
 
@@ -71,6 +80,7 @@ export function createSessionTimeoutState(args: {
   userId: string
   sessionId: string | null
   method: SessionAuthMethod
+  autoLogout: boolean
   now?: number
 }): SessionTimeoutState {
   const now = args.now ?? Date.now()
@@ -81,6 +91,56 @@ export function createSessionTimeoutState(args: {
     startedAt: now,
     lastActivityAt: now,
     method: args.method,
+    autoLogout: args.autoLogout,
+  }
+}
+
+/**
+ * Whether timeouts actually apply to this session. Auto logout is opt-in
+ * per user (founder decision 2026-08-12): without the opt-in snapshot, or
+ * the global force-all override, a session lives as long as the Supabase
+ * refresh token.
+ */
+export function sessionTimeoutEnforced(
+  state: SessionTimeoutState,
+  config: SessionTimeoutConfig,
+): boolean {
+  return config.enabled && (state.autoLogout === true || config.enforceForAll)
+}
+
+/**
+ * Read the user's auto_logout opt-in. A missing row is a definitive false
+ * (never opted in); a FAILED read returns null, deliberately distinct from
+ * the opt-out path: callers must not persist a snapshot for an unknown
+ * preference (which would silently disable the control for an opted-in
+ * user for the cookie's lifetime) and instead skip minting so the next
+ * request retries the read. Sessions that already carry a snapshot are
+ * unaffected: enforcement keeps running off the signed cookie.
+ */
+export async function fetchAutoLogoutPreference(
+  supabase: SupabaseClient,
+  userId: string,
+): Promise<boolean | null> {
+  try {
+    const { data, error } = await supabase
+      .from('user_preferences')
+      .select('auto_logout')
+      .eq('user_id', userId)
+      .maybeSingle()
+    if (error) {
+      console.error(
+        '[session-timeout] auto_logout preference read FAILED; enforcement undetermined for this request',
+        error,
+      )
+      return null
+    }
+    return data?.auto_logout === true
+  } catch (error) {
+    console.error(
+      '[session-timeout] auto_logout preference read FAILED; enforcement undetermined for this request',
+      error,
+    )
+    return null
   }
 }
 
@@ -89,6 +149,8 @@ export function evaluateSessionTimeout(
   config: SessionTimeoutConfig,
   now = Date.now(),
 ): SessionTimeoutReason | null {
+  if (!sessionTimeoutEnforced(state, config)) return null
+
   if (
     config.absoluteTimeoutMs > 0 &&
     now - state.startedAt >= config.absoluteTimeoutMs
@@ -169,6 +231,9 @@ function isValidState(value: unknown): value is SessionTimeoutState {
     Number.isSafeInteger(state.startedAt) &&
     Number.isSafeInteger(state.lastActivityAt) &&
     (state.method === 'password' || state.method === 'bankid') &&
+    // Absent on pre-toggle cookies: valid, but callers re-mint (see
+    // sessionStateNeedsRemint) instead of treating the cookie as forged.
+    (state.autoLogout === undefined || typeof state.autoLogout === 'boolean') &&
     (state.startedAt as number) > 0 &&
     (state.lastActivityAt as number) >= (state.startedAt as number)
   )
@@ -284,7 +349,7 @@ export function toSessionTimeoutClientState(
   serverNow = Date.now(),
 ): SessionTimeoutClientState {
   return {
-    enabled: config.enabled,
+    enabled: sessionTimeoutEnforced(state, config),
     idleTimeoutMs: config.idleTimeoutMs,
     absoluteTimeoutMs: config.absoluteTimeoutMs,
     warningMs: config.warningMs,
@@ -307,6 +372,15 @@ export function sessionStateMatchesUser(
   // the caller mints a fresh state instead of accepting another session's.
   if (sessionId === null) return false
   return state.sessionId === sessionId
+}
+
+/**
+ * Pre-toggle cookies carry no auto_logout snapshot. They are authentic, so
+ * they must not hit the tampering path; callers re-mint them, reading the
+ * preference, so every live cookie converges on the v-with-snapshot shape.
+ */
+export function sessionStateNeedsRemint(state: SessionTimeoutState): boolean {
+  return state.autoLogout === undefined
 }
 
 export function apiRequestSkipsSessionTimeout(

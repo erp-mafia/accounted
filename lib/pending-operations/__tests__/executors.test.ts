@@ -1004,6 +1004,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // UPDATE returning
     enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
+    enqueue({ data: [], error: null }) // voucher-link resolution: not bulk-booked either
     enqueue({ data: null, error: null }) // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -1023,6 +1024,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { journal_entry_id: 'je-7' }, error: null }) // UPDATE returning post-state
     enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
     enqueue({ data: null, error: null }) // doc propagation update
+    enqueue({ data: [], error: null }) // completion: matched inbox items (none)
     enqueue({ data: null, error: null }) // dispatcher commit update
 
     const result = await commitPendingOperation(
@@ -1032,6 +1034,34 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
       makePendingOp(baseOp),
     )
     expect(result.status).toBe('committed')
+  })
+
+  it('completes matched inbox items when the tx is anchored via a bulk-book samlingsverifikat', async () => {
+    // A bulk-booked tx keeps transactions.journal_entry_id null: the verifikat
+    // hangs off transaction_voucher_links. Attaching a hunted receipt to it
+    // must still resolve the matched inbox item, or it strands as "linked"
+    // forever (the 2026-08-12 report).
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
+    enqueue({ data: { journal_entry_id: null }, error: null }) // UPDATE returning (still null)
+    enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
+    enqueue({ data: [{ transaction_id: 'tx-1', journal_entry_id: 'je-9' }], error: null }) // voucher links
+    enqueue({ data: [{ id: 'inbox-9', document_id: null }], error: null }) // matched inbox items
+    enqueue({ data: null, error: null }) // created_journal_entry_id stamp
+    enqueue({ data: null, error: null }) // dispatcher commit update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('committed')
+    expect(findCalls('invoice_inbox_items', 'update')).toContainEqual([
+      { created_journal_entry_id: 'je-9' },
+    ])
   })
 
   it('still commits when the inbox-link best-effort update errors', async () => {
@@ -1046,6 +1076,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // tx UPDATE returning
     enqueue({ data: null, error: { message: 'inbox row missing or RLS-blocked' } }) // inbox link: errors
+    enqueue({ data: [], error: null }) // voucher-link resolution: not bulk-booked either
     enqueue({ data: null, error: null }) // dispatcher commit update
 
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})

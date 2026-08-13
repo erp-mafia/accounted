@@ -37,6 +37,9 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { fetchDimensions, type DimensionDto } from '@/components/dimensions/types'
+import { DetailPager } from '@/components/common/DetailPager'
+import { listContextKey } from '@/lib/navigation/list-context'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
 
@@ -67,6 +70,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const { id } = use(params)
   const router = useRouter()
   const { canWrite } = useCanWrite()
+  const company = useCompanyOptional()?.company ?? null
   const { toast } = useToast()
   const t = useTranslations('journal_detail')
   const sourceTypeLabels = useSourceTypeLabels()
@@ -409,14 +413,25 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
 
   return (
     <div className="space-y-8">
-      {/* Back link */}
-      <Link
-        href="/bookkeeping"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        {t('back')}
-      </Link>
+      {/* Back link + prev/next record pager */}
+      <div className="flex items-center justify-between gap-4">
+        <Link
+          href="/bookkeeping"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t('back')}
+        </Link>
+        <DetailPager
+          contextKey={listContextKey('bookkeeping', company?.id)}
+          basePath="/bookkeeping"
+          currentId={id}
+          // Arrow paging unmounts the page and would destroy an unsaved notes
+          // draft; the textarea only guards arrows while it has focus, so gate
+          // the keyboard bindings on the editing state itself.
+          keyboard={!editingNotes}
+        />
+      </div>
 
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">

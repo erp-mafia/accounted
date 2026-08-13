@@ -622,6 +622,7 @@ export function makeCompanySettings(
     reminder_fee_amount: 60,
     reminder_interest_rate_override: null,
     dimensions_enabled: false,
+    mileage_enabled: false,
     preferred_payment_format: 'pain001',
     salary_pay_day: 25,
     salary_default_bank: null,
