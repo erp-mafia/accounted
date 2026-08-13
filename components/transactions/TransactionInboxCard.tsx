@@ -12,6 +12,7 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import {
   AlertCircle,
+  ArrowRightLeft,
   ChevronRight,
   EyeOff,
   FileSearch,
@@ -39,6 +40,7 @@ const HAS_AI_EXTRACTION = ENABLED_EXTENSION_IDS.has('document-extraction')
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { TransactionWithInvoice, CategorizeHandler } from './transaction-types'
+import type { CashAccount } from '@/types'
 
 interface TransactionInboxCardProps {
   transaction: TransactionWithInvoice
@@ -73,6 +75,12 @@ interface TransactionInboxCardProps {
   onIgnore?: (transaction: TransactionWithInvoice) => void
   /** Open the edit-title dialog. Only wired for editable (unbooked/unmatched) rows. */
   onEditTitle?: (transaction: TransactionWithInvoice) => void
+  /** Open the move-to-another-cash-account dialog. Only shown when the company
+   *  has more than one enabled cash account (see `cashAccounts`). */
+  onMoveCashAccount?: (transaction: TransactionWithInvoice) => void
+  /** The company's enabled cash accounts (the page's ?enabled_only=true fetch):
+   *  gates the move action, which is pointless with a single account. */
+  cashAccounts?: CashAccount[]
   onToggleSelect: (id: string) => void
 }
 
@@ -98,6 +106,8 @@ export default function TransactionInboxCard({
   onDelete,
   onIgnore,
   onEditTitle,
+  onMoveCashAccount,
+  cashAccounts,
   onToggleSelect,
 }: TransactionInboxCardProps) {
   const t = useTranslations('tx_inbox_card')
@@ -195,10 +205,15 @@ export default function TransactionInboxCard({
   const showAttachDocumentItem = isUnbooked && canWrite && !!onOpenAttachDocument
   const showSplitItem = showInvoiceMatchButton && !!onOpenSplitMatch
   const showEditItem = isTitleEditable && !!onEditTitle
+  // Moving between cash accounts only makes sense with somewhere to move TO,
+  // and only for rows the server would accept: same movable gate as the title
+  // (not booked, not confirmed-matched: mirrors PATCH .../cash-account).
+  const showMoveAccountItem =
+    isTitleEditable && canWrite && (cashAccounts?.length ?? 0) > 1 && !!onMoveCashAccount
   const showIgnoreItem = isUnbooked && isImportedTransaction(transaction) && !!onIgnore
   const showDeleteItem = canDelete && !!onDelete
   const showOverflowMenu =
-    showInvoiceMatchButton || showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showIgnoreItem || showDeleteItem
+    showInvoiceMatchButton || showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem || showIgnoreItem || showDeleteItem
 
   // The foldout carries row detail only (actions live on the row: pill + ⋯).
   // Rows with nothing to show don't expand at all; classified imported rows
@@ -384,7 +399,18 @@ export default function TransactionInboxCard({
                       {t('edit_title_aria')}
                     </DropdownMenuItem>
                   )}
-                  {(showIgnoreItem || showDeleteItem) && (showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem) && (
+                  {showMoveAccountItem && (
+                    <DropdownMenuItem
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onMoveCashAccount!(transaction)
+                      }}
+                    >
+                      <ArrowRightLeft className="h-4 w-4" />
+                      {t('move_account_btn')}
+                    </DropdownMenuItem>
+                  )}
+                  {(showIgnoreItem || showDeleteItem) && (showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem) && (
                     <DropdownMenuSeparator />
                   )}
                   {showIgnoreItem && (

@@ -11,6 +11,7 @@ import {
   FLOAT_KEEP_ON_SCREEN,
   clampDockWidth,
   clampFloatRect,
+  containFloatRect,
   defaultFloatRect,
   expandedDockWidth,
   resizeFloatRect,
@@ -144,6 +145,56 @@ describe('clampFloatRect', () => {
   it('keeps the header reachable at the bottom', () => {
     const r = clampFloatRect({ x: 100, y: 99999, w: 420, h: 640 }, WIDE, TALL)
     expect(r.y).toBe(TALL - FLOAT_KEEP_ON_SCREEN)
+  })
+})
+
+describe('containFloatRect', () => {
+  it('keeps a fully visible rect unchanged', () => {
+    const rect = { x: 200, y: 100, w: 420, h: 640 }
+    expect(containFloatRect(rect, WIDE, TALL)).toEqual(rect)
+  })
+
+  it('pulls a right-edge sliver fully inside the viewport', () => {
+    // x = 1392 is legal for clampFloatRect (48px visible) but renders as a
+    // sliver; contain pulls the whole window on screen.
+    const r = containFloatRect({ x: 1392, y: 100, w: 420, h: 640 }, 1440, 900)
+    expect(r).toEqual({ x: 1440 - 420, y: 100, w: 420, h: 640 })
+  })
+
+  it('pulls a left-hanging rect back to the left edge', () => {
+    const r = containFloatRect({ x: -372, y: 100, w: 420, h: 640 }, 1440, 900)
+    expect(r).toEqual({ x: 0, y: 100, w: 420, h: 640 })
+  })
+
+  it('migrates a rect persisted on a larger screen fully on screen', () => {
+    // Saved bottom-right on a 2560x1440 external monitor, reopened on a
+    // 1440x900 laptop: both axes end flush with the smaller viewport.
+    const r = containFloatRect({ x: 2116, y: 776, w: 420, h: 640 }, 1440, 900)
+    expect(r).toEqual({ x: 1020, y: 260, w: 420, h: 640 })
+  })
+
+  it('enforces the minimum size before containing', () => {
+    const r = containFloatRect({ x: 99999, y: 99999, w: 10, h: 10 }, WIDE, TALL)
+    expect(r.w).toBe(FLOAT_MIN_W)
+    expect(r.h).toBe(FLOAT_MIN_H)
+    expect(r.x).toBe(WIDE - FLOAT_MIN_W)
+    expect(r.y).toBe(TALL - FLOAT_MIN_H)
+  })
+
+  it('output is a fixpoint of clampFloatRect and of itself', () => {
+    // Pins the render-clamp no-op invariant: the contained rect passed
+    // through clampFloatRect (what AgentSheet renders) must not move again.
+    const cases = [
+      { x: 2116, y: 776, w: 420, h: 640 },
+      { x: -372, y: -50, w: 420, h: 640 },
+      { x: 0, y: 0, w: 10, h: 10 },
+      { x: 500, y: 300, w: 5000, h: 5000 },
+    ]
+    for (const rect of cases) {
+      const contained = containFloatRect(rect, 1440, 900)
+      expect(clampFloatRect(contained, 1440, 900)).toEqual(contained)
+      expect(containFloatRect(contained, 1440, 900)).toEqual(contained)
+    }
   })
 })
 

@@ -1,7 +1,9 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import {
   Table,
   TableBody,
@@ -21,19 +23,22 @@ import {
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { summarizeByCurrency } from '@/lib/import/bank-file/currency-summary'
-import type { BankFileParseResult } from '@/lib/import/bank-file/types'
+import type { BankFileParseResult, BankFileDuplicateInfo } from '@/lib/import/bank-file/types'
 
 interface BankFilePreviewStepProps {
   parseResult: BankFileParseResult
+  duplicateInfo?: BankFileDuplicateInfo | null
   onContinue: () => void
   onBack: () => void
 }
 
 export default function BankFilePreviewStep({
   parseResult,
+  duplicateInfo,
   onContinue,
   onBack,
 }: BankFilePreviewStepProps) {
+  const t = useTranslations('transactions')
   const { transactions, stats, issues, date_from, date_to } = parseResult
   const errors = issues.filter((i) => i.severity === 'error')
   const hasIssues = errors.length > 0
@@ -41,6 +46,10 @@ export default function BankFilePreviewStep({
   // Wise/camt.053 files can mix currencies per row: the parser-level totals
   // sum across currencies, so income/expenses are grouped per currency here.
   const currencyTotals = summarizeByCurrency(transactions)
+  const duplicateCount = duplicateInfo?.duplicate_count ?? 0
+  // Table rows render transactions.slice(0, 50), so the slice index IS the
+  // original array index the server flagged.
+  const duplicateRowSet = new Set(duplicateInfo?.duplicate_row_indexes ?? [])
 
   return (
     <div className="space-y-6">
@@ -102,6 +111,23 @@ export default function BankFilePreviewStep({
         </Card>
       </div>
 
+      {/* Duplicate rows already in bookkeeping: advisory, ingest skips them */}
+      {duplicateCount > 0 && (
+        <Card>
+          <CardHeader className="py-3">
+            <CardTitle className="text-sm flex items-center gap-2 text-warning">
+              <AlertTriangle className="h-4 w-4" />
+              {t('import_duplicate_rows_title', { count: duplicateCount })}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <p className="text-xs text-muted-foreground">
+              {t('import_duplicate_rows_body')}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Warnings */}
       {warnings.length > 0 && (
         <Card>
@@ -156,7 +182,14 @@ export default function BankFilePreviewStep({
                 {transactions.slice(0, 50).map((tx, i) => (
                   <TableRow key={i}>
                     <TableCell className="font-mono text-sm">{tx.date}</TableCell>
-                    <TableCell className="text-sm">{tx.description}</TableCell>
+                    <TableCell className="text-sm">
+                      {tx.description}
+                      {duplicateRowSet.has(i) && (
+                        <Badge variant="secondary" className="ml-2">
+                          {t('import_duplicate_row_badge')}
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell
                       className="text-right font-mono text-sm"
                     >

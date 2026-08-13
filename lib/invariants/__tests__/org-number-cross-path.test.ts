@@ -22,6 +22,7 @@ import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
  */
 
 const AB_10 = '5560125790'
+const AB_KU_12 = '165560125790'
 
 /** The input forms a Swedish user or a provider API actually produces. */
 const EQUIVALENT_FORMS = ['5560125790', '556012-5790', '556012 5790', '165560125790']
@@ -131,33 +132,25 @@ describe('org number: the four export paths agree', () => {
     expect(identities[0]).toBe('165560125790')
   })
 
-  it('emits a separator-free identity into the KU10 file', () => {
+  it('emits the schema-required 12-digit identity into the KU10 file', () => {
     for (const form of TEN_DIGIT_FORMS) {
       const xml = generateKU10Xml(ku10CompanyFixture(form), [])
       const match = xml.match(/<Organisationsnummer>([^<]*)<\/Organisationsnummer>/)
       // Guard against a vacuous assertion: the element must actually be there.
       expect(match, `input form ${form}: no <Organisationsnummer> in output`).not.toBeNull()
-      expect(match?.[1], `input form ${form}`).toBe(AB_10)
+      expect(match?.[1], `input form ${form}`).toBe(AB_KU_12)
     }
   })
 
   /**
-   * OPEN QUESTION, deliberately pinned rather than changed.
-   *
-   * KU10 strips separators but does not fold the 12-digit form down to the
-   * canonical 10 digits, so a company stored as `165560125790` files with 12
-   * digits. Whether Skatteverket's KU10 schema wants 10 or 12 here is a Swedish
-   * domain question that the `swedish-payroll` skill does not cover, and
-   * CLAUDE.md forbids answering it from training data.
-   *
-   * This is pre-existing behaviour (the old `replace('-', '')` did the same);
-   * this test pins it so the answer, when we get it, is a deliberate change with
-   * a failing test to update rather than a silent drift.
+   * Skatteverket's KU 12.0 XSD defines OrganisationsnummerTYPE as a 12-digit
+   * value with the `16` prefix. The official 2026 KU10 examples use that form.
+   * Source: https://www.skatteverket.se/foretag/skatterochavdrag/kontrolluppgifter/testtjanstochtekniskbeskrivning.4.233f91f71260075abe8800073614.html
    */
-  it('PINNED: KU10 passes a 12-digit stored org number through unfolded', () => {
+  it('keeps a stored 12-digit KU organisation identity unchanged', () => {
     const xml = generateKU10Xml(ku10CompanyFixture('165560125790'), [])
     const match = xml.match(/<Organisationsnummer>([^<]*)<\/Organisationsnummer>/)
-    expect(match?.[1]).toBe('165560125790')
+    expect(match?.[1]).toBe(AB_KU_12)
   })
 
   it.each([
@@ -167,6 +160,7 @@ describe('org number: the four export paths agree', () => {
     expect(redovisareRejects(bad), 'SRU redovisare conversion').toBe(true)
     expect(ixbrlRejects(bad), 'årsredovisning preflight').toBe(true)
     expect(agiRejects(bad), 'AGI generator').toBe(true)
+    expect(() => generateKU10Xml(ku10CompanyFixture(bad), []), 'KU10 generator').toThrow()
   })
 
   it('surfaces a bad check digit without blocking the filing', () => {

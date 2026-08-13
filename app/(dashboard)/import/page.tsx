@@ -52,7 +52,7 @@ import type {
 import type { ImportExecuteOptions } from '@/components/import/ImportReviewStep'
 import { applyMappingOverride } from '@/lib/import/account-mapper'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
-import type { BankFileParseResult, BankFileFormatId, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
+import type { BankFileParseResult, BankFileFormatId, BankFileDuplicateInfo, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
 import type { IngestResult } from '@/lib/transactions/ingest'
 import type {
   ImportWizardStep,
@@ -107,6 +107,7 @@ const SIEPreviewStep = dynamic(() => import('@/components/import/SIEPreviewStep'
 const AccountMappingStep = dynamic(() => import('@/components/import/AccountMappingStep'), { loading: ImportStepLoading })
 const ImportReviewStep = dynamic(() => import('@/components/import/ImportReviewStep'), { loading: ImportStepLoading })
 const ImportResultStep = dynamic(() => import('@/components/import/ImportResultStep'), { loading: ImportStepLoading })
+const SIEImportHistory = dynamic(() => import('@/components/import/SIEImportHistory'), { loading: ImportStepLoading })
 
 // ============================================================
 // Bank File Import Wizard Steps
@@ -145,6 +146,37 @@ function BankFileImportWizard() {
 
   // Import result
   const [ingestResult, setIngestResult] = useState<IngestResult | null>(null)
+
+  // Advisory duplicate preview: which parsed rows ingest will skip because
+  // they already exist. Fetched from check-duplicates after every (re-)parse;
+  // a failed check leaves this null and the wizard proceeds without warning
+  // (execute-side dedup still skips, and the result step reports the count).
+  const [duplicateInfo, setDuplicateInfo] = useState<BankFileDuplicateInfo | null>(null)
+
+  const checkDuplicates = useCallback(async (transactions: BankFileParseResult['transactions'], format: BankFileFormatId) => {
+    setDuplicateInfo(null)
+    if (transactions.length === 0) return
+    try {
+      const res = await fetch('/api/import/bank-file/check-duplicates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactions, format }),
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      const preview = data?.data
+      if (preview && Array.isArray(preview.duplicate_row_indexes)) {
+        setDuplicateInfo({
+          duplicate_row_indexes: preview.duplicate_row_indexes,
+          duplicate_count: typeof preview.duplicate_count === 'number'
+            ? preview.duplicate_count
+            : preview.duplicate_row_indexes.length,
+        })
+      }
+    } catch {
+      // Advisory only: never block the wizard on a failed preview.
+    }
+  }, [])
 
   // Active PSD2 connections: drives an overlap warning so users don't
   // accidentally upload a CSV covering periods we already sync nightly.
@@ -232,31 +264,53 @@ function BankFileImportWizard() {
       if (data.data.parse_result.format === 'generic_csv') {
         // Auto-detect failed or user picked "Annan CSV": always route to manual column mapping.
         // Default mapping rarely matches, so advance regardless of tx count.
+        // (The duplicate check runs after column mapping instead, on the
+        // client-side re-parse.)
+        setDuplicateInfo(null)
         setBankStep('column_mapping')
       } else if (txCount > 0) {
+        // Fire-and-forget: the warning card/badges appear when the answer
+        // lands; the wizard never waits for it.
+        void checkDuplicates(data.data.parse_result.transactions, data.data.parse_result.format)
         setBankStep('preview')
         toast({
           title: 'Fil analyserad',
           description: `${txCount} transaktioner hittades`,
         })
       } else {
-        // Format detected but no transactions parsed: parser couldn't extract rows
-        setBankError('Filen kunde läsas men inga transaktioner hittades. Kontrollera att filen innehåller transaktionsdata och inte bara rubriker.')
+        // Format detected but no transactions parsed: surface the parser's
+        // real issues when it produced any, so the user sees WHY (wrong
+        // columns, invalid dates, ...) instead of only a generic hint.
+        const parseIssues: BankFileParseResult['issues'] = data.data.parse_result.issues ?? []
+        if (parseIssues.length > 0) {
+          setBankError(
+            parseIssues
+              .slice(0, 5)
+              .map((issue) => (issue.row > 0 ? `Rad ${issue.row}: ${issue.message}` : issue.message))
+              .join(' ')
+          )
+        } else {
+          setBankError('Filen kunde läsas men inga transaktioner hittades. Kontrollera att filen innehåller transaktionsdata och inte bara rubriker.')
+        }
       }
     } catch (err) {
       setBankError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
     } finally {
       setBankIsLoading(false)
     }
-  }, [toast])
+  }, [toast, checkDuplicates])
 
   const handleColumnMappingConfirm = useCallback(async (mapping: GenericCSVColumnMapping) => {
     // Re-parse with mapping via the generic CSV parser
     const { parseGenericCSV } = await import('@/lib/import/bank-file/formats/generic-csv')
     const result = parseGenericCSV(rawFileContent, mapping)
     setParseResult(result)
+    // The generic path never re-hits the parse route, so this is its only
+    // duplicate check. Fire-and-forget: the confirm step renders immediately
+    // and the warning card appears when the answer lands.
+    void checkDuplicates(result.transactions, 'generic_csv')
     setBankStep('confirm')
-  }, [rawFileContent])
+  }, [rawFileContent, checkDuplicates])
 
   const handleExecuteImport = useCallback(async (options: { skip_duplicates: boolean; auto_categorize: boolean; settlement_account?: string }) => {
     if (!parseResult) return
@@ -312,6 +366,7 @@ function BankFileImportWizard() {
     setBankError(null)
     setBankErrorTitle(null)
     setRawFileContent('')
+    setDuplicateInfo(null)
   }
 
   return (
@@ -375,6 +430,7 @@ function BankFileImportWizard() {
       {bankStep === 'preview' && parseResult && (
         <BankFilePreviewStep
           parseResult={parseResult}
+          duplicateInfo={duplicateInfo}
           onContinue={() => {
             if (parseResult.format === 'generic_csv') {
               setBankStep('column_mapping')
@@ -397,6 +453,7 @@ function BankFileImportWizard() {
       {bankStep === 'confirm' && parseResult && (
         <BankFileConfirmStep
           parseResult={parseResult}
+          duplicateInfo={duplicateInfo}
           onExecute={handleExecuteImport}
           onBack={() => {
             if (parseResult.format === 'generic_csv') {
@@ -2006,6 +2063,7 @@ export default function ImportPage() {
   const [view, setView] = useState<'import' | 'export'>('import')
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
   const [cloudOpen, setCloudOpen] = useState(false)
+  const [sieHistoryOpen, setSieHistoryOpen] = useState(false)
   const [userId, setUserId] = useState('')
   const [exportPeriodId, setExportPeriodId] = useState<string | null>(null)
   const [exportExcludeClosing, setExportExcludeClosing] = useState(true)
@@ -2209,7 +2267,18 @@ export default function ImportPage() {
                   sub={t('sie_description')}
                   onClick={() => setMode('sie')}
                 />
+                <ImportRow
+                  title={t('sie_history_title')}
+                  sub={t('sie_history_description')}
+                  expanded={sieHistoryOpen}
+                  onClick={() => setSieHistoryOpen((v) => !v)}
+                />
               </div>
+              {sieHistoryOpen && (
+                <div className="mt-6">
+                  <SIEImportHistory />
+                </div>
+              )}
               <p className="mt-4 px-1 text-xs leading-5 text-muted-foreground">{t('pgnote')}</p>
             </div>
           ) : (

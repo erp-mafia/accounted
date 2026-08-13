@@ -25,6 +25,7 @@ import {
   DOCK_WIDTH_MIN,
   clampDockWidth,
   clampFloatRect,
+  containFloatRect,
   defaultFloatRect,
   expandedDockWidth,
   resizeFloatRect,
@@ -250,6 +251,33 @@ export default function AgentSheet({
         viewport.h,
       )
     : null
+
+  // Open/resize-time validation of the persisted float rect: a rect saved at
+  // the viewport edge (or on a larger monitor) passes clampFloatRect but
+  // renders as a 48px sliver, so snap it fully on screen and persist the
+  // corrected position. panelPrefs.float is read through a ref, NOT the deps:
+  // putting it in the deps would re-run this on every drag commit and snap
+  // the window back mid-session, killing the deliberate hang-off-the-edge
+  // allowance of the live drag path. The effect fires on sheet mount (every
+  // fresh open remounts, keyed by the provider) and on viewport resize only.
+  const floatPrefRef = useRef(panelPrefs.float)
+  useEffect(() => {
+    floatPrefRef.current = panelPrefs.float
+  }, [panelPrefs.float])
+  useEffect(() => {
+    if (!floating) return
+    const rect = floatPrefRef.current
+    if (!rect) return
+    const contained = containFloatRect(rect, viewport.w, viewport.h)
+    if (
+      contained.x !== rect.x ||
+      contained.y !== rect.y ||
+      contained.w !== rect.w ||
+      contained.h !== rect.h
+    ) {
+      updatePanelPrefs({ float: contained })
+    }
+  }, [floating, viewport.w, viewport.h, updatePanelPrefs])
 
   // Reserve page margin while docked, compact AND expanded: both reflow the
   // page beside the panel instead of covering it (the original complaint).

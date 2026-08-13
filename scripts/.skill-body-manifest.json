@@ -92,8 +92,8 @@
     "version": 1
   },
   "horizontal/swedish-invoice-compliance": {
-    "hash": "e59a5cad1da2e4d21cdc495939c92f457280020da82e3c3b84ee830c08d72398",
-    "version": 5
+    "hash": "1ce94ae22e82bec31fdcfbf28d95d225097d150e1be0631bb1c3c41aa172bd44",
+    "version": 6
   },
   "horizontal/swedish-invoice-compliance/invoice-rules": {
     "hash": "00f8b5a1e2883595f470216f1200d88481de9dc6aab3520bac7ab4589922a386",

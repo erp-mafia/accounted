@@ -15,6 +15,7 @@ import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipien
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
 import type { AuditAction } from '@/types'
+import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
 // ============================================================
 // Shared primitives
@@ -1479,6 +1480,18 @@ export const UpdateTransactionTitleSchema = z.object({
   description: z.string().trim().min(1, 'Title cannot be empty').max(500),
 })
 
+/**
+ * Move an unbooked bank transaction to another of the company's cash accounts,
+ * addressed by the target's BAS 19xx ledger account. Deliberately no null
+ * variant: unassigning a row would just re-strand it under the primary
+ * account's report (the exact symptom the move action exists to fix).
+ */
+export const MoveTransactionCashAccountSchema = z.object({
+  account_number: z
+    .string()
+    .regex(/^19\d{2}$/, 'Expected a BAS 19xx bank account number'),
+})
+
 export const BookInboxItemDirectlySchema = z.object({
   fiscal_period_id: uuid,
   entry_date: isoDate,
@@ -1644,6 +1657,11 @@ export const BulkBookSchema = z
     // BOTH the template and manual paths (per-line bags win per key). The
     // route merges before calling the RPC.
     default_dimensions: DimensionsBagSchema.optional(),
+    // Bypass the booking-time duplicate guard after the user reviewed the
+    // flagged candidate (TRANSACTION_BOOK_POSSIBLE_DUPLICATE). Bulk-book has
+    // no per-tx candidate binding: force skips the guard for the whole batch,
+    // and the route records each dismissed candidate in behandlingshistorik.
+    force: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     const hasExisting = !!data.existing_journal_entry_id
@@ -2172,6 +2190,12 @@ export const RunReconciliationSchema = z.object({
     )
     .max(500)
     .optional(),
+  // Server-side confidence floor for the apply path (0..1), mirroring the v1
+  // route. The UI sends 0.85 with a strong-only apply so a pair that scored
+  // lower on the fresh server re-run is never committed, even if a stale
+  // client still has it ticked. Omitted = legacy behavior: every selected
+  // match applies, including manually ticked fuzzy ones at 0.75.
+  confidence_threshold: z.number().min(0).max(1).optional(),
 })
 
 // ============================================================
@@ -3339,3 +3363,56 @@ export const MileageSalaryPushSchema = z
   .refine((p) => p.from.slice(0, 4) === p.to.slice(0, 4), {
     message: 'Milersättning bokförs per kalenderår: dela upp perioden per år',
   })
+
+// ============================================================
+// Bank file import
+// ============================================================
+
+/**
+ * Known bank-file format ids, mirrored from `BankFileFormatId`
+ * (lib/import/bank-file/types.ts). `satisfies` pins every member to the union
+ * at compile time; a format id added to the union but not listed here only
+ * degrades the ADVISORY duplicate preview (400), never the import itself.
+ */
+const BANK_FILE_FORMAT_IDS = [
+  'nordea',
+  'nordea_business',
+  'seb',
+  'swedbank',
+  'handelsbanken',
+  'lansforsakringar',
+  'ica_banken',
+  'skandia',
+  'lunar',
+  'northmill',
+  'wise',
+  'wise_statement',
+  'generic_csv',
+  'camt053',
+] as const satisfies readonly BankFileFormatId[]
+
+/**
+ * POST /api/import/bank-file/check-duplicates
+ *
+ * The rows are client-supplied (the generic_csv path never round-trips through
+ * the parse route), so the array is hard-capped: the parse route caps files at
+ * 10 MB, and 20000 rows mirrors that ceiling so an oversized payload cannot
+ * drive the per-chunk dedup queries as a DoS vector. `raw_line` must pass
+ * through untouched: camt.053/Wise external_ids are derived from it, and the
+ * preview must compute byte-identical ids to execute.
+ */
+export const BankFileCheckDuplicatesSchema = z.object({
+  transactions: z
+    .array(
+      z.object({
+        date: isoDate,
+        description: z.string().max(1000),
+        amount: z.number().finite(),
+        currency: z.string().max(8).optional().nullable(),
+        raw_line: z.string().max(4000).optional().nullable(),
+      })
+    )
+    .min(1)
+    .max(20000),
+  format: z.enum(BANK_FILE_FORMAT_IDS),
+})

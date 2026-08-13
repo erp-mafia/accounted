@@ -7,12 +7,38 @@
  */
 
 /**
- * Decode file content, handling both UTF-8 and Windows-1252 encodings.
+ * Decode file content, handling BOMs plus UTF-8 and Windows-1252 encodings.
  *
- * Strategy: Try UTF-8 first. If the result contains replacement characters
- * (U+FFFD) or garbled Swedish chars, fall back to Windows-1252.
+ * Strategy: inspect the leading BYTES first.
+ * - FF FE / FE FF: UTF-16LE/BE (e.g. Excel "Unicode text" re-saves). Decode
+ *   as such; TextDecoder consumes the BOM itself.
+ * - EF BB BF (UTF-8 BOM): strip the three bytes and decode the REMAINDER.
+ *   If the remainder still contains U+FFFD (invalid UTF-8 somewhere in the
+ *   file), decode the remainder as Windows-1252. The BOM bytes are never
+ *   re-included, so the fallback can no longer produce a literal mojibake
+ *   "ï»¿" prefix that breaks exact-match header detection.
+ * - No BOM: try UTF-8; fall back to Windows-1252 on replacement characters
+ *   or garbled Swedish chars (unchanged behavior).
  */
 export function decodeFileContent(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return new TextDecoder('utf-16le', { fatal: false }).decode(buffer)
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return new TextDecoder('utf-16be', { fatal: false }).decode(buffer)
+  }
+
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    const rest = bytes.subarray(3)
+    const utf8Rest = new TextDecoder('utf-8', { fatal: false }).decode(rest)
+    if (!utf8Rest.includes('�')) {
+      return utf8Rest
+    }
+    return new TextDecoder('windows-1252', { fatal: false }).decode(rest)
+  }
+
   const utf8Decoder = new TextDecoder('utf-8', { fatal: false })
   const utf8Result = utf8Decoder.decode(buffer)
 
@@ -72,11 +98,18 @@ export function normalizeLineEndings(content: string): string {
 }
 
 /**
- * Strip BOM (Byte Order Mark) from start of content
+ * Strip BOM (Byte Order Mark) from start of content.
+ *
+ * Also strips the literal mojibake form "ï»¿" (U+00EF U+00BB U+00BF): a
+ * UTF-8 BOM whose bytes were decoded as Windows-1252/Latin-1 upstream.
+ * Covers string-entry paths that were pre-decoded outside decodeFileContent.
  */
 export function stripBOM(content: string): string {
   if (content.charCodeAt(0) === 0xfeff) {
     return content.slice(1)
+  }
+  if (content.startsWith('ï»¿')) {
+    return content.slice(3)
   }
   return content
 }
