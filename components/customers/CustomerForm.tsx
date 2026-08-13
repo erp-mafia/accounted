@@ -350,7 +350,7 @@ export default function CustomerForm({
 
       {/* Address */}
       <div className="space-y-4">
-        <h3 className="">{t('address_section')}</h3>
+        <h3>{t('address_section')}</h3>
         <div className="space-y-2">
           <Label htmlFor="address_line1">{t('street_label')}</Label>
           <Input
@@ -390,7 +390,7 @@ export default function CustomerForm({
       {/* Identification: depends on customer type */}
       {customerType === 'individual' ? (
         <div className="space-y-4 pt-4 border-t">
-          <h3 className="">{t('individual_section')}</h3>
+          <h3>{t('individual_section')}</h3>
 
           <div className="space-y-2">
             <Label htmlFor="personal_number">{t('personal_number_label')}</Label>
@@ -408,7 +408,7 @@ export default function CustomerForm({
         </div>
       ) : (
         <div className="space-y-4 pt-4 border-t">
-          <h3 className="">{t('business_section')}</h3>
+          <h3>{t('business_section')}</h3>
 
           <div className="space-y-2">
             <Label htmlFor="org_number">{t('org_number_label')}</Label>
