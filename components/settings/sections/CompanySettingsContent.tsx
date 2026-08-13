@@ -1,5 +1,6 @@
 'use client'
 
+import { useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { CompanyDangerZone } from '@/components/settings/CompanyDangerZone'
@@ -21,6 +22,17 @@ export function CompanySettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
+
+  // Deep-link target for "Medlemmar och roller" (/settings/company#members):
+  // a ref callback rather than an effect because this content mounts late
+  // (settings fetch + dynamic import); the callback fires exactly when the
+  // section exists. The hash is cleared after scrolling so switching tabs
+  // and returning to Företag doesn't scroll again.
+  const scrollToMembers = useCallback((node: HTMLDivElement | null) => {
+    if (!node || window.location.hash !== '#members') return
+    node.scrollIntoView({ block: 'start' })
+    history.replaceState(null, '', window.location.pathname + window.location.search)
+  }, [])
 
   if (isLoading) return <SettingsLoadingSkeleton />
   if (!settings) return <SettingsLoadError onRetry={refetch} />
@@ -77,7 +89,9 @@ export function CompanySettingsContent() {
         onUpdate={(url) => updateSettings({ logo_url: url })}
       />
 
-      <CompanyMembersSection />
+      <div id="members" ref={scrollToMembers} className="scroll-mt-6">
+        <CompanyMembersSection />
+      </div>
 
       <FiscalPeriodEditor />
 
