@@ -126,6 +126,31 @@ describe('skvRequest: error mapping', () => {
     }
   })
 
+  // The same body has two causes (subscription gap #973, missing token scope
+  // like the AGI kvittens one), and the gateway never says which. A message
+  // naming only the subscription sent a real prod filing down a dead end: the
+  // fix was a scope, so every minute spent in Utvecklarportalen was wasted.
+  it('names BOTH causes and the refused service on the gateway 403', async () => {
+    mockFetchStatus(403, '{"error": "The required scopes are not authorized"}')
+    try {
+      // The real shape of the incident: the kvittens read on the hantera API.
+      await skvRequest(
+        fakeSupabase, 'user-1', 'GET',
+        '/arbetsgivare/165560000000/redovisningsperioder/202608/kvittenser',
+        undefined,
+        { baseUrl: 'https://api.skatteverket.se/arbetsgivardeklaration/hanteraredovisningsperiod/v1' },
+      )
+      expect.fail('expected throw')
+    } catch (e) {
+      const { message } = e as SkatteverketAuthError
+      expect(message).toMatch(/prenumeration/)
+      expect(message).toMatch(/scope/)
+      // Which service refused. Naming it is the whole point: the sibling
+      // inlamning API kept working, so "Skatteverket said no" is not a clue.
+      expect(message).toContain('arbetsgivardeklaration/hanteraredovisningsperiod/v1')
+    }
+  })
+
   it('still maps a real token-scope rejection → MISSING_SCOPE', async () => {
     // Body shape from SKV's AGI Tjänstebeskrivning v1.7 §4.1.2.2.
     mockFetchStatus(
@@ -274,10 +299,12 @@ describe('skvRequestWithAuth: system mode', () => {
     }
   })
 
-  it('403 APIGW contract error in system mode names the subscription, not the scope list', async () => {
-    // Still SYSTEM_AUTH_FAILED (run-level config either way), but the two are
-    // fixed with different knobs, so the message must not send the operator to
-    // SKATTEVERKET_SYSTEM_SCOPES when the gateway is what refused.
+  it('403 APIGW contract error in system mode names both knobs', async () => {
+    // Still SYSTEM_AUTH_FAILED (run-level config either way). This assertion
+    // is the inverse of what it was: #1250 removed the SKATTEVERKET_SYSTEM_SCOPES
+    // mention on the reasoning that the gateway, not the scope list, had
+    // refused. Production later proved the body cannot distinguish the two, so
+    // naming one and hiding the other is a coin flip presented as a diagnosis.
     mockFetchStatus(403, '{"error": "The required scopes are not authorized"}')
     try {
       await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
@@ -285,7 +312,7 @@ describe('skvRequestWithAuth: system mode', () => {
     } catch (e) {
       expect((e as SkatteverketAuthError).code).toBe('SYSTEM_AUTH_FAILED')
       expect((e as SkatteverketAuthError).message).toMatch(/prenumeration/)
-      expect((e as SkatteverketAuthError).message).not.toMatch(/SKATTEVERKET_SYSTEM_SCOPES/)
+      expect((e as SkatteverketAuthError).message).toMatch(/SKATTEVERKET_SYSTEM_SCOPES/)
     }
   })
 
