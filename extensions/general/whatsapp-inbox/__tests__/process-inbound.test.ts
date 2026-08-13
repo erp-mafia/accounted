@@ -8,7 +8,7 @@ vi.mock('@/extensions/general/whatsapp-inbox/lib/graph-api', async () => {
   >('@/extensions/general/whatsapp-inbox/lib/graph-api')
   return {
     ...actual,
-    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT' }),
+    sendText: vi.fn().mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null }),
     markReadWithTyping: vi.fn().mockResolvedValue(undefined),
     downloadMedia: vi.fn(),
   }
@@ -141,7 +141,7 @@ function lastUpdate(findCalls: (table: string, method: string) => unknown[][]): 
 describe('processInboundMessage (media intake)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT' })
+    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null })
     askCompanyQuestionMock.mockResolvedValue(true)
     rateLimitMock.mockResolvedValue({ ok: true })
     downloadMediaMock.mockResolvedValue({
@@ -563,5 +563,60 @@ describe('processInboundMessage (media intake)', () => {
     const finalUpdate = lastUpdate(findCalls)
     expect(finalUpdate.processing_status).toBe('done')
     expect(finalUpdate.inbox_item_id).toBe('item-winner')
+  })
+})
+
+describe('processInboundMessage: linked-sender silences become replies (#1552)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    sendTextMock.mockResolvedValue({ ok: true, wamid: 'wamid.OUT', errorDetail: null })
+  })
+
+  it('missing media reference: marks error AND owns the failure with M18 via the link', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow({ media_id: null }) }) // load row
+    enqueue({ data: { id: 'msg-1' } }) // claim
+    enqueue({ data: null }) // markStatus error
+    enqueue({ data: makeLink() }) // load link for the reply address
+    enqueue({ data: null }) // errorNoticeAlreadySent: none
+
+    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    expect(lastUpdate(findCalls).processing_status).toBe('error')
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    const args = sendTextMock.mock.calls[0][1]
+    expect(args.template).toBe(TEMPLATE.m18Error)
+    expect(args.to).toBe('46701234567')
+  })
+
+  it('link revoked before processing: marks skipped AND replies with the M1 unlinked copy', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() }) // load row
+    enqueue({ data: { id: 'msg-1' } }) // claim
+    enqueue({ data: makeLink({ revoked_at: '2026-08-01T09:30:00Z' }) }) // revoked link
+    enqueue({ data: null }) // markStatus skipped
+    enqueue({ data: [] }) // greeting throttle window: clear
+
+    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    expect(lastUpdate(findCalls).processing_status).toBe('skipped')
+    expect(sendTextMock).toHaveBeenCalledTimes(1)
+    const args = sendTextMock.mock.calls[0][1]
+    expect(args.template).toBe(TEMPLATE.m1Unlinked)
+    expect(args.to).toBe('46701234567')
+  })
+
+  it('link revoked before processing: stays quiet when the M1 throttle is exhausted', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeRow() })
+    enqueue({ data: { id: 'msg-1' } })
+    enqueue({ data: makeLink({ revoked_at: '2026-08-01T09:30:00Z' }) })
+    enqueue({ data: null }) // markStatus skipped
+    enqueue({ data: [{ created_at: new Date().toISOString() }] }) // greeted within the hour
+
+    await processInboundMessage(supabase as unknown as SupabaseClient, 'msg-1')
+
+    expect(lastUpdate(findCalls).processing_status).toBe('skipped')
+    expect(sendTextMock).not.toHaveBeenCalled()
   })
 })

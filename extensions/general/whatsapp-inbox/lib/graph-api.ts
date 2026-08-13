@@ -69,6 +69,8 @@ export interface SendTextArgs extends SendMessageBase {
 export interface SendTextResult {
   ok: boolean
   wamid: string | null
+  /** Why the send failed, for the outbound row (#1552). Null on success. */
+  errorDetail: string | null
 }
 
 /** POST one message payload to the Graph API. Never throws. */
@@ -78,6 +80,7 @@ async function postToGraph(
 ): Promise<SendTextResult> {
   let wamid: string | null = null
   let ok = false
+  let errorDetail: string | null = null
 
   try {
     const response = await fetchWithTimeout(
@@ -101,6 +104,7 @@ async function postToGraph(
       ok = true
     } else {
       const detail = await response.text().catch(() => '')
+      errorDetail = `Send failed (HTTP ${response.status}): ${detail.slice(0, 250)}`
       log.warn('WhatsApp send failed', {
         status: response.status,
         template,
@@ -108,13 +112,12 @@ async function postToGraph(
       })
     }
   } catch (err) {
-    log.warn('WhatsApp send errored', {
-      template,
-      error: err instanceof Error ? err.message : String(err),
-    })
+    const message = err instanceof Error ? err.message : String(err)
+    errorDetail = `Send errored: ${message.slice(0, 250)}`
+    log.warn('WhatsApp send errored', { template, error: message })
   }
 
-  return { ok, wamid }
+  return { ok, wamid, errorDetail }
 }
 
 /** Persist the outbound message row. Never throws. */
@@ -136,6 +139,9 @@ async function persistOutbound(
       // Outbound rows are not jobs: mark done so the sweep never claims them.
       processing_status: 'done',
       delivery_status: result.ok ? 'sent' : 'failed',
+      // A failed reply used to be indistinguishable from a delivered one at
+      // the row level (#1552): keep the Graph error on the record.
+      error_message: result.ok ? null : (result.errorDetail ?? 'Send failed'),
       correlation_id: args.correlationId ?? null,
       inbox_item_id: args.inboxItemId ?? null,
     })

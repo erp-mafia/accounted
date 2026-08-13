@@ -3,7 +3,7 @@
 import { useState, useEffect, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -118,6 +118,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoice_detail')
+  const locale = useLocale()
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
   const [reminders, setReminders] = useState<InvoiceReminder[]>([])
@@ -158,6 +159,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isLoading, setIsLoading] = useState(true)
   const [isUpdating, setIsUpdating] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
+  const [isDownloadingPeppol, setIsDownloadingPeppol] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [showFinalizeDialog, setShowFinalizeDialog] = useState(false)
@@ -580,6 +582,50 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         deliveries,
       }),
     )
+  }
+
+  async function downloadPeppolXml() {
+    if (!invoice) return
+    setIsDownloadingPeppol(true)
+
+    try {
+      const response = await fetch(`/api/invoices/${invoice.id}/peppol`)
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as {
+          error?: { code?: string; message?: string; message_en?: string }
+        } | null
+        throw body?.error ?? new Error(t('peppol_download_failed_description'))
+      }
+
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = contentDispositionFilename(response.headers.get('Content-Disposition'))
+        ?? `peppol-invoice-${invoice.invoice_number ?? invoice.id}.xml`
+      document.body.appendChild(anchor)
+      anchor.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(anchor)
+
+      toast({
+        title: t('peppol_downloaded_title'),
+        description: t('peppol_downloaded_description'),
+      })
+    } catch (error) {
+      toast({
+        title: t('peppol_download_failed_title'),
+        description: error instanceof Error
+          ? getUserErrorMessage(error, { locale: locale.startsWith('sv') ? 'sv' : 'en' })
+          : getUserErrorMessage(error, {
+              context: 'invoice',
+              locale: locale.startsWith('sv') ? 'sv' : 'en',
+            }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsDownloadingPeppol(false)
+    }
   }
 
   /**
@@ -1023,6 +1069,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 {t('download_pdf')}
               </Button>
             </>
+          )}
+          {!isSelfBilled && isRealInvoice && !isCreditNote && invoice.invoice_number && (
+            <Button
+              variant="outline"
+              onClick={downloadPeppolXml}
+              disabled={isDownloadingPeppol}
+            >
+              {isDownloadingPeppol ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <FileText className="mr-2 h-4 w-4" />
+              )}
+              {t('download_peppol_xml')}
+            </Button>
           )}
         </div>
       </div>

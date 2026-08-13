@@ -52,11 +52,13 @@ import {
   DEBOUNCE_WINDOW_MS,
   getContext,
   getOrCreateConversation,
+  greetingThrottled,
   redactRawPayload,
   resolveAnswerTarget,
   updateConversation,
   type ConversationContext,
 } from './lib/conversation'
+import { summarizeInboundEvent } from './lib/last-event'
 import { applyCompanyChoice, type CompanyChoiceVia } from './lib/company-question'
 
 const log = createLogger('whatsapp-inbox')
@@ -66,10 +68,9 @@ const log = createLogger('whatsapp-inbox')
 // much handling an unbound phone can consume at all. Beyond it: silence.
 const UNKNOWN_SENDER_MINUTE_MAX = 15
 const UNKNOWN_SENDER_DAY_MAX = 200
-// The M1 greeting itself is throttled much harder: 1/hour, 3/day, then silence.
-const GREETING_HOUR_MS = 60 * 60 * 1000
-const GREETING_DAY_MS = 24 * 60 * 60 * 1000
-const GREETING_DAY_MAX = 3
+// Declined-message trace rows (issue #1552) are capped per hash and day so an
+// over-quota flood cannot turn the observability trail into a write amplifier.
+const DECLINE_TRACE_DAY_MAX = 20
 
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000
 
@@ -97,24 +98,65 @@ function buildServiceClient(): SupabaseClient {
 
 // ── Unknown senders ──────────────────────────────────────────
 
-async function greetingThrottled(
+/**
+ * Metadata-only trace row for an inbound message from an unknown sender
+ * (issue #1552): direction, wamid, phone hash, type, disposition. NO body,
+ * NO media reference, NO raw payload, NO profile name: the trace must never
+ * become content persistence for someone who has not linked. phone_link_id
+ * stays null, so the 30-day unknown-sender retention pass deletes these
+ * wholesale.
+ *
+ * Returns 'recorded', 'duplicate' (wamid already persisted: a Meta
+ * redelivery of a message we already handled), or 'skipped' (trace cap or
+ * insert failure: observability must never break the webhook).
+ */
+async function recordUnknownSenderMessage(
   supabase: SupabaseClient,
+  msg: ParsedInboundMessage,
   phoneHash: string,
-): Promise<boolean> {
-  const since = new Date(Date.now() - GREETING_DAY_MS).toISOString()
-  const { data } = await supabase
-    .from('whatsapp_messages')
-    .select('created_at')
-    .eq('direction', 'outbound')
-    .eq('sender_phone_hash', phoneHash)
-    .eq('raw_payload->>template', TEMPLATE.m1Unlinked)
-    .gte('created_at', since)
-    .order('created_at', { ascending: false })
-    .limit(GREETING_DAY_MAX)
-  const rows = (data ?? []) as Array<{ created_at: string }>
-  if (rows.length >= GREETING_DAY_MAX) return true
-  const hourAgo = Date.now() - GREETING_HOUR_MS
-  return rows.some((r) => new Date(r.created_at).getTime() > hourAgo)
+  status: 'skipped' | 'done',
+  disposition: string,
+): Promise<'recorded' | 'duplicate' | 'skipped'> {
+  try {
+    // The day cap guards the one unbounded path: 'skipped' declines from an
+    // over-quota flood. 'done' traces (a reply went out) skip it: they are
+    // already bounded upstream (M1 by the greeting throttle, M2 by the
+    // pre-binding quota), and capping them would let a redelivered wamid
+    // past the dedupe below into a second reply. Best-effort under
+    // concurrency: racing webhooks can overshoot by a few rows, which is
+    // fine for a metadata trail.
+    if (status === 'skipped') {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const { count } = await supabase
+        .from('whatsapp_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('direction', 'inbound')
+        .eq('sender_phone_hash', phoneHash)
+        .is('phone_link_id', null)
+        .gte('created_at', since)
+      if ((count ?? 0) >= DECLINE_TRACE_DAY_MAX) return 'skipped'
+    }
+
+    const { error } = await supabase.from('whatsapp_messages').insert({
+      direction: 'inbound',
+      wamid: msg.wamid,
+      sender_phone_hash: phoneHash,
+      phone_link_id: null,
+      conversation_id: null,
+      message_type: msg.type,
+      processing_status: status,
+      error_message: disposition,
+    })
+    if (!error) return 'recorded'
+    if (error.code === '23505') return 'duplicate'
+    log.warn('Failed to record unknown-sender trace row', { error: error.message, disposition })
+    return 'skipped'
+  } catch (err) {
+    log.warn('Unknown-sender trace write errored', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return 'skipped'
+  }
 }
 
 /**
@@ -137,16 +179,33 @@ async function handleUnknownSender(
   )
   if (quotaError) {
     // Fail closed for unknown senders: without the limiter we send nothing.
+    // The decline itself is still recorded (#1552): support must be able to
+    // answer "what happened to my message" even for this path.
     log.warn('sender quota RPC failed; staying silent', { error: quotaError.message })
+    await recordUnknownSenderMessage(
+      supabase, msg, phoneHash, 'skipped', 'Unknown sender: quota check failed, declined fail-closed',
+    )
     return
   }
-  if ((quota as { ok?: boolean } | null)?.ok === false) return
+  if ((quota as { ok?: boolean } | null)?.ok === false) {
+    await recordUnknownSenderMessage(
+      supabase, msg, phoneHash, 'skipped', 'Unknown sender: over pre-binding quota, declined',
+    )
+    return
+  }
 
   const copy = botCopy('sv')
 
   if (msg.type === 'text' && looksLikeLinkCode(msg.text)) {
     const consumed = await consumeLinkCode(supabase, msg.text ?? '')
     if (!consumed) {
+      // Trace row first: a Meta redelivery of a message already answered
+      // (including a redelivered CONSUMED code, whose row the success path
+      // wrote) dedupes on the wamid instead of earning a second reply.
+      const traced = await recordUnknownSenderMessage(
+        supabase, msg, phoneHash, 'done', 'Unknown sender: invalid link code, M2 sent',
+      )
+      if (traced === 'duplicate') return
       await sendText(supabase, {
         to: msg.from,
         body: copy.m2BadCode(),
@@ -203,7 +262,16 @@ async function handleUnknownSender(
 
   // Anything else from an unknown number: the AI-disclosure greeting, hard
   // throttled per phone hash (EU AI Act Art 50 disclosure lives in M1).
-  if (await greetingThrottled(supabase, phoneHash)) return
+  if (await greetingThrottled(supabase, phoneHash)) {
+    await recordUnknownSenderMessage(
+      supabase, msg, phoneHash, 'skipped', 'Unknown sender: greeting throttled, declined',
+    )
+    return
+  }
+  const traced = await recordUnknownSenderMessage(
+    supabase, msg, phoneHash, 'done', 'Unknown sender: greeted, M1 sent',
+  )
+  if (traced === 'duplicate') return
   await sendText(supabase, {
     to: msg.from,
     body: copy.m1Unlinked(),
@@ -213,6 +281,16 @@ async function handleUnknownSender(
 }
 
 // ── Linked senders ───────────────────────────────────────────
+
+/** Why a message earns deliberate silence. Persisted on the skipped row
+ *  (issue #1552) so support can answer "what happened" per message. */
+type SilenceReason = 'muted' | 'stale_interactive' | 'ignorable_type'
+
+const SILENCE_REASON_TEXT: Record<SilenceReason, string> = {
+  muted: 'Muted by stopp: message not read',
+  stale_interactive: 'Stale interactive tap after the question closed',
+  ignorable_type: 'Ignorable message type, no reply expected',
+}
 
 type Disposition =
   | { kind: 'media' }
@@ -228,7 +306,7 @@ type Disposition =
   | { kind: 'voice' }
   | { kind: 'unsupported' }
   | { kind: 'fallback' }
-  | { kind: 'silence' }
+  | { kind: 'silence'; reason: SilenceReason }
 
 /** Dispositions with a durable side effect (mute, pin, company routing).
  *  Their effect runs BEFORE the terminal row is written: see
@@ -256,7 +334,9 @@ function classify(
     const normalized = (msg.text ?? '').trim().toLowerCase()
     if (muted) {
       // While muted only `start` is recognized; everything else is silence.
-      return normalized === START_KEYWORD ? { kind: 'start' } : { kind: 'silence' }
+      return normalized === START_KEYWORD
+        ? { kind: 'start' }
+        : { kind: 'silence', reason: 'muted' }
     }
     if (STOP_KEYWORDS.has(normalized)) return { kind: 'stop' }
     if (HELP_KEYWORDS.has(normalized)) return { kind: 'help' }
@@ -284,13 +364,13 @@ function classify(
     // reply or the most recent open one); resolved below.
     return { kind: 'text_open' }
   }
-  if (muted) return { kind: 'silence' }
+  if (muted) return { kind: 'silence', reason: 'muted' }
   if (msg.type === 'interactive') {
     if ((conversation?.state === 'awaiting_company' || companyChoiceOpen) && msg.interactiveReplyId) {
       return { kind: 'company_interactive', companyId: msg.interactiveReplyId }
     }
     // Stale button tap after the question closed: silence beats lecturing.
-    return { kind: 'silence' }
+    return { kind: 'silence', reason: 'stale_interactive' }
   }
   if (msg.type === 'image' || msg.type === 'document') {
     return msg.media ? { kind: 'media' } : { kind: 'unsupported' }
@@ -301,7 +381,7 @@ function classify(
   }
   // Truly unknown types (reactions, ephemeral, future additions): stay
   // silent rather than lecture someone for sending a thumbs-up.
-  return { kind: 'silence' }
+  return { kind: 'silence', reason: 'ignorable_type' }
 }
 
 /** True when this inbound wamid was already persisted (Meta redelivery). */
@@ -520,6 +600,9 @@ async function handleLinkedSender(
       // decrypt the link instead (resolveRecipient).
       raw_payload: keepContent ? redactRawPayload(msg.raw) : null,
       processing_status: initialStatus,
+      // Deliberate silences carry their reason (#1552): a skipped row with
+      // no explanation is exactly the blind spot this exists to close.
+      error_message: disposition.kind === 'silence' ? SILENCE_REASON_TEXT[disposition.reason] : null,
       correlation_id: correlationId,
     })
     .select('id')
@@ -637,12 +720,24 @@ export const whatsappInboxExtension: Extension = {
         const supabase = buildServiceClient()
 
         // Outbound delivery lifecycle updates (sent -> delivered -> read).
+        // A 'failed' status carries Meta's error detail (e.g. undeliverable,
+        // recipient unavailable): keep it on the row (#1552), it is the only
+        // record of WHY a reply never reached the sender. Two literal
+        // payloads so the phantom-column scanner can verify both shapes.
         for (const status of parsed.statuses) {
-          await supabase
-            .from('whatsapp_messages')
-            .update({ delivery_status: status.status })
-            .eq('wamid', status.wamid)
-            .eq('direction', 'outbound')
+          if (status.status === 'failed' && status.errorDetail) {
+            await supabase
+              .from('whatsapp_messages')
+              .update({ delivery_status: status.status, error_message: status.errorDetail })
+              .eq('wamid', status.wamid)
+              .eq('direction', 'outbound')
+          } else {
+            await supabase
+              .from('whatsapp_messages')
+              .update({ delivery_status: status.status })
+              .eq('wamid', status.wamid)
+              .eq('direction', 'outbound')
+          }
         }
 
         const deferredMessageIds: string[] = []
@@ -727,18 +822,49 @@ export const whatsappInboxExtension: Extension = {
         if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
         const { data } = await ctx.supabase
           .from('whatsapp_phone_links')
-          .select('phone_masked, default_company_id, muted_at, verified_at')
+          .select('id, phone_masked, default_company_id, muted_at, verified_at')
           .eq('user_id', ctx.userId)
           .is('revoked_at', null)
           .maybeSingle()
 
         if (!data) return NextResponse.json({ data: { linked: false } })
         const row = data as {
+          id: string
           phone_masked: string
           default_company_id: string | null
           muted_at: string | null
           verified_at: string
         }
+
+        // Last inbound event + last reply delivery (#1552): the panel answers
+        // "when did you last hear from me and what happened". whatsapp_messages
+        // is service-role only, so read with the service client, keyed strictly
+        // by the link row RLS just proved the caller owns. Only a closed enum
+        // and timestamps leave the server, never message content.
+        const serviceClient = createServiceClient()
+        const { data: lastInbound } = await serviceClient
+          .from('whatsapp_messages')
+          .select('created_at, processing_status, error_message, inbox_item_id')
+          .eq('phone_link_id', row.id)
+          .eq('direction', 'inbound')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        const { data: lastOutbound } = await serviceClient
+          .from('whatsapp_messages')
+          .select('delivery_status')
+          .eq('phone_link_id', row.id)
+          .eq('direction', 'outbound')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+
+        const inboundRow = lastInbound as {
+          created_at: string
+          processing_status: string
+          error_message: string | null
+          inbox_item_id: string | null
+        } | null
         return NextResponse.json({
           data: {
             linked: true,
@@ -746,6 +872,11 @@ export const whatsappInboxExtension: Extension = {
             defaultCompanyId: row.default_company_id,
             muted: row.muted_at != null,
             verifiedAt: row.verified_at,
+            lastInboundAt: inboundRow?.created_at ?? null,
+            lastInboundEvent: inboundRow ? summarizeInboundEvent(inboundRow) : null,
+            lastReplyFailed:
+              (lastOutbound as { delivery_status: string | null } | null)?.delivery_status ===
+              'failed',
           },
         })
       },

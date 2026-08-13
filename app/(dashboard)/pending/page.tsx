@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, Fragment, createContext, useContext } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS, VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
+import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
   SlideOver,
   SlideOverContent,
@@ -29,7 +29,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
@@ -50,94 +50,12 @@ import type {
   PendingOperation,
   PendingOperationRejectionCategory,
 } from '@/types'
-import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
-import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
-
-// Short human label (i18n key in the "pending" namespace) for each staged
-// operation_type. Keep in sync with OPERATION_RISK_TIERS in
-// lib/pending-operations/risk-tiers.ts: every operation an agent can stage
-// needs a label here, otherwise the Granskning list falls back to the raw
-// snake_case tool name (e.g. "create_supplier_invoice_from_inbox"), which is
-// long and pushes the meta row to wrap awkwardly on mobile.
-const OPERATION_LABEL_KEYS: Record<string, string> = {
-  categorize_transaction: 'type_categorize_transaction',
-  create_customer: 'type_create_customer',
-  create_invoice: 'type_create_invoice',
-  create_transaction: 'type_create_transaction',
-  create_voucher: 'type_create_voucher',
-  correct_entry: 'type_correct_entry',
-  reverse_entry: 'type_reverse_entry',
-  mark_invoice_paid: 'type_mark_invoice_paid',
-  send_invoice: 'type_send_invoice',
-  mark_invoice_sent: 'type_mark_invoice_sent',
-  match_transaction_invoice: 'type_match_transaction_invoice',
-  // Master data
-  create_supplier: 'type_create_supplier',
-  create_article: 'type_create_article',
-  update_article: 'type_update_article',
-  create_account: 'type_create_account',
-  update_account: 'type_update_account',
-  create_dimension_value: 'type_create_dimension_value',
-  // Supplier invoices
-  create_supplier_invoice_from_inbox: 'type_create_supplier_invoice_from_inbox',
-  create_self_billed_supplier_invoice: 'type_create_self_billed_supplier_invoice',
-  approve_supplier_invoice: 'type_approve_supplier_invoice',
-  credit_supplier_invoice: 'type_credit_supplier_invoice',
-  // Invoices
-  credit_invoice: 'type_credit_invoice',
-  convert_invoice: 'type_convert_invoice',
-  // Documents & links
-  attach_document_to_transaction: 'type_attach_document_to_transaction',
-  link_document_to_voucher: 'type_link_document_to_voucher',
-  link_invoice_voucher: 'type_link_invoice_voucher',
-  link_supplier_invoice_voucher: 'type_link_supplier_invoice_voucher',
-  link_transaction_journal_entry: 'type_link_transaction_journal_entry',
-  uncategorize_transaction: 'type_uncategorize_transaction',
-  retag_line_dimensions: 'type_retag_line_dimensions',
-  set_voucher_note: 'type_set_voucher_note',
-  // Bulk booking / allocation
-  match_batch_allocate: 'type_match_batch_allocate',
-  bulk_book_transactions: 'type_bulk_book_transactions',
-  bulk_book_inbox_items: 'type_bulk_book_inbox_items',
-  // Periods, year-end, depreciation
-  close_period: 'type_close_period',
-  lock_period: 'type_lock_period',
-  unlock_period: 'type_unlock_period',
-  set_opening_balances: 'type_set_opening_balances',
-  run_year_end: 'type_run_year_end',
-  run_currency_revaluation: 'type_run_currency_revaluation',
-  post_annual_depreciation: 'type_post_annual_depreciation',
-  explain_voucher_gap: 'type_explain_voucher_gap',
-  // SIE
-  import_sie: 'type_import_sie',
-  undo_sie_import: 'type_undo_sie_import',
-  // Payroll & Skatteverket filings
-  create_salary_run: 'type_create_salary_run',
-  book_salary_run: 'type_book_salary_run',
-  generate_agi: 'type_generate_agi',
-  update_payslip_line: 'type_update_payslip_line',
-  register_absence: 'type_register_absence',
-  delete_absence: 'type_delete_absence',
-  create_employee: 'type_create_employee',
-  update_employee: 'type_update_employee',
-  set_employee_opening_balances: 'type_set_employee_opening_balances',
-  vacation_year_close: 'type_vacation_year_close',
-  submit_vat_declaration: 'type_submit_vat_declaration',
-  submit_agi: 'type_submit_agi',
-}
-
-// Fallback for an operation_type with no entry above (e.g. a newly added op
-// not yet given a label): turn "create_supplier_invoice_from_inbox" into
-// "Create supplier invoice from inbox" so it never surfaces as raw snake_case.
-function humanizeOperationType(operationType: string): string {
-  const spaced = operationType.replace(/_/g, ' ')
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1)
-}
-
-function operationLabel(operationType: string, t: (key: string) => string): string {
-  const labelKey = OPERATION_LABEL_KEYS[operationType]
-  return labelKey ? t(labelKey) : humanizeOperationType(operationType)
-}
+import { OperationPreview, AccountNamesContext } from '@/components/pending-operations/OperationPreview'
+import {
+  operationLabel,
+  singleActionWarning,
+  REJECTION_CATEGORY_LABELS,
+} from '@/components/pending-operations/vocabulary'
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
 // they read naturally under the heading "Genom att bekräfta utförs följande:".
@@ -161,47 +79,6 @@ function bulkActionLabel(operationType: string, count: number, t: (key: string) 
   const fn = bulkActionDescriptions[operationType]
   if (fn) return fn(count)
   return `${count} × ${operationLabel(operationType, t)}`
-}
-
-// Full-sentence warning for the single-op confirmation dialog AND the inline
-// list-view warning when risk is medium/high. The list-view truncates beyond
-// one line; the dialog shows it in full. Order roughly low → high risk so
-// reviewers scanning the source see the destructive paths grouped together.
-const singleActionWarnings: Record<string, string> = {
-  // Low/medium risk: light verifikation work
-  create_transaction: 'Genom att klicka godkänn så skapar du en transaktion.',
-  create_customer: 'Genom att klicka godkänn så skapar du en kund.',
-  create_invoice: 'Genom att klicka godkänn så skapas ett fakturautkast (det skickas inte).',
-  categorize_transaction: 'Genom att klicka godkänn så kategoriseras transaktionen och en verifikation skapas.',
-  match_transaction_invoice: 'Genom att klicka godkänn så matchas transaktionen mot fakturan.',
-  attach_document_to_transaction: 'Genom att klicka godkänn så bifogas dokumentet till transaktionen.',
-  uncategorize_transaction: 'Genom att klicka godkänn så tas kategoriseringen bort.',
-  send_invoice: 'Genom att klicka godkänn så skickas fakturan till kunden.',
-  mark_invoice_paid: 'Genom att klicka godkänn så bokförs en betalning på fakturan.',
-  mark_invoice_sent: 'Genom att klicka godkänn så märks fakturan som skickad och en verifikation skapas.',
-  // High risk: period/year-end/voucher edits. These are the ones the reviewer
-  // really needs the warning for, so we keep them concrete: name the
-  // irreversibility or compliance consequence, not the generic risk-level.
-  lock_period: 'Genom att klicka godkänn så låses perioden: inga nya verifikationer kan bokföras tills den låses upp.',
-  unlock_period: 'Genom att klicka godkänn så låses perioden upp. Använd endast för rättelser; lås igen efter.',
-  close_period: 'Genom att klicka godkänn så stängs perioden permanent (BFL). Stängningen kan inte ångras.',
-  run_year_end: 'Genom att klicka godkänn så körs bokslut: resultatkonton nollställs, perioden låses, nästa period skapas.',
-  set_opening_balances: 'Genom att klicka godkänn så bokförs ingående balans i nästa period.',
-  run_currency_revaluation: 'Genom att klicka godkänn så bokförs valutaomvärdering (3960/7960).',
-  create_voucher: 'Genom att klicka godkänn så bokförs verifikationen med ett nytt löpnummer.',
-  correct_entry: 'Genom att klicka godkänn så stornas originalverifikationen och en rättelse bokförs (BFL 5 kap 5§).',
-  reverse_entry: 'Genom att klicka godkänn så stornas verifikationen: originalet behålls synligt (BFL 5 kap).',
-  credit_invoice: 'Genom att klicka godkänn så skapas en kreditfaktura och originalverifikationen stornas.',
-  credit_supplier_invoice: 'Genom att klicka godkänn så krediteras leverantörsfakturan och registreringsverifikationen stornas.',
-  approve_supplier_invoice: 'Genom att klicka godkänn så attesteras leverantörsfakturan och blir betalningsbar.',
-  convert_invoice: 'Genom att klicka godkänn så konverteras proformafakturan till en riktig faktura med F-nummer.',
-  import_sie: 'Genom att klicka godkänn så importeras SIE-filen: räkenskapsperiod, ingående balans och verifikationer skapas.',
-  explain_voucher_gap: 'Genom att klicka godkänn så dokumenteras förklaringen för verifikationsluckan (BFNAR 2013:2).',
-  post_annual_depreciation: 'Genom att klicka godkänn så bokförs planenlig avskrivning: en verifikation per tillgång.',
-}
-
-function singleActionWarning(operationType: string): string {
-  return singleActionWarnings[operationType] ?? ''
 }
 
 // Period status carried inside preview_data when stagePendingOperation can
@@ -234,14 +111,6 @@ const GACT_OK_CLASS = 'border-success/40 text-success hover:bg-success/10'
 const GACT_NO_CLASS = 'border-destructive/40 text-destructive hover:bg-destructive/10'
 const GACT_NEUTRAL_CLASS =
   'border-border text-muted-foreground hover:bg-secondary/40 hover:text-foreground'
-
-const REJECTION_CATEGORY_LABELS: Record<PendingOperationRejectionCategory, string> = {
-  wrong_category: 'Fel kategori / konto',
-  wrong_amount: 'Fel belopp',
-  duplicate: 'Dubblett',
-  wrong_period: 'Fel period',
-  other: 'Annat',
-}
 
 /**
  * Human origin line for a staged operation. Many reviewers never used the AI
@@ -321,8 +190,6 @@ function formatRelativeTime(dateStr: string): string {
  * names after a switch. A failed fetch leaves the map empty, which shows the
  * bare number rather than a wrong name, and retries on the next mount.
  */
-const AccountNamesContext = createContext<Record<string, string>>({})
-
 function useAccountNamesSource(): Record<string, string> {
   const [names, setNames] = useState<Record<string, string>>({})
   useEffect(() => {
@@ -351,433 +218,6 @@ function useAccountNamesSource(): Record<string, string> {
   return names
 }
 
-
-function CategorizePreview({ data }: { data: Record<string, unknown> }) {
-  const accountNames = useContext(AccountNamesContext)
-  // The exact journal lines the approval will post (net cost line, VAT line,
-  // gross bank line, SEK) — staged by the server since the preview-lines fix.
-  const lines = (data.lines as Array<{ account_number?: string; debit_amount?: number; credit_amount?: number; description?: string }>) || []
-  const vatLines = (data.vat_lines as Array<{ account_number: string; debit_amount: number; credit_amount: number; description: string }>) || []
-
-  if (lines.length > 0) {
-    return (
-      <div className="space-y-1 text-sm">
-        <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
-        {lines.map((line, i) => {
-          const debitAmt = typeof line.debit_amount === 'number' ? line.debit_amount : 0
-          const creditAmt = typeof line.credit_amount === 'number' ? line.credit_amount : 0
-          return (
-            <div key={i} className="flex justify-between gap-4 font-mono text-xs">
-              <span className="truncate">
-                {line.account_number ?? '?'}{' '}
-                {/* The account's own name first: it is what the posting means.
-                    The line text follows only when it adds something the name
-                    does not already say. */}
-                <span className="text-foreground">
-                  {(line.account_number && accountNames[line.account_number]) || line.description || ''}
-                </span>
-                {line.description &&
-                line.account_number &&
-                accountNames[line.account_number] &&
-                line.description !== accountNames[line.account_number] ? (
-                  <span className="text-muted-foreground"> · {line.description}</span>
-                ) : null}
-              </span>
-              <span className="tabular-nums shrink-0">
-                {debitAmt > 0 ? `D ${formatCurrency(debitAmt)}` : `K ${formatCurrency(creditAmt)}`}
-              </span>
-            </div>
-          )
-        })}
-      </div>
-    )
-  }
-
-  // Some operations carry their kontering under the generic `preview_lines`
-  // key instead (the shape every other staged type renders through). Read it
-  // before falling through to the legacy summary, which would otherwise show
-  // blank accounts for a preview that does describe the entry in full.
-  if (isKonteringLines(data.preview_lines)) {
-    return (
-      <div className="space-y-1 text-sm">
-        <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
-        <PreviewKonteringTable lines={data.preview_lines} />
-      </div>
-    )
-  }
-
-  // Legacy summary for operations staged before the preview carried full
-  // lines: debit/credit accounts + gross amount + separate VAT rows.
-  const legacyAmount = typeof data.amount === 'number' && Number.isFinite(data.amount)
-    ? data.amount
-    : null
-  return (
-    <div className="space-y-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Debetkonto</span>
-        <span className="font-mono">{String(data.debit_account ?? '')}</span>
-        <span className="text-muted-foreground">Kreditkonto</span>
-        <span className="font-mono">{String(data.credit_account ?? '')}</span>
-        <span className="text-muted-foreground">Belopp</span>
-        <span className="font-mono tabular-nums">
-          {/* A preview with no usable amount used to render "NaN kr": show the
-              gap as a gap instead of a number that isn't one. */}
-          {legacyAmount === null
-            ? '-'
-            : formatCurrency(legacyAmount, (data.currency as string) || 'SEK')}
-        </span>
-      </div>
-      {vatLines.length > 0 && (
-        <div className="border-t pt-2">
-          <p className="text-xs text-muted-foreground mb-1">Momsrader</p>
-          {vatLines.map((line, i) => (
-            <div key={i} className="flex justify-between font-mono text-xs">
-              <span>
-                {line.account_number}{' '}
-                {accountNames[line.account_number] || line.description}
-                {accountNames[line.account_number] &&
-                line.description !== accountNames[line.account_number] ? (
-                  <span className="text-muted-foreground"> · {line.description}</span>
-                ) : null}
-              </span>
-              <span className="tabular-nums">
-                {line.debit_amount > 0 ? `D ${formatCurrency(line.debit_amount)}` : `K ${formatCurrency(line.credit_amount)}`}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function CustomerPreview({ data }: { data: Record<string, unknown> }) {
-  return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-      <span className="text-muted-foreground">Namn</span>
-      <span>{String(data.name ?? '')}</span>
-      <span className="text-muted-foreground">Typ</span>
-      <span>{String(data.customer_type ?? '')}</span>
-      {data.email ? (
-        <>
-          <span className="text-muted-foreground">E-post</span>
-          <span>{String(data.email)}</span>
-        </>
-      ) : null}
-      {data.org_number ? (
-        <>
-          <span className="text-muted-foreground">Org.nr</span>
-          <span className="font-mono">{String(data.org_number)}</span>
-        </>
-      ) : null}
-    </div>
-  )
-}
-
-function InvoicePreview({ data }: { data: Record<string, unknown> }) {
-  const items = (data.items as Array<{ description: string; quantity: number; unit: string; unit_price: number; line_total: number; vat_rate: number }>) || []
-
-  return (
-    <div className="space-y-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Kund</span>
-        <span>{String(data.customer_name ?? '')}</span>
-        <span className="text-muted-foreground">Datum</span>
-        <span>{String(data.invoice_date ?? '')}</span>
-        <span className="text-muted-foreground">Förfallodatum</span>
-        <span>{String(data.due_date ?? '')}</span>
-      </div>
-      {items.length > 0 && (
-        <div className="border-t pt-2 space-y-1">
-          {items.map((item, i) => (
-            <div key={i} className="flex justify-between text-xs">
-              <span className="truncate mr-4">{item.description} ({item.quantity} {item.unit})</span>
-              <span className="font-mono tabular-nums whitespace-nowrap">
-                {formatCurrency(item.line_total, (data.currency as string) || 'SEK')}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Netto</span>
-        <span className="tabular-nums text-right">{formatCurrency(data.subtotal as number, (data.currency as string) || 'SEK')}</span>
-        <span className="text-muted-foreground">Moms</span>
-        <span className="tabular-nums text-right">{formatCurrency(data.vat_amount as number, (data.currency as string) || 'SEK')}</span>
-        <span className="font-medium">Totalt</span>
-        <span className="tabular-nums font-medium text-right">{formatCurrency(data.total as number, (data.currency as string) || 'SEK')}</span>
-      </div>
-    </div>
-  )
-}
-
-function CreateTransactionPreview({ data }: { data: Record<string, unknown> }) {
-  const amount = data.amount as number
-  const currency = (data.currency as string) || 'SEK'
-
-  return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-      <span className="text-muted-foreground">Datum</span>
-      <span className="font-mono">{String(data.date ?? '')}</span>
-      <span className="text-muted-foreground">Beskrivning</span>
-      <span className="truncate">{String(data.description ?? '')}</span>
-      <span className="text-muted-foreground">Belopp</span>
-      <span className="font-mono tabular-nums">
-        {formatCurrency(amount, currency)}
-      </span>
-      {data.external_id ? (
-        <>
-          <span className="text-muted-foreground">Extern referens</span>
-          <span className="font-mono text-xs truncate">{String(data.external_id)}</span>
-        </>
-      ) : null}
-    </div>
-  )
-}
-
-type VoucherLine = {
-  account_number: string
-  account_name?: string | null
-  debit_amount: number
-  credit_amount: number
-  line_description?: string | null
-}
-
-function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency?: string }) {
-  return (
-    <div className="border-t pt-2 space-y-1">
-      {lines.map((line, i) => (
-        <div key={i} className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs items-baseline">
-          <span className="font-mono text-muted-foreground">{line.account_number}</span>
-          <span className="truncate">
-            {line.account_name || line.line_description || '-'}
-          </span>
-          <span className="font-mono tabular-nums text-right w-24">
-            {line.debit_amount > 0 ? formatCurrency(line.debit_amount, currency || 'SEK') : ''}
-          </span>
-          <span className="font-mono tabular-nums text-right w-24">
-            {line.credit_amount > 0 ? formatCurrency(line.credit_amount, currency || 'SEK') : ''}
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function VoucherPreview({ data }: { data: Record<string, unknown> }) {
-  const lines = (data.lines as VoucherLine[]) || []
-  const totalDebit = data.total_debit as number | undefined
-  const totalCredit = data.total_credit as number | undefined
-
-  return (
-    <div className="space-y-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Datum</span>
-        <span className="font-mono">{String(data.entry_date ?? '')}</span>
-        <span className="text-muted-foreground">Beskrivning</span>
-        <span className="truncate">{String(data.description ?? '')}</span>
-        <span className="text-muted-foreground">Serie</span>
-        <span className="font-mono">{String(data.voucher_series ?? 'A')}</span>
-      </div>
-      {lines.length > 0 && (
-        <div>
-          <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-[11px] uppercase tracking-wider text-muted-foreground pb-1">
-            <span>Konto</span>
-            <span>Text</span>
-            <span className="text-right w-24">Debet</span>
-            <span className="text-right w-24">Kredit</span>
-          </div>
-          <VoucherLinesTable lines={lines} />
-        </div>
-      )}
-      {totalDebit != null && totalCredit != null && (
-        <div className="border-t pt-2 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs">
-          <span></span>
-          <span className="text-muted-foreground">Summa</span>
-          <span className="font-mono tabular-nums text-right w-24 font-medium">
-            {formatCurrency(totalDebit)}
-          </span>
-          <span className="font-mono tabular-nums text-right w-24 font-medium">
-            {formatCurrency(totalCredit)}
-          </span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
-  const original = (data.original as {
-    voucher?: string
-    entry_date?: string
-    description?: string
-    lines?: VoucherLine[]
-  }) || {}
-  const correction = (data.correction as {
-    total_debit?: number
-    total_credit?: number
-    line_count?: number
-    lines?: VoucherLine[]
-  }) || {}
-
-  return (
-    <div className="space-y-4 text-sm">
-      <div>
-        <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
-          Originalverifikation V{original.voucher ?? ''}, {original.entry_date ?? ''}
-        </p>
-        <p className="text-xs text-muted-foreground italic mb-2">{original.description ?? ''}</p>
-        {original.lines && original.lines.length > 0 && (
-          <VoucherLinesTable lines={original.lines} />
-        )}
-      </div>
-      <div>
-        <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
-          Korrigerad verifikation ({correction.line_count ?? correction.lines?.length ?? 0} rader)
-        </p>
-        {correction.lines && correction.lines.length > 0 && (
-          <VoucherLinesTable lines={correction.lines} />
-        )}
-        {correction.total_debit != null && (
-          <div className="border-t pt-1 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs mt-1">
-            <span></span>
-            <span className="text-muted-foreground">Summa</span>
-            <span className="font-mono tabular-nums text-right w-24 font-medium">
-              {formatCurrency(correction.total_debit)}
-            </span>
-            <span className="font-mono tabular-nums text-right w-24 font-medium">
-              {formatCurrency(correction.total_credit ?? 0)}
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// Render a primitive (string/number/bool) or a short summary of an array/object.
-// Used by GenericPreview to avoid the "[object Object]" stringification that
-// occurs when an operation_type has no dedicated preview component.
-function renderPrimitive(value: unknown): string {
-  if (value == null) return ''
-  if (Array.isArray(value)) return `${value.length} rader`
-  if (typeof value === 'object') return JSON.stringify(value)
-  return String(value)
-}
-
-// A preview_data value that is a kontering (array of account/debit/credit
-// rows). Several staged op types carry one under keys like `preview_lines`
-// without a dedicated preview component; rendering it as the actual
-// verifikat rows is what makes the detail panel say what the agent will do.
-interface PreviewKonteringLine {
-  account?: string
-  account_number?: string
-  description?: string
-  debit?: number
-  credit?: number
-  debit_amount?: number
-  credit_amount?: number
-}
-
-function isKonteringLines(value: unknown): value is PreviewKonteringLine[] {
-  return (
-    Array.isArray(value) &&
-    value.length > 0 &&
-    value.every(
-      (line) =>
-        line != null &&
-        typeof line === 'object' &&
-        ('account' in line || 'account_number' in line) &&
-        ('debit' in line || 'credit' in line || 'debit_amount' in line || 'credit_amount' in line),
-    )
-  )
-}
-
-function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
-  const amount = (n: number | undefined) =>
-    n && n > 0 ? n.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''
-  return (
-    <table className="w-full border-collapse text-[12.5px]" aria-label="Föreslagen kontering">
-      <thead>
-        <tr>
-          <th className={cn(VTH_CLASS, 'w-[70px]')}>Konto</th>
-          <th className={VTH_CLASS}>Beskrivning</th>
-          <th className={cn(VTH_CLASS, 'text-right')}>Debet</th>
-          <th className={cn(VTH_CLASS, 'text-right')}>Kredit</th>
-        </tr>
-      </thead>
-      <tbody>
-        {lines.map((line, i) => (
-          <tr key={i}>
-            <td className={cn(VTD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>
-              {line.account ?? line.account_number}
-            </td>
-            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>{line.description ?? ''}</td>
-            <td className={cn(VTD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-              {amount(line.debit ?? line.debit_amount)}
-            </td>
-            <td className={cn(VTD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-              {amount(line.credit ?? line.credit_amount)}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
-}
-
-function GenericPreview({ data }: { data: Record<string, unknown> }) {
-  // Skip period_status here: it's surfaced in the dedicated banner, not the
-  // generic key-value dump (otherwise the approver sees the same fact twice).
-  const entries = Object.entries(data).filter(([k, v]) => v != null && v !== '' && k !== 'period_status')
-  const konteringEntries = entries.filter(([, v]) => isKonteringLines(v))
-  const rest = entries.filter(([, v]) => !isKonteringLines(v))
-  return (
-    <div className="space-y-3">
-      {konteringEntries.map(([key, value]) => (
-        <PreviewKonteringTable key={key} lines={value as PreviewKonteringLine[]} />
-      ))}
-      {rest.length > 0 && (
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-          {rest.map(([key, value]) => (
-            <Fragment key={key}>
-              <span className="text-muted-foreground">{key.replace(/_/g, ' ')}</span>
-              <span className={typeof value === 'number' ? 'font-mono tabular-nums' : ''}>
-                {renderPrimitive(value)}
-              </span>
-            </Fragment>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function OperationPreview({ op }: { op: PendingOperation }) {
-  const body = (() => {
-    switch (op.operation_type) {
-      case 'categorize_transaction':
-        return <CategorizePreview data={op.preview_data} />
-      case 'create_customer':
-        return <CustomerPreview data={op.preview_data} />
-      case 'create_invoice':
-        return <InvoicePreview data={op.preview_data} />
-      case 'create_transaction':
-        return <CreateTransactionPreview data={op.preview_data} />
-      case 'create_voucher':
-        return <VoucherPreview data={op.preview_data} />
-      case 'correct_entry':
-        return <CorrectEntryPreview data={op.preview_data} />
-      case 'attach_document_to_transaction':
-        return <AttachDocumentPreview data={op.preview_data} params={op.params} />
-      case 'match_transaction_invoice':
-        return <MatchTransactionInvoicePreview data={op.preview_data} />
-      default:
-        return <GenericPreview data={op.preview_data} />
-    }
-  })()
-  return body
-}
 
 /**
  * Inline period-lock banner. Renders when the staged operation touches a
