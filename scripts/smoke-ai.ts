@@ -34,14 +34,16 @@ import {
   hasAiCredentials,
   resolveAiProvider,
 } from '../lib/ai/provider'
-import {
-  getAnthropic,
-  EFFORT_DEEP,
-  MAX_TOKENS_DEEP,
-  OPUS_MODEL,
-  SONNET_MODEL,
-} from '../lib/agent/composer/client'
-import { extractInvoiceFields } from '../extensions/general/invoice-inbox/lib/extract-invoice-fields'
+
+type ComposerModule = typeof import('../lib/agent/composer/client')
+type ExtractionModule = typeof import('../extensions/general/invoice-inbox/lib/extract-invoice-fields')
+
+let getAnthropic: ComposerModule['getAnthropic']
+let EFFORT_DEEP: ComposerModule['EFFORT_DEEP']
+let MAX_TOKENS_DEEP: ComposerModule['MAX_TOKENS_DEEP']
+let OPUS_MODEL: ComposerModule['OPUS_MODEL']
+let SONNET_MODEL: ComposerModule['SONNET_MODEL']
+let extractInvoiceFields: ExtractionModule['extractInvoiceFields']
 
 let failures = 0
 
@@ -238,13 +240,28 @@ async function extraction(path: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // These modules resolve their model ids at import time. Load them only after
+  // dotenv has populated the environment so .env.local provider and model
+  // overrides are exercised by the smoke test.
+  const [composer, extractionModule] = await Promise.all([
+    import('../lib/agent/composer/client'),
+    import('../extensions/general/invoice-inbox/lib/extract-invoice-fields'),
+  ])
+  getAnthropic = composer.getAnthropic
+  EFFORT_DEEP = composer.EFFORT_DEEP
+  MAX_TOKENS_DEEP = composer.MAX_TOKENS_DEEP
+  OPUS_MODEL = composer.OPUS_MODEL
+  SONNET_MODEL = composer.SONNET_MODEL
+  extractInvoiceFields = extractionModule.extractInvoiceFields
+
   const provider = resolveAiProvider()
+  const explicitProvider = (process.env.AI_PROVIDER ?? '').trim().toLowerCase()
   console.log(`Leverantör:   ${provider}`)
   console.log(`Nyckel:       ${hasAiCredentials() ? `${aiCredentialPrefix()}…` : 'SAKNAS'}`)
   if (provider === 'bedrock') console.log(`Region:       ${process.env.AWS_REGION || 'eu-north-1'}`)
   console.log(`Modeller:     ${SONNET_MODEL} / ${OPUS_MODEL}`)
 
-  if (!hasAiCredentials() && process.env.AI_PROVIDER !== 'bedrock') 
+  if (!hasAiCredentials() && explicitProvider !== 'bedrock') {
     console.error(
       '\nInga synliga nycklar. Sätt ANTHROPIC_API_KEY, eller AWS_ACCESS_KEY_ID +\n' +
         'AWS_SECRET_ACCESS_KEY för Bedrock. (Bedrock via instansprofil/IRSA syns\n' +

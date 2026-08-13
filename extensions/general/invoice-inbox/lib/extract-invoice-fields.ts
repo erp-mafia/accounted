@@ -23,7 +23,7 @@ const log = createLogger('invoice-inbox-extract')
 // backend is configured (Bedrock in eu-north-1 on hosted, the direct Anthropic
 // API on self-hosted: see lib/ai/provider.ts). 8192 tokens is enough headroom
 // for invoices with 20+ line items.
-const MODEL = process.env.BEDROCK_MODEL_ID || toProviderModelId('claude-sonnet-5')
+const MODEL = toProviderModelId(process.env.BEDROCK_MODEL_ID || 'claude-sonnet-5')
 const MAX_TOKENS = (() => {
   const parsed = Number(process.env.BEDROCK_MAX_TOKENS)
   // Use the env value only if it's a positive number: `||` would also

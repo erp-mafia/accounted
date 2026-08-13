@@ -30,10 +30,11 @@ const log = createLogger('receipt-hunt-intelligence')
 /**
  * Overridable so ops can move the hunt off the default without a deploy.
  */
-const MODEL =
+const MODEL = toProviderModelId(
   process.env.RECEIPT_HUNT_MODEL_ID ||
-  process.env.BEDROCK_MODEL_ID ||
-  toProviderModelId('claude-sonnet-5')
+    process.env.BEDROCK_MODEL_ID ||
+    'claude-sonnet-5'
+)
 
 export interface CandidateForReview {
   messageId: string

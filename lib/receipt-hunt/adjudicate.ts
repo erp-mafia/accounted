@@ -29,10 +29,11 @@ import { createLogger } from '@/lib/logger'
 
 const log = createLogger('receipt-hunt-adjudicate')
 
-const MODEL =
+const MODEL = toProviderModelId(
   process.env.RECEIPT_HUNT_MODEL_ID ||
-  process.env.BEDROCK_MODEL_ID ||
-  toProviderModelId('claude-sonnet-5')
+    process.env.BEDROCK_MODEL_ID ||
+    'claude-sonnet-5'
+)
 
 export interface UncertainPair {
   /** Stable handle for this pair, opaque to the model beyond matching it back. */

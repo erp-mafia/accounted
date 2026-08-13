@@ -201,6 +201,8 @@ Additionally, migration 048 schedules a `pg_cron` job inside the database that m
 
 All AI features (automatic interpretation of uploaded receipts and invoices via the `document-extraction` and `invoice-inbox` extensions, and the in-app AI assistant) run Claude. There are two ways to provide credentials; pick one.
 
+The stock self-hosted image includes both extraction extensions, so these credentials cover emailed invoices and documents uploaded in the app.
+
 **Option 1: the direct Anthropic API.** The simplest option for self-hosting, since it needs nothing but a key from [console.anthropic.com](https://console.anthropic.com). Billing is your own, separate from any Claude subscription.
 
 ```bash
@@ -238,7 +240,7 @@ Without working credentials the rest of the app runs normally: uploads are store
 npx tsx scripts/smoke-ai.ts                  # credentials, models, chat loop
 # Note: this check only detects static credentials (ANTHROPIC_API_KEY or
 # AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY). Bedrock deployments using an
-# instance profile or IRSA won't be picked up automatically — set
+# instance profile or IRSA won't be picked up automatically: set
 # AI_PROVIDER=bedrock to run the probes against the AWS credential chain
 # anyway.
 npx tsx scripts/smoke-ai.ts ./receipt.pdf    # also runs document extraction

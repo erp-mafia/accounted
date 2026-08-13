@@ -68,9 +68,9 @@ export function getAnthropic(): AiClient {
 // heavy-reasoning intents (supplier-invoice review, VAT review, bokslut) so
 // that split survives if a genuinely larger model is enabled here later.
 export const OPUS_MODEL =
-  process.env.BEDROCK_OPUS_MODEL_ID || toProviderModelId('claude-sonnet-5')
+  toProviderModelId(process.env.BEDROCK_OPUS_MODEL_ID || 'claude-sonnet-5')
 export const SONNET_MODEL =
-  process.env.BEDROCK_SONNET_MODEL_ID || toProviderModelId('claude-sonnet-5')
+  toProviderModelId(process.env.BEDROCK_SONNET_MODEL_ID || 'claude-sonnet-5')
 
 // Reasoning depth for the chat intents.
 //

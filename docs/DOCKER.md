@@ -166,7 +166,7 @@ If you already have nginx / a managed load balancer / Cloudflare in front, skip 
 
 ## Optional Extensions
 
-The self-hosted image ships with all extensions enabled (except Enable Banking, which requires private PSD2 credentials). Each extension activates when you provide its env vars: without them, the app works normally and the feature is simply unavailable.
+The self-hosted image ships with a curated set of general extensions, including email, invoice inbox, document extraction, push notifications, calendar, and the MCP server. Enable Banking is excluded because it requires private PSD2 credentials. Each extension activates when you provide its env vars: without them, the app works normally and the feature is simply unavailable.
 
 ### AI Features (document-extraction, invoice-inbox, AI assistant)
 
@@ -186,10 +186,9 @@ AWS_REGION=eu-north-1
 
 If both are set, Bedrock is used; `AI_PROVIDER=bedrock|anthropic` forces the choice. `OPENAI_API_KEY` from earlier versions is not read by any code path. See [SELF-HOSTING.md](./SELF-HOSTING.md#ai-features) for optional model overrides.
 
-Note: these credentials select the AI *provider*, not which AI features are
-available. Document extraction additionally requires the
-`document-extraction` extension to be packaged into your image; it is not
-included in the stock self-hosted image.
+The stock self-hosted image includes both `invoice-inbox` and
+`document-extraction`, so the same provider credentials cover emailed invoices
+and documents uploaded in the app.
 
 ### Email (invoice sending, reminders)
 
