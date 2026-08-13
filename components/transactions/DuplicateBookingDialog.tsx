@@ -202,9 +202,14 @@ export default function DuplicateBookingDialog({
         <div className="space-y-4">
           {/* Sibling candidates get the "vill du matcha i stället?" copy: the
               generic body's "en annan transaktion eller en befintlig
-              verifikation" hedge reads as noise once the twin is known. */}
+              verifikation" hedge reads as noise once the twin is known. The
+              ignore hint renders only when the action itself does (callers
+              without onIgnored, e.g. the manual booking form and the bulk
+              dialog, must not have copy pointing at a button that is not
+              there). */}
           <p className="text-sm text-muted-foreground">
             {isSiblingCandidate ? t('dialog_duplicate_body_sibling') : t('dialog_duplicate_body')}
+            {canIgnore && <> {t('dialog_duplicate_ignore_hint')}</>}
           </p>
           {candidate && (
             <div className="space-y-1 rounded-md border bg-muted/30 p-3">

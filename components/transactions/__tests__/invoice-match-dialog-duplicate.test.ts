@@ -120,15 +120,25 @@ describe('DuplicateBookingDialog sibling candidates', () => {
       for (const key of [
         'dialog_duplicate_body_sibling',
         'dialog_duplicate_ignore',
+        'dialog_duplicate_ignore_hint',
         'dialog_duplicate_ignore_failed',
       ]) {
         expect(messages[key], `${locale}.transactions.${key}`).toBeTruthy()
         expect(messages[key]).not.toMatch(/–|—/)
       }
+      // The ignore guidance lives in the gated hint, never in the body: two
+      // render sites (manual booking form, bulk dialog) show sibling
+      // candidates without the ignore action, and body copy must not point at
+      // a button that is not there.
+      expect(messages.dialog_duplicate_body_sibling).not.toMatch(/ignorera|ignore it/i)
     }
     // The requested copy pattern: an offer to match instead, in question form.
     expect(readMessages('sv', 'transactions').dialog_duplicate_body_sibling).toMatch(
       /matcha[\s\S]*i stället/i,
     )
+  })
+
+  it('renders the ignore hint only when the ignore action is offered', () => {
+    expect(BOOKING_DIALOG_SRC).toMatch(/canIgnore && <> \{t\('dialog_duplicate_ignore_hint'\)\}<\/>/)
   })
 })
