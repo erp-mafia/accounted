@@ -6,11 +6,12 @@
  * posted with the new lines. All three remain in the verifikationsserie,
  * linked via reverses_id, reversed_by_id, and correction_of_id.
  *
- * Body: `{ lines: [...], description? }`: the new balanced lines. The
- * corrected entry inherits entry_date, fiscal_period_id, and voucher_series
- * from the original. Its description defaults to "Rättelse: <original>";
- * pass `description` to override it (e.g. when the original label named the
- * wrong account).
+ * Body: `{ lines: [...], description?, allow_deep_chain? }`: the new balanced
+ * lines. The corrected entry inherits entry_date, fiscal_period_id, and
+ * voucher_series from the original. Its description defaults to
+ * "Rättelse: <original>"; pass `description` to override it (e.g. when the
+ * original label named the wrong account). `allow_deep_chain` bypasses the
+ * correction-chain depth guard (CORRECTION_CHAIN_TOO_DEEP at 3+ levels).
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable.
  */
@@ -52,6 +53,7 @@ registerEndpoint({
     'The new lines must balance. JOURNAL_ENTRY_NOT_BALANCED if not.',
     'The original\'s entry_date and fiscal_period_id are inherited. If the original\'s period has been locked since posting, the call returns PERIOD_LOCKED.',
     'Three voucher numbers are advanced in this call: the original (already burned), the reversal, and the corrected. The series stays unbroken.',
+    'A chain 3+ corrections deep returns CORRECTION_CHAIN_TOO_DEEP (409). Compute the net effect of the whole chain and book ONE correction, or pass allow_deep_chain=true to override.',
   ],
   example: {
     request: {
@@ -110,7 +112,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         details: { issues: parsed.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message })) },
       })
     }
-    const { lines, description } = parsed.data
+    const { lines, description, allow_deep_chain } = parsed.data
 
     const balance = validateBalance(lines)
     if (!balance.valid) {
@@ -180,7 +182,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         ctx.userId,
         entryId,
         lines,
-        { description },
+        { description, allowDeepChain: allow_deep_chain },
       )
       return ok(
         {

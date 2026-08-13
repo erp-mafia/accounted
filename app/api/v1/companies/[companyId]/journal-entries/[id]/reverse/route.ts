@@ -24,6 +24,10 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 const ReverseRequest = z
   .object({
     reversal_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'reversal_date must be ISO YYYY-MM-DD').optional(),
+    // Explicit override of the correction-chain depth guard: reversing an
+    // entry 3+ links deep in a rättelse chain returns
+    // CORRECTION_CHAIN_TOO_DEEP without it.
+    allow_deep_chain: z.boolean().optional(),
   })
   .strict()
 
@@ -51,6 +55,7 @@ registerEndpoint({
     'Idempotency-Key is mandatory.',
     'reversal_date defaults to today; the reversal is posted in the fiscal period covering that date. If today\'s period is locked the call returns PERIOD_LOCKED.',
     'You cannot reverse a draft (status must be posted). Use /correct after commit if the original needs replacing.',
+    'Reversing an entry 3+ links deep in a correction chain returns CORRECTION_CHAIN_TOO_DEEP (409). Book ONE net-effect correction instead, or pass allow_deep_chain=true to override.',
   ],
   example: {
     request: { reversal_date: '2026-05-13' },
@@ -85,6 +90,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const entryId = idParse.data
 
     let bodyReversalDate: string | undefined
+    let bodyAllowDeepChain = false
     let rawBody: unknown = null
     try {
       const text = await request.text()
@@ -104,6 +110,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         })
       }
       bodyReversalDate = parsed.data.reversal_date
+      bodyAllowDeepChain = parsed.data.allow_deep_chain === true
     }
 
     const today = new Date().toISOString().split('T')[0]
@@ -157,7 +164,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     try {
-      const reversal = await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, entryId, reversalDate)
+      const reversal = await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, entryId, reversalDate, {
+        allowDeepChain: bodyAllowDeepChain,
+      })
       return ok(
         {
           reversal_id: reversal.id,
