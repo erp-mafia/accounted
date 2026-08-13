@@ -443,8 +443,8 @@ export default function QuickReviewDialog({
 
         {/* Template special rules */}
         {template?.special_rules_sv && (
-          <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
-            <p className="text-xs text-warning-foreground leading-snug">
+          <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+            <p className="text-xs text-attn leading-snug">
               {template.special_rules_sv}
             </p>
           </div>
@@ -461,10 +461,10 @@ export default function QuickReviewDialog({
 
         {/* Reverse charge warning */}
         {template?.requires_vat_registration_data && (
-          <div className="rounded-lg border border-warning/30 bg-warning/[0.03] px-3 py-2">
+          <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
             <div className="flex items-start gap-2">
-              <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-warning-foreground leading-snug">
+              <AlertTriangle className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-attn leading-snug">
                 {t('reverse_charge_warning')}
               </p>
             </div>

@@ -1052,7 +1052,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
             <p
               className={cn(
                 'text-xs tabular-nums',
-                disabledReason ? 'text-warning-foreground' : 'text-muted-foreground'
+                disabledReason ? 'text-attn' : 'text-muted-foreground'
               )}
               aria-live="polite"
             >

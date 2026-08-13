@@ -135,7 +135,7 @@ export default function CorrectOpeningBalanceDialog({
         </DialogHeader>
 
         {/* Storno explanation: a booked verifikat can't be edited in place */}
-        <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
           <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
           <p className="text-sm text-warning">
             En bokförd verifikation kan inte ändras direkt (Bokföringslagen). När du sparar stornas

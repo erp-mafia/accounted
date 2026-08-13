@@ -683,7 +683,7 @@ export function ApiKeysPanel() {
               {hasSodConflict && (
                 <div
                   role="alert"
-                  className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-xs text-foreground"
+                  className="flex items-start gap-2 rounded-md border border-border bg-muted/30 p-3 text-xs text-foreground"
                 >
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                   <p className="leading-snug">{t('sod_warning')}</p>

@@ -1390,7 +1390,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   className={cn(
                     'flex items-center gap-2',
                     invoice.status === 'paid' && 'text-success',
-                    invoice.status === 'partially_paid' && 'text-warning-foreground',
+                    invoice.status === 'partially_paid' && 'text-attn',
                   )}
                 >
                   {invoice.status === 'paid' ? (
@@ -1423,7 +1423,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     <p
                       className={cn(
                         'font-display text-xl tabular-nums mt-1',
-                        invoice.status === 'partially_paid' && 'text-warning-foreground',
+                        invoice.status === 'partially_paid' && 'text-attn',
                       )}
                     >
                       {formatCurrency(
@@ -1567,7 +1567,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
           {/* Credit note reference (if this invoice was credited) */}
           {creditNote && (
-            <Card className={creditNote.status === 'draft' ? undefined : 'border-warning/50'}>
+            <Card className={creditNote.status === 'draft' ? undefined : 'border-border'}>
               <CardHeader>
                 <CardTitle className={cn(
                   'flex items-center gap-2',

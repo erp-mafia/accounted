@@ -946,10 +946,10 @@ export default function NewSupplierInvoiceForm({
     return (
       <div
         role="status"
-        className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3"
+        className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
       >
-        <AlertTriangle className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
-        <p className="flex-1 text-sm text-warning-foreground">
+        <AlertTriangle className="h-4 w-4 text-attn mt-0.5 shrink-0" />
+        <p className="flex-1 text-sm text-attn">
           {t('slp_hint', { amount: formatAmount(slpAmount) })}
         </p>
         <Button
@@ -1982,10 +1982,10 @@ export default function NewSupplierInvoiceForm({
             {rcAccountWarningRows.length > 0 && (
               <div
                 role="status"
-                className="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3"
+                className="mb-4 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
               >
-                <AlertTriangle className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
-                <p className="text-sm text-warning-foreground">
+                <AlertTriangle className="h-4 w-4 text-attn mt-0.5 shrink-0" />
+                <p className="text-sm text-attn">
                   {t('rc_account_warning', {
                     count: rcAccountWarningRows.length,
                     rows: rcAccountWarningRows.map((i) => i + 1).join(', '),
@@ -2000,10 +2000,10 @@ export default function NewSupplierInvoiceForm({
             {foreignZeroVatRows.length > 0 && (
               <div
                 role="status"
-                className="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3"
+                className="mb-4 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
               >
-                <AlertTriangle className="h-4 w-4 text-warning-foreground mt-0.5 shrink-0" />
-                <p className="text-sm text-warning-foreground">
+                <AlertTriangle className="h-4 w-4 text-attn mt-0.5 shrink-0" />
+                <p className="text-sm text-attn">
                   {t('foreign_zero_vat_warning', {
                     count: foreignZeroVatRows.length,
                     rows: foreignZeroVatRows.map((i) => i + 1).join(', '),

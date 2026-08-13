@@ -130,10 +130,10 @@ export function ActivateAccountsDialog({
           )}
 
           {!loading && unknownRows.length > 0 && (
-            <div className="rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning-foreground">
+            <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-attn">
               <p className="font-medium">Finns inte i BAS-katalogen:</p>
               <p className="mt-1 font-mono">{unknownRows.map((r) => r.account_number).join(', ')}</p>
-              <p className="mt-1 text-warning-foreground/80">
+              <p className="mt-1 text-attn/80">
                 Skapa dem som egna konton, eller kontrollera inmatningen.
               </p>
               {onCreateUnknown && (

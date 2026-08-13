@@ -690,7 +690,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <CardContent className="text-sm">
             {attachmentCount === 0 && references.length === 0 ? (
               <div className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-warning-foreground" />
+                <AlertTriangle className="h-4 w-4 text-attn" />
                 <span className="text-muted-foreground">{t('no_attachments')}</span>
               </div>
             ) : (

@@ -1959,7 +1959,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                               30%/50% applies to the full line total: the seller
                               must ensure the line is 100% labor; material has
                               to be invoiced separately. */}
-                          <div className="mt-2 flex items-start gap-2 text-xs text-warning-foreground">
+                          <div className="mt-2 flex items-start gap-2 text-xs text-attn">
                             <AlertTriangle className="h-3.5 w-3.5 mt-0.5 text-warning shrink-0" />
                             <p>{t('deduction_labor_only_warning')}</p>
                           </div>

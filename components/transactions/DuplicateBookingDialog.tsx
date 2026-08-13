@@ -199,8 +199,8 @@ export default function DuplicateBookingDialog({
                   null amount already shows dialog_duplicate_amount_unknown. */}
               {candidate.amount == null && candidate.currency && (
                 <div className="flex items-start gap-2 pt-1">
-                  <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground flex-shrink-0 mt-0.5" />
-                  <p className="text-xs text-warning-foreground leading-snug">
+                  <AlertTriangle className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-attn leading-snug">
                     {t('dialog_duplicate_sek_unavailable', { currency: candidate.currency })}
                   </p>
                 </div>
@@ -211,8 +211,8 @@ export default function DuplicateBookingDialog({
                   match rests on date + account + direction alone. */}
               {candidate.amount != null && !candidate.amount_verified && (
                 <div className="flex items-start gap-2 pt-1">
-                  <AlertTriangle className="h-3.5 w-3.5 text-warning-foreground flex-shrink-0 mt-0.5" />
-                  <p className="text-xs text-warning-foreground leading-snug">
+                  <AlertTriangle className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-attn leading-snug">
                     {t('dialog_duplicate_amount_unverified')}
                   </p>
                 </div>

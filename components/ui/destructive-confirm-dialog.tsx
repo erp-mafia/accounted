@@ -62,7 +62,7 @@ export function DestructiveConfirmDialog({
                 'flex-shrink-0 flex items-center justify-center h-10 w-10 rounded-full',
                 variant === 'destructive'
                   ? 'bg-destructive/10 text-destructive'
-                  : 'bg-warning/10 text-warning'
+                  : 'bg-muted text-attn'
               )}
             >
               <AlertTriangle className="h-5 w-5" />
@@ -87,14 +87,13 @@ export function DestructiveConfirmDialog({
           >
             {cancelLabel}
           </Button>
+          {/* Warning-variant confirms use the default primary button: in
+              chrome only --destructive survives as a colored action. */}
           <Button
             variant={variant === 'destructive' ? 'destructive' : 'default'}
             onClick={handleConfirm}
             disabled={isLoading}
-            className={cn(
-              'min-h-11 w-full sm:w-auto',
-              variant === 'warning' && 'bg-warning hover:bg-warning/90 text-warning-foreground'
-            )}
+            className="min-h-11 w-full sm:w-auto"
           >
             {isLoading ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />

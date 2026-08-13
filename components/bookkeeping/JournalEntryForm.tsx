@@ -1254,9 +1254,9 @@ export default function JournalEntryForm({
       </div>
 
       {(monthChanged || selectedPeriodLocked) && (
-        <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3">
-          <AlertTriangle className="h-5 w-5 text-warning-foreground mt-0.5 shrink-0" />
-          <div className="flex-1 text-sm text-warning-foreground space-y-0.5">
+        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
+          <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
+          <div className="flex-1 text-sm text-attn space-y-0.5">
             {monthChanged && (
               <p className="font-medium">
                 {t('review_month_changed', { prev: monthLabel(lastPostedMonth as string), current: monthLabel(entryMonth) })}
@@ -1268,7 +1268,7 @@ export default function JournalEntryForm({
       )}
 
       {uploadedFiles.filter((f) => f.status === 'uploaded').length === 0 && (
-        <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning-foreground">
+        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm text-attn">
           <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
           <p>{t('no_doc_body')}</p>
         </div>
@@ -1488,9 +1488,9 @@ export default function JournalEntryForm({
         )}
 
         {periodMismatch === 'no_period' && (
-          <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3">
-            <AlertTriangle className="h-5 w-5 text-warning-foreground mt-0.5 shrink-0" />
-            <div className="flex-1 text-sm text-warning-foreground">
+          <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
+            <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
+            <div className="flex-1 text-sm text-attn">
               <p className="font-medium">{t('no_period_warning', { date: entryDate })}</p>
               <p className="mt-0.5">{t('no_period_help')}</p>
             </div>
@@ -2021,9 +2021,9 @@ export default function JournalEntryForm({
         warningText={embedded ? '' : t('review_warning')}
       >
         {(monthChanged || selectedPeriodLocked) && (
-          <div className="mb-4 flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3">
-            <AlertTriangle className="h-5 w-5 text-warning-foreground mt-0.5 shrink-0" />
-            <div className="flex-1 text-sm text-warning-foreground space-y-0.5">
+          <div className="mb-4 flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
+            <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
+            <div className="flex-1 text-sm text-attn space-y-0.5">
               {monthChanged && (
                 <p className="font-medium">
                   {t('review_month_changed', {
