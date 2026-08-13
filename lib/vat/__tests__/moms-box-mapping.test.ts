@@ -48,6 +48,7 @@ describe('ACCOUNT_TO_BOX', () => {
     expect(ACCOUNT_TO_BOX['2641']).toBe('48')
     expect(ACCOUNT_TO_BOX['2645']).toBe('48')
     expect(ACCOUNT_TO_BOX['2647']).toBe('48')
+    expect(ACCOUNT_TO_BOX['2648']).toBe('48')
     expect(ACCOUNT_TO_BOX['2649']).toBe('48')
   })
 

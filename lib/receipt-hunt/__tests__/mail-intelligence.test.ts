@@ -7,10 +7,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockCreate = vi.fn()
-vi.mock('@anthropic-ai/bedrock-sdk', () => ({
-  default: class {
-    messages = { create: (...args: unknown[]) => mockCreate(...args) }
-  },
+vi.mock('@/lib/ai/provider', () => ({
+  createAiClient: () => ({ messages: { create: (...args: unknown[]) => mockCreate(...args) } }),
+  toProviderModelId: (id: string) => id,
 }))
 
 import { extractMailDocuments, type CandidateForReview } from '../mail-intelligence'

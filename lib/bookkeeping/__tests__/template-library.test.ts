@@ -225,9 +225,9 @@ describe('deriveTemplateLinesFromBooking', () => {
   })
 
   it('snaps a 12% VAT line to the reduced rate', () => {
-    // Hotel: 5820 net 1000, 2641 VAT 120, 1930 gross 1120.
+    // Hotel: 5830 net 1000, 2641 VAT 120, 1930 gross 1120.
     const lines = deriveTemplateLinesFromBooking([
-      { account_number: '5820', debit_amount: '1000', credit_amount: '' },
+      { account_number: '5830', debit_amount: '1000', credit_amount: '' },
       { account_number: '2641', debit_amount: '120', credit_amount: '' },
       { account_number: '1930', debit_amount: '', credit_amount: '1120' },
     ])

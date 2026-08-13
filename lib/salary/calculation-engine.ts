@@ -415,8 +415,8 @@ export function calculateSalary(
       output: 0,
     })
   } else if (input.fSkattStatus === 'not_verified') {
-    // Unverified: flat 30%
-    taxWithheld = r(taxableIncome * 0.30)
+    // Unverified: flat 30%, whole kronor (SFF 22 kap. 1 §)
+    taxWithheld = calculateSidoinkomstTax(taxableIncome)
     steps.push({
       label: 'Skatteavdrag (ej verifierad)',
       formula: 'skattegrundande inkomst × 30 %',
@@ -451,8 +451,8 @@ export function calculateSalary(
       output: taxWithheld,
     })
   } else {
-    // Fallback: flat 30%
-    taxWithheld = r(taxableIncome * 0.30)
+    // Fallback: flat 30%, whole kronor (SFF 22 kap. 1 §)
+    taxWithheld = calculateSidoinkomstTax(taxableIncome)
     steps.push({
       label: 'Skatteavdrag (30 % schablon)',
       formula: 'skattegrundande inkomst × 30 %',

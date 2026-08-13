@@ -1996,6 +1996,23 @@ describe('CreateAccountSchema', () => {
     })
     expect(result.success).toBe(false)
   })
+
+  it('rejects a VAT treatment that does not apply to the account class', () => {
+    expect(CreateAccountSchema.safeParse({
+      account_number: '5010',
+      account_name: 'Consulting costs',
+      account_type: 'expense',
+      normal_balance: 'debit',
+      default_vat_treatment: 'standard_25',
+    }).success).toBe(false)
+    expect(CreateAccountSchema.safeParse({
+      account_number: '5010',
+      account_name: 'EU services',
+      account_type: 'expense',
+      normal_balance: 'debit',
+      default_vat_treatment: 'reverse_charge_eu_services',
+    }).success).toBe(true)
+  })
 })
 
 // ============================================================
@@ -2304,6 +2321,14 @@ describe('UpdateAccountSchema', () => {
       normal_balance: 'debit',
       default_vat_rate: 0.5,
     }).success).toBe(false)
+  })
+
+  it('accepts supported account VAT treatments and rejects unknown values', () => {
+    expect(UpdateAccountSchema.safeParse({
+      default_vat_treatment: 'reverse_charge_eu_goods',
+    }).success).toBe(true)
+    expect(UpdateAccountSchema.safeParse({ default_vat_treatment: null }).success).toBe(true)
+    expect(UpdateAccountSchema.safeParse({ default_vat_treatment: 'eu_purchase' }).success).toBe(false)
   })
 })
 

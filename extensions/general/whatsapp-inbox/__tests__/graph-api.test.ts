@@ -45,11 +45,12 @@ describe('graph-api', () => {
         senderPhoneHash: 'hash-1',
       })
 
-      expect(result).toEqual({ ok: true, wamid: 'wamid.OUT1' })
+      expect(result).toEqual({ ok: true, wamid: 'wamid.OUT1', errorDetail: null })
       const [row] = findCall('whatsapp_messages', 'insert') as [Record<string, unknown>]
       expect(row.direction).toBe('outbound')
       expect(row.wamid).toBe('wamid.OUT1')
       expect(row.delivery_status).toBe('sent')
+      expect(row.error_message).toBeNull()
       expect(row.processing_status).toBe('done')
       expect(row.raw_payload).toEqual({ template: TEMPLATE.m16Fallback })
       expect(row.sender_phone_hash).toBe('hash-1')
@@ -72,10 +73,13 @@ describe('graph-api', () => {
         template: TEMPLATE.m18Error,
       })
 
-      expect(result).toEqual({ ok: false, wamid: null })
+      expect(result.ok).toBe(false)
+      expect(result.wamid).toBeNull()
       const [row] = findCall('whatsapp_messages', 'insert') as [Record<string, unknown>]
       expect(row.delivery_status).toBe('failed')
       expect(row.wamid).toBeNull()
+      // #1552: the row keeps WHY the send failed, not just that it failed.
+      expect(row.error_message).toContain('HTTP 500')
     })
 
     it('never throws on a network error', async () => {

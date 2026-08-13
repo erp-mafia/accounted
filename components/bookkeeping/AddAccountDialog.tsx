@@ -19,6 +19,11 @@ import { isStandardBASAccount } from '@/lib/bookkeeping/bas-reference'
 import { classifyAccount } from '@/lib/bookkeeping/account-classifier'
 import type { BASAccount } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { AccountVatTreatmentSelect } from './AccountVatTreatmentSelect'
+import {
+  defaultRateForVatTreatment,
+  type AccountVatTreatment,
+} from '@/lib/vat/account-vat-treatment'
 
 /**
  * The create path hands back the full row the API inserted. The reactivate
@@ -49,6 +54,7 @@ export function AddAccountDialog({
   // "Standard moms": the moms-sats a booking line defaults to when this konto is
   // picked. 'none' = no default. SelectItem values are stringified decimals.
   const [defaultVatRate, setDefaultVatRate] = useState('none')
+  const [defaultVatTreatment, setDefaultVatTreatment] = useState<AccountVatTreatment | 'none'>('none')
   const [sruCode, setSruCode] = useState('')
   const [normalBalance, setNormalBalance] = useState<'debit' | 'credit'>('debit')
   const [isSaving, setIsSaving] = useState(false)
@@ -102,6 +108,7 @@ export function AddAccountDialog({
           normal_balance: normalBalance,
           description: description || null,
           default_vat_rate: defaultVatRate === 'none' ? null : parseFloat(defaultVatRate),
+          default_vat_treatment: defaultVatTreatment === 'none' ? null : defaultVatTreatment,
           sru_code: sruCode || null,
         }),
       })
@@ -127,6 +134,7 @@ export function AddAccountDialog({
       setAccountName('')
       setDescription('')
       setDefaultVatRate('none')
+      setDefaultVatTreatment('none')
       setSruCode('')
       onCreated(createdAccount)
       onOpenChange(false)
@@ -162,6 +170,7 @@ export function AddAccountDialog({
       setAccountName('')
       setDescription('')
       setDefaultVatRate('none')
+      setDefaultVatTreatment('none')
       setSruCode('')
       onCreated({ account_number: accountNumber })
       onOpenChange(false)
@@ -260,6 +269,18 @@ export function AddAccountDialog({
             />
           </div>
 
+          <AccountVatTreatmentSelect
+            value={defaultVatTreatment}
+            accountClass={derived ? Number(accountNumber.charAt(0)) : null}
+            onValueChange={(treatment) => {
+              setDefaultVatTreatment(treatment)
+              if (treatment !== 'none') {
+                const rate = defaultRateForVatTreatment(treatment, Number(accountNumber.charAt(0)))
+                setDefaultVatRate(rate === null ? 'none' : String(rate))
+              }
+            }}
+          />
+
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Standard moms <span className="text-muted-foreground">(valfritt)</span></Label>
@@ -275,12 +296,6 @@ export function AddAccountDialog({
                   <SelectItem value="0.06">6 %</SelectItem>
                 </SelectContent>
               </Select>
-              {accountNumber.length === 4 && accountNumber.startsWith('3') && (
-                <p className="text-xs text-muted-foreground">
-                  På intäktskonton avgör satsen också om kontot räknas som
-                  momspliktig försäljning i ruta 05 i momsdeklarationen.
-                </p>
-              )}
             </div>
             <div className="space-y-2">
               <Label>SRU-kod <span className="text-muted-foreground">(valfritt)</span></Label>

@@ -106,4 +106,19 @@ describe('pending_operations operation_type CHECK audit', () => {
       client.release()
     }
   })
+
+  it('accepts post_kontantmetod_cutoff for the staged year-end posting flow', async () => {
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      await client.query(
+        `INSERT INTO public.pending_operations (user_id, company_id, operation_type, title)
+         VALUES ($1, $2, 'post_kontantmetod_cutoff', 'kontantmetod cut-off')`,
+        [userId, companyId],
+      )
+      await client.query('ROLLBACK')
+    } finally {
+      client.release()
+    }
+  })
 })

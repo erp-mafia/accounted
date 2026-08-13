@@ -1734,6 +1734,7 @@ export interface BASAccount {
   // Per-account default VAT rate for booking lines (0/0.06/0.12/0.25).
   // null = no default (line keeps its own rate). Öresavrundning (3740) = 0.
   default_vat_rate: number | null
+  default_vat_treatment: import('@/lib/vat/account-vat-treatment').AccountVatTreatment | null
   description: string | null
   sru_code: string | null
   k2_excluded: boolean
@@ -1789,6 +1790,13 @@ export interface JournalEntry {
   attachment_urls: string[] | null
   notes: string | null
   commit_method: string | null
+  // WHO relayed the commit; complements commit_method = HOW. Stamped at
+  // commit time since migration 20260619120000. actor_type is NULL or one of
+  // 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'system' | 'agent_chat'
+  // (the DB CHECK is the authority); actor_label is a credential snapshot
+  // (e.g. the API key name).
+  committed_actor_type: string | null
+  committed_actor_label: string | null
   rubric_version: string | null
   source_voucher_series: string | null
   source_voucher_number: number | null
@@ -2302,6 +2310,7 @@ export type PendingOperationType =
   | 'unlock_period'
   | 'set_opening_balances'
   | 'run_year_end'
+  | 'post_kontantmetod_cutoff'
   | 'run_currency_revaluation'
   // Stream 1 Phase 1: SIE import (export is read-only)
   | 'import_sie'
@@ -3584,6 +3593,8 @@ export type YearEndBlockerCode =
   | 'TRIAL_BALANCE_UNBALANCED'
   | 'CONTINUITY_MISMATCH'
   | 'NEXT_PERIOD_HAS_IB'
+  | 'KONTANTMETOD_CUTOFF_REQUIRED'
+  | 'KONTANTMETOD_CUTOFF_CHECK_FAILED'
   | 'UNBOOKED_TRANSACTIONS'
   | 'UNBOOKED_CHECK_FAILED'
 
@@ -4451,6 +4462,7 @@ export interface StoredStagedOperation {
   title?: string | null
   risk_level?: string | null
   preview_data?: unknown
+  params?: Record<string, unknown> | null
 }
 
 // ============================================================

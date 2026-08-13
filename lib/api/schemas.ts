@@ -16,6 +16,7 @@ import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import { PERSONAL_NUMBER_INPUT_RE } from '@/lib/customers/mask-personal-number'
 import type { AuditAction } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
+import { isVatTreatmentValidForAccountClass } from '@/lib/vat/account-vat-treatment'
 
 // ============================================================
 // Shared primitives
@@ -2114,6 +2115,15 @@ const defaultVatRate = z
   .nullable()
   .optional()
 
+export const AccountVatTreatmentSchema = z.enum([
+  'standard_25', 'reduced_12', 'reduced_6', 'exempt',
+  'reverse_charge_domestic', 'reverse_charge_eu_goods',
+  'reverse_charge_eu_services', 'export_goods', 'export_services',
+  'vmb', 'rental_voluntary',
+])
+
+const defaultVatTreatment = AccountVatTreatmentSchema.nullable().optional()
+
 export const CreateAccountSchema = z.object({
   account_number: accountNumber,
   account_name: z.string().min(1, 'Account name is required'),
@@ -2123,7 +2133,22 @@ export const CreateAccountSchema = z.object({
   description: z.string().nullable().optional(),
   default_vat_code: z.string().nullable().optional(),
   default_vat_rate: defaultVatRate,
+  default_vat_treatment: defaultVatTreatment,
   sru_code: z.string().nullable().optional(),
+}).superRefine((value, ctx) => {
+  if (
+    value.default_vat_treatment &&
+    !isVatTreatmentValidForAccountClass(
+      value.default_vat_treatment,
+      Number(value.account_number.charAt(0)),
+    )
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['default_vat_treatment'],
+      message: 'VAT treatment is not valid for the account class',
+    })
+  }
 })
 
 export const UpdateAccountSchema = z.object({
@@ -2132,6 +2157,7 @@ export const UpdateAccountSchema = z.object({
   description: z.string().nullable().optional(),
   default_vat_code: z.string().nullable().optional(),
   default_vat_rate: defaultVatRate,
+  default_vat_treatment: defaultVatTreatment,
   sru_code: z.string().nullable().optional(),
 })
 

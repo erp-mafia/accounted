@@ -32,6 +32,11 @@ import {
   type DimensionRuleType,
 } from '@/components/dimensions/types'
 import type { BASAccount } from '@/types'
+import { AccountVatTreatmentSelect } from './AccountVatTreatmentSelect'
+import {
+  defaultRateForVatTreatment,
+  type AccountVatTreatment,
+} from '@/lib/vat/account-vat-treatment'
 
 interface EditAccountDialogProps {
   open: boolean
@@ -64,6 +69,9 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
   // as a decimal fraction; SelectItem values are the stringified decimals.
   const [defaultVatRate, setDefaultVatRate] = useState(
     account.default_vat_rate != null ? String(account.default_vat_rate) : 'none',
+  )
+  const [defaultVatTreatment, setDefaultVatTreatment] = useState<AccountVatTreatment | 'none'>(
+    account.default_vat_treatment ?? 'none',
   )
   const [sruCode, setSruCode] = useState(account.sru_code || '')
   const [isActive, setIsActive] = useState(account.is_active)
@@ -256,6 +264,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
           account_name: accountName,
           description: description || null,
           default_vat_rate: defaultVatRate === 'none' ? null : parseFloat(defaultVatRate),
+          default_vat_treatment: defaultVatTreatment === 'none' ? null : defaultVatTreatment,
           sru_code: sruCode || null,
           is_active: isActive,
         }),
@@ -313,6 +322,18 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
             />
           </div>
 
+          <AccountVatTreatmentSelect
+            value={defaultVatTreatment}
+            accountClass={account.account_class}
+            onValueChange={(treatment) => {
+              setDefaultVatTreatment(treatment)
+              if (treatment !== 'none') {
+                const rate = defaultRateForVatTreatment(treatment, account.account_class)
+                setDefaultVatRate(rate === null ? 'none' : String(rate))
+              }
+            }}
+          />
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Standard moms</Label>
@@ -328,12 +349,6 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                   <SelectItem value="0.06">6 %</SelectItem>
                 </SelectContent>
               </Select>
-              {account.account_class === 3 && (
-                <p className="text-xs text-muted-foreground">
-                  På intäktskonton avgör satsen också om kontot räknas som
-                  momspliktig försäljning i ruta 05 i momsdeklarationen.
-                </p>
-              )}
             </div>
             <div className="space-y-2">
               <Label>SRU-kod</Label>

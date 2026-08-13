@@ -17,6 +17,7 @@ import {
   runReconciliation,
   DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
 } from '@/lib/reconciliation/bank-reconciliation'
+import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -1336,6 +1337,7 @@ export const enableBankingExtension: Extension = {
         let initialSyncSummary: {
           imported: number
           duplicates: number
+          auto_matched: number
           requested_from: string
           returned_min_date: string | null
           returned_max_date: string | null
@@ -1349,12 +1351,37 @@ export const enableBankingExtension: Extension = {
             .toISOString()
             .split('T')[0]
 
+          // Same guard the manual /sync route and the cron apply. This path also
+          // runs on RENEWAL (reconnect resets status to pending_selection), and a
+          // fresh consent often makes the bank release history the first connect
+          // never delivered, straight over an already-bookkept period. Without
+          // the guard those rows would be auto-categorized into brand-new
+          // verifikat (double-booking) instead of being linked to the ones that
+          // already describe them.
+          const { data: sieOverlap } = await supabase
+            .from('sie_imports')
+            .select('id')
+            .eq('company_id', companyId)
+            .eq('status', 'completed')
+            .gte('fiscal_year_end', fromDate)
+            .limit(1)
+            .maybeSingle()
+
+          const { data: membership } = await supabase
+            .from('company_members')
+            .select('role')
+            .eq('company_id', companyId)
+            .eq('user_id', user.id)
+            .maybeSingle()
+          const isViewer = membership?.role === 'viewer'
+
           log.info('[enable-banking] Starting inline initial backfill', {
             connectionId: connection.id,
             accountCount: accountsToSync.length,
             lookbackDays: initialLookbackDays,
             fromDate,
             toDate,
+            sieOverlap: Boolean(sieOverlap),
           })
 
           let timeoutHandle: ReturnType<typeof setTimeout> | undefined
@@ -1370,7 +1397,11 @@ export const enableBankingExtension: Extension = {
                 fromDate,
                 toDate,
                 ingestFn,
-                { strategy: 'longest' }
+                {
+                  strategy: 'longest',
+                  ...(sieOverlap ? { skipAutoCategorization: true } : {}),
+                  ...(isViewer ? { rawInsertOnly: true } : {}),
+                }
               ))
             )
             // If the timeout wins the race, the underlying Promise.all keeps
@@ -1396,6 +1427,78 @@ export const enableBankingExtension: Extension = {
             const maxDates = results.map(r => r.returnedMaxBookingDate).filter((d): d is string => !!d)
             const returnedMin = minDates.length > 0 ? minDates.reduce((a, b) => (a < b ? a : b)) : null
             const returnedMax = maxDates.length > 0 ? maxDates.reduce((a, b) => (a > b ? a : b)) : null
+
+            // Post-backfill reconciliation sweep, mirroring the manual /sync
+            // route: link just-imported rows to the verifikat that already
+            // describe them so a re-released period does not resurface as
+            // hundreds of "ohanterade" transactions. Unlike the /sync and cron
+            // sweeps this runs once per enabled ledger account with a resolved
+            // cash-account scope: the pooled unscoped form can cross-link
+            // accounts (#1290/#1298). Both a thrown scope resolution AND an
+            // unresolved cash-account row (found: false) skip that account's
+            // sweep instead of widening to the pooled form.
+            //
+            // The window opens at the OLDEST booking date the bank actually
+            // returned when that is older than the requested fromDate: some
+            // ASPSPs over-return history, and rows outside the requested window
+            // would otherwise be ingested but never swept.
+            const sweepDateFrom = returnedMin && returnedMin < fromDate ? returnedMin : fromDate
+            // The sweep writes bank-feed metadata only (transactions.journal_entry_id,
+            // reconciliation_method, is_business): journal tables are never touched,
+            // so BFL immutability and period locks (which guard journal entries) are
+            // not in play. Links to opening-balance verifikat are blocked by the
+            // check_transaction_link_not_opening_balance trigger, and every link is
+            // reversible via unlinkReconciliation without any ledger write.
+            let totalAutoMatched = 0
+            if (sieOverlap && totalImported > 0 && !isViewer) {
+              // Filter, not `?? undefined`: an undefined accountNumber makes
+              // resolveCashAccountScope fall back to the primary account with
+              // includeUnassigned=true, which is the pooled form this block must
+              // never widen to. The allocator gives every enabled account a
+              // concrete ledger_account, so nothing is skipped in practice.
+              const ledgerAccounts = Array.from(
+                new Set(
+                  accountsToSync
+                    .map(a => a.ledger_account)
+                    .filter((l): l is string => typeof l === 'string' && l.length > 0)
+                )
+              )
+              for (const ledgerAccount of ledgerAccounts) {
+                try {
+                  const scope = await resolveCashAccountScope(supabase, companyId, ledgerAccount)
+                  if (!scope.found) {
+                    log.warn('[enable-banking] No cash_accounts row for ledger account; skipping its reconciliation sweep', {
+                      connectionId: connection.id,
+                      ledgerAccount,
+                    })
+                    continue
+                  }
+                  const reconResult = await runReconciliation(supabase, companyId, user.id, {
+                    dateFrom: sweepDateFrom,
+                    dateTo: toDate,
+                    accountNumber: scope.accountNumber,
+                    currency: scope.currency,
+                    cashAccountId: scope.cashAccountId,
+                    includeUnassigned: scope.includeUnassigned,
+                    // Unattended run: nobody reviews a dry-run first, so never
+                    // commit low-confidence (fuzzy / date-range) matches.
+                    confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
+                  })
+                  totalAutoMatched += reconResult.applied
+                  if (reconResult.applied > 0 || reconResult.skippedBelowThreshold > 0) {
+                    log.info('[enable-banking] Post-backfill reconciliation linked imported rows to existing verifikat', {
+                      connectionId: connection.id,
+                      accountNumber: scope.accountNumber,
+                      applied: reconResult.applied,
+                      skippedBelowThreshold: reconResult.skippedBelowThreshold,
+                      total: reconResult.matches.length,
+                    })
+                  }
+                } catch {
+                  // Non-critical: rows stay unmatched for manual review.
+                }
+              }
+            }
 
             const completedAt = new Date().toISOString()
             // Don't re-write accounts_data here: the first update already wrote it.
@@ -1432,6 +1535,7 @@ export const enableBankingExtension: Extension = {
               initialSyncSummary = {
                 imported: totalImported,
                 duplicates: totalDuplicates,
+                auto_matched: totalAutoMatched,
                 requested_from: fromDate,
                 returned_min_date: returnedMin,
                 returned_max_date: returnedMax,

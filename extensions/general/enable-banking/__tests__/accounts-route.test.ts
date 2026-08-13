@@ -27,8 +27,23 @@ vi.mock('@/lib/cash-accounts/service', () => ({
     iban ? iban.replace(/\s+/g, '').toUpperCase() || null : null,
 }))
 
+// Mock the reconciliation modules so the renewal-guard sweep is deterministic
+// and observable. The mocks must export every symbol index.ts imports.
+const { mockRunReconciliation, mockResolveCashAccountScope } = vi.hoisted(() => ({
+  mockRunReconciliation: vi.fn(),
+  mockResolveCashAccountScope: vi.fn(),
+}))
+vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
+  runReconciliation: (...args: unknown[]) => mockRunReconciliation(...args),
+  DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD: 0.9,
+}))
+vi.mock('@/lib/reconciliation/cash-account-scope', () => ({
+  resolveCashAccountScope: (...args: unknown[]) => mockResolveCashAccountScope(...args),
+}))
+
 import { enableBankingExtension } from '../index'
 import { syncAccountTransactions } from '../lib/sync'
+import { eventBus } from '@/lib/events/bus'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import type { StoredAccount } from '../types'
 
@@ -67,6 +82,10 @@ interface SupabaseStub {
     bank_connection_id: string | null
     ledger_account: string
   }>
+  /** Completed SIE import overlapping the backfill window (renewal-flood guard). */
+  sieImportRow?: { id: string } | null
+  /** company_members row for the caller; role 'viewer' disables the sweep. */
+  membershipRow?: { role: string } | null
   /** Last update payload (may be overwritten by a follow-up metadata update). */
   capturedUpdate?: Record<string, unknown>
   /** All update payloads in order: first is the status flip, second the initial-sync metadata. */
@@ -101,6 +120,24 @@ function buildSupabase(stub: SupabaseStub) {
         return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn(() => Promise.resolve({ data: stub.cashAccountRows ?? [], error: null })),
+        }
+      }
+      // Renewal-flood guard: SIE-overlap probe before the inline backfill.
+      if (table === 'sie_imports') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          gte: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockReturnThis(),
+          maybeSingle: vi.fn().mockResolvedValue({ data: stub.sieImportRow ?? null, error: null }),
+        }
+      }
+      // Role probe for the reconciliation sweep (viewers cannot write links).
+      if (table === 'company_members') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          maybeSingle: vi.fn().mockResolvedValue({ data: stub.membershipRow ?? null, error: null }),
         }
       }
       return {
@@ -167,7 +204,25 @@ const ALLOCATOR_DEFAULTS: Record<string, string> = {
 describe('PATCH /accounts (enable-banking)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    eventBus.clear()
     mockUpsertFromPsd2.mockResolvedValue(undefined)
+    mockRunReconciliation.mockResolvedValue({
+      matches: [],
+      applied: 0,
+      errors: 0,
+      skippedBelowThreshold: 0,
+    })
+    // Scope stand-in: echo the requested account (or the '1930' default) so
+    // tests can assert the sweep runs once per ledger account, correctly scoped.
+    mockResolveCashAccountScope.mockImplementation(
+      async (_supabase: unknown, _companyId: unknown, accountNumber?: string) => ({
+        accountNumber: accountNumber ?? '1930',
+        currency: 'SEK',
+        cashAccountId: `ca-${accountNumber ?? '1930'}`,
+        includeUnassigned: accountNumber === undefined,
+        found: true,
+      }),
+    )
     // Default: no revoked connections; individual tests override to exercise
     // the self-heal path.
     mockGetRevokedConnectionIds.mockResolvedValue(new Set<string>())
@@ -518,6 +573,252 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(meta?.initial_sync_returned_max_date).toBe('2026-05-13')
       expect(meta?.initial_sync_lookback_days).toBe(90)
       expect(meta?.last_synced_at).toBeDefined()
+    })
+
+    it('suppresses auto-categorization and reconciles per ledger account when the window overlaps an SIE import (renewal-flood guard)', async () => {
+      mockedSync.mockResolvedValue({
+        imported: 22,
+        duplicates: 0,
+        errors: 0,
+        returnedMinBookingDate: '2026-01-05',
+        returnedMaxBookingDate: '2026-05-06',
+      })
+      mockRunReconciliation
+        .mockResolvedValueOnce({ matches: [{}, {}, {}, {}], applied: 3, errors: 0, skippedBelowThreshold: 1 })
+        .mockResolvedValueOnce({ matches: [{}, {}], applied: 2, errors: 0, skippedBelowThreshold: 0 })
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [
+            // ledger_account preset on the stored account: no account_mappings
+            // in the request, so the chart/collision validation stays out of scope.
+            { uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930' },
+            { uid: 'acc-2', currency: 'EUR', enabled: true },
+          ] as StoredAccount[],
+        },
+        sieImportRow: { id: 'sie-1' },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1', 'acc-2'],
+          initial_lookback_days: 90,
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+
+      // Auto-categorization is suppressed: booking these rows through mapping
+      // rules would double-book the already-imported period.
+      expect(mockedSync).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        'user-1',
+        'conn-1',
+        expect.objectContaining({ uid: 'acc-1' }),
+        expect.any(String),
+        expect.any(String),
+        undefined,
+        { strategy: 'longest', skipAutoCategorization: true }
+      )
+
+      // One scoped sweep per distinct ledger account: pooled unscoped runs can
+      // cross-link accounts (#1290/#1298). The EUR account had no stored
+      // ledger_account, but the PATCH allocator assigns one ('1932') before the
+      // backfill, so both sweeps run with a concrete account.
+      expect(mockResolveCashAccountScope).toHaveBeenCalledTimes(2)
+      expect(mockResolveCashAccountScope).toHaveBeenCalledWith(expect.anything(), 'company-1', '1930')
+      expect(mockResolveCashAccountScope).toHaveBeenCalledWith(expect.anything(), 'company-1', '1932')
+      expect(mockRunReconciliation).toHaveBeenCalledTimes(2)
+      expect(mockRunReconciliation).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        'user-1',
+        expect.objectContaining({
+          accountNumber: '1930',
+          currency: 'SEK',
+          cashAccountId: 'ca-1930',
+          includeUnassigned: false,
+          confidenceThreshold: 0.9,
+          // The bank over-returned history: the sweep window opens at the
+          // oldest returned booking date, not the requested 90-day fromDate,
+          // so over-returned rows are swept too.
+          dateFrom: '2026-01-05',
+          dateTo: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        })
+      )
+
+      // Applied links surface to the UI so the user sees the period was
+      // recognized, not re-imported as work.
+      expect(body.initial_sync.auto_matched).toBe(5)
+    })
+
+    it('runs no reconciliation sweep and keeps categorization on without SIE overlap', async () => {
+      mockedSync.mockResolvedValue({
+        imported: 10,
+        duplicates: 0,
+        errors: 0,
+        returnedMinBookingDate: '2026-05-01',
+        returnedMaxBookingDate: '2026-05-13',
+      })
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 90 }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(mockedSync).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        'user-1',
+        'conn-1',
+        expect.anything(),
+        expect.any(String),
+        expect.any(String),
+        undefined,
+        { strategy: 'longest' }
+      )
+      expect(mockRunReconciliation).not.toHaveBeenCalled()
+      expect(body.initial_sync.auto_matched).toBe(0)
+    })
+
+    it('gives viewers rawInsertOnly and no sweep even with SIE overlap (viewers cannot write links)', async () => {
+      mockedSync.mockResolvedValue({
+        imported: 5,
+        duplicates: 0,
+        errors: 0,
+        returnedMinBookingDate: '2026-05-01',
+        returnedMaxBookingDate: '2026-05-13',
+      })
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+        sieImportRow: { id: 'sie-1' },
+        membershipRow: { role: 'viewer' },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 90 }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      expect(mockedSync).toHaveBeenCalledWith(
+        expect.anything(),
+        'company-1',
+        'user-1',
+        'conn-1',
+        expect.anything(),
+        expect.any(String),
+        expect.any(String),
+        undefined,
+        { strategy: 'longest', skipAutoCategorization: true, rawInsertOnly: true }
+      )
+      expect(mockRunReconciliation).not.toHaveBeenCalled()
+    })
+
+    it('skips the sweep for an account whose cash_accounts row did not resolve instead of widening to the pooled form', async () => {
+      mockedSync.mockResolvedValue({
+        imported: 6,
+        duplicates: 0,
+        errors: 0,
+        returnedMinBookingDate: '2026-05-01',
+        returnedMaxBookingDate: '2026-05-13',
+      })
+      // found: false = no cash_accounts row (e.g. the mirror upsert failed
+      // earlier in the request). Running anyway would sweep currency-only
+      // across every same-currency account (#1290 write shape).
+      mockResolveCashAccountScope.mockResolvedValue({
+        accountNumber: '1930',
+        currency: 'SEK',
+        cashAccountId: undefined,
+        includeUnassigned: true,
+        found: false,
+      })
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930' }] as StoredAccount[],
+        },
+        sieImportRow: { id: 'sie-1' },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 90 }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(mockResolveCashAccountScope).toHaveBeenCalled()
+      expect(mockRunReconciliation).not.toHaveBeenCalled()
+      expect(body.initial_sync.auto_matched).toBe(0)
+    })
+
+    it('keeps the backfill successful when the reconciliation sweep throws (non-critical)', async () => {
+      mockedSync.mockResolvedValue({
+        imported: 8,
+        duplicates: 0,
+        errors: 0,
+        returnedMinBookingDate: '2026-05-01',
+        returnedMaxBookingDate: '2026-05-13',
+      })
+      mockRunReconciliation.mockRejectedValue(new Error('recon exploded'))
+
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
+        },
+        sieImportRow: { id: 'sie-1' },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 90 }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.initial_sync).toMatchObject({ imported: 8, auto_matched: 0 })
+      expect(body.initial_sync_error).toBeUndefined()
     })
 
     it('does NOT run inline sync when connection is already active (selection edit)', async () => {

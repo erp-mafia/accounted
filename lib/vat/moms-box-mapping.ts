@@ -133,6 +133,7 @@ export const ACCOUNT_TO_BOX: Record<string, MomsBox> = {
   '2645': '48',  // Beräknad ingående moms (EU/non-EU förvärv)
   '2646': '48',  // Uthyrning
   '2647': '48',  // Omvänd skattskyldighet i Sverige
+  '2648': '48',  // Vilande ingående moms vid bokslut
   '2649': '48',  // Blandad verksamhet
 
   // Reverse-charge purchase bases (debit on cost accounts) → Boxes 20-24
