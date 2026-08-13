@@ -120,7 +120,7 @@ function SetPasswordContent() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-background p-4">
+    <div className="min-h-dvh flex flex-col items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="text-center mb-10">
           <div className="flex justify-center mb-4">

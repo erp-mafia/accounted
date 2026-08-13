@@ -12,7 +12,7 @@ export function generateMetadata(): Metadata {
 export default function PrivacyPolicyPage() {
   const { appName, legalEntity, privacyEmail } = getBranding()
   return (
-    <div className="min-h-screen bg-background py-12 px-4">
+    <div className="min-h-dvh bg-background py-12 px-4">
       <div className="max-w-3xl mx-auto space-y-6">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-foreground mb-2">
