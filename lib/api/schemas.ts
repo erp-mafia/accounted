@@ -1644,6 +1644,11 @@ export const BulkBookSchema = z
     // BOTH the template and manual paths (per-line bags win per key). The
     // route merges before calling the RPC.
     default_dimensions: DimensionsBagSchema.optional(),
+    // Bypass the booking-time duplicate guard after the user reviewed the
+    // flagged candidate (TRANSACTION_BOOK_POSSIBLE_DUPLICATE). Bulk-book has
+    // no per-tx candidate binding: force skips the guard for the whole batch,
+    // and the route records each dismissed candidate in behandlingshistorik.
+    force: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     const hasExisting = !!data.existing_journal_entry_id
