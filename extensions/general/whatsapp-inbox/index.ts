@@ -118,15 +118,24 @@ async function recordUnknownSenderMessage(
   disposition: string,
 ): Promise<'recorded' | 'duplicate' | 'skipped'> {
   try {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-    const { count } = await supabase
-      .from('whatsapp_messages')
-      .select('id', { count: 'exact', head: true })
-      .eq('direction', 'inbound')
-      .eq('sender_phone_hash', phoneHash)
-      .is('phone_link_id', null)
-      .gte('created_at', since)
-    if ((count ?? 0) >= DECLINE_TRACE_DAY_MAX) return 'skipped'
+    // The day cap guards the one unbounded path: 'skipped' declines from an
+    // over-quota flood. 'done' traces (a reply went out) skip it: they are
+    // already bounded upstream (M1 by the greeting throttle, M2 by the
+    // pre-binding quota), and capping them would let a redelivered wamid
+    // past the dedupe below into a second reply. Best-effort under
+    // concurrency: racing webhooks can overshoot by a few rows, which is
+    // fine for a metadata trail.
+    if (status === 'skipped') {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const { count } = await supabase
+        .from('whatsapp_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('direction', 'inbound')
+        .eq('sender_phone_hash', phoneHash)
+        .is('phone_link_id', null)
+        .gte('created_at', since)
+      if ((count ?? 0) >= DECLINE_TRACE_DAY_MAX) return 'skipped'
+    }
 
     const { error } = await supabase.from('whatsapp_messages').insert({
       direction: 'inbound',

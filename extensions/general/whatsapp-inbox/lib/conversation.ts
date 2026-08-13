@@ -37,13 +37,15 @@ const GREETING_HOUR_MS = 60 * 60 * 1000
 const GREETING_DAY_MS = 24 * 60 * 60 * 1000
 const GREETING_DAY_MAX = 3
 
-/** True when another M1 greeting to this phone hash would exceed the cap. */
+/** True when another M1 greeting to this phone hash would exceed the cap.
+ *  Fails CLOSED: if the throttle window cannot be read, no greeting goes
+ *  out, matching the unknown-sender quota's stance. */
 export async function greetingThrottled(
   supabase: SupabaseClient,
   phoneHash: string,
 ): Promise<boolean> {
   const since = new Date(Date.now() - GREETING_DAY_MS).toISOString()
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('whatsapp_messages')
     .select('created_at')
     .eq('direction', 'outbound')
@@ -52,6 +54,10 @@ export async function greetingThrottled(
     .gte('created_at', since)
     .order('created_at', { ascending: false })
     .limit(GREETING_DAY_MAX)
+  if (error) {
+    log.warn('greeting throttle window unreadable; staying silent', { error: error.message })
+    return true
+  }
   const rows = (data ?? []) as Array<{ created_at: string }>
   if (rows.length >= GREETING_DAY_MAX) return true
   const hourAgo = Date.now() - GREETING_HOUR_MS

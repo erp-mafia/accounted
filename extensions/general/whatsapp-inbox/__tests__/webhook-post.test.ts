@@ -232,8 +232,7 @@ describe('POST /webhook', () => {
       enqueue({ data: null }) // no active link
       enqueue({ data: { ok: true } }) // sender quota RPC
       enqueue({ data: [] }) // greeting throttle: nothing sent before
-      enqueue({ count: 0 }) // decline-trace day cap
-      enqueue({ data: null, error: null }) // trace row insert
+      enqueue({ data: null, error: null }) // trace row insert ('done': no cap query)
 
       const response = await route.handler(
         signedRequest(envelope({ messages: [imageMessage()] })),
@@ -261,8 +260,7 @@ describe('POST /webhook', () => {
       enqueue({ data: null })
       enqueue({ data: { ok: true } })
       enqueue({ data: [] }) // throttle window clear
-      enqueue({ count: 0 }) // decline-trace day cap
-      enqueue({ data: null, error: { code: '23505', message: 'duplicate key' } })
+      enqueue({ data: null, error: { code: '23505', message: 'duplicate key' } }) // trace insert
 
       await route.handler(signedRequest(envelope({ messages: [imageMessage()] })))
       expect(sendTextMock).not.toHaveBeenCalled()
